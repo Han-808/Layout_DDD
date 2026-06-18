@@ -1,0 +1,19 @@
+geometry:
+  boundary_tolerance: 1.0e-6
+  collision_area_tolerance: 1.0e-6
+  vertical_overlap_tolerance: 1.0e-6
+  floor_contact_tolerance: 0.05
+  support_z_tolerance: 0.05
+  min_support_overlap_ratio: 0.25
+  wall_contact_tolerance: 0.15
+
+spatial:
+  near_distance: 1.0
+  far_distance: 2.0
+  facing_angle_tolerance_deg: 35.0
+  left_right_min_delta: 0.10
+  front_back_min_delta: 0.10
+  against_wall_distance: 0.20
+  on_top_z_tolerance: 0.05
+  min_on_top_overlap_ratio: 0.25
+  check_required_objects: true

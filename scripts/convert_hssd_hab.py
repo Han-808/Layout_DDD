@@ -1,0 +1,45 @@
+from __future__ import annotations
+
+import argparse
+import sys
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
+
+from benchmark.datasets.hssd_hab_converter import convert_hssd_hab
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Convert local HSSD-HAB scene instances into bm_instance v2 cases.")
+    parser.add_argument("--hssd-root", default=str(PROJECT_ROOT / "data" / "external" / "hssd-hab"))
+    parser.add_argument("--out-dir", default=str(PROJECT_ROOT / "data" / "benchmark_cases" / "hssd"))
+    parser.add_argument("--limit", type=int, default=None)
+    parser.add_argument("--max-objects", type=int, default=None, help="Optional max objects per converted scene.")
+    parser.add_argument(
+        "--compact-object-ids",
+        action="store_true",
+        help="Use short object_### IDs and hssd_object_### categories while preserving source metadata.",
+    )
+    parser.add_argument(
+        "--levels",
+        nargs="+",
+        default=["prompt_only", "structured_basic"],
+        choices=["prompt_only", "structured_basic", "structured_relation"],
+    )
+    args = parser.parse_args()
+
+    paths = convert_hssd_hab(
+        hssd_root=Path(args.hssd_root),
+        out_dir=Path(args.out_dir),
+        limit=args.limit,
+        levels=args.levels,
+        max_objects=args.max_objects,
+        compact_object_ids=args.compact_object_ids,
+    )
+    for path in paths:
+        print(path)
+
+
+if __name__ == "__main__":
+    main()

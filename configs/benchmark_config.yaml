@@ -1,0 +1,27 @@
+benchmark:
+  save_intermediate_artifacts: true
+  save_viewer_scene: true
+  max_repair_iterations: 0
+
+outputs:
+  per_case_filename: per_case_result.json
+  per_model_summary_json: per_model_summary.json
+  per_model_summary_csv: per_model_summary.csv
+
+evaluation:
+  enabled: true
+  evaluator: "layered_vlm_room_pair_evaluator_v0"
+  room_judge: "mock"
+  pair_judge: "mock"
+  renderer: "simple_bbox"
+  save_room_views: true
+  save_pair_views: true
+  save_debug_evidence: true
+
+metrics:
+  output_case_metrics: true
+  output_benchmark_csv: true
+  primary_score_policy: "mean_active_metrics_v0"
+
+hssd:
+  root: "data/external/hssd-hab"

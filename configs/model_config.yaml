@@ -1,0 +1,59 @@
+default_model: mock
+
+models:
+  mock:
+    provider: mock
+    name: mock
+    behavior: valid
+
+  openai_compatible:
+    provider: openai_compatible
+    name: local-openai-compatible
+    model: null
+    endpoint: null
+    api_key_env: OPENAI_API_KEY
+    temperature: 0.0
+    timeout_seconds: 180
+    response_format_json: false
+
+  anthropic_compatible:
+    provider: anthropic_compatible
+    name: null
+    endpoint: null
+    api_key_env: ANTHROPIC_API_KEY
+
+  gemini_compatible:
+    provider: gemini_compatible
+    name: null
+    endpoint: null
+    api_key_env: GEMINI_API_KEY
+
+  vllm:
+    provider: openai_compatible
+    name: local-vllm
+    model: Qwen/Qwen2.5-7B-Instruct
+    endpoint: http://localhost:8000/v1
+    api_key_env: VLLM_API_KEY
+    temperature: 0.0
+    timeout_seconds: 180
+    response_format_json: false
+
+  qwen3vl_sglang:
+    provider: openai_compatible
+    name: qwen3vl-sglang
+    model: Qwen/Qwen3-VL-8B-Instruct
+    endpoint: http://localhost:8000/v1
+    temperature: 0.0
+    max_tokens: 2048
+    timeout_seconds: 300
+    response_format_json: true
+
+  ollama:
+    provider: openai_compatible
+    name: local-ollama
+    model: qwen2.5:7b-instruct
+    endpoint: http://localhost:11434/v1
+    api_key_env: OLLAMA_API_KEY
+    temperature: 0.0
+    timeout_seconds: 180
+    response_format_json: false

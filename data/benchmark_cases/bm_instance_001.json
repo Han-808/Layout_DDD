@@ -1,0 +1,31 @@
+{
+  "task_id": "bedroom_001",
+  "input_mode": "text_room_boundary_objects",
+  "scene_prompt": "Create a small bedroom with a bed, desk, chair, wardrobe, and nightstand.",
+  "room": {
+    "unit": "meter",
+    "floor_polygon": [[0, 0], [5, 0], [5, 4], [0, 4]],
+    "floor_z": 0.0,
+    "wall_height": 2.8
+  },
+  "required_objects": ["bed", "desk", "chair", "wardrobe", "nightstand"],
+  "spatial_constraints": [
+    {
+      "type": "against_wall",
+      "source_category": "bed",
+      "target": "any_wall",
+      "hard": false
+    },
+    {
+      "type": "facing",
+      "source_category": "chair",
+      "target_category": "desk",
+      "hard": false
+    }
+  ],
+  "hidden_annotations": {
+    "expected_objects": [],
+    "expected_relations": [],
+    "attachment_rules": []
+  }
+}

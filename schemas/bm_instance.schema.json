@@ -1,0 +1,222 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.org/3d-layout-benchmark/bm_instance.schema.json",
+  "title": "BenchmarkInstance",
+  "type": "object",
+  "additionalProperties": true,
+  "anyOf": [
+    {
+      "required": ["case_id", "schema_version", "input_level", "description"]
+    },
+    {
+      "required": ["task_id", "input_mode", "scene_prompt"]
+    }
+  ],
+  "properties": {
+    "case_id": {"type": "string", "minLength": 1},
+    "schema_version": {"type": "string", "minLength": 1},
+    "input_level": {
+      "type": "string",
+      "enum": ["prompt_only", "structured_basic", "structured_relation"]
+    },
+    "description": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "text": {"type": "string", "minLength": 1},
+        "room_type": {"type": "string"},
+        "tags": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "room": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "unit": {"type": "string"},
+        "boundary": {"$ref": "#/$defs/polygon"},
+        "floor_polygon": {"$ref": "#/$defs/polygon"},
+        "floor_z": {"type": "number"},
+        "wall_height": {"type": "number", "exclusiveMinimum": 0}
+      }
+    },
+    "objects": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "category"],
+        "additionalProperties": true,
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "category": {"type": "string", "minLength": 1},
+          "bbox_size": {
+            "type": "array",
+            "minItems": 3,
+            "maxItems": 3,
+            "items": {"type": "number", "exclusiveMinimum": 0}
+          },
+          "required": {"type": "boolean", "default": true},
+          "source": {"type": "string"}
+        }
+      }
+    },
+    "relations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "type", "subject", "object"],
+        "additionalProperties": true,
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "type": {
+            "type": "string",
+            "enum": ["near", "left_of", "right_of", "in_front_of", "behind", "facing", "against_wall"]
+          },
+          "subject": {"type": "string", "minLength": 1},
+          "object": {"type": "string", "minLength": 1},
+          "visible_to_model": {"type": "boolean", "default": true}
+        }
+      }
+    },
+    "attachments": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "type", "child", "parent"],
+        "additionalProperties": true,
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "type": {"type": "string", "enum": ["support", "on", "inside"]},
+          "child": {"type": "string", "minLength": 1},
+          "parent": {"type": "string", "minLength": 1},
+          "surface": {"type": "string"},
+          "visible_to_model": {"type": "boolean", "default": true}
+        }
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "reference_layout": {
+      "type": "object",
+      "additionalProperties": true
+    },
+
+    "task_id": {"type": "string", "minLength": 1},
+    "input_mode": {
+      "type": "string",
+      "enum": ["text_only", "text_room_boundary", "text_room_boundary_objects"]
+    },
+    "scene_prompt": {"type": "string", "minLength": 1},
+    "required_objects": {
+      "anyOf": [
+        {"type": "null"},
+        {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "uniqueItems": true
+        }
+      ]
+    },
+    "spatial_constraints": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["type"],
+        "additionalProperties": true,
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "near",
+              "far",
+              "facing",
+              "against_wall",
+              "on_top_of",
+              "left_of",
+              "right_of",
+              "in_front_of",
+              "behind"
+            ]
+          },
+          "source_category": {"type": "string"},
+          "target_category": {"type": "string"},
+          "target": {"type": "string"},
+          "hard": {"type": "boolean"}
+        }
+      }
+    },
+    "hidden_annotations": {
+      "type": "object",
+      "additionalProperties": true
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {"input_level": {"const": "prompt_only"}},
+        "required": ["input_level"]
+      },
+      "then": {
+        "required": ["description"],
+        "properties": {
+          "description": {"required": ["text"]}
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {"input_level": {"const": "structured_basic"}},
+        "required": ["input_level"]
+      },
+      "then": {
+        "required": ["description", "room", "objects"],
+        "properties": {
+          "description": {"required": ["text"]},
+          "room": {
+            "anyOf": [
+              {"required": ["boundary"]},
+              {"required": ["floor_polygon"]}
+            ]
+          },
+          "objects": {"minItems": 1}
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {"input_level": {"const": "structured_relation"}},
+        "required": ["input_level"]
+      },
+      "then": {
+        "required": ["description", "room", "objects"],
+        "properties": {
+          "description": {"required": ["text"]},
+          "room": {
+            "anyOf": [
+              {"required": ["boundary"]},
+              {"required": ["floor_polygon"]}
+            ]
+          },
+          "objects": {"minItems": 1}
+        },
+        "anyOf": [
+          {"required": ["relations"]},
+          {"required": ["attachments"]}
+        ]
+      }
+    }
+  ],
+  "$defs": {
+    "polygon": {
+      "type": "array",
+      "minItems": 3,
+      "items": {
+        "type": "array",
+        "minItems": 2,
+        "maxItems": 2,
+        "items": {"type": "number"}
+      }
+    }
+  }
+}

@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.org/3d-layout-benchmark/evaluation_report.schema.json",
+  "title": "EvaluationReport",
+  "type": "object",
+  "required": [
+    "task_id",
+    "iteration",
+    "overall_valid",
+    "summary",
+    "schema_failures",
+    "physical_failures",
+    "spatial_relation_failures",
+    "repair_targets"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "task_id": {"type": "string"},
+    "iteration": {"type": "integer", "minimum": 0},
+    "overall_valid": {"type": "boolean"},
+    "metrics": {
+      "type": "object",
+      "required": [
+        "schema_validity",
+        "physical_validity",
+        "spatial_relation_validity"
+      ],
+      "properties": {
+        "schema_validity": {"type": "integer", "enum": [0, 1]},
+        "physical_validity": {"type": "integer", "enum": [0, 1]},
+        "spatial_relation_validity": {"type": "integer", "enum": [0, 1]}
+      }
+    },
+    "summary": {
+      "type": "object",
+      "required": [
+        "schema_valid",
+        "physical_valid",
+        "spatial_relation_valid",
+        "num_schema_errors",
+        "num_physical_errors",
+        "num_spatial_relation_errors"
+      ],
+      "properties": {
+        "schema_valid": {"type": "boolean"},
+        "physical_valid": {"type": "boolean"},
+        "spatial_relation_valid": {"type": "boolean"},
+        "num_schema_errors": {"type": "integer", "minimum": 0},
+        "num_physical_errors": {"type": "integer", "minimum": 0},
+        "num_spatial_relation_errors": {"type": "integer", "minimum": 0}
+      }
+    },
+    "schema_failures": {"type": "array", "items": {"type": "object"}},
+    "physical_failures": {"type": "array", "items": {"type": "object"}},
+    "spatial_relation_failures": {"type": "array", "items": {"type": "object"}},
+    "repair_targets": {"type": "array", "items": {"type": "string"}}
+  }
+}

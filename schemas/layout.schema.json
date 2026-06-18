@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.org/3d-layout-benchmark/layout.schema.json",
+  "title": "BBoxLayout",
+  "type": "object",
+  "required": [
+    "scene_id",
+    "unit",
+    "coordinate_system",
+    "objects"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "scene_id": {"type": "string", "minLength": 1},
+    "unit": {"const": "meter"},
+    "coordinate_system": {
+      "type": "object",
+      "required": ["origin", "x_axis", "y_axis", "z_axis", "rotation_unit"],
+      "additionalProperties": true,
+      "properties": {
+        "origin": {"type": "string"},
+        "x_axis": {"type": "string"},
+        "y_axis": {"type": "string"},
+        "z_axis": {"type": "string"},
+        "rotation_unit": {"const": "degree"}
+      }
+    },
+    "objects": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["object_id", "category", "center", "size", "yaw"],
+        "additionalProperties": true,
+        "properties": {
+          "object_id": {"type": "string", "minLength": 1},
+          "category": {"type": "string", "minLength": 1},
+          "center": {
+            "type": "array",
+            "minItems": 3,
+            "maxItems": 3,
+            "items": {"type": "number"}
+          },
+          "size": {
+            "type": "array",
+            "minItems": 3,
+            "maxItems": 3,
+            "items": {"type": "number", "exclusiveMinimum": 0}
+          },
+          "yaw": {"type": "number"},
+          "support_parent": {"type": "string"},
+          "region_id": {"type": "string"}
+        }
+      }
+    },
+    "relations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["type", "source"],
+        "additionalProperties": true,
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "near",
+              "far",
+              "facing",
+              "against_wall",
+              "on_top_of",
+              "left_of",
+              "right_of",
+              "in_front_of",
+              "behind"
+            ]
+          },
+          "source": {"type": "string"},
+          "target": {"type": "string"},
+          "hard": {"type": "boolean"}
+        }
+      }
+    },
+    "hierarchy": {
+      "type": "object",
+      "required": ["regions", "floor_objects", "supported_objects"],
+      "additionalProperties": true,
+      "properties": {
+        "regions": {"type": "array", "items": {"type": "string"}},
+        "floor_objects": {"type": "array", "items": {"type": "string"}},
+        "supported_objects": {"type": "array"}
+      }
+    }
+  }
+}

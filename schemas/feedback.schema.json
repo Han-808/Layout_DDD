@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.org/3d-layout-benchmark/feedback.schema.json",
+  "title": "DeterministicFeedback",
+  "type": "object",
+  "required": [
+    "task_id",
+    "iteration",
+    "repair_targets",
+    "locked_objects",
+    "violations",
+    "instruction"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "task_id": {"type": "string"},
+    "iteration": {"type": "integer", "minimum": 0},
+    "repair_targets": {"type": "array", "items": {"type": "string"}},
+    "locked_objects": {"type": "array", "items": {"type": "string"}},
+    "violations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["category", "type", "message"],
+        "additionalProperties": true,
+        "properties": {
+          "category": {"type": "string", "enum": ["schema", "physical", "spatial_relation"]},
+          "type": {"type": "string"},
+          "objects": {"type": "array", "items": {"type": "string"}},
+          "message": {"type": "string"}
+        }
+      }
+    },
+    "instruction": {"type": "string"}
+  }
+}

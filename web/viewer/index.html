@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>3D Layout Benchmark Viewer</title>
+    <link rel="stylesheet" href="./style.css" />
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://cdn.jsdelivr.net/npm/three@0.165.0/build/three.module.js"
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <main id="app">
+      <section id="workflow-bar" aria-label="Benchmark workflow">
+        <header>
+          <div>
+            <h1 id="task-title">viewer_scene.json</h1>
+            <p id="workflow-caption">Layout generation -> rendered views -> VLM-style judging -> scalar metrics.</p>
+          </div>
+          <div class="toolbar" aria-label="Workflow controls">
+            <button id="before-button" type="button">Before Repair</button>
+            <button id="after-button" type="button">After Repair</button>
+            <button id="replay-button" type="button">Replay Workflow</button>
+          </div>
+        </header>
+        <div id="workflow"></div>
+      </section>
+
+      <section id="workbench">
+        <section id="viewport" aria-label="3D scene viewport"></section>
+        <aside id="panel" aria-label="Scene metadata">
+        <header>
+          <h2>Iteration</h2>
+          <select id="iteration-select" aria-label="Iteration"></select>
+        </header>
+        <section class="panel-section">
+          <h2>Summary</h2>
+          <dl id="summary"></dl>
+        </section>
+
+        <section class="panel-section">
+          <h2>Violations</h2>
+          <div id="violations"></div>
+        </section>
+
+        <section class="panel-section">
+          <h2>Deterministic Feedback</h2>
+          <div id="feedback"></div>
+        </section>
+
+        <section class="panel-section">
+          <h2>Metrics</h2>
+          <dl id="metrics"></dl>
+        </section>
+
+        <section class="panel-section">
+          <h2>Room Views</h2>
+          <div id="room-views"></div>
+        </section>
+
+        <section class="panel-section">
+          <h2>Relation / Attachment Views</h2>
+          <div id="pair-views"></div>
+        </section>
+
+        <section class="panel-section">
+          <h2>Workflow Trace</h2>
+          <div id="workflow-trace"></div>
+        </section>
+
+        <section class="panel-section">
+          <h2>Relations</h2>
+          <div id="relations"></div>
+        </section>
+
+        <section class="panel-section">
+          <h2>History</h2>
+          <div id="history"></div>
+        </section>
+        </aside>
+      </section>
+
+      <section id="artifact-drawer" aria-label="Selected artifact JSON">
+        <div id="artifact-title" class="artifact-title muted">Select a workflow step</div>
+        <pre id="artifact-preview" class="json-preview">{}</pre>
+      </section>
+    </main>
+    <script type="module" src="./viewer.js?v=20260518b"></script>
+  </body>
+</html>

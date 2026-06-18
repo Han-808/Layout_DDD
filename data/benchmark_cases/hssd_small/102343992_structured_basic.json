@@ -1,0 +1,173 @@
+{
+  "case_id": "102343992_structured_basic",
+  "schema_version": "2.0",
+  "input_level": "structured_basic",
+  "description": {
+    "text": "Generate a plausible 3D room layout containing the specified HSSD-HAB objects for scene 102343992.",
+    "room_type": "room",
+    "tags": [
+      "hssd-hab"
+    ]
+  },
+  "room": {
+    "unit": "meter",
+    "boundary": [
+      [
+        0.6589999198913574,
+        -10.538998947203183
+      ],
+      [
+        12.034000396728516,
+        -10.538998947203183
+      ],
+      [
+        12.034000396728516,
+        8.805999797224985
+      ],
+      [
+        0.6589999198913574,
+        8.805999797224985
+      ]
+    ],
+    "floor_z": 0.0,
+    "wall_height": 3.0
+  },
+  "objects": [
+    {
+      "id": "object_001",
+      "category": "hssd_object_001",
+      "bbox_size": [
+        0.8,
+        0.8,
+        0.8
+      ],
+      "required": true,
+      "source": "hssd-hab",
+      "source_id": "1efdc3d37dfab1eb9f99117bb84c59003d684811_001",
+      "source_template_name": "1efdc3d37dfab1eb9f99117bb84c59003d684811",
+      "source_position": [
+        7.869999885559082,
+        1.200000514924497,
+        -9.038998947203183
+      ],
+      "source_floor_position": [
+        7.869999885559082,
+        -9.038998947203183
+      ]
+    },
+    {
+      "id": "object_002",
+      "category": "hssd_object_002",
+      "bbox_size": [
+        0.8,
+        0.8,
+        0.8
+      ],
+      "required": true,
+      "source": "hssd-hab",
+      "source_id": "1efdc3d37dfab1eb9f99117bb84c59003d684811_002",
+      "source_template_name": "1efdc3d37dfab1eb9f99117bb84c59003d684811",
+      "source_position": [
+        8.145999908447266,
+        -4.354715485987981e-07,
+        7.305999797224985
+      ],
+      "source_floor_position": [
+        8.145999908447266,
+        7.305999797224985
+      ]
+    },
+    {
+      "id": "object_003",
+      "category": "hssd_object_003",
+      "bbox_size": [
+        0.8,
+        0.8,
+        0.8
+      ],
+      "required": true,
+      "source": "hssd-hab",
+      "source_id": "356ce92bc38493578fdf63b7f3edfaea8001c849_003",
+      "source_template_name": "356ce92bc38493578fdf63b7f3edfaea8001c849",
+      "source_position": [
+        2.1589999198913574,
+        4.4175203584018163e-07,
+        -7.411368881978433
+      ],
+      "source_floor_position": [
+        2.1589999198913574,
+        -7.411368881978433
+      ]
+    },
+    {
+      "id": "object_004",
+      "category": "hssd_object_004",
+      "bbox_size": [
+        0.8,
+        0.8,
+        0.8
+      ],
+      "required": true,
+      "source": "hssd-hab",
+      "source_id": "27dd125228e0872193eb34907b03ef9caf98289f_004",
+      "source_template_name": "27dd125228e0872193eb34907b03ef9caf98289f",
+      "source_position": [
+        4.874000072479248,
+        0.5699998878836645,
+        1.190999947726727
+      ],
+      "source_floor_position": [
+        4.874000072479248,
+        1.190999947726727
+      ]
+    },
+    {
+      "id": "object_005",
+      "category": "hssd_object_005",
+      "bbox_size": [
+        0.8,
+        0.8,
+        0.8
+      ],
+      "required": true,
+      "source": "hssd-hab",
+      "source_id": "27dd125228e0872193eb34907b03ef9caf98289f_005",
+      "source_template_name": "27dd125228e0872193eb34907b03ef9caf98289f",
+      "source_position": [
+        8.262999534606934,
+        -2.82585631339316e-07,
+        4.740999892890443
+      ],
+      "source_floor_position": [
+        8.262999534606934,
+        4.740999892890443
+      ]
+    },
+    {
+      "id": "object_006",
+      "category": "hssd_object_006",
+      "bbox_size": [
+        0.8,
+        0.8,
+        0.8
+      ],
+      "required": true,
+      "source": "hssd-hab",
+      "source_id": "b4197540cbbe2787185cd37ab9f1524b883cbdbe_006",
+      "source_template_name": "b4197540cbbe2787185cd37ab9f1524b883cbdbe",
+      "source_position": [
+        10.534000396728516,
+        2.419999523435223,
+        6.855429861817953
+      ],
+      "source_floor_position": [
+        10.534000396728516,
+        6.855429861817953
+      ]
+    }
+  ],
+  "source": {
+    "dataset": "hssd-hab",
+    "scene_instance": "data\\external\\hssd-hab\\scenes\\102343992.scene_instance.json"
+  }
+}
