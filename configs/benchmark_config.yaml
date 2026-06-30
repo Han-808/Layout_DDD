@@ -10,18 +10,171 @@ outputs:
 
 evaluation:
   enabled: true
-  evaluator: "layered_vlm_room_pair_evaluator_v0"
-  room_judge: "mock"
-  pair_judge: "mock"
-  renderer: "simple_bbox"
+  evaluator: "vlm_as_judge_v1"
+  vlm_judge: "same_model"
+  renderer: "perspective_bbox"
   save_room_views: true
+  save_global_view: true
+  save_group_views: true
   save_pair_views: true
   save_debug_evidence: true
+
+evaluation_policy:
+  evaluator_identity: "vlm_as_judge_v1"
+  deterministic_flags_affect_validity: false
+  skip_vlm_judge_only_if_unparseable: true
+  parseable_layout_requires_vlm_judge: true
+  overall_valid_source: "vlm_judgement.valid"
+
+vlm_judge:
+  text_budget:
+    max_total_chars: 12000
+    max_scene_summary_chars: 1500
+    max_layout_summary_chars: 2500
+    max_selected_group_objects: 40
+    max_objects_per_group_in_prompt: 12
+    max_flag_examples_per_type: 8
+    numeric_precision: 2
+
+  evidence_budget:
+    max_input_tokens: 60000
+    include_global_view: true
+    base_max_groups_for_judge: 3
+    budget_raise_ratio: 0.5
+    max_groups_for_judge_cap: 5
+    group_views: ["xy", "yz", "xz"]
+    include_full_object_list: false
+    include_compact_scene_summary: true
+    include_selected_group_details: true
+    summarize_schema_flags: true
+    summarize_physical_flags: true
+    summarize_view_flags: true
+
+  profiles:
+    hyak_h200_qwen3vl32b:
+      judge_generation:
+        temperature: 0.0
+        max_tokens: 2048
+        timeout_seconds: 300
+        response_format_json: true
+
+render:
+  backend: "perspective_bbox_zbuffer"
+  width: 640
+  height: 480
+  fov_degrees: 50.0
+  near: 0.05
+  far: 200.0
+  min_visible_pixel_area: 4.0
+  canvas_margin_px: 20
+  background_rgba: [248, 249, 246, 255]
+  min_camera_distance_m: 2.5
+  distance_scale: 1.5
+  fit_span_scale: 0.75
+  min_target_z: 0.35
+  top_look_at_shift_scale: 0.25
+  side_look_at_shift_scale: 0.3
+  camera_candidates:
+    - [0.0, 0.0]
+    - [0.25, 0.0]
+    - [-0.25, 0.0]
+    - [0.0, 0.25]
+    - [0.0, -0.25]
+
+physical_flags:
+  boundary_tolerance_m: 0.35
+  boundary_tolerance_rel_object_size: 0.25
+  floor_contact_tolerance_m: 0.15
+  floor_contact_tolerance_rel_height: 0.10
+  above_wall_tolerance_m: 0.20
+  serious_collision_overlap_ratio: 0.60
+  serious_collision_min_volume:
+    abs_min_volume_m3: 0.002
+    object_volume_ratio: 0.01
+    scene_volume_ratio: 0.0001
+    min_cap_m3: 0.002
+    max_cap_m3: 0.05
+  floor_z_default: 0.0
+
+grouping:
+  enabled: true
+  proximity:
+    min_gap_m: 0.25
+    max_gap_m: 1.25
+    max_normalized_gap: 0.75
+  diameter:
+    ratio_of_room_diagonal: 0.35
+    min_m: 2.5
+    max_m: 8.0
+  object_count:
+    rule: "sqrt_num_renderable_objects"
+    additive_margin: 1
+    min_objects_per_group: 6
+    max_objects_per_group: 12
+  strong_link_relaxation:
+    max_group_diameter_multiplier: 1.25
+    max_objects_multiplier: 1.5
+  derived_support:
+    enabled: true
+    vertical_tolerance_m: 0.08
+    min_xy_overlap_ratio: 0.15
+  invariants:
+    every_renderable_object_in_exactly_one_group: true
+    never_break_must_link: true
+
+view_validation:
+  min_foreground_ratio: 0.005
+  min_visible_object_ratio: 0.4
+  max_camera_retries: 4
 
 metrics:
   output_case_metrics: true
   output_benchmark_csv: true
   primary_score_policy: "mean_active_metrics_v0"
+
+repair:
+  collision_avoidance:
+    enabled: true
+    soft_overlap_ratio: 0.15
+    soft_min_volume:
+      abs_min_volume_m3: 0.001
+      object_volume_ratio: 0.005
+      scene_volume_ratio: 0.00005
+      min_cap_m3: 0.001
+      max_cap_m3: 0.03
+    max_pairs: 12
+    cost_mode: "normalized_dimensionless"
+    weights:
+      outside: 1.0
+      overlap: 1.0
+      movement: 0.25
+
+viewer:
+  default_focus: "visual"
+  json_preview:
+    lazy_load: true
+    hidden_by_default: true
+    truncate_chars: 20000
+  group_coloring:
+    enabled_by_default: false
+    toggle_available: true
+  overlays:
+    show_floor_grid: true
+    show_axes: true
+    show_room_proxy: false
+    show_floor_plan_regions: true
+    show_relation_edges_by_default: false
+    allow_relation_edge_toggle: true
+    show_judge_status_markers: true
+  replay:
+    enabled: true
+    autoplay_default: false
+    step_duration_ms: 1200
+  diff:
+    enabled: true
+    position_tolerance_m: 0.01
+    size_tolerance_m: 0.01
+    yaw_tolerance_degrees: 1.0
 
 hssd:
   root: "data/external/hssd-hab"

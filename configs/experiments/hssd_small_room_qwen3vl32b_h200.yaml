@@ -1,0 +1,17 @@
+name: hssd_small_room_qwen3vl32b_h200
+description: Small downloaded HSSD bbox case through local tunnel to Hyak H200 Qwen3-VL-32B.
+defaults:
+  dataset: hssd_downloaded_small
+  model: qwen3vl_sglang_32b
+  inference: hyak_h200_qwen3vl32b
+  evaluation: vlm_as_judge_v1
+  render: bbox_perspective_default
+  grouping: deterministic_metadata_geometry
+  repair: compact_feedback
+  viewer: threejs_default
+out: outputs/hssd_small_room_qwen3vl32b_h200
+judge_model: same
+max_repair_iterations: 0
+model_overrides:
+  max_tokens: 12000
+  timeout_seconds: 1200

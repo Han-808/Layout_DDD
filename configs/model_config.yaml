@@ -1,10 +1,19 @@
 default_model: mock
 
+api:
+  max_retries: 1
+  retry_backoff_seconds: 1.0
+  retry_on_status: [429, 500, 502, 503, 504]
+
+judge:
+  model: same
+
 models:
   mock:
     provider: mock
     name: mock
     behavior: valid
+    judge_evidence_budgeting: false
 
   openai_compatible:
     provider: openai_compatible
@@ -15,18 +24,32 @@ models:
     temperature: 0.0
     timeout_seconds: 180
     response_format_json: false
+    judge_evidence_budgeting: false
+
+  openai_api:
+    provider: openai_compatible
+    name: openai-api-template
+    model: null
+    endpoint: https://api.openai.com/v1
+    api_key_env: OPENAI_API_KEY
+    temperature: 0.0
+    timeout_seconds: 180
+    response_format_json: true
+    judge_evidence_budgeting: false
 
   anthropic_compatible:
     provider: anthropic_compatible
     name: null
     endpoint: null
     api_key_env: ANTHROPIC_API_KEY
+    judge_evidence_budgeting: false
 
   gemini_compatible:
     provider: gemini_compatible
     name: null
     endpoint: null
     api_key_env: GEMINI_API_KEY
+    judge_evidence_budgeting: false
 
   vllm:
     provider: openai_compatible
@@ -37,6 +60,7 @@ models:
     temperature: 0.0
     timeout_seconds: 180
     response_format_json: false
+    judge_evidence_budgeting: false
 
   qwen3vl_sglang:
     provider: openai_compatible
@@ -47,6 +71,19 @@ models:
     max_tokens: 2048
     timeout_seconds: 300
     response_format_json: true
+    judge_evidence_budgeting: true
+
+  qwen3vl_sglang_32b:
+    provider: openai_compatible
+    name: qwen3vl-sglang-32b
+    model: Qwen/Qwen3-VL-32B-Instruct
+    endpoint: http://localhost:8000/v1
+    runtime_profile: hyak_h200_qwen3vl32b
+    temperature: 0.0
+    max_tokens: 8192
+    timeout_seconds: 900
+    response_format_json: true
+    judge_evidence_budgeting: true
 
   ollama:
     provider: openai_compatible
@@ -57,3 +94,4 @@ models:
     temperature: 0.0
     timeout_seconds: 180
     response_format_json: false
+    judge_evidence_budgeting: false

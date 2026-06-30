@@ -1,0 +1,4 @@
+name: hyak_h200_qwen3vl32b
+endpoint: http://localhost:8000/v1
+runtime_profile: hyak_h200_qwen3vl32b
+context_limit_tokens: 65536

@@ -19,8 +19,26 @@ body,
 }
 
 #app {
+  --artifact-drawer-height: 260px;
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr) 260px;
+  grid-template-columns: minmax(380px, 30vw) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  grid-template-areas: "sidebar viewport";
+  overflow: hidden;
+}
+
+#app.drawer-collapsed {
+  --artifact-drawer-height: 38px;
+}
+
+#sidebar {
+  grid-area: sidebar;
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: minmax(170px, 34vh) minmax(0, 1fr) var(--artifact-drawer-height);
+  border-right: 1px solid #ccd4ca;
+  background: #fbfbf8;
   overflow: hidden;
 }
 
@@ -28,23 +46,17 @@ body,
   border-bottom: 1px solid #ccd4ca;
   background: #fbfbf8;
   padding: 12px 14px 10px;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 #workflow-bar header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
+  display: grid;
   gap: 16px;
 }
 
-#workbench {
-  min-height: 0;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 360px;
-  overflow: hidden;
-}
-
 #viewport {
+  grid-area: viewport;
   min-width: 0;
   min-height: 0;
   background: #eef0eb;
@@ -56,7 +68,6 @@ body,
 }
 
 #panel {
-  border-left: 1px solid #d3d8d0;
   background: #fbfbf8;
   overflow-y: auto;
   padding: 16px;
@@ -107,9 +118,12 @@ select {
 
 .toolbar {
   display: grid;
-  grid-template-columns: repeat(3, minmax(112px, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 8px;
-  min-width: 430px;
+}
+
+.visual-toolbar {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
 }
 
 button {
@@ -127,9 +141,20 @@ button:hover {
   background: #edf2ea;
 }
 
+button.active,
+button[aria-pressed="true"] {
+  border-color: #2f5f4f;
+  background: #eff7f1;
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 #workflow {
   display: grid;
-  grid-template-columns: repeat(8, minmax(118px, 1fr));
+  grid-template-columns: 1fr;
   gap: 8px;
   margin-top: 10px;
 }
@@ -252,6 +277,53 @@ dd {
   background: #f3fbf4;
 }
 
+.group-button {
+  width: 100%;
+  text-align: left;
+  display: grid;
+  gap: 4px;
+  padding: 9px 10px;
+  margin-bottom: 8px;
+}
+
+.group-button.active {
+  border-color: #2f5f4f;
+  background: #eff7f1;
+}
+
+.group-filter-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.group-filter {
+  min-width: 0;
+  padding: 7px 8px;
+  font-size: 12px;
+}
+
+.group-filter.active {
+  border-color: #2f5f4f;
+  background: #eff7f1;
+}
+
+.diagnostics-preview {
+  margin: 8px 0 0;
+  padding: 8px;
+  border: 1px solid #e2e7df;
+  border-radius: 6px;
+  background: #f8faf6;
+  color: #26342d;
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  font-size: 10px;
+  line-height: 1.35;
+  white-space: pre-wrap;
+  max-height: 180px;
+  overflow: auto;
+}
+
 .view-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -280,15 +352,58 @@ dd {
   min-height: 0;
   border-top: 1px solid #ccd4ca;
   background: #111814;
+  position: relative;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
-  padding: 10px 14px 14px;
+  padding: 12px 14px 14px;
+}
+
+#artifact-resize-handle {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 8px;
+  cursor: ns-resize;
+}
+
+.artifact-header {
+  min-height: 26px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 12px;
 }
 
 .artifact-title {
+  min-width: 0;
   font-size: 12px;
-  margin-bottom: 8px;
   color: #aebcb2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#artifact-toggle {
+  min-height: 26px;
+  padding: 3px 9px;
+  border-color: #33443a;
+  background: #17221d;
+  color: #dfeee4;
+}
+
+.artifact-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.artifact-actions button {
+  min-height: 26px;
+  padding: 3px 8px;
+  border-color: #33443a;
+  background: #17221d;
+  color: #dfeee4;
+  font-size: 12px;
 }
 
 .json-preview {
@@ -304,6 +419,10 @@ dd {
   font-size: 11px;
   line-height: 1.45;
   white-space: pre-wrap;
+}
+
+.drawer-collapsed #artifact-preview {
+  display: none;
 }
 
 .clickable {
@@ -325,7 +444,18 @@ dd {
 
 @media (max-width: 980px) {
   #app {
-    grid-template-rows: auto minmax(0, 1fr) 240px;
+    --artifact-drawer-height: 220px;
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(340px, 54vh) minmax(0, 1fr);
+    grid-template-areas:
+      "viewport"
+      "sidebar";
+  }
+
+  #sidebar {
+    grid-template-rows: minmax(150px, 32vh) minmax(0, 1fr) var(--artifact-drawer-height);
+    border-right: 0;
+    border-top: 1px solid #ccd4ca;
   }
 
   #workflow-bar header {
@@ -338,16 +468,10 @@ dd {
   }
 
   #workflow {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  #workbench {
     grid-template-columns: 1fr;
-    grid-template-rows: minmax(320px, 54vh) minmax(0, 1fr);
   }
 
   #panel {
-    border-left: 0;
-    border-top: 1px solid #d3d8d0;
+    border-top: 0;
   }
 }

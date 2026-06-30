@@ -1,6 +1,6 @@
-# Metrics Spec v0
+# Metrics Spec v1
 
-The benchmark compares explicit bbox-based 3D room layouts with a small set of scalar metrics. Model outputs remain JSON layouts; meshes, CAD, Blender code, and Habitat scenes are not benchmark outputs.
+The workflow compares explicit bbox-based 3D room layouts with VLM-as-judge scores over rendered evidence. Model outputs remain JSON layouts; meshes, CAD, Blender code, and Habitat scenes are not benchmark outputs.
 
 ## Per-Case Metrics
 
@@ -14,28 +14,23 @@ Each case writes `case_metrics.json` with exactly these comparable scalar fields
 - `specified_attachment_pass_rate`: float or null, range 0..1
 - `primary_score`: float, range 0..1
 
-There is no `constraint_score` in v0.
+There is no `constraint_score` in v1.
 
 ## Validity Gate
 
-`validity_gate` is false only for catastrophic failures:
+`validity_gate` is false only when model output cannot be converted into any parseable layout scene:
 
-- output JSON cannot parse
-- layout schema or bbox geometry is invalid
-- bbox size is non-positive, NaN, or infinity
-- all placed objects are completely outside the room boundary
-- most or all objects fully overlap into essentially one volume
-- for structured cases, all required objects are missing
+- output JSON cannot parse into an object
+- generation fails before any layout scene exists
 
-Minor collision, one partially out-of-bound object, small floating gaps, imperfect attachments, and questionable spacing are debug evidence only. They do not fail the gate.
+Schema issues, malformed objects, invalid bbox geometry, non-positive sizes, room-boundary issues, below-floor objects, above-wall-height objects, serious collisions, imperfect attachments, and questionable spacing are debug evidence only. They do not fail the gate directly for parseable layouts.
 
 ## Room Consistency
 
-`room_consistency_score` is produced by the room-level judge using room-level rendered views:
+`room_consistency_score` is produced by the VLM judge using rendered view evidence:
 
-- `topdown_room`
-- `front_room`
-- `corner_room`
+- `topdown_global_xy`
+- each object group's `xy`, `yz`, and `xz` views
 
 Rubric:
 
@@ -57,7 +52,7 @@ For `structured_basic` and `structured_relation`:
 placed_required_objects / required_objects
 ```
 
-v2 cases prefer id-based matching. If only categories exist, matching falls back to category counts.
+v2 cases prefer id-based matching. If only categories exist, matching falls back to category counts. This metric is reported for debugging and comparison but is not averaged into `primary_score` in v1.
 
 ## Explicit Relations And Attachments
 
@@ -73,23 +68,19 @@ passed_visible_explicit_relations / total_visible_explicit_relations
 passed_visible_explicit_attachments / total_visible_explicit_attachments
 ```
 
-Only items with `visible_to_model=true` are evaluated. Pair judges output pass or fail only: no numeric score, partial score, or uncertain class.
+Only items with `visible_to_model=true` are evaluated. The VLM judge outputs pass or fail for each explicit relation/attachment.
 
 ## Primary Score
 
-If `validity_gate` is false, `primary_score = 0.0`.
+If `validity_gate` is false because no parseable scene exists, `primary_score = 0.0`.
 
-Otherwise, `primary_score` is the equal-weight mean of non-null active metrics:
-
-- `prompt_only`: `room_consistency_score_norm`
-- `structured_basic`: `room_consistency_score_norm`, `object_presence_rate`
-- `structured_relation`: `room_consistency_score_norm`, `object_presence_rate`, `specified_relation_pass_rate` if non-null, `specified_attachment_pass_rate` if non-null
-
-Example:
+Otherwise, `primary_score` is the VLM room/layout score:
 
 ```text
-mean(0.75, 1.0, 0.5, 1.0) = 0.8125
+primary_score = room_consistency_score_norm
 ```
+
+Relation, attachment, and object-presence rates remain reported scalar diagnostics.
 
 ## Benchmark Outputs
 
@@ -108,4 +99,4 @@ They also write `benchmark_summary.json`, grouped by `input_level`, with:
 - `room_consistency_score_norm_mean`
 - optional metric means when applicable
 
-Debug physical and spatial flags are not benchmark CSV columns in v0.
+Debug sanity, renderability, physical, and view flags are not benchmark CSV columns in v1. They are stored in `evaluation_report.json` under `debug_evidence`.

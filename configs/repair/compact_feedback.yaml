@@ -1,0 +1,4 @@
+benchmark:
+  max_repair_iterations: 0
+repair:
+  feedback_mode: compact

@@ -2,11 +2,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from benchmark.models.base_model import ModelResponseError
 from benchmark.feedback import build_feedback
 from benchmark.metrics import compute_case_metrics
 from benchmark.utils.io import ensure_dir, read_json, write_json
 from benchmark.visualization import export_viewer_scene
-from benchmark.workflow.evaluation import evaluate_layout_v0
+from benchmark.workflow.evaluation import evaluate_layout_vlm_as_judge_v1
+from benchmark.workflow.layout_normalization import enforce_layout_object_set
 from benchmark.workflow.scoring import infer_input_level
 from benchmark.workflow.artifacts import (
     attach_feedback_to_history,
@@ -39,20 +41,51 @@ class NormalizeInputNode:
         next_state.setdefault("iteration", 0)
         next_state.setdefault("history", [])
         next_state.setdefault("evaluation_reports", [])
+        next_state.setdefault("model_request_metadata_paths", [])
         ensure_dir(next_state["out_dir"])
+        if isinstance(next_state.get("resolved_run_config"), dict):
+            resolved_path = Path(next_state["out_dir"]) / "resolved_run_config.json"
+            write_json(resolved_path, next_state["resolved_run_config"])
+            hash_value = str(next_state["resolved_run_config"].get("config_hash", ""))
+            if hash_value:
+                (Path(next_state["out_dir"]) / "config_hash.txt").write_text(hash_value + "\n", encoding="utf-8")
+            next_state["resolved_run_config_path"] = str(resolved_path)
         return next_state
 
 
 class GenerateLayoutNode:
     def __call__(self, state: BenchmarkState) -> BenchmarkState:
         next_state = dict(state)
-        layout = next_state["model"].generate_layout(next_state["input_json"], next_state["layout_schema"])
+        next_state.pop("generation_error", None)
+        try:
+            layout = next_state["model"].generate_layout(next_state["input_json"], next_state["layout_schema"])
+        except ModelResponseError as exc:
+            layout = _empty_layout(next_state["input_json"])
+            next_state["generation_error"] = str(exc)
+        if not next_state.get("generation_error"):
+            layout, normalization = enforce_layout_object_set(layout, next_state["input_json"], stage="generation")
+            next_state["current_layout_normalization"] = normalization
         path = Path(next_state["out_dir"]) / "initial_layout.json"
         save_intermediate = save_intermediate_artifacts(next_state.get("benchmark_config"))
         if save_intermediate:
             write_json(path, layout)
         next_state["current_layout"] = layout
         next_state["current_layout_path"] = str(path) if save_intermediate else ""
+        metadata_path = _write_model_request_metadata(
+            next_state,
+            filename="generation_request_metadata.json",
+            metadata=getattr(next_state.get("model"), "last_request_metadata", None),
+        )
+        if metadata_path:
+            next_state["generation_request_metadata_path"] = metadata_path
+            next_state["model_request_metadata_paths"] = [*next_state.get("model_request_metadata_paths", []), metadata_path]
+        raw_response_path = _write_model_text_artifact(
+            next_state,
+            filename="generation_raw_response.txt",
+            text=getattr(next_state.get("model"), "last_response_text", ""),
+        )
+        if raw_response_path:
+            next_state["generation_raw_response_path"] = raw_response_path
         next_state["iteration"] = 0
         return next_state
 
@@ -61,7 +94,7 @@ class EvaluateLayoutNode:
     def __call__(self, state: BenchmarkState) -> BenchmarkState:
         next_state = dict(state)
         iteration = int(next_state.get("iteration", 0))
-        report, case_metrics = evaluate_layout_v0(
+        report, case_metrics = evaluate_layout_vlm_as_judge_v1(
             case=next_state["input_json"],
             layout=next_state["current_layout"],
             out_dir=next_state["out_dir"],
@@ -69,6 +102,10 @@ class EvaluateLayoutNode:
             benchmark_config=next_state.get("benchmark_config"),
             layout_schema=next_state.get("layout_schema"),
             iteration=iteration,
+            generator_model=next_state.get("model"),
+            judge_model=next_state.get("judge_model", next_state.get("model")),
+            judge_model_name=next_state.get("judge_model_name"),
+            generation_error=next_state.get("generation_error"),
         )
         path = Path(next_state["out_dir"]) / "evaluation_report.json"
         write_json(path, report)
@@ -106,6 +143,7 @@ class BuildFeedbackNode:
             next_state["current_evaluation"],
             next_state["current_layout"],
             next_state["input_json"],
+            benchmark_config=next_state.get("benchmark_config"),
         )
         iteration = int(next_state.get("iteration", 0))
         path = Path(next_state["out_dir"]) / f"feedback_iter_{iteration}.json"
@@ -127,18 +165,45 @@ class RepairLayoutNode:
     def __call__(self, state: BenchmarkState) -> BenchmarkState:
         next_state = dict(state)
         next_iteration = int(next_state.get("iteration", 0)) + 1
+        previous_layout = next_state["current_layout"]
         layout = next_state["model"].repair_layout(
             next_state["input_json"],
-            next_state["current_layout"],
+            previous_layout,
             next_state["current_feedback"],
             next_state["layout_schema"],
         )
+        layout, normalization = enforce_layout_object_set(
+            layout,
+            next_state["input_json"],
+            previous_layout=previous_layout,
+            stage=f"repair_iter_{next_iteration}",
+        )
+        layout["_repair_change_summary"] = _layout_change_summary(
+            previous_layout,
+            layout,
+            next_state.get("current_feedback", {}).get("repair_targets", []),
+        )
+        next_state["current_layout_normalization"] = normalization
         path = Path(next_state["out_dir"]) / f"repaired_layout_iter_{next_iteration}.json"
         save_intermediate = save_intermediate_artifacts(next_state.get("benchmark_config"))
         if save_intermediate:
             write_json(path, layout)
         next_state["current_layout"] = layout
         next_state["current_layout_path"] = str(path) if save_intermediate else ""
+        metadata_path = _write_model_request_metadata(
+            next_state,
+            filename=f"repair_request_metadata_iter_{next_iteration}.json",
+            metadata=getattr(next_state.get("model"), "last_request_metadata", None),
+        )
+        if metadata_path:
+            next_state["model_request_metadata_paths"] = [*next_state.get("model_request_metadata_paths", []), metadata_path]
+        raw_response_path = _write_model_text_artifact(
+            next_state,
+            filename=f"repair_raw_response_iter_{next_iteration}.txt",
+            text=getattr(next_state.get("model"), "last_response_text", ""),
+        )
+        if raw_response_path:
+            next_state["repair_raw_response_path"] = raw_response_path
         next_state["iteration"] = next_iteration
         return next_state
 
@@ -158,6 +223,8 @@ class ComputeMetricsNode:
             "case_metrics_path": next_state.get("case_metrics_path", ""),
             "history": compact_history(next_state["history"]),
             "final_evaluation": next_state["current_evaluation"],
+            "config_refs": next_state["current_evaluation"].get("config_refs", {}),
+            "config_hash": next_state["current_evaluation"].get("config_hash", ""),
         }
         result_path = Path(next_state["out_dir"]) / per_case_filename(next_state.get("benchmark_config"))
         write_json(result_path, result)
@@ -175,22 +242,30 @@ class ComputeMetricsNode:
                 next_state["current_layout"],
                 next_state["current_evaluation"],
                 next_state["history"],
+                next_state.get("benchmark_config"),
             )
-            viewer_scene["workflow"] = build_workflow_metadata(
+            workflow_metadata = build_workflow_metadata(
                 {
                     **next_state,
                     "per_case_result": result,
                     "per_case_result_path": str(result_path),
                     "viewer_scene_path": str(Path(next_state["out_dir"]) / "viewer_scene.json"),
-                }
+                },
+                include_data=False,
             )
+            viewer_scene["workflow"] = workflow_metadata
+            viewer_scene["workflow_steps"] = workflow_metadata.get("artifacts", [])
+            viewer_scene["artifacts"] = workflow_metadata.get("artifacts", [])
             viewer_scene["feedback"] = next_state.get("current_feedback", {})
             viewer_scene["metrics"] = metrics
             viewer_scene["metrics_summary"] = next_state.get("case_metrics", metrics)
             viewer_scene["view_artifacts"] = {
                 "room": next_state["current_evaluation"].get("room_consistency", {}).get("view_artifacts", []),
+                "global": next_state["current_evaluation"].get("room_consistency", {}).get("view_artifacts", []),
+                "groups": next_state["current_evaluation"].get("debug_evidence", {}).get("group_view_artifacts", []),
                 "relations": next_state["current_evaluation"].get("specified_relations", {}).get("results", []),
                 "attachments": next_state["current_evaluation"].get("specified_attachments", {}).get("results", []),
+                "vlm_judge": next_state["current_evaluation"].get("vlm_judge_artifacts", {}),
             }
             viewer_scene["workflow_trace_path"] = "workflow_trace.json"
             viewer_scene["history"] = result["history"]
@@ -215,3 +290,66 @@ def route_after_eval(state: BenchmarkState) -> str:
     if overall_valid is False and has_budget:
         return "repair"
     return "metrics"
+
+
+def _empty_layout(input_json: dict) -> dict:
+    scene_id = input_json.get("task_id") or input_json.get("case_id") or "unparseable_scene"
+    return {
+        "scene_id": str(scene_id),
+        "unit": "meter",
+        "coordinate_system": {
+            "origin": "case floor-plan coordinate frame; HSSD cases may use negative x/y values",
+            "x_axis": "floor-plan x coordinate",
+            "y_axis": "floor-plan y/depth coordinate",
+            "z_axis": "height",
+            "rotation_unit": "degree",
+        },
+        "objects": [],
+        "relations": [],
+        "hierarchy": {"regions": [], "floor_objects": [], "supported_objects": []},
+    }
+
+
+def _write_model_request_metadata(state: BenchmarkState, *, filename: str, metadata: object) -> str:
+    if not isinstance(metadata, dict) or not metadata:
+        return ""
+    path = Path(state["out_dir"]) / filename
+    write_json(path, metadata)
+    return str(path)
+
+
+def _write_model_text_artifact(state: BenchmarkState, *, filename: str, text: object) -> str:
+    if not isinstance(text, str) or not text:
+        return ""
+    path = Path(state["out_dir"]) / filename
+    path.write_text(text, encoding="utf-8")
+    return str(path)
+
+
+def _layout_change_summary(previous_layout: dict, current_layout: dict, repair_targets: object) -> dict:
+    targets = {str(item) for item in repair_targets} if isinstance(repair_targets, list) else set()
+    previous = {
+        obj.get("object_id"): obj
+        for obj in previous_layout.get("objects", [])
+        if isinstance(obj, dict) and isinstance(obj.get("object_id"), str)
+    }
+    changed = []
+    for obj in current_layout.get("objects", []):
+        if not isinstance(obj, dict) or not isinstance(obj.get("object_id"), str):
+            continue
+        object_id = obj["object_id"]
+        before = previous.get(object_id)
+        if before is None:
+            changed.append(object_id)
+            continue
+        if any(before.get(key) != obj.get(key) for key in ["center", "size", "yaw", "support_parent", "region_id"]):
+            changed.append(object_id)
+    changed_targets = sorted(object_id for object_id in changed if object_id in targets)
+    return {
+        "changed_object_ids": sorted(changed),
+        "changed_repair_targets": changed_targets,
+        "num_changed_objects": len(changed),
+        "num_changed_repair_targets": len(changed_targets),
+        "repair_targets": sorted(targets),
+        "repair_noop": bool(targets and not changed_targets),
+    }

@@ -13,20 +13,56 @@ set -euo pipefail
 #   logs/ready/qwen3vl-server.url
 
 MODE="${1:-submit}"
+MODEL_PROFILE="${MODEL_PROFILE:-32b}"
+case "$MODEL_PROFILE" in
+  2b)
+    DEFAULT_JOB_NAME="qwen3vl-2b-server"
+    DEFAULT_MODEL_ID="Qwen/Qwen3-VL-2B-Instruct"
+    DEFAULT_PARTITION="gpu-l40s"
+    DEFAULT_CPUS_PER_TASK="8"
+    DEFAULT_MEMORY="80G"
+    DEFAULT_CONTEXT_LENGTH="8192"
+    DEFAULT_MEM_FRACTION_STATIC=""
+    ;;
+  8b)
+    DEFAULT_JOB_NAME="qwen3vl-8b-server"
+    DEFAULT_MODEL_ID="Qwen/Qwen3-VL-8B-Instruct"
+    DEFAULT_PARTITION="gpu-a100"
+    DEFAULT_CPUS_PER_TASK="12"
+    DEFAULT_MEMORY="120G"
+    DEFAULT_CONTEXT_LENGTH="8192"
+    DEFAULT_MEM_FRACTION_STATIC=""
+    ;;
+  32b)
+    DEFAULT_JOB_NAME="qwen3vl-32b-server"
+    DEFAULT_MODEL_ID="Qwen/Qwen3-VL-32B-Instruct"
+    DEFAULT_PARTITION="gpu-h200"
+    DEFAULT_CPUS_PER_TASK="16"
+    DEFAULT_MEMORY="240G"
+    DEFAULT_CONTEXT_LENGTH="65536"
+    DEFAULT_MEM_FRACTION_STATIC="0.90"
+    ;;
+  *)
+    echo "ERROR: unsupported MODEL_PROFILE='$MODEL_PROFILE' (expected 2b, 8b, or 32b)" >&2
+    exit 2
+    ;;
+esac
 
-JOB_NAME="${JOB_NAME:-qwen3vl-8b-server}"
+JOB_NAME="${JOB_NAME:-$DEFAULT_JOB_NAME}"
 ACCOUNT="${ACCOUNT:-h2lab}"
-PARTITION="${PARTITION:-gpu-a100}"
+PARTITION="${PARTITION:-$DEFAULT_PARTITION}"
 GPU_REQUEST="${GPU_REQUEST:-gpu:1}"
-CPUS_PER_TASK="${CPUS_PER_TASK:-12}"
-MEMORY="${MEMORY:-120G}"
+CPUS_PER_TASK="${CPUS_PER_TASK:-$DEFAULT_CPUS_PER_TASK}"
+MEMORY="${MEMORY:-$DEFAULT_MEMORY}"
 WALLTIME="${WALLTIME:-24:00:00}"
 
-MODEL_ID="${MODEL_ID:-Qwen/Qwen3-VL-8B-Instruct}"
+MODEL_ID="${MODEL_ID:-$DEFAULT_MODEL_ID}"
 SERVED_MODEL_NAME="${SERVED_MODEL_NAME:-$MODEL_ID}"
 HOST="${HOST:-0.0.0.0}"
 PORT="${PORT:-8000}"
-CONTEXT_LENGTH="${CONTEXT_LENGTH:-8192}"
+CONTEXT_LENGTH="${CONTEXT_LENGTH:-$DEFAULT_CONTEXT_LENGTH}"
+MEM_FRACTION_STATIC="${MEM_FRACTION_STATIC:-$DEFAULT_MEM_FRACTION_STATIC}"
+SGLANG_EXTRA_ARGS="${SGLANG_EXTRA_ARGS:-}"
 
 SGLANG_ENV="${SGLANG_ENV:-/gscratch/stf/mohanc3/.conda/envs/sglang311}"
 HF_HOME="${HF_HOME:-/gscratch/h2lab/mohanc3/hf-cache}"
@@ -46,16 +82,23 @@ usage() {
 Usage: bash scripts/hyak/qwen3vl_server.sh <submit|server|status|tail|stop|dry-run>
 
 Common overrides:
-  MODEL_ID=Qwen/Qwen3-VL-8B-Instruct
-  PARTITION=gpu-a100
+  MODEL_PROFILE=32b
+  MODEL_ID=Qwen/Qwen3-VL-32B-Instruct
+  PARTITION=gpu-h200
   GPU_REQUEST=gpu:1
-  MEMORY=120G
+  MEMORY=240G
+  CONTEXT_LENGTH=65536
+  MEM_FRACTION_STATIC=0.90
   WALLTIME=24:00:00
   PORT=8000
+  SGLANG_EXTRA_ARGS="--arg value"
+  JOB_ID=36252666
 
 Examples:
   bash scripts/hyak/qwen3vl_server.sh submit
-  MODEL_ID=Qwen/Qwen3-VL-2B-Instruct PARTITION=gpu-l40s bash scripts/hyak/qwen3vl_server.sh submit
+  MODEL_PROFILE=8b bash scripts/hyak/qwen3vl_server.sh submit
+  MODEL_PROFILE=2b bash scripts/hyak/qwen3vl_server.sh submit
+  MODEL_PROFILE=32b CONTEXT_LENGTH=65536 bash scripts/hyak/qwen3vl_server.sh submit
   JOB_IDS="36168488 36168454" bash scripts/hyak/qwen3vl_server.sh stop
   bash scripts/hyak/qwen3vl_server.sh stop
 EOF
@@ -64,6 +107,7 @@ EOF
 print_config() {
   cat <<EOF
 job_name=$JOB_NAME
+model_profile=$MODEL_PROFILE
 account=$ACCOUNT
 partition=$PARTITION
 gpu_request=$GPU_REQUEST
@@ -75,10 +119,12 @@ served_model_name=$SERVED_MODEL_NAME
 host=$HOST
 port=$PORT
 context_length=$CONTEXT_LENGTH
+mem_fraction_static=$MEM_FRACTION_STATIC
 sglang_env=$SGLANG_ENV
 hf_home=$HF_HOME
 ready_file=$READY_FILE
 stop_existing=$STOP_EXISTING
+sglang_extra_args=$SGLANG_EXTRA_ARGS
 EOF
 }
 
@@ -141,11 +187,33 @@ status_jobs() {
 }
 
 tail_logs() {
+  job_id="${JOB_ID:-}"
+  if [ -z "$job_id" ]; then
+    job_id=$(squeue -h -u "$USER" -n "$JOB_NAME" -o "%i" 2>/dev/null | tail -n 1 || true)
+  fi
+
+  if [ -n "$job_id" ]; then
+    target="$LOG_DIR/$JOB_NAME-$job_id.out"
+    echo "Current Slurm job for $JOB_NAME: $job_id"
+    echo "Tailing $target"
+    while [ ! -e "$target" ]; do
+      if ! squeue -h -j "$job_id" >/dev/null 2>&1; then
+        echo "Job $job_id is no longer in squeue and log was not created: $target" >&2
+        return 1
+      fi
+      echo "Waiting for log file to be created. Job may still be pending..."
+      sleep 10
+    done
+    tail -f "$target"
+    return 0
+  fi
+
   latest=$(ls -t "$LOG_DIR"/"$JOB_NAME"-*.out 2>/dev/null | head -n 1 || true)
   if [ -z "$latest" ]; then
-    echo "No logs found for $JOB_NAME under $LOG_DIR"
+    echo "No active Slurm job and no logs found for $JOB_NAME under $LOG_DIR"
     return 1
   fi
+  echo "No active Slurm job found for $JOB_NAME; tailing latest historical log."
   echo "Tailing $latest"
   tail -f "$latest"
 }
@@ -202,6 +270,14 @@ server_main() {
   nvidia-smi
 
   rm -f "$READY_FILE"
+  extra_args=()
+  if [ -n "$MEM_FRACTION_STATIC" ]; then
+    extra_args+=(--mem-fraction-static "$MEM_FRACTION_STATIC")
+  fi
+  if [ -n "$SGLANG_EXTRA_ARGS" ]; then
+    # shellcheck disable=SC2206
+    extra_args+=($SGLANG_EXTRA_ARGS)
+  fi
 
   "$py" -m sglang.launch_server \
     --model-path "$MODEL_ID" \
@@ -209,7 +285,8 @@ server_main() {
     --host "$HOST" \
     --port "$PORT" \
     --trust-remote-code \
-    --context-length "$CONTEXT_LENGTH" &
+    --context-length "$CONTEXT_LENGTH" \
+    "${extra_args[@]}" &
 
   server_pid=$!
   echo "SGLang pid=$server_pid"

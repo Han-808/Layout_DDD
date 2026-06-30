@@ -1,0 +1,5 @@
+name: synthetic_debug
+source_type: json_folder
+path: data/benchmark_cases/hssd_small
+pattern: "*.json"
+input_level: structured_relation

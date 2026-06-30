@@ -1,0 +1,9 @@
+name: hssd_scene_instances_local
+source_type: hssd_scene_instance_json
+path: data/external/hssd-hab
+pattern: "**/*.scene_instance.json"
+input_level: structured_basic
+default_room:
+  boundary: [[0, 0], [8, 0], [8, 8], [0, 8]]
+  floor_z: 0.0
+  wall_height: 3.0

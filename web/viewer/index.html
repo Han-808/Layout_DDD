@@ -15,80 +15,117 @@
   </head>
   <body>
     <main id="app">
-      <section id="workflow-bar" aria-label="Benchmark workflow">
-        <header>
-          <div>
-            <h1 id="task-title">viewer_scene.json</h1>
-            <p id="workflow-caption">Layout generation -> rendered views -> VLM-style judging -> scalar metrics.</p>
-          </div>
-          <div class="toolbar" aria-label="Workflow controls">
-            <button id="before-button" type="button">Before Repair</button>
-            <button id="after-button" type="button">After Repair</button>
-            <button id="replay-button" type="button">Replay Workflow</button>
-          </div>
-        </header>
-        <div id="workflow"></div>
-      </section>
+      <aside id="sidebar" aria-label="Workflow, metadata, and artifact JSON">
+        <section id="workflow-bar" aria-label="Benchmark workflow">
+          <header>
+            <div>
+              <h1 id="task-title">viewer_scene.json</h1>
+              <p id="workflow-caption">Layout generation -> rendered views -> VLM-style judging -> scalar metrics.</p>
+            </div>
+            <div class="toolbar" aria-label="Workflow controls">
+              <button id="before-button" type="button">Before Repair</button>
+              <button id="after-button" type="button">After Repair</button>
+              <button id="compare-button" type="button">Compare</button>
+              <button id="replay-button" type="button">Replay Workflow</button>
+            </div>
+            <div class="toolbar visual-toolbar" aria-label="Visual controls">
+              <button id="group-color-button" type="button" aria-pressed="false">Color by group</button>
+              <button id="edge-overlay-button" type="button" aria-pressed="false">Relation edges</button>
+              <button id="replay-prev-button" type="button">Previous step</button>
+              <button id="replay-next-button" type="button">Next step</button>
+              <button id="replay-reset-button" type="button">Reset</button>
+            </div>
+          </header>
+          <div id="workflow"></div>
+        </section>
 
-      <section id="workbench">
-        <section id="viewport" aria-label="3D scene viewport"></section>
         <aside id="panel" aria-label="Scene metadata">
-        <header>
-          <h2>Iteration</h2>
-          <select id="iteration-select" aria-label="Iteration"></select>
-        </header>
-        <section class="panel-section">
-          <h2>Summary</h2>
-          <dl id="summary"></dl>
-        </section>
+          <header>
+            <h2>Iteration</h2>
+            <select id="iteration-select" aria-label="Iteration"></select>
+          </header>
+          <section class="panel-section">
+            <h2>Summary</h2>
+            <dl id="summary"></dl>
+          </section>
 
-        <section class="panel-section">
-          <h2>Violations</h2>
-          <div id="violations"></div>
-        </section>
+          <section class="panel-section">
+            <h2>Violations</h2>
+            <div id="violations"></div>
+          </section>
 
-        <section class="panel-section">
-          <h2>Deterministic Feedback</h2>
-          <div id="feedback"></div>
-        </section>
+          <section class="panel-section">
+            <h2>Deterministic Feedback</h2>
+            <div id="feedback"></div>
+          </section>
 
-        <section class="panel-section">
-          <h2>Metrics</h2>
-          <dl id="metrics"></dl>
-        </section>
+          <section class="panel-section">
+            <h2>Metrics</h2>
+            <dl id="metrics"></dl>
+          </section>
 
-        <section class="panel-section">
-          <h2>Room Views</h2>
-          <div id="room-views"></div>
-        </section>
+          <section class="panel-section">
+            <h2>Global View</h2>
+            <div id="global-views"></div>
+          </section>
 
-        <section class="panel-section">
-          <h2>Relation / Attachment Views</h2>
-          <div id="pair-views"></div>
-        </section>
+          <section class="panel-section">
+            <h2>Group Evidence</h2>
+            <div id="group-evidence"></div>
+          </section>
 
-        <section class="panel-section">
-          <h2>Workflow Trace</h2>
-          <div id="workflow-trace"></div>
-        </section>
+          <section class="panel-section">
+            <h2>Skipped Objects</h2>
+            <div id="skipped-objects"></div>
+          </section>
 
-        <section class="panel-section">
-          <h2>Relations</h2>
-          <div id="relations"></div>
-        </section>
+          <section class="panel-section">
+            <h2>VLM Judge Artifacts</h2>
+            <div id="judge-artifacts"></div>
+          </section>
 
-        <section class="panel-section">
-          <h2>History</h2>
-          <div id="history"></div>
-        </section>
+          <section class="panel-section">
+            <h2>Room Views</h2>
+            <div id="room-views"></div>
+          </section>
+
+          <section class="panel-section">
+            <h2>Relation / Attachment Views</h2>
+            <div id="pair-views"></div>
+          </section>
+
+          <section class="panel-section">
+            <h2>Workflow Trace</h2>
+            <div id="workflow-trace"></div>
+          </section>
+
+          <section class="panel-section">
+            <h2>Relations</h2>
+            <div id="relations"></div>
+          </section>
+
+          <section class="panel-section">
+            <h2>History</h2>
+            <div id="history"></div>
+          </section>
         </aside>
-      </section>
 
-      <section id="artifact-drawer" aria-label="Selected artifact JSON">
-        <div id="artifact-title" class="artifact-title muted">Select a workflow step</div>
-        <pre id="artifact-preview" class="json-preview">{}</pre>
-      </section>
+        <section id="artifact-drawer" aria-label="Selected artifact JSON">
+          <div id="artifact-resize-handle" title="Drag to resize artifact drawer"></div>
+          <div class="artifact-header">
+            <div id="artifact-title" class="artifact-title muted">Select a workflow step</div>
+            <div class="artifact-actions">
+              <button id="artifact-load" type="button">Load artifact</button>
+              <button id="artifact-copy" type="button">Copy path</button>
+            </div>
+            <button id="artifact-toggle" type="button" aria-expanded="true">Collapse</button>
+          </div>
+          <pre id="artifact-preview" class="json-preview">{}</pre>
+        </section>
+      </aside>
+
+      <section id="viewport" aria-label="3D scene viewport"></section>
     </main>
-    <script type="module" src="./viewer.js?v=20260518b"></script>
+    <script type="module" src="./viewer.js?v=20260623b"></script>
   </body>
 </html>

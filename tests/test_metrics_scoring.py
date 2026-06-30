@@ -16,7 +16,7 @@ def test_primary_score_prompt_only_equals_room_score() -> None:
     assert compute_primary_score(metrics, "prompt_only") == 0.75
 
 
-def test_primary_score_structured_basic_mean() -> None:
+def test_primary_score_structured_basic_uses_vlm_score() -> None:
     metrics = {
         "validity_gate": True,
         "room_consistency_score_norm": 0.75,
@@ -25,10 +25,10 @@ def test_primary_score_structured_basic_mean() -> None:
         "specified_attachment_pass_rate": None,
     }
 
-    assert compute_primary_score(metrics, "structured_basic") == 0.875
+    assert compute_primary_score(metrics, "structured_basic") == 0.75
 
 
-def test_primary_score_structured_relation_mean_non_null() -> None:
+def test_primary_score_structured_relation_uses_vlm_score() -> None:
     metrics = {
         "validity_gate": True,
         "room_consistency_score_norm": 0.75,
@@ -37,7 +37,7 @@ def test_primary_score_structured_relation_mean_non_null() -> None:
         "specified_attachment_pass_rate": 1.0,
     }
 
-    assert compute_primary_score(metrics, "structured_relation") == 0.8125
+    assert compute_primary_score(metrics, "structured_relation") == 0.75
 
 
 def test_validity_gate_false_forces_primary_score_zero() -> None:

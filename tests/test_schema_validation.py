@@ -8,10 +8,11 @@ from benchmark.utils.io import read_json
 
 
 ROOT = Path(__file__).resolve().parents[1]
+HSSD_CASE = ROOT / "data" / "benchmark_cases" / "hssd_small" / "102343992_structured_relation.json"
 
 
 def test_schema_validation_accepts_mock_layout() -> None:
-    case = read_json(ROOT / "data" / "benchmark_cases" / "bm_instance_001.json")
+    case = read_json(HSSD_CASE)
     schema = read_json(ROOT / "schemas" / "layout.schema.json")
     layout = MockModel().generate_layout(case, schema)
 
@@ -22,7 +23,7 @@ def test_schema_validation_accepts_mock_layout() -> None:
 
 
 def test_schema_validation_rejects_duplicate_object_id() -> None:
-    case = read_json(ROOT / "data" / "benchmark_cases" / "bm_instance_001.json")
+    case = read_json(HSSD_CASE)
     schema = read_json(ROOT / "schemas" / "layout.schema.json")
     layout = MockModel().generate_layout(case, schema)
     layout["objects"][1]["object_id"] = layout["objects"][0]["object_id"]
@@ -34,7 +35,7 @@ def test_schema_validation_rejects_duplicate_object_id() -> None:
 
 
 def test_schema_validation_allows_optional_relations_and_hierarchy() -> None:
-    case = read_json(ROOT / "data" / "benchmark_cases" / "bm_instance_001.json")
+    case = read_json(HSSD_CASE)
     schema = read_json(ROOT / "schemas" / "layout.schema.json")
     layout = MockModel().generate_layout(case, schema)
     layout.pop("relations")

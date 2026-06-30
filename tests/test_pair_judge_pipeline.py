@@ -45,9 +45,12 @@ def test_explicit_relation_and_attachment_create_pair_views(tmp_path: Path) -> N
 
     assert metrics["specified_relation_pass_rate"] == 1.0
     assert metrics["specified_attachment_pass_rate"] == 1.0
-    relation_views = report["specified_relations"]["results"][0]["view_artifacts"]
-    attachment_views = report["specified_attachments"]["results"][0]["view_artifacts"]
-    assert any(item["path"].endswith("pair_top.png") for item in relation_views)
-    assert any(item["path"].endswith("pair_oblique.png") for item in attachment_views)
-    assert (tmp_path / "views" / "pairs" / "rel_001" / "pair_top.png").exists()
-    assert (tmp_path / "views" / "pairs" / "att_001" / "pair_side.png").exists()
+    assert report["specified_relations"]["results"][0]["pass"]
+    assert report["specified_attachments"]["results"][0]["pass"]
+    groups = report["debug_evidence"]["object_groups"]
+    assert any({"chair_001", "desk_001"}.issubset(set(group["object_ids"])) for group in groups)
+    assert any({"lamp_001", "desk_001"}.issubset(set(group["object_ids"])) for group in groups)
+    assert (tmp_path / "views" / "global" / "topdown_global_xy.png").exists()
+    assert (tmp_path / "views" / "groups" / "group_001" / "group_001_xy.png").exists()
+    assert (tmp_path / "views" / "groups" / "group_001" / "group_001_yz.png").exists()
+    assert (tmp_path / "views" / "groups" / "group_001" / "group_001_xz.png").exists()

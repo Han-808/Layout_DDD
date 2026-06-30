@@ -17,7 +17,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run a minimal 3D layout benchmark visualization demo.")
     parser.add_argument(
         "--case",
-        default=str(PROJECT_ROOT / "data" / "benchmark_cases" / "bm_instance_001.json"),
+        default=str(PROJECT_ROOT / "data" / "benchmark_cases" / "hssd_small_room_full" / "102344115_structured_basic.json"),
         help="Path to a benchmark case JSON.",
     )
     parser.add_argument(

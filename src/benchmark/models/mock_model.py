@@ -31,9 +31,10 @@ class MockModel(BaseLayoutModel):
 
     behavior: str = "valid"
 
-    def __init__(self, name: str = "mock", behavior: str = "valid") -> None:
+    def __init__(self, name: str = "mock", behavior: str = "valid", judge_evidence_budgeting: bool = False) -> None:
         super().__init__(name=name)
         self.behavior = behavior
+        self.judge_evidence_budgeting = judge_evidence_budgeting
 
     def generate_layout(self, bm_instance: dict, layout_schema: dict) -> dict:
         layout = self._make_layout(bm_instance)

@@ -103,7 +103,7 @@ def artifact_path(path: str | Path | None, out_dir: str | Path | None = None) ->
 def build_workflow_metadata(
     state: dict,
     *,
-    include_data: bool = True,
+    include_data: bool = False,
 ) -> dict:
     out_dir = state.get("out_dir")
     artifacts: list[dict] = [
@@ -141,6 +141,49 @@ def build_workflow_metadata(
                 include_data=include_data,
             )
         )
+        evaluation = item.get("evaluation") if isinstance(item.get("evaluation"), dict) else {}
+        for key, label in [
+            ("input_manifest_path", "VLM judge input manifest"),
+            ("prompt_path", "VLM judge prompt"),
+            ("image_manifest_path", "VLM judge image manifest"),
+            ("request_metadata_path", "VLM judge request metadata"),
+            ("raw_response_path", "VLM judge raw response"),
+            ("parsed_response_path", "VLM judge parsed response"),
+        ]:
+            path = evaluation.get("vlm_judge_artifacts", {}).get(key)
+            if path:
+                artifacts.append(
+                    _artifact(
+                        step="judge",
+                        label=label,
+                        path=path,
+                        iteration=iteration,
+                        status="evidence",
+                        include_data=False,
+                    )
+                )
+        if iteration == 0 and state.get("generation_request_metadata_path"):
+            artifacts.append(
+                _artifact(
+                    step="generate",
+                    label="Generation request metadata",
+                    path=artifact_path(state.get("generation_request_metadata_path", ""), out_dir),
+                    iteration=iteration,
+                    status="api_metadata",
+                    include_data=False,
+                )
+            )
+        if iteration == 0 and state.get("generation_raw_response_path"):
+            artifacts.append(
+                _artifact(
+                    step="generate",
+                    label="Generation raw response",
+                    path=artifact_path(state.get("generation_raw_response_path", ""), out_dir),
+                    iteration=iteration,
+                    status="raw_response",
+                    include_data=False,
+                )
+            )
         if item.get("feedback_path") or item.get("feedback") is not None:
             artifacts.append(
                 _artifact(

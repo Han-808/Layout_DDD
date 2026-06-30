@@ -1,0 +1,14 @@
+name: hssd_small_room_mock
+description: Mock run over a small downloaded HSSD bbox case.
+defaults:
+  dataset: hssd_downloaded_small
+  model: mock
+  inference: local_mock
+  evaluation: vlm_as_judge_v1
+  render: bbox_perspective_default
+  grouping: deterministic_metadata_geometry
+  repair: compact_feedback
+  viewer: threejs_default
+out: outputs/hssd_small_room_mock_resolved
+judge_model: same
+max_repair_iterations: 0

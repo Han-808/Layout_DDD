@@ -1,0 +1,6 @@
+name: mock
+provider: mock
+behavior: valid
+judge_evidence_budgeting: false
+generation: {}
+judge: {}

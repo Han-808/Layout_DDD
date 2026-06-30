@@ -1,0 +1,40 @@
+experiments:
+  hssd_natural_small_qwen3vl32b_local:
+    description: "Natural small complete HSSD-HAB scene through local Hyak SGLang Qwen3-VL-32B."
+    case: data/benchmark_cases/hssd_natural_small/selected_structured_basic.json
+    model: qwen3vl_sglang_32b
+    judge_model: same
+    out: outputs/hssd_natural_small_vlm_judge_smoke
+    max_repair_iterations: 1
+    model_overrides:
+      max_tokens: 12000
+      timeout_seconds: 1200
+
+  hssd_small_room_qwen3vl32b_local:
+    description: "Full 74-object HSSD-HAB small room through local Hyak SGLang Qwen3-VL-32B."
+    case: data/benchmark_cases/hssd_small_room_full/102344115_structured_basic.json
+    model: qwen3vl_sglang_32b
+    judge_model: same
+    out: outputs/hssd_small_room_vlm_judge_smoke
+    max_repair_iterations: 0
+    model_overrides:
+      max_tokens: 24000
+      timeout_seconds: 1800
+
+  hssd_small_room_mock:
+    description: "Local mock smoke for the same HSSD-HAB case without a model server."
+    case: data/benchmark_cases/hssd_small_room_full/102344115_structured_basic.json
+    model: mock
+    out: outputs/hssd_small_room_mock
+    max_repair_iterations: 0
+
+  hssd_small_room_qwen3vl32b_local_batch:
+    description: "Batch form of the same HSSD small-room experiment."
+    cases: data/benchmark_cases/hssd_small_room_full
+    model: qwen3vl_sglang_32b
+    judge_model: same
+    out: outputs/hssd_small_room_batch
+    max_repair_iterations: 0
+    model_overrides:
+      max_tokens: 24000
+      timeout_seconds: 1800

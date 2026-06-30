@@ -7,14 +7,22 @@ class BenchmarkState(TypedDict, total=False):
     task_id: str
     model_name: str
     model: Any
+    judge_model_name: str
+    judge_model: Any
     case_path: str
     out_dir: str
     input_json: dict
     layout_schema: dict
     layout_schema_path: str
     benchmark_config: dict
+    resolved_run_config: dict
+    resolved_run_config_path: str
     current_layout: dict
     current_layout_path: str
+    generation_error: str
+    generation_request_metadata_path: str
+    generation_raw_response_path: str
+    model_request_metadata_paths: list[str]
     current_evaluation: dict
     current_evaluation_path: str
     current_feedback: dict

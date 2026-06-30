@@ -8,10 +8,11 @@ from benchmark.utils.io import read_json
 
 
 ROOT = Path(__file__).resolve().parents[1]
+HSSD_CASE = ROOT / "data" / "benchmark_cases" / "hssd_small" / "102343992_structured_basic.json"
 
 
 def test_evaluator_reports_valid_mock_layout() -> None:
-    case = read_json(ROOT / "data" / "benchmark_cases" / "bm_instance_001.json")
+    case = read_json(HSSD_CASE)
     schema = read_json(ROOT / "schemas" / "layout.schema.json")
     layout = MockModel().generate_layout(case, schema)
 
@@ -29,7 +30,7 @@ def test_evaluator_reports_valid_mock_layout() -> None:
 
 
 def test_evaluator_reports_collision() -> None:
-    case = read_json(ROOT / "data" / "benchmark_cases" / "bm_instance_001.json")
+    case = read_json(HSSD_CASE)
     schema = read_json(ROOT / "schemas" / "layout.schema.json")
     layout = MockModel(behavior="colliding_then_repair").generate_layout(case, schema)
 
@@ -40,7 +41,7 @@ def test_evaluator_reports_collision() -> None:
 
 
 def test_evaluator_allows_null_required_objects() -> None:
-    case = read_json(ROOT / "data" / "benchmark_cases" / "bm_instance_001.json")
+    case = read_json(HSSD_CASE)
     schema = read_json(ROOT / "schemas" / "layout.schema.json")
     case["required_objects"] = None
     case["spatial_constraints"] = []

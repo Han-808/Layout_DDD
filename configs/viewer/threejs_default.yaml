@@ -1,0 +1,30 @@
+benchmark:
+  save_viewer_scene: true
+viewer:
+  type: threejs
+  copy_assets: true
+  default_focus: "visual"
+  json_preview:
+    lazy_load: true
+    hidden_by_default: true
+    truncate_chars: 20000
+  group_coloring:
+    enabled_by_default: false
+    toggle_available: true
+  overlays:
+    show_floor_grid: true
+    show_axes: true
+    show_room_proxy: false
+    show_floor_plan_regions: true
+    show_relation_edges_by_default: false
+    allow_relation_edge_toggle: true
+    show_judge_status_markers: true
+  replay:
+    enabled: true
+    autoplay_default: false
+    step_duration_ms: 1200
+  diff:
+    enabled: true
+    position_tolerance_m: 0.01
+    size_tolerance_m: 0.01
+    yaw_tolerance_degrees: 1.0

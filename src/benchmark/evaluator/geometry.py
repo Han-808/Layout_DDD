@@ -4,7 +4,8 @@ import math
 from typing import Iterable
 
 import numpy as np
-from shapely.geometry import Polygon
+from shapely.geometry import MultiPolygon, Polygon
+from shapely.ops import unary_union
 
 
 def bbox_z_bounds(obj: dict) -> tuple[float, float]:
@@ -13,8 +14,16 @@ def bbox_z_bounds(obj: dict) -> tuple[float, float]:
     return center_z - height / 2.0, center_z + height / 2.0
 
 
-def room_polygon(room: dict) -> Polygon:
-    return Polygon(room["floor_polygon"])
+def room_polygon(room: dict) -> Polygon | MultiPolygon:
+    region_polygons = _region_polygons(room)
+    if region_polygons:
+        union = unary_union(region_polygons)
+        if not union.is_empty:
+            return union
+    polygon = room.get("floor_polygon") or room.get("boundary")
+    if not polygon:
+        raise KeyError("room requires floor_polygon or boundary")
+    return Polygon(polygon)
 
 
 def footprint_polygon(obj: dict, yaw_aware: bool = True) -> Polygon:
@@ -47,6 +56,24 @@ def footprint_inside_room(obj: dict, room: dict, tolerance: float = 1.0e-6) -> b
     footprint = footprint_polygon(obj)
     polygon = room_polygon(room)
     return polygon.buffer(tolerance).covers(footprint)
+
+
+def _region_polygons(room: dict) -> list[Polygon]:
+    floor_plan = room.get("floor_plan") if isinstance(room.get("floor_plan"), dict) else {}
+    regions = floor_plan.get("regions") or room.get("regions") or []
+    if not isinstance(regions, list):
+        return []
+    polygons = []
+    for region in regions:
+        if not isinstance(region, dict):
+            continue
+        polygon = region.get("floor_polygon")
+        if not isinstance(polygon, list) or len(polygon) < 3:
+            continue
+        candidate = Polygon(polygon)
+        if candidate.is_valid and not candidate.is_empty and candidate.area > 0:
+            polygons.append(candidate)
+    return polygons
 
 
 def footprints_intersect(obj_a: dict, obj_b: dict, area_tolerance: float = 1.0e-6) -> bool:

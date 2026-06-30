@@ -1,0 +1,25 @@
+grouping:
+  enabled: true
+  proximity:
+    min_gap_m: 0.25
+    max_gap_m: 1.25
+    max_normalized_gap: 0.75
+  diameter:
+    ratio_of_room_diagonal: 0.35
+    min_m: 2.5
+    max_m: 8.0
+  object_count:
+    rule: sqrt_num_renderable_objects
+    additive_margin: 1
+    min_objects_per_group: 6
+    max_objects_per_group: 12
+  strong_link_relaxation:
+    max_group_diameter_multiplier: 1.25
+    max_objects_multiplier: 1.5
+  derived_support:
+    enabled: true
+    vertical_tolerance_m: 0.08
+    min_xy_overlap_ratio: 0.15
+  invariants:
+    every_renderable_object_in_exactly_one_group: true
+    never_break_must_link: true

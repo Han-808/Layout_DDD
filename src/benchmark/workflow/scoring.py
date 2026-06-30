@@ -91,19 +91,6 @@ def compute_validity_gate(case: dict, layout: dict, layout_schema: dict | None =
     if errors:
         return ValidityGateResult(False, errors)
 
-    boundary = room_boundary(case)
-    if boundary and placed_objects and all(_object_fully_outside_boundary(obj, boundary) for obj in placed_objects):
-        errors.append("all placed objects are outside the room boundary")
-
-    if _mostly_same_volume(placed_objects):
-        errors.append("most placed objects overlap into essentially one volume")
-
-    required_specs = required_object_specs(case)
-    if infer_input_level(case) in {"structured_basic", "structured_relation"} and required_specs:
-        presence = compute_object_presence(case, layout)
-        if presence.required_objects > 0 and presence.placed_required_objects == 0:
-            errors.append("all required objects are missing")
-
     return ValidityGateResult(not errors, errors)
 
 
@@ -145,26 +132,8 @@ def compute_object_presence(case: dict, layout: dict) -> ObjectPresenceResult:
 def compute_primary_score(case_metrics: dict, input_level: str) -> float:
     if not case_metrics.get("validity_gate", False):
         return 0.0
-
-    active: list[float] = []
     room_score = case_metrics.get("room_consistency_score_norm")
-    if room_score is not None:
-        active.append(float(room_score))
-
-    if input_level in {"structured_basic", "structured_relation"}:
-        object_presence = case_metrics.get("object_presence_rate")
-        if object_presence is not None:
-            active.append(float(object_presence))
-
-    if input_level == "structured_relation":
-        for key in ["specified_relation_pass_rate", "specified_attachment_pass_rate"]:
-            value = case_metrics.get(key)
-            if value is not None:
-                active.append(float(value))
-
-    if not active:
-        return 0.0
-    return sum(active) / len(active)
+    return 0.0 if room_score is None else float(room_score)
 
 
 def build_case_metrics(
