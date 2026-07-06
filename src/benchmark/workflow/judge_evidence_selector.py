@@ -289,6 +289,9 @@ def _score_group(group: dict, physical_flags: list[dict], view_flags: list[dict]
     if _has_group_edge(group, {"explicit_relation"}):
         score += 30
         reasons.append("explicit_relation")
+    if group.get("group_source") == "semantic_region":
+        score += 25
+        reasons.append("semantic_region")
     if _has_view_flag(view_flags, str(group.get("group_id")), object_set):
         score += 20
         reasons.append("view_flag")

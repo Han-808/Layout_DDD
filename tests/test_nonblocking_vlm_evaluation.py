@@ -23,6 +23,34 @@ class _UnparseableModel(BaseLayoutModel):
         raise AssertionError("repair should not run")
 
 
+class _MalformedRepairModel(BaseLayoutModel):
+    def __init__(self) -> None:
+        super().__init__(name="malformed_repair")
+        self.last_response_text = ""
+        self.last_prompt_text = ""
+        self.last_request_metadata = {}
+        self.last_prompt_sections = []
+
+    def generate_layout(self, bm_instance: dict, layout_schema: dict) -> dict:
+        raise ModelResponseError("Initial response does not contain a JSON object.")
+
+    def repair_layout(self, bm_instance: dict, current_layout: dict, feedback: dict, layout_schema: dict) -> dict:
+        self.last_prompt_text = "repair prompt"
+        self.last_response_text = '{"scene_id": "bad_layout_case" "objects": []}'
+        self.last_request_metadata = {
+            "call_type": "repair",
+            "finish_reason": "stop",
+            "prompt_budget_report": {
+                "call_type": "repair",
+                "fits_context": True,
+                "estimated_prompt_tokens": 10,
+                "max_tokens": 100,
+            },
+        }
+        self.last_prompt_sections = [{"name": "repair_instruction", "chars": 13, "estimated_tokens": 4}]
+        raise ModelResponseError("Model response contains malformed JSON: Expecting ',' delimiter at char 30.")
+
+
 def _case() -> dict:
     return {
         "case_id": "bad_layout_case",
@@ -99,7 +127,8 @@ def test_no_renderable_objects_still_produces_global_evidence(tmp_path: Path) ->
     assert any(flag["type"] == "no_renderable_objects" for flag in report["debug_evidence"]["view_flags"])
     assert report["debug_evidence"]["object_groups"] == []
     assert (tmp_path / "views" / "global" / "topdown_global_xy.png").exists()
-    assert report["overall_valid"] is True
+    assert report["overall_valid"] is False
+    assert report["hard_failures"][0]["code"] == "no_renderable_objects"
 
 
 def test_unparseable_generation_writes_structured_failure(tmp_path: Path) -> None:
@@ -123,3 +152,28 @@ def test_unparseable_generation_writes_structured_failure(tmp_path: Path) -> Non
     assert report["debug_evidence"]["sanity_flags"][0]["type"] == "model_output_unparseable"
     assert state["case_metrics"]["primary_score"] == 0.0
     assert (tmp_path / "evaluation_report.json").exists()
+
+
+def test_malformed_repair_response_is_recorded_without_aborting_case(tmp_path: Path) -> None:
+    state = run_workflow(
+        {
+            "case_path": str(HSSD_CASE),
+            "out_dir": str(tmp_path),
+            "model": _MalformedRepairModel(),
+            "model_name": "malformed_repair",
+            "layout_schema": read_json(ROOT / "schemas" / "layout.schema.json"),
+            "benchmark_config": {"benchmark": {"save_viewer_scene": True}, "evaluation": {"vlm_judge": "mock"}},
+            "max_repair_iterations": 1,
+        }
+    )
+
+    assert "malformed JSON" in state["repair_error"]
+    assert state["iteration"] == 1
+    assert len(state["history"]) == 2
+    assert (tmp_path / "repair_raw_response_iter_1.txt").exists()
+    assert (tmp_path / "repair_prompt_iter_1.txt").exists()
+    assert (tmp_path / "repair_request_metadata_iter_1.json").exists()
+    assert (tmp_path / "repair_prompt_budget_report_iter_1.json").exists()
+    assert (tmp_path / "repair_prompt_sections_iter_1.json").exists()
+    assert (tmp_path / "per_case_result.json").exists()
+    assert (tmp_path / "viewer_scene.json").exists()

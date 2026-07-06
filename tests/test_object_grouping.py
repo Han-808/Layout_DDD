@@ -45,6 +45,54 @@ def test_grouping_assigns_every_object_once_and_splits_far_objects() -> None:
     assert len(assigned) == len(set(assigned))
     assert any({"chair_1", "desk_1"} == set(group["object_ids"]) for group in groups)
     assert any(group["object_ids"] == ["bed_1"] for group in groups)
+    assert all(group["group_source"] == "spatial_cluster" for group in groups)
+
+
+def test_grouping_prefers_semantic_regions_when_available() -> None:
+    layout = {
+        "objects": [
+            _obj("chair_1", [0.2, 0.2, 0.25]),
+            _obj("desk_1", [0.8, 0.2, 0.25]),
+            _obj("bed_1", [8.0, 8.0, 0.25]),
+            _obj("lamp_1", [8.5, 8.0, 0.25]),
+        ]
+    }
+    case = {
+        "room": {
+            "floor_plan": {
+                "regions": [
+                    {"id": "work_0", "label": "work", "floor_polygon": [[0, 0], [2, 0], [2, 2], [0, 2]]},
+                    {"id": "sleep_0", "label": "sleep", "floor_polygon": [[7, 7], [10, 7], [10, 10], [7, 10]]},
+                ]
+            }
+        },
+        "objects": [
+            {"id": "chair_1", "source_region_id": "work_0"},
+            {"id": "desk_1", "source_region_id": "work_0"},
+            {"id": "bed_1", "source_region_id": "sleep_0"},
+            {"id": "lamp_1", "source_region_id": "sleep_0"},
+        ],
+    }
+
+    report = build_object_grouping_report(layout, case, _grouping_config(proximity={"max_gap_m": 0.0}))
+
+    assert report["resolved_grouping_config"]["grouping_source"] == "semantic_region"
+    assert {tuple(group["object_ids"]) for group in report["object_groups"]} == {
+        ("bed_1", "lamp_1"),
+        ("chair_1", "desk_1"),
+    }
+    assert all(group["group_source"] == "semantic_region" for group in report["object_groups"])
+    assert {group["region_id"] for group in report["object_groups"]} == {"work_0", "sleep_0"}
+
+
+def test_grouping_falls_back_when_region_assignment_is_sparse() -> None:
+    layout = {"objects": [_obj("chair_1", [0, 0, 0.25]), _obj("desk_1", [0.8, 0, 0.25]), _obj("bed_1", [8, 8, 0.25])]}
+    case = {"objects": [{"id": "chair_1", "source_region_id": "work_0"}]}
+
+    report = build_object_grouping_report(layout, case, _grouping_config())
+
+    assert report["resolved_grouping_config"].get("grouping_source") is None
+    assert all(group["group_source"] == "spatial_cluster" for group in report["object_groups"])
 
 
 def test_grouping_keeps_attachment_and_support_links_together() -> None:

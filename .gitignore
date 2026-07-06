@@ -7,6 +7,10 @@ __pycache__/
 outputs/*
 !outputs/.gitkeep
 
-data/external/
+data/
+notes/
+URLs.md
+takeaway.md
+todo.md
 logs/
 downloads/

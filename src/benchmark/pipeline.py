@@ -8,6 +8,7 @@ from pathlib import Path
 from benchmark.data import iter_case_paths
 from benchmark.metrics.aggregate import aggregate_case_results, write_benchmark_metrics_outputs
 from benchmark.models import create_model
+from benchmark.input_modes import canonicalize_input_mode
 from benchmark.utils.io import load_json_schema, load_yaml, read_json
 from benchmark.workflow import run_workflow
 from benchmark.workflow.artifacts import configured_max_repair_iterations, output_settings
@@ -103,14 +104,16 @@ def run_benchmark_pipeline(
     model_overrides: dict | None = None,
     judge_model_name: str | None = None,
     cases: list[tuple[Path, dict]] | None = None,
+    input_modes: list[str] | None = None,
 ) -> tuple[dict, Path, Path]:
     root_out = Path(out_dir)
     root_out.mkdir(parents=True, exist_ok=True)
 
     case_metrics = []
     discovered_cases = cases or [(Path(case_path), None) for case_path in iter_case_paths(cases_dir)]
-    for case_path, input_json in discovered_cases:
-        case_out = root_out / _case_output_id(case_path)
+    expanded_cases = _expand_case_modes(discovered_cases, input_modes)
+    for case_path, input_json, mode in expanded_cases:
+        case_out = root_out / _case_output_id(case_path, input_json=input_json, mode=mode)
         state = run_case_pipeline(
             case_path=case_path,
             out_dir=case_out,
@@ -190,10 +193,39 @@ def copy_viewer_assets(out_dir: str | Path, project_root: str | Path) -> None:
             shutil.copy2(path, Path(out_dir) / path.name)
 
 
-def _case_output_id(case_path: str | Path) -> str:
+def _expand_case_modes(cases: list[tuple[Path, dict | None]], input_modes: list[str] | None) -> list[tuple[Path, dict | None, str | None]]:
+    if not input_modes:
+        return [(case_path, input_json, None) for case_path, input_json in cases]
+    modes = [canonicalize_input_mode(mode) for mode in input_modes]
+    expanded = []
+    for case_path, input_json in cases:
+        base = input_json if isinstance(input_json, dict) else read_json(case_path)
+        if not isinstance(base, dict):
+            raise ValueError(f"Case at {case_path} must be a JSON object.")
+        for mode in modes:
+            expanded.append((case_path, _case_with_input_mode(base, mode), mode))
+    return expanded
+
+
+def _case_with_input_mode(case: dict, mode: str) -> dict:
+    patched = deepcopy(case)
+    patched["scene_representation_mode"] = mode
+    source = patched.get("source")
+    if isinstance(source, dict):
+        source = dict(source)
+        source["input_representation_mode"] = mode
+        source["scene_representation_mode"] = mode
+        patched["source"] = source
+    return patched
+
+
+def _case_output_id(case_path: str | Path, *, input_json: dict | None = None, mode: str | None = None) -> str:
     path = Path(case_path)
-    try:
-        case = read_json(path)
-    except (OSError, ValueError):
-        return path.stem
-    return str(case.get("case_id") or case.get("task_id") or path.stem)
+    case = input_json
+    if case is None:
+        try:
+            case = read_json(path)
+        except (OSError, ValueError):
+            case = {}
+    base = str(case.get("case_id") or case.get("task_id") or path.stem) if isinstance(case, dict) else path.stem
+    return f"{base}__{mode}" if mode else base

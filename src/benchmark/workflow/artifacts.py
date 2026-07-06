@@ -173,12 +173,45 @@ def build_workflow_metadata(
                     include_data=False,
                 )
             )
+        if iteration == 0 and state.get("generation_prompt_path"):
+            artifacts.append(
+                _artifact(
+                    step="generate",
+                    label="Generation prompt",
+                    path=artifact_path(state.get("generation_prompt_path", ""), out_dir),
+                    iteration=iteration,
+                    status="model_input",
+                    include_data=False,
+                )
+            )
         if iteration == 0 and state.get("generation_raw_response_path"):
             artifacts.append(
                 _artifact(
                     step="generate",
                     label="Generation raw response",
                     path=artifact_path(state.get("generation_raw_response_path", ""), out_dir),
+                    iteration=iteration,
+                    status="raw_response",
+                    include_data=False,
+                )
+            )
+        if iteration > 0 and state.get("repair_prompt_path"):
+            artifacts.append(
+                _artifact(
+                    step="repair",
+                    label=f"Repair prompt iteration {iteration}",
+                    path=artifact_path(state.get("repair_prompt_path", ""), out_dir),
+                    iteration=iteration,
+                    status="model_input",
+                    include_data=False,
+                )
+            )
+        if iteration > 0 and state.get("repair_raw_response_path"):
+            artifacts.append(
+                _artifact(
+                    step="repair",
+                    label=f"Repair raw response iteration {iteration}",
+                    path=artifact_path(state.get("repair_raw_response_path", ""), out_dir),
                     iteration=iteration,
                     status="raw_response",
                     include_data=False,

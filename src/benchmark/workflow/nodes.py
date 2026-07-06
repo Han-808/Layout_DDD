@@ -1,14 +1,19 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
-from benchmark.models.base_model import ModelResponseError
+from benchmark.input_modes import representation_mode_for_level, resolve_input_representation_mode
+from benchmark.models.base_model import ModelResponseError, build_generation_prompt
+from benchmark.models.prompt_budget import PromptBudgetError
 from benchmark.feedback import build_feedback
 from benchmark.metrics import compute_case_metrics
 from benchmark.utils.io import ensure_dir, read_json, write_json
 from benchmark.visualization import export_viewer_scene
 from benchmark.workflow.evaluation import evaluate_layout_vlm_as_judge_v1
 from benchmark.workflow.layout_normalization import enforce_layout_object_set
+from benchmark.object_aliasing import ALIAS_MAP_KEY
+from benchmark.workflow.payloads import build_input_payloads, eval_context_summary
 from benchmark.workflow.scoring import infer_input_level
 from benchmark.workflow.artifacts import (
     attach_feedback_to_history,
@@ -32,11 +37,26 @@ class NormalizeInputNode:
             next_state["layout_schema"] = read_json(next_state["layout_schema_path"])
         input_json = dict(next_state["input_json"])
         input_json.setdefault("input_level", infer_input_level(input_json))
+        mode = resolve_input_representation_mode(
+            input_json,
+            default=representation_mode_for_level(input_json.get("input_level")),
+        )
+        input_json.setdefault("scene_representation_mode", mode)
+        if isinstance(input_json.get("source"), dict):
+            source = dict(input_json["source"])
+            source.setdefault("input_representation_mode", mode)
+            source.setdefault("scene_representation_mode", mode)
+            input_json["source"] = source
         case_id = input_json.get("case_id") or input_json.get("task_id")
         if case_id:
             input_json.setdefault("case_id", case_id)
             input_json.setdefault("task_id", case_id)
+        payloads = build_input_payloads(input_json)
+        input_json = payloads["normalized_case"]
         next_state["input_json"] = input_json
+        next_state["normalized_case"] = input_json
+        next_state["prompt_payload"] = payloads["prompt_payload"]
+        next_state["eval_context"] = payloads["eval_context"]
         next_state["task_id"] = input_json.get("task_id") or input_json.get("case_id")
         next_state.setdefault("iteration", 0)
         next_state.setdefault("history", [])
@@ -50,6 +70,13 @@ class NormalizeInputNode:
             if hash_value:
                 (Path(next_state["out_dir"]) / "config_hash.txt").write_text(hash_value + "\n", encoding="utf-8")
             next_state["resolved_run_config_path"] = str(resolved_path)
+        next_state["normalized_case_path"] = str(write_json(Path(next_state["out_dir"]) / "normalized_case.json", next_state["normalized_case"]))
+        next_state["prompt_payload_path"] = str(write_json(Path(next_state["out_dir"]) / "prompt_payload.json", next_state["prompt_payload"]))
+        next_state["eval_context_summary_path"] = str(write_json(Path(next_state["out_dir"]) / "eval_context_summary.json", eval_context_summary(next_state["eval_context"])))
+        if isinstance(next_state["normalized_case"].get(ALIAS_MAP_KEY), dict):
+            next_state["object_alias_map_path"] = str(write_json(Path(next_state["out_dir"]) / "object_alias_map.json", next_state["normalized_case"][ALIAS_MAP_KEY]))
+        next_state["visibility_audit_path"] = str(write_json(Path(next_state["out_dir"]) / "visibility_audit.json", payloads["visibility_audit"]))
+        next_state["input_quality_path"] = str(write_json(Path(next_state["out_dir"]) / "input_quality.json", payloads["input_quality"]))
         return next_state
 
 
@@ -57,8 +84,14 @@ class GenerateLayoutNode:
     def __call__(self, state: BenchmarkState) -> BenchmarkState:
         next_state = dict(state)
         next_state.pop("generation_error", None)
+        generation_input = next_state.get("prompt_payload") or next_state["input_json"]
         try:
-            layout = next_state["model"].generate_layout(next_state["input_json"], next_state["layout_schema"])
+            layout = next_state["model"].generate_layout(generation_input, next_state["layout_schema"])
+        except PromptBudgetError as exc:
+            layout = _empty_layout(next_state["input_json"])
+            next_state["generation_error"] = str(exc)
+            next_state["prompt_budget_exceeded"] = True
+            next_state["prompt_budget_error_stage"] = "generation"
         except ModelResponseError as exc:
             layout = _empty_layout(next_state["input_json"])
             next_state["generation_error"] = str(exc)
@@ -82,10 +115,31 @@ class GenerateLayoutNode:
         raw_response_path = _write_model_text_artifact(
             next_state,
             filename="generation_raw_response.txt",
-            text=getattr(next_state.get("model"), "last_response_text", ""),
+            text=getattr(next_state.get("model"), "last_response_text", "") or (json.dumps(layout, ensure_ascii=False, indent=2) if not next_state.get("generation_error") else ""),
         )
         if raw_response_path:
             next_state["generation_raw_response_path"] = raw_response_path
+        prompt_path = _write_model_text_artifact(
+            next_state,
+            filename="generation_prompt.txt",
+            text=getattr(next_state.get("model"), "last_prompt_text", "") or build_generation_prompt(generation_input, next_state["layout_schema"]),
+        )
+        if prompt_path:
+            next_state["generation_prompt_path"] = prompt_path
+        budget_path = _write_prompt_budget_report(
+            next_state,
+            filename="generation_prompt_budget_report.json",
+            metadata=getattr(next_state.get("model"), "last_request_metadata", None),
+        )
+        if budget_path:
+            next_state["generation_prompt_budget_report_path"] = budget_path
+        sections_path = _write_prompt_sections(
+            next_state,
+            filename="generation_prompt_sections.json",
+            sections=getattr(next_state.get("model"), "last_prompt_sections", None),
+        )
+        if sections_path:
+            next_state["generation_prompt_sections_path"] = sections_path
         next_state["iteration"] = 0
         return next_state
 
@@ -106,6 +160,7 @@ class EvaluateLayoutNode:
             judge_model=next_state.get("judge_model", next_state.get("model")),
             judge_model_name=next_state.get("judge_model_name"),
             generation_error=next_state.get("generation_error"),
+            eval_context=next_state.get("eval_context"),
         )
         path = Path(next_state["out_dir"]) / "evaluation_report.json"
         write_json(path, report)
@@ -130,7 +185,7 @@ class EvaluateLayoutNode:
         next_state["current_evaluation"] = report
         next_state["current_evaluation_path"] = str(path)
         next_state["case_metrics"] = case_metrics
-        next_state["case_metrics_path"] = str(Path(next_state["out_dir"]) / "case_metrics.json")
+        next_state["current_case_metrics_path"] = str(Path(next_state["out_dir"]) / f"case_metrics_iter_{iteration}.json")
         next_state["history"] = history
         next_state["evaluation_reports"] = reports
         return next_state
@@ -166,30 +221,49 @@ class RepairLayoutNode:
         next_state = dict(state)
         next_iteration = int(next_state.get("iteration", 0)) + 1
         previous_layout = next_state["current_layout"]
-        layout = next_state["model"].repair_layout(
-            next_state["input_json"],
+        deterministic_layout, deterministic_summary = _apply_deterministic_repair_actions(
             previous_layout,
-            next_state["current_feedback"],
-            next_state["layout_schema"],
+            next_state.get("current_feedback", {}),
         )
-        layout, normalization = enforce_layout_object_set(
-            layout,
-            next_state["input_json"],
-            previous_layout=previous_layout,
-            stage=f"repair_iter_{next_iteration}",
-        )
-        layout["_repair_change_summary"] = _layout_change_summary(
-            previous_layout,
-            layout,
-            next_state.get("current_feedback", {}).get("repair_targets", []),
-        )
-        next_state["current_layout_normalization"] = normalization
-        path = Path(next_state["out_dir"]) / f"repaired_layout_iter_{next_iteration}.json"
+        repair_input = _model_repair_input(next_state)
         save_intermediate = save_intermediate_artifacts(next_state.get("benchmark_config"))
-        if save_intermediate:
-            write_json(path, layout)
+        try:
+            layout = next_state["model"].repair_layout(
+                repair_input,
+                deterministic_layout,
+                next_state["current_feedback"],
+                next_state["layout_schema"],
+            )
+        except (PromptBudgetError, ModelResponseError) as exc:
+            next_state["repair_error"] = str(exc)
+            if isinstance(exc, PromptBudgetError):
+                next_state["prompt_budget_exceeded"] = True
+                next_state["prompt_budget_error_stage"] = "repair"
+            next_state["iteration"] = next_iteration
+            layout = previous_layout
+            path = Path(next_state.get("current_layout_path", ""))
+        else:
+            layout, normalization = enforce_layout_object_set(
+                layout,
+                next_state["input_json"],
+                previous_layout=previous_layout,
+                stage=f"repair_iter_{next_iteration}",
+            )
+            if deterministic_summary["num_changed_objects"]:
+                layout["_deterministic_repair_summary"] = deterministic_summary
+            layout["_repair_change_summary"] = _layout_change_summary(
+                previous_layout,
+                layout,
+                next_state.get("current_feedback", {}).get("repair_targets", []),
+            )
+            next_state["current_layout_normalization"] = normalization
+            next_state["iteration"] = next_iteration
+            path = Path(next_state["out_dir"]) / f"repaired_layout_iter_{next_iteration}.json"
+            if save_intermediate:
+                write_json(path, layout)
         next_state["current_layout"] = layout
-        next_state["current_layout_path"] = str(path) if save_intermediate else ""
+        if not next_state.get("repair_error"):
+            next_state["current_layout_path"] = str(path) if save_intermediate else ""
         metadata_path = _write_model_request_metadata(
             next_state,
             filename=f"repair_request_metadata_iter_{next_iteration}.json",
@@ -204,7 +278,27 @@ class RepairLayoutNode:
         )
         if raw_response_path:
             next_state["repair_raw_response_path"] = raw_response_path
-        next_state["iteration"] = next_iteration
+        prompt_path = _write_model_text_artifact(
+            next_state,
+            filename=f"repair_prompt_iter_{next_iteration}.txt",
+            text=getattr(next_state.get("model"), "last_prompt_text", ""),
+        )
+        if prompt_path:
+            next_state["repair_prompt_path"] = prompt_path
+        budget_path = _write_prompt_budget_report(
+            next_state,
+            filename=f"repair_prompt_budget_report_iter_{next_iteration}.json",
+            metadata=getattr(next_state.get("model"), "last_request_metadata", None),
+        )
+        if budget_path:
+            next_state["repair_prompt_budget_report_path"] = budget_path
+        sections_path = _write_prompt_sections(
+            next_state,
+            filename=f"repair_prompt_sections_iter_{next_iteration}.json",
+            sections=getattr(next_state.get("model"), "last_prompt_sections", None),
+        )
+        if sections_path:
+            next_state["repair_prompt_sections_path"] = sections_path
         return next_state
 
 
@@ -215,10 +309,35 @@ class ComputeMetricsNode:
             next_state["history"],
             max_repair_iterations=int(next_state.get("max_repair_iterations", 0)),
         )
+        case_metrics_path = Path(next_state["out_dir"]) / "case_metrics.json"
+        write_json(case_metrics_path, metrics)
+        next_state["case_metrics"] = metrics
+        next_state["case_metrics_path"] = str(case_metrics_path)
+        input_source = next_state["input_json"].get("source") if isinstance(next_state["input_json"].get("source"), dict) else {}
         result = {
             "task_id": next_state["task_id"],
             "model_name": next_state.get("model_name", getattr(next_state.get("model"), "name", "unknown_model")),
             "max_repair_iterations": int(next_state.get("max_repair_iterations", 0)),
+            "input_level": next_state["input_json"].get("input_level"),
+            "scene_representation_mode": next_state["input_json"].get("scene_representation_mode"),
+            "object_aliasing": next_state.get("eval_context", {}).get("object_aliasing", {}),
+            "object_alias_map_path": next_state.get("object_alias_map_path", ""),
+            "input_source_summary": {
+                key: input_source[key]
+                for key in [
+                    "dataset",
+                    "scene_instance",
+                    "raw_object_instance_count",
+                    "imported_object_count",
+                    "truncated",
+                    "mesh_imported",
+                    "mesh_free_import",
+                    "room_boundary_source_kind",
+                    "room_geometry_fidelity",
+                    "room_is_proxy_geometry",
+                ]
+                if key in input_source
+            },
             "metrics": metrics,
             "case_metrics_path": next_state.get("case_metrics_path", ""),
             "history": compact_history(next_state["history"]),
@@ -326,6 +445,60 @@ def _write_model_text_artifact(state: BenchmarkState, *, filename: str, text: ob
     return str(path)
 
 
+def _write_prompt_budget_report(state: BenchmarkState, *, filename: str, metadata: object) -> str:
+    if not isinstance(metadata, dict):
+        return ""
+    report = metadata.get("prompt_budget_report")
+    if not isinstance(report, dict):
+        return ""
+    path = Path(state["out_dir"]) / filename
+    write_json(path, report)
+    return str(path)
+
+
+def _write_prompt_sections(state: BenchmarkState, *, filename: str, sections: object) -> str:
+    if not isinstance(sections, list) or not sections:
+        return ""
+    path = Path(state["out_dir"]) / filename
+    write_json(path, sections)
+    return str(path)
+
+
+def _model_repair_input(state: BenchmarkState) -> dict:
+    base = state.get("prompt_payload") or state["input_json"]
+    repair_input = dict(base)
+    eval_context = state.get("eval_context")
+    alias_map = eval_context.get(ALIAS_MAP_KEY) if isinstance(eval_context, dict) else None
+    if not isinstance(alias_map, dict):
+        input_json = state.get("input_json")
+        alias_map = input_json.get(ALIAS_MAP_KEY) if isinstance(input_json, dict) else None
+    if isinstance(alias_map, dict):
+        repair_input[ALIAS_MAP_KEY] = alias_map
+    return repair_input
+
+
+REPAIR_POSITION_TOLERANCE_M = 0.01
+REPAIR_SIZE_TOLERANCE_M = 0.01
+REPAIR_YAW_TOLERANCE_DEG = 1.0
+
+
+def _apply_deterministic_repair_actions(previous_layout: dict, feedback: dict) -> tuple[dict, dict]:
+    actions = feedback.get("repair_actions") if isinstance(feedback, dict) else None
+    return previous_layout, _deterministic_repair_summary([], action_count=len(actions) if isinstance(actions, list) else 0)
+
+
+def _deterministic_repair_summary(changes: list[dict], *, action_count: int = 0) -> dict:
+    return {
+        "enabled": False,
+        "reason": "Repair actions are advisory cues for model generation; no deterministic geometry rewrite is applied.",
+        "candidate_action_count": action_count,
+        "applied_actions": changes,
+        "changed_object_ids": sorted({str(change["object_id"]) for change in changes if change.get("object_id")}),
+        "num_changed_objects": len({str(change["object_id"]) for change in changes if change.get("object_id")}),
+        "position_tolerance_m": REPAIR_POSITION_TOLERANCE_M,
+    }
+
+
 def _layout_change_summary(previous_layout: dict, current_layout: dict, repair_targets: object) -> dict:
     targets = {str(item) for item in repair_targets} if isinstance(repair_targets, list) else set()
     previous = {
@@ -342,7 +515,7 @@ def _layout_change_summary(previous_layout: dict, current_layout: dict, repair_t
         if before is None:
             changed.append(object_id)
             continue
-        if any(before.get(key) != obj.get(key) for key in ["center", "size", "yaw", "support_parent", "region_id"]):
+        if _meaningful_layout_object_change(before, obj):
             changed.append(object_id)
     changed_targets = sorted(object_id for object_id in changed if object_id in targets)
     return {
@@ -352,4 +525,45 @@ def _layout_change_summary(previous_layout: dict, current_layout: dict, repair_t
         "num_changed_repair_targets": len(changed_targets),
         "repair_targets": sorted(targets),
         "repair_noop": bool(targets and not changed_targets),
+        "meaningful_change_tolerances": {
+            "position_m": REPAIR_POSITION_TOLERANCE_M,
+            "size_m": REPAIR_SIZE_TOLERANCE_M,
+            "yaw_degrees": REPAIR_YAW_TOLERANCE_DEG,
+        },
     }
+
+
+def _meaningful_layout_object_change(before: dict, after: dict) -> bool:
+    if _vector_changed(before.get("center"), after.get("center"), REPAIR_POSITION_TOLERANCE_M):
+        return True
+    if _vector_changed(before.get("size"), after.get("size"), REPAIR_SIZE_TOLERANCE_M):
+        return True
+    if _float_changed(before.get("yaw", 0), after.get("yaw", 0), REPAIR_YAW_TOLERANCE_DEG):
+        return True
+    return any(before.get(key) != after.get(key) for key in ["support_parent", "region_id"])
+
+
+def _vector_changed(left: object, right: object, tolerance: float) -> bool:
+    left_vector = _numeric_vector(left)
+    right_vector = _numeric_vector(right)
+    if left_vector is None or right_vector is None or len(left_vector) != len(right_vector):
+        return left != right
+    return any(abs(left_vector[index] - right_vector[index]) > tolerance for index in range(len(left_vector)))
+
+
+def _float_changed(left: object, right: object, tolerance: float) -> bool:
+    try:
+        return abs(float(left) - float(right)) > tolerance
+    except (TypeError, ValueError):
+        return left != right
+
+
+def _numeric_vector(value: object, *, length: int | None = None) -> list[float] | None:
+    if not isinstance(value, list):
+        return None
+    if length is not None and len(value) != length:
+        return None
+    try:
+        return [float(item) for item in value]
+    except (TypeError, ValueError):
+        return None

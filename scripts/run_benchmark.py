@@ -9,6 +9,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from benchmark.experiments import experiment_model_overrides, load_experiment_config, pick_value, resolve_experiment
 from benchmark.data import discover_and_normalize_cases
+from benchmark.input_modes import list_main_input_modes
 from benchmark.pipeline import load_pipeline_resources, run_benchmark_pipeline
 from benchmark.run_config import load_resolved_run_config, pipeline_resources_from_resolved
 
@@ -18,6 +19,14 @@ def main() -> None:
     parser.add_argument("--experiment_config", default=None, help="Path to a component-composed experiment YAML.")
     parser.add_argument("--experiment", default=None, help="Experiment name from configs/experiment_config.yaml.")
     parser.add_argument("--cases", default=None, help="Directory containing bm_instance JSON files.")
+    parser.add_argument(
+        "--input-modes",
+        "--input_modes",
+        dest="input_modes",
+        nargs="*",
+        default=None,
+        help="Optional comma-separated or space-separated input modes. When set, each case is run once per mode.",
+    )
     parser.add_argument("--model", default=None, help="Model name from configs/model_config.yaml.")
     parser.add_argument("--judge_model", default=None, help="Optional judge model name; defaults to configs/model_config.yaml judge.model, usually 'same'.")
     parser.add_argument("--max_repair_iterations", type=int, default=None)
@@ -53,6 +62,7 @@ def main() -> None:
             max_repair_iterations=pick_value(args.max_repair_iterations, resolved.data, "max_repair_iterations"),
             mock_behavior=args.mock_behavior,
             judge_model_name=args.judge_model or resolved.data.get("judge_model"),
+            input_modes=_parse_input_modes(args.input_modes),
         )
         print(json_path)
         print(csv_path)
@@ -78,6 +88,7 @@ def main() -> None:
         mock_behavior=mock_behavior,
         model_overrides=_merge_overrides(experiment_model_overrides(experiment), cli_model_overrides),
         judge_model_name=judge_model_name,
+        input_modes=_parse_input_modes(args.input_modes),
     )
     print(json_path)
     print(csv_path)
@@ -118,6 +129,21 @@ def _dataset_config_for_cli(dataset_config: dict, cases_override: str | None) ->
             config[key] = str(path if path.is_absolute() else PROJECT_ROOT / path)
             break
     return config
+
+
+def _parse_input_modes(value: list[str] | None) -> list[str] | None:
+    if value is None:
+        return None
+    text = " ".join(value).strip()
+    if not text:
+        return None
+    if text == "main":
+        return list_main_input_modes()
+    modes = []
+    for chunk in text.replace(",", " ").split():
+        if chunk:
+            modes.append(chunk)
+    return modes or None
 
 if __name__ == "__main__":
     main()

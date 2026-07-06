@@ -68,7 +68,10 @@ def _scene_payload(
         "objects": [
             {
                 "object_id": obj.get("object_id"),
-                "label": obj.get("category"),
+                "canonical_object_id": obj.get("canonical_object_id") or obj.get("object_id"),
+                "model_object_id": obj.get("model_object_id"),
+                "model_category": obj.get("model_category"),
+                "label": _object_label(obj),
                 "category": obj.get("category"),
                 "center": obj.get("center"),
                 "three_center": _project_to_three(obj.get("center", [0, 0, 0])),
@@ -112,6 +115,14 @@ def _scene_payload(
         "history": _history_summary(history),
         "viewer_options": viewer_options or DEFAULT_VIEWER_OPTIONS,
     }
+
+
+def _object_label(obj: dict) -> str:
+    alias = obj.get("model_object_id")
+    category = obj.get("model_category") or obj.get("category")
+    if alias and category:
+        return f"{alias} {category}"
+    return str(category or obj.get("object_id") or "object")
 
 
 def _iteration_scenes(bm_instance: dict, history: list[dict], viewer_options: dict) -> list[dict]:

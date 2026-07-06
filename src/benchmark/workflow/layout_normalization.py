@@ -3,6 +3,8 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
+from benchmark.object_aliasing import remap_layout_aliases_to_canonical
+
 
 OPTIONAL_NULL_FIELDS = {
     "region_id",
@@ -48,7 +50,7 @@ def enforce_layout_object_set(
     if not required_specs:
         return layout, {"object_set_normalization_used": False, "reason": "no_required_object_specs"}
 
-    normalized = deepcopy(layout)
+    normalized, alias_report = remap_layout_aliases_to_canonical(layout, bm_instance, stage=stage)
     current_by_id, duplicate_flags = _objects_by_id(normalized.get("objects"))
     previous_by_id, _ = _objects_by_id(previous_layout.get("objects") if isinstance(previous_layout, dict) else [])
     required_ids = [str(obj["id"]) for obj in required_specs]
@@ -91,6 +93,9 @@ def enforce_layout_object_set(
         "duplicate_dropped": [flag["object_id"] for flag in flags if flag["type"] == "duplicate_object_dropped"],
         "flags": flags,
     }
+    if alias_report.get("alias_remap_used"):
+        report["alias_remap"] = alias_report
+        report["object_set_normalization_used"] = bool(flags or alias_report.get("flags"))
     normalized["_layout_object_set_normalization"] = report
     return normalized, report
 
@@ -129,7 +134,12 @@ def _objects_by_id(objects: object) -> tuple[dict[str, dict], list[dict]]:
 def _restore_required_fields(obj: dict, spec: dict, source: str) -> None:
     object_id = str(spec["id"])
     obj["object_id"] = object_id
+    obj.setdefault("canonical_object_id", object_id)
+    if obj.get("model_object_id"):
+        obj["model_object_id"] = str(obj["model_object_id"])
     obj["category"] = str(spec.get("category") or obj.get("category") or "object")
+    if obj.get("model_category"):
+        obj["model_category"] = str(obj["model_category"])
     if not _valid_vector(obj.get("size"), positive=True):
         obj["size"] = _size_from_spec(spec)
     if not _valid_vector(obj.get("center"), positive=False):

@@ -5,6 +5,12 @@ import json
 from pathlib import Path
 from typing import Any, Iterable
 
+from benchmark.datasets.estimated_relations import build_estimated_spatial_cues, compatibility_relations, relation_policy_metadata
+from benchmark.input_modes import (
+    ACCEPTED_INPUT_REPRESENTATION_MODES,
+    canonicalize_input_mode,
+    representation_mode_for_level,
+)
 from benchmark.utils.io import write_json
 
 MESH_ASSET_EXTENSIONS = {".glb", ".gltf", ".obj", ".ply"}
@@ -43,7 +49,12 @@ def convert_hssd_hab(
     preserve_raw_metadata: bool = False,
     bbox_from_scale: bool = False,
     include_estimated_relations: bool = True,
+    input_representation_mode: str | None = None,
 ) -> list[Path]:
+    if input_representation_mode is not None and input_representation_mode not in ACCEPTED_INPUT_REPRESENTATION_MODES:
+        available = ", ".join(sorted(ACCEPTED_INPUT_REPRESENTATION_MODES))
+        raise ValueError(f"Unsupported input_representation_mode '{input_representation_mode}'. Available: {available}")
+    input_representation_mode = canonicalize_input_mode(input_representation_mode) if input_representation_mode else None
     selected_levels = levels or ["prompt_only", "structured_basic"]
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -64,26 +75,31 @@ def convert_hssd_hab(
             preserve_raw_metadata=preserve_raw_metadata,
             bbox_from_scale=bbox_from_scale,
         )
-        source = _source_metadata(
+        room = _room_metadata(scene_metadata, objects)
+        room.update(
+            {
+                "unit": "meter",
+                "floor_z": 0.0,
+                "coordinate_note": "HSSD translation [x, y, z] is adapted to benchmark floor [x, z] with y as height.",
+            }
+        )
+        _assign_object_regions(objects, room)
+        estimated_spatial_cues = build_estimated_spatial_cues(objects) if include_estimated_relations else []
+        source_base = _source_metadata(
             scene,
             path,
             objects=objects,
             metadata=scene_metadata,
+            room=room,
+            estimated_spatial_cues=estimated_spatial_cues,
             preserve_raw_metadata=preserve_raw_metadata,
             bbox_from_scale=bbox_from_scale,
             max_objects=max_objects,
             include_estimated_relations=include_estimated_relations,
         )
-        room = _room_metadata(scene_metadata, objects)
-        room.update(
-            {
-            "unit": "meter",
-            "floor_z": 0.0,
-            "coordinate_note": "HSSD translation [x, y, z] is adapted to benchmark floor [x, z] with y as height.",
-            }
-        )
 
         if "prompt_only" in selected_levels:
+            mode = representation_mode_for_level("prompt_only", input_representation_mode)
             written.append(
                 write_json(
                     out / f"{scene_id}_prompt_only.json",
@@ -91,17 +107,19 @@ def convert_hssd_hab(
                         "case_id": f"{scene_id}_prompt_only",
                         "schema_version": "2.0",
                         "input_level": "prompt_only",
+                        "scene_representation_mode": mode,
                         "description": {
                             "text": f"Generate a plausible 3D room layout for HSSD-HAB scene {scene_id}.",
                             "room_type": "room",
                             "tags": ["hssd-hab"],
                         },
-                        "source": source,
+                        "source": _source_for_mode(source_base, mode),
                     },
                 )
             )
 
         if "structured_basic" in selected_levels:
+            mode = representation_mode_for_level("structured_basic", input_representation_mode)
             written.append(
                 write_json(
                     out / f"{scene_id}_structured_basic.json",
@@ -109,6 +127,7 @@ def convert_hssd_hab(
                         "case_id": f"{scene_id}_structured_basic",
                         "schema_version": "2.0",
                         "input_level": "structured_basic",
+                        "scene_representation_mode": mode,
                         "description": {
                             "text": f"Generate a plausible 3D room layout containing the specified HSSD-HAB objects for scene {scene_id}.",
                             "room_type": "room",
@@ -116,33 +135,33 @@ def convert_hssd_hab(
                         },
                         "room": room,
                         "objects": objects,
-                        "source": source,
+                        "source": _source_for_mode(source_base, mode),
                     },
                 )
             )
 
         if "structured_relation" in selected_levels:
-            relations = _near_relations(objects) if include_estimated_relations else []
-            if relations:
-                written.append(
-                    write_json(
-                        out / f"{scene_id}_structured_relation.json",
-                        {
-                            "case_id": f"{scene_id}_structured_relation",
-                            "schema_version": "2.0",
-                            "input_level": "structured_relation",
-                            "description": {
-                                "text": f"Generate a plausible 3D room layout with the specified objects and visible relations for HSSD-HAB scene {scene_id}.",
-                                "room_type": "room",
-                                "tags": ["hssd-hab"],
-                            },
-                            "room": room,
-                            "objects": objects,
-                            "relations": relations,
-                            "source": source,
-                        },
-                    )
-                )
+            relations = compatibility_relations(estimated_spatial_cues) if include_estimated_relations else []
+            if estimated_spatial_cues:
+                mode = representation_mode_for_level("structured_relation", input_representation_mode)
+                case = {
+                    "case_id": f"{scene_id}_structured_relation",
+                    "schema_version": "2.0",
+                    "input_level": "structured_relation",
+                    "scene_representation_mode": mode,
+                    "description": {
+                        "text": f"Generate a plausible 3D room layout with the specified objects and deterministic spatial cues for HSSD-HAB scene {scene_id}.",
+                        "room_type": "room",
+                        "tags": ["hssd-hab"],
+                    },
+                    "room": room,
+                    "objects": objects,
+                    "spatial_cues": estimated_spatial_cues,
+                    "source": _source_for_mode(source_base, mode),
+                }
+                if relations:
+                    case["relations"] = relations
+                written.append(write_json(out / f"{scene_id}_structured_relation.json", case))
     return written
 
 
@@ -316,6 +335,8 @@ def _source_metadata(
     *,
     objects: list[dict],
     metadata: dict,
+    room: dict,
+    estimated_spatial_cues: list[dict],
     preserve_raw_metadata: bool,
     bbox_from_scale: bool,
     max_objects: int | None,
@@ -324,6 +345,16 @@ def _source_metadata(
     raw_objects = _raw_scene_objects(scene)
     raw_count = len(raw_objects)
     room_layout = metadata.get("room_layout") if isinstance(metadata.get("room_layout"), dict) else {}
+    stage_asset_refs = _asset_references(metadata.get("stage_config"))
+    object_asset_ref_count = sum(1 for obj in objects if isinstance(obj.get("source_asset_references"), dict) and obj["source_asset_references"])
+    mesh_asset_references_kept = bool(stage_asset_refs or object_asset_ref_count)
+    relation_metadata = relation_policy_metadata(estimated_spatial_cues) if include_estimated_relations else {
+        "relation_policy": "none",
+        "relation_generation_version": None,
+        "relation_counts_by_type": {},
+        "relations_are_ground_truth": False,
+        "relations_source_note": "No deterministic spatial cues generated for this case.",
+    }
     return {
         "dataset": "hssd-hab",
         "dataset_url": "https://huggingface.co/datasets/hssd/hssd-hab",
@@ -344,7 +375,17 @@ def _source_metadata(
         "preserve_raw_metadata": preserve_raw_metadata,
         "bbox_from_scale": bbox_from_scale,
         "estimated_relations_included": include_estimated_relations,
+        "relations_policy": relation_metadata["relation_policy"],
+        "relation_policy": relation_metadata["relation_policy"],
+        "relation_generation_version": relation_metadata["relation_generation_version"],
+        "relation_counts_by_type": relation_metadata["relation_counts_by_type"],
+        "relations_are_ground_truth": relation_metadata["relations_are_ground_truth"],
+        "relations_source_note": relation_metadata["relations_source_note"],
+        "mesh_imported": False,
         "mesh_free_import": True,
+        "mesh_asset_policy": "metadata_references_only",
+        "mesh_asset_references_kept": mesh_asset_references_kept,
+        "object_asset_reference_count": object_asset_ref_count,
         "excluded_asset_extensions": sorted(MESH_ASSET_EXTENSIONS),
         "metadata_inclusion": {
             "scene_dataset_configs": metadata.get("scene_dataset_config_count", 0),
@@ -358,12 +399,23 @@ def _source_metadata(
             "supporting_visuals": len(metadata.get("supporting_visuals", [])),
         },
         "metadata_paths": metadata.get("metadata_paths", {}),
-        "stage_asset_references": _asset_references(metadata.get("stage_config")),
+        "stage_asset_references": stage_asset_refs,
         "room_layout_source": room_layout.get("source"),
+        "room_boundary_source": room.get("boundary_source"),
+        "room_boundary_source_kind": room.get("boundary_source_kind"),
+        "room_geometry_fidelity": room.get("geometry_fidelity"),
+        "room_is_proxy_geometry": room.get("is_proxy_geometry"),
         "room_region_count": room_layout.get("region_count", 0),
         "supporting_visuals": metadata.get("supporting_visuals", []),
         "missing_metadata": metadata.get("missing_metadata", []),
     }
+
+
+def _source_for_mode(source: dict, mode: str) -> dict:
+    resolved = dict(source)
+    resolved["input_representation_mode"] = mode
+    resolved["scene_representation_mode"] = mode
+    return resolved
 
 
 def _raw_object_collection_counts(scene: dict) -> dict[str, int]:
@@ -399,10 +451,16 @@ def _room_metadata(metadata: dict, objects: list[dict]) -> dict:
     floor_polygon = semantic_floor_polygon or stage_floor_polygon
     if semantic_floor_polygon:
         boundary_source = "hssd_semantic_config.region_annotations.poly_loop"
+        boundary_source_kind = "hssd_semantic_region_polygon"
+        geometry_fidelity = "semantic_floor_plan"
     elif stage_floor_polygon:
         boundary_source = "hssd_stage_config.floor_polygon"
+        boundary_source_kind = "hssd_stage_floor_polygon"
+        geometry_fidelity = "stage_floor_polygon"
     else:
         boundary_source = "hssd_object_position_extent"
+        boundary_source_kind = "object_position_extent_fallback"
+        geometry_fidelity = "proxy_rectangle"
     boundary = floor_polygon or _room_boundary_from_objects(objects)
     regions = room_layout.get("regions") if isinstance(room_layout.get("regions"), list) else _extract_regions(semantic_config)
     room = {
@@ -410,6 +468,8 @@ def _room_metadata(metadata: dict, objects: list[dict]) -> dict:
         "floor_polygon": boundary,
         "floor_plan": {
             "source": boundary_source,
+            "source_kind": boundary_source_kind,
+            "geometry_fidelity": geometry_fidelity,
             "coordinate_mapping": "HSSD semantic poly_loop [x, y, z] is imported as benchmark floor polygon [x, z].",
             "regions": regions,
             "aggregate_boundary": boundary,
@@ -418,7 +478,11 @@ def _room_metadata(metadata: dict, objects: list[dict]) -> dict:
         },
         "wall_height": _wall_height(stage_config) or _semantic_wall_height(regions) or 3.0,
         "boundary_source": boundary_source,
+        "boundary_source_kind": boundary_source_kind,
         "room_layout_source": boundary_source,
+        "geometry_fidelity": geometry_fidelity,
+        "is_proxy_geometry": geometry_fidelity == "proxy_rectangle",
+        "mesh_floor_geometry_imported": False,
         "boundary_role": "aggregate_proxy" if regions else "primary_boundary",
     }
     if regions:
@@ -434,23 +498,99 @@ def _room_metadata(metadata: dict, objects: list[dict]) -> dict:
     return room
 
 
-def _near_relations(objects: list[dict]) -> list[dict]:
-    with_positions = [obj for obj in objects if isinstance(obj.get("source_position"), list)]
-    relations = []
-    for index in range(min(len(with_positions) - 1, 3)):
-        first = with_positions[index]
-        second = with_positions[index + 1]
-        relations.append(
-            {
-                "id": f"rel_{index + 1:03d}",
-                "type": "near",
-                "subject": first["id"],
-                "object": second["id"],
-                "visible_to_model": True,
-                "source": "estimated",
-            }
-        )
-    return relations
+def _assign_object_regions(objects: list[dict], room: dict) -> None:
+    regions = _room_regions(room)
+    if not regions:
+        return
+    for obj in objects:
+        point = obj.get("source_floor_position")
+        if not isinstance(point, list) or len(point) < 2:
+            continue
+        assignment = _region_for_point(point, regions)
+        if not assignment:
+            continue
+        region, confidence = assignment
+        obj["source_region_id"] = region.get("id")
+        obj["source_region_label"] = region.get("label") or region.get("name")
+        obj["region_assignment_source"] = "semantic_region_polygon"
+        obj["region_assignment_confidence"] = confidence
+
+
+def _room_regions(room: dict) -> list[dict]:
+    direct = room.get("regions")
+    if isinstance(direct, list):
+        return [item for item in direct if isinstance(item, dict)]
+    floor_plan = room.get("floor_plan")
+    nested = floor_plan.get("regions") if isinstance(floor_plan, dict) else []
+    return [item for item in nested if isinstance(item, dict)]
+
+
+def _region_for_point(point: list, regions: list[dict]) -> tuple[dict, float] | None:
+    try:
+        x, y = float(point[0]), float(point[1])
+    except (TypeError, ValueError):
+        return None
+    containing = []
+    for region in regions:
+        polygon = region.get("floor_polygon")
+        if not isinstance(polygon, list) or len(polygon) < 3:
+            continue
+        if _point_in_polygon(x, y, polygon):
+            containing.append((abs(_polygon_area(polygon)), region))
+    if not containing:
+        return None
+    containing.sort(key=lambda item: (item[0], str(item[1].get("id") or "")))
+    return containing[0][1], 1.0
+
+
+def _point_in_polygon(x: float, y: float, polygon: list) -> bool:
+    points = []
+    for item in polygon:
+        if not isinstance(item, list) or len(item) < 2:
+            continue
+        try:
+            points.append((float(item[0]), float(item[1])))
+        except (TypeError, ValueError):
+            continue
+    if len(points) < 3:
+        return False
+    for index, (x1, y1) in enumerate(points):
+        x2, y2 = points[(index + 1) % len(points)]
+        if _point_on_segment(x, y, x1, y1, x2, y2):
+            return True
+    inside = False
+    j = len(points) - 1
+    for i, (xi, yi) in enumerate(points):
+        xj, yj = points[j]
+        if ((yi > y) != (yj > y)) and (x < (xj - xi) * (y - yi) / ((yj - yi) or 1.0e-12) + xi):
+            inside = not inside
+        j = i
+    return inside
+
+
+def _point_on_segment(x: float, y: float, x1: float, y1: float, x2: float, y2: float, *, eps: float = 1.0e-9) -> bool:
+    cross = (x - x1) * (y2 - y1) - (y - y1) * (x2 - x1)
+    if abs(cross) > eps:
+        return False
+    return min(x1, x2) - eps <= x <= max(x1, x2) + eps and min(y1, y2) - eps <= y <= max(y1, y2) + eps
+
+
+def _polygon_area(polygon: list) -> float:
+    points = []
+    for item in polygon:
+        if not isinstance(item, list) or len(item) < 2:
+            continue
+        try:
+            points.append((float(item[0]), float(item[1])))
+        except (TypeError, ValueError):
+            continue
+    if len(points) < 3:
+        return 0.0
+    total = 0.0
+    for index, (x1, y1) in enumerate(points):
+        x2, y2 = points[(index + 1) % len(points)]
+        total += x1 * y2 - x2 * y1
+    return total / 2.0
 
 
 class HSSDMetadataContext:

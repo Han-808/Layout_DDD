@@ -233,6 +233,15 @@ def build_judge_prompt_payload(
             "parseable_layouts": "Run VLM judge; overall_valid is set from vlm_judgement.valid.",
             "unparseable_layouts": "Skip VLM judge; overall_valid=false; judgement_status=unparseable_layout.",
             "deterministic_flags": "Schema, physical, view, skipped render object, and grouping diagnostics are evidence only.",
+            "physical_evidence_semantics": (
+                "High-confidence serious collisions should strongly affect validity. "
+                "Fallback-derived room boundary or wall-height flags are lower-confidence evidence, not hard invalidity. "
+                "floating_or_vertical_inconsistency is evidence of possible spatial implausibility but is not hard invalidity by itself."
+            ),
+            "fallback_metadata": (
+                "Some room geometry constraints may be fallback-derived and approximate. Treat source_kind=fallback_default "
+                "or object_position_extent_fallback as lower-confidence evidence."
+            ),
             "use_images_and_summaries_together": True,
             "evidence_budgeting": (
                 "If evidence budgeting is enabled, omitted groups/images are omitted for prompt budget only. "
@@ -444,11 +453,16 @@ def _omitted_group_summary(groups: list[dict], omitted_ids: list[str]) -> list[d
 
 
 def _compact_layout_object(obj: dict) -> dict:
-    return {
-        key: _round_value(obj.get(key), 2)
-        for key in ["object_id", "category", "center", "size", "yaw", "support_parent", "region_id"]
-        if key in obj
+    compact = {
+        "object_id": obj.get("model_object_id") or obj.get("object_id"),
+        "category": obj.get("model_category") or obj.get("category"),
     }
+    if obj.get("model_object_id"):
+        compact["canonical_object_id"] = obj.get("canonical_object_id") or obj.get("object_id")
+    for key in ["center", "size", "yaw", "support_parent", "region_id"]:
+        if key in obj:
+            compact[key] = _round_value(obj.get(key), 2)
+    return compact
 
 
 def _summarize_flags(flags: list[dict], text_budget: dict) -> dict:
@@ -464,7 +478,25 @@ def _summarize_flags(flags: list[dict], text_budget: dict) -> dict:
         examples_by_type[flag_type].append(
             {
                 key: flag[key]
-                for key in ["type", "severity", "objects", "object_id", "group_id", "projection", "message", "reason"]
+                for key in [
+                    "type",
+                    "code",
+                    "severity",
+                    "confidence",
+                    "source_kind",
+                    "source_confidence",
+                    "blocking",
+                    "suppressed",
+                    "repair_relevant",
+                    "objects",
+                    "object_ids",
+                    "object_id",
+                    "group_id",
+                    "projection",
+                    "message",
+                    "reason",
+                    "vertical_gap",
+                ]
                 if key in flag
             }
         )

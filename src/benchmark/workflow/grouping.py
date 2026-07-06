@@ -67,6 +67,19 @@ def build_object_grouping_report(layout: dict, case: dict, config: dict | None =
             "cross_group_relations": [],
         }
 
+    region_groups = _semantic_region_groups(objects, case)
+    if region_groups:
+        _validate_group_partition(region_groups, ids)
+        return {
+            "object_groups": region_groups,
+            "resolved_grouping_config": {
+                **asdict(resolved),
+                "grouping_source": "semantic_region",
+            },
+            "omitted_edges": [],
+            "cross_group_relations": [],
+        }
+
     index_by_id = {object_id: index for index, object_id in enumerate(ids)}
     dsu = _DisjointSet(ids)
     reasons: dict[str, list[str]] = {object_id: [] for object_id in ids}
@@ -432,6 +445,9 @@ def _group_record(
     group_reasons = sorted({reason for object_id in object_ids for reason in reasons.get(object_id, [])})
     return {
         "group_id": f"group_{group_index:03d}",
+        "group_source": "spatial_cluster",
+        "region_id": None,
+        "region_category": None,
         "object_ids": object_ids,
         "num_objects": len(object_ids),
         "group_footprint_diameter_m": _round(_footprint_diameter(group_objects)),
@@ -442,6 +458,73 @@ def _group_record(
             if edge["source"] in object_set and edge["target"] in object_set
         ],
     }
+
+
+def _semantic_region_groups(objects: list[dict], case: dict) -> list[dict]:
+    source_regions = _case_object_regions(case)
+    if not source_regions:
+        return []
+    object_ids = [_object_id(obj) for obj in objects]
+    assigned = [object_id for object_id in object_ids if object_id in source_regions]
+    if len(assigned) < max(2, int(len(object_ids) * 0.5)):
+        return []
+    region_meta = _case_region_metadata(case)
+    by_region: dict[str, list[str]] = {}
+    unassigned = []
+    for object_id in object_ids:
+        region_id = source_regions.get(object_id)
+        if region_id:
+            by_region.setdefault(region_id, []).append(object_id)
+        else:
+            unassigned.append(object_id)
+    groups = []
+    for index, (region_id, ids) in enumerate(sorted(by_region.items()), start=1):
+        group = _group_record(index, ids, {object_id: ["semantic_region"] for object_id in ids}, [], objects)
+        meta = region_meta.get(region_id, {})
+        group.update(
+            {
+                "group_source": "semantic_region",
+                "region_id": region_id,
+                "region_category": meta.get("label") or meta.get("category") or meta.get("name"),
+            }
+        )
+        groups.append(group)
+    if unassigned:
+        group = _group_record(len(groups) + 1, unassigned, {object_id: ["region_unassigned"] for object_id in unassigned}, [], objects)
+        group.update({"group_source": "semantic_region_unassigned", "region_id": None, "region_category": None})
+        groups.append(group)
+    return groups
+
+
+def _case_object_regions(case: dict) -> dict[str, str]:
+    regions = {}
+    for obj in case.get("objects", []) if isinstance(case.get("objects"), list) else []:
+        if not isinstance(obj, dict):
+            continue
+        object_id = obj.get("id")
+        region_id = obj.get("source_region_id") or obj.get("region_id")
+        if isinstance(object_id, str) and isinstance(region_id, str) and region_id:
+            regions[object_id] = region_id
+    return regions
+
+
+def _case_region_metadata(case: dict) -> dict[str, dict]:
+    room = case.get("room") if isinstance(case, dict) else {}
+    candidates = []
+    if isinstance(room, dict):
+        if isinstance(room.get("regions"), list):
+            candidates.extend(room["regions"])
+        floor_plan = room.get("floor_plan")
+        if isinstance(floor_plan, dict) and isinstance(floor_plan.get("regions"), list):
+            candidates.extend(floor_plan["regions"])
+    metadata = {}
+    for region in candidates:
+        if not isinstance(region, dict):
+            continue
+        region_id = region.get("id")
+        if isinstance(region_id, str) and region_id:
+            metadata[region_id] = region
+    return metadata
 
 
 def _cross_group_relations(explicit_edges: list[_Edge], object_to_group: dict[str, str]) -> list[dict]:

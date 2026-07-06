@@ -76,6 +76,7 @@ def test_dataset_registry_json_folder_and_hssd_normalization(tmp_path: Path) -> 
     assert "json_folder" in DATASET_ADAPTERS
     json_cases = discover_and_normalize_cases({"source_type": "json_folder", "path": str(case_path)})
     assert json_cases[0][1]["task_id"] == "case"
+    assert json_cases[0][1]["scene_representation_mode"] == "compact_objects"
 
     hssd_path = tmp_path / "demo.scene_instance.json"
     write_json(
@@ -87,11 +88,22 @@ def test_dataset_registry_json_folder_and_hssd_normalization(tmp_path: Path) -> 
             ],
         },
     )
-    hssd_cases = discover_and_normalize_cases({"source_type": "hssd_scene_instance_json", "path": str(hssd_path)})
+    hssd_cases = discover_and_normalize_cases(
+        {
+            "source_type": "hssd_scene_instance_json",
+            "path": str(hssd_path),
+            "scene_representation_mode": "full_metadata_budgeted",
+        }
+    )
     normalized = hssd_cases[0][1]
     assert normalized["case_id"] == "demo"
+    assert normalized["scene_representation_mode"] == "full_metadata_budgeted"
     assert normalized["objects"][0]["id"] == "chair_1"
     assert normalized["objects"][0]["source_floor_position"] == [1.0, 2.0]
+    assert normalized["room"]["boundary_source_kind"] == "object_position_extent_fallback"
+    assert normalized["room"]["geometry_fidelity"] == "proxy_rectangle"
+    assert normalized["source"]["mesh_imported"] is False
+    assert normalized["source"]["room_geometry_fidelity"] == "proxy_rectangle"
 
 
 def test_unknown_dataset_and_model_errors_are_clear() -> None:

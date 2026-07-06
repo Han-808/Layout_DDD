@@ -45,7 +45,9 @@ def test_evaluation_report_sections_and_case_metrics(tmp_path: Path) -> None:
     assert "omitted_grouping_edges" in report["debug_evidence"]
     assert "cross_group_relations" in report["debug_evidence"]
     assert metrics["primary_score"] == 0.75
-    assert (tmp_path / "case_metrics.json").exists()
+    assert report["case_metrics_path"] == "case_metrics_iter_0.json"
+    assert (tmp_path / "case_metrics_iter_0.json").exists()
+    assert not (tmp_path / "case_metrics.json").exists()
     assert metrics["primary_score"] == report["metrics"]["primary_score"]
     assert (tmp_path / "views" / "global" / "topdown_global_xy.png").exists()
     assert (tmp_path / "views" / "groups" / "group_001" / "group_001_xy.png").exists()

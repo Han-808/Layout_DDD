@@ -47,6 +47,21 @@ DEFAULT_PHYSICAL_FLAGS_CONFIG = {
     "floor_z_default": 0.0,
 }
 
+DEFAULT_PHYSICAL_FLAG_POLICY_CONFIG = {
+    "fallback_boundary_behavior": "downgrade",
+    "fallback_wall_height_behavior": "downgrade",
+    "fallback_evidence_blocking": False,
+}
+
+DEFAULT_VERTICAL_CONSISTENCY_CONFIG = {
+    "enabled": True,
+    "blocking": False,
+    "min_gap_absolute": 0.25,
+    "min_gap_relative_to_height": 0.5,
+    "min_support_overlap_ratio": 0.15,
+    "ignore_categories": ["wall_art", "lamp_ceiling", "curtain", "mirror"],
+}
+
 
 def resolve_runtime_evidence_config(
     benchmark_config: dict | None,
@@ -59,6 +74,8 @@ def resolve_runtime_evidence_config(
     render = _merge(DEFAULT_RENDER_CONFIG, _section(benchmark_config, "render"))
     view_validation = _merge(DEFAULT_VIEW_VALIDATION_CONFIG, _section(benchmark_config, "view_validation"))
     physical = _merge(DEFAULT_PHYSICAL_FLAGS_CONFIG, _section(benchmark_config, "physical_flags"))
+    physical_policy = _merge(DEFAULT_PHYSICAL_FLAG_POLICY_CONFIG, _section(benchmark_config, "physical_flag_policy"))
+    vertical_consistency = _merge(DEFAULT_VERTICAL_CONSISTENCY_CONFIG, _section(benchmark_config, "vertical_consistency"))
 
     room = bm_instance.get("room") if isinstance(bm_instance.get("room"), dict) else {}
     boundary = _room_boundary(room)
@@ -109,6 +126,8 @@ def resolve_runtime_evidence_config(
                 max(object_stats["mean_width_m"], object_stats["mean_depth_m"]) * float(physical["boundary_tolerance_rel_object_size"]),
             ),
         },
+        "physical_flag_policy": physical_policy,
+        "vertical_consistency": vertical_consistency,
     }
 
 

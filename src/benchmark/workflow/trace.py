@@ -44,7 +44,7 @@ def build_workflow_trace(state: dict, out_dir: str | Path | None = None) -> dict
             "status": "success",
             "artifacts": {
                 "evaluation_report": "evaluation_report.json",
-                "case_metrics": "case_metrics.json",
+                "case_metrics": artifact_path(state.get("case_metrics_path", "case_metrics.json"), out_dir),
                 "room_views": room_views,
                 "global_views": room_views,
                 "group_views": group_views,
@@ -72,7 +72,7 @@ def build_workflow_trace(state: dict, out_dir: str | Path | None = None) -> dict
                 "attempt_id": item.get("iteration", index),
                 "layout": artifact_path(item.get("layout_path", ""), out_dir),
                 "evaluation_report": artifact_path(item.get("evaluation_path", ""), out_dir),
-                "case_metrics": "case_metrics.json",
+                "case_metrics": f"case_metrics_iter_{item.get('iteration', index)}.json",
             }
             for index, item in enumerate(state.get("history", []))
         ],

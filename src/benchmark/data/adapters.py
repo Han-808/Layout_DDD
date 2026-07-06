@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
+from benchmark.input_modes import representation_mode_for_level, resolve_input_representation_mode
 from benchmark.utils.io import read_json
 
 
@@ -46,6 +47,24 @@ class JsonFolderAdapter:
         if case_id:
             case.setdefault("case_id", str(case_id))
             case.setdefault("task_id", str(case_id))
+        input_level = case.get("input_level") or dataset_config.get("input_level")
+        if input_level:
+            case.setdefault("input_level", str(input_level))
+        mode = resolve_input_representation_mode(
+            {
+                **dataset_config,
+                **case,
+                "scene_representation_mode": case.get("scene_representation_mode") or dataset_config.get("scene_representation_mode"),
+            },
+            default=representation_mode_for_level(input_level),
+        )
+        case.setdefault("scene_representation_mode", mode)
+        source = case.get("source")
+        if isinstance(source, dict):
+            source = dict(source)
+            source.setdefault("input_representation_mode", mode)
+            source.setdefault("scene_representation_mode", mode)
+            case["source"] = source
         return case
 
 
@@ -64,11 +83,18 @@ class HSSDSceneInstanceAdapter(JsonFolderAdapter):
 
         scene_id = _hssd_scene_id(raw_case, dataset_config)
         objects = _hssd_objects(raw_case)
-        room = dataset_config.get("room") or dataset_config.get("default_room") or _default_room()
+        input_level = dataset_config.get("input_level", "structured_basic")
+        mode = resolve_input_representation_mode(
+            dataset_config,
+            default=representation_mode_for_level(input_level, dataset_config.get("scene_representation_mode")),
+        )
+        room = _room_for_hssd_case(objects, dataset_config)
+        raw_objects = _hssd_raw_objects(raw_case)
         return {
             "case_id": scene_id,
             "task_id": scene_id,
-            "input_level": dataset_config.get("input_level", "structured_basic"),
+            "input_level": input_level,
+            "scene_representation_mode": mode,
             "description": {
                 "text": dataset_config.get(
                     "description",
@@ -82,9 +108,20 @@ class HSSDSceneInstanceAdapter(JsonFolderAdapter):
             "source": {
                 "dataset": "hssd-hab",
                 "source_type": self.source_type,
-                "raw_object_instance_count": len(_hssd_raw_objects(raw_case)),
+                "scene_instance_fields": sorted(raw_case.keys()),
+                "stage_instance": raw_case.get("stage_instance"),
+                "translation_origin": raw_case.get("translation_origin"),
+                "raw_object_instance_count": len(raw_objects),
                 "imported_object_count": len(objects),
                 "truncated": False,
+                "input_representation_mode": mode,
+                "scene_representation_mode": mode,
+                "mesh_imported": False,
+                "mesh_free_import": True,
+                "mesh_asset_policy": "metadata_references_only",
+                "room_boundary_source_kind": room.get("boundary_source_kind"),
+                "room_geometry_fidelity": room.get("geometry_fidelity"),
+                "room_is_proxy_geometry": room.get("is_proxy_geometry"),
             },
         }
 
@@ -225,4 +262,43 @@ def _default_room() -> dict:
         "boundary": [[0, 0], [8, 0], [8, 8], [0, 8]],
         "floor_z": 0.0,
         "wall_height": 3.0,
+        "boundary_source": "dataset_config_default",
+        "boundary_source_kind": "dataset_config_default",
+        "geometry_fidelity": "configured_proxy",
+        "is_proxy_geometry": True,
+        "mesh_floor_geometry_imported": False,
     }
+
+
+def _room_for_hssd_case(objects: list[dict], dataset_config: dict) -> dict:
+    configured = dataset_config.get("room") or dataset_config.get("default_room")
+    if isinstance(configured, dict) and configured:
+        room = dict(configured)
+        room.setdefault("boundary_source", "dataset_config_default")
+        room.setdefault("boundary_source_kind", "dataset_config_default")
+        room.setdefault("geometry_fidelity", "configured_proxy")
+        room.setdefault("is_proxy_geometry", True)
+        room.setdefault("mesh_floor_geometry_imported", False)
+        return room
+    return {
+        "boundary": _boundary_from_hssd_objects(objects),
+        "floor_polygon": _boundary_from_hssd_objects(objects),
+        "floor_z": 0.0,
+        "wall_height": 3.0,
+        "boundary_source": "hssd_object_position_extent",
+        "boundary_source_kind": "object_position_extent_fallback",
+        "geometry_fidelity": "proxy_rectangle",
+        "is_proxy_geometry": True,
+        "mesh_floor_geometry_imported": False,
+    }
+
+
+def _boundary_from_hssd_objects(objects: list[dict]) -> list[list[float]]:
+    points = [obj.get("source_floor_position") for obj in objects if isinstance(obj.get("source_floor_position"), list)]
+    if not points:
+        return _default_room()["boundary"]
+    xs = [float(point[0]) for point in points]
+    ys = [float(point[1]) for point in points]
+    min_x, max_x = min(xs) - 1.5, max(xs) + 1.5
+    min_y, max_y = min(ys) - 1.5, max(ys) + 1.5
+    return [[min_x, min_y], [max_x, min_y], [max_x, max_y], [min_x, max_y]]

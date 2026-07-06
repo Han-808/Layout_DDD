@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 from benchmark.feedback import build_feedback
-from benchmark.feedback.feedback_builder import DEFAULT_COLLISION_AVOIDANCE_CONFIG
+from benchmark.feedback.feedback_builder import (
+    DEFAULT_COLLISION_AVOIDANCE_CONFIG,
+    _floor_plan_regions,
+    _outside_floor_plan_penalty,
+)
 
 
 def test_feedback_builder_is_deterministic_from_report() -> None:
@@ -168,10 +172,17 @@ def test_feedback_builder_adds_geometry_repair_actions() -> None:
     feedback = build_feedback(report, layout, case)
 
     actions = feedback["repair_actions"]
-    assert any(action["action"] == "move_inside_floor_plan" and action["object_id"] == "table_1" for action in actions)
+    boundary_actions = [action for action in actions if action["action"] == "move_inside_boundary" and action["object_id"] == "table_1"]
+    assert boundary_actions
+    assert boundary_actions[0]["suggested_delta_xy"]
+    assert boundary_actions[0]["advisory"] is True
     collision_actions = [action for action in actions if action["action"] == "separate_collision_pair"]
     assert collision_actions
     assert collision_actions[0]["must_remain_inside_floor_plan"] is True
+    assert collision_actions[0]["suggested_delta_xy"]
+    assert collision_actions[0]["move_object"]
+    assert collision_actions[0]["anchor_object"]
+    assert collision_actions[0]["reason_code"] == "serious_collision"
     assert "candidate_floor_plan_outside_penalty" in collision_actions[0]
     assert "candidate_total_overlap_volume_m3" in collision_actions[0]
     assert "candidate_overlap_pairs" in collision_actions[0]
@@ -181,6 +192,29 @@ def test_feedback_builder_adds_geometry_repair_actions() -> None:
     assert 0.0 <= collision_actions[0]["movement_cost"] <= 1.0
     assert collision_actions[0]["total_cost"] >= 0.0
     assert any(action["category"] == "vlm_judge_issue" for action in feedback["violations"])
+
+
+def test_feedback_builder_uses_aggregate_boundary_when_regions_are_missing() -> None:
+    case = {
+        "task_id": "case_1",
+        "room": {
+            "floor_plan": {
+                "aggregate_boundary": [[-2, -1], [2, -1], [2, 1], [-2, 1]],
+                "geometry_fidelity": "proxy_rectangle",
+                "source_kind": "object_position_extent_fallback",
+            },
+            "boundary": [[-2, -1], [2, -1], [2, 1], [-2, 1]],
+            "geometry_fidelity": "proxy_rectangle",
+        },
+    }
+    obj = {"object_id": "chair_1", "center": [0, -0.5, 0.5], "size": [0.8, 0.8, 1.0]}
+
+    regions = _floor_plan_regions(case)
+
+    assert regions
+    assert regions[0]["id"] == "__aggregate_floor_plan__"
+    assert _outside_floor_plan_penalty(obj, [0, -1.2, 0.5], regions) > 0.0
+    assert _outside_floor_plan_penalty(obj, [0, -0.5, 0.5], regions) == 0.0
 
 
 def test_feedback_builder_adds_soft_collision_pressure_from_layout_overlap() -> None:
@@ -307,3 +341,177 @@ def test_feedback_builder_can_disable_soft_collision_pressure() -> None:
 
     assert feedback["repair_targets"] == []
     assert feedback["repair_actions"] == []
+
+
+def test_feedback_builder_marks_fallback_boundary_cue_low_confidence() -> None:
+    report = {
+        "task_id": "case_1",
+        "iteration": 0,
+        "repair_targets": [],
+        "schema_failures": [],
+        "physical_failures": [],
+        "spatial_relation_failures": [],
+        "debug_evidence": {
+            "physical_flags": [
+                {
+                    "type": "room_boundary",
+                    "code": "room_boundary_low_confidence",
+                    "objects": ["chair_1"],
+                    "source_kind": "object_position_extent_fallback",
+                    "confidence": "low",
+                    "message": "chair_1 is outside fallback boundary.",
+                }
+            ]
+        },
+    }
+    layout = {"objects": [{"object_id": "chair_1", "center": [2.4, 1.0, 0.5], "size": [1.0, 1.0, 1.0]}]}
+    case = {"task_id": "case_1", "room": {"boundary": [[0, 0], [2, 0], [2, 2], [0, 2]], "boundary_source_kind": "object_position_extent_fallback"}}
+
+    feedback = build_feedback(report, layout, case)
+
+    action = next(item for item in feedback["repair_actions"] if item["action"] == "move_inside_boundary")
+    assert action["confidence"] == "low"
+    assert "fallback-derived" in action["fallback_note"]
+    assert action["suggested_center"][0] < 2.4
+
+
+def test_feedback_builder_keeps_suppressed_fallback_out_of_repair_cues() -> None:
+    report = {
+        "task_id": "case_1",
+        "iteration": 0,
+        "repair_targets": [],
+        "schema_failures": [],
+        "physical_failures": [],
+        "spatial_relation_failures": [],
+        "debug_evidence": {
+            "physical_flags": [
+                {
+                    "type": "room_boundary",
+                    "code": "room_boundary_suppressed",
+                    "objects": ["chair_1"],
+                    "source_kind": "object_position_extent_fallback",
+                    "confidence": "low",
+                    "severity": "info",
+                    "repair_relevant": False,
+                    "message": "chair_1 is outside suppressed fallback boundary.",
+                }
+            ]
+        },
+    }
+    layout = {"objects": [{"object_id": "chair_1", "center": [2.4, 1.0, 0.5], "size": [1.0, 1.0, 1.0]}]}
+
+    feedback = build_feedback(report, layout, {"task_id": "case_1"})
+
+    assert feedback["repair_targets"] == []
+    assert not any(item["action"] == "move_inside_boundary" for item in feedback["repair_actions"])
+
+
+def test_feedback_builder_aggregates_repeated_collision_moves() -> None:
+    flags = [
+        {"type": "serious_collision", "objects": ["small", "anchor_a"], "overlap_ratio": 0.9, "message": "collision"},
+        {"type": "serious_collision", "objects": ["small", "anchor_b"], "overlap_ratio": 0.8, "message": "collision"},
+    ]
+    report = {"task_id": "case_1", "iteration": 0, "repair_targets": [], "schema_failures": [], "physical_failures": [], "spatial_relation_failures": [], "debug_evidence": {"physical_flags": flags}}
+    layout = {
+        "objects": [
+            {"object_id": "small", "center": [0.0, 0.0, 0.5], "size": [0.5, 0.5, 1.0]},
+            {"object_id": "anchor_a", "center": [0.1, 0.0, 0.5], "size": [1.0, 1.0, 1.0]},
+            {"object_id": "anchor_b", "center": [-0.1, 0.0, 0.5], "size": [1.0, 1.0, 1.0]},
+        ]
+    }
+
+    feedback = build_feedback(report, layout, {"task_id": "case_1"})
+
+    aggregate = next(item for item in feedback["repair_actions"] if item["action"] == "move_object_to_reduce_collisions")
+    assert aggregate["object_id"] == "small"
+    assert aggregate["collision_count"] == 2
+    assert aggregate["contributing_pair_count"] == 2
+    assert aggregate["omitted_pair_count"] == 0
+    assert aggregate["advisory"] is True
+
+
+def test_feedback_builder_detects_dense_collision_cluster() -> None:
+    ids = ["a", "b", "c", "d"]
+    flags = [
+        {"type": "serious_collision", "objects": [ids[i], ids[j]], "overlap_ratio": 0.9, "message": "collision"}
+        for i in range(len(ids))
+        for j in range(i + 1, len(ids))
+    ]
+    report = {"task_id": "case_1", "iteration": 0, "repair_targets": [], "schema_failures": [], "physical_failures": [], "spatial_relation_failures": [], "debug_evidence": {"physical_flags": flags}}
+    layout = {"objects": [{"object_id": object_id, "center": [0.0, 0.0, 0.5], "size": [1.0, 1.0, 1.0]} for object_id in ids]}
+
+    feedback = build_feedback(
+        report,
+        layout,
+        {"task_id": "case_1"},
+        benchmark_config={"repair": {"collision_repair": {"max_pair_cues_per_cluster": 3}}},
+    )
+
+    cluster = next(item for item in feedback["repair_actions"] if item["action"] == "spread_dense_collision_cluster")
+    assert cluster["cluster_id"] == "collision_cluster_0"
+    assert len(cluster["objects"]) == 4
+    assert cluster["top_pair_count"] == 3
+    assert cluster["omitted_pair_count"] == 3
+    assert "Do not move the whole cluster together" in cluster["message"]
+
+
+def test_feedback_height_interval_avoids_below_floor_target() -> None:
+    report = {
+        "task_id": "case_1",
+        "iteration": 0,
+        "repair_targets": [],
+        "schema_failures": [],
+        "physical_failures": [],
+        "spatial_relation_failures": [],
+        "debug_evidence": {
+            "physical_flags": [
+                {
+                    "type": "above_wall_height",
+                    "objects": ["cabinet"],
+                    "wall_height": 3.0,
+                    "effective_above_wall_tolerance_m": 0.0,
+                    "confidence": "high",
+                    "message": "too high",
+                }
+            ]
+        },
+    }
+    layout = {"objects": [{"object_id": "cabinet", "center": [0.0, 0.0, 3.0], "size": [1.0, 1.0, 1.0]}]}
+
+    feedback = build_feedback(report, layout, {"task_id": "case_1", "room": {"floor_z": 0.0, "wall_height": 3.0}})
+
+    action = next(item for item in feedback["repair_actions"] if item["action"] == "adjust_height_within_floor_wall_interval")
+    assert action["target_center_z"] >= action["min_center_z"]
+    assert action["target_center_z"] <= action["max_center_z"]
+
+
+def test_feedback_impossible_height_does_not_emit_naive_lowering() -> None:
+    report = {
+        "task_id": "case_1",
+        "iteration": 0,
+        "repair_targets": [],
+        "schema_failures": [],
+        "physical_failures": [],
+        "spatial_relation_failures": [],
+        "debug_evidence": {
+            "physical_flags": [
+                {"type": "above_wall_height", "objects": ["tall"], "confidence": "low", "source_kind": "fallback_default", "message": "too high"},
+                {
+                    "type": "impossible_height_constraint",
+                    "code": "fallback_metadata_conflict",
+                    "objects": ["tall"],
+                    "confidence": "low",
+                    "source_kind": "fallback_default",
+                    "message": "impossible",
+                },
+            ]
+        },
+    }
+    layout = {"objects": [{"object_id": "tall", "center": [0.0, 0.0, 2.5], "size": [1.0, 1.0, 4.0]}]}
+
+    feedback = build_feedback(report, layout, {"task_id": "case_1", "room": {"floor_z": 0.0, "wall_height": 3.0}})
+
+    actions = feedback["repair_actions"]
+    impossible = next(item for item in actions if item["action"] == "impossible_height_constraint")
+    assert impossible["code"] == "fallback_metadata_conflict"
+    assert not any(item["action"] == "lower_below_wall_height" for item in actions)

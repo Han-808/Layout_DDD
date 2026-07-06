@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 from pathlib import Path
 from typing import Any
+from collections import Counter
 
 from benchmark.evidence_config import resolve_runtime_evidence_config
 from benchmark.models.base_model import ModelResponseError
@@ -51,6 +52,7 @@ def evaluate_layout_vlm_as_judge_v1(
     judge_model: Any | None = None,
     judge_model_name: str | None = None,
     generation_error: str | None = None,
+    eval_context: dict | None = None,
 ) -> tuple[dict, dict]:
     output_dir = Path(out_dir)
     evaluation_config = _evaluation_config(benchmark_config)
@@ -113,9 +115,28 @@ def evaluate_layout_vlm_as_judge_v1(
                 }
             )
 
-    if generation_error:
-        judge_skipped_reason = JUDGE_SKIPPED_UNPARSEABLE
-        judgement = _invalid_judgement(f"Model output was unparseable: {generation_error}")
+    hard_failures = _hard_failures(
+        generation_error=generation_error,
+        layout=eval_layout,
+        renderable_layout=renderable_layout,
+        render_skipped_objects=render_skipped_objects,
+    )
+    evidence_flags = _evidence_flags(
+        sanity_flags=sanity_flags,
+        physical_flags=physical_flags,
+        view_flags=view_flags,
+        render_skipped_objects=render_skipped_objects,
+        object_presence=object_presence,
+    )
+    validity_gate = (
+        ValidityGateResult(False, [failure["message"] for failure in hard_failures])
+        if hard_failures
+        else ValidityGateResult(True, [])
+    )
+
+    if hard_failures:
+        judge_skipped_reason = JUDGE_SKIPPED_UNPARSEABLE if generation_error else str(hard_failures[0].get("code") or JUDGE_SKIPPED_UNPARSEABLE)
+        judgement = _invalid_judgement(_hard_failure_reason(hard_failures))
     else:
         try:
             judgement = create_vlm_judge(benchmark_config, judge_model).judge(
@@ -175,6 +196,9 @@ def evaluate_layout_vlm_as_judge_v1(
     if generation_error:
         judgement["judgement_status"] = "unparseable_layout"
         judgement["brief_reasoning"] = judgement.get("brief_reasoning") or judgement.get("short_reason", "")
+    elif hard_failures:
+        judgement["judgement_status"] = "hard_failure"
+        judgement["brief_reasoning"] = judgement.get("brief_reasoning") or judgement.get("short_reason", "")
     if judge_error:
         judgement["judgement_status"] = "judge_error"
 
@@ -195,9 +219,28 @@ def evaluate_layout_vlm_as_judge_v1(
         relation_pass_rate=relation_pass_rate,
         attachment_pass_rate=attachment_pass_rate,
     )
-    if judge_error:
+    judge_success = bool(not hard_failures and not judge_error)
+    overall_valid = bool(judgement.get("valid")) if judge_success else False
+    _augment_case_metrics(
+        case_metrics,
+        case=case,
+        overall_valid=overall_valid,
+        judgement=judgement,
+        judge_success=judge_success,
+        hard_failures=hard_failures,
+        evidence_flags=evidence_flags,
+        renderable_layout=renderable_layout,
+        object_groups=object_groups,
+        judge_input_manifest=judge_input_manifest,
+        generator_model=generator_model,
+        generation_error=generation_error,
+        judge_error=judge_error,
+        eval_context=eval_context,
+    )
+    if judge_error or hard_failures:
         case_metrics["primary_score"] = 0.0
-    case_metrics_path = output_dir / CASE_METRICS_FILENAME
+    case_metrics_filename = f"case_metrics_iter_{iteration}.json"
+    case_metrics_path = output_dir / case_metrics_filename
     write_json(case_metrics_path, case_metrics)
 
     failed_relations = _failed_relation_items(relation_results, relations, "relation")
@@ -228,7 +271,6 @@ def evaluate_layout_vlm_as_judge_v1(
         **_model_metadata(judge_model, judge_model_name or model_name),
         "same_as_generator": same_as_generator,
     }
-    overall_valid = bool(judgement.get("valid")) if not generation_error else False
     report = {
         "evaluator": EVALUATOR_NAME,
         "evaluator_identity": evaluation_policy["evaluator_identity"],
@@ -236,6 +278,34 @@ def evaluate_layout_vlm_as_judge_v1(
         "case_id": case_metrics["case_id"],
         "iteration": iteration,
         "overall_valid": overall_valid,
+        "judge_success": judge_success,
+        "hard_failures": hard_failures,
+        "evidence_flags": evidence_flags,
+        "deterministic_evidence": {
+            "schema": {
+                "parse_success": not bool(generation_error),
+                "has_objects_array": isinstance(eval_layout.get("objects"), list) if isinstance(eval_layout, dict) else False,
+                "usable_object_count": len(renderable_layout.get("objects", [])) if isinstance(renderable_layout, dict) else 0,
+                "schema_flags": sanity_flags,
+            },
+            "object_presence": {
+                "required_count": object_presence.required_objects,
+                "present_count": object_presence.placed_required_objects,
+                "missing_object_ids": object_presence.missing_objects,
+                "extra_object_ids": _extra_object_ids(case, eval_layout),
+                "object_presence_rate": object_presence.rate,
+                "category_match_rate": None,
+            },
+            "physical_flags": physical_flags,
+            "render_flags": view_flags,
+            "spatial_cue_flags": [],
+        },
+        "render_evidence": {
+            "renderable": bool(renderable_layout.get("objects")) if isinstance(renderable_layout, dict) else False,
+            "global_views": _public_artifacts(global_artifacts),
+            "group_views": group_view_records,
+            "view_warnings": view_flags,
+        },
         "evaluation_policy": evaluation_policy,
         "config_refs": _config_refs(benchmark_config),
         "config_hash": _config_hash(benchmark_config),
@@ -282,6 +352,7 @@ def evaluate_layout_vlm_as_judge_v1(
         },
         "debug_evidence": {
             "runtime_evidence_config": resolve_runtime_evidence_config(benchmark_config, case, renderable_layout),
+            "eval_context_summary": _compact_eval_context(eval_context),
             "layout_normalization": layout_normalization,
             "sanity_flags": sanity_flags,
             "physical_flags": physical_flags,
@@ -294,7 +365,7 @@ def evaluate_layout_vlm_as_judge_v1(
             "group_view_artifacts": group_view_records,
             "judge_input_manifest": judge_input_manifest,
         },
-        "case_metrics_path": CASE_METRICS_FILENAME,
+        "case_metrics_path": case_metrics_filename,
         "metrics": case_metrics,
         "summary": {
             "schema_valid": not bool(sanity_flags),
@@ -430,6 +501,254 @@ def _invalid_judgement(reason: str) -> dict:
         "group_results": [],
         "relation_results": [],
         "attachment_results": [],
+    }
+
+
+def _hard_failures(
+    *,
+    generation_error: str | None,
+    layout: dict,
+    renderable_layout: dict,
+    render_skipped_objects: list[dict],
+) -> list[dict]:
+    failures = []
+    if generation_error:
+        failures.append(
+            {
+                "code": "generation_error",
+                "message": f"Model output was unparseable: {generation_error}",
+                "source": "generate_layout",
+            }
+        )
+        return failures
+    if not isinstance(layout, dict):
+        failures.append({"code": "layout_not_object", "message": "Layout is not a JSON object.", "source": "evaluate_layout"})
+        return failures
+    if not isinstance(layout.get("objects"), list):
+        failures.append({"code": "objects_array_missing", "message": "layout.objects is missing or not an array.", "source": "evaluate_layout"})
+        return failures
+    if not renderable_layout.get("objects"):
+        failures.append(
+            {
+                "code": "no_renderable_objects",
+                "message": "No usable bbox objects remain after layout sanitation/renderability checks.",
+                "source": "renderability",
+                "skipped_object_count": len(render_skipped_objects),
+            }
+        )
+    return failures
+
+
+def _hard_failure_reason(hard_failures: list[dict]) -> str:
+    if not hard_failures:
+        return ""
+    return "; ".join(str(item.get("message") or item.get("code")) for item in hard_failures)
+
+
+def _evidence_flags(
+    *,
+    sanity_flags: list[dict],
+    physical_flags: list[dict],
+    view_flags: list[dict],
+    render_skipped_objects: list[dict],
+    object_presence: Any,
+) -> list[dict]:
+    flags = []
+    for source_name, items in [
+        ("schema", sanity_flags),
+        ("physical_flags", physical_flags),
+        ("render", view_flags),
+        ("renderability", render_skipped_objects),
+    ]:
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            flags.append(
+                {
+                    "code": item.get("code") or item.get("type") or source_name,
+                    "type": item.get("type") or item.get("code") or source_name,
+                    "severity": item.get("severity", "medium"),
+                    "confidence": item.get("confidence"),
+                    "source_kind": item.get("source_kind"),
+                    "source_confidence": item.get("source_confidence"),
+                    "object_ids": item.get("objects") or item.get("object_ids") or [],
+                    "message": item.get("message", ""),
+                    "source": source_name,
+                    "blocking": bool(item.get("blocking", False)),
+                }
+            )
+    if getattr(object_presence, "evaluated", False) and object_presence.rate is not None and object_presence.rate < 1.0:
+        flags.append(
+            {
+                "code": "low_object_presence_rate",
+                "severity": "high",
+                "object_ids": list(getattr(object_presence, "missing_objects", [])),
+                "message": f"Object presence rate is {object_presence.rate:.3f}.",
+                "source": "object_presence",
+                "blocking": False,
+            }
+        )
+    return flags
+
+
+def _augment_case_metrics(
+    metrics: dict,
+    *,
+    case: dict,
+    overall_valid: bool,
+    judgement: dict,
+    judge_success: bool,
+    hard_failures: list[dict],
+    evidence_flags: list[dict],
+    renderable_layout: dict,
+    object_groups: list[dict],
+    judge_input_manifest: dict,
+    generator_model: Any | None,
+    generation_error: str | None,
+    judge_error: str,
+    eval_context: dict | None,
+) -> None:
+    flag_counts = Counter(str(flag.get("code") or flag.get("type") or "unknown") for flag in evidence_flags if isinstance(flag, dict))
+    physical_evidence = [flag for flag in evidence_flags if isinstance(flag, dict) and flag.get("source") == "physical_flags"]
+    confidence_counts = Counter(str(flag.get("confidence") or "unknown") for flag in physical_evidence)
+    source_kind_counts = Counter(str(flag.get("source_kind") or "unknown") for flag in physical_evidence)
+    group_source_counts = Counter(str(group.get("group_source") or "unknown") for group in object_groups if isinstance(group, dict))
+    request_metadata = getattr(generator_model, "last_request_metadata", {}) if generator_model is not None else {}
+    prompt_budget = request_metadata.get("prompt_budget_report") if isinstance(request_metadata, dict) else None
+    prompt_budget = prompt_budget if isinstance(prompt_budget, dict) else {}
+    prompt_stage = prompt_budget.get("call_type")
+    input_quality = eval_context.get("input_quality", {}) if isinstance(eval_context, dict) and isinstance(eval_context.get("input_quality"), dict) else {}
+    aliasing = eval_context.get("object_aliasing", {}) if isinstance(eval_context, dict) and isinstance(eval_context.get("object_aliasing"), dict) else {}
+    finish_reason = request_metadata.get("finish_reason") if isinstance(request_metadata, dict) else None
+    finish_reason_length = bool(finish_reason == "length")
+    parse_error_kind = _parse_error_kind(generation_error, finish_reason_length)
+    metrics.update(
+        {
+            "scene_representation_mode": case.get("scene_representation_mode"),
+            "input_mode": case.get("scene_representation_mode") or case.get("input_mode") or case.get("input_level"),
+            "overall_valid": bool(overall_valid),
+            "parse_success": not bool(generation_error),
+            "renderable": bool(renderable_layout.get("objects")) if isinstance(renderable_layout, dict) else False,
+            "num_renderable_objects": len(renderable_layout.get("objects", [])) if isinstance(renderable_layout, dict) else 0,
+            "judge_success": bool(judge_success),
+            "judge_valid": bool(judgement.get("valid")) if judge_success else False,
+            "vlm_valid": bool(judgement.get("valid")) if judge_success else False,
+            "vlm_score": judgement.get("score"),
+            "vlm_confidence": _confidence_number(judgement.get("confidence")),
+            "judgement_status": judgement.get("judgement_status"),
+            "task_error": False,
+            "generation_error": bool(generation_error),
+            "generation_truncated": bool(finish_reason_length),
+            "parse_error_kind": parse_error_kind,
+            "malformed_json": bool(generation_error and parse_error_kind != "truncated_json" and "malformed JSON" in generation_error),
+            "render_error": False,
+            "judge_error": bool(judge_error),
+            "hard_failure_codes": [str(item.get("code")) for item in hard_failures if item.get("code")],
+            "evidence_flag_counts": dict(sorted(flag_counts.items())),
+            "physical_flag_confidence_counts": dict(sorted(confidence_counts.items())),
+            "physical_flag_source_kind_counts": dict(sorted(source_kind_counts.items())),
+            "fallback_physical_flag_count": sum(
+                1
+                for flag in physical_evidence
+                if str(flag.get("source_kind") or "").lower() in {"object_position_extent_fallback", "fallback_default", "unknown"}
+                or str(flag.get("confidence") or "").lower() == "low"
+            ),
+            "fallback_metadata_conflict_count": sum(1 for flag in physical_evidence if str(flag.get("code") or "") == "fallback_metadata_conflict"),
+            "high_confidence_physical_flag_count": confidence_counts.get("high", 0),
+            "low_confidence_physical_flag_count": confidence_counts.get("low", 0),
+            "finish_reason": finish_reason,
+            "finish_reason_length": finish_reason_length,
+            "prompt_budget_exceeded": bool(prompt_budget.get("fits_context") is False),
+            "prompt_budget_error_stage": prompt_stage if prompt_budget.get("fits_context") is False else None,
+            "prompt_tokens_est": prompt_budget.get("estimated_prompt_tokens"),
+            "prompt_chars": prompt_budget.get("prompt_chars"),
+            "context_length": prompt_budget.get("context_length"),
+            "request_max_tokens": prompt_budget.get("max_tokens"),
+            "prompt_budget_ok": prompt_budget.get("fits_context"),
+            "prompt_budget": prompt_budget.get("prompt_budget"),
+            "prompt_budget_over_tokens": prompt_budget.get("over_budget_tokens"),
+            f"{prompt_stage}_prompt_tokens_est" if prompt_stage else "model_prompt_tokens_est": prompt_budget.get("estimated_prompt_tokens"),
+            f"{prompt_stage}_max_tokens" if prompt_stage else "model_max_tokens": prompt_budget.get("max_tokens"),
+            f"{prompt_stage}_context_length" if prompt_stage else "model_context_length": prompt_budget.get("context_length"),
+            f"{prompt_stage}_prompt_budget_ok" if prompt_stage else "model_prompt_budget_ok": prompt_budget.get("fits_context"),
+            "region_info_available": input_quality.get("region_info_available"),
+            "region_assignment_rate": input_quality.get("region_assignment_rate"),
+            "num_region_groups": sum(1 for group in object_groups if isinstance(group, dict) and group.get("group_source") == "semantic_region"),
+            "grouping_source_distribution": dict(sorted(group_source_counts.items())),
+            "evidence_groups_selected": _selected_group_count(judge_input_manifest),
+            "estimated_spatial_cue_count": input_quality.get("estimated_spatial_cue_count"),
+            "aliasing_enabled": aliasing.get("aliasing_enabled"),
+            "num_aliases": aliasing.get("num_aliases"),
+            "avg_canonical_object_id_length": aliasing.get("avg_canonical_object_id_length"),
+            "avg_model_object_id_length": aliasing.get("avg_model_object_id_length"),
+            "avg_canonical_category_length": aliasing.get("avg_canonical_category_length"),
+            "avg_model_category_length": aliasing.get("avg_model_category_length"),
+            "estimated_output_token_savings": aliasing.get("estimated_output_token_savings"),
+            "hierarchy_floor_objects_requested": aliasing.get("hierarchy_floor_objects_requested"),
+        }
+    )
+
+
+def _confidence_number(value: object) -> float | None:
+    if isinstance(value, (int, float)):
+        return float(value)
+    if not isinstance(value, str):
+        return None
+    return {"low": 0.33, "medium": 0.66, "high": 1.0}.get(value.lower())
+
+
+def _selected_group_count(judge_input_manifest: dict) -> int | None:
+    if not isinstance(judge_input_manifest, dict):
+        return None
+    selected = judge_input_manifest.get("selected_groups")
+    if isinstance(selected, list):
+        return len(selected)
+    full = judge_input_manifest.get("full_groups_sent")
+    if isinstance(full, list):
+        return len(full)
+    return None
+
+
+def _parse_error_kind(generation_error: str | None, finish_reason_length: bool) -> str | None:
+    if not generation_error:
+        return None
+    if finish_reason_length:
+        return "truncated_json"
+    text = generation_error.lower()
+    if "unterminated string" in text:
+        return "unterminated_string"
+    if "expecting ',' delimiter" in text:
+        return "missing_comma"
+    if "malformed json" in text:
+        return "malformed_json"
+    return "other"
+
+
+def _extra_object_ids(case: dict, layout: dict) -> list[str]:
+    required = {str(obj.get("id")) for obj in case.get("objects", []) if isinstance(obj, dict) and obj.get("id")}
+    if not required or not isinstance(layout, dict) or not isinstance(layout.get("objects"), list):
+        return []
+    extras = []
+    for obj in layout["objects"]:
+        if not isinstance(obj, dict):
+            continue
+        object_id = obj.get("object_id") or obj.get("id")
+        if isinstance(object_id, str) and object_id not in required:
+            extras.append(object_id)
+    return sorted(set(extras))
+
+
+def _compact_eval_context(eval_context: dict | None) -> dict:
+    if not isinstance(eval_context, dict):
+        return {}
+    return {
+        "scene_id": eval_context.get("scene_id"),
+        "dataset": eval_context.get("dataset"),
+        "object_count": len(eval_context.get("objects_by_id", {})) if isinstance(eval_context.get("objects_by_id"), dict) else 0,
+        "regions": eval_context.get("regions"),
+        "input_quality": eval_context.get("input_quality"),
+        "visibility_audit": eval_context.get("visibility_audit"),
+        "estimated_spatial_cue_count": len(eval_context.get("estimated_spatial_cues", [])) if isinstance(eval_context.get("estimated_spatial_cues"), list) else 0,
     }
 
 

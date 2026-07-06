@@ -8,6 +8,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from benchmark.datasets.hssd_small_selector import convert_selected_small_hssd_scene
+from benchmark.input_modes import list_all_input_modes
 
 
 def main() -> None:
@@ -25,7 +26,8 @@ def main() -> None:
     parser.add_argument("--compact-object-ids", action="store_true")
     parser.add_argument("--preserve-raw-metadata", action="store_true")
     parser.add_argument("--bbox-from-scale", action="store_true")
-    parser.add_argument("--no-estimated-relations", action="store_true")
+    parser.add_argument("--no-estimated-relations", action="store_true", help="Do not synthesize deterministic estimated spatial cues.")
+    parser.add_argument("--input-representation-mode", choices=sorted(list_all_input_modes(include_aliases=True)), default=None)
     args = parser.parse_args()
 
     selected, paths, manifest = convert_selected_small_hssd_scene(
@@ -38,6 +40,7 @@ def main() -> None:
         preserve_raw_metadata=args.preserve_raw_metadata,
         bbox_from_scale=args.bbox_from_scale,
         include_estimated_relations=not args.no_estimated_relations,
+        input_representation_mode=args.input_representation_mode,
     )
     print(f"selected_scene_id={selected.scene_id}")
     print(f"object_count={selected.object_count}")

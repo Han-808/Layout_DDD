@@ -3,6 +3,7 @@ source_type: hssd_scene_instance_json
 path: data/external/hssd-hab
 pattern: "**/*.scene_instance.json"
 input_level: structured_basic
+scene_representation_mode: compact_objects
 default_room:
   boundary: [[0, 0], [8, 0], [8, 8], [0, 8]]
   floor_z: 0.0

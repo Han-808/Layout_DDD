@@ -186,6 +186,52 @@ def test_prompt_payload_contains_temporary_rubric_and_output_schema() -> None:
     assert payload["evidence_manifest"][0]["meaning"] == "global top-down proxy room view"
     assert "budget-omitted groups" in payload["evaluation_policy"]["evidence_budgeting"]
     assert payload["evaluation_policy"]["completeness_source"].startswith("Judge object completeness")
+    assert "Fallback-derived" in payload["evaluation_policy"]["physical_evidence_semantics"]
+
+
+def test_prompt_payload_marks_fallback_and_floating_evidence_as_nonhard() -> None:
+    bundle = build_judge_prompt_payload(
+        case=_case(),
+        layout=_layout(),
+        renderable_layout=_layout(),
+        input_level="structured_basic",
+        layout_normalization_summary={},
+        object_groups=_groups(),
+        sanity_flags=[],
+        physical_flags=[
+            {
+                "type": "room_boundary",
+                "code": "room_boundary_low_confidence",
+                "objects": ["chair_1"],
+                "confidence": "low",
+                "source_kind": "object_position_extent_fallback",
+                "blocking": False,
+                "message": "fallback boundary",
+            },
+            {
+                "type": "floating_or_vertical_inconsistency",
+                "objects": ["lamp_1"],
+                "confidence": "medium",
+                "blocking": False,
+                "vertical_gap": 0.8,
+                "message": "floating",
+            },
+        ],
+        view_flags=[],
+        render_skipped_objects=[],
+        relation_specs=[],
+        attachment_specs=[],
+        evidence_selection={"budgeting_enabled": False},
+        image_manifest=[],
+        benchmark_config={},
+    )
+
+    policy = bundle["prompt_payload"]["evaluation_policy"]
+    physical_summary = bundle["prompt_payload"]["flag_summary"]["physical_flags"]
+    assert "fallback-derived" in policy["physical_evidence_semantics"].lower()
+    assert "not hard invalidity" in policy["physical_evidence_semantics"]
+    assert physical_summary["by_type"]["floating_or_vertical_inconsistency"] == 1
+    assert physical_summary["examples_by_type"]["room_boundary"]["examples"][0]["confidence"] == "low"
 
 
 def test_new_judge_output_schema_normalizes_to_compatible_fields() -> None:

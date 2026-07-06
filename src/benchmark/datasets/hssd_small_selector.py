@@ -57,6 +57,7 @@ def convert_selected_small_hssd_scene(
     preserve_raw_metadata: bool = False,
     bbox_from_scale: bool = False,
     include_estimated_relations: bool = True,
+    input_representation_mode: str | None = None,
 ) -> tuple[HSSDSmallSceneCandidate, list[Path], Path]:
     selected = select_natural_small_hssd_scene(
         hssd_root=hssd_root,
@@ -76,6 +77,7 @@ def convert_selected_small_hssd_scene(
         preserve_raw_metadata=preserve_raw_metadata,
         bbox_from_scale=bbox_from_scale,
         include_estimated_relations=include_estimated_relations,
+        input_representation_mode=input_representation_mode,
     )
     stable_paths = [_copy_to_stable_selected_name(path, out) for path in converted_paths]
     manifest_path = write_json(
@@ -94,6 +96,7 @@ def convert_selected_small_hssd_scene(
             "preserve_raw_metadata": preserve_raw_metadata,
             "bbox_from_scale": bbox_from_scale,
             "include_estimated_relations": include_estimated_relations,
+            "input_representation_mode": input_representation_mode,
             "stable_case_paths": [str(path) for path in stable_paths],
             "truncated": False,
         },

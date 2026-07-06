@@ -19,6 +19,16 @@
       "type": "string",
       "enum": ["prompt_only", "structured_basic", "structured_relation"]
     },
+    "scene_representation_mode": {
+      "type": "string",
+      "enum": [
+        "prompt_only",
+        "compact_objects",
+        "compact_objects_with_estimated_relations",
+        "compact_objects_with_spatial_cues",
+        "full_metadata_budgeted"
+      ]
+    },
     "description": {
       "type": "object",
       "additionalProperties": true,
@@ -74,6 +84,31 @@
           "subject": {"type": "string", "minLength": 1},
           "object": {"type": "string", "minLength": 1},
           "visible_to_model": {"type": "boolean", "default": true}
+        }
+      }
+    },
+    "spatial_cues": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["type", "subject", "target", "source", "confidence", "hard"],
+        "additionalProperties": true,
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "relation_id": {"type": "string", "minLength": 1},
+          "type": {
+            "type": "string",
+            "enum": ["near", "support_candidate", "same_region", "inside_region", "near_wall", "boundary_candidate"]
+          },
+          "subject": {"type": "string", "minLength": 1},
+          "object": {"type": "string", "minLength": 1},
+          "target": {"type": "string", "minLength": 1},
+          "source": {"type": "string", "minLength": 1},
+          "provenance": {"type": "string"},
+          "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+          "hard": {"type": "boolean", "const": false},
+          "visible_to_model": {"type": "boolean", "default": true},
+          "evidence": {"type": "object", "additionalProperties": true}
         }
       }
     },
@@ -202,7 +237,8 @@
         },
         "anyOf": [
           {"required": ["relations"]},
-          {"required": ["attachments"]}
+          {"required": ["attachments"]},
+          {"required": ["spatial_cues"]}
         ]
       }
     }

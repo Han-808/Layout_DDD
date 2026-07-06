@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections import defaultdict
+
 from benchmark.evidence_config import effective_scale_aware_min_volume, scene_volume_m3_from_case
 
 
@@ -22,6 +24,15 @@ DEFAULT_COLLISION_AVOIDANCE_CONFIG = {
     },
 }
 
+DEFAULT_COLLISION_REPAIR_CONFIG = {
+    "dense_cluster_min_objects": 4,
+    "dense_cluster_min_edges": 6,
+    "dense_cluster_max_clusters": 5,
+    "max_pair_cues_per_cluster": 8,
+    "aggregate_min_collision_count": 2,
+    "aggregate_max_magnitude_m": 1.5,
+}
+
 
 def build_feedback(
     evaluation_report: dict,
@@ -30,6 +41,7 @@ def build_feedback(
     benchmark_config: dict | None = None,
 ) -> dict:
     collision_cfg = _collision_avoidance_config(benchmark_config)
+    collision_repair_cfg = _collision_repair_config(benchmark_config)
     soft_collision_pairs = _soft_collision_pairs(
         current_layout,
         collision_cfg,
@@ -82,6 +94,7 @@ def build_feedback(
             vlm_issues=evaluation_report.get("vlm_judgement", {}).get("issues", []),
             soft_collision_pairs=soft_collision_pairs,
             collision_cfg=collision_cfg,
+            collision_repair_cfg=collision_repair_cfg,
         ),
         "debug_evidence_summary": _debug_evidence_summary(debug_evidence),
         "room_consistency_reason": room_consistency.get("short_reason", ""),
@@ -95,6 +108,15 @@ def _collision_avoidance_config(benchmark_config: dict | None) -> dict:
     if not isinstance(override, dict):
         override = {}
     return _merge_collision_config(DEFAULT_COLLISION_AVOIDANCE_CONFIG, override)
+
+
+def _collision_repair_config(benchmark_config: dict | None) -> dict:
+    config = benchmark_config if isinstance(benchmark_config, dict) else {}
+    repair = config.get("repair", {}) if isinstance(config.get("repair"), dict) else {}
+    override = repair.get("collision_repair") if isinstance(repair.get("collision_repair"), dict) else config.get("collision_repair", {})
+    if not isinstance(override, dict):
+        override = {}
+    return _merge_collision_config(DEFAULT_COLLISION_REPAIR_CONFIG, override)
 
 
 def _merge_collision_config(defaults: dict, overrides: dict) -> dict:
@@ -135,8 +157,16 @@ def _debug_physical_repair_targets(evaluation_report: dict) -> set[str]:
     for flag in debug.get("physical_flags", []):
         if not isinstance(flag, dict):
             continue
+        if flag.get("repair_relevant") is False:
+            continue
         flag_type = flag.get("type")
-        if flag_type not in {"room_boundary", "below_floor", "above_wall_height", "serious_collision"}:
+        if flag_type not in {
+            "room_boundary",
+            "below_floor",
+            "above_wall_height",
+            "serious_collision",
+            "floating_or_vertical_inconsistency",
+        }:
             continue
         for object_id in flag.get("objects", []):
             if isinstance(object_id, str) and object_id:
@@ -174,16 +204,30 @@ def _debug_flags_to_violations(category: str, flags: object) -> list[dict]:
     for flag in flags[:80]:
         if not isinstance(flag, dict):
             continue
+        if flag.get("repair_relevant") is False:
+            continue
         flag_type = flag.get("type")
-        if flag_type not in {"room_boundary", "below_floor", "above_wall_height", "serious_collision"}:
+        if flag_type not in {
+            "room_boundary",
+            "below_floor",
+            "above_wall_height",
+            "serious_collision",
+            "floating_or_vertical_inconsistency",
+            "impossible_height_constraint",
+        }:
             continue
         violations.append(
             {
                 "category": category,
                 "type": flag_type,
+                "code": flag.get("code"),
                 "message": flag.get("message", ""),
                 "objects": [item for item in flag.get("objects", []) if isinstance(item, str)],
                 "severity": flag.get("severity"),
+                "confidence": flag.get("confidence"),
+                "source_kind": flag.get("source_kind"),
+                "source_confidence": flag.get("source_confidence"),
+                "blocking": bool(flag.get("blocking", False)),
             }
         )
     if len(flags) > 80:
@@ -238,13 +282,25 @@ def _repair_actions(
     vlm_issues: object,
     soft_collision_pairs: list[dict],
     collision_cfg: dict,
+    collision_repair_cfg: dict,
 ) -> list[dict]:
     objects = _layout_object_map(current_layout)
     regions = _floor_plan_regions(bm_instance)
     actions: list[dict] = []
     physical_flag_list = physical_flags if isinstance(physical_flags, list) else []
+    impossible_height_objects = {
+        object_id
+        for flag in physical_flag_list
+        if isinstance(flag, dict) and flag.get("type") == "impossible_height_constraint"
+        for object_id in flag.get("objects", [])
+        if isinstance(object_id, str)
+    }
+    actions.extend(_dense_collision_cluster_actions(physical_flag_list, objects, collision_repair_cfg))
+    serious_pair_actions: list[dict] = []
     for flag in physical_flag_list:
         if not isinstance(flag, dict):
+            continue
+        if flag.get("repair_relevant") is False:
             continue
         flag_type = flag.get("type")
         object_ids = [item for item in flag.get("objects", []) if isinstance(item, str)]
@@ -256,12 +312,23 @@ def _repair_actions(
                 suggestion = _suggest_inside_floor_plan(obj, regions)
                 actions.append(
                     {
-                        "action": "move_inside_floor_plan",
+                        "action": "move_inside_boundary",
                         "object_id": object_id,
                         "current_bbox": _object_bbox_summary(obj),
                         "target_region": suggestion.get("target_region"),
                         "suggested_center": suggestion.get("suggested_center"),
                         "suggested_delta": suggestion.get("suggested_delta"),
+                        "suggested_delta_xy": suggestion.get("suggested_delta_xy"),
+                        "distance_outside": suggestion.get("distance_outside"),
+                        "boundary_source_kind": flag.get("source_kind") or suggestion.get("source_kind"),
+                        "boundary_source_confidence": flag.get("source_confidence") or flag.get("confidence"),
+                        "confidence": flag.get("confidence", "medium"),
+                        "advisory": True,
+                        "fallback_note": (
+                            "Boundary is fallback-derived; treat this as a soft repair cue, not absolute room geometry."
+                            if flag.get("confidence") == "low" or _is_fallback_source(flag.get("source_kind"))
+                            else ""
+                        ),
                         "reason": flag.get("message", "object footprint is outside the floor plan"),
                     }
                 )
@@ -274,37 +341,37 @@ def _repair_actions(
                 size = _numeric_triplet(obj.get("size"))
                 if center is None or size is None:
                     continue
-                suggested = [center[0], center[1], max(center[2], size[2] / 2.0)]
-                actions.append(
-                    {
-                        "action": "raise_above_floor",
-                        "object_id": object_id,
-                        "current_bbox": _object_bbox_summary(obj),
-                        "suggested_center": _round_list(suggested),
-                        "suggested_delta": _round_list([suggested[i] - center[i] for i in range(3)]),
-                        "reason": flag.get("message", "object bottom is below floor"),
-                    }
-                )
+                actions.append(_height_repair_action(obj, bm_instance, flag, reason="below_floor"))
         elif flag_type == "above_wall_height":
+            for object_id in object_ids:
+                if object_id in impossible_height_objects:
+                    continue
+                obj = objects.get(object_id)
+                if obj is None:
+                    continue
+                actions.append(_height_repair_action(obj, bm_instance, flag, reason="above_wall_height"))
+        elif flag_type == "impossible_height_constraint":
             for object_id in object_ids:
                 obj = objects.get(object_id)
                 if obj is None:
                     continue
-                center = _numeric_triplet(obj.get("center"))
-                size = _numeric_triplet(obj.get("size"))
-                if center is None or size is None:
+                actions.append(_impossible_height_action(obj, bm_instance, flag))
+        elif flag_type == "floating_or_vertical_inconsistency":
+            for object_id in object_ids:
+                obj = objects.get(object_id)
+                if obj is None:
                     continue
-                wall_height = _room_height(bm_instance)
-                suggested = [center[0], center[1], min(center[2], wall_height - size[2] / 2.0)]
                 actions.append(
                     {
-                        "action": "lower_below_wall_height",
+                        "action": "lower_or_support_object",
                         "object_id": object_id,
                         "current_bbox": _object_bbox_summary(obj),
-                        "wall_height": wall_height,
-                        "suggested_center": _round_list(suggested),
-                        "suggested_delta": _round_list([suggested[i] - center[i] for i in range(3)]),
-                        "reason": flag.get("message", "object top is above wall height"),
+                        "bottom_z": flag.get("bottom_z"),
+                        "nearest_support_top_z": flag.get("nearest_support_top_z"),
+                        "vertical_gap": flag.get("vertical_gap"),
+                        "confidence": flag.get("confidence", "medium"),
+                        "advisory": True,
+                        "reason": flag.get("message", "object appears vertically unsupported or floating"),
                     }
                 )
         elif flag_type == "serious_collision" and len(object_ids) >= 2:
@@ -315,6 +382,9 @@ def _repair_actions(
             action = _separate_collision_action(obj_a, obj_b, flag, regions, objects, collision_cfg=collision_cfg)
             if action:
                 actions.append(action)
+                serious_pair_actions.append(action)
+
+    actions.extend(_aggregate_collision_actions(serious_pair_actions, collision_repair_cfg))
 
     for pair in soft_collision_pairs:
         object_ids = [item for item in pair.get("objects", []) if isinstance(item, str)]
@@ -410,14 +480,24 @@ def _compact_flags(value: object, *, limit: int) -> list[dict]:
                 key: item[key]
                 for key in [
                     "type",
+                    "code",
                     "severity",
+                    "confidence",
+                    "source_kind",
+                    "source_confidence",
+                    "blocking",
+                    "suppressed",
+                    "repair_relevant",
                     "objects",
+                    "object_ids",
+                    "object_id",
                     "message",
                     "group_id",
                     "projection",
                     "view_id",
                     "overlap_ratio",
                     "threshold",
+                    "vertical_gap",
                 ]
                 if key in item
             }
@@ -521,14 +601,53 @@ def _floor_plan_regions(bm_instance: dict) -> list[dict]:
     room = bm_instance.get("room") if isinstance(bm_instance.get("room"), dict) else {}
     floor_plan = room.get("floor_plan") if isinstance(room.get("floor_plan"), dict) else {}
     regions = floor_plan.get("regions") or room.get("regions") or []
-    return [region for region in regions if isinstance(region, dict) and _region_bounds(region) is not None]
+    source_kind = floor_plan.get("source_kind") or room.get("boundary_source_kind") or room.get("source_kind")
+    valid_regions = []
+    for region in regions:
+        if not isinstance(region, dict) or _region_bounds(region) is None:
+            continue
+        copied = dict(region)
+        copied.setdefault("source_kind", source_kind or "semantic_region")
+        valid_regions.append(copied)
+    if valid_regions:
+        return valid_regions
+
+    for source_key, polygon in [
+        ("floor_plan.aggregate_boundary", floor_plan.get("aggregate_boundary")),
+        ("room.floor_polygon", room.get("floor_polygon")),
+        ("room.boundary", room.get("boundary")),
+    ]:
+        region = _synthetic_floor_plan_region(polygon, source_key)
+        if region is not None:
+            return [region]
+    return []
+
+
+def _synthetic_floor_plan_region(polygon: object, source_key: str) -> dict | None:
+    if not isinstance(polygon, list) or not polygon:
+        return None
+    region = {
+        "id": "__aggregate_floor_plan__",
+        "label": "aggregate_floor_plan",
+        "floor_polygon": polygon,
+        "source": source_key,
+        "source_kind": "object_position_extent_fallback" if "boundary" in source_key or "aggregate" in source_key else "room_metadata",
+        "synthetic": True,
+    }
+    return region if _region_bounds(region) is not None else None
 
 
 def _suggest_inside_floor_plan(obj: dict, regions: list[dict]) -> dict:
     center = _numeric_triplet(obj.get("center"))
     size = _numeric_triplet(obj.get("size"))
     if center is None or size is None or not regions:
-        return {"target_region": None, "suggested_center": center, "suggested_delta": [0.0, 0.0, 0.0]}
+        return {
+            "target_region": None,
+            "suggested_center": center,
+            "suggested_delta": [0.0, 0.0, 0.0],
+            "suggested_delta_xy": [0.0, 0.0],
+            "distance_outside": 0.0,
+        }
 
     region = _matching_region(obj.get("region_id"), regions) or min(
         regions,
@@ -536,7 +655,13 @@ def _suggest_inside_floor_plan(obj: dict, regions: list[dict]) -> dict:
     )
     bounds = _region_bounds(region)
     if bounds is None:
-        return {"target_region": None, "suggested_center": _round_list(center), "suggested_delta": [0.0, 0.0, 0.0]}
+        return {
+            "target_region": None,
+            "suggested_center": _round_list(center),
+            "suggested_delta": [0.0, 0.0, 0.0],
+            "suggested_delta_xy": [0.0, 0.0],
+            "distance_outside": 0.0,
+        }
 
     min_x, max_x, min_y, max_y = bounds
     margin = 0.02
@@ -555,10 +680,14 @@ def _suggest_inside_floor_plan(obj: dict, regions: list[dict]) -> dict:
         _clamp(center[1], safe_min_y, safe_max_y),
         max(center[2], size[2] / 2.0),
     ]
+    delta = [suggested[i] - center[i] for i in range(3)]
     return {
         "target_region": _region_summary(region),
         "suggested_center": _round_list(suggested),
-        "suggested_delta": _round_list([suggested[i] - center[i] for i in range(3)]),
+        "suggested_delta": _round_list(delta),
+        "suggested_delta_xy": _round_list(delta[:2]),
+        "distance_outside": round(_outside_floor_plan_penalty(obj, center, [region]), 4),
+        "source_kind": region.get("source_kind"),
     }
 
 
@@ -602,14 +731,23 @@ def _separate_collision_action(
     overlap_after = _candidate_overlap_volume(keep_obj, move_obj, suggested_center_raw)
     total_overlap_after, overlap_pairs = _candidate_total_overlap_summary(move_obj, suggested_center_raw, all_objects)
     suggested_center = _round_list(suggested_center_raw)
+    vector = _separating_vector(move_obj, keep_obj)
     action = {
         "action": "separate_collision_pair",
+        "advisory": True,
         "object_ids": [obj_a.get("object_id"), obj_b.get("object_id")],
         "current_bboxes": [_object_bbox_summary(obj_a), _object_bbox_summary(obj_b)],
+        "move_object": move_obj.get("object_id"),
+        "anchor_object": keep_obj.get("object_id"),
         "move_object_id": move_obj.get("object_id"),
         "keep_object_id": keep_obj.get("object_id"),
-        "separation_axis": "x" if chosen["axis"] == 0 else "y",
-        "minimum_delta_m": round(chosen["minimum_delta"], 4),
+        "separation_axis": vector["overlap_axis"],
+        "minimum_delta_m": round(vector["min_separation_distance"], 4),
+        "suggested_delta_xy": vector["suggested_delta_xy"],
+        "min_separation_distance": round(vector["min_separation_distance"], 4),
+        "overlap_axis": vector["overlap_axis"],
+        "overlap_depth": round(vector["overlap_depth"], 4),
+        "confidence": "medium",
         "candidate_strategy": chosen["strategy"],
         "candidate_overlap_volume_m3": round(overlap_after, 6),
         "candidate_total_overlap_volume_m3": round(total_overlap_after, 6),
@@ -624,6 +762,7 @@ def _separate_collision_action(
         "collision_pressure": "high" if flag.get("type") == "serious_collision" else "moderate",
         "overlap_ratio": flag.get("overlap_ratio"),
         "intersection_volume_m3": flag.get("intersection_volume_m3"),
+        "reason_code": flag.get("type") or "serious_collision",
         "reason": flag.get("message", "serious bbox collision"),
     }
     if total_overlap_after <= 1.0e-9 and outside_penalty <= 1.0e-9:
@@ -635,6 +774,259 @@ def _separate_collision_action(
             "choose a globally plausible placement with lower total overlap and inside-floor-plan placement."
         )
     return action
+
+
+def _separating_vector(move_obj: dict, anchor_obj: dict) -> dict:
+    center_move = _numeric_triplet(move_obj.get("center")) or [0.0, 0.0, 0.0]
+    center_anchor = _numeric_triplet(anchor_obj.get("center")) or [0.0, 0.0, 0.0]
+    size_move = _numeric_triplet(move_obj.get("size")) or [0.0, 0.0, 0.0]
+    size_anchor = _numeric_triplet(anchor_obj.get("size")) or [0.0, 0.0, 0.0]
+    overlaps = []
+    for axis in [0, 1]:
+        half_sum = (size_move[axis] + size_anchor[axis]) / 2.0
+        current_gap = abs(center_move[axis] - center_anchor[axis])
+        overlaps.append(max(0.0, half_sum - current_gap))
+    axis = 0 if overlaps[0] <= overlaps[1] else 1
+    direction = _axis_direction(center_move, center_anchor, axis, str(move_obj.get("object_id")), str(anchor_obj.get("object_id")))
+    margin = 0.05
+    distance = max(0.05, overlaps[axis] + margin)
+    delta = [0.0, 0.0]
+    delta[axis] = direction * distance
+    return {
+        "suggested_delta_xy": _round_list(delta),
+        "min_separation_distance": distance,
+        "overlap_axis": "x" if axis == 0 else "y",
+        "overlap_depth": overlaps[axis],
+    }
+
+
+def _axis_direction(center_move: list[float], center_anchor: list[float], axis: int, move_id: str, anchor_id: str) -> float:
+    diff = center_move[axis] - center_anchor[axis]
+    if abs(diff) > 1.0e-9:
+        return 1.0 if diff > 0 else -1.0
+    return 1.0 if move_id >= anchor_id else -1.0
+
+
+def _height_repair_action(obj: dict, bm_instance: dict, flag: dict, *, reason: str) -> dict:
+    center = _numeric_triplet(obj.get("center")) or [0.0, 0.0, 0.0]
+    size = _numeric_triplet(obj.get("size")) or [0.0, 0.0, 0.0]
+    floor_z = _floor_z(bm_instance)
+    wall_height = _room_height_or_none(bm_instance)
+    floor_margin = float(flag.get("effective_floor_contact_tolerance_m") or 0.0)
+    wall_margin = float(flag.get("effective_above_wall_tolerance_m") or floor_margin)
+    min_center_z = floor_z + size[2] / 2.0 + max(0.0, floor_margin)
+    max_center_z = (wall_height - size[2] / 2.0 - max(0.0, wall_margin)) if wall_height is not None else None
+    if max_center_z is not None and max_center_z < min_center_z:
+        return _impossible_height_action(obj, bm_instance, flag)
+    high = max_center_z if max_center_z is not None else max(center[2], min_center_z)
+    target_z = _clamp(center[2], min_center_z, high)
+    suggested = [center[0], center[1], target_z]
+    return {
+        "action": "adjust_height_within_floor_wall_interval",
+        "object_id": obj.get("object_id"),
+        "current_bbox": _object_bbox_summary(obj),
+        "current_center_z": round(center[2], 4),
+        "target_center_z": round(target_z, 4),
+        "min_center_z": round(min_center_z, 4),
+        "max_center_z": round(max_center_z, 4) if max_center_z is not None else None,
+        "floor_z": floor_z,
+        "wall_height": wall_height,
+        "suggested_center": _round_list(suggested),
+        "suggested_delta": _round_list([suggested[i] - center[i] for i in range(3)]),
+        "reason": reason,
+        "confidence": flag.get("confidence", "medium"),
+        "source_kind": flag.get("source_kind"),
+        "advisory": True,
+    }
+
+
+def _impossible_height_action(obj: dict, bm_instance: dict, flag: dict) -> dict:
+    center = _numeric_triplet(obj.get("center")) or [0.0, 0.0, 0.0]
+    size = _numeric_triplet(obj.get("size")) or [0.0, 0.0, 0.0]
+    floor_z = _floor_z(bm_instance)
+    wall_height = _room_height_or_none(bm_instance)
+    return {
+        "action": "impossible_height_constraint",
+        "code": flag.get("code") or "impossible_height_constraint",
+        "object_id": obj.get("object_id"),
+        "current_bbox": _object_bbox_summary(obj),
+        "object_height": size[2],
+        "floor_z": floor_z,
+        "wall_height": wall_height,
+        "current_center_z": round(center[2], 4),
+        "source_kind": flag.get("source_kind"),
+        "confidence": flag.get("confidence", "low"),
+        "blocking": False,
+        "advisory": True,
+        "message": flag.get(
+            "message",
+            "Object height exceeds the available floor-wall interval. Do not attempt naive lowering below floor.",
+        ),
+    }
+
+
+def _dense_collision_cluster_actions(physical_flags: list[dict], objects: dict[str, dict], cfg: dict) -> list[dict]:
+    pairs = _serious_collision_pairs(physical_flags)
+    if not pairs:
+        return []
+    graph: dict[str, set[str]] = defaultdict(set)
+    weights: dict[tuple[str, str], float] = {}
+    for a, b, flag in pairs:
+        graph[a].add(b)
+        graph[b].add(a)
+        weights[tuple(sorted([a, b]))] = float(flag.get("overlap_ratio") or 0.0)
+    components = _connected_components(graph)
+    min_objects = int(cfg.get("dense_cluster_min_objects", 4))
+    min_edges = int(cfg.get("dense_cluster_min_edges", 6))
+    max_clusters = int(cfg.get("dense_cluster_max_clusters", 5))
+    max_pair_cues = int(cfg.get("max_pair_cues_per_cluster", 8))
+    actions = []
+    for component in components:
+        edge_keys = [key for key in weights if key[0] in component and key[1] in component]
+        if len(component) < min_objects and len(edge_keys) < min_edges:
+            continue
+        anchors = _cluster_anchor_objects(component, objects)
+        movable = [object_id for object_id in sorted(component) if object_id not in set(anchors)]
+        center = _cluster_centroid(component, objects)
+        spread = {
+            object_id: _round_list(_radial_delta(objects.get(object_id), center, object_id))
+            for object_id in movable[: max(0, max_pair_cues)]
+        }
+        top_edges = sorted(edge_keys, key=lambda key: (-weights[key], key))[:max_pair_cues]
+        actions.append(
+            {
+                "action": "spread_dense_collision_cluster",
+                "cluster_id": f"collision_cluster_{len(actions)}",
+                "objects": sorted(component),
+                "anchor_objects": anchors,
+                "movable_objects": movable,
+                "suggested_strategy": "radial_spread_from_cluster_centroid",
+                "suggested_delta_xy_by_object": spread,
+                "top_pair_count": len(top_edges),
+                "top_pairs": [list(key) for key in top_edges],
+                "omitted_pair_count": max(0, len(edge_keys) - len(top_edges)),
+                "confidence": "medium",
+                "advisory": True,
+                "message": (
+                    "This dense cluster has many overlapping objects. Do not move the whole cluster together; "
+                    "spread non-anchor objects apart while preserving object ids/sizes."
+                ),
+            }
+        )
+        if len(actions) >= max_clusters:
+            break
+    return actions
+
+
+def _aggregate_collision_actions(pair_actions: list[dict], cfg: dict) -> list[dict]:
+    min_count = int(cfg.get("aggregate_min_collision_count", 2))
+    max_magnitude = float(cfg.get("aggregate_max_magnitude_m", 1.5))
+    sums: dict[str, list[float]] = defaultdict(lambda: [0.0, 0.0])
+    counts: dict[str, int] = defaultdict(int)
+    partners: dict[str, list[str]] = defaultdict(list)
+    for action in pair_actions:
+        object_id = action.get("move_object_id")
+        delta = action.get("suggested_delta_xy")
+        partner = action.get("keep_object_id")
+        if not isinstance(object_id, str) or not isinstance(delta, list) or len(delta) < 2:
+            continue
+        weight = max(float(action.get("overlap_depth") or 0.0), 0.05)
+        sums[object_id][0] += float(delta[0]) * weight
+        sums[object_id][1] += float(delta[1]) * weight
+        counts[object_id] += 1
+        if isinstance(partner, str):
+            partners[object_id].append(partner)
+    actions = []
+    for object_id, count in sorted(counts.items(), key=lambda item: (-item[1], item[0])):
+        if count < min_count:
+            continue
+        delta = [sums[object_id][0] / count, sums[object_id][1] / count]
+        delta = _cap_xy_delta(delta, max_magnitude)
+        actions.append(
+            {
+                "action": "move_object_to_reduce_collisions",
+                "object_id": object_id,
+                "suggested_delta_xy": _round_list(delta),
+                "collision_count": count,
+                "top_partners": sorted(set(partners[object_id]))[:5],
+                "contributing_pair_count": count,
+                "omitted_pair_count": max(0, count - 5),
+                "advisory": True,
+                "confidence": "medium",
+            }
+        )
+    return actions
+
+
+def _serious_collision_pairs(physical_flags: list[dict]) -> list[tuple[str, str, dict]]:
+    pairs = []
+    for flag in physical_flags:
+        if not isinstance(flag, dict) or flag.get("type") != "serious_collision":
+            continue
+        object_ids = [item for item in flag.get("objects", []) if isinstance(item, str)]
+        if len(object_ids) >= 2:
+            pairs.append((object_ids[0], object_ids[1], flag))
+    return pairs
+
+
+def _connected_components(graph: dict[str, set[str]]) -> list[set[str]]:
+    seen: set[str] = set()
+    components = []
+    for start in sorted(graph):
+        if start in seen:
+            continue
+        stack = [start]
+        component = set()
+        while stack:
+            item = stack.pop()
+            if item in component:
+                continue
+            component.add(item)
+            stack.extend(sorted(graph.get(item, set()) - component))
+        seen |= component
+        components.append(component)
+    components.sort(key=lambda item: (-len(item), sorted(item)))
+    return components
+
+
+def _cluster_anchor_objects(component: set[str], objects: dict[str, dict]) -> list[str]:
+    ranked = sorted(component, key=lambda object_id: (-_footprint_area(objects.get(object_id, {})), object_id))
+    return ranked[:1]
+
+
+def _cluster_centroid(component: set[str], objects: dict[str, dict]) -> list[float]:
+    centers = [_numeric_triplet(objects.get(object_id, {}).get("center")) for object_id in component]
+    centers = [center for center in centers if center is not None]
+    if not centers:
+        return [0.0, 0.0, 0.0]
+    return [sum(center[i] for center in centers) / len(centers) for i in range(3)]
+
+
+def _radial_delta(obj: dict | None, centroid: list[float], object_id: str) -> list[float]:
+    center = _numeric_triplet((obj or {}).get("center"))
+    if center is None:
+        return [0.0, 0.0]
+    dx = center[0] - centroid[0]
+    dy = center[1] - centroid[1]
+    norm = (dx * dx + dy * dy) ** 0.5
+    if norm <= 1.0e-9:
+        direction = 1.0 if object_id >= "m" else -1.0
+        return [0.35 * direction, 0.0]
+    scale = 0.35 / norm
+    return [dx * scale, dy * scale]
+
+
+def _cap_xy_delta(delta: list[float], max_magnitude: float) -> list[float]:
+    magnitude = (delta[0] * delta[0] + delta[1] * delta[1]) ** 0.5
+    if magnitude <= max_magnitude or magnitude <= 1.0e-9:
+        return delta
+    scale = max_magnitude / magnitude
+    return [delta[0] * scale, delta[1] * scale]
+
+
+def _footprint_area(obj: dict) -> float:
+    size = _numeric_triplet(obj.get("size"))
+    return max(0.0, size[0] * size[1]) if size is not None else 0.0
 
 
 def _collision_separation_candidates(move_obj: dict, keep_obj: dict, regions: list[dict]) -> list[dict]:
@@ -880,6 +1272,9 @@ def _region_summary(region: dict) -> dict:
         "id": region.get("id"),
         "label": region.get("label") or region.get("name"),
         "bounds_xy": _round_list(list(bounds)) if bounds is not None else None,
+        "source_kind": region.get("source_kind"),
+        "source": region.get("source"),
+        "synthetic": bool(region.get("synthetic", False)),
     }
 
 
@@ -900,13 +1295,31 @@ def _numeric_triplet(value: object) -> list[float] | None:
 
 
 def _room_height(bm_instance: dict) -> float:
+    value = _room_height_or_none(bm_instance)
+    return value if value is not None else 2.8
+
+
+def _room_height_or_none(bm_instance: dict) -> float | None:
     room = bm_instance.get("room") if isinstance(bm_instance.get("room"), dict) else {}
     for key in ["height", "wall_height"]:
         try:
             return float(room.get(key))
         except (TypeError, ValueError):
             pass
-    return 2.8
+    return None
+
+
+def _floor_z(bm_instance: dict) -> float:
+    room = bm_instance.get("room") if isinstance(bm_instance.get("room"), dict) else {}
+    try:
+        return float(room.get("floor_z", 0.0))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _is_fallback_source(source_kind: object) -> bool:
+    text = str(source_kind or "").lower()
+    return "fallback" in text or "object_position_extent" in text or text in {"", "unknown"}
 
 
 def _clamp(value: float, low: float, high: float) -> float:

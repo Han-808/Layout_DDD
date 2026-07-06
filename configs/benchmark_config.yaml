@@ -20,6 +20,9 @@ evaluation:
   save_debug_evidence: true
 
 evaluation_policy:
+  # For parseable/renderable layouts, VLM-as-judge is the final semantic
+  # validity source. Deterministic checks are diagnostic evidence unless the
+  # layout cannot be parsed or rendered into usable bbox evidence.
   evaluator_identity: "vlm_as_judge_v1"
   deterministic_flags_affect_validity: false
   skip_vlm_judge_only_if_unparseable: true
@@ -96,6 +99,27 @@ physical_flags:
     max_cap_m3: 0.05
   floor_z_default: 0.0
 
+physical_flag_policy:
+  fallback_boundary_behavior: downgrade
+  fallback_wall_height_behavior: downgrade
+  fallback_evidence_blocking: false
+  supported_fallback_behaviors:
+    - downgrade
+    - suppress
+    - normal
+
+vertical_consistency:
+  enabled: true
+  blocking: false
+  min_gap_absolute: 0.25
+  min_gap_relative_to_height: 0.5
+  min_support_overlap_ratio: 0.15
+  ignore_categories:
+    - wall_art
+    - lamp_ceiling
+    - curtain
+    - mirror
+
 grouping:
   enabled: true
   proximity:
@@ -133,6 +157,21 @@ metrics:
   primary_score_policy: "mean_active_metrics_v0"
 
 repair:
+  prompt_budget:
+    max_repair_targets: 20
+    max_repair_actions: 20
+    max_physical_flags: 30
+    max_collision_pairs: 20
+    max_render_flags: 10
+    max_relation_flags: 20
+    max_judge_issues: 12
+    max_group_issues: 8
+    max_locked_object_ids: 50
+    max_debug_evidence_chars: 6000
+    max_feedback_chars: 12000
+    max_judge_issue_chars_each: 500
+    max_total_judge_issue_chars: 4000
+    numeric_precision: 3
   collision_avoidance:
     enabled: true
     soft_overlap_ratio: 0.15
@@ -148,6 +187,13 @@ repair:
       outside: 1.0
       overlap: 1.0
       movement: 0.25
+  collision_repair:
+    dense_cluster_min_objects: 4
+    dense_cluster_min_edges: 6
+    dense_cluster_max_clusters: 5
+    max_pair_cues_per_cluster: 8
+    aggregate_min_collision_count: 2
+    aggregate_max_magnitude_m: 1.5
 
 viewer:
   default_focus: "visual"

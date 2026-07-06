@@ -29,6 +29,9 @@ def test_physical_flags_boundary_floor_and_wall() -> None:
     flag_types = {flag["type"] for flag in flags}
 
     assert {"room_boundary", "below_floor", "above_wall_height"}.issubset(flag_types)
+    below = next(flag for flag in flags if flag["type"] == "below_floor")
+    assert below["source_kind"] == "room_metadata"
+    assert below["source_confidence"] == "medium"
 
 
 def test_serious_collision_threshold() -> None:
@@ -141,3 +144,82 @@ def test_physical_flags_use_floor_plan_region_union() -> None:
     boundary_objects = {flag["objects"][0] for flag in flags if flag["type"] == "room_boundary"}
     assert "in_region" not in boundary_objects
     assert "in_gap" in boundary_objects
+
+
+def test_fallback_boundary_flag_is_downgraded_and_nonblocking() -> None:
+    room = {
+        "boundary": [[0, 0], [2, 0], [2, 2], [0, 2]],
+        "boundary_source_kind": "object_position_extent_fallback",
+        "floor_z": 0.0,
+        "wall_height": 3.0,
+    }
+    flags = collect_physical_flags({"objects": [_obj("outside", [2.6, 1.0, 0.5], [1.0, 1.0, 1.0])]}, {"room": room})
+
+    boundary = next(flag for flag in flags if flag["type"] == "room_boundary")
+    assert boundary["confidence"] == "low"
+    assert boundary["blocking"] is False
+    assert boundary["source_kind"] == "object_position_extent_fallback"
+    assert boundary["code"] == "room_boundary_low_confidence"
+
+
+def test_fallback_boundary_can_be_suppressed_without_disappearing() -> None:
+    room = {
+        "boundary": [[0, 0], [2, 0], [2, 2], [0, 2]],
+        "boundary_source_kind": "object_position_extent_fallback",
+        "floor_z": 0.0,
+        "wall_height": 3.0,
+    }
+    config = {"physical_flag_policy": {"fallback_boundary_behavior": "suppress"}}
+
+    flags = collect_physical_flags({"objects": [_obj("outside", [2.6, 1.0, 0.5], [1.0, 1.0, 1.0])]}, {"room": room}, config)
+
+    boundary = next(flag for flag in flags if flag["type"] == "room_boundary")
+    assert boundary["code"] == "room_boundary_suppressed"
+    assert boundary["severity"] == "info"
+    assert boundary["suppressed"] is True
+    assert boundary["repair_relevant"] is False
+
+
+def test_impossible_fallback_wall_height_constraint_is_recorded() -> None:
+    room = {
+        "boundary": [[0, 0], [4, 0], [4, 4], [0, 4]],
+        "boundary_source_kind": "object_position_extent_fallback",
+        "floor_z": 0.0,
+        "wall_height": 3.0,
+    }
+    flags = collect_physical_flags({"objects": [_obj("too_tall", [1.0, 1.0, 2.5], [1.0, 1.0, 4.0])]}, {"room": room})
+
+    above = next(flag for flag in flags if flag["type"] == "above_wall_height")
+    impossible = next(flag for flag in flags if flag["type"] == "impossible_height_constraint")
+    assert above["confidence"] == "low"
+    assert impossible["blocking"] is False
+    assert impossible["source_kind"] == "fallback_default"
+    assert impossible["object_height"] == pytest.approx(4.0)
+    assert impossible["code"] == "fallback_metadata_conflict"
+
+
+def test_floating_or_vertical_inconsistency_flag_is_nonblocking() -> None:
+    floating = _obj("floating", [1.0, 1.0, 2.0], [0.5, 0.5, 0.5])
+
+    flags = collect_physical_flags({"objects": [floating]}, {"room": ROOM})
+
+    flag = next(item for item in flags if item["type"] == "floating_or_vertical_inconsistency")
+    assert flag["blocking"] is False
+    assert flag["confidence"] == "medium"
+    assert flag["vertical_gap"] > 0.25
+
+
+def test_floor_object_is_not_flagged_as_floating() -> None:
+    floor_object = _obj("floor_object", [1.0, 1.0, 0.5], [0.5, 0.5, 1.0])
+
+    flags = collect_physical_flags({"objects": [floor_object]}, {"room": ROOM})
+
+    assert not any(item["type"] == "floating_or_vertical_inconsistency" for item in flags)
+
+
+def test_floating_ignore_category_is_respected() -> None:
+    wall_art = {"object_id": "art", "category": "wall_art", "center": [1.0, 1.0, 2.0], "size": [0.5, 0.5, 0.5], "yaw": 0}
+
+    flags = collect_physical_flags({"objects": [wall_art]}, {"room": ROOM})
+
+    assert not any(item["type"] == "floating_or_vertical_inconsistency" for item in flags)

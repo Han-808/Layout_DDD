@@ -8,6 +8,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from benchmark.datasets.hssd_hab_converter import convert_hssd_hab
+from benchmark.input_modes import list_all_input_modes
 
 
 def main() -> None:
@@ -40,13 +41,19 @@ def main() -> None:
     parser.add_argument(
         "--no-estimated-relations",
         action="store_true",
-        help="Do not synthesize estimated near relations.",
+        help="Do not synthesize deterministic estimated spatial cues.",
     )
     parser.add_argument(
         "--levels",
         nargs="+",
         default=["prompt_only", "structured_basic"],
         choices=["prompt_only", "structured_basic", "structured_relation"],
+    )
+    parser.add_argument(
+        "--input-representation-mode",
+        choices=sorted(list_all_input_modes(include_aliases=True)),
+        default=None,
+        help="Model-facing scene representation mode stored on converted cases.",
     )
     args = parser.parse_args()
 
@@ -61,6 +68,7 @@ def main() -> None:
         preserve_raw_metadata=args.preserve_raw_metadata,
         bbox_from_scale=args.bbox_from_scale,
         include_estimated_relations=not args.no_estimated_relations,
+        input_representation_mode=args.input_representation_mode,
     )
     for path in paths:
         print(path)

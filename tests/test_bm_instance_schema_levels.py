@@ -68,6 +68,34 @@ def test_structured_relation_case_validates() -> None:
     )
 
 
+def test_structured_relation_with_spatial_cues_validates() -> None:
+    _assert_valid(
+        {
+            "case_id": "cue_001",
+            "schema_version": "2.0",
+            "input_level": "structured_relation",
+            "scene_representation_mode": "compact_objects_with_spatial_cues",
+            "description": {"text": "Create a study room."},
+            "room": {"boundary": [[0, 0], [4, 0], [4, 3], [0, 3]], "unit": "meter"},
+            "objects": [
+                {"id": "vase_001", "category": "vase"},
+                {"id": "table_001", "category": "table"},
+            ],
+            "spatial_cues": [
+                {
+                    "id": "support_candidate__vase_001__table_001",
+                    "type": "support_candidate",
+                    "subject": "vase_001",
+                    "target": "table_001",
+                    "source": "bbox_geometry_heuristic",
+                    "confidence": 0.8,
+                    "hard": False,
+                }
+            ],
+        }
+    )
+
+
 def test_legacy_cases_still_validate() -> None:
     for path in sorted((ROOT / "data" / "benchmark_cases").glob("*.json")):
         _assert_valid(read_json(path))
