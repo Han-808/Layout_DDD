@@ -80,6 +80,10 @@ def main() -> None:
     parser.add_argument("--judge-model", default="same")
     parser.add_argument("--model-endpoint", default="http://127.0.0.1:8000/v1")
     parser.add_argument("--model-id", default="Qwen/Qwen3-VL-32B-Instruct")
+    parser.add_argument("--judge-model-endpoint", default=None)
+    parser.add_argument("--judge-model-id", default=None)
+    parser.add_argument("--judge-timeout-seconds", type=int, default=None)
+    parser.add_argument("--judge-context-length", type=int, default=None)
     parser.add_argument("--temperature", type=float, default=0.0)
     parser.add_argument("--max-tokens", type=int, default=8192)
     parser.add_argument("--generation-max-tokens", type=int, default=None)
@@ -122,6 +126,15 @@ def main() -> None:
         return
 
     resources = load_pipeline_resources(PROJECT_ROOT)
+    _apply_judge_model_overrides(
+        resources.model_config,
+        judge_model=args.judge_model,
+        endpoint=args.judge_model_endpoint,
+        model_id=args.judge_model_id,
+        timeout_seconds=args.judge_timeout_seconds,
+        context_length=args.judge_context_length,
+        max_tokens=args.judge_max_tokens,
+    )
     model_overrides = {
         "model_endpoint": args.model_endpoint,
         "model_id": args.model_id,
@@ -163,6 +176,35 @@ def main() -> None:
         _write_status_outputs(out_root, results)
 
     _write_status_outputs(out_root, results)
+
+
+def _apply_judge_model_overrides(
+    model_config: dict,
+    *,
+    judge_model: str,
+    endpoint: str | None,
+    model_id: str | None,
+    timeout_seconds: int | None,
+    context_length: int | None,
+    max_tokens: int | None,
+) -> None:
+    if not judge_model or judge_model in {"same", "same_model"}:
+        return
+    overrides = {
+        "endpoint": endpoint,
+        "model": model_id,
+        "timeout_seconds": timeout_seconds,
+        "context_length": context_length,
+        "max_tokens": max_tokens,
+        "judge_max_tokens": max_tokens,
+        "response_format_json": True if (endpoint or model_id or max_tokens) else None,
+        "judge_evidence_budgeting": True if (endpoint or model_id) else None,
+    }
+    selected = model_config.setdefault("models", {}).setdefault(judge_model, {})
+    selected.setdefault("provider", "openai_compatible")
+    for key, value in overrides.items():
+        if value is not None:
+            selected[key] = value
 
 
 def _ensure_scene_files(hssd_root: Path, scene_ids: list[str], *, download: bool) -> list[Path]:
