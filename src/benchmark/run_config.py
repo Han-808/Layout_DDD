@@ -124,6 +124,7 @@ def pipeline_resources_from_resolved(project_root: str | Path, resolved: Resolve
         model_config=resolved.model_config,
         benchmark_config=resolved.benchmark_config,
         layout_schema=load_json_schema(root / "schemas" / "layout.schema.json"),
+        scene_schema=load_json_schema(root / "schemas" / "scene.schema.json"),
         resolved_run_config=deepcopy(resolved.data),
     )
 

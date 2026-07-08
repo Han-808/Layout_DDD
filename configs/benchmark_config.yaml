@@ -12,12 +12,15 @@ evaluation:
   enabled: true
   evaluator: "vlm_as_judge_v1"
   vlm_judge: "same_model"
+  vlm_judge_input_mode: "json_only"
   renderer: "perspective_bbox"
   save_room_views: true
   save_global_view: true
   save_group_views: true
   save_pair_views: true
   save_debug_evidence: true
+
+vlm_judge_input_mode: "json_only"
 
 evaluation_policy:
   # For parseable/renderable layouts, VLM-as-judge is the final semantic

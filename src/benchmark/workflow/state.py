@@ -5,11 +5,14 @@ from typing import Any, TypedDict
 
 class BenchmarkState(TypedDict, total=False):
     task_id: str
+    pipeline_mode: str
+    generation_used: bool
     model_name: str
     model: Any
     judge_model_name: str
     judge_model: Any
     case_path: str
+    input_scene_path: str
     out_dir: str
     input_json: dict
     normalized_case: dict
@@ -26,6 +29,11 @@ class BenchmarkState(TypedDict, total=False):
     resolved_run_config_path: str
     current_layout: dict
     current_layout_path: str
+    current_scene: dict
+    current_scene_path: str
+    normalized_scene_path: str
+    candidate_scene_path: str
+    generated_layout_path: str
     generation_error: str
     generation_request_metadata_path: str
     generation_prompt_path: str

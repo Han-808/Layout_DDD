@@ -1,0 +1,151 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.org/3d-layout-benchmark/scene.schema.json",
+  "title": "EvaluationScene",
+  "description": "Canonical asset-aware evaluation input. A legacy bbox layout is one bbox-only representation of this scene.",
+  "version": "1.0.0",
+  "type": "object",
+  "required": [
+    "scene_id",
+    "assets"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "scene_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "unit": {
+      "const": "meter"
+    },
+    "coordinate_system": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "room": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "assets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "asset_id",
+          "category"
+        ],
+        "additionalProperties": true,
+        "properties": {
+          "asset_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "object_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "category": {
+            "type": "string",
+            "minLength": 1
+          },
+          "bbox": {
+            "type": "object",
+            "required": [
+              "center",
+              "size",
+              "yaw"
+            ],
+            "additionalProperties": true,
+            "properties": {
+              "center": {
+                "type": "array",
+                "minItems": 3,
+                "maxItems": 3,
+                "items": {
+                  "type": "number"
+                }
+              },
+              "size": {
+                "type": "array",
+                "minItems": 3,
+                "maxItems": 3,
+                "items": {
+                  "type": "number",
+                  "exclusiveMinimum": 0
+                }
+              },
+              "yaw": {
+                "type": "number"
+              },
+              "metadata": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          },
+          "asset_ref": {
+            "type": "object",
+            "properties": {
+              "source": {
+                "type": "string"
+              },
+              "asset_id": {
+                "type": "string"
+              },
+              "template_id": {
+                "type": "string"
+              },
+              "mesh_uri": {
+                "type": "string"
+              },
+              "mesh_path": {
+                "type": "string"
+              },
+              "metadata": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            },
+            "additionalProperties": true
+          },
+          "support_parent": {
+            "type": "string"
+          },
+          "region_id": {
+            "type": "string"
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      }
+    },
+    "relations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    "attachments": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "eval_context": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": true
+    }
+  }
+}

@@ -4,11 +4,14 @@ import json
 from collections import Counter, defaultdict
 from typing import Any
 
+from benchmark.data.scene_adapters import layout_to_scene, normalize_scene
+
 
 DEFAULT_TEXT_BUDGET = {
     "max_total_chars": 12000,
     "max_scene_summary_chars": 1500,
     "max_layout_summary_chars": 2500,
+    "max_scene_assets": 80,
     "max_selected_group_objects": 40,
     "max_objects_per_group_in_prompt": 12,
     "max_flag_examples_per_type": 8,
@@ -75,11 +78,52 @@ def text_budget_config(benchmark_config: dict | None) -> dict:
         "max_total_chars": _positive_int(config.get("max_total_chars"), DEFAULT_TEXT_BUDGET["max_total_chars"]),
         "max_scene_summary_chars": _positive_int(config.get("max_scene_summary_chars"), DEFAULT_TEXT_BUDGET["max_scene_summary_chars"]),
         "max_layout_summary_chars": _positive_int(config.get("max_layout_summary_chars"), DEFAULT_TEXT_BUDGET["max_layout_summary_chars"]),
+        "max_scene_assets": _positive_int(config.get("max_scene_assets"), DEFAULT_TEXT_BUDGET["max_scene_assets"]),
         "max_selected_group_objects": _positive_int(config.get("max_selected_group_objects"), DEFAULT_TEXT_BUDGET["max_selected_group_objects"]),
         "max_objects_per_group_in_prompt": _positive_int(config.get("max_objects_per_group_in_prompt"), DEFAULT_TEXT_BUDGET["max_objects_per_group_in_prompt"]),
         "max_flag_examples_per_type": _positive_int(config.get("max_flag_examples_per_type"), DEFAULT_TEXT_BUDGET["max_flag_examples_per_type"]),
         "numeric_precision": _positive_int(config.get("numeric_precision"), DEFAULT_TEXT_BUDGET["numeric_precision"]),
     }
+
+
+def build_compact_scene_payload(scene: dict, layout: dict, text_budget: dict) -> dict:
+    normalized = normalize_scene(scene)
+    assets = [asset for asset in normalized.get("assets", []) if isinstance(asset, dict)]
+    max_assets = int(text_budget.get("max_scene_assets", DEFAULT_TEXT_BUDGET["max_scene_assets"]))
+    shown_assets = assets[:max_assets]
+    omitted_assets = assets[max_assets:]
+    compact = {
+        "scene_id": normalized.get("scene_id"),
+        "unit": normalized.get("unit", "meter"),
+        "room": _compact_room(normalized.get("room"), text_budget),
+        "assets": [_compact_scene_asset(asset, text_budget) for asset in shown_assets],
+        "asset_count": len(assets),
+        "bbox_asset_count": sum(1 for asset in assets if _asset_has_bbox(asset)),
+        "non_bbox_asset_count": sum(1 for asset in assets if not _asset_has_bbox(asset)),
+    }
+    if isinstance(normalized.get("relations"), list):
+        compact["relations"] = _compact_specs(normalized["relations"])
+    if isinstance(normalized.get("attachments"), list):
+        compact["attachments"] = _compact_specs(normalized["attachments"])
+    if omitted_assets:
+        omitted_ids = [str(asset.get("asset_id") or asset.get("object_id") or f"asset_{idx + max_assets + 1:03d}") for idx, asset in enumerate(omitted_assets)]
+        compact["omitted_asset_count"] = len(omitted_assets)
+        compact["omitted_asset_ids"] = omitted_ids[:200]
+        compact["omitted_asset_ids_truncated"] = len(omitted_ids) > 200
+        compact["assets_truncated"] = True
+        compact["truncation"] = {"reason": "max_scene_assets prompt budget", "shown": len(shown_assets), "total": len(assets)}
+    non_bbox_assets = layout.get("_non_bbox_assets") if isinstance(layout, dict) else None
+    if isinstance(non_bbox_assets, list) and non_bbox_assets:
+        compact["non_bbox_assets"] = [
+            {
+                key: item.get(key)
+                for key in ["asset_id", "object_id", "category", "reason"]
+                if isinstance(item, dict) and key in item
+            }
+            for item in non_bbox_assets[:max_assets]
+            if isinstance(item, dict)
+        ]
+    return _round_numbers(compact, text_budget)
 
 
 def build_scene_summary(case: dict, input_level: str, text_budget: dict) -> dict:
@@ -198,8 +242,11 @@ def build_judge_prompt_payload(
     *,
     case: dict,
     layout: dict,
+    scene: dict | None = None,
     renderable_layout: dict | None,
     input_level: str,
+    judge_input_mode: str = "json_only",
+    render_evidence_used: bool = False,
     layout_normalization_summary: dict | None,
     object_groups: list[dict],
     sanity_flags: list[dict],
@@ -213,6 +260,7 @@ def build_judge_prompt_payload(
     benchmark_config: dict | None,
 ) -> dict:
     budget = text_budget_config(benchmark_config)
+    compact_scene = build_compact_scene_payload(scene or layout_to_scene(layout, case), layout, budget)
     scene_summary = build_scene_summary(case, input_level, budget)
     layout_summary = build_layout_summary(
         layout=layout,
@@ -226,10 +274,18 @@ def build_judge_prompt_payload(
         evidence_selection=evidence_selection,
         text_budget=budget,
     )
+    bbox_rate = _bbox_available_rate(compact_scene)
     payload = {
-        "role": "independent evaluator of explicit 3D bbox-proxy layouts",
+        "task": "Evaluate whether this 3D scene/layout placement is plausible.",
+        "role": "independent evaluator of 3D scene/layout placement",
+        "vlm_judge_input_mode": judge_input_mode,
+        "json_scene_used": True,
+        "render_evidence_used": bool(render_evidence_used),
         "coordinate_convention": COORDINATE_CONVENTION,
         "evaluation_policy": {
+            "input_modes": "Input may be JSON-only or JSON plus rendered views.",
+            "json_only": "When rendered views are absent, judge from structured scene JSON and evidence.",
+            "json_plus_render": "Rendered bbox views are legacy/full visual evidence, not a mesh dependency.",
             "parseable_layouts": "Run VLM judge; overall_valid is set from vlm_judgement.valid.",
             "unparseable_layouts": "Skip VLM judge; overall_valid=false; judgement_status=unparseable_layout.",
             "deterministic_flags": "Schema, physical, view, skipped render object, and grouping diagnostics are evidence only.",
@@ -249,11 +305,41 @@ def build_judge_prompt_payload(
             ),
             "completeness_source": "Judge object completeness from num_layout_objects versus num_input_objects, not from selected/omitted evidence groups.",
         },
+        "scene": compact_scene,
+        "structured_evidence": {
+            "object_completeness": {
+                "num_input_objects": scene_summary.get("num_input_objects"),
+                "num_scene_assets": compact_scene.get("asset_count"),
+                "num_layout_objects": layout_summary.get("num_layout_objects"),
+                "num_renderable_objects": layout_summary.get("num_renderable_objects"),
+                "bbox_available_rate": bbox_rate,
+                "omitted_asset_count": compact_scene.get("omitted_asset_count", 0),
+            },
+            "physical_flags": _compact_flags(physical_flags, budget),
+            "schema_flags": _compact_flags(sanity_flags, budget),
+            "render_flags": _compact_flags(view_flags, budget),
+            "bbox_missing": _compact_flags(_flags_of_type(render_skipped_objects, "bbox_missing_asset"), budget),
+            "fallback_confidence": _fallback_confidence_summary(physical_flags),
+            "render_available": bool(image_manifest),
+            "render_evidence_used": bool(render_evidence_used),
+        },
         "scene_summary": scene_summary,
         "layout_summary": layout_summary,
         "evidence_manifest": build_evidence_manifest(evidence_selection, image_manifest),
         "flag_summary": layout_summary.get("flag_summary", {}),
-        "rubric": TEMPORARY_RUBRIC,
+        "rubric": {
+            "judge_geometry": True,
+            "judge_object_relations": True,
+            "judge_room_coherence": True,
+            "physical_flags_are_evidence_not_rules": True,
+            "relation_aware_overlap_guidance": (
+                "Some bbox overlaps may be valid depending on object relation: chair under table, "
+                "object on table, object inside cabinet, or wall-mounted object. Other intersections "
+                "are likely invalid: bed through table or large furniture penetrating unrelated large furniture. "
+                "Consider category, relation, support, containment, and overall room coherence."
+            ),
+            **TEMPORARY_RUBRIC,
+        },
         "score_scale": {
             "0": "Unusable, invalid, or impossible to judge because evidence is insufficient.",
             "1": "Severe bbox layout or task-completeness problems.",
@@ -281,6 +367,144 @@ def build_judge_prompt_payload(
             "prompt_chars": len(prompt_text),
             "truncated": _contains_truncation(payload),
         },
+    }
+
+
+def _compact_room(room: object, text_budget: dict) -> dict:
+    if not isinstance(room, dict):
+        return {}
+    return _room_proxy_summary(room, text_budget)
+
+
+def _compact_scene_asset(asset: dict, text_budget: dict) -> dict:
+    compact = {
+        "asset_id": asset.get("asset_id"),
+        "category": asset.get("category"),
+    }
+    if asset.get("object_id") and asset.get("object_id") != asset.get("asset_id"):
+        compact["object_id"] = asset.get("object_id")
+    bbox = asset.get("bbox")
+    if isinstance(bbox, dict):
+        compact["bbox"] = {
+            key: _round_value(bbox.get(key), int(text_budget.get("numeric_precision", 2)))
+            for key in ["center", "size", "yaw"]
+            if key in bbox
+        }
+    for key in ["support_parent", "support_surface", "parent_id", "region_id"]:
+        if asset.get(key) is not None:
+            compact[key] = asset.get(key)
+    if isinstance(asset.get("asset_ref"), dict):
+        compact["asset_ref"] = _compact_asset_ref(asset["asset_ref"])
+    if isinstance(asset.get("metadata"), dict):
+        metadata = _compact_metadata(asset["metadata"])
+        if metadata:
+            compact["metadata"] = metadata
+    return compact
+
+
+def _compact_asset_ref(asset_ref: dict) -> dict:
+    compact = {
+        key: _truncate_string(str(asset_ref[key]), 240) if isinstance(asset_ref.get(key), str) else asset_ref.get(key)
+        for key in ["source", "template_id", "mesh_uri", "category", "model_id", "asset_type"]
+        if key in asset_ref and asset_ref.get(key) is not None
+    }
+    metadata = asset_ref.get("metadata")
+    if isinstance(metadata, dict) and metadata:
+        compact["metadata_keys"] = sorted(str(key) for key in metadata.keys())[:12]
+        compact["metadata_key_count"] = len(metadata)
+    for key, value in asset_ref.items():
+        if key in compact or key == "metadata":
+            continue
+        if isinstance(value, (str, int, float, bool)) or value is None:
+            compact[key] = _truncate_string(value, 240) if isinstance(value, str) else value
+        if len(compact) >= 12:
+            break
+    return compact
+
+
+def _compact_metadata(metadata: dict) -> dict:
+    primitive_fields = {}
+    for key, value in metadata.items():
+        if key == "source_layout_object":
+            continue
+        if isinstance(value, (str, int, float, bool)) or value is None:
+            primitive_fields[str(key)] = _truncate_string(value, 180) if isinstance(value, str) else value
+        if len(primitive_fields) >= 6:
+            break
+    result: dict[str, Any] = {
+        "keys": sorted(str(key) for key in metadata if key != "source_layout_object")[:12],
+        "key_count": len([key for key in metadata if key != "source_layout_object"]),
+    }
+    if primitive_fields:
+        result["primitive_fields"] = primitive_fields
+    return result if result["key_count"] or primitive_fields else {}
+
+
+def _asset_has_bbox(asset: dict) -> bool:
+    bbox = asset.get("bbox")
+    return isinstance(bbox, dict) and all(key in bbox for key in ["center", "size", "yaw"])
+
+
+def _bbox_available_rate(compact_scene: dict) -> float | None:
+    asset_count = compact_scene.get("asset_count")
+    bbox_count = compact_scene.get("bbox_asset_count")
+    if not isinstance(asset_count, int) or asset_count <= 0 or not isinstance(bbox_count, int):
+        return None
+    return float(bbox_count) / float(asset_count)
+
+
+def _compact_flags(flags: list[dict], text_budget: dict) -> list[dict]:
+    limit = text_budget["max_flag_examples_per_type"]
+    compact = []
+    for flag in flags:
+        if not isinstance(flag, dict):
+            continue
+        item = {
+            key: flag[key]
+            for key in [
+                "type",
+                "code",
+                "severity",
+                "confidence",
+                "source_kind",
+                "source_confidence",
+                "blocking",
+                "objects",
+                "object_ids",
+                "object_id",
+                "asset_id",
+                "category",
+                "message",
+                "reason",
+            ]
+            if key in flag
+        }
+        compact.append(item)
+        if len(compact) >= limit:
+            break
+    return compact
+
+
+def _flags_of_type(flags: list[dict], flag_type: str) -> list[dict]:
+    return [
+        flag
+        for flag in flags
+        if isinstance(flag, dict) and (flag.get("type") == flag_type or flag.get("code") == flag_type)
+    ]
+
+
+def _fallback_confidence_summary(flags: list[dict]) -> dict:
+    confidence = Counter(str(flag.get("confidence") or "unknown") for flag in flags if isinstance(flag, dict))
+    source_kind = Counter(str(flag.get("source_kind") or "unknown") for flag in flags if isinstance(flag, dict))
+    return {
+        "confidence_counts": dict(sorted(confidence.items())),
+        "source_kind_counts": dict(sorted(source_kind.items())),
+        "has_low_confidence_or_fallback": any(
+            str(flag.get("confidence") or "").lower() == "low"
+            or str(flag.get("source_kind") or "").lower() in {"fallback_default", "object_position_extent_fallback", "unknown"}
+            for flag in flags
+            if isinstance(flag, dict)
+        ),
     }
 
 
@@ -666,6 +890,34 @@ def _enforce_total_budget(payload: dict, text_budget: dict) -> dict:
         "truncated": True,
     }
     result["total_budget_truncation"] = {"truncated": True, "cap_chars": cap, "strategy": "final compact payload"}
+    if len(_json_text(result)) <= cap:
+        return result
+    scene = result.get("scene") if isinstance(result.get("scene"), dict) else {}
+    shown_assets = scene.get("assets") if isinstance(scene.get("assets"), list) else []
+    result["scene"] = {
+        "scene_id": scene.get("scene_id"),
+        "unit": scene.get("unit"),
+        "asset_count": scene.get("asset_count"),
+        "bbox_asset_count": scene.get("bbox_asset_count"),
+        "non_bbox_asset_count": scene.get("non_bbox_asset_count"),
+        "assets": [{"truncated": True, "shown": 0, "total": len(shown_assets), "reason": "total prompt text budget"}],
+        "truncated": True,
+    }
+    structured = result.get("structured_evidence") if isinstance(result.get("structured_evidence"), dict) else {}
+    result["structured_evidence"] = {
+        "object_completeness": structured.get("object_completeness", {}),
+        "physical_flags": structured.get("physical_flags", [])[:1] if isinstance(structured.get("physical_flags"), list) else [],
+        "bbox_missing": structured.get("bbox_missing", [])[:1] if isinstance(structured.get("bbox_missing"), list) else [],
+        "render_available": structured.get("render_available"),
+        "render_evidence_used": structured.get("render_evidence_used"),
+        "truncated": True,
+    }
+    result["total_budget_truncation"] = {"truncated": True, "cap_chars": cap, "strategy": "final compact payload plus compact scene"}
+    if len(_json_text(result)) <= cap:
+        return result
+    result["rubric"] = {"target": TEMPORARY_RUBRIC["target"], "physical_flags_are_evidence_not_rules": True, "truncated": True}
+    result["output_instruction"] = "Return one JSON object."
+    result["total_budget_truncation"] = {"truncated": True, "cap_chars": cap, "strategy": "minimal final payload"}
     return result
 
 

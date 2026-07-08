@@ -4,7 +4,7 @@ from pathlib import Path
 
 from benchmark.models.mock_model import MockModel
 from benchmark.utils.io import read_json
-from benchmark.workflow import run_workflow
+from benchmark.workflow import BenchmarkAgent, WorkflowEvent, build_graph, run_workflow
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -18,7 +18,7 @@ def _base_state(tmp_path: Path, model: MockModel, max_repair_iterations: int) ->
         "model": model,
         "model_name": model.name,
         "layout_schema": read_json(ROOT / "schemas" / "layout.schema.json"),
-        "benchmark_config": {"benchmark": {"save_viewer_scene": True}},
+        "benchmark_config": {"benchmark": {"save_viewer_scene": True}, "evaluation": {"vlm_judge_input_mode": "json_plus_render"}},
         "max_repair_iterations": max_repair_iterations,
     }
 
@@ -63,6 +63,32 @@ def test_graph_one_shot_path(tmp_path: Path) -> None:
     group_diag = viewer_scene["group_evidence"][0]["diagnostics"]["xy"]
     assert group_diag["resolved_config"]["render"]["backend"] == "perspective_bbox_zbuffer"
     assert "data" not in viewer_scene["workflow"]["artifacts"][1]
+
+
+def test_build_graph_returns_agent_runner_for_compatibility() -> None:
+    runner = build_graph()
+
+    assert isinstance(runner, BenchmarkAgent)
+    assert hasattr(runner, "invoke")
+
+
+def test_benchmark_agent_api_emits_step_events(tmp_path: Path) -> None:
+    events: list[WorkflowEvent] = []
+    agent = BenchmarkAgent(callbacks=[events.append])
+
+    state = agent.run(_base_state(tmp_path, MockModel(), 0))
+
+    assert state["current_evaluation"]["overall_valid"] is True
+    action_events = [event.action for event in events if event.event == "after_action"]
+    assert action_events == [
+        "normalize_input",
+        "generate_layout",
+        "evaluate_layout",
+        "compute_metrics",
+    ]
+    route_events = [event for event in events if event.event == "route"]
+    assert route_events
+    assert route_events[-1].route == "metrics"
 
 
 def test_graph_vlm_evaluator_does_not_repair_minor_debug_overlap(tmp_path: Path) -> None:

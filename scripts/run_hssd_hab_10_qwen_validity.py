@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import quote
@@ -13,7 +14,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from benchmark.datasets.hssd_hab_converter import convert_hssd_hab
 from benchmark.input_modes import list_main_input_modes
-from benchmark.pipeline import load_pipeline_resources, run_case_pipeline
+from benchmark.pipeline import PipelineResources, load_pipeline_resources, run_case_pipeline
 from benchmark.utils.io import read_json, write_json
 
 
@@ -78,6 +79,7 @@ def main() -> None:
     parser.add_argument("--modes", nargs="*", choices=sorted(MODE_SPECS), default=list_main_input_modes())
     parser.add_argument("--model", default="qwen3vl_sglang_32b")
     parser.add_argument("--judge-model", default="same")
+    parser.add_argument("--vlm-judge-input-mode", choices=["json_only", "json_plus_render"], default=None)
     parser.add_argument("--model-endpoint", default="http://127.0.0.1:8000/v1")
     parser.add_argument("--model-id", default="Qwen/Qwen3-VL-32B-Instruct")
     parser.add_argument("--judge-model-endpoint", default=None)
@@ -125,7 +127,7 @@ def main() -> None:
             print(f"{item['scene_id']}\t{item['mode']}\t{item['case_path']}")
         return
 
-    resources = load_pipeline_resources(PROJECT_ROOT)
+    resources = _with_vlm_judge_input_mode(load_pipeline_resources(PROJECT_ROOT), args.vlm_judge_input_mode)
     _apply_judge_model_overrides(
         resources.model_config,
         judge_model=args.judge_model,
@@ -205,6 +207,23 @@ def _apply_judge_model_overrides(
     for key, value in overrides.items():
         if value is not None:
             selected[key] = value
+
+
+def _with_vlm_judge_input_mode(resources: PipelineResources, mode: str | None) -> PipelineResources:
+    if not mode:
+        return resources
+    benchmark_config = deepcopy(resources.benchmark_config)
+    benchmark_config["vlm_judge_input_mode"] = mode
+    evaluation = dict(benchmark_config.get("evaluation") or {})
+    evaluation["vlm_judge_input_mode"] = mode
+    benchmark_config["evaluation"] = evaluation
+    return PipelineResources(
+        model_config=resources.model_config,
+        benchmark_config=benchmark_config,
+        layout_schema=resources.layout_schema,
+        scene_schema=resources.scene_schema,
+        resolved_run_config=resources.resolved_run_config,
+    )
 
 
 def _ensure_scene_files(hssd_root: Path, scene_ids: list[str], *, download: bool) -> list[Path]:

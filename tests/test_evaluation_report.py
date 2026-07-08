@@ -18,7 +18,13 @@ def test_evaluation_report_sections_and_case_metrics(tmp_path: Path) -> None:
         "objects": [{"object_id": "box_001", "category": "box", "center": [0, 0, 0.5], "size": [1, 1, 1], "yaw": 0}],
     }
 
-    report, metrics = evaluate_layout_vlm_as_judge_v1(case=case, layout=layout, out_dir=tmp_path, model_name="mock")
+    report, metrics = evaluate_layout_vlm_as_judge_v1(
+        case=case,
+        layout=layout,
+        out_dir=tmp_path,
+        model_name="mock",
+        benchmark_config={"evaluation": {"vlm_judge_input_mode": "json_plus_render"}},
+    )
 
     assert report["evaluator"] == "vlm_as_judge_v1"
     assert report["evaluator_identity"] == "vlm_as_judge_v1"

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import math
+import tempfile
 from pathlib import Path
 from typing import Any
 from collections import Counter
 
+from benchmark.data.scene_adapters import layout_to_scene, normalize_scene, scene_adapter_summary, scene_to_case, scene_to_layout
 from benchmark.evidence_config import resolve_runtime_evidence_config
 from benchmark.models.base_model import ModelResponseError
 from benchmark.utils.io import write_json
@@ -22,7 +24,11 @@ from benchmark.workflow.scoring import (
     visible_attachments,
     visible_relations,
 )
-from benchmark.workflow.vlm_judge import create_vlm_judge
+from benchmark.workflow.vlm_judge import (
+    VLM_JUDGE_INPUT_JSON_PLUS_RENDER,
+    create_vlm_judge,
+    resolve_vlm_judge_input_mode,
+)
 
 
 EVALUATOR_NAME = "vlm_as_judge_v1"
@@ -39,6 +45,70 @@ DEFAULT_EVALUATION_POLICY = {
 }
 
 
+def evaluate_scene(
+    scene: dict,
+    *,
+    benchmark_config: dict | None = None,
+    judge_model: object | None = None,
+    out_dir: str | Path | None = None,
+    mode: str | None = None,
+    **compat: Any,
+) -> tuple[dict, dict]:
+    """Evaluate an asset-aware scene without requiring model generation.
+
+    Existing renderer, physical flag, grouping, metric, and VLM-judge code still
+    consumes the legacy bbox layout. The scene is therefore the canonical input,
+    while the layout derived here is a bbox-only compatibility representation.
+    """
+
+    output_dir = Path(out_dir) if out_dir is not None else Path(tempfile.mkdtemp(prefix="layout_ddd_eval_scene_"))
+    layout = scene_to_layout(scene)
+    case = compat.get("case")
+    if not isinstance(case, dict):
+        case = scene_to_case(scene)
+    resolved_mode = resolve_vlm_judge_input_mode(benchmark_config, mode)
+    eval_context = _merge_scene_eval_context(scene, compat.get("eval_context"), resolved_mode)
+    iteration = int(compat.get("iteration", 0))
+    model_name = str(compat.get("model_name") or _scene_model_name(scene))
+    report, case_metrics = evaluate_layout_vlm_as_judge_v1(
+        case=case,
+        layout=layout,
+        out_dir=output_dir,
+        model_name=model_name,
+        benchmark_config=benchmark_config,
+        layout_schema=compat.get("layout_schema"),
+        iteration=iteration,
+        generator_model=compat.get("generator_model"),
+        judge_model=judge_model,
+        judge_model_name=compat.get("judge_model_name"),
+        generation_error=compat.get("generation_error"),
+        eval_context=eval_context,
+        scene=scene,
+        judge_input_mode=resolved_mode,
+    )
+    adapter_summary = scene_adapter_summary(scene, layout)
+    adapter_summary["mode"] = resolved_mode
+    report["evaluation_input"] = adapter_summary
+    report["scene_id"] = adapter_summary.get("scene_id")
+    report.setdefault("debug_evidence", {})["scene_adapter"] = adapter_summary
+    case_metrics.update(
+        {
+            "evaluation_input_type": "scene",
+            "scene_id": adapter_summary["scene_id"],
+            "scene_asset_count": adapter_summary["asset_count"],
+            "bbox_asset_count": adapter_summary["bbox_asset_count"],
+            "non_bbox_asset_count": adapter_summary["non_bbox_asset_count"],
+            "asset_ref_asset_count": adapter_summary["asset_ref_asset_count"],
+            "asset_ref_available_rate": adapter_summary["asset_ref_available_rate"],
+            "bbox_available_rate": report.get("bbox_available_rate"),
+        }
+    )
+    if isinstance(report.get("metrics"), dict):
+        report["metrics"].update(case_metrics)
+    write_json(output_dir / f"case_metrics_iter_{iteration}.json", case_metrics)
+    return report, case_metrics
+
+
 def evaluate_layout_vlm_as_judge_v1(
     *,
     case: dict,
@@ -53,12 +123,17 @@ def evaluate_layout_vlm_as_judge_v1(
     judge_model_name: str | None = None,
     generation_error: str | None = None,
     eval_context: dict | None = None,
+    scene: dict | None = None,
+    judge_input_mode: str | None = None,
 ) -> tuple[dict, dict]:
     output_dir = Path(out_dir)
     evaluation_config = _evaluation_config(benchmark_config)
     evaluation_policy = _evaluation_policy(benchmark_config)
+    resolved_judge_input_mode = resolve_vlm_judge_input_mode(benchmark_config, judge_input_mode)
+    render_evidence_used = resolved_judge_input_mode == VLM_JUDGE_INPUT_JSON_PLUS_RENDER
     input_level = infer_input_level(case)
     eval_layout, layout_normalization = sanitize_layout_optional_nulls(layout)
+    evaluation_scene = normalize_scene(scene) if isinstance(scene, dict) else layout_to_scene(eval_layout, case)
     object_set_normalization = eval_layout.get("_layout_object_set_normalization") if isinstance(eval_layout.get("_layout_object_set_normalization"), dict) else {}
     if object_set_normalization:
         layout_normalization = {**layout_normalization, "object_set_normalization": object_set_normalization}
@@ -71,7 +146,6 @@ def evaluate_layout_vlm_as_judge_v1(
     relations = visible_relations(case)
     attachments = visible_attachments(case)
 
-    renderer = SimpleBBoxRenderer(output_dir, benchmark_config=benchmark_config)
     sanity_flags = _sanity_flags(raw_validity_gate)
     physical_flags: list[dict] = []
     view_flags: list[dict] = []
@@ -89,31 +163,36 @@ def evaluate_layout_vlm_as_judge_v1(
     layout_summary: dict = {}
     text_budget_used: dict = {}
     renderable_layout, render_skipped_objects = _renderable_layout(eval_layout)
+    layout_render_skipped_objects = list(render_skipped_objects)
+    bbox_missing_flags = _bbox_missing_asset_flags(eval_layout)
+    render_skipped_objects = [*layout_render_skipped_objects, *bbox_missing_flags]
     if generation_error:
         sanity_flags.append(_flag(JUDGE_SKIPPED_UNPARSEABLE, generation_error, severity="critical"))
-    if render_skipped_objects:
-        sanity_flags.extend(render_skipped_objects)
+    if layout_render_skipped_objects:
+        sanity_flags.extend(layout_render_skipped_objects)
 
     if not generation_error:
         physical_flags = collect_physical_flags(renderable_layout, case, benchmark_config or {})
         grouping_report = build_object_grouping_report(renderable_layout, case, benchmark_config or {})
         object_groups = grouping_report.get("object_groups", [])
-        if evaluation_config.get("save_global_view", evaluation_config.get("save_room_views", True)):
-            global_artifacts = renderer.render_global_top_view(case, renderable_layout)
-        if evaluation_config.get("save_group_views", True):
-            for group in object_groups:
-                artifacts, flags = renderer.render_group_views(case, renderable_layout, group, _view_validation_config(benchmark_config))
-                view_flags.extend(flags)
-                group_artifacts.extend(artifacts)
-                group_view_records.append(_group_view_record(group, artifacts, flags))
-        if not renderable_layout.get("objects"):
-            view_flags.append(
-                {
-                    "type": "no_renderable_objects",
-                    "message": "No objects had renderable object_id, center, and positive size.",
-                    "severity": "high",
-                }
-            )
+        if render_evidence_used:
+            renderer = SimpleBBoxRenderer(output_dir, benchmark_config=benchmark_config)
+            if evaluation_config.get("save_global_view", evaluation_config.get("save_room_views", True)):
+                global_artifacts = renderer.render_global_top_view(case, renderable_layout)
+            if evaluation_config.get("save_group_views", True):
+                for group in object_groups:
+                    artifacts, flags = renderer.render_group_views(case, renderable_layout, group, _view_validation_config(benchmark_config))
+                    view_flags.extend(flags)
+                    group_artifacts.extend(artifacts)
+                    group_view_records.append(_group_view_record(group, artifacts, flags))
+            if not renderable_layout.get("objects"):
+                view_flags.append(
+                    {
+                        "type": "no_renderable_objects",
+                        "message": "No objects had renderable object_id, center, and positive size.",
+                        "severity": "high",
+                    }
+                )
 
     hard_failures = _hard_failures(
         generation_error=generation_error,
@@ -153,6 +232,8 @@ def evaluate_layout_vlm_as_judge_v1(
                 relation_specs=relations,
                 attachment_specs=attachments,
                 renderable_layout=renderable_layout,
+                scene=evaluation_scene,
+                judge_input_mode=resolved_judge_input_mode,
                 layout_normalization_summary=layout_normalization,
                 validity_gate_passed=True,
                 artifact_dir=_judge_artifact_dir(output_dir, iteration),
@@ -239,6 +320,15 @@ def evaluate_layout_vlm_as_judge_v1(
     )
     if judge_error or hard_failures:
         case_metrics["primary_score"] = 0.0
+    bbox_available_rate = _scene_bbox_available_rate(evaluation_scene)
+    case_metrics.update(
+        {
+            "vlm_judge_input_mode": resolved_judge_input_mode,
+            "render_evidence_used": bool(render_evidence_used),
+            "json_scene_used": True,
+            "bbox_available_rate": bbox_available_rate,
+        }
+    )
     case_metrics_filename = f"case_metrics_iter_{iteration}.json"
     case_metrics_path = output_dir / case_metrics_filename
     write_json(case_metrics_path, case_metrics)
@@ -279,6 +369,10 @@ def evaluate_layout_vlm_as_judge_v1(
         "iteration": iteration,
         "overall_valid": overall_valid,
         "judge_success": judge_success,
+        "vlm_judge_input_mode": resolved_judge_input_mode,
+        "render_evidence_used": bool(render_evidence_used),
+        "json_scene_used": True,
+        "bbox_available_rate": bbox_available_rate,
         "hard_failures": hard_failures,
         "evidence_flags": evidence_flags,
         "deterministic_evidence": {
@@ -302,6 +396,8 @@ def evaluate_layout_vlm_as_judge_v1(
         },
         "render_evidence": {
             "renderable": bool(renderable_layout.get("objects")) if isinstance(renderable_layout, dict) else False,
+            "used": bool(render_evidence_used),
+            "json_only_mode": not bool(render_evidence_used),
             "global_views": _public_artifacts(global_artifacts),
             "group_views": group_view_records,
             "view_warnings": view_flags,
@@ -362,6 +458,7 @@ def evaluate_layout_vlm_as_judge_v1(
             "omitted_grouping_edges": grouping_report.get("omitted_edges", []),
             "cross_group_relations": grouping_report.get("cross_group_relations", []),
             "render_skipped_objects": render_skipped_objects,
+            "bbox_missing_assets": bbox_missing_flags,
             "group_view_artifacts": group_view_records,
             "judge_input_manifest": judge_input_manifest,
         },
@@ -385,6 +482,29 @@ def evaluate_layout_vlm_as_judge_v1(
 
 def evaluate_layout_v0(**kwargs: Any) -> tuple[dict, dict]:
     return evaluate_layout_vlm_as_judge_v1(**kwargs)
+
+
+def _merge_scene_eval_context(scene: dict, eval_context: object, mode: str) -> dict:
+    scene_context = scene.get("eval_context") if isinstance(scene, dict) and isinstance(scene.get("eval_context"), dict) else {}
+    merged = dict(scene_context)
+    if isinstance(eval_context, dict):
+        merged.update(eval_context)
+    merged.setdefault("evaluation_input_type", "scene")
+    merged.setdefault("evaluation_mode", mode)
+    if isinstance(scene, dict):
+        merged.setdefault("scene_id", scene.get("scene_id"))
+    return merged
+
+
+def _scene_model_name(scene: dict) -> str:
+    if isinstance(scene, dict):
+        source = scene.get("source")
+        if isinstance(source, dict):
+            for key in ["model_name", "generator_model", "candidate_model"]:
+                value = source.get(key)
+                if isinstance(value, str) and value:
+                    return value
+    return "scene_evaluation"
 
 
 def _align_binary_results(specs: list[dict], judge_results: Any) -> list[dict]:
@@ -527,15 +647,6 @@ def _hard_failures(
     if not isinstance(layout.get("objects"), list):
         failures.append({"code": "objects_array_missing", "message": "layout.objects is missing or not an array.", "source": "evaluate_layout"})
         return failures
-    if not renderable_layout.get("objects"):
-        failures.append(
-            {
-                "code": "no_renderable_objects",
-                "message": "No usable bbox objects remain after layout sanitation/renderability checks.",
-                "source": "renderability",
-                "skipped_object_count": len(render_skipped_objects),
-            }
-        )
     return failures
 
 
@@ -813,6 +924,44 @@ def _renderable_layout(layout: dict) -> tuple[dict, list[dict]]:
         objects.append(obj)
     renderable["objects"] = objects
     return renderable, skipped
+
+
+def _bbox_missing_asset_flags(layout: dict) -> list[dict]:
+    if not isinstance(layout, dict) or not isinstance(layout.get("_non_bbox_assets"), list):
+        return []
+    flags = []
+    for item in layout["_non_bbox_assets"]:
+        if not isinstance(item, dict):
+            continue
+        asset_id = item.get("asset_id")
+        object_id = item.get("object_id")
+        objects = [str(value) for value in [object_id or asset_id] if isinstance(value, str) and value]
+        flag = _flag(
+            "bbox_missing_asset",
+            f"{asset_id or object_id or 'asset'} has no bbox and was skipped by bbox-only checks.",
+            objects=objects,
+            severity="medium",
+        )
+        flag["asset_id"] = asset_id
+        flag["object_id"] = object_id
+        flag["category"] = item.get("category")
+        flag["reason"] = item.get("reason") or "asset has no complete bbox"
+        flags.append(flag)
+    return flags
+
+
+def _scene_bbox_available_rate(scene: dict) -> float | None:
+    if not isinstance(scene, dict):
+        return None
+    assets = [asset for asset in scene.get("assets", []) if isinstance(asset, dict)]
+    if not assets:
+        return None
+    bbox_count = 0
+    for asset in assets:
+        bbox = asset.get("bbox")
+        if isinstance(bbox, dict) and all(key in bbox for key in ["center", "size", "yaw"]):
+            bbox_count += 1
+    return float(bbox_count) / float(len(assets))
 
 
 def _skip_flag(index: int, message: str, obj: Any) -> dict:

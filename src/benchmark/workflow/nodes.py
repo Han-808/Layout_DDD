@@ -8,9 +8,10 @@ from benchmark.models.base_model import ModelResponseError, build_generation_pro
 from benchmark.models.prompt_budget import PromptBudgetError
 from benchmark.feedback import build_feedback
 from benchmark.metrics import compute_case_metrics
+from benchmark.data.scene_adapters import layout_to_scene
 from benchmark.utils.io import ensure_dir, read_json, write_json
 from benchmark.visualization import export_viewer_scene
-from benchmark.workflow.evaluation import evaluate_layout_vlm_as_judge_v1
+from benchmark.workflow.evaluation import evaluate_scene
 from benchmark.workflow.layout_normalization import enforce_layout_object_set
 from benchmark.object_aliasing import ALIAS_MAP_KEY
 from benchmark.workflow.payloads import build_input_payloads, eval_context_summary
@@ -104,6 +105,7 @@ class GenerateLayoutNode:
             write_json(path, layout)
         next_state["current_layout"] = layout
         next_state["current_layout_path"] = str(path) if save_intermediate else ""
+        next_state["generated_layout_path"] = next_state["current_layout_path"]
         metadata_path = _write_model_request_metadata(
             next_state,
             filename="generation_request_metadata.json",
@@ -148,9 +150,17 @@ class EvaluateLayoutNode:
     def __call__(self, state: BenchmarkState) -> BenchmarkState:
         next_state = dict(state)
         iteration = int(next_state.get("iteration", 0))
-        report, case_metrics = evaluate_layout_vlm_as_judge_v1(
+        candidate_scene = layout_to_scene(next_state["current_layout"], next_state["input_json"])
+        save_intermediate = save_intermediate_artifacts(next_state.get("benchmark_config"))
+        scene_path = Path(next_state["out_dir"]) / ("candidate_scene.json" if iteration == 0 else f"candidate_scene_iter_{iteration}.json")
+        if save_intermediate:
+            write_json(scene_path, candidate_scene)
+        next_state["current_scene"] = candidate_scene
+        next_state["current_scene_path"] = str(scene_path) if save_intermediate else ""
+        next_state["candidate_scene_path"] = next_state["current_scene_path"]
+        report, case_metrics = evaluate_scene(
+            candidate_scene,
             case=next_state["input_json"],
-            layout=next_state["current_layout"],
             out_dir=next_state["out_dir"],
             model_name=next_state.get("model_name", getattr(next_state.get("model"), "name", "unknown_model")),
             benchmark_config=next_state.get("benchmark_config"),
@@ -162,6 +172,15 @@ class EvaluateLayoutNode:
             generation_error=next_state.get("generation_error"),
             eval_context=next_state.get("eval_context"),
         )
+        pipeline_mode = str(next_state.get("pipeline_mode") or "generation")
+        generation_used = bool(next_state.get("generation_used", pipeline_mode == "generation"))
+        report["pipeline_mode"] = pipeline_mode
+        report["generation_used"] = generation_used
+        report["generated_layout_path"] = next_state.get("generated_layout_path", next_state.get("current_layout_path", ""))
+        report["candidate_scene_path"] = next_state.get("candidate_scene_path", next_state.get("current_scene_path", ""))
+        case_metrics.update({"pipeline_mode": pipeline_mode, "generation_used": generation_used})
+        if isinstance(report.get("metrics"), dict):
+            report["metrics"].update({"pipeline_mode": pipeline_mode, "generation_used": generation_used})
         path = Path(next_state["out_dir"]) / "evaluation_report.json"
         write_json(path, report)
         iter_path = Path(next_state["out_dir"]) / f"evaluation_report_iter_{iteration}.json"
@@ -309,6 +328,38 @@ class ComputeMetricsNode:
             next_state["history"],
             max_repair_iterations=int(next_state.get("max_repair_iterations", 0)),
         )
+        pipeline_mode = str(next_state.get("pipeline_mode") or "generation")
+        generation_used = bool(next_state.get("generation_used", pipeline_mode == "generation"))
+        metrics.update({"pipeline_mode": pipeline_mode, "generation_used": generation_used})
+        final_eval_metrics = next_state.get("current_evaluation", {}).get("metrics", {})
+        if isinstance(final_eval_metrics, dict):
+            for key in [
+                "scene_id",
+                "scene_asset_count",
+                "bbox_asset_count",
+                "non_bbox_asset_count",
+                "asset_ref_asset_count",
+                "asset_ref_available_rate",
+                "bbox_available_rate",
+                "renderable",
+                "num_renderable_objects",
+                "judge_success",
+                "vlm_valid",
+                "vlm_score",
+                "evidence_flag_counts",
+                "physical_flag_confidence_counts",
+                "physical_flag_source_kind_counts",
+                "vlm_judge_input_mode",
+                "render_evidence_used",
+                "json_scene_used",
+            ]:
+                if key in final_eval_metrics:
+                    metrics.setdefault(key, final_eval_metrics[key])
+        feedback = next_state.get("current_feedback", {})
+        metrics["feedback_issue_count"] = len(feedback.get("issues", [])) if isinstance(feedback.get("issues"), list) else 0
+        metrics["feedback_suggested_action_count"] = (
+            len(feedback.get("suggested_actions", [])) if isinstance(feedback.get("suggested_actions"), list) else 0
+        )
         case_metrics_path = Path(next_state["out_dir"]) / "case_metrics.json"
         write_json(case_metrics_path, metrics)
         next_state["case_metrics"] = metrics
@@ -317,6 +368,8 @@ class ComputeMetricsNode:
         result = {
             "task_id": next_state["task_id"],
             "model_name": next_state.get("model_name", getattr(next_state.get("model"), "name", "unknown_model")),
+            "pipeline_mode": pipeline_mode,
+            "generation_used": generation_used,
             "max_repair_iterations": int(next_state.get("max_repair_iterations", 0)),
             "input_level": next_state["input_json"].get("input_level"),
             "scene_representation_mode": next_state["input_json"].get("scene_representation_mode"),
@@ -340,6 +393,11 @@ class ComputeMetricsNode:
             },
             "metrics": metrics,
             "case_metrics_path": next_state.get("case_metrics_path", ""),
+            "metrics_path": next_state.get("case_metrics_path", ""),
+            "generated_layout_path": next_state.get("generated_layout_path", ""),
+            "candidate_scene_path": next_state.get("candidate_scene_path", next_state.get("current_scene_path", "")),
+            "evaluation_report_path": next_state.get("current_evaluation_path", ""),
+            "feedback_path": next_state.get("current_feedback_path", ""),
             "history": compact_history(next_state["history"]),
             "final_evaluation": next_state["current_evaluation"],
             "config_refs": next_state["current_evaluation"].get("config_refs", {}),

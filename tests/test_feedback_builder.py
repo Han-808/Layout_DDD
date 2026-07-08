@@ -258,6 +258,70 @@ def test_feedback_builder_adds_soft_collision_pressure_from_layout_overlap() -> 
     assert soft_actions[0]["effective_soft_min_volume_m3"] > 0
 
 
+def test_feedback_builder_exposes_general_purpose_advisory_feedback() -> None:
+    report = {
+        "task_id": "case_1",
+        "case_id": "scene_1",
+        "iteration": 0,
+        "overall_valid": False,
+        "bbox_available_rate": 0.5,
+        "render_evidence_used": False,
+        "json_scene_used": True,
+        "repair_targets": ["chair_1"],
+        "schema_failures": [],
+        "physical_failures": [],
+        "spatial_relation_failures": [],
+        "debug_evidence": {
+            "physical_flags": [
+                {
+                    "type": "room_boundary",
+                    "objects": ["chair_1"],
+                    "message": "chair_1 is outside.",
+                    "confidence": "medium",
+                }
+            ],
+            "bbox_missing_assets": [{"type": "bbox_missing_asset", "asset_id": "plant_1", "message": "missing bbox"}],
+        },
+        "vlm_judgement": {
+            "valid": False,
+            "score": 1,
+            "score_norm": 0.25,
+            "confidence": "medium",
+            "judgement_status": "valid_judgement",
+            "brief_reasoning": "Object placement needs attention.",
+            "issues": [
+                {
+                    "issue_type": "boundary",
+                    "severity": "high",
+                    "object_ids": ["chair_1"],
+                    "evidence": "outside",
+                    "repair_hint": "Move chair_1 inside the floor plan.",
+                }
+            ],
+        },
+    }
+    layout = {
+        "objects": [
+            {"object_id": "chair_1", "category": "chair", "center": [3.5, 0.5, 0.45], "size": [0.6, 0.6, 0.9]}
+        ]
+    }
+    case = {"task_id": "case_1", "room": {"boundary": [[0, 0], [3, 0], [3, 3], [0, 3]]}}
+
+    feedback = build_feedback(report, layout, case)
+
+    assert feedback["scene_id"] == "scene_1"
+    assert feedback["overall_valid"] is False
+    assert feedback["score"] == 1
+    assert feedback["score_norm"] == 0.25
+    assert feedback["advisory"] is True
+    assert feedback["issues"]
+    assert feedback["repair_hints"]
+    assert feedback["physical_evidence"]["bbox_available_rate"] == 0.5
+    assert feedback["vlm_judge_feedback"]["brief_reasoning"] == "Object placement needs attention."
+    assert feedback["suggested_actions"]
+    assert all(action["advisory"] is True for action in feedback["suggested_actions"])
+
+
 def test_feedback_soft_collision_uses_scale_aware_min_volume_below_old_fixed_threshold() -> None:
     report = {
         "task_id": "case_1",

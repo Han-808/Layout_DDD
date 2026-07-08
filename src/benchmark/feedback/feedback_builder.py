@@ -67,8 +67,10 @@ def build_feedback(
     violations.extend(_failures_to_violations("spatial_relation", evaluation_report.get("spatial_relation_failures", [])))
     debug_evidence = evaluation_report.get("debug_evidence", {})
     physical_flags = debug_evidence.get("physical_flags", []) if isinstance(debug_evidence, dict) else []
+    vlm_judgement = evaluation_report.get("vlm_judgement", {})
+    vlm_issues = vlm_judgement.get("issues", []) if isinstance(vlm_judgement, dict) else []
     violations.extend(_debug_flags_to_violations("physical_debug_flag", physical_flags))
-    violations.extend(_vlm_issues_to_violations(evaluation_report.get("vlm_judgement", {}).get("issues", [])))
+    violations.extend(_vlm_issues_to_violations(vlm_issues))
     room_consistency = evaluation_report.get("room_consistency", {})
     if room_consistency.get("short_reason") and room_consistency.get("score", 4) <= 2:
         violations.append(
@@ -80,26 +82,177 @@ def build_feedback(
             }
         )
 
+    repair_actions = _repair_actions(
+        repair_targets=repair_targets,
+        current_layout=current_layout,
+        bm_instance=bm_instance,
+        physical_flags=physical_flags,
+        vlm_issues=vlm_issues,
+        soft_collision_pairs=soft_collision_pairs,
+        collision_cfg=collision_cfg,
+        collision_repair_cfg=collision_repair_cfg,
+    )
+    suggested_actions = _suggested_actions(repair_actions)
+    issues = _general_issues(violations, evaluation_report)
     return {
+        "scene_id": evaluation_report.get("scene_id")
+        or evaluation_report.get("case_id")
+        or evaluation_report.get("task_id")
+        or bm_instance.get("scene_id")
+        or bm_instance.get("case_id")
+        or bm_instance.get("task_id", "unknown_scene"),
         "task_id": evaluation_report.get("task_id", bm_instance.get("task_id", "unknown_task")),
         "iteration": int(evaluation_report.get("iteration", 0)),
+        "overall_valid": bool(evaluation_report.get("overall_valid", False)),
+        "score": _feedback_score(evaluation_report, vlm_judgement),
+        "score_norm": _feedback_score_norm(evaluation_report, vlm_judgement),
+        "issues": issues,
+        "repair_hints": _repair_hints(suggested_actions, issues),
+        "physical_evidence": _physical_evidence(evaluation_report, debug_evidence),
+        "vlm_judge_feedback": _vlm_judge_feedback(vlm_judgement, evaluation_report),
+        "suggested_actions": suggested_actions,
+        "advisory": True,
         "repair_targets": repair_targets,
         "locked_objects": locked_objects,
         "violations": violations,
-        "repair_actions": _repair_actions(
-            repair_targets=repair_targets,
-            current_layout=current_layout,
-            bm_instance=bm_instance,
-            physical_flags=physical_flags,
-            vlm_issues=evaluation_report.get("vlm_judgement", {}).get("issues", []),
-            soft_collision_pairs=soft_collision_pairs,
-            collision_cfg=collision_cfg,
-            collision_repair_cfg=collision_repair_cfg,
-        ),
+        "repair_actions": repair_actions,
         "debug_evidence_summary": _debug_evidence_summary(debug_evidence),
         "room_consistency_reason": room_consistency.get("short_reason", ""),
-        "instruction": "Fix the listed violations and debug physical flags. Preserve valid objects. Return corrected layout JSON only.",
+        "instruction": (
+            "Review the listed issues and suggested actions as advisory evaluation feedback. "
+            "Use them only when repairing or improving the scene."
+        ),
     }
+
+
+def _general_issues(violations: list[dict], evaluation_report: dict) -> list[dict]:
+    issues = []
+    for violation in violations:
+        if not isinstance(violation, dict):
+            continue
+        objects = violation.get("objects") or violation.get("object_ids") or []
+        issues.append(
+            {
+                "source": violation.get("category", "evaluation"),
+                "type": violation.get("type", "unknown"),
+                "severity": violation.get("severity", "medium"),
+                "object_ids": [item for item in objects if isinstance(item, str)],
+                "message": violation.get("message", ""),
+                "repair_hint": violation.get("repair_hint", ""),
+            }
+        )
+    for failure in evaluation_report.get("hard_failures", []):
+        if not isinstance(failure, dict):
+            continue
+        issues.append(
+            {
+                "source": failure.get("source", "evaluation"),
+                "type": failure.get("code", "hard_failure"),
+                "severity": "critical",
+                "object_ids": [],
+                "message": failure.get("message", ""),
+                "repair_hint": "",
+            }
+        )
+    return issues
+
+
+def _feedback_score(evaluation_report: dict, vlm_judgement: object) -> object:
+    if isinstance(vlm_judgement, dict) and "score" in vlm_judgement:
+        return vlm_judgement.get("score")
+    room = evaluation_report.get("room_consistency")
+    if isinstance(room, dict) and "score" in room:
+        return room.get("score")
+    metrics = evaluation_report.get("metrics")
+    return metrics.get("primary_score") if isinstance(metrics, dict) else None
+
+
+def _feedback_score_norm(evaluation_report: dict, vlm_judgement: object) -> object:
+    if isinstance(vlm_judgement, dict) and "score_norm" in vlm_judgement:
+        return vlm_judgement.get("score_norm")
+    room = evaluation_report.get("room_consistency")
+    if isinstance(room, dict) and "score_norm" in room:
+        return room.get("score_norm")
+    return None
+
+
+def _physical_evidence(evaluation_report: dict, debug_evidence: object) -> dict:
+    debug = debug_evidence if isinstance(debug_evidence, dict) else {}
+    deterministic = evaluation_report.get("deterministic_evidence")
+    deterministic_physical = deterministic.get("physical_flags") if isinstance(deterministic, dict) else []
+    physical_flags = debug.get("physical_flags", deterministic_physical)
+    return {
+        "physical_flags": _compact_flags(physical_flags, limit=80),
+        "bbox_missing_assets": _compact_flags(debug.get("bbox_missing_assets"), limit=80),
+        "render_skipped_objects": _compact_flags(debug.get("render_skipped_objects"), limit=80),
+        "bbox_available_rate": evaluation_report.get("bbox_available_rate"),
+        "render_evidence_used": bool(evaluation_report.get("render_evidence_used", False)),
+        "json_scene_used": bool(evaluation_report.get("json_scene_used", False)),
+    }
+
+
+def _vlm_judge_feedback(vlm_judgement: object, evaluation_report: dict) -> dict:
+    judgement = vlm_judgement if isinstance(vlm_judgement, dict) else {}
+    return {
+        "valid": judgement.get("valid"),
+        "score": judgement.get("score"),
+        "score_norm": judgement.get("score_norm"),
+        "confidence": judgement.get("confidence"),
+        "judgement_status": judgement.get("judgement_status") or evaluation_report.get("judgement_status"),
+        "brief_reasoning": judgement.get("brief_reasoning") or judgement.get("short_reason", ""),
+        "issues": judgement.get("issues", []) if isinstance(judgement.get("issues"), list) else [],
+        "insufficient_evidence": bool(judgement.get("insufficient_evidence", False)),
+    }
+
+
+def _suggested_actions(repair_actions: list[dict]) -> list[dict]:
+    actions = []
+    for action in repair_actions:
+        if not isinstance(action, dict):
+            continue
+        item = dict(action)
+        item.setdefault("advisory", True)
+        actions.append(item)
+    return actions
+
+
+def _repair_hints(suggested_actions: list[dict], issues: list[dict]) -> list[dict]:
+    hints = []
+    seen = set()
+    for issue in issues:
+        hint = issue.get("repair_hint") if isinstance(issue, dict) else None
+        if isinstance(hint, str) and hint.strip():
+            key = ("issue", hint.strip())
+            if key not in seen:
+                hints.append(
+                    {
+                        "source": issue.get("source", "evaluation"),
+                        "object_ids": issue.get("object_ids", []),
+                        "hint": hint.strip(),
+                        "advisory": True,
+                    }
+                )
+                seen.add(key)
+    for action in suggested_actions:
+        hint = action.get("repair_hint") or action.get("reason") or action.get("reason_code") or action.get("action")
+        if not isinstance(hint, str) or not hint.strip():
+            continue
+        object_ids = action.get("object_ids")
+        if not isinstance(object_ids, list):
+            object_ids = [action.get("object_id")] if isinstance(action.get("object_id"), str) else []
+        key = ("action", action.get("action"), tuple(object_ids), hint.strip())
+        if key in seen:
+            continue
+        hints.append(
+            {
+                "source": action.get("action", "suggested_action"),
+                "object_ids": [item for item in object_ids if isinstance(item, str)],
+                "hint": hint.strip(),
+                "advisory": True,
+            }
+        )
+        seen.add(key)
+    return hints
 
 
 def _collision_avoidance_config(benchmark_config: dict | None) -> dict:
