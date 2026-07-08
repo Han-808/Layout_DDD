@@ -5,7 +5,7 @@ from pathlib import Path
 
 from benchmark.models.factory import create_model
 from benchmark.visualization import export_viewer_scene
-from benchmark.workflow.evaluation import evaluate_layout_vlm_as_judge_v1
+from benchmark.workflow.evaluate import evaluate_layout_vlm_as_judge_v1
 from benchmark.workflow.judge_evidence_selector import evidence_budgeting_config, select_judge_evidence
 from benchmark.workflow.layout_normalization import sanitize_layout_optional_nulls
 from benchmark.workflow.trace import build_workflow_trace
@@ -58,6 +58,7 @@ class _FakeBudgetedVLM:
 
 def _budget_config() -> dict:
     return {
+        "evaluation": {"vlm_judge_input_mode": "json_plus_render"},
         "vlm_judge": {
             "evidence_budget": {
                 "max_input_tokens": 60000,
@@ -324,9 +325,12 @@ def test_full_evaluation_sends_all_evidence_without_budget_manifest(tmp_path: Pa
         judge_model=fake,
     )
 
-    assert report["debug_evidence"]["judge_input_manifest"] == {}
-    assert "input_manifest_path" not in report["vlm_judge_artifacts"]
-    assert not (tmp_path / "vlm_judge" / "iter_000" / "judge_input_manifest.json").exists()
+    manifest = report["debug_evidence"]["judge_input_manifest"]
+    assert manifest["vlm_judge_input_mode"] == "json_plus_render"
+    assert manifest["judge_evidence_budgeting"] is False
+    assert manifest["budgeting_enabled"] is False
+    assert report["vlm_judge_artifacts"]["input_manifest_path"] == "vlm_judge/iter_000/judge_input_manifest.json"
+    assert (tmp_path / "vlm_judge" / "iter_000" / "judge_input_manifest.json").exists()
     assert fake.last_request_metadata["image_count"] == 13
 
     user_prompt = fake.messages[1]["content"][0]["text"]
@@ -337,7 +341,7 @@ def test_full_evaluation_sends_all_evidence_without_budget_manifest(tmp_path: Pa
     assert len(prompt_payload["layout_summary"]["selected_group_details"]) == 4
 
     viewer_scene = export_viewer_scene(_case(), _layout(), report)
-    assert viewer_scene["judge_input_manifest"] == {}
+    assert viewer_scene["judge_input_manifest"]["judge_evidence_budgeting"] is False
     assert all("sent_to_judge" not in group for group in viewer_scene["group_evidence"])
 
 

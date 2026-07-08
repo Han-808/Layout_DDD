@@ -1,0 +1,338 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.org/3d-layout-benchmark/scene.schema.json",
+  "title": "EvaluationScene",
+  "description": "Canonical asset-aware evaluation input. Public inputs may provide assets directly, import local repo scenes under Scenes/, or pass a local_repo scene_ref that the adapter loads before evaluation. Old bbox/layout records are handled only by legend compatibility adapters.",
+  "version": "2.1.0",
+  "type": "object",
+  "required": [
+    "scene_id"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "scene_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "unit": {
+      "const": "meter"
+    },
+    "coordinate_system": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "room": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "assets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "asset_id",
+          "category"
+        ],
+        "not": {
+          "required": [
+            "bbox"
+          ]
+        },
+        "additionalProperties": true,
+        "properties": {
+          "asset_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "object_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "category": {
+            "type": "string",
+            "minLength": 1
+          },
+          "placement": {
+            "type": "object",
+            "additionalProperties": true,
+            "properties": {
+              "position": {
+                "type": "array",
+                "minItems": 3,
+                "maxItems": 3,
+                "items": {
+                  "type": "number"
+                }
+              },
+              "yaw_degrees": {
+                "type": "number"
+              },
+              "rotation_euler_degrees": {
+                "type": "array",
+                "minItems": 3,
+                "maxItems": 3,
+                "items": {
+                  "type": "number"
+                }
+              },
+              "region_id": {
+                "type": "string"
+              },
+              "support_parent": {
+                "type": "string"
+              }
+            }
+          },
+          "dimensions": {
+            "type": "array",
+            "minItems": 3,
+            "maxItems": 3,
+            "items": {
+              "type": "number",
+              "minimum": 0
+            }
+          },
+          "asset_ref": {
+            "type": "object",
+            "properties": {
+              "source": {
+                "type": "string",
+                "description": "Use local_repo for assets stored in this repository."
+              },
+              "asset_id": {
+                "type": "string",
+                "description": "Local asset folder/name, e.g. 0_SM_Chair_1."
+              },
+              "template_id": {
+                "type": "string"
+              },
+              "mesh_uri": {
+                "type": "string"
+              },
+              "mesh_path": {
+                "type": "string",
+                "description": "Repo-relative render mesh path, usually .fbx."
+              },
+              "metadata": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "collection": {
+                "type": "string",
+                "description": "Local asset collection, e.g. imaginarium_assets."
+              },
+              "repo_path": {
+                "type": "string",
+                "description": "Repo-relative asset directory path."
+              },
+              "pointcloud_path": {
+                "type": "string",
+                "description": "Repo-relative point cloud path, usually .ply."
+              },
+              "metadata_path": {
+                "type": "string",
+                "description": "Repo-relative asset metadata JSON path."
+              },
+              "dimensions": {
+                "type": "array",
+                "minItems": 3,
+                "maxItems": 3,
+                "items": {
+                  "type": "number",
+                  "minimum": 0
+                }
+              },
+              "category": {
+                "type": "string"
+              },
+              "caption_en": {
+                "type": "string"
+              },
+              "license": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": true
+          },
+          "support_parent": {
+            "type": "string"
+          },
+          "region_id": {
+            "type": "string"
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      }
+    },
+    "relations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    "attachments": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "eval_context": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "scene_type": {
+      "type": "string"
+    },
+    "boundary": {
+      "type": "array",
+      "description": "Local Scenes import field. Normalization copies this to room.boundary.",
+      "items": {
+        "type": "array",
+        "minItems": 2,
+        "items": {
+          "type": "number"
+        }
+      }
+    },
+    "scene_height": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "description": "Local Scenes import field. Normalization copies this to room.wall_height."
+    },
+    "scene_ref": {
+      "type": "object",
+      "description": "Reference to a scene stored in this repository, usually under Scenes/.",
+      "properties": {
+        "source": {
+          "type": "string",
+          "description": "Use local_repo for scenes stored in this repository."
+        },
+        "collection": {
+          "type": "string",
+          "description": "Local scene collection, usually Scenes."
+        },
+        "scene_id": {
+          "type": "string",
+          "description": "Local scene id, e.g. scene_000000_03."
+        },
+        "repo_path": {
+          "type": "string",
+          "description": "Repo-relative directory containing the scene JSON."
+        },
+        "scene_json_path": {
+          "type": "string",
+          "description": "Repo-relative scene JSON path."
+        },
+        "scene_type": {
+          "type": "string"
+        },
+        "asset_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "scene_height": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": true
+    },
+    "objects": {
+      "type": "array",
+      "description": "Local Scenes import format. Normalization converts jid/center/size/rotation records into canonical assets.",
+      "items": {
+        "type": "object",
+        "not": {
+          "required": [
+            "bbox"
+          ]
+        },
+        "additionalProperties": true,
+        "properties": {
+          "jid": {
+            "type": "string"
+          },
+          "object_id": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string"
+          },
+          "desc": {
+            "type": "string"
+          },
+          "short_desc": {
+            "type": "string"
+          },
+          "center": {
+            "type": "array",
+            "minItems": 3,
+            "maxItems": 3,
+            "items": {
+              "type": "number"
+            }
+          },
+          "size": {
+            "type": "array",
+            "minItems": 3,
+            "maxItems": 3,
+            "items": {
+              "type": "number",
+              "minimum": 0
+            }
+          },
+          "rotation": {
+            "type": "array",
+            "minItems": 3,
+            "maxItems": 3,
+            "items": {
+              "type": "number"
+            }
+          },
+          "quaternion": {
+            "type": "array",
+            "minItems": 4,
+            "maxItems": 4,
+            "items": {
+              "type": "number"
+            }
+          }
+        }
+      }
+    }
+  },
+  "anyOf": [
+    {
+      "required": [
+        "assets"
+      ]
+    },
+    {
+      "required": [
+        "objects"
+      ]
+    },
+    {
+      "required": [
+        "scene_ref"
+      ]
+    }
+  ]
+}

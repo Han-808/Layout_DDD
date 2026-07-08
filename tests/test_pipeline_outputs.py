@@ -13,7 +13,7 @@ HSSD_CASE = ROOT / "data" / "benchmark_cases" / "hssd_small" / "102343992_struct
 def test_shared_pipeline_writes_v0_outputs(tmp_path: Path) -> None:
     resources = PipelineResources(
         model_config={"models": {"mock": {"provider": "mock", "name": "mock"}}},
-        benchmark_config={"benchmark": {"save_viewer_scene": True}, "evaluation": {"vlm_judge": "mock"}},
+        benchmark_config={"benchmark": {"save_viewer_scene": True}, "evaluation": {"vlm_judge": "mock", "vlm_judge_input_mode": "json_plus_render"}},
         layout_schema=read_json(ROOT / "schemas" / "layout.schema.json"),
     )
 
@@ -61,7 +61,7 @@ def test_pipeline_can_use_configured_separate_judge_model(tmp_path: Path) -> Non
                 "judge_mock": {"provider": "mock", "name": "judge-mock"},
             },
         },
-        benchmark_config={"benchmark": {"save_viewer_scene": True}, "evaluation": {"vlm_judge": "same_model"}},
+        benchmark_config={"benchmark": {"save_viewer_scene": True}, "evaluation": {"vlm_judge": "same_model", "vlm_judge_input_mode": "json_plus_render"}},
         layout_schema=read_json(ROOT / "schemas" / "layout.schema.json"),
     )
 

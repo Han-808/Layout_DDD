@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from benchmark.workflow.evaluation import evaluate_layout_v0
+from benchmark.workflow.evaluate import evaluate_layout_v0
 
 
 def _case() -> dict:
@@ -40,7 +40,7 @@ def test_explicit_relation_and_attachment_create_pair_views(tmp_path: Path) -> N
         layout=_layout(),
         out_dir=tmp_path,
         model_name="mock",
-        benchmark_config={},
+        benchmark_config={"evaluation": {"vlm_judge_input_mode": "json_plus_render"}},
     )
 
     assert metrics["specified_relation_pass_rate"] == 1.0

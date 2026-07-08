@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import http.server
 import sys
+from copy import deepcopy
 from functools import partial
 from pathlib import Path
 
@@ -12,7 +13,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 from benchmark.experiments import experiment_model_overrides, load_experiment_config, pick_value, resolve_experiment
 from benchmark.data import discover_and_normalize_cases
 from benchmark.input_modes import canonicalize_input_mode
-from benchmark.pipeline import copy_viewer_assets, load_pipeline_resources, run_case_pipeline
+from benchmark.pipeline import PipelineResources, copy_viewer_assets, load_pipeline_resources, run_case_pipeline
 from benchmark.run_config import load_resolved_run_config, pipeline_resources_from_resolved
 from benchmark.utils.io import read_json
 
@@ -25,6 +26,7 @@ def main() -> None:
     parser.add_argument("--input-mode", "--input_mode", dest="input_mode", default=None, help="Optional model input mode override for this run.")
     parser.add_argument("--model", default=None, help="Model name from configs/model_config.yaml.")
     parser.add_argument("--judge_model", default=None, help="Optional judge model name; defaults to configs/model_config.yaml judge.model, usually 'same'.")
+    parser.add_argument("--vlm-judge-input-mode", choices=["json_only", "json_plus_render"], default=None)
     parser.add_argument("--max_repair_iterations", type=int, default=None)
     parser.add_argument("--model_endpoint", default=None)
     parser.add_argument("--model_id", default=None)
@@ -48,7 +50,7 @@ def main() -> None:
             experiment_name=args.experiment,
             model_overrides=cli_model_overrides,
         )
-        resources = pipeline_resources_from_resolved(PROJECT_ROOT, resolved)
+        resources = _with_vlm_judge_input_mode(pipeline_resources_from_resolved(PROJECT_ROOT, resolved), args.vlm_judge_input_mode)
         dataset_config = _dataset_config_for_cli(resolved.dataset_config, args.case)
         case_ref, input_json = discover_and_normalize_cases(dataset_config)[0]
         input_json = _apply_input_mode_override(input_json, args.input_mode)
@@ -74,7 +76,7 @@ def main() -> None:
             _serve(Path(out_dir), args.port)
         return
 
-    resources = load_pipeline_resources(PROJECT_ROOT)
+    resources = _with_vlm_judge_input_mode(load_pipeline_resources(PROJECT_ROOT), args.vlm_judge_input_mode)
     try:
         experiment = resolve_experiment(load_experiment_config(PROJECT_ROOT), args.experiment)
     except ValueError as exc:
@@ -167,6 +169,23 @@ def _apply_input_mode_override(input_json: dict, input_mode: str | None) -> dict
         source["scene_representation_mode"] = mode
         patched["source"] = source
     return patched
+
+
+def _with_vlm_judge_input_mode(resources: PipelineResources, mode: str | None) -> PipelineResources:
+    if not mode:
+        return resources
+    benchmark_config = deepcopy(resources.benchmark_config)
+    benchmark_config["vlm_judge_input_mode"] = mode
+    evaluation = dict(benchmark_config.get("evaluation") or {})
+    evaluation["vlm_judge_input_mode"] = mode
+    benchmark_config["evaluation"] = evaluation
+    return PipelineResources(
+        model_config=resources.model_config,
+        benchmark_config=benchmark_config,
+        layout_schema=resources.layout_schema,
+        scene_schema=resources.scene_schema,
+        resolved_run_config=resources.resolved_run_config,
+    )
 
 if __name__ == "__main__":
     main()

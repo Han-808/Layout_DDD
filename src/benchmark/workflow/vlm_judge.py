@@ -13,6 +13,12 @@ from benchmark.workflow.judge_summaries import build_judge_prompt_payload
 
 DEFAULT_VLM_JUDGE = "same_model"
 MOCK_JUDGE_NAME = "mock"
+VLM_JUDGE_INPUT_JSON_ONLY = "json_only"
+VLM_JUDGE_INPUT_JSON_PLUS_RENDER = "json_plus_render"
+ALLOWED_VLM_JUDGE_INPUT_MODES = {
+    VLM_JUDGE_INPUT_JSON_ONLY,
+    VLM_JUDGE_INPUT_JSON_PLUS_RENDER,
+}
 DEFAULT_MOCK_SCORE = 3
 SCORE_MIN = 0
 SCORE_MAX = 4
@@ -60,6 +66,8 @@ class VLMSceneJudge(Protocol):
         relation_specs: list[dict],
         attachment_specs: list[dict],
         renderable_layout: dict | None = None,
+        scene: dict | None = None,
+        judge_input_mode: str | None = None,
         layout_normalization_summary: dict | None = None,
         validity_gate_passed: bool = True,
         artifact_dir: str | Path | None = None,
@@ -125,6 +133,8 @@ class MockVLMSceneJudge:
         relation_specs: list[dict],
         attachment_specs: list[dict],
         renderable_layout: dict | None = None,
+        scene: dict | None = None,
+        judge_input_mode: str | None = None,
         layout_normalization_summary: dict | None = None,
         validity_gate_passed: bool = True,
         artifact_dir: str | Path | None = None,
@@ -141,10 +151,14 @@ class MockVLMSceneJudge:
                 "attachment_results": [],
             }
         score = _clamp_score(self.default_score)
-        image_manifest = _image_manifest(global_view_artifacts, group_view_artifacts)
+        resolved_input_mode = resolve_vlm_judge_input_mode(self.benchmark_config, judge_input_mode)
+        render_evidence_used = resolved_input_mode == VLM_JUDGE_INPUT_JSON_PLUS_RENDER
+        selected_global_candidates = global_view_artifacts if render_evidence_used else []
+        selected_group_candidates = group_view_artifacts if render_evidence_used else []
+        image_manifest = _image_manifest(selected_global_candidates, selected_group_candidates, mode=resolved_input_mode)
         evidence_selection = select_judge_evidence(
-            global_view_artifacts=global_view_artifacts,
-            group_view_artifacts=group_view_artifacts,
+            global_view_artifacts=selected_global_candidates,
+            group_view_artifacts=selected_group_candidates,
             object_groups=object_groups,
             physical_flags=physical_flags,
             view_flags=view_flags,
@@ -154,8 +168,11 @@ class MockVLMSceneJudge:
         prompt_bundle = build_judge_prompt_payload(
             case=case,
             layout=layout,
+            scene=scene,
             renderable_layout=renderable_layout or layout,
             input_level=input_level,
+            judge_input_mode=resolved_input_mode,
+            render_evidence_used=render_evidence_used,
             layout_normalization_summary=layout_normalization_summary,
             object_groups=object_groups,
             sanity_flags=sanity_flags,
@@ -202,6 +219,8 @@ class MockVLMSceneJudge:
         judgement["_scene_summary"] = prompt_bundle["scene_summary"]
         judgement["_layout_summary"] = prompt_bundle["layout_summary"]
         judgement["_text_budget_used"] = prompt_bundle["text_budget_used"]
+        input_manifest = _judge_input_manifest(evidence_selection, input_mode=resolved_input_mode, render_evidence_used=render_evidence_used)
+        input_manifest_path = _save_judge_input_manifest(artifact_dir, input_manifest)
         artifacts = _save_judge_artifacts(
             artifact_dir,
             system_prompt=_judge_system_prompt(),
@@ -210,9 +229,11 @@ class MockVLMSceneJudge:
             request_metadata=None,
             raw_response=json.dumps(judgement, indent=2),
             parsed_response=judgement,
+            input_manifest_path=input_manifest_path,
         )
         if artifacts:
             judgement["_judge_artifacts"] = artifacts
+        judgement["_judge_input_manifest"] = input_manifest
         return judgement
 
 
@@ -237,6 +258,8 @@ class OpenAICompatibleVLMJudge:
         relation_specs: list[dict],
         attachment_specs: list[dict],
         renderable_layout: dict | None = None,
+        scene: dict | None = None,
+        judge_input_mode: str | None = None,
         layout_normalization_summary: dict | None = None,
         validity_gate_passed: bool = True,
         artifact_dir: str | Path | None = None,
@@ -253,9 +276,11 @@ class OpenAICompatibleVLMJudge:
             judge_evidence_budgeting=judge_evidence_budgeting,
             runtime_profile=runtime_profile,
         )
+        resolved_input_mode = resolve_vlm_judge_input_mode(self.benchmark_config, judge_input_mode)
+        render_evidence_used = resolved_input_mode == VLM_JUDGE_INPUT_JSON_PLUS_RENDER
         evidence_selection = select_judge_evidence(
-            global_view_artifacts=global_view_artifacts,
-            group_view_artifacts=group_view_artifacts,
+            global_view_artifacts=global_view_artifacts if render_evidence_used else [],
+            group_view_artifacts=group_view_artifacts if render_evidence_used else [],
             object_groups=object_groups,
             physical_flags=physical_flags,
             view_flags=view_flags,
@@ -265,14 +290,16 @@ class OpenAICompatibleVLMJudge:
         )
         selected_global_artifacts = evidence_selection["selected_global_artifacts"]
         selected_group_artifacts = evidence_selection["selected_group_artifacts"]
-        budgeting_enabled = bool(evidence_selection.get("budgeting_enabled"))
         system_prompt = _judge_system_prompt()
-        image_manifest = _image_manifest(selected_global_artifacts, selected_group_artifacts)
+        image_manifest = _image_manifest(selected_global_artifacts, selected_group_artifacts, mode=resolved_input_mode)
         prompt_bundle = build_judge_prompt_payload(
             case=case,
             layout=layout,
+            scene=scene,
             renderable_layout=renderable_layout or layout,
             input_level=input_level,
+            judge_input_mode=resolved_input_mode,
+            render_evidence_used=render_evidence_used,
             layout_normalization_summary=layout_normalization_summary,
             object_groups=object_groups,
             sanity_flags=sanity_flags,
@@ -292,18 +319,20 @@ class OpenAICompatibleVLMJudge:
                 "text": user_prompt,
             }
         ]
-        for artifact in selected_global_artifacts + selected_group_artifacts:
-            if artifact.get("id") == "camera_policy":
-                continue
-            path = artifact.get("abs_path")
-            if isinstance(path, str) and Path(path).exists():
-                content.append({"type": "text", "text": f"View artifact: {artifact.get('id')} path={artifact.get('path')}"})
-                content.append({"type": "image_url", "image_url": {"url": _image_data_url(Path(path))}})
+        if render_evidence_used:
+            for artifact in selected_global_artifacts + selected_group_artifacts:
+                if artifact.get("id") == "camera_policy":
+                    continue
+                path = artifact.get("abs_path")
+                if isinstance(path, str) and Path(path).exists():
+                    content.append({"type": "text", "text": f"View artifact: {artifact.get('id')} path={artifact.get('path')}"})
+                    content.append({"type": "image_url", "image_url": {"url": _image_data_url(Path(path))}})
 
+        input_manifest = _judge_input_manifest(evidence_selection, input_mode=resolved_input_mode, render_evidence_used=render_evidence_used)
         input_manifest_path = _save_judge_input_manifest(
             artifact_dir,
-            _judge_input_manifest(evidence_selection),
-        ) if budgeting_enabled else None
+            input_manifest,
+        )
         _save_judge_artifacts(
             artifact_dir,
             system_prompt=system_prompt,
@@ -348,12 +377,29 @@ class OpenAICompatibleVLMJudge:
         )
         if artifacts:
             judgement["_judge_artifacts"] = artifacts
-        if budgeting_enabled:
-            judgement["_judge_input_manifest"] = _judge_input_manifest(evidence_selection)
+        judgement["_judge_input_manifest"] = input_manifest
         judgement["_scene_summary"] = prompt_bundle["scene_summary"]
         judgement["_layout_summary"] = prompt_bundle["layout_summary"]
         judgement["_text_budget_used"] = prompt_bundle["text_budget_used"]
         return judgement
+
+
+def resolve_vlm_judge_input_mode(benchmark_config: dict | None, override: str | None = None) -> str:
+    mode = override
+    config = benchmark_config or {}
+    if mode in {None, ""}:
+        mode = config.get("vlm_judge_input_mode")
+    evaluation = config.get("evaluation")
+    if mode in {None, ""} and isinstance(evaluation, dict):
+        mode = evaluation.get("vlm_judge_input_mode")
+    vlm_judge = config.get("vlm_judge")
+    if mode in {None, ""} and isinstance(vlm_judge, dict):
+        mode = vlm_judge.get("input_mode")
+    text = str(mode or VLM_JUDGE_INPUT_JSON_ONLY)
+    if text not in ALLOWED_VLM_JUDGE_INPUT_MODES:
+        allowed = ", ".join(sorted(ALLOWED_VLM_JUDGE_INPUT_MODES))
+        raise ValueError(f"Unsupported vlm_judge_input_mode '{text}'. Allowed: {allowed}.")
+    return text
 
 
 def create_room_judge(benchmark_config: dict | None) -> RoomConsistencyJudge:
@@ -426,18 +472,21 @@ def _evaluation_config(benchmark_config: dict | None) -> dict:
 
 def _judge_system_prompt() -> str:
     return (
-        "You are an independent evaluator of explicit 3D bbox-proxy layouts. Judge bbox "
-        "layout quality from rendered bbox views and deterministic structured summaries. "
-        "For parseable layouts, your judgement determines overall_valid. Deterministic "
-        "schema, physical, view, render, and grouping flags are evidence only, not automatic "
-        "verdicts. Treat high-confidence serious collisions as strong evidence; treat "
-        "fallback-derived room boundary or wall-height evidence as lower-confidence and "
-        "approximate. Treat floating or unsupported vertical placement as plausibility "
-        "evidence, not hard invalidity by itself. The target is explicit bbox layout quality, not photorealistic scene "
-        "reconstruction. Do not penalize missing meshes, textures, real wall geometry, "
-        "doors, windows, or lack of photorealism. If evidence is insufficient, set "
-        "insufficient_evidence=true and judgement_status='insufficient_evidence'. Return "
-        "exactly one JSON object with no Markdown and no chain-of-thought."
+        "You are an independent evaluator of 3D scene asset placement. Input may be "
+        "JSON-only or JSON plus rendered geometry-proxy views. When rendered views are absent, judge "
+        "from structured scene JSON and evidence. For parseable scenes, your judgement "
+        "determines overall_valid. Deterministic schema, physical, view, render, and grouping "
+        "flags are evidence only, not automatic verdicts. Some geometry-proxy overlaps may be valid "
+        "depending on category, relation, support, or containment, such as chair under table, "
+        "object on table, object inside cabinet, or wall-mounted object. Other intersections "
+        "are likely invalid, such as bed through table or large furniture penetrating unrelated "
+        "large furniture. Consider category, relation, support, containment, and overall room "
+        "coherence. Treat fallback-derived room boundary or wall-height evidence as "
+        "lower-confidence and approximate. Do not penalize missing meshes, textures, real wall "
+        "geometry, doors, windows, or lack of photorealism when evaluation mode is scene/json. "
+        "If evidence is insufficient, set insufficient_evidence=true and "
+        "judgement_status='insufficient_evidence'. Return exactly one JSON object with no "
+        "Markdown and no chain-of-thought."
     )
 
 
@@ -446,7 +495,9 @@ def _image_data_url(path: Path) -> str:
     return f"data:image/png;base64,{encoded}"
 
 
-def _image_manifest(global_view_artifacts: list[dict], group_view_artifacts: list[dict]) -> list[dict]:
+def _image_manifest(global_view_artifacts: list[dict], group_view_artifacts: list[dict], *, mode: str) -> list[dict]:
+    if mode != VLM_JUDGE_INPUT_JSON_PLUS_RENDER:
+        return []
     manifest = []
     for scope, artifacts in [("global", global_view_artifacts), ("group", group_view_artifacts)]:
         for artifact in artifacts:
@@ -465,7 +516,7 @@ def _image_manifest(global_view_artifacts: list[dict], group_view_artifacts: lis
     return manifest
 
 
-def _judge_input_manifest(evidence_selection: dict) -> dict:
+def _judge_input_manifest(evidence_selection: dict, *, input_mode: str, render_evidence_used: bool) -> dict:
     selected_images = [
         artifact.get("path")
         for artifact in evidence_selection.get("selected_global_artifacts", []) + evidence_selection.get("selected_group_artifacts", [])
@@ -473,6 +524,9 @@ def _judge_input_manifest(evidence_selection: dict) -> dict:
     ]
     budget = evidence_selection.get("budget", {}) if isinstance(evidence_selection.get("budget"), dict) else {}
     return {
+        "vlm_judge_input_mode": input_mode,
+        "json_scene_used": True,
+        "render_evidence_used": bool(render_evidence_used),
         "judge_evidence_budgeting": bool(evidence_selection.get("judge_evidence_budgeting")),
         "budgeting_enabled": bool(evidence_selection.get("budgeting_enabled")),
         "mode": evidence_selection.get("mode", "budgeted"),
@@ -526,19 +580,17 @@ def _save_judge_artifacts(
         encoding="utf-8",
     )
     manifest_path.write_text(json.dumps(image_manifest, indent=2), encoding="utf-8")
-    if request_metadata is not None:
-        request_metadata_path.write_text(json.dumps(request_metadata, indent=2), encoding="utf-8")
+    request_metadata_path.write_text(json.dumps(request_metadata or {}, indent=2), encoding="utf-8")
     raw_path.write_text(raw_response, encoding="utf-8")
     parsed_path.write_text(json.dumps(parsed_response or {}, indent=2), encoding="utf-8")
     root = _artifact_root(out)
     artifacts = {
         "prompt_path": _relative_artifact(prompt_path, root),
         "image_manifest_path": _relative_artifact(manifest_path, root),
+        "request_metadata_path": _relative_artifact(request_metadata_path, root),
         "raw_response_path": _relative_artifact(raw_path, root),
         "parsed_response_path": _relative_artifact(parsed_path, root),
     }
-    if request_metadata is not None:
-        artifacts["request_metadata_path"] = _relative_artifact(request_metadata_path, root)
     if input_manifest_path is not None:
         artifacts["input_manifest_path"] = _relative_artifact(input_manifest_path, root)
     return artifacts

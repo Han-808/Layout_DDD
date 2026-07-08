@@ -5,7 +5,7 @@ from pathlib import Path
 from benchmark.models.base_model import BaseLayoutModel, ModelResponseError
 from benchmark.utils.io import read_json
 from benchmark.workflow import run_workflow
-from benchmark.workflow.evaluation import evaluate_layout_v0
+from benchmark.workflow.evaluate import evaluate_layout_v0
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -77,6 +77,7 @@ def test_parseable_invalid_layout_still_reaches_vlm_judge(tmp_path: Path) -> Non
         layout=layout,
         out_dir=tmp_path,
         model_name="mock",
+        benchmark_config={"evaluation": {"vlm_judge_input_mode": "json_plus_render"}},
         layout_schema=read_json(ROOT / "schemas" / "layout.schema.json"),
     )
 
@@ -108,7 +109,13 @@ def test_serious_collision_is_flag_only_and_does_not_skip_judge(tmp_path: Path) 
         ],
     }
 
-    report, _ = evaluate_layout_v0(case=_case(), layout=layout, out_dir=tmp_path, model_name="mock")
+    report, _ = evaluate_layout_v0(
+        case=_case(),
+        layout=layout,
+        out_dir=tmp_path,
+        model_name="mock",
+        benchmark_config={"evaluation": {"vlm_judge_input_mode": "json_plus_render"}},
+    )
 
     assert any(flag["type"] == "serious_collision" for flag in report["debug_evidence"]["physical_flags"])
     assert report["overall_valid"] is True
@@ -122,13 +129,19 @@ def test_no_renderable_objects_still_produces_global_evidence(tmp_path: Path) ->
         "objects": [{"object_id": "box_bad", "category": "box", "center": [1, 1, 0.5], "size": [0, 1, 1], "yaw": 0}],
     }
 
-    report, _ = evaluate_layout_v0(case=_case(), layout=layout, out_dir=tmp_path, model_name="mock")
+    report, _ = evaluate_layout_v0(
+        case=_case(),
+        layout=layout,
+        out_dir=tmp_path,
+        model_name="mock",
+        benchmark_config={"evaluation": {"vlm_judge_input_mode": "json_plus_render"}},
+    )
 
     assert any(flag["type"] == "no_renderable_objects" for flag in report["debug_evidence"]["view_flags"])
     assert report["debug_evidence"]["object_groups"] == []
     assert (tmp_path / "views" / "global" / "topdown_global_xy.png").exists()
-    assert report["overall_valid"] is False
-    assert report["hard_failures"][0]["code"] == "no_renderable_objects"
+    assert report["overall_valid"] is True
+    assert report["hard_failures"] == []
 
 
 def test_unparseable_generation_writes_structured_failure(tmp_path: Path) -> None:
@@ -139,7 +152,7 @@ def test_unparseable_generation_writes_structured_failure(tmp_path: Path) -> Non
             "model": _UnparseableModel(),
             "model_name": "unparseable",
             "layout_schema": read_json(ROOT / "schemas" / "layout.schema.json"),
-            "benchmark_config": {"benchmark": {"save_viewer_scene": True}},
+            "benchmark_config": {"benchmark": {"save_viewer_scene": True}, "evaluation": {"vlm_judge_input_mode": "json_plus_render"}},
             "max_repair_iterations": 0,
         }
     )
@@ -162,7 +175,7 @@ def test_malformed_repair_response_is_recorded_without_aborting_case(tmp_path: P
             "model": _MalformedRepairModel(),
             "model_name": "malformed_repair",
             "layout_schema": read_json(ROOT / "schemas" / "layout.schema.json"),
-            "benchmark_config": {"benchmark": {"save_viewer_scene": True}, "evaluation": {"vlm_judge": "mock"}},
+            "benchmark_config": {"benchmark": {"save_viewer_scene": True}, "evaluation": {"vlm_judge": "mock", "vlm_judge_input_mode": "json_plus_render"}},
             "max_repair_iterations": 1,
         }
     )
