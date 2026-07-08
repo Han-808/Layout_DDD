@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from benchmark.workflow.evaluation import evaluate_layout_v0
+from benchmark.workflow.evaluate import evaluate_layout_v0
 from benchmark.workflow.vlm_judge import OpenAICompatibleVLMJudge
 
 
@@ -127,7 +127,8 @@ def test_openai_compatible_vlm_judge_json_only_sends_scene_without_images(tmp_pa
                 {
                     "asset_id": "desk_1",
                     "category": "desk",
-                    "bbox": {"center": [1, 1, 0.4], "size": [1, 1, 0.8], "yaw": 0},
+                    "placement": {"position": [1, 1, 0.4], "yaw_degrees": 0},
+                    "dimensions": [1, 1, 0.8],
                 }
             ],
         },

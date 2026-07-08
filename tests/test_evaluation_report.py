@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from benchmark.workflow.evaluation import evaluate_layout_vlm_as_judge_v1
+from benchmark.workflow.evaluate import evaluate_layout_vlm_as_judge_v1
 
 
 def test_evaluation_report_sections_and_case_metrics(tmp_path: Path) -> None:

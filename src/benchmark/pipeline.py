@@ -19,7 +19,7 @@ from benchmark.visualization import export_viewer_scene
 from benchmark.workflow import BenchmarkAgent
 from benchmark.workflow.artifacts import configured_max_repair_iterations, output_settings, save_viewer_scene
 from benchmark.workflow.judge_evidence_selector import judge_generation_overrides
-from benchmark.workflow.evaluation import evaluate_scene
+from benchmark.workflow.evaluate import evaluate_scene
 from benchmark.workflow.state import BenchmarkState
 from benchmark.workflow.vlm_judge import VLM_JUDGE_INPUT_JSON_ONLY, resolve_vlm_judge_input_mode
 
@@ -45,7 +45,7 @@ def load_pipeline_resources(project_root: str | Path) -> PipelineResources:
     return PipelineResources(
         model_config=load_yaml(root / "configs" / "model_config.yaml", default={}),
         benchmark_config=load_yaml(root / "configs" / "benchmark_config.yaml", default={}),
-        layout_schema=load_json_schema(root / "schemas" / "layout.schema.json"),
+        layout_schema=load_json_schema(_legend_layout_schema_path(root)),
         scene_schema=load_json_schema(root / "schemas" / "scene.schema.json"),
     )
 
@@ -352,15 +352,37 @@ def _model_with_judge_generation_overrides(model: object, benchmark_config: dict
 
 def _validate_scene_or_layout_or_raise(scene: object, scene_schema: dict, layout_schema: dict, scene_path: str | Path) -> str:
     scene_errors = _schema_errors(scene, scene_schema)
+    layout_errors = _schema_errors(scene, layout_schema) if _looks_like_legend_layout(scene) else None
     if not scene_errors:
+        if layout_errors == []:
+            return "legend_layout"
         return "scene"
-    layout_errors = _schema_errors(scene, layout_schema)
+    if layout_errors is None:
+        layout_errors = _schema_errors(scene, layout_schema)
     if not layout_errors:
-        return "layout"
+        return "legend_layout"
     raise ValueError(
-        f"Input JSON at {scene_path} must match schemas/scene.schema.json or legacy schemas/layout.schema.json. "
+        f"Input JSON at {scene_path} must match schemas/scene.schema.json or legend/schemas/legend_layout.schema.json. "
         f"Scene errors: {_format_schema_errors(scene_errors)}; layout errors: {_format_schema_errors(layout_errors)}"
     )
+
+
+def _looks_like_legend_layout(scene: object) -> bool:
+    if not isinstance(scene, dict) or "assets" in scene or "scene_ref" in scene:
+        return False
+    objects = scene.get("objects")
+    if not isinstance(objects, list) or not objects:
+        return False
+    if scene.get("scene_type") is not None or isinstance(scene.get("boundary"), list):
+        return False
+    for obj in objects:
+        if not isinstance(obj, dict):
+            continue
+        if obj.get("jid") is not None:
+            return False
+        if obj.get("object_id") is not None or obj.get("yaw") is not None:
+            return True
+    return isinstance(scene.get("coordinate_system"), dict)
 
 
 def _schema_errors(instance: object, schema: dict) -> list:
@@ -380,6 +402,11 @@ def _format_schema_errors(errors: list) -> str:
 
 def _default_scene_schema() -> dict:
     return load_json_schema(Path(__file__).resolve().parents[2] / "schemas" / "scene.schema.json")
+
+
+def _legend_layout_schema_path(root: Path) -> Path:
+    legend_path = root / "legend" / "schemas" / "legend_layout.schema.json"
+    return legend_path if legend_path.exists() else root / "schemas" / "layout.schema.json"
 
 
 def _scene_schema_version(scene_schema: dict, scene: dict) -> str:

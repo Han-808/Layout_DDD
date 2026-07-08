@@ -11,7 +11,7 @@ from benchmark.metrics import compute_case_metrics
 from benchmark.data.scene_adapters import layout_to_scene
 from benchmark.utils.io import ensure_dir, read_json, write_json
 from benchmark.visualization import export_viewer_scene
-from benchmark.workflow.evaluation import evaluate_scene
+from benchmark.workflow.evaluate import evaluate_scene
 from benchmark.workflow.layout_normalization import enforce_layout_object_set
 from benchmark.object_aliasing import ALIAS_MAP_KEY
 from benchmark.workflow.payloads import build_input_payloads, eval_context_summary
@@ -336,11 +336,16 @@ class ComputeMetricsNode:
             for key in [
                 "scene_id",
                 "scene_asset_count",
-                "bbox_asset_count",
-                "non_bbox_asset_count",
+                "geometry_asset_count",
+                "non_geometric_asset_count",
                 "asset_ref_asset_count",
                 "asset_ref_available_rate",
-                "bbox_available_rate",
+                "local_asset_ref_count",
+                "local_asset_available_rate",
+                "local_scene_ref_available",
+                "local_scene_id",
+                "local_scene_json_path",
+                "geometry_available_rate",
                 "renderable",
                 "num_renderable_objects",
                 "judge_success",

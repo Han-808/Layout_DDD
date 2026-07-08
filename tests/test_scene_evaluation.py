@@ -6,10 +6,12 @@ from pathlib import Path
 
 from jsonschema import Draft202012Validator
 
-from benchmark.data.scene_adapters import layout_to_scene, scene_to_layout
+from benchmark.data.scene_adapters import layout_to_scene, normalize_scene, scene_adapter_summary, scene_to_layout
+from benchmark.data.local_assets import resolve_local_asset_ref
+from benchmark.data.local_scenes import load_local_scene, load_local_scene_index, resolve_local_scene_ref
 from benchmark.pipeline import PipelineResources, evaluate_scene_pipeline, run_case_pipeline
 from benchmark.utils.io import read_json, write_json
-from benchmark.workflow.evaluation import evaluate_scene
+from benchmark.workflow.evaluate import evaluate_scene
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -34,7 +36,111 @@ def test_scene_schema_accepts_minimal_scene() -> None:
     )
 
 
-def test_scene_schema_accepts_bbox_and_flexible_asset_ref() -> None:
+
+def test_local_repo_asset_ref_resolves_existing_asset() -> None:
+    ref = resolve_local_asset_ref({"source": "local_repo", "asset_id": "0_SM_Chair_1"})
+
+    assert ref is not None
+    assert ref["collection"] == "imaginarium_assets"
+    assert ref["repo_path"] == "Assets/imaginarium_assets/0_SM_Chair_1"
+    assert ref["mesh_path"].endswith("0_SM_Chair_1.fbx")
+    assert ref["pointcloud_path"].endswith("0_SM_Chair_1.ply")
+    assert ref["metadata_path"].endswith("0_SM_Chair_1_metadata.json")
+    assert ref["dimensions"] == [0.646512, 0.637464, 0.850842]
+
+
+def test_normalize_scene_enriches_local_repo_asset_ref() -> None:
+    scene = normalize_scene(
+        {
+            "scene_id": "local_asset_scene",
+            "assets": [
+                {
+                    "asset_id": "chair_instance_1",
+                    "category": "chair",
+                    "asset_ref": {"source": "local_repo", "asset_id": "0_SM_Chair_1"},
+                }
+            ],
+        }
+    )
+
+    asset = scene["assets"][0]
+    assert asset["dimensions"] == [0.646512, 0.637464, 0.850842]
+    assert asset["asset_ref"]["repo_path"] == "Assets/imaginarium_assets/0_SM_Chair_1"
+    assert asset["asset_ref"]["mesh_path"].endswith("0_SM_Chair_1.fbx")
+    assert asset["asset_ref"]["pointcloud_path"].endswith("0_SM_Chair_1.ply")
+    _assert_valid_scene(scene)
+
+
+def test_local_repo_scene_ref_resolves_existing_scene() -> None:
+    ref = resolve_local_scene_ref({"source": "local_repo", "scene_id": "scene_000000_03"})
+
+    assert ref is not None
+    assert ref["collection"] == "Scenes"
+    assert ref["scene_id"] == "scene_000000_03"
+    assert ref["scene_json_path"] == "Scenes/converted_scenes/scene_000000_03.json"
+    assert ref["repo_path"] == "Scenes/converted_scenes"
+    assert ref["scene_type"] == "living room"
+    assert ref["asset_count"] > 0
+    assert "scene_000000_03" in load_local_scene_index(ROOT)
+
+
+def test_load_local_scene_reads_existing_scene_json() -> None:
+    loaded = load_local_scene({"source": "local_repo", "scene_json_path": "Scenes/converted_scenes/scene_000000_03.json"})
+
+    assert loaded is not None
+    assert loaded["scene_id"] == "scene_000000_03"
+    assert loaded["scene_ref"]["scene_json_path"] == "Scenes/converted_scenes/scene_000000_03.json"
+    assert loaded["objects"][0]["jid"] == "b_58"
+
+
+def test_normalize_scene_loads_local_repo_scene_ref() -> None:
+    scene = normalize_scene(
+        {
+            "scene_id": "scene_000000_03",
+            "scene_ref": {"source": "local_repo", "scene_id": "scene_000000_03"},
+        }
+    )
+
+    assert scene["scene_id"] == "scene_000000_03"
+    assert scene["scene_ref"]["scene_json_path"] == "Scenes/converted_scenes/scene_000000_03.json"
+    assert scene["room"]["boundary"][2] == [7.03, 10.64]
+    assert scene["room"]["wall_height"] == 2.957
+    asset = scene["assets"][0]
+    assert asset["asset_id"] == "b_58"
+    assert asset["object_id"] == "b_58"
+    assert asset["placement"]["position"] == [1.86, 8.26, 0.5]
+    assert asset["placement"]["yaw_degrees"] == 90.0
+    assert len(scene["assets"]) == scene["scene_ref"]["asset_count"]
+    summary = scene_adapter_summary(scene)
+    assert summary["local_scene_ref_available"] is True
+    assert summary["local_scene_id"] == "scene_000000_03"
+    assert summary["local_scene_json_path"] == "Scenes/converted_scenes/scene_000000_03.json"
+    _assert_valid_scene(scene)
+
+
+def test_scene_schema_accepts_local_scene_ref_input() -> None:
+    _assert_valid_scene(
+        {
+            "scene_id": "scene_000000_03",
+            "scene_ref": {"source": "local_repo", "scene_id": "scene_000000_03"},
+        }
+    )
+
+
+def test_scene_schema_accepts_local_scene_objects_import_shape() -> None:
+    raw_scene = read_json(ROOT / "Scenes" / "converted_scenes" / "scene_000000_03.json")
+
+    _assert_valid_scene(
+        {
+            "scene_id": raw_scene["scene_id"],
+            "scene_type": raw_scene["scene_type"],
+            "boundary": raw_scene["boundary"],
+            "scene_height": raw_scene["scene_height"],
+            "objects": [raw_scene["objects"][0]],
+        }
+    )
+
+def test_scene_schema_accepts_placement_dimensions_and_flexible_asset_ref() -> None:
     _assert_valid_scene(
         {
             "scene_id": "asset_ref_scene",
@@ -43,16 +149,19 @@ def test_scene_schema_accepts_bbox_and_flexible_asset_ref() -> None:
                 {
                     "asset_id": "chair_1",
                     "category": "chair",
-                    "bbox": {"center": [1, 2, 0.45], "size": [0.6, 0.6, 0.9], "yaw": 15},
+                    "placement": {"position": [1, 2, 0.45], "yaw_degrees": 15},
+                    "dimensions": [0.6, 0.6, 0.9],
                     "support_parent": "floor",
                     "region_id": "work_zone",
                     "asset_ref": {
-                        "source": "hssd-hab",
-                        "asset_id": "chair-template-001",
-                        "template_id": "chairs/example",
-                        "mesh_uri": "metadata-only://chair",
-                        "mesh_path": "metadata-only/chair.glb",
-                        "metadata": {"future_field": {"kept_open": True}},
+                        "source": "local_repo",
+                        "collection": "imaginarium_assets",
+                        "asset_id": "0_SM_Chair_1",
+                        "repo_path": "Assets/imaginarium_assets/0_SM_Chair_1",
+                        "mesh_path": "Assets/imaginarium_assets/0_SM_Chair_1/0_SM_Chair_1.fbx",
+                        "pointcloud_path": "Assets/imaginarium_assets/0_SM_Chair_1/0_SM_Chair_1.ply",
+                        "metadata_path": "Assets/imaginarium_assets/0_SM_Chair_1/0_SM_Chair_1_metadata.json",
+                        "metadata": {"note": "repo asset already exists"},
                     },
                 }
             ],
@@ -60,7 +169,22 @@ def test_scene_schema_accepts_bbox_and_flexible_asset_ref() -> None:
     )
 
 
-def test_layout_to_scene_converts_legacy_objects_to_assets() -> None:
+def test_scene_schema_rejects_bbox_on_canonical_asset() -> None:
+    scene = {
+        "scene_id": "bbox_scene",
+        "assets": [
+            {
+                "asset_id": "chair_1",
+                "category": "chair",
+                "bbox": {"center": [1, 2, 0.45], "size": [0.6, 0.6, 0.9], "yaw": 15},
+            }
+        ],
+    }
+    errors = sorted(Draft202012Validator(_scene_schema()).iter_errors(scene), key=lambda item: list(item.path))
+    assert errors
+
+
+def test_layout_to_scene_converts_legend_objects_to_assets() -> None:
     layout = {
         "scene_id": "legacy_scene",
         "unit": "meter",
@@ -85,7 +209,7 @@ def test_layout_to_scene_converts_legacy_objects_to_assets() -> None:
             {
                 "id": "chair_1",
                 "category": "chair",
-                "asset_ref": {"source": "hssd-hab", "template_id": "chairs/from-case"},
+                "asset_ref": {"source": "local_repo", "asset_id": "0_SM_Chair_1"},
             }
         ],
         "relations": [{"id": "rel_1", "type": "near", "subject": "chair_1", "object": "desk_1"}],
@@ -99,29 +223,33 @@ def test_layout_to_scene_converts_legacy_objects_to_assets() -> None:
     assert scene["relations"] == case["relations"]
     assert asset["asset_id"] == "chair_1"
     assert asset["object_id"] == "chair_1"
-    assert asset["bbox"] == {"center": [1, 2, 0.45], "size": [0.6, 0.6, 0.9], "yaw": 0}
+    assert asset["placement"] == {"position": [1, 2, 0.45], "yaw_degrees": 0}
+    assert asset["dimensions"] == [0.6, 0.6, 0.9]
     assert asset["support_parent"] == "floor"
     assert asset["region_id"] == "work_zone"
     assert asset["canonical_object_id"] == "chair_canonical"
     assert asset["model_object_id"] == "chair_alias_1"
-    assert asset["asset_ref"] == {"source": "hssd-hab", "template_id": "chairs/from-case"}
+    assert asset["asset_ref"]["source"] == "local_repo"
+    assert asset["asset_ref"]["asset_id"] == "0_SM_Chair_1"
+    assert asset["asset_ref"]["mesh_path"].endswith("0_SM_Chair_1.fbx")
     assert asset["metadata"]["source_layout_object"]["object_id"] == "chair_1"
 
 
-def test_scene_to_layout_converts_bbox_assets_to_legacy_objects() -> None:
+def test_scene_to_layout_converts_asset_geometry_to_legend_objects() -> None:
     scene = {
         "scene_id": "candidate_scene",
         "assets": [
             {
                 "asset_id": "desk_1",
                 "category": "desk",
-                "bbox": {
-                    "center": [2, 1, 0.4],
-                    "size": [1.2, 0.6, 0.8],
-                    "yaw": 90,
-                    "metadata": {"support_parent": "floor", "region_id": "work_zone"},
+                "placement": {
+                    "position": [2, 1, 0.4],
+                    "yaw_degrees": 90,
+                    "support_parent": "floor",
+                    "region_id": "work_zone",
                 },
-                "asset_ref": {"source": "hssd-hab", "template_id": "desk-template"},
+                "dimensions": [1.2, 0.6, 0.8],
+                "asset_ref": {"source": "local_repo", "asset_id": "0_SM_Desk_Fir001"},
             }
         ],
     }
@@ -130,35 +258,35 @@ def test_scene_to_layout_converts_bbox_assets_to_legacy_objects() -> None:
 
     assert layout["scene_id"] == "candidate_scene"
     assert layout["coordinate_system"]["rotation_unit"] == "degree"
-    assert layout["objects"] == [
-        {
-            "object_id": "desk_1",
-            "category": "desk",
-            "center": [2, 1, 0.4],
-            "size": [1.2, 0.6, 0.8],
-            "yaw": 90,
-            "asset_id": "desk_1",
-            "asset_ref": {"source": "hssd-hab", "template_id": "desk-template"},
-            "support_parent": "floor",
-            "region_id": "work_zone",
-        }
-    ]
+    obj = layout["objects"][0]
+    assert obj["object_id"] == "desk_1"
+    assert obj["category"] == "desk"
+    assert obj["center"] == [2, 1, 0.4]
+    assert obj["size"] == [1.2, 0.6, 0.8]
+    assert obj["yaw"] == 90
+    assert obj["asset_id"] == "desk_1"
+    assert obj["asset_ref"]["source"] == "local_repo"
+    assert obj["asset_ref"]["asset_id"] == "0_SM_Desk_Fir001"
+    assert obj["asset_ref"]["mesh_path"].endswith("0_SM_Desk_Fir001.fbx")
+    assert obj["support_parent"] == "floor"
+    assert obj["region_id"] == "work_zone"
 
 
-def test_asset_without_bbox_is_preserved_in_scene_and_skipped_in_layout() -> None:
+def test_asset_without_geometry_is_preserved_in_scene_and_skipped_in_layout() -> None:
     scene = {
         "scene_id": "mixed_scene",
         "assets": [
             {
                 "asset_id": "box_1",
                 "category": "box",
-                "bbox": {"center": [0, 0, 0.5], "size": [1, 1, 1], "yaw": 0},
+                "placement": {"position": [0, 0, 0.5], "yaw_degrees": 0},
+                "dimensions": [1, 1, 1],
             },
             {
                 "asset_id": "mesh_only_1",
                 "category": "plant",
-                "asset_ref": {"source": "future-catalog", "template_id": "plant"},
-                "metadata": {"note": "no bbox yet"},
+                "asset_ref": {"source": "local_repo", "asset_id": "0_SM_Chair_1"},
+                "metadata": {"note": "no placement yet"},
             },
         ],
     }
@@ -167,8 +295,8 @@ def test_asset_without_bbox_is_preserved_in_scene_and_skipped_in_layout() -> Non
 
     assert len(scene["assets"]) == 2
     assert [obj["object_id"] for obj in layout["objects"]] == ["box_1"]
-    assert layout["_non_bbox_assets"][0]["asset_id"] == "mesh_only_1"
-    assert layout["_non_bbox_assets"][0]["reason"] == "asset has no complete bbox"
+    assert layout["_non_geometric_assets"][0]["asset_id"] == "mesh_only_1"
+    assert layout["_non_geometric_assets"][0]["reason"] == "asset has no complete placement/dimensions geometry"
 
 
 def test_evaluate_scene_accepts_scene_without_generation(tmp_path: Path) -> None:
@@ -179,12 +307,14 @@ def test_evaluate_scene_accepts_scene_without_generation(tmp_path: Path) -> None
             {
                 "asset_id": "desk_1",
                 "category": "desk",
-                "bbox": {"center": [1, 1, 0.4], "size": [1.0, 0.6, 0.8], "yaw": 0},
+                "placement": {"position": [1, 1, 0.4], "yaw_degrees": 0},
+                "dimensions": [1.0, 0.6, 0.8],
             },
             {
                 "asset_id": "chair_1",
                 "category": "chair",
-                "bbox": {"center": [1.8, 1, 0.45], "size": [0.5, 0.5, 0.9], "yaw": 180},
+                "placement": {"position": [1.8, 1, 0.45], "yaw_degrees": 180},
+                "dimensions": [0.5, 0.5, 0.9],
             },
         ],
         "relations": [{"id": "rel_1", "type": "near", "subject": "chair_1", "object": "desk_1"}],
@@ -197,15 +327,15 @@ def test_evaluate_scene_accepts_scene_without_generation(tmp_path: Path) -> None
     )
 
     assert report["evaluation_input"]["input_type"] == "scene"
-    assert report["evaluation_input"]["bbox_asset_count"] == 2
+    assert report["evaluation_input"]["geometry_asset_count"] == 2
     assert report["vlm_judge_input_mode"] == "json_only"
     assert report["render_evidence_used"] is False
     assert report["json_scene_used"] is True
-    assert report["bbox_available_rate"] == 1.0
+    assert report["geometry_available_rate"] == 1.0
     assert report["overall_valid"] is True
     assert metrics["evaluation_input_type"] == "scene"
     assert metrics["scene_asset_count"] == 2
-    assert metrics["bbox_available_rate"] == 1.0
+    assert metrics["geometry_available_rate"] == 1.0
     assert (tmp_path / "case_metrics_iter_0.json").exists()
     assert not (tmp_path / "views").exists()
     assert (tmp_path / "vlm_judge" / "iter_000" / "judge_prompt.json").exists()
@@ -214,7 +344,7 @@ def test_evaluate_scene_accepts_scene_without_generation(tmp_path: Path) -> None
     assert read_json(tmp_path / "vlm_judge" / "iter_000" / "judge_image_manifest.json") == []
 
 
-def test_evaluate_scene_json_only_allows_missing_bbox_assets(tmp_path: Path) -> None:
+def test_evaluate_scene_json_only_allows_missing_geometry_assets(tmp_path: Path) -> None:
     scene = {
         "scene_id": "metadata_only_scene",
         "room": {"boundary": [[0, 0], [4, 0], [4, 4], [0, 4]], "floor_z": 0.0, "wall_height": 3.0},
@@ -222,7 +352,7 @@ def test_evaluate_scene_json_only_allows_missing_bbox_assets(tmp_path: Path) -> 
             {
                 "asset_id": "plant_1",
                 "category": "plant",
-                "asset_ref": {"source": "future-catalog", "template_id": "plant_large", "metadata": {"raw": "not dumped"}},
+                "asset_ref": {"source": "local_repo", "asset_id": "0_SM_Chair_1", "metadata": {"raw": "kept"}},
             }
         ],
     }
@@ -235,12 +365,14 @@ def test_evaluate_scene_json_only_allows_missing_bbox_assets(tmp_path: Path) -> 
 
     assert report["overall_valid"] is True
     assert report["hard_failures"] == []
-    assert report["bbox_available_rate"] == 0.0
-    assert metrics["bbox_available_rate"] == 0.0
+    assert report["geometry_available_rate"] == 0.0
+    assert metrics["geometry_available_rate"] == 0.0
     assert metrics["asset_ref_asset_count"] == 1
     assert metrics["asset_ref_available_rate"] == 1.0
-    assert report["debug_evidence"]["bbox_missing_assets"][0]["asset_id"] == "plant_1"
-    assert report["debug_evidence"]["render_skipped_objects"][0]["type"] == "bbox_missing_asset"
+    assert metrics["local_asset_ref_count"] == 1
+    assert metrics["local_asset_available_rate"] == 1.0
+    assert report["debug_evidence"]["geometry_missing_assets"][0]["asset_id"] == "plant_1"
+    assert report["debug_evidence"]["render_skipped_objects"][0]["type"] == "geometry_missing_asset"
     assert report["render_evidence"]["global_views"] == []
     prompt = read_json(tmp_path / "vlm_judge" / "iter_000" / "judge_prompt.json")
     assert "plant_1" in prompt["user"]
@@ -311,25 +443,27 @@ def test_evaluate_scene_pipeline_writes_direct_evaluation_artifacts(tmp_path: Pa
     assert report["generation_used"] is False
     assert report["vlm_judge_input_mode"] == "json_only"
     assert report["render_evidence_used"] is False
-    assert report["scene_schema_version"] == "1.0.0"
+    assert report["scene_schema_version"] == "2.1.0"
     assert report["normalized_scene_path"] == "normalized_scene.json"
     assert report["feedback_path"] == "feedback.json"
     assert metrics["pipeline_mode"] == "evaluation"
     assert metrics["generation_used"] is False
-    assert metrics["scene_schema_version"] == "1.0.0"
+    assert metrics["scene_schema_version"] == "2.1.0"
     assert metrics["scene_schema_valid"] is True
     assert metrics["input_schema_type"] == "scene"
     assert metrics["scene_id"] == "direct_pipeline_scene"
     assert metrics["scene_asset_count"] == 2
-    assert metrics["bbox_asset_count"] == 2
+    assert metrics["geometry_asset_count"] == 2
     assert metrics["asset_ref_asset_count"] == 2
     assert metrics["asset_ref_available_rate"] == 1.0
+    assert metrics["local_asset_ref_count"] == 2
+    assert metrics["local_asset_available_rate"] == 1.0
     assert metrics["feedback_issue_count"] == len(feedback["issues"])
     assert feedback["scene_id"] == "direct_pipeline_scene"
     assert feedback["advisory"] is True
     assert {"overall_valid", "score", "issues", "repair_hints", "physical_evidence", "vlm_judge_feedback", "suggested_actions"} <= set(feedback)
     assert "asset_ref" in prompt["user"]
-    assert "chairs/example" in prompt["user"]
+    assert "0_SM_Chair_1" in prompt["user"]
     assert read_json(out_dir / "normalized_scene.json")["scene_id"] == "direct_pipeline_scene"
     assert state["current_scene_path"].endswith("normalized_scene.json")
     assert (out_dir / "viewer_scene.json").exists()
@@ -339,7 +473,7 @@ def test_evaluate_scene_pipeline_writes_direct_evaluation_artifacts(tmp_path: Pa
     assert not (out_dir / "candidate_scene.json").exists()
 
 
-def test_evaluate_scene_pipeline_accepts_legacy_layout_json(tmp_path: Path) -> None:
+def test_evaluate_scene_pipeline_accepts_legend_layout_json(tmp_path: Path) -> None:
     layout_path = tmp_path / "layout.json"
     write_json(
         layout_path,
@@ -376,7 +510,7 @@ def test_evaluate_scene_pipeline_accepts_legacy_layout_json(tmp_path: Path) -> N
     metrics = read_json(tmp_path / "out" / "case_metrics.json")
     normalized_scene = read_json(tmp_path / "out" / "normalized_scene.json")
     assert state["pipeline_mode"] == "evaluation"
-    assert metrics["input_schema_type"] == "layout"
+    assert metrics["input_schema_type"] == "legend_layout"
     assert metrics["scene_schema_valid"] is False
     assert normalized_scene["scene_id"] == "legacy_direct_layout"
     assert normalized_scene["assets"][0]["asset_id"] == "box_1"
@@ -462,14 +596,16 @@ def _direct_scene() -> dict:
             {
                 "asset_id": "chair_1",
                 "category": "chair",
-                "asset_ref": {"source": "hssd-hab", "template_id": "chairs/example"},
-                "bbox": {"center": [1.0, 1.0, 0.45], "size": [0.6, 0.6, 0.9], "yaw": 180},
+                "asset_ref": {"source": "local_repo", "asset_id": "0_SM_Chair_1"},
+                "placement": {"position": [1.0, 1.0, 0.45], "yaw_degrees": 180},
+                "dimensions": [0.6, 0.6, 0.9],
             },
             {
                 "asset_id": "desk_1",
                 "category": "desk",
-                "asset_ref": {"source": "hssd-hab", "template_id": "desks/example"},
-                "bbox": {"center": [2.1, 1.0, 0.4], "size": [1.2, 0.6, 0.8], "yaw": 0},
+                "asset_ref": {"source": "local_repo", "asset_id": "0_SM_Desk_Fir001"},
+                "placement": {"position": [2.1, 1.0, 0.4], "yaw_degrees": 0},
+                "dimensions": [1.2, 0.6, 0.8],
             },
         ],
         "relations": [{"id": "rel_1", "type": "near", "subject": "chair_1", "object": "desk_1"}],

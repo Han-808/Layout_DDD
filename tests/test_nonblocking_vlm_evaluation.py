@@ -5,7 +5,7 @@ from pathlib import Path
 from benchmark.models.base_model import BaseLayoutModel, ModelResponseError
 from benchmark.utils.io import read_json
 from benchmark.workflow import run_workflow
-from benchmark.workflow.evaluation import evaluate_layout_v0
+from benchmark.workflow.evaluate import evaluate_layout_v0
 
 
 ROOT = Path(__file__).resolve().parents[1]

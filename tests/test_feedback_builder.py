@@ -264,7 +264,7 @@ def test_feedback_builder_exposes_general_purpose_advisory_feedback() -> None:
         "case_id": "scene_1",
         "iteration": 0,
         "overall_valid": False,
-        "bbox_available_rate": 0.5,
+        "geometry_available_rate": 0.5,
         "render_evidence_used": False,
         "json_scene_used": True,
         "repair_targets": ["chair_1"],
@@ -280,7 +280,9 @@ def test_feedback_builder_exposes_general_purpose_advisory_feedback() -> None:
                     "confidence": "medium",
                 }
             ],
-            "bbox_missing_assets": [{"type": "bbox_missing_asset", "asset_id": "plant_1", "message": "missing bbox"}],
+            "geometry_missing_assets": [
+                {"type": "geometry_missing_asset", "asset_id": "plant_1", "message": "missing placement/dimensions"}
+            ],
         },
         "vlm_judgement": {
             "valid": False,
@@ -316,7 +318,7 @@ def test_feedback_builder_exposes_general_purpose_advisory_feedback() -> None:
     assert feedback["advisory"] is True
     assert feedback["issues"]
     assert feedback["repair_hints"]
-    assert feedback["physical_evidence"]["bbox_available_rate"] == 0.5
+    assert feedback["physical_evidence"]["geometry_available_rate"] == 0.5
     assert feedback["vlm_judge_feedback"]["brief_reasoning"] == "Object placement needs attention."
     assert feedback["suggested_actions"]
     assert all(action["advisory"] is True for action in feedback["suggested_actions"])

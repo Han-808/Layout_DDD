@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from benchmark.workflow.evaluation import evaluate_layout_v0
+from benchmark.workflow.evaluate import evaluate_layout_v0
 
 
 def _case() -> dict:

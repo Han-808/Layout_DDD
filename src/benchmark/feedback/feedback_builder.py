@@ -181,11 +181,14 @@ def _physical_evidence(evaluation_report: dict, debug_evidence: object) -> dict:
     deterministic = evaluation_report.get("deterministic_evidence")
     deterministic_physical = deterministic.get("physical_flags") if isinstance(deterministic, dict) else []
     physical_flags = debug.get("physical_flags", deterministic_physical)
+    geometry_missing = debug.get("geometry_missing_assets")
+    if geometry_missing is None and isinstance(debug.get("legend_compat"), dict):
+        geometry_missing = debug["legend_compat"].get("bbox_missing_assets")
     return {
         "physical_flags": _compact_flags(physical_flags, limit=80),
-        "bbox_missing_assets": _compact_flags(debug.get("bbox_missing_assets"), limit=80),
+        "geometry_missing_assets": _compact_flags(geometry_missing, limit=80),
         "render_skipped_objects": _compact_flags(debug.get("render_skipped_objects"), limit=80),
-        "bbox_available_rate": evaluation_report.get("bbox_available_rate"),
+        "geometry_available_rate": evaluation_report.get("geometry_available_rate"),
         "render_evidence_used": bool(evaluation_report.get("render_evidence_used", False)),
         "json_scene_used": bool(evaluation_report.get("json_scene_used", False)),
     }

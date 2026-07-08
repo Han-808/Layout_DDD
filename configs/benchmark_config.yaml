@@ -25,7 +25,7 @@ vlm_judge_input_mode: "json_only"
 evaluation_policy:
   # For parseable/renderable layouts, VLM-as-judge is the final semantic
   # validity source. Deterministic checks are diagnostic evidence unless the
-  # layout cannot be parsed or rendered into usable bbox evidence.
+  # scene cannot be parsed or rendered into usable geometry-proxy evidence.
   evaluator_identity: "vlm_as_judge_v1"
   deterministic_flags_affect_validity: false
   skip_vlm_judge_only_if_unparseable: true

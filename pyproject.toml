@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "3d-layout-benchmark"
 version = "0.1.0"
-description = "Deterministic benchmark scaffold for explicit bbox-based 3D scene layout generation by VLMs/LLMs."
+description = "Scene/assets-first 3D benchmark scaffold with VLM-as-judge evaluation."
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [

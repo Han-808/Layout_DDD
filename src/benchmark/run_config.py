@@ -123,10 +123,15 @@ def pipeline_resources_from_resolved(project_root: str | Path, resolved: Resolve
     return PipelineResources(
         model_config=resolved.model_config,
         benchmark_config=resolved.benchmark_config,
-        layout_schema=load_json_schema(root / "schemas" / "layout.schema.json"),
+        layout_schema=load_json_schema(_legend_layout_schema_path(root)),
         scene_schema=load_json_schema(root / "schemas" / "scene.schema.json"),
         resolved_run_config=deepcopy(resolved.data),
     )
+
+
+def _legend_layout_schema_path(root: Path) -> Path:
+    legend_path = root / "legend" / "schemas" / "legend_layout.schema.json"
+    return legend_path if legend_path.exists() else root / "schemas" / "layout.schema.json"
 
 
 def config_hash_for(data: dict) -> str:

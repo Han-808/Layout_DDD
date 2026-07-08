@@ -1,0 +1,26 @@
+render:
+  backend: perspective_bbox_zbuffer
+  width: 640
+  height: 480
+  fov_degrees: 50.0
+  near: 0.05
+  far: 200.0
+  min_visible_pixel_area: 4.0
+  canvas_margin_px: 20
+  background_rgba: [248, 249, 246, 255]
+  min_camera_distance_m: 2.5
+  distance_scale: 1.5
+  fit_span_scale: 0.75
+  min_target_z: 0.35
+  top_look_at_shift_scale: 0.25
+  side_look_at_shift_scale: 0.3
+  camera_candidates:
+    - [0.0, 0.0]
+    - [0.25, 0.0]
+    - [-0.25, 0.0]
+    - [0.0, 0.25]
+    - [0.0, -0.25]
+view_validation:
+  min_foreground_ratio: 0.005
+  min_visible_object_ratio: 0.4
+  max_camera_retries: 4

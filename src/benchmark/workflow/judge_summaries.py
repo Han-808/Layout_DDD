@@ -25,11 +25,11 @@ COORDINATE_CONVENTION = {
     "z_axis": "height",
     "unit": "meters",
     "yaw": "degrees around z/up axis",
-    "bbox": "center [x,y,z] + size [width,depth,height]",
+    "asset_geometry": "asset.placement.position [x,y,z], asset.dimensions [width,depth,height], and yaw_degrees",
 }
 
 TEMPORARY_RUBRIC = {
-    "target": "Evaluate explicit 3D bbox-proxy layout quality, not photorealistic reconstruction.",
+    "target": "Evaluate explicit 3D scene asset placement quality, not photorealistic reconstruction.",
     "do_not_penalize": [
         "missing meshes",
         "missing textures",
@@ -42,7 +42,7 @@ TEMPORARY_RUBRIC = {
         {"id": "completeness", "description": "Explicit task/object completeness relative to the benchmark instance."},
         {"id": "boundary", "description": "Room-boundary and containment plausibility within the proxy room."},
         {"id": "height", "description": "Floor-height and vertical plausibility."},
-        {"id": "collision", "description": "Severe collision or overlap between bbox objects."},
+        {"id": "collision", "description": "Severe collision or overlap between placed assets."},
         {"id": "support", "description": "Support and local spatial plausibility."},
         {"id": "evidence", "description": "Evidence sufficiency from rendered views and structured summaries."},
     ],
@@ -94,13 +94,16 @@ def build_compact_scene_payload(scene: dict, layout: dict, text_budget: dict) ->
     omitted_assets = assets[max_assets:]
     compact = {
         "scene_id": normalized.get("scene_id"),
+        "scene_type": normalized.get("scene_type"),
         "unit": normalized.get("unit", "meter"),
         "room": _compact_room(normalized.get("room"), text_budget),
         "assets": [_compact_scene_asset(asset, text_budget) for asset in shown_assets],
         "asset_count": len(assets),
-        "bbox_asset_count": sum(1 for asset in assets if _asset_has_bbox(asset)),
-        "non_bbox_asset_count": sum(1 for asset in assets if not _asset_has_bbox(asset)),
+        "geometry_asset_count": sum(1 for asset in assets if _asset_has_geometry(asset)),
+        "non_geometric_asset_count": sum(1 for asset in assets if not _asset_has_geometry(asset)),
     }
+    if isinstance(normalized.get("scene_ref"), dict):
+        compact["scene_ref"] = _compact_scene_ref(normalized["scene_ref"])
     if isinstance(normalized.get("relations"), list):
         compact["relations"] = _compact_specs(normalized["relations"])
     if isinstance(normalized.get("attachments"), list):
@@ -112,15 +115,17 @@ def build_compact_scene_payload(scene: dict, layout: dict, text_budget: dict) ->
         compact["omitted_asset_ids_truncated"] = len(omitted_ids) > 200
         compact["assets_truncated"] = True
         compact["truncation"] = {"reason": "max_scene_assets prompt budget", "shown": len(shown_assets), "total": len(assets)}
-    non_bbox_assets = layout.get("_non_bbox_assets") if isinstance(layout, dict) else None
-    if isinstance(non_bbox_assets, list) and non_bbox_assets:
-        compact["non_bbox_assets"] = [
+    non_geometric_assets = layout.get("_non_geometric_assets") if isinstance(layout, dict) else None
+    if not isinstance(non_geometric_assets, list) and isinstance(layout, dict):
+        non_geometric_assets = layout.get("_non_bbox_assets")
+    if isinstance(non_geometric_assets, list) and non_geometric_assets:
+        compact["non_geometric_assets"] = [
             {
                 key: item.get(key)
                 for key in ["asset_id", "object_id", "category", "reason"]
                 if isinstance(item, dict) and key in item
             }
-            for item in non_bbox_assets[:max_assets]
+            for item in non_geometric_assets[:max_assets]
             if isinstance(item, dict)
         ]
     return _round_numbers(compact, text_budget)
@@ -146,7 +151,7 @@ def build_scene_summary(case: dict, input_level: str, text_budget: dict) -> dict
         "dataset_source": _dataset_source(case, source),
         "hssd_source_path": _source_value(source, ["scene_instance", "scene_instance_path", "source_path", "path"]),
         "notes": [
-            "Room boundary is bbox-evaluation evidence. If floor_plan.regions exist, use their polygon union as the primary floor plan.",
+            "Room boundary is geometry-proxy evidence. If floor_plan.regions exist, use their polygon union as the primary floor plan.",
             "Aggregate room rectangles are compatibility proxies only when multi-region floor plans are available.",
             "Do not treat missing meshes/textures/doors/windows as errors.",
         ],
@@ -274,7 +279,7 @@ def build_judge_prompt_payload(
         evidence_selection=evidence_selection,
         text_budget=budget,
     )
-    bbox_rate = _bbox_available_rate(compact_scene)
+    geometry_rate = _geometry_available_rate(compact_scene)
     payload = {
         "task": "Evaluate whether this 3D scene/layout placement is plausible.",
         "role": "independent evaluator of 3D scene/layout placement",
@@ -285,7 +290,7 @@ def build_judge_prompt_payload(
         "evaluation_policy": {
             "input_modes": "Input may be JSON-only or JSON plus rendered views.",
             "json_only": "When rendered views are absent, judge from structured scene JSON and evidence.",
-            "json_plus_render": "Rendered bbox views are legacy/full visual evidence, not a mesh dependency.",
+            "json_plus_render": "Rendered geometry-proxy views are legacy/full visual evidence, not a mesh dependency.",
             "parseable_layouts": "Run VLM judge; overall_valid is set from vlm_judgement.valid.",
             "unparseable_layouts": "Skip VLM judge; overall_valid=false; judgement_status=unparseable_layout.",
             "deterministic_flags": "Schema, physical, view, skipped render object, and grouping diagnostics are evidence only.",
@@ -312,13 +317,13 @@ def build_judge_prompt_payload(
                 "num_scene_assets": compact_scene.get("asset_count"),
                 "num_layout_objects": layout_summary.get("num_layout_objects"),
                 "num_renderable_objects": layout_summary.get("num_renderable_objects"),
-                "bbox_available_rate": bbox_rate,
+                "geometry_available_rate": geometry_rate,
                 "omitted_asset_count": compact_scene.get("omitted_asset_count", 0),
             },
             "physical_flags": _compact_flags(physical_flags, budget),
             "schema_flags": _compact_flags(sanity_flags, budget),
             "render_flags": _compact_flags(view_flags, budget),
-            "bbox_missing": _compact_flags(_flags_of_type(render_skipped_objects, "bbox_missing_asset"), budget),
+            "geometry_missing": _compact_flags(_flags_of_type(render_skipped_objects, "geometry_missing_asset"), budget),
             "fallback_confidence": _fallback_confidence_summary(physical_flags),
             "render_available": bool(image_manifest),
             "render_evidence_used": bool(render_evidence_used),
@@ -333,7 +338,7 @@ def build_judge_prompt_payload(
             "judge_room_coherence": True,
             "physical_flags_are_evidence_not_rules": True,
             "relation_aware_overlap_guidance": (
-                "Some bbox overlaps may be valid depending on object relation: chair under table, "
+                "Some geometry-proxy overlaps may be valid depending on object relation: chair under table, "
                 "object on table, object inside cabinet, or wall-mounted object. Other intersections "
                 "are likely invalid: bed through table or large furniture penetrating unrelated large furniture. "
                 "Consider category, relation, support, containment, and overall room coherence."
@@ -342,10 +347,10 @@ def build_judge_prompt_payload(
         },
         "score_scale": {
             "0": "Unusable, invalid, or impossible to judge because evidence is insufficient.",
-            "1": "Severe bbox layout or task-completeness problems.",
+            "1": "Severe asset placement or task-completeness problems.",
             "2": "Partially plausible with multiple important issues.",
-            "3": "Mostly coherent with minor bbox layout issues.",
-            "4": "Coherent, plausible, task-complete bbox-proxy layout.",
+            "3": "Mostly coherent with minor asset placement issues.",
+            "4": "Coherent, plausible, task-complete scene asset placement.",
         },
         "relations_to_judge": _compact_specs(relation_specs),
         "attachments_to_judge": _compact_specs(attachment_specs),
@@ -383,12 +388,28 @@ def _compact_scene_asset(asset: dict, text_budget: dict) -> dict:
     }
     if asset.get("object_id") and asset.get("object_id") != asset.get("asset_id"):
         compact["object_id"] = asset.get("object_id")
-    bbox = asset.get("bbox")
-    if isinstance(bbox, dict):
-        compact["bbox"] = {
-            key: _round_value(bbox.get(key), int(text_budget.get("numeric_precision", 2)))
+    placement = asset.get("placement")
+    if isinstance(placement, dict):
+        compact["placement"] = {
+            key: _round_value(placement.get(key), int(text_budget.get("numeric_precision", 2)))
+            for key in ["position", "yaw_degrees", "region_id", "support_parent"]
+            if key in placement
+        }
+    if isinstance(asset.get("dimensions"), list):
+        compact["dimensions"] = _round_value(asset["dimensions"], int(text_budget.get("numeric_precision", 2)))
+    geometry = asset.get("geometry")
+    if "placement" not in compact and isinstance(geometry, dict):
+        compact["geometry"] = {
+            key: _round_value(geometry.get(key), int(text_budget.get("numeric_precision", 2)))
+            for key in ["position", "center", "dimensions", "size", "yaw_degrees", "yaw"]
+            if key in geometry
+        }
+    legend_bbox = asset.get("bbox")
+    if isinstance(legend_bbox, dict) and "placement" not in compact and "dimensions" not in compact:
+        compact["legend_geometry"] = {
+            key: _round_value(legend_bbox.get(key), int(text_budget.get("numeric_precision", 2)))
             for key in ["center", "size", "yaw"]
-            if key in bbox
+            if key in legend_bbox
         }
     for key in ["support_parent", "support_surface", "parent_id", "region_id"]:
         if asset.get(key) is not None:
@@ -402,10 +423,23 @@ def _compact_scene_asset(asset: dict, text_budget: dict) -> dict:
     return compact
 
 
+def _compact_scene_ref(scene_ref: dict) -> dict:
+    compact = {
+        key: _truncate_string(str(scene_ref[key]), 240) if isinstance(scene_ref.get(key), str) else scene_ref.get(key)
+        for key in ["source", "collection", "scene_id", "repo_path", "scene_json_path", "scene_type", "asset_count", "scene_height"]
+        if key in scene_ref and scene_ref.get(key) is not None
+    }
+    metadata = scene_ref.get("metadata")
+    if isinstance(metadata, dict) and metadata:
+        compact["metadata_keys"] = sorted(str(key) for key in metadata.keys())[:12]
+        compact["metadata_key_count"] = len(metadata)
+    return compact
+
+
 def _compact_asset_ref(asset_ref: dict) -> dict:
     compact = {
         key: _truncate_string(str(asset_ref[key]), 240) if isinstance(asset_ref.get(key), str) else asset_ref.get(key)
-        for key in ["source", "template_id", "mesh_uri", "category", "model_id", "asset_type"]
+        for key in ["source", "collection", "asset_id", "template_id", "repo_path", "mesh_path", "pointcloud_path", "metadata_path", "mesh_uri", "category", "caption_en", "license", "model_id", "asset_type"]
         if key in asset_ref and asset_ref.get(key) is not None
     }
     metadata = asset_ref.get("metadata")
@@ -417,6 +451,8 @@ def _compact_asset_ref(asset_ref: dict) -> dict:
             continue
         if isinstance(value, (str, int, float, bool)) or value is None:
             compact[key] = _truncate_string(value, 240) if isinstance(value, str) else value
+        elif isinstance(value, list) and all(isinstance(item, (int, float)) for item in value[:3]):
+            compact[key] = _round_value(value, 3)
         if len(compact) >= 12:
             break
     return compact
@@ -440,17 +476,26 @@ def _compact_metadata(metadata: dict) -> dict:
     return result if result["key_count"] or primitive_fields else {}
 
 
-def _asset_has_bbox(asset: dict) -> bool:
-    bbox = asset.get("bbox")
-    return isinstance(bbox, dict) and all(key in bbox for key in ["center", "size", "yaw"])
+def _asset_has_geometry(asset: dict) -> bool:
+    placement = asset.get("placement")
+    dimensions = asset.get("dimensions")
+    if isinstance(placement, dict) and isinstance(placement.get("position"), list) and isinstance(dimensions, list):
+        return len(placement["position"]) >= 3 and len(dimensions) >= 3
+    geometry = asset.get("geometry")
+    if isinstance(geometry, dict):
+        position = geometry.get("position") or geometry.get("center")
+        size = geometry.get("dimensions") or geometry.get("size")
+        return isinstance(position, list) and isinstance(size, list) and len(position) >= 3 and len(size) >= 3
+    legend_bbox = asset.get("bbox")
+    return isinstance(legend_bbox, dict) and all(key in legend_bbox for key in ["center", "size", "yaw"])
 
 
-def _bbox_available_rate(compact_scene: dict) -> float | None:
+def _geometry_available_rate(compact_scene: dict) -> float | None:
     asset_count = compact_scene.get("asset_count")
-    bbox_count = compact_scene.get("bbox_asset_count")
-    if not isinstance(asset_count, int) or asset_count <= 0 or not isinstance(bbox_count, int):
+    geometry_count = compact_scene.get("geometry_asset_count")
+    if not isinstance(asset_count, int) or asset_count <= 0 or not isinstance(geometry_count, int):
         return None
-    return float(bbox_count) / float(asset_count)
+    return float(geometry_count) / float(asset_count)
 
 
 def _compact_flags(flags: list[dict], text_budget: dict) -> list[dict]:
@@ -862,7 +907,7 @@ def _enforce_total_budget(payload: dict, text_budget: dict) -> dict:
     result["score_scale"] = {"0": "unusable", "1": "severe", "2": "partial", "3": "mostly coherent", "4": "coherent", "truncated": True}
     if len(_json_text(result)) <= cap:
         return result
-    result["coordinate_convention"] = {"unit": "meters", "bbox": "center+size", "truncated": True}
+    result["coordinate_convention"] = {"unit": "meters", "asset_geometry": "placement+dimensions", "truncated": True}
     result["evaluation_policy"] = {
         "overall_valid": "vlm_judgement.valid",
         "deterministic_flags": "evidence_only",
@@ -898,8 +943,8 @@ def _enforce_total_budget(payload: dict, text_budget: dict) -> dict:
         "scene_id": scene.get("scene_id"),
         "unit": scene.get("unit"),
         "asset_count": scene.get("asset_count"),
-        "bbox_asset_count": scene.get("bbox_asset_count"),
-        "non_bbox_asset_count": scene.get("non_bbox_asset_count"),
+        "geometry_asset_count": scene.get("geometry_asset_count"),
+        "non_geometric_asset_count": scene.get("non_geometric_asset_count"),
         "assets": [{"truncated": True, "shown": 0, "total": len(shown_assets), "reason": "total prompt text budget"}],
         "truncated": True,
     }
@@ -907,7 +952,7 @@ def _enforce_total_budget(payload: dict, text_budget: dict) -> dict:
     result["structured_evidence"] = {
         "object_completeness": structured.get("object_completeness", {}),
         "physical_flags": structured.get("physical_flags", [])[:1] if isinstance(structured.get("physical_flags"), list) else [],
-        "bbox_missing": structured.get("bbox_missing", [])[:1] if isinstance(structured.get("bbox_missing"), list) else [],
+        "geometry_missing": structured.get("geometry_missing", [])[:1] if isinstance(structured.get("geometry_missing"), list) else [],
         "render_available": structured.get("render_available"),
         "render_evidence_used": structured.get("render_evidence_used"),
         "truncated": True,
@@ -951,7 +996,7 @@ def _image_meaning(artifact_id: str, scope: str) -> str:
         return "selected group yz side elevation view"
     if artifact_id.endswith("_xz"):
         return "selected group xz front elevation view"
-    return "rendered bbox evidence view"
+    return "rendered geometry evidence view"
 
 
 def _first_present(value: dict, keys: list[str]) -> Any:

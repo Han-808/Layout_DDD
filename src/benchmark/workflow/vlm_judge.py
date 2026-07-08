@@ -472,18 +472,18 @@ def _evaluation_config(benchmark_config: dict | None) -> dict:
 
 def _judge_system_prompt() -> str:
     return (
-        "You are an independent evaluator of 3D scene/layout placement. Input may be "
-        "JSON-only or JSON plus rendered bbox views. When rendered views are absent, judge "
-        "from structured scene JSON and evidence. For parseable layouts, your judgement "
+        "You are an independent evaluator of 3D scene asset placement. Input may be "
+        "JSON-only or JSON plus rendered geometry-proxy views. When rendered views are absent, judge "
+        "from structured scene JSON and evidence. For parseable scenes, your judgement "
         "determines overall_valid. Deterministic schema, physical, view, render, and grouping "
-        "flags are evidence only, not automatic verdicts. Some bbox overlaps may be valid "
+        "flags are evidence only, not automatic verdicts. Some geometry-proxy overlaps may be valid "
         "depending on category, relation, support, or containment, such as chair under table, "
         "object on table, object inside cabinet, or wall-mounted object. Other intersections "
         "are likely invalid, such as bed through table or large furniture penetrating unrelated "
         "large furniture. Consider category, relation, support, containment, and overall room "
         "coherence. Treat fallback-derived room boundary or wall-height evidence as "
         "lower-confidence and approximate. Do not penalize missing meshes, textures, real wall "
-        "geometry, doors, windows, or lack of photorealism when evaluation mode is bbox/json. "
+        "geometry, doors, windows, or lack of photorealism when evaluation mode is scene/json. "
         "If evidence is insufficient, set insufficient_evidence=true and "
         "judgement_status='insufficient_evidence'. Return exactly one JSON object with no "
         "Markdown and no chain-of-thought."
