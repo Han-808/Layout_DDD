@@ -4,6 +4,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
 from jsonschema import Draft202012Validator
 
 from benchmark.data.scene_adapters import layout_to_scene, normalize_scene, scene_adapter_summary, scene_to_layout
@@ -16,6 +17,22 @@ from benchmark.workflow.evaluate import evaluate_scene
 
 ROOT = Path(__file__).resolve().parents[1]
 HSSD_CASE = ROOT / "data" / "benchmark_cases" / "hssd_small" / "102343992_structured_relation.json"
+LOCAL_ASSET_ROOT = ROOT / "Assets" / "imaginarium_assets"
+LOCAL_SCENE_JSON = ROOT / "Scenes" / "converted_scenes" / "scene_000000_03.json"
+
+
+def _require_local_assets() -> None:
+    if not (LOCAL_ASSET_ROOT / "0_SM_Chair_1").exists():
+        pytest.skip("local Assets/ directory is not checked into this repo")
+
+
+def _require_local_scenes() -> None:
+    if not LOCAL_SCENE_JSON.exists():
+        pytest.skip("local Scenes/ directory is not checked into this repo")
+
+
+def _has_local_assets() -> bool:
+    return (LOCAL_ASSET_ROOT / "0_SM_Chair_1").exists()
 
 
 def _scene_schema() -> dict:
@@ -38,6 +55,7 @@ def test_scene_schema_accepts_minimal_scene() -> None:
 
 
 def test_local_repo_asset_ref_resolves_existing_asset() -> None:
+    _require_local_assets()
     ref = resolve_local_asset_ref({"source": "local_repo", "asset_id": "0_SM_Chair_1"})
 
     assert ref is not None
@@ -50,6 +68,7 @@ def test_local_repo_asset_ref_resolves_existing_asset() -> None:
 
 
 def test_normalize_scene_enriches_local_repo_asset_ref() -> None:
+    _require_local_assets()
     scene = normalize_scene(
         {
             "scene_id": "local_asset_scene",
@@ -72,6 +91,7 @@ def test_normalize_scene_enriches_local_repo_asset_ref() -> None:
 
 
 def test_local_repo_scene_ref_resolves_existing_scene() -> None:
+    _require_local_scenes()
     ref = resolve_local_scene_ref({"source": "local_repo", "scene_id": "scene_000000_03"})
 
     assert ref is not None
@@ -85,6 +105,7 @@ def test_local_repo_scene_ref_resolves_existing_scene() -> None:
 
 
 def test_load_local_scene_reads_existing_scene_json() -> None:
+    _require_local_scenes()
     loaded = load_local_scene({"source": "local_repo", "scene_json_path": "Scenes/converted_scenes/scene_000000_03.json"})
 
     assert loaded is not None
@@ -94,6 +115,7 @@ def test_load_local_scene_reads_existing_scene_json() -> None:
 
 
 def test_normalize_scene_loads_local_repo_scene_ref() -> None:
+    _require_local_scenes()
     scene = normalize_scene(
         {
             "scene_id": "scene_000000_03",
@@ -128,7 +150,8 @@ def test_scene_schema_accepts_local_scene_ref_input() -> None:
 
 
 def test_scene_schema_accepts_local_scene_objects_import_shape() -> None:
-    raw_scene = read_json(ROOT / "Scenes" / "converted_scenes" / "scene_000000_03.json")
+    _require_local_scenes()
+    raw_scene = read_json(LOCAL_SCENE_JSON)
 
     _assert_valid_scene(
         {
@@ -231,7 +254,8 @@ def test_layout_to_scene_converts_legend_objects_to_assets() -> None:
     assert asset["model_object_id"] == "chair_alias_1"
     assert asset["asset_ref"]["source"] == "local_repo"
     assert asset["asset_ref"]["asset_id"] == "0_SM_Chair_1"
-    assert asset["asset_ref"]["mesh_path"].endswith("0_SM_Chair_1.fbx")
+    if _has_local_assets():
+        assert asset["asset_ref"]["mesh_path"].endswith("0_SM_Chair_1.fbx")
     assert asset["metadata"]["source_layout_object"]["object_id"] == "chair_1"
 
 
@@ -267,7 +291,8 @@ def test_scene_to_layout_converts_asset_geometry_to_legend_objects() -> None:
     assert obj["asset_id"] == "desk_1"
     assert obj["asset_ref"]["source"] == "local_repo"
     assert obj["asset_ref"]["asset_id"] == "0_SM_Desk_Fir001"
-    assert obj["asset_ref"]["mesh_path"].endswith("0_SM_Desk_Fir001.fbx")
+    if _has_local_assets():
+        assert obj["asset_ref"]["mesh_path"].endswith("0_SM_Desk_Fir001.fbx")
     assert obj["support_parent"] == "floor"
     assert obj["region_id"] == "work_zone"
 
