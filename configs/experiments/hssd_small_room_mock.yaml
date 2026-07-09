@@ -1,5 +1,7 @@
 name: hssd_small_room_mock
-description: Mock run over a small downloaded HSSD bbox case.
+input_chain: legend
+current_input_chain: natural_language
+description: LEGEND compatibility run over a small downloaded HSSD bbox case.
 defaults:
   dataset: hssd_downloaded_small
   model: mock

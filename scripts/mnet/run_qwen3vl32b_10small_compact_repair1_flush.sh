@@ -166,7 +166,7 @@ run_scene() {
   ensure_server
 
   local args=(
-    "$REPO_ROOT/scripts/run_hssd_hab_10_qwen_validity.py"
+    "$REPO_ROOT/scripts/legend/legend_run_hssd_hab_10_qwen_validity.py"
     --hssd-root "$HSSD_ROOT"
     --cases-root "$CASES_ROOT"
     --scene-ids "$scene_id"

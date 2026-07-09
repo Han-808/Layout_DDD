@@ -91,7 +91,7 @@ echo "endpoint=${MODEL_ENDPOINT}"
 echo "out=${OUT_DIR}"
 
 cmd=(
-  "${BENCH_PYTHON}" "${REPO_ROOT}/scripts/run_hssd_hab_10_qwen_validity.py"
+  "${BENCH_PYTHON}" "${REPO_ROOT}/scripts/legend/legend_run_hssd_hab_10_qwen_validity.py"
   --hssd-root "${HSSD_ROOT}" \
   --cases-root "${CASES_ROOT}" \
   --scene-ids "${SCENE_ID}" \

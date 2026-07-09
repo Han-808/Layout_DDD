@@ -68,8 +68,8 @@ class JsonFolderAdapter:
         return case
 
 
-class HSSDSceneInstanceAdapter(JsonFolderAdapter):
-    source_type = "hssd_scene_instance_json"
+class LegendHSSDSceneInstanceAdapter(JsonFolderAdapter):
+    source_type = "legend_hssd_scene_instance_json"
 
     def discover_cases(self, dataset_config: dict) -> list[CaseRef]:
         root = _configured_path(dataset_config)
@@ -98,7 +98,7 @@ class HSSDSceneInstanceAdapter(JsonFolderAdapter):
             "description": {
                 "text": dataset_config.get(
                     "description",
-                    "Real HSSD scene-instance metadata normalized to bbox layout benchmark input.",
+                    "LEGEND HSSD scene-instance metadata normalized to legacy bbox layout benchmark input.",
                 )
             },
             "room": room,
@@ -108,6 +108,8 @@ class HSSDSceneInstanceAdapter(JsonFolderAdapter):
             "source": {
                 "dataset": "hssd-hab",
                 "source_type": self.source_type,
+                "input_chain": "legend",
+                "current_input_chain": "natural_language",
                 "scene_instance_fields": sorted(raw_case.keys()),
                 "stage_instance": raw_case.get("stage_instance"),
                 "translation_origin": raw_case.get("translation_origin"),
@@ -128,7 +130,9 @@ class HSSDSceneInstanceAdapter(JsonFolderAdapter):
 
 DATASET_ADAPTERS: dict[str, type[DatasetAdapter]] = {
     "json_folder": JsonFolderAdapter,
-    "hssd_scene_instance_json": HSSDSceneInstanceAdapter,
+    "legend_hssd_scene_instance_json": LegendHSSDSceneInstanceAdapter,
+    # Backward-compatible alias for old configs; HSSD remains a legend input chain.
+    "hssd_scene_instance_json": LegendHSSDSceneInstanceAdapter,
 }
 
 

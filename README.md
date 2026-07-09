@@ -1,8 +1,8 @@
 # 3D Layout Benchmark
 
-Evaluation-first benchmark for explicit 3D scene asset validity. The core module evaluates canonical scene JSON with a VLM-as-judge; layout generation is an optional harness that produces a candidate scene and then calls the same evaluator.
+Evaluation-first benchmark for natural-language-driven 3D scene construction and explicit scene asset validity. The current user-facing input path starts with natural language, converts it into a scene spec for asset retrieval/generation, and evaluates the resulting canonical scene JSON with a VLM-as-judge.
 
-This is not a 3D asset generation project. Inputs and outputs are JSON scene records with assets, placement, dimensions, local `scene_ref` metadata pointing at `Scenes/`, and `asset_ref` metadata pointing at local repo assets under `Assets/imaginarium_assets`. Old layout/bbox-facing entry points live under `legend/` and `benchmark.legend.*`. The evaluator can run from structured JSON alone or from JSON plus rendered geometry-proxy views.
+This is not a 3D asset generation project. Runtime artifacts are JSON scene records with assets, placement, dimensions, local `scene_ref` metadata pointing at `Scenes/`, and `asset_ref` metadata pointing at local repo assets under `Assets/imaginarium_assets`. Old HSSD/BM-instance/layout/bbox-facing entry points live under `legend/`, `benchmark.legend.*`, and `scripts/legend/`. HSSD is a legend compatibility input chain, not the current product input. The evaluator can run from structured JSON alone or from JSON plus rendered geometry-proxy views.
 
 ## What Is Evaluated
 
@@ -78,16 +78,22 @@ Validity fields are never stored in scene input JSON; they belong only in `evalu
 
 ## Architecture
 
-The primary path is:
+The primary input path is:
+
+```text
+natural language instruction -> scene_spec -> asset retrieval -> generation input -> candidate scene -> evaluation core -> VLM judge -> metrics -> feedback
+```
+
+Direct scene evaluation remains available for generated or hand-authored candidate scenes:
 
 ```text
 scene / candidate_scene -> evaluation core -> VLM judge -> metrics -> feedback
 ```
 
-Generation mode is a compatibility harness:
+BM-instance/HSSD generation mode is a legend compatibility harness:
 
 ```text
-input case -> model generation -> candidate scene -> evaluation core
+legend input case -> model generation -> candidate scene -> evaluation core
 ```
 
 Programmatic generation-mode runs use an agent-style runner rather than a LangGraph-defined fixed state machine:
@@ -112,6 +118,27 @@ On Unix-like systems, use `python` instead of `py`.
 
 ## Run
 
+Natural-language MVP workflow:
+
+```bash
+py scripts/run_nl_scene_workflow.py --instruction "Create a cozy living room for reading and casual conversation. Include seating, a rug, coffee table, lighting, and decor. Keep it walkable." --scene-type "living room" --asset-index-path outputs/asset_index_imaginarium --retrieval-k 1 --out-dir outputs/mvp_demo
+```
+
+This is the current natural-language input path. The converter produces `scene_spec.json`, then the workflow calls the asset retriever to produce `asset_retrieval.json` and `generation_input.json`. The converter is not yet a full relationship-aware converter: relation dictionaries may be preserved, but OOR/OAR-ready relationship normalization still needs to be added. If no generated scene is supplied, the workflow writes `workflow_status.json` with `generation_skipped`. See `docs/workflow_mvp.md` for details. HSSD compatibility details live in `docs/legend_hssd.md`.
+
+Deterministic generic validity evaluation:
+
+```bash
+py scripts/evaluate_generic_validity.py --scene outputs/generated_scene.json --out outputs/generic_validity_report.json
+```
+
+Deterministic relationship evaluation:
+
+```bash
+py scripts/evaluate_oor.py --scene outputs/generated_scene.json --out outputs/oor_report.json
+py scripts/evaluate_oar.py --scene outputs/generated_scene.json --out outputs/oar_report.json
+```
+
 Direct scene evaluation:
 
 ```bash
@@ -120,19 +147,25 @@ py scripts/evaluate_scene.py --scene Scenes/converted_scenes/scene_000000_03.jso
 
 Use `--vlm-judge-input-mode json_only` for structured JSON evidence only. Use `--vlm-judge-input-mode json_plus_render` or `--json-plus-render` when geometry-proxy render evidence should be generated and sent to the judge.
 
-Direct scene generation:
+Direct dummy evaluation:
+
+```bash
+py scripts/evaluate_scene.py --scene outputs/some_generated_scene.json --instruction "Create a cozy living room..." --out outputs/evaluation_report.json --seed 0 --dummy
+```
+
+Legend compatibility: direct scene generation from a BM-instance case:
 
 ```bash
 py scripts/generate_scene.py --case data/benchmark_cases/hssd_small_room_full/102344115_structured_basic.json --model mock --out outputs/generated_scene
 ```
 
-Single case:
+Legend compatibility: single BM-instance case:
 
 ```bash
 py scripts/run_single_case.py --case data/benchmark_cases/hssd_small_room_full/102344115_structured_basic.json --model mock --max_repair_iterations 0 --out outputs/hssd_small_room_debug_case
 ```
 
-Single case from an experiment profile:
+Legend compatibility: single BM-instance case from an experiment profile:
 
 ```bash
 py scripts/run_single_case.py --experiment hssd_small_room_qwen3vl32b_local --out outputs/hssd_small_room_vlm_judge_smoke --serve --port 8080
@@ -144,17 +177,17 @@ Benchmark folder:
 py scripts/run_benchmark.py --cases data/benchmark_cases --model mock --max_repair_iterations 0 --out outputs/benchmark_run
 ```
 
-HSSD-HAB with a local open-source model:
+Legend compatibility: HSSD-HAB with a local open-source model:
 
 ```bash
-py scripts/prepare_hssd_hab.py --hssd-root data/external/hssd-hab
-py scripts/convert_hssd_hab.py --hssd-root data/external/hssd-hab --out-dir data/benchmark_cases/hssd --limit 1 --levels structured_basic structured_relation
+py scripts/legend/legend_prepare_hssd_hab.py --hssd-root data/external/hssd-hab
+py scripts/legend/legend_convert_hssd_hab.py --hssd-root data/external/hssd-hab --out-dir data/benchmark_cases/hssd --limit 1 --levels structured_basic structured_relation
 py scripts/run_single_case.py --case data/benchmark_cases/hssd/<case_id>_structured_basic.json --model ollama --max_repair_iterations 0 --out outputs/hssd_local_model
 ```
 
 The `qwen3vl_sglang`, `qwen3vl_sglang_32b`, `ollama`, and `vllm` entries in `configs/model_config.yaml` are server/API profiles. Start the model server separately, or add/update a model entry for your setup. Case-specific choices such as case path, output directory, and larger HSSD token budgets belong in `configs/experiment_config.yaml`. The default VLM judge reuses the same model endpoint as the layout generator in generation mode; pass `--judge_model` or direct-eval `--judge-model` when you intentionally want a separate configured judge model. Use `scripts/check_model_endpoint.py` for temporary endpoint/model-id smoke checks instead of adding server debug parameters to the main pipeline commands.
 
-Validate a case:
+Legend compatibility: validate a BM-instance case:
 
 ```bash
 py scripts/validate_case.py --case data/benchmark_cases/hssd_small_room_full/102344115_structured_basic.json

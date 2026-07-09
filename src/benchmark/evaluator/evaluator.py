@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from benchmark.evaluator.OAR.evaluator import DEFAULT_OAR_CONFIG, evaluate_oar
+from benchmark.evaluator.OOR.evaluator import DEFAULT_OOR_CONFIG, DETERMINISTIC_ONLY, evaluate_oor, evaluate_scene
+from benchmark.evaluator.generic_validity.evaluator import DEFAULT_GENERIC_VALIDITY_CONFIG, evaluate_generic_validity, evaluate_scene_validity
 from benchmark.evaluator.physical_check import check_physical_validity
 from benchmark.evaluator.schema_check import check_layout_schema
 from benchmark.evaluator.spatial_check import check_spatial_relations

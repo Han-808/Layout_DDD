@@ -4,7 +4,7 @@ from pathlib import Path
 
 from jsonschema import Draft202012Validator
 
-from benchmark.datasets.hssd_hab_converter import convert_hssd_hab
+from benchmark.legend.hssd.hssd_hab_converter import convert_hssd_hab
 from benchmark.utils.io import read_json, write_json
 
 

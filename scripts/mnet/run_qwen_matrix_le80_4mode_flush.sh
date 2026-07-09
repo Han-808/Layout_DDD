@@ -705,7 +705,7 @@ run_task() {
   local case_dir="${run_out}/${mode}/${scene_id}"
   if command -v timeout >/dev/null 2>&1; then
     timeout --foreground "$TASK_TIMEOUT_SECONDS" \
-      "$BENCH_PY" "$REPO_ROOT/scripts/run_hssd_hab_10_qwen_validity.py" \
+      "$BENCH_PY" "$REPO_ROOT/scripts/legend/legend_run_hssd_hab_10_qwen_validity.py" \
         --hssd-root "$stage_root" \
         --cases-root "${CASES_ROOT}/${pair_key}/${instance_key}/${mode}" \
         --scene-ids "$scene_id" \
@@ -730,7 +730,7 @@ run_task() {
         --no-download \
         --out "$run_out" || task_rc=$?
   else
-    "$BENCH_PY" "$REPO_ROOT/scripts/run_hssd_hab_10_qwen_validity.py" \
+    "$BENCH_PY" "$REPO_ROOT/scripts/legend/legend_run_hssd_hab_10_qwen_validity.py" \
       --hssd-root "$stage_root" \
       --cases-root "${CASES_ROOT}/${pair_key}/${instance_key}/${mode}" \
       --scene-ids "$scene_id" \

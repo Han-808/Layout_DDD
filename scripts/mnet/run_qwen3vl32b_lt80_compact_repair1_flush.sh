@@ -407,7 +407,7 @@ run_instance() {
     return 0
   fi
 
-  "$BENCH_PY" "$REPO_ROOT/scripts/run_hssd_hab_10_qwen_validity.py" \
+  "$BENCH_PY" "$REPO_ROOT/scripts/legend/legend_run_hssd_hab_10_qwen_validity.py" \
     --hssd-root "$stage_root" \
     --cases-root "${CASES_ROOT}/${instance_key}" \
     --scene-ids "$scene_id" \

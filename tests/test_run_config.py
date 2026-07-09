@@ -90,7 +90,7 @@ def test_dataset_registry_json_folder_and_hssd_normalization(tmp_path: Path) -> 
     )
     hssd_cases = discover_and_normalize_cases(
         {
-            "source_type": "hssd_scene_instance_json",
+            "source_type": "legend_hssd_scene_instance_json",
             "path": str(hssd_path),
             "scene_representation_mode": "full_metadata_budgeted",
         }

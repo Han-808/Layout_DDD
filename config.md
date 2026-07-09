@@ -1,4 +1,177 @@
-# Experiment Config Notes
+# VLM Connection Config
+
+This repo supports both remote API endpoints and local-hosted model servers through the same OpenAI-compatible adapter.
+
+Important boundary: OOR evaluator v0 is deterministic-only. Do not route OOR v0 through VLM/LLM. The VLM connection settings here are for scene generation, VLM-as-judge evaluation, NL conversion/selection, and legacy benchmark sweeps.
+
+## Supported Endpoint Shapes
+
+Remote API:
+
+```yaml
+provider: openai_compatible
+endpoint: https://api.openai.com/v1
+model: <remote-model-id>
+api_key_env: OPENAI_API_KEY
+response_format_json: true
+```
+
+Localhost or SSH tunnel:
+
+```yaml
+provider: openai_compatible
+endpoint: http://127.0.0.1:<port>/v1
+model: <served-model-name>
+response_format_json: true
+```
+
+The code path is the same. `localhost` can mean a model server running on the same machine, or a tunnel from the local machine to an MNET/cluster server.
+
+## Repo Config Locations
+
+Base model registry:
+
+```text
+configs/model_config.yaml
+```
+
+Component model config:
+
+```text
+configs/models/qwen3vl_sglang_32b.yaml
+```
+
+Inference/runtime profile:
+
+```text
+configs/inference/hyak_h200_qwen3vl32b.yaml
+```
+
+Ad-hoc CLI overrides use:
+
+```text
+--model-endpoint / --model_endpoint
+--model-id / --model_id
+--judge-model-endpoint
+--judge-model-id
+--timeout-seconds
+--judge-timeout-seconds
+--response-format-json
+```
+
+## MNET Localhost Defaults
+
+MNET scripts launch local OpenAI-compatible SGLang servers and call them through `127.0.0.1:<port>/v1`.
+
+Main script:
+
+```bash
+bash scripts/mnet/run_qwen_matrix_le80_4mode_flush.sh
+```
+
+Default paths:
+
+```text
+REPO_ROOT=/mnt/group/cmh/Layout_DDD
+LOG_ROOT=/mnt/group/cmh/logs
+MODELS_ROOT=/mnt/group/cmh/models
+SGLANG_PY=/mnt/group/cmh/envs/sglang-qwen3vl/bin/python
+BENCH_PY=/mnt/group/cmh/.venvs/layoutddd_sys/bin/python
+```
+
+Default MNET model servers:
+
+```text
+qwen8b:
+  endpoint: http://127.0.0.1:8390/v1
+  model_id: Qwen3VL-8B-Instruct-64K
+  model_path: /mnt/group/cmh/models/Qwen3VL-8B-Instruct
+  cuda_devices: 4
+  tensor_parallel: 1
+  context_length: 65536
+
+qwen32b:
+  endpoint: http://127.0.0.1:8298/v1
+  model_id: Qwen3-VL-32B-Instruct-64K
+  model_path: /mnt/group/cmh/models/Qwen3-VL-32B-Instruct
+  cuda_devices: 0,1,2,3
+  tensor_parallel: 4
+  context_length: 65536
+
+glm9b optional generator:
+  endpoint: http://127.0.0.1:8391/v1
+  model_id: GLM-4.1V-9B-Thinking-64K
+  model_path: /mnt/group/cmh/models/GLM-4.1V-9B-Thinking
+  cuda_devices: 4
+  tensor_parallel: 1
+  context_length: 65536
+```
+
+The MNET sweep passes generator and judge endpoints independently:
+
+```text
+--model openai_compatible
+--judge-model openai_compatible_judge
+--model-endpoint http://127.0.0.1:<generator_port>/v1
+--model-id <generator_served_model>
+--judge-model-endpoint http://127.0.0.1:<judge_port>/v1
+--judge-model-id <judge_served_model>
+```
+
+## Smoke Checks
+
+Check the Qwen32B MNET endpoint from the MNET machine:
+
+```bash
+python scripts/check_model_endpoint.py \
+  --model openai_compatible \
+  --model_endpoint http://127.0.0.1:8298/v1 \
+  --model_id Qwen3-VL-32B-Instruct-64K \
+  --timeout_seconds 5400 \
+  --response_format_json \
+  --multimodal
+```
+
+Check the Qwen8B MNET endpoint:
+
+```bash
+python scripts/check_model_endpoint.py \
+  --model openai_compatible \
+  --model_endpoint http://127.0.0.1:8390/v1 \
+  --model_id Qwen3VL-8B-Instruct-64K \
+  --timeout_seconds 5400 \
+  --response_format_json \
+  --multimodal
+```
+
+If running from a local workstation instead of MNET, open an SSH tunnel and keep the endpoint shape unchanged on the local side:
+
+```bash
+ssh -N -L 8298:<mnet-node>:8298 <user>@<mnet-login>
+curl http://127.0.0.1:8298/v1/models
+```
+
+## Current Recommendation
+
+Use MNET localhost endpoints for heavy VLM runs:
+
+```text
+generator qwen32b -> http://127.0.0.1:8298/v1
+judge qwen32b     -> http://127.0.0.1:8298/v1
+```
+
+Use separate ports when comparing generator/judge pairs:
+
+```text
+generator qwen8b  -> http://127.0.0.1:8390/v1
+judge qwen32b     -> http://127.0.0.1:8298/v1
+```
+
+Keep OOR v0 separate: it should run deterministic bbox/OBB checks only and should not read any of these VLM endpoint settings.
+
+---
+
+# Legacy Hyak / Previous Experiment Notes
 
 This file collects practical Hyak operating notes for running model servers and workflow jobs. Keep heavy compute off login nodes.
 

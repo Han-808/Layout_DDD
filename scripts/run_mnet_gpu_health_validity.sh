@@ -157,7 +157,7 @@ run_one_case() {
   log "gpu ${gpu} round ${round}/${REPEATS} scene ${scene_id} mode ${mode}"
 
   local status="not_valid"
-  if "${BENCH_PYTHON}" "${REPO_ROOT}/scripts/run_hssd_hab_10_qwen_validity.py" \
+  if "${BENCH_PYTHON}" "${REPO_ROOT}/scripts/legend/legend_run_hssd_hab_10_qwen_validity.py" \
       --hssd-root "${HSSD_ROOT}" \
       --cases-root "${cases_root}" \
       --scene-ids "${scene_id}" \

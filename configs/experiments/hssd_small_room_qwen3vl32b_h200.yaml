@@ -1,5 +1,7 @@
 name: hssd_small_room_qwen3vl32b_h200
-description: Small downloaded HSSD bbox case through local tunnel to Hyak H200 Qwen3-VL-32B.
+input_chain: legend
+current_input_chain: natural_language
+description: LEGEND compatibility HSSD bbox case through local tunnel to Hyak H200 Qwen3-VL-32B.
 defaults:
   dataset: hssd_downloaded_small
   model: qwen3vl_sglang_32b

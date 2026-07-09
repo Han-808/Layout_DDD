@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from benchmark.datasets.estimated_relations import build_estimated_spatial_cues, compatibility_relations
+from benchmark.legend.hssd.estimated_relations import build_estimated_spatial_cues, compatibility_relations
 
 
 def test_estimated_near_cues_are_deterministic_and_capped() -> None:

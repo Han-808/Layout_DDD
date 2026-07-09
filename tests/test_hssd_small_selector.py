@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from benchmark.datasets.hssd_small_selector import convert_selected_small_hssd_scene
+from benchmark.legend.hssd.hssd_small_selector import convert_selected_small_hssd_scene
 from benchmark.utils.io import read_json, write_json
 
 
