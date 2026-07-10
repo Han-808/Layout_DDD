@@ -1,58 +1,24 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://example.org/3d-layout-benchmark/evaluation_report.schema.json",
-  "title": "EvaluationReport",
+  "$id": "https://example.org/layout-ddd/evaluation_report.schema.json",
+  "title": "SceneHarnessEvaluationReport",
   "type": "object",
-  "required": [
-    "task_id",
-    "iteration",
-    "overall_valid",
-    "summary",
-    "schema_failures",
-    "physical_failures",
-    "spatial_relation_failures",
-    "repair_targets"
-  ],
+  "required": ["scene_id", "request_id", "evaluator_version", "overall_score", "reports", "notes"],
   "additionalProperties": true,
   "properties": {
-    "task_id": {"type": "string"},
-    "iteration": {"type": "integer", "minimum": 0},
-    "overall_valid": {"type": "boolean"},
-    "metrics": {
+    "scene_id": {"type": ["string", "null"]},
+    "request_id": {"type": ["string", "null"]},
+    "evaluator_version": {"const": "scene_harness_evaluator_v0"},
+    "overall_score": {"type": "number"},
+    "reports": {
       "type": "object",
-      "required": [
-        "schema_validity",
-        "physical_validity",
-        "spatial_relation_validity"
-      ],
+      "additionalProperties": true,
       "properties": {
-        "schema_validity": {"type": "integer", "enum": [0, 1]},
-        "physical_validity": {"type": "integer", "enum": [0, 1]},
-        "spatial_relation_validity": {"type": "integer", "enum": [0, 1]}
+        "generic_validity": {"type": "object"},
+        "oor": {"type": "object"},
+        "oar": {"type": "object"}
       }
     },
-    "summary": {
-      "type": "object",
-      "required": [
-        "schema_valid",
-        "physical_valid",
-        "spatial_relation_valid",
-        "num_schema_errors",
-        "num_physical_errors",
-        "num_spatial_relation_errors"
-      ],
-      "properties": {
-        "schema_valid": {"type": "boolean"},
-        "physical_valid": {"type": "boolean"},
-        "spatial_relation_valid": {"type": "boolean"},
-        "num_schema_errors": {"type": "integer", "minimum": 0},
-        "num_physical_errors": {"type": "integer", "minimum": 0},
-        "num_spatial_relation_errors": {"type": "integer", "minimum": 0}
-      }
-    },
-    "schema_failures": {"type": "array", "items": {"type": "object"}},
-    "physical_failures": {"type": "array", "items": {"type": "object"}},
-    "spatial_relation_failures": {"type": "array", "items": {"type": "object"}},
-    "repair_targets": {"type": "array", "items": {"type": "string"}}
+    "notes": {"type": "array", "items": {"type": "string"}}
   }
 }

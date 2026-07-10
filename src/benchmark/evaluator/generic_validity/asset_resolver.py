@@ -28,7 +28,7 @@ def resolve_asset_metadata(
     metadata = _dict(enriched.get("metadata"))
     jid = _string(enriched.get("jid") or asset_ref.get("asset_key"))
     csv_row = _asset_csv_row(asset_csv_path, jid) if jid and asset_csv_path else {}
-    metadata_json = _read_asset_metadata_json(asset_root, jid, warnings) if jid and asset_root else {}
+    metadata_json = _read_asset_metadata_json(asset_root, jid, warnings, asset_ref=asset_ref) if jid else {}
 
     if jid:
         enriched["jid"] = jid
@@ -93,9 +93,9 @@ def enrich_scene_assets(
     if not isinstance(scene, dict):
         raise ValueError("scene must be a JSON object")
     enriched_scene = deepcopy(scene)
-    key = "objects" if isinstance(enriched_scene.get("objects"), list) else "assets" if isinstance(enriched_scene.get("assets"), list) else None
+    key = "objects" if isinstance(enriched_scene.get("objects"), list) else None
     if key is None:
-        return enriched_scene, {"object_count": 0, "enriched_count": 0, "warnings": ["scene has no objects/assets list"]}
+        return enriched_scene, {"object_count": 0, "enriched_count": 0, "warnings": ["scene has no objects list"]}
     objects = []
     warnings: list[dict[str, Any]] = []
     enriched_count = 0
@@ -129,19 +129,35 @@ def _asset_csv_row(asset_csv_path: str | Path | None, jid: str) -> dict:
     return {}
 
 
-def _read_asset_metadata_json(asset_root: str | Path | None, jid: str, warnings: list[str]) -> dict:
-    if not asset_root or not jid:
-        return {}
-    path = Path(asset_root).expanduser() / jid / f"{jid}_metadata.json"
-    if not path.exists():
+def _read_asset_metadata_json(asset_root: str | Path | None, jid: str, warnings: list[str], *, asset_ref: dict | None = None) -> dict:
+    candidates: list[Path] = []
+    ref = asset_ref if isinstance(asset_ref, dict) else {}
+    metadata_uri = ref.get("metadata_uri") or ref.get("metadata_path")
+    if metadata_uri:
+        uri_path = Path(str(metadata_uri)).expanduser()
+        if uri_path.is_absolute():
+            candidates.append(uri_path)
+        if asset_root:
+            candidates.append(Path(asset_root).expanduser() / uri_path)
+    if asset_root and jid:
+        candidates.append(Path(asset_root).expanduser() / jid / f"{jid}_metadata.json")
+    seen: set[str] = set()
+    for path in candidates:
+        key = path.as_posix()
+        if key in seen:
+            continue
+        seen.add(key)
+        if not path.exists():
+            continue
+        try:
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            warnings.append(f"metadata JSON could not be read for asset {jid!r}: {exc}")
+            return {}
+        return loaded if isinstance(loaded, dict) else {}
+    if candidates:
         warnings.append(f"metadata JSON not found for asset {jid!r}")
-        return {}
-    try:
-        loaded = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        warnings.append(f"metadata JSON could not be read for asset {jid!r}: {exc}")
-        return {}
-    return loaded if isinstance(loaded, dict) else {}
+    return {}
 
 
 def _resolve_asset_file_uris(asset_ref: dict, *, asset_root: str | Path | None, jid: str | None, warnings: list[str]) -> None:

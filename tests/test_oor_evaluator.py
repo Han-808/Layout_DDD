@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from benchmark.evaluator import evaluate_oor, evaluate_scene
+from benchmark.evaluator import evaluate_oor
 
 
 def _box(object_id: str, center: list[float], size: list[float] | None = None, yaw: float = 0.0) -> dict:
@@ -96,7 +96,7 @@ def test_evaluator_average_over_called_checks() -> None:
         ],
     }
 
-    report = evaluate_scene(scene)
+    report = evaluate_oor(scene)
 
     assert report["num_checks_called"] == 4
     assert report["num_passed"] == 3

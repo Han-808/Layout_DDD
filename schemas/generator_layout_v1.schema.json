@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.org/layout-ddd/generator_layout_v1.schema.json",
+  "title": "GeneratorLayoutV1",
+  "description": "Minimal declarative JSON emitted by an LLM scene generator before adapter conversion.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["schema_version", "room", "objects"],
+  "properties": {
+    "schema_version": {"const": "layout_json_v1"},
+    "scene_id": {"type": "string", "minLength": 1},
+    "scene_type": {"type": "string", "minLength": 1},
+    "room": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "size": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 3,
+          "items": {"type": "number", "exclusiveMinimum": 0}
+        },
+        "boundary": {"$ref": "#/$defs/boundary"},
+        "height": {"type": "number", "exclusiveMinimum": 0}
+      },
+      "anyOf": [
+        {"required": ["size"]},
+        {"required": ["boundary"]}
+      ]
+    },
+    "objects": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/object"}
+    },
+    "relationships": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/relationship"}
+    }
+  },
+  "$defs": {
+    "boundary": {
+      "type": "array",
+      "minItems": 3,
+      "items": {
+        "type": "array",
+        "minItems": 2,
+        "maxItems": 2,
+        "items": {"type": "number"}
+      }
+    },
+    "vec3": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "items": {"type": "number"}
+    },
+    "positiveVec3": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "items": {"type": "number", "exclusiveMinimum": 0}
+    },
+    "object": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["id", "category", "description", "center", "size"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "category": {"type": "string", "minLength": 1},
+        "description": {"type": "string", "minLength": 1},
+        "center": {"$ref": "#/$defs/vec3"},
+        "size": {"$ref": "#/$defs/positiveVec3"},
+        "rotation": {"$ref": "#/$defs/vec3"},
+        "asset_id": {"type": "string", "minLength": 1},
+        "support_parent": {"type": ["string", "null"]}
+      }
+    },
+    "relationship": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["subject", "predicate", "object"],
+      "properties": {
+        "subject": {"type": "string", "minLength": 1},
+        "predicate": {"type": "string", "minLength": 1},
+        "object": {"type": "string", "minLength": 1}
+      }
+    }
+  }
+}

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from benchmark.adapters.base import GenerationAdapter
+from benchmark.adapters.layout_json.adapter import LayoutJsonAdapter
 from benchmark.adapters.manual.adapter import ManualAdapter
 from benchmark.adapters.passthrough.adapter import PassthroughAdapter
 
 
 _ADAPTERS: dict[str, type[GenerationAdapter]] = {
+    "layout_json": LayoutJsonAdapter,
     "manual": ManualAdapter,
     "passthrough": PassthroughAdapter,
 }

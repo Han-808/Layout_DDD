@@ -183,7 +183,7 @@ def _normalized_objects(scene: dict) -> tuple[dict[str, NormalizedObject], dict[
     objects: dict[str, NormalizedObject] = {}
     errors: dict[str, str] = {}
     for raw_obj in _scene_objects(scene):
-        object_id = _id_key(_first_present(raw_obj, ["id", "object_id", "asset_id"]))
+        object_id = _id_key(_first_present(raw_obj, ["id", "object_id"]))
         try:
             normalized = normalize_object(raw_obj)
         except ValueError as exc:
@@ -198,11 +198,8 @@ def _normalized_objects(scene: dict) -> tuple[dict[str, NormalizedObject], dict[
 def _scene_objects(scene: dict) -> list[dict]:
     if not isinstance(scene, dict):
         return []
-    for key in ["objects", "assets"]:
-        value = scene.get(key)
-        if isinstance(value, list):
-            return [item for item in value if isinstance(item, dict)]
-    return []
+    value = scene.get("objects")
+    return [item for item in value if isinstance(item, dict)] if isinstance(value, list) else []
 
 
 def _extract_oar_relation_specs(scene: dict) -> list[dict | str]:
@@ -218,7 +215,7 @@ def _extract_oar_relation_specs(scene: dict) -> list[dict | str]:
 
     specs: list[dict | str] = []
     for obj in _scene_objects(scene):
-        subject_id = _first_present(obj, ["id", "object_id", "asset_id"])
+        subject_id = _first_present(obj, ["id", "object_id"])
         placement_intent = obj.get("placement_intent") if isinstance(obj.get("placement_intent"), dict) else {}
         for relation in _absolute_relations_from_container(placement_intent):
             specs.append(_relation_with_subject(relation, subject_id))
@@ -237,7 +234,7 @@ def _extract_oar_relation_specs(scene: dict) -> list[dict | str]:
         for sample in samples:
             if not isinstance(sample, dict):
                 continue
-            subject_id = _first_present(sample, ["subject_id", "subject", "id", "object_id", "asset_id"])
+            subject_id = _first_present(sample, ["subject_id", "subject", "id", "object_id"])
             expected = sample.get("expected_relations") if isinstance(sample.get("expected_relations"), dict) else {}
             for relation in _absolute_relations_from_container(expected):
                 specs.append(_relation_with_subject(relation, subject_id))
@@ -353,7 +350,7 @@ def _missing_subject_reason(subject_id: str, objects: dict[str, NormalizedObject
 
 def _object_lookup_keys(raw_obj: dict, normalized: NormalizedObject) -> set[str]:
     keys = {normalized.id}
-    for key in ["id", "object_id", "asset_id", "jid"]:
+    for key in ["id", "object_id", "jid"]:
         value = raw_obj.get(key)
         if value is not None:
             keys.add(str(value))

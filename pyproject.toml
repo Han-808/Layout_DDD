@@ -5,8 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "3d-layout-benchmark"
 version = "0.1.0"
-description = "Scene/assets-first 3D benchmark scaffold with VLM-as-judge evaluation."
-readme = "README.md"
+description = "Adapter-based scene construction and deterministic evaluation harness."
 requires-python = ">=3.10"
 dependencies = [
   "httpx>=0.28.1",
@@ -27,12 +26,25 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
+retrieval = [
+    "sentence-transformers>=5.6.0",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = [
+  "tests/test_asset_retriever.py",
+  "tests/test_generic_validity.py",
+  "tests/test_input_chain_boundaries.py",
+  "tests/test_layout_json_adapter.py",
+  "tests/test_nl_scene_mvp.py",
+  "tests/test_oar_evaluator.py",
+  "tests/test_oor_evaluator.py",
+  "tests/test_relationship_mapper.py",
+  "tests/test_scene_harness.py",
+]
 pythonpath = ["src"]
 addopts = "-q"
 

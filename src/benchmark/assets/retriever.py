@@ -1,3 +1,5 @@
+"""Imaginarium retrieval behavior adapted from IntelliScene3's asset retriever."""
+
 from __future__ import annotations
 
 import csv
@@ -80,14 +82,18 @@ class AssetIndex:
         category: str = "",
         description: str = "",
         embedding: np.ndarray | None = None,
+        preview_uri: str | None = None,
     ) -> None:
-        self.assets[jid] = {
+        record = {
             "jid": jid,
             "short_desc": short_desc,
             "size": size,
             "category": category,
             "description": description or short_desc,
         }
+        if preview_uri:
+            record["preview_uri"] = str(preview_uri)
+        self.assets[jid] = record
         if jid not in self.jid_list:
             self.jid_list.append(jid)
             if embedding is not None:
@@ -172,10 +178,7 @@ class AssetRetriever:
     def encode_text(self, text: str, *, is_query: bool = True) -> np.ndarray:
         model = self._get_embedding_model()
         if is_query:
-            try:
-                return model.encode(text, prompt_name="query", convert_to_numpy=True)
-            except TypeError:
-                return model.encode(text, convert_to_numpy=True)
+            return model.encode(text, prompt_name="query", convert_to_numpy=True)
         return model.encode(text, convert_to_numpy=True)
 
     def retrieve(
@@ -204,7 +207,9 @@ class AssetRetriever:
             scored.append({**asset, "score": score})
         scored.sort(key=lambda item: item["score"], reverse=True)
         results = [item for item in scored if item["score"] >= min_score]
-        return (results or scored)[: max(1, int(top_k))]
+        if results:
+            return results[:top_k]
+        return scored[:1]
 
 
 def build_asset_index_from_asset_info(
@@ -233,20 +238,20 @@ def build_asset_index_from_asset_info(
                 continue
             short_desc = _clean_text(row.get("short_desc"))
             description = _clean_text(row.get("desc") or row.get("caption_en")) or short_desc
-            category = _clean_text(row.get("category") or row.get("class_en")).lower().replace("_", " ")
+            category = _clean_text(row.get("category")).lower().replace("_", " ")
             size = _parse_size_field(row.get("size") or row.get("bbx"))
             metadata_path = asset_path / f"{jid}_metadata.json"
             if metadata_path.exists():
-                try:
-                    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-                    size = metadata.get("transformed_size") or size
-                except (OSError, json.JSONDecodeError):
-                    pass
+                with metadata_path.open("r", encoding="utf-8") as handle:
+                    metadata = json.load(handle)
+                if "transformed_size" in metadata:
+                    size = metadata["transformed_size"]
             if not short_desc:
                 raise ValueError(f"Asset {jid} is missing short_desc in asset info CSV.")
             if not size or len(size) != 3:
                 raise ValueError(f"Asset {jid} is missing valid size in asset info and metadata.")
             embedding = model.encode(short_desc, convert_to_numpy=True)
+            preview_uri = _resolve_preview_uri(row, asset_path=asset_path, asset_root=asset_root)
             index.add_asset(
                 jid=jid,
                 short_desc=short_desc,
@@ -254,6 +259,7 @@ def build_asset_index_from_asset_info(
                 category=category,
                 description=description,
                 embedding=embedding,
+                preview_uri=preview_uri,
             )
     index.save(output_path)
     return index
@@ -266,3 +272,26 @@ def _default_device() -> str:
         return "cuda:0" if torch.cuda.is_available() else "cpu"
     except ImportError:
         return "cpu"
+
+
+def _resolve_preview_uri(row: dict[str, Any], *, asset_path: Path, asset_root: Path) -> str | None:
+    value = _clean_text(
+        row.get("preview_uri")
+        or row.get("thumbnail_uri")
+        or row.get("render_uri")
+        or row.get("preview_path")
+    )
+    if value.startswith(("http://", "https://", "data:image/")):
+        return value
+    if value:
+        path = Path(value).expanduser()
+        if not path.is_absolute():
+            local_asset_path = asset_path / path
+            path = local_asset_path if local_asset_path.exists() else asset_root / path
+        if path.is_file():
+            return path.as_posix()
+    for pattern in ["*preview*.png", "*thumbnail*.png", "*render*.png", "*preview*.jpg", "*render*.jpg"]:
+        match = next(asset_path.glob(pattern), None)
+        if match is not None and match.is_file():
+            return match.as_posix()
+    return None

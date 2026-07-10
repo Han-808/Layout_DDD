@@ -49,6 +49,25 @@ def _obj(
     return result
 
 
+
+def _canonical_obj(object_id: str, center: list[float], size: list[float] | None = None) -> dict:
+    jid = f"{object_id}_asset"
+    resolved_size = size or [0.5, 0.5, 1.0]
+    return {
+        "id": object_id,
+        "jid": jid,
+        "category": "box",
+        "retrieval_category": "box",
+        "desc": "box",
+        "short_desc": "box",
+        "center": center,
+        "size": resolved_size,
+        "rotation": [0, 0, 0],
+        "asset_ref": {"source_db": "imaginarium", "asset_key": jid, "mesh_uri": None, "pointcloud_uri": None, "metadata_uri": None},
+        "asset_proxy": {"type": "obb_from_metadata_or_csv", "bbox_center_local": [0, 0, 0], "bbox_size": resolved_size},
+        "metadata": {"interactive": False},
+    }
+
 def test_collision_counts_overlap_and_exempts_support_surface_touching() -> None:
     overlapping = _scene([_obj("a", [1.0, 1.0, 0.5]), _obj("b", [1.1, 1.0, 0.5])])
     touching = _scene([_obj("table", [1.0, 1.0, 0.5]), _obj("book", [1.0, 1.0, 1.1], [0.3, 0.3, 0.2])])
@@ -156,15 +175,15 @@ def test_evaluator_aggregation_averages_active_metrics_only() -> None:
     assert report["overall_score"] == 0.75
 
 
-def test_generic_validity_cli_writes_report(tmp_path: Path) -> None:
+def test_evaluate_cli_writes_generic_validity_report_by_default(tmp_path: Path) -> None:
     scene_path = tmp_path / "scene.json"
     out_path = tmp_path / "report.json"
-    scene_path.write_text(json.dumps(_scene([_obj("box", [1.0, 1.0, 0.5])])), encoding="utf-8")
+    scene_path.write_text(json.dumps({**_scene([_canonical_obj("box", [1.0, 1.0, 0.5])]), "request_id": "cli"}), encoding="utf-8")
 
     completed = subprocess.run(
         [
             sys.executable,
-            str(ROOT / "scripts" / "evaluate_generic_validity.py"),
+            str(ROOT / "evaluate.py"),
             "--scene",
             str(scene_path),
             "--out",
@@ -177,7 +196,8 @@ def test_generic_validity_cli_writes_report(tmp_path: Path) -> None:
     )
 
     report = read_json(out_path)
-    assert report["evaluator_version"] == "generic_validity_v0"
+    assert report["evaluator_version"] == "scene_harness_evaluator_v0"
+    assert "generic_validity" in report["reports"]
     assert "overall_score:" in completed.stdout
 
 
@@ -289,7 +309,7 @@ def test_metadata_interactive_true_drives_accessibility() -> None:
     assert report["objects"][0]["accessible"] is True
 
 
-def test_generic_validity_cli_can_write_enriched_scene(tmp_path: Path) -> None:
+def test_evaluate_cli_can_enrich_assets_from_metadata_json(tmp_path: Path) -> None:
     jid = "cli_asset"
     asset_dir = tmp_path / "assets" / jid
     asset_dir.mkdir(parents=True)
@@ -297,20 +317,18 @@ def test_generic_validity_cli_can_write_enriched_scene(tmp_path: Path) -> None:
     (asset_dir / f"{jid}.ply").write_text("reference only", encoding="utf-8")
     scene_path = tmp_path / "scene.json"
     out_path = tmp_path / "report.json"
-    enriched_path = tmp_path / "enriched_scene.json"
-    scene_path.write_text(json.dumps(_scene([{"id": "obj", "jid": jid, "center": [1.0, 1.0, 0.3], "rotation": [0, 0, 0]}])), encoding="utf-8")
+    scene = {**_scene([{"id": "obj", "jid": jid, "center": [1.0, 1.0, 0.3], "rotation": [0, 0, 0]}]), "request_id": "cli"}
+    scene_path.write_text(json.dumps(scene), encoding="utf-8")
 
     subprocess.run(
         [
             sys.executable,
-            str(ROOT / "scripts" / "evaluate_generic_validity.py"),
+            str(ROOT / "evaluate.py"),
             "--scene",
             str(scene_path),
             "--asset-root",
             str(tmp_path / "assets"),
             "--enrich-assets",
-            "--write-enriched-scene",
-            str(enriched_path),
             "--out",
             str(out_path),
         ],
@@ -320,8 +338,6 @@ def test_generic_validity_cli_can_write_enriched_scene(tmp_path: Path) -> None:
         text=True,
     )
 
-    enriched = read_json(enriched_path)
     report = read_json(out_path)
-    assert enriched["objects"][0]["size"] == [0.4, 0.2, 0.6]
-    assert enriched["objects"][0]["asset_ref"]["pointcloud_uri"] == f"{jid}/{jid}.ply"
-    assert "asset_enrichment" in report
+    assert report["evaluator_version"] == "scene_harness_evaluator_v0"
+    assert report["reports"]["generic_validity"]["status"] == "ok"

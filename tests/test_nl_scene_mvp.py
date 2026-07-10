@@ -1,31 +1,30 @@
 from __future__ import annotations
 
 import json
-import subprocess
-import sys
 from pathlib import Path
 
-from benchmark.nl_scene.asset_retrieval import retrieve_assets_for_scene_spec
-from benchmark.nl_scene.converter import parse_json_object_from_text
-from benchmark.nl_scene.dummy_evaluator import evaluate_scene
-from benchmark.nl_scene.workflow import run_nl_scene_workflow
-from benchmark.utils.io import read_json
+import pytest
+
+from benchmark.assets.generation import AssetGenerationError, MCPAssetGenerationTool
+from benchmark.nl_scene.asset_retrieval import retrieve_assets_for_object_plan
+from benchmark.nl_scene.converter import convert_nl_to_object_plan, parse_json_object_from_text
+from benchmark.scene_io.validate import validate_asset_selection
 
 
-ROOT = Path(__file__).resolve().parents[1]
-
-
-SCENE_SPEC = {
+OBJECT_PLAN = {
+    "request_id": "demo_001",
     "scene_type": "living room",
     "scene_description": "A cozy reading living room.",
     "objects": [
         {
-            "id": 0,
+            "id": "obj_000",
             "role": "main seating",
             "category": "sofa",
             "description": "comfortable dark modern sofa",
             "estimated_size": [2.2, 0.9, 0.8],
             "count": 1,
+            "placement_intent": {"absolute_relations": [], "relative_relations": []},
+            "metadata": {},
         }
     ],
     "global_constraints": ["cozy", "walkable"],
@@ -39,30 +38,59 @@ def test_converter_json_parser_strips_markdown_fences() -> None:
     assert parsed == {"scene_type": "living room", "objects": []}
 
 
-def test_retriever_wrapper_selects_top1(tmp_path: Path) -> None:
+def test_converter_outputs_object_plan_with_no_pose_or_assets() -> None:
+    result = convert_nl_to_object_plan(
+        "Create a cozy living room.",
+        request_id="demo_001",
+        scene_type="living room",
+        model_config={"mock_response": json.dumps(OBJECT_PLAN)},
+    )
+
+    assert result["request_id"] == "demo_001"
+    assert result["objects"][0]["id"] == "obj_000"
+    forbidden = {"center", "position", "rotation", "pose", "target_pose", "jid", "asset_id", "asset_ref"}
+    assert forbidden.isdisjoint(result["objects"][0])
+
+
+def test_converter_rejects_pose_and_asset_fields() -> None:
+    bad = {**OBJECT_PLAN, "objects": [{**OBJECT_PLAN["objects"][0], "jid": "asset_a"}]}
+
+    with pytest.raises(Exception, match="forbidden"):
+        convert_nl_to_object_plan(
+            "Create a cozy living room.",
+            request_id="demo_001",
+            scene_type="living room",
+            model_config={"mock_response": json.dumps(bad)},
+        )
+
+
+def test_retriever_wrapper_selects_top1_asset_selection(tmp_path: Path) -> None:
     module_path = _fake_retriever_module(tmp_path)
     index_path = _fake_index_path(tmp_path)
 
-    result = retrieve_assets_for_scene_spec(
-        SCENE_SPEC,
+    result = retrieve_assets_for_object_plan(
+        OBJECT_PLAN,
         asset_index_path=str(index_path),
         retrieval_k=1,
         retriever_module_path=str(module_path),
-        use_vlm_selector=False,
     )
 
     item = result["objects"][0]
+    assert result["request_id"] == "demo_001"
+    assert item["object_id"] == "obj_000"
     assert item["selected_asset"]["jid"] == "asset_a"
-    assert item["candidates"] == [item["selected_asset"]]
-    assert item["selection_reason"] == "selected top-1 retriever result"
+    assert item["selected_asset"]["asset_ref"]["asset_key"] == "asset_a"
+    assert item["selected_asset"]["asset_proxy"]["bbox_size"] == [2.0, 0.9, 0.8]
+    assert item["selection_action"] == "select"
+    assert item["selection_reason"] == "top retrieval result; VLM selector disabled"
 
 
-def test_retriever_wrapper_uses_fake_vlm_selector_for_topk(tmp_path: Path) -> None:
+def test_retriever_wrapper_uses_configured_selector_for_topk(tmp_path: Path) -> None:
     module_path = _fake_retriever_module(tmp_path)
     index_path = _fake_index_path(tmp_path)
 
-    result = retrieve_assets_for_scene_spec(
-        SCENE_SPEC,
+    result = retrieve_assets_for_object_plan(
+        OBJECT_PLAN,
         asset_index_path=str(index_path),
         retrieval_k=2,
         retriever_module_path=str(module_path),
@@ -73,81 +101,100 @@ def test_retriever_wrapper_uses_fake_vlm_selector_for_topk(tmp_path: Path) -> No
     item = result["objects"][0]
     assert [candidate["jid"] for candidate in item["candidates"]] == ["asset_a", "asset_b"]
     assert item["selected_asset"]["jid"] == "asset_b"
+    assert item["selection_action"] == "select"
     assert item["selection_reason"] == "better color match"
 
 
-def test_dummy_evaluator_is_reproducible() -> None:
-    scene = {"scene_id": "generated_scene", "assets": []}
+def test_retriever_vlm_can_generate_when_no_candidate_is_suitable(tmp_path: Path) -> None:
+    module_path = _fake_retriever_module(tmp_path)
+    index_path = _fake_index_path(tmp_path)
+    calls = []
 
-    first = evaluate_scene(scene, instruction="make a room", seed=7)
-    second = evaluate_scene(scene, instruction="make a room", seed=7)
-    other = evaluate_scene(scene, instruction="make a room", seed=8)
+    def generate_asset(request: dict) -> dict:
+        calls.append(request)
+        return {
+            "jid": "generated_sofa_001",
+            "description": "custom comfortable dark modern sofa",
+            "size": [2.2, 0.9, 0.8],
+            "mesh_uri": "outputs/generated_sofa_001.glb",
+        }
 
-    assert first["evaluator_version"] == "dummy_v0"
-    assert first["dummy"] is True
-    assert first["metrics"] == second["metrics"]
-    assert first["metrics"] != other["metrics"]
+    result = retrieve_assets_for_object_plan(
+        OBJECT_PLAN,
+        asset_index_path=str(index_path),
+        retrieval_k=2,
+        retriever_module_path=str(module_path),
+        use_vlm_selector=True,
+        model_config={
+            "selector_response": {
+                "action": "generate",
+                "selected_jid": None,
+                "reason": "neither candidate has the requested dark upholstery",
+                "generation_request": {
+                    "prompt": "a comfortable dark modern sofa",
+                    "category": "sofa",
+                    "target_size": [2.2, 0.9, 0.8],
+                },
+            }
+        },
+        asset_generation_tool=generate_asset,
+    )
+
+    item = result["objects"][0]
+    selected = item["selected_asset"]
+    assert item["selection_action"] == "generate"
+    assert item["selection_decision"]["action"] == "generate"
+    assert selected["jid"] == "generated_sofa_001"
+    assert selected["asset_ref"]["source_db"] == "generated"
+    assert selected["asset_ref"]["mesh_uri"] == "outputs/generated_sofa_001.glb"
+    assert selected["metadata"]["generated"] is True
+    assert calls[0]["object_id"] == "obj_000"
+    assert [candidate["jid"] for candidate in calls[0]["rejected_candidates"]] == ["asset_a", "asset_b"]
+    assert validate_asset_selection(result) is result
 
 
-def test_workflow_stops_after_retrieval_when_generation_missing(tmp_path: Path) -> None:
+def test_retriever_fails_if_vlm_requests_generation_without_tool(tmp_path: Path) -> None:
     module_path = _fake_retriever_module(tmp_path)
     index_path = _fake_index_path(tmp_path)
 
-    result = run_nl_scene_workflow(
-        instruction="Create a cozy living room.",
-        scene_type="living room",
-        asset_index_path=str(index_path),
-        retrieval_k=1,
-        retriever_module_path=str(module_path),
-        use_vlm_selector=False,
-        model_config={"mock_response": json.dumps(SCENE_SPEC)},
-        out_dir=tmp_path / "out",
-        seed=0,
-    )
-
-    out_dir = tmp_path / "out"
-    assert read_json(out_dir / "scene_spec.json")["scene_type"] == "living room"
-    assert read_json(out_dir / "asset_retrieval.json")["objects"][0]["selected_asset"]["jid"] == "asset_a"
-    generation_input = read_json(out_dir / "generation_input.json")
-    assert generation_input["original_instruction"] == "Create a cozy living room."
-    assert read_json(out_dir / "workflow_status.json") == {
-        "status": "generation_skipped",
-        "reason": "generation stage is not implemented yet",
-        "next_expected_input": "generated_scene.json",
-    }
-    assert result["workflow_status"]["status"] == "generation_skipped"
+    with pytest.raises(AssetGenerationError, match="not enabled/configured"):
+        retrieve_assets_for_object_plan(
+            OBJECT_PLAN,
+            asset_index_path=str(index_path),
+            retrieval_k=2,
+            retriever_module_path=str(module_path),
+            use_vlm_selector=True,
+            model_config={
+                "selector_response": {
+                    "action": "generate",
+                    "reason": "no suitable candidate",
+                }
+            },
+        )
 
 
-def test_direct_dummy_evaluator_cli_writes_report(tmp_path: Path) -> None:
-    scene_path = tmp_path / "scene.json"
-    scene_path.write_text(json.dumps({"scene_id": "dummy_scene", "assets": []}), encoding="utf-8")
-    report_path = tmp_path / "report.json"
+def test_mcp_asset_generation_adapter_calls_configured_tool() -> None:
+    class FakeMCPClient:
+        def __init__(self) -> None:
+            self.calls = []
 
-    completed = subprocess.run(
-        [
-            sys.executable,
-            str(ROOT / "scripts" / "evaluate_scene.py"),
-            "--scene",
-            str(scene_path),
-            "--instruction",
-            "Create a room.",
-            "--out",
-            str(report_path),
-            "--seed",
-            "3",
-            "--dummy",
-        ],
-        cwd=ROOT,
-        text=True,
-        capture_output=True,
-        check=True,
-    )
+        def call_tool(self, name: str, arguments: dict) -> dict:
+            self.calls.append((name, arguments))
+            return {
+                "asset": {
+                    "jid": "generated_chair_001",
+                    "size": [0.6, 0.6, 0.9],
+                    "mesh_uri": "outputs/generated_chair_001.glb",
+                }
+            }
 
-    report = read_json(report_path)
-    assert "evaluation_report:" in completed.stdout
-    assert report["scene_id"] == "dummy_scene"
-    assert report["dummy"] is True
-    assert set(report["metrics"]) == {"physical_validity", "text_fidelity", "scene_plausibility", "game_usability", "overall"}
+    client = FakeMCPClient()
+    tool = MCPAssetGenerationTool(client, tool_name="create_3d_asset")
+
+    asset = tool.generate_asset({"object_id": "chair_001"})
+
+    assert asset["jid"] == "generated_chair_001"
+    assert client.calls == [("create_3d_asset", {"object_id": "chair_001"})]
 
 
 def _fake_index_path(tmp_path: Path) -> Path:

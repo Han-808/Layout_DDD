@@ -9,6 +9,9 @@ outputs/*
 
 data/
 notes/
+docs/
+reports/
+/datasets/
 URLs.md
 takeaway.md
 todo.md
@@ -18,4 +21,8 @@ downloads/
 # Local bulky data / notes
 /Assets/
 /Scenes/
+/assets/
+/scenes/
+/IntelliScene3/
+/IntelliScene3-main.tar.gz
 /benchmark_notes.txt

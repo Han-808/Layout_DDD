@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+PRIMARY_EVALUATOR_ENTRYPOINT = "evaluate.py"
+
 import argparse
 import sys
 from pathlib import Path
@@ -13,7 +15,7 @@ from benchmark.utils.io import read_json, write_json
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Evaluate lightweight Object-Object Relationship constraints.")
-    parser.add_argument("--scene", required=True, help="Scene JSON containing objects/assets and optional OOR relations.")
+    parser.add_argument("--scene", required=True, help="Canonical generated_scene JSON containing objects and optional OOR relations.")
     parser.add_argument("--relations", default=None, help="Optional JSON relation spec file. Can be a list or an object with oor_relations/relations.")
     parser.add_argument("--config", default=None, help="Optional JSON config override.")
     parser.add_argument("--out", required=True, help="Output report JSON path.")

@@ -12,7 +12,7 @@ LEGEND_SCRIPT = Path(__file__).resolve().parent / "legend" / "legend_run_hssd_ha
 def main() -> None:
     print(
         "LEGEND compatibility entry point: HSSD input is no longer the current input path; "
-        "use natural-language input via scripts/run_nl_scene_workflow.py for current work. "
+        "use the canonical harness via scripts/run_scene_harness.py for current work. "
         f"Forwarding to {LEGEND_SCRIPT.relative_to(Path(__file__).resolve().parent.parent)}.",
         file=sys.stderr,
     )

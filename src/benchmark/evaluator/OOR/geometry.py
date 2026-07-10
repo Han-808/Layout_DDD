@@ -1,114 +1,11 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
 from typing import Iterable
 
 import numpy as np
 
-
-EPS = 1.0e-9
-
-
-@dataclass(frozen=True)
-class NormalizedObject:
-    id: str
-    center: np.ndarray
-    size: np.ndarray
-    half: np.ndarray
-    rotation: np.ndarray
-    R: np.ndarray
-    right: np.ndarray
-    front: np.ndarray
-    up: np.ndarray
-    bottom: float
-    top: float
-    category: str | None = None
-    jid: str | None = None
-
-
-def normalize_object(obj: dict) -> NormalizedObject:
-    if not isinstance(obj, dict):
-        raise ValueError("object must be a mapping")
-    object_id = _first_present(obj, ["id", "object_id", "asset_id"])
-    if object_id is None:
-        raise ValueError("object id is missing")
-    center = _vector3(_first_present(obj, ["center", "position"]))
-    size = _vector3(_first_present(obj, ["size", "dimensions"]))
-    rotation_value = _first_present(obj, ["rotation"])
-    rotation_is_degrees = False
-
-    pose = obj.get("pose") if isinstance(obj.get("pose"), dict) else {}
-    placement = obj.get("placement") if isinstance(obj.get("placement"), dict) else {}
-    if center is None:
-        center = _vector3(_first_present(pose, ["center", "position"]))
-    if center is None:
-        center = _vector3(_first_present(placement, ["center", "position"]))
-    if rotation_value is None:
-        rotation_value = _first_present(pose, ["rotation"])
-    if rotation_value is None:
-        yaw_degrees = _first_present(obj, ["yaw_degrees"])
-        if yaw_degrees is not None:
-            rotation_value = _rotation_from_yaw(yaw_degrees)
-            rotation_is_degrees = True
-        else:
-            rotation_value = _rotation_from_yaw(_first_present(obj, ["yaw"]))
-    if rotation_value is None:
-        yaw_degrees = _first_present(placement, ["yaw_degrees"])
-        if yaw_degrees is not None:
-            rotation_value = _rotation_from_yaw(yaw_degrees)
-            rotation_is_degrees = True
-        else:
-            rotation_value = _rotation_from_yaw(_first_present(placement, ["yaw"]))
-
-    if center is None:
-        raise ValueError(f"object {object_id!r} center is missing or invalid")
-    if size is None or np.any(size <= 0):
-        raise ValueError(f"object {object_id!r} size is missing or invalid")
-
-    rotation = _rotation_vector(rotation_value, assume_degrees=rotation_is_degrees)
-    R = rotation_matrix_from_euler(rotation, assume_degrees=True)
-    corners = _obb_corners_from_parts(center, size / 2.0, R)
-    right = _unit(R @ np.array([1.0, 0.0, 0.0]))
-    front = _unit(R @ np.array([0.0, -1.0, 0.0]))
-    up = _unit(R @ np.array([0.0, 0.0, 1.0]))
-    category = obj.get("category")
-    jid = obj.get("jid")
-    return NormalizedObject(
-        id=str(object_id),
-        center=center,
-        size=size,
-        half=size / 2.0,
-        rotation=rotation,
-        R=R,
-        right=right,
-        front=front,
-        up=up,
-        bottom=float(np.min(corners[:, 2])),
-        top=float(np.max(corners[:, 2])),
-        category=str(category) if category is not None else None,
-        jid=str(jid) if jid is not None else None,
-    )
-
-
-def rotation_matrix_from_euler(rotation: Iterable[float] | np.ndarray | None, *, assume_degrees: bool = False) -> np.ndarray:
-    """Return local-to-world rotation for roll, pitch, yaw.
-
-    Rotation inputs are interpreted as degrees when any component has magnitude
-    greater than 2*pi; otherwise they are interpreted as radians. yaw=0 maps the
-    local front direction [0, -1, 0] to world [0, -1, 0].
-    """
-
-    roll, pitch, yaw = _rotation_vector(rotation, assume_degrees=assume_degrees)
-    roll_rad, pitch_rad, yaw_rad = np.radians([roll, pitch, yaw])
-    cr, sr = math.cos(roll_rad), math.sin(roll_rad)
-    cp, sp = math.cos(pitch_rad), math.sin(pitch_rad)
-    cy, sy = math.cos(yaw_rad), math.sin(yaw_rad)
-    rx = np.array([[1.0, 0.0, 0.0], [0.0, cr, -sr], [0.0, sr, cr]])
-    ry = np.array([[cp, 0.0, sp], [0.0, 1.0, 0.0], [-sp, 0.0, cp]])
-    rz = np.array([[cy, -sy, 0.0], [sy, cy, 0.0], [0.0, 0.0, 1.0]])
-    return rz @ ry @ rx
-
+from benchmark.scene_io.object_normalization import EPS, NormalizedObject, normalize_object, rotation_matrix_from_euler
 
 def get_obb_corners(obj: NormalizedObject) -> np.ndarray:
     return _obb_corners_from_parts(obj.center, obj.half, obj.R)

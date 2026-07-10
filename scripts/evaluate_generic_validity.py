@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+PRIMARY_EVALUATOR_ENTRYPOINT = "evaluate.py"
+
 import argparse
 import sys
 from pathlib import Path
@@ -13,7 +15,7 @@ from benchmark.utils.io import read_json, write_json
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Evaluate deterministic generic scene validity.")
+    parser = argparse.ArgumentParser(description="Compatibility shortcut. Primary evaluator entry point is root evaluate.py.")
     parser.add_argument("--scene", required=True, help="Generated scene JSON.")
     parser.add_argument("--config", default=None, help="Optional JSON config override.")
     parser.add_argument("--asset-csv", default=None, help="Optional asset_info.csv used for asset metadata enrichment.")

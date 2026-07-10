@@ -196,7 +196,7 @@ def _normalized_objects(scene: dict) -> tuple[dict[str, NormalizedObject], dict[
     objects: dict[str, NormalizedObject] = {}
     errors: dict[str, str] = {}
     for raw_obj in _scene_objects(scene):
-        object_id = _id_key(_first_present(raw_obj, ["id", "object_id", "asset_id"]))
+        object_id = _id_key(_first_present(raw_obj, ["id", "object_id"]))
         try:
             normalized = normalize_object(raw_obj)
         except ValueError as exc:
@@ -211,11 +211,8 @@ def _normalized_objects(scene: dict) -> tuple[dict[str, NormalizedObject], dict[
 def _scene_objects(scene: dict) -> list[dict]:
     if not isinstance(scene, dict):
         return []
-    for key in ["objects", "assets"]:
-        value = scene.get(key)
-        if isinstance(value, list):
-            return [item for item in value if isinstance(item, dict)]
-    return []
+    value = scene.get("objects")
+    return [item for item in value if isinstance(item, dict)] if isinstance(value, list) else []
 
 
 def _extract_relation_specs(scene: dict) -> list[dict]:
@@ -231,7 +228,7 @@ def _extract_relation_specs(scene: dict) -> list[dict]:
         relations = placement_intent.get("relative_relations")
         if not isinstance(relations, list):
             continue
-        subject_id = _first_present(obj, ["id", "object_id", "asset_id"])
+        subject_id = _first_present(obj, ["id", "object_id"])
         for relation in relations:
             if not isinstance(relation, dict):
                 continue
@@ -311,7 +308,7 @@ def _missing_object_reason(subject_id: str, object_id: str, objects: dict[str, N
 
 def _object_lookup_keys(raw_obj: dict, normalized: NormalizedObject) -> set[str]:
     keys = {normalized.id}
-    for key in ["id", "object_id", "asset_id", "jid"]:
+    for key in ["id", "object_id", "jid"]:
         value = raw_obj.get(key)
         if value is not None:
             keys.add(str(value))
