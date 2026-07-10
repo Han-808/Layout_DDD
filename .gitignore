@@ -26,3 +26,6 @@ downloads/
 /IntelliScene3/
 /IntelliScene3-main.tar.gz
 /benchmark_notes.txt
+
+# Local documentation and operational notes
+*.md
