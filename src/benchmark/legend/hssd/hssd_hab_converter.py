@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from benchmark.legend.hssd.estimated_relations import build_estimated_spatial_cues, compatibility_relations, relation_policy_metadata
-from benchmark.input_modes import (
+from benchmark.legend.input_modes import (
     ACCEPTED_INPUT_REPRESENTATION_MODES,
     canonicalize_input_mode,
     representation_mode_for_level,

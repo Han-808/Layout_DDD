@@ -1,0 +1,116 @@
+{
+  "request_id": "easy_004",
+  "scene_type": "reading_lounge",
+  "scene_description": "Create a reading lounge with a beige fabric sofa against the south wall. Place an oval walnut coffee table in front of the sofa. Put a teal blue paperback book and a beige linen table lamp on the table. Place a lush green philodendron to the left of the sofa.",
+  "prompt_granularity": "fine_grained",
+  "explicit_claims": [],
+  "objects": [
+    {
+      "id": "obj_000",
+      "role": "",
+      "category": "sofa",
+      "description": "beige fabric sofa",
+      "count": 1,
+      "placement_intent": {
+        "absolute_relations": [],
+        "relative_relations": []
+      },
+      "metadata": {
+        "description_source": "imaginarium_asset_info.short_desc"
+      }
+    },
+    {
+      "id": "obj_001",
+      "role": "",
+      "category": "table",
+      "description": "oval walnut coffee table",
+      "count": 1,
+      "placement_intent": {
+        "absolute_relations": [],
+        "relative_relations": []
+      },
+      "metadata": {
+        "description_source": "imaginarium_asset_info.short_desc"
+      }
+    },
+    {
+      "id": "obj_002",
+      "role": "",
+      "category": "book",
+      "description": "teal blue paperback book",
+      "count": 1,
+      "placement_intent": {
+        "absolute_relations": [],
+        "relative_relations": []
+      },
+      "metadata": {
+        "description_source": "imaginarium_asset_info.short_desc"
+      }
+    },
+    {
+      "id": "obj_003",
+      "role": "",
+      "category": "lamp",
+      "description": "beige linen table lamp",
+      "count": 1,
+      "placement_intent": {
+        "absolute_relations": [],
+        "relative_relations": []
+      },
+      "metadata": {
+        "description_source": "imaginarium_asset_info.short_desc"
+      }
+    },
+    {
+      "id": "obj_004",
+      "role": "",
+      "category": "plant",
+      "description": "lush green philodendron",
+      "count": 1,
+      "placement_intent": {
+        "absolute_relations": [],
+        "relative_relations": []
+      },
+      "metadata": {
+        "description_source": "imaginarium_asset_info.short_desc"
+      }
+    }
+  ],
+  "global_constraints": [],
+  "relations": [
+    {
+      "family": "oar",
+      "subject_id": "obj_000",
+      "type": "against_wall",
+      "target": "south_wall"
+    },
+    {
+      "family": "oor",
+      "subject_id": "obj_001",
+      "type": "in_front_of",
+      "object_id": "obj_000"
+    },
+    {
+      "family": "oor",
+      "subject_id": "obj_002",
+      "type": "on_top_of",
+      "object_id": "obj_001"
+    },
+    {
+      "family": "oor",
+      "subject_id": "obj_003",
+      "type": "on_top_of",
+      "object_id": "obj_001"
+    },
+    {
+      "family": "oor",
+      "subject_id": "obj_004",
+      "type": "left_of",
+      "object_id": "obj_000"
+    }
+  ],
+  "metadata": {
+    "fixture_policy": "manual_low_ambiguity_public_structure",
+    "room_dimensions_are_benchmark_fallback": true
+  }
+}

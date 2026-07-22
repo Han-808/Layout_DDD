@@ -2,6 +2,10 @@ from __future__ import annotations
 
 from typing import Any
 
+from benchmark.io_contracts import I2_NATURAL_LANGUAGE_STRUCTURE, O1_OBJECT_STATE, input_type_for_mode
+from benchmark.nl_scene.converter import FINE_GRAINED
+from benchmark.task_contract import architecture_contract_for_room
+
 
 STRUCTURED_ASSETS_INPUT_MODE = "structured_assets"
 STRUCTURED_NATURAL_LANGUAGE_INPUT_MODE = "natural_language_structured"
@@ -13,34 +17,52 @@ def build_scene_request(
     request_id: str,
     instruction: str,
     scene_type: str,
-    room: dict,
+    room: dict | None,
     structure: bool = True,
+    prompt_granularity: str = FINE_GRAINED,
     metadata: dict | None = None,
 ) -> dict:
     """Build the natural-language request artifact used by the scene harness."""
 
-    return {
+    request = {
         "request_id": str(request_id),
         "instruction": str(instruction),
         "scene_type": str(scene_type),
-        "room": room,
         "structure": bool(structure),
+        "prompt_granularity": str(prompt_granularity),
         "metadata": metadata if isinstance(metadata, dict) else {},
     }
+    if room is not None:
+        request["room"] = room
+    return request
 
 
 def build_generation_input(
     *,
     scene_request: dict,
-    object_plan: dict,
+    object_plan: dict | None = None,
     asset_selection: dict | None = None,
+    evaluator_output_type: str = O1_OBJECT_STATE,
 ) -> dict:
-    """Build generation_input without coupling structure to asset retrieval."""
+    """Build the generator-facing input from public benchmark artifacts only.
+
+    ``object_plan`` is public generator structure, not evaluator ground truth.
+    It is required for structured modes and forbidden for direct NL mode. Frozen
+    reference annotations are passed separately to the evaluator and must never
+    be added to this artifact.
+    """
 
     structure_value = scene_request.get("structure", True)
     if not isinstance(structure_value, bool):
         raise ValueError("scene_request.structure must be boolean")
     structure = structure_value
+    if structure and not isinstance(object_plan, dict):
+        raise ValueError("structured generator input requires an explicit public object_plan")
+    if not structure and object_plan is not None:
+        raise ValueError(
+            "direct natural-language generator input must not carry object_plan; "
+            "use a private reference_annotation for evaluation"
+        )
     has_assets = asset_selection is not None
     if structure and has_assets:
         input_mode = STRUCTURED_ASSETS_INPUT_MODE
@@ -49,33 +71,26 @@ def build_generation_input(
     else:
         input_mode = DIRECT_NATURAL_LANGUAGE_INPUT_MODE
     generation_input: dict[str, Any] = {
-        "request_id": str(scene_request.get("request_id") or object_plan.get("request_id") or "request_001"),
+        "request_id": str(scene_request.get("request_id") or "request_001"),
         "scene_request": scene_request,
-        "object_plan": object_plan,
         "generation_contract": {
             "output_format": "canonical_generated_scene_v1",
             "requires_pose": True,
             "input_mode": input_mode,
+            "input_type": input_type_for_mode(input_mode),
+            "evaluator_output_type": str(evaluator_output_type),
             "requires_asset_selection": structure and has_assets,
+            "architecture": architecture_contract_for_room(scene_request.get("room")),
         },
     }
+    if structure:
+        generation_input["object_plan"] = object_plan
     if structure and has_assets:
         generation_input["asset_selection"] = asset_selection
     elif structure:
         generation_input["generator_input"] = build_structured_generator_input(scene_request, object_plan)
-        generation_input["evaluation_context"] = {
-            "object_plan": object_plan,
-            "asset_retrieval_skipped": True,
-            "asset_selection_required": False,
-            "structure_available_to_generator": True,
-        }
     else:
         generation_input["generator_input"] = build_natural_language_generator_input(scene_request)
-        generation_input["evaluation_context"] = {
-            "object_plan": object_plan,
-            "asset_retrieval_skipped": True,
-            "asset_selection_required": False,
-        }
     return generation_input
 
 
@@ -87,8 +102,16 @@ def build_direct_natural_language_generation_input(
     room: dict,
     object_plan: dict | None = None,
     metadata: dict | None = None,
+    prompt_granularity: str = FINE_GRAINED,
+    evaluator_output_type: str = O1_OBJECT_STATE,
 ) -> dict:
     """Interface-only helper for generators that expect raw natural language."""
+
+    if object_plan is not None:
+        raise ValueError(
+            "object_plan is not allowed in direct natural-language mode; "
+            "pass it only as public structured generator input"
+        )
 
     scene_request = build_scene_request(
         request_id=request_id,
@@ -96,10 +119,15 @@ def build_direct_natural_language_generation_input(
         scene_type=scene_type,
         room=room,
         structure=False,
+        prompt_granularity=prompt_granularity,
         metadata=metadata,
     )
-    plan = object_plan if isinstance(object_plan, dict) else _empty_object_plan(scene_request)
-    return build_generation_input(scene_request=scene_request, object_plan=plan, asset_selection=None)
+    return build_generation_input(
+        scene_request=scene_request,
+        object_plan=None,
+        asset_selection=None,
+        evaluator_output_type=evaluator_output_type,
+    )
 
 
 def build_natural_language_generator_input(scene_request: dict) -> dict:
@@ -111,6 +139,7 @@ def build_natural_language_generator_input(scene_request: dict) -> dict:
         "instruction": str(scene_request.get("instruction") or ""),
         "scene_type": str(scene_request.get("scene_type") or "room"),
         "room": scene_request.get("room"),
+        "prompt_granularity": str(scene_request.get("prompt_granularity") or FINE_GRAINED),
     }
 
 
@@ -123,17 +152,38 @@ def build_structured_generator_input(scene_request: dict, object_plan: dict) -> 
         "instruction": str(scene_request.get("instruction") or ""),
         "scene_type": str(scene_request.get("scene_type") or "room"),
         "room": scene_request.get("room"),
+        "prompt_granularity": str(scene_request.get("prompt_granularity") or FINE_GRAINED),
         "object_plan": object_plan,
     }
 
 
-def _empty_object_plan(scene_request: dict) -> dict:
-    instruction = str(scene_request.get("instruction") or "")
-    return {
-        "request_id": str(scene_request.get("request_id") or "request_001"),
-        "scene_type": str(scene_request.get("scene_type") or "room"),
-        "scene_description": instruction,
-        "objects": [],
-        "global_constraints": [],
-        "relations": [],
+def build_generator_visible_payload(generation_input: dict) -> dict:
+    """Project canonical input onto the fields a generator is allowed to see."""
+
+    contract = generation_input.get("generation_contract")
+    if not isinstance(contract, dict):
+        raise ValueError("generation_input.generation_contract must be a JSON object")
+    input_mode = str(contract.get("input_mode") or DIRECT_NATURAL_LANGUAGE_INPUT_MODE)
+    input_type = input_type_for_mode(input_mode)
+    scene_request = generation_input.get("scene_request")
+    if not isinstance(scene_request, dict):
+        raise ValueError("generation_input.scene_request must be a JSON object")
+    payload: dict[str, Any] = {
+        "input_type": input_type,
+        "natural_language": str(scene_request.get("instruction") or ""),
+        "benchmark_environment": {
+            "architecture": contract.get("architecture")
+            or architecture_contract_for_room(scene_request.get("room")),
+        },
     }
+    if input_type == I2_NATURAL_LANGUAGE_STRUCTURE:
+        payload["structure"] = {
+            "room": scene_request.get("room"),
+            "object_plan": generation_input.get("object_plan"),
+        }
+    if input_mode == STRUCTURED_ASSETS_INPUT_MODE:
+        payload["assistance"] = {"asset_selection": generation_input.get("asset_selection")}
+    reflection = generation_input.get("self_reflection")
+    if isinstance(reflection, dict) and reflection.get("enabled") is True:
+        payload["self_reflection"] = reflection
+    return payload

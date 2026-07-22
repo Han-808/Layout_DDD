@@ -1,0 +1,112 @@
+{
+  "schema_version": "p0b_camera_ablation_gt_v1",
+  "request_id": "prompt_005",
+  "scene_id": "generated_prompt_005",
+  "scope": "camera-sensitive P0b events routed to VLM in the frozen prompt_005 scene",
+  "label_semantics": {
+    "valid": "the flagged event is not an error for this metric",
+    "invalid": "the flagged event is an error for this metric"
+  },
+  "positive_class": "invalid",
+  "annotation_provenance": {
+    "method": "manual review of canonical geometry, detector evidence, asset renders, and prompt context",
+    "frozen_before_ablation": true,
+    "source_tables": [
+      "Support/artifacts/result/collision_oob_gt_first7/event_labels.tsv",
+      "Support/artifacts/result/support_gt_first7/event_labels.tsv"
+    ]
+  },
+  "events": [
+    {
+      "metric": "collision",
+      "event_id": "desk_1|chair_1",
+      "object_ids": ["desk_1", "chair_1"],
+      "label": "valid",
+      "reason_code": "concavity_or_no_invalid_penetration"
+    },
+    {
+      "metric": "collision",
+      "event_id": "desk_1|laptop_1",
+      "object_ids": ["desk_1", "laptop_1"],
+      "label": "invalid",
+      "reason_code": "placement_center_causes_penetration"
+    },
+    {
+      "metric": "collision",
+      "event_id": "desk_1|book_1",
+      "object_ids": ["desk_1", "book_1"],
+      "label": "invalid",
+      "reason_code": "placement_center_causes_penetration"
+    },
+    {
+      "metric": "collision",
+      "event_id": "desk_1|book_2",
+      "object_ids": ["desk_1", "book_2"],
+      "label": "invalid",
+      "reason_code": "placement_center_causes_penetration"
+    },
+    {
+      "metric": "collision",
+      "event_id": "desk_1|toy_box_2",
+      "object_ids": ["desk_1", "toy_box_2"],
+      "label": "valid",
+      "reason_code": "concavity_or_no_invalid_penetration"
+    },
+    {
+      "metric": "collision",
+      "event_id": "laptop_1|book_1",
+      "object_ids": ["laptop_1", "book_1"],
+      "label": "invalid",
+      "reason_code": "physical_intersection_or_co_location"
+    },
+    {
+      "metric": "collision",
+      "event_id": "laptop_1|book_2",
+      "object_ids": ["laptop_1", "book_2"],
+      "label": "invalid",
+      "reason_code": "physical_intersection_or_co_location"
+    },
+    {
+      "metric": "oob",
+      "event_id": "bunk_bed_1",
+      "object_ids": ["bunk_bed_1"],
+      "label": "invalid",
+      "reason_code": "ordinary_object_crosses_room_plane"
+    },
+    {
+      "metric": "oob",
+      "event_id": "shelf_1",
+      "object_ids": ["shelf_1"],
+      "label": "invalid",
+      "reason_code": "ordinary_object_crosses_room_plane"
+    },
+    {
+      "metric": "oob",
+      "event_id": "toy_box_3",
+      "object_ids": ["toy_box_3"],
+      "label": "invalid",
+      "reason_code": "ordinary_object_crosses_room_plane"
+    },
+    {
+      "metric": "support",
+      "event_id": "bunk_bed_1",
+      "object_ids": ["bunk_bed_1"],
+      "label": "valid",
+      "reason_code": "deterministic_or_mesh_base_contact"
+    },
+    {
+      "metric": "support",
+      "event_id": "shelf_1",
+      "object_ids": ["shelf_1"],
+      "label": "valid",
+      "reason_code": "architecture_attachment"
+    },
+    {
+      "metric": "support",
+      "event_id": "toy_box_3",
+      "object_ids": ["toy_box_3"],
+      "label": "valid",
+      "reason_code": "oob_owned_floor_projection_and_canonical_floor_contact"
+    }
+  ]
+}

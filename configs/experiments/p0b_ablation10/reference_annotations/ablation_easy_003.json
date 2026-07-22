@@ -1,0 +1,28 @@
+{
+  "annotation_version": "reference_annotation_v1",
+  "validation_status": "confirmed",
+  "source": "manual",
+  "request_id": "ablation_easy_003",
+  "scene_type": "study",
+  "inventory_policy": "closed_world",
+  "objects": [
+    {"id": "obj_000", "category": "desk", "description": "dark angular wooden desk", "count": 1, "claim_state": "confirmed"},
+    {"id": "obj_001", "category": "chair", "description": "brown leather office chair", "count": 1, "claim_state": "confirmed"},
+    {"id": "obj_002", "category": "monitor", "description": "dark metallic monitor", "count": 1, "claim_state": "confirmed"},
+    {"id": "obj_003", "category": "book", "description": "teal blue paperback book", "count": 1, "claim_state": "confirmed"},
+    {"id": "obj_004", "category": "plant", "description": "vibrant green rosemary plant", "count": 1, "claim_state": "confirmed"}
+  ],
+  "oor_relations": [
+    {"type": "in_front", "subject_id": "obj_001", "object_id": "obj_000", "claim_state": "confirmed"},
+    {"type": "on_top_of", "subject_id": "obj_002", "object_id": "obj_000", "claim_state": "confirmed"},
+    {"type": "left", "subject_id": "obj_003", "object_id": "obj_002", "claim_state": "confirmed"},
+    {"type": "on_top_of", "subject_id": "obj_003", "object_id": "obj_000", "claim_state": "confirmed"},
+    {"type": "right", "subject_id": "obj_004", "object_id": "obj_002", "claim_state": "confirmed"},
+    {"type": "on_top_of", "subject_id": "obj_004", "object_id": "obj_000", "claim_state": "confirmed"}
+  ],
+  "oar_relations": [
+    {"type": "against_wall", "subject_id": "obj_000", "architectural_element": "east_wall", "claim_state": "confirmed"}
+  ],
+  "room_constraints": {"claim_state": "not_mentioned"},
+  "provenance": {"origin": "manual_p0b_ablation_conversion", "generator_visible": false, "leaderboard_ground_truth": false, "room_source": "benchmark_fallback"}
+}

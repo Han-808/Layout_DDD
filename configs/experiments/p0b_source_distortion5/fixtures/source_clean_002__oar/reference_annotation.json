@@ -1,0 +1,90 @@
+{
+  "annotation_version": "reference_annotation_v1",
+  "validation_status": "confirmed",
+  "source": "manual",
+  "request_id": "source_clean_002__oar",
+  "scene_type": "bedroom",
+  "inventory_policy": "closed_world",
+  "objects": [
+    {
+      "id": "obj_000",
+      "category": "cabinet",
+      "description": "dark gray minimalist cabinet",
+      "count": 1,
+      "claim_state": "confirmed"
+    },
+    {
+      "id": "obj_001",
+      "category": "cabinet",
+      "description": "dark gray minimalist cabinet",
+      "count": 1,
+      "claim_state": "confirmed"
+    },
+    {
+      "id": "obj_002",
+      "category": "bed",
+      "description": "gray wooden single bed",
+      "count": 1,
+      "claim_state": "confirmed"
+    },
+    {
+      "id": "obj_003",
+      "category": "box",
+      "description": "dark wooden storage box",
+      "count": 1,
+      "claim_state": "confirmed"
+    },
+    {
+      "id": "obj_004",
+      "category": "box",
+      "description": "dark wooden storage box",
+      "count": 1,
+      "claim_state": "confirmed"
+    }
+  ],
+  "oor_relations": [],
+  "oar_relations": [
+    {
+      "type": "against_wall",
+      "subject_id": "obj_000",
+      "architectural_element": "west_wall",
+      "claim_state": "confirmed",
+      "relation_id": "oar_000"
+    },
+    {
+      "type": "against_wall",
+      "subject_id": "obj_001",
+      "architectural_element": "west_wall",
+      "claim_state": "confirmed",
+      "relation_id": "oar_001"
+    },
+    {
+      "type": "room_center",
+      "subject_id": "obj_002",
+      "architectural_element": "center_region",
+      "claim_state": "confirmed",
+      "relation_id": "oar_002"
+    }
+  ],
+  "room_constraints": {
+    "claim_state": "confirmed",
+    "shape": "rectangular_enclosed_room",
+    "dimensions": {
+      "width": 2.46,
+      "depth": 3.51,
+      "height": 2.45
+    }
+  },
+  "review": {
+    "status": "approved",
+    "reviewer": "benchmark_author"
+  },
+  "provenance": {
+    "origin": "manual_source_scene_fixture_conversion",
+    "generator_visible": false,
+    "leaderboard_ground_truth": false,
+    "source_scene_id": "scene_003309_01",
+    "base_case_id": "source_clean_002",
+    "variant_family": "oar"
+  }
+}

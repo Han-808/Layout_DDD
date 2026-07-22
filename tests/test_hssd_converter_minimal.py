@@ -30,7 +30,16 @@ def test_hssd_converter_writes_prompt_and_structured_basic_cases(tmp_path: Path)
     paths = convert_hssd_hab(hssd_root=hssd_root, out_dir=out_dir, limit=1, levels=["prompt_only", "structured_basic"])
 
     assert len(paths) == 2
-    validator = Draft202012Validator(read_json(ROOT / "schemas" / "bm_instance.schema.json"))
+    validator = Draft202012Validator(
+        read_json(
+            ROOT
+            / "Support"
+            / "legacy"
+            / "legend"
+            / "schemas"
+            / "legend_bm_instance.schema.json"
+        )
+    )
     for path in paths:
         assert list(validator.iter_errors(read_json(path))) == []
 
@@ -86,7 +95,16 @@ def test_hssd_converter_can_write_small_compact_case(tmp_path: Path) -> None:
     assert case["source"]["relation_policy"] == "deterministic_estimated_spatial_cues_v1"
     assert case["source"]["relations_are_ground_truth"] is False
 
-    validator = Draft202012Validator(read_json(ROOT / "schemas" / "bm_instance.schema.json"))
+    validator = Draft202012Validator(
+        read_json(
+            ROOT
+            / "Support"
+            / "legacy"
+            / "legend"
+            / "schemas"
+            / "legend_bm_instance.schema.json"
+        )
+    )
     assert list(validator.iter_errors(case)) == []
 
 

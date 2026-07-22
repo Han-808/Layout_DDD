@@ -242,11 +242,9 @@ def _rotation_vector(value: object | None, *, assume_degrees: bool = False) -> n
     vector = _vector3(value)
     if vector is None:
         vector = np.zeros(3, dtype=float)
-    if assume_degrees:
-        return vector.astype(float)
-    max_abs = float(np.max(np.abs(vector))) if vector.size else 0.0
-    if max_abs <= (2.0 * math.pi + 1.0e-6):
-        return np.degrees(vector)
+    # Canonical object rotations are always XYZ Euler degrees. The keyword is
+    # retained for compatibility with older callers, but no unit guessing is
+    # allowed at this boundary.
     return vector.astype(float)
 
 

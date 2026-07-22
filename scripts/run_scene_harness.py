@@ -1,3 +1,33 @@
+"""End-to-end reference pipeline: generate -> (optional render) -> evaluate.
+
+Summary:
+    Orchestrates the full benchmark pipeline for one case and is the main
+    reference harness. It chains the generate and evaluate stages, optionally
+    renders Blender evidence, and can retry generation in a self-reflexive loop.
+
+Input:
+    - ``--instruction`` / ``--scene-type`` and the generator submission
+      (``--adapter`` + ``--method-output`` or a generator structure).
+    - Optional assets (``--asset-csv`` / ``--asset-root``), rendered evidence
+      (``--blender-bin`` + camera-pose mode), and a frozen
+      ``--reference-annotation`` or coarse-mode
+      ``--spatial-fidelity-ontology``.
+    - ``--out-dir`` for all artifacts.
+
+Output:
+    Under ``--out-dir``: per-attempt and final ``generated_scene.json`` and
+    ``evaluation_report.json``, render manifests, ``run_manifest.json``, and
+    ``self_reflexive_history.json``.
+
+Function:
+    Runs ``run_generate`` then ``run_evaluate`` per attempt, threads P0b options
+    (support enable/disable, official mode, collision camera/overlay evidence),
+    enforces the scene/architecture contract, and records auditable artifacts.
+    Camera-pose selection stays an injected, bounded evidence provider.
+    ``scene_request.prompt_granularity`` gates Prompt Fidelity versus Spatial
+    Fidelity before mode-specific evaluators run.
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -9,22 +39,42 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from evaluate import run_evaluate
-from generate import run_generate
+from benchmark.api.evaluation import run_evaluate
+from benchmark.api.generation import run_generate
 
 from benchmark.adapters import get_adapter
+from benchmark.evaluator.profile import (
+    FIDELITY_CATEGORY_BY_GRANULARITY,
+    evaluation_mode_for_prompt_granularity,
+)
+from benchmark.io_contracts import O1_OBJECT_STATE, O3_SCENE_PACKAGE
 from benchmark.assets.generation import load_asset_generation_tool
 from benchmark.assets.mode import resolve_asset_mode
 from benchmark.nl_scene.asset_retrieval import retrieve_assets_for_object_plan
-from benchmark.nl_scene.converter import convert_nl_to_object_plan
+from benchmark.nl_scene.converter import (
+    AUTO_GRANULARITY,
+    COARSE_GRAINED,
+    FINE_GRAINED,
+    PROMPT_GRANULARITIES,
+    extract_room_dimension_claims,
+)
 from benchmark.nl_scene.generation_input import build_generation_input, build_scene_request
+from benchmark.reference_annotation import validate_reference_annotation
 from benchmark.scene_io.validate import validate_asset_selection, validate_object_plan, validate_scene_request
-from benchmark.utils.io import read_json, write_json
-
-
-# Rounded per-scene means from local Scenes: 5.269m x 5.290m x 2.865m.
-DEFAULT_ROOM = {"boundary": [[0, 0], [5, 0], [5, 5], [0, 5]], "height": 2.9, "unit": "meter"}
-
+from benchmark.rendering import CAMERA_POSE_MODES, CYCLES_DEVICES, RENDER_ENGINES, BlenderRenderer
+from benchmark.rendering.camera_pose import (
+    parse_metric_camera_modes,
+    validate_camera_pose_mode,
+    validate_metric_camera_modes,
+)
+from benchmark.task_contract import (
+    architecture_contract_for_room,
+    require_scene_matches_architecture,
+    resolve_room_contract,
+)
+from benchmark.utils.io import load_yaml, read_json, write_json
+from benchmark.visual_judge import CameraEvidenceProvider, build_openai_compatible_vlm_judge
+from benchmark.vlm_assistance import budget_for_output
 
 def run_scene_harness(
     *,
@@ -35,52 +85,122 @@ def run_scene_harness(
     asset_csv: str | Path | None = None,
     asset_root: str | Path | None = None,
     asset_index_path: str | Path | None = None,
-    retrieval_k: int = 5,
+    retrieval_k: int = 1,
     use_vlm_asset_selector: bool = False,
     asset_selector_model_config: dict | None = None,
     asset_generation_tool: Any | None = None,
     asset_mode: str = "off",
-    adapter: str = "passthrough",
+    adapter: str = "layout_json",
     adapter_config: dict | None = None,
+    vlm_budget_config: dict | None = None,
+    # Retained only to fail old callers with an explicit boundary message.
     converter_model_config: dict | None = None,
-    generated_scene: str | Path | None = None,
+    method_output: str | Path | None = None,
     run_generation: bool = False,
     iteration_limit: int = 0,
-    structure: bool = True,
+    structure: bool | None = None,
+    prompt_granularity: str = FINE_GRAINED,
+    generator_structure: dict | None = None,
+    # Deprecated API alias for generator_structure. It is public generator
+    # input, never evaluator ground truth.
     object_plan: dict | None = None,
+    reference_annotation: dict | None = None,
     asset_selection: dict | None = None,
+    evaluator_output_type: str = O1_OBJECT_STATE,
     eval_generic_validity: bool = False,
     eval_oor: bool = False,
     eval_oar: bool = False,
     enrich_assets: bool | None = None,
+    render_evidence: list[str] | None = None,
+    evaluator_vlm_judge: Any | None = None,
+    blender_bin: str | Path | None = None,
+    blender_timeout_seconds: int = 900,
+    render_width: int = 768,
+    render_height: int = 768,
+    blender_render_engine: str = "BLENDER_EEVEE_NEXT",
+    blender_cycles_device: str = "CPU",
+    blender_cycles_samples: int = 16,
+    blender_cycles_denoising: bool = False,
+    evaluation_profile: dict | None = None,
+    spatial_fidelity_ontology: dict | str | Path | None = None,
+    support_enabled: bool = True,
+    p0b_official_mode: bool = False,
+    p0b_local_view_provider: object | None = None,
+    camera_pose_mode: str | None = None,
+    camera_pose_metric_modes: dict[str, str] | None = None,
+    camera_pose_max_views: int = 2,
+    camera_pose_max_steps: int = 1,
+    collision_pair_overlay: bool = True,
 ) -> dict:
+    _reject_literal_api_key(asset_selector_model_config, "asset selector config")
+    _reject_literal_api_key(adapter_config, "adapter config")
     output_dir = Path(out_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     request_id = _request_id(output_dir)
+    if generator_structure is not None and object_plan is not None:
+        raise ValueError("provide only one of generator_structure or the deprecated object_plan alias")
+    public_object_plan = generator_structure if generator_structure is not None else object_plan
+    public_structure_provided = public_object_plan is not None
+    if converter_model_config:
+        raise ValueError(
+            "runtime NL conversion is disabled in benchmark runs; use "
+            "scripts/author_reference_annotation.py offline, review the draft, and pass "
+            "--reference-annotation for scoring"
+        )
+    requested_granularity = str(prompt_granularity)
+    if requested_granularity == AUTO_GRANULARITY:
+        raise ValueError(
+            "prompt granularity must be frozen in the benchmark case; runtime auto classification is disabled"
+        )
+    if requested_granularity not in PROMPT_GRANULARITIES:
+        raise ValueError(
+            f"prompt_granularity must be one of {sorted(PROMPT_GRANULARITIES)}, "
+            f"got {requested_granularity!r}"
+        )
+    resolved_granularity = requested_granularity
+    resolved_evaluation_mode = evaluation_mode_for_prompt_granularity(resolved_granularity)
+    resolved_fidelity_category = FIDELITY_CATEGORY_BY_GRANULARITY[resolved_granularity]
+    resolved_structure = public_structure_provided if structure is None else bool(structure)
+    if resolved_structure and not public_structure_provided:
+        raise ValueError(
+            "structured generator mode requires --generator-structure; the private "
+            "reference annotation is never projected into generator input"
+        )
+    if not resolved_structure and public_structure_provided:
+        raise ValueError(
+            "generator_structure is public method input and cannot be supplied with structure=false; "
+            "use --reference-annotation for benchmark-private evaluation claims"
+        )
+    prompt_room_dimensions = extract_room_dimension_claims(instruction)
+    resolved_room = resolve_room_contract(room, prompt_dimensions=prompt_room_dimensions)
     scene_request = build_scene_request(
         request_id=request_id,
         instruction=instruction,
         scene_type=scene_type,
-        room=room or DEFAULT_ROOM,
-        structure=structure,
+        room=resolved_room,
+        structure=resolved_structure,
+        prompt_granularity=resolved_granularity,
     )
     validate_scene_request(scene_request)
+    if reference_annotation is not None:
+        validate_reference_annotation(reference_annotation)
+        annotation_request_id = str(reference_annotation.get("request_id") or "")
+        if annotation_request_id != request_id:
+            raise ValueError(
+                "reference_annotation.request_id must match the harness request_id "
+                f"{request_id!r}; got {annotation_request_id!r}"
+            )
+        if int(iteration_limit) > 0:
+            raise ValueError(
+                "reference_annotation cannot be combined with self-reflective generation: "
+                "the evaluation report contains benchmark-private alignment evidence. "
+                "Use iteration_limit=0 until a frozen feedback sanitizer defines a separate refinement track."
+            )
     artifacts: dict[str, str | None] = {}
-    artifacts["scene_request"] = write_json(output_dir / "scene_request.json", scene_request).as_posix()
 
-    object_plan_provided = object_plan is not None
-    resolved_converter_config = _resolve_converter_model_config(converter_model_config, adapter_config)
-    if object_plan is None:
-        object_plan = convert_nl_to_object_plan(
-            instruction,
-            request_id=request_id,
-            scene_type=scene_type,
-            room=scene_request["room"],
-            model_config=resolved_converter_config or None,
-        )
-    object_plan = _canonical_object_plan(scene_request, object_plan)
-    validate_object_plan(object_plan)
-    artifacts["object_plan"] = write_json(output_dir / "object_plan.json", object_plan).as_posix()
+    if public_object_plan is not None:
+        public_object_plan = _canonical_object_plan(scene_request, public_object_plan)
+        validate_object_plan(public_object_plan)
 
     generation_adapter = get_adapter(adapter)
     declared_asset_support = generation_adapter.capabilities.asset_support
@@ -97,24 +217,23 @@ def run_scene_harness(
             if not asset_index_path:
                 raise ValueError("asset_index_path is required when asset retrieval is enabled without --asset-selection.")
             asset_selection = retrieve_assets_for_object_plan(
-                object_plan,
+                public_object_plan,
                 asset_index_path=str(asset_index_path),
                 retrieval_k=retrieval_k,
                 use_vlm_selector=use_vlm_asset_selector,
                 model_config=asset_selector_model_config,
                 asset_generation_tool=(asset_generation_tool if asset_decision.generation_enabled else None),
             )
-        asset_selection = _canonical_asset_selection(scene_request, object_plan, asset_selection)
+        asset_selection = _canonical_asset_selection(scene_request, public_object_plan, asset_selection)
         validate_asset_selection(asset_selection)
-        artifacts["asset_selection"] = write_json(output_dir / "asset_selection.json", asset_selection).as_posix()
     else:
         asset_selection = None
-        artifacts["asset_selection"] = None
 
     generation_input = build_generation_input(
         scene_request=scene_request,
-        object_plan=object_plan,
+        object_plan=public_object_plan,
         asset_selection=asset_selection,
+        evaluator_output_type=evaluator_output_type,
     )
     input_mode = generation_input["generation_contract"]["input_mode"]
     if input_mode not in generation_adapter.capabilities.input_modes:
@@ -122,12 +241,15 @@ def run_scene_harness(
             f"Adapter {adapter!r} does not declare support for input mode {input_mode!r}; "
             f"supported modes: {list(generation_adapter.capabilities.input_modes)}"
         )
-    artifacts["generation_input"] = write_json(output_dir / "generation_input.json", generation_input).as_posix()
+    io_contract = generation_adapter.resolve_io_contract(generation_input, config=adapter_config)
     if int(iteration_limit) < 0:
         raise ValueError("iteration_limit must be >= 0")
 
     resolved_enrich_assets = bool(enrich_assets) if enrich_assets is not None else bool(asset_csv or asset_root)
     resolved_adapter_config = dict(adapter_config or {})
+    resolved_vlm_budget = budget_for_output(vlm_budget_config, io_contract.native_output_type)
+    resolved_adapter_config["vlm_budget"] = resolved_vlm_budget.as_dict()
+    vlm_assistance = generation_adapter.resolve_vlm_assistance(resolved_adapter_config)
     asset_adapter_config = {
         "asset_csv": str(asset_csv) if asset_csv else None,
         "asset_root": str(asset_root) if asset_root else None,
@@ -136,22 +258,90 @@ def run_scene_harness(
     resolved_adapter_config.update({key: value for key, value in asset_adapter_config.items() if value is not None})
     if not eval_generic_validity and not eval_oor and not eval_oar:
         eval_generic_validity = True
-
-    loop_result = _run_generation_evaluation_loop(
-        generation_input=generation_input,
-        adapter=adapter,
-        output_dir=output_dir,
-        generated_scene=generated_scene,
-        adapter_config=resolved_adapter_config,
-        run_generation=run_generation,
-        iteration_limit=int(iteration_limit),
-        eval_generic_validity=eval_generic_validity,
-        eval_oor=eval_oor,
-        eval_oar=eval_oar,
-        asset_csv=asset_csv,
-        asset_root=asset_root,
-        enrich_assets=resolved_enrich_assets,
+    resolved_camera_metric_modes = validate_metric_camera_modes(camera_pose_metric_modes)
+    resolved_camera_pose_mode = validate_camera_pose_mode(camera_pose_mode)
+    if resolved_camera_metric_modes and resolved_camera_pose_mode is None:
+        resolved_camera_pose_mode = "auto"
+    if resolved_camera_pose_mode is not None and p0b_local_view_provider is not None:
+        raise ValueError("camera_pose_mode cannot be combined with a custom p0b_local_view_provider")
+    if resolved_camera_pose_mode is not None and blender_bin is None:
+        raise ValueError("camera_pose_mode requires blender_bin so local evidence can be rendered")
+    if resolved_camera_pose_mode is not None and evaluator_vlm_judge is None:
+        raise ValueError(
+            "camera_pose_mode requires an evaluator VLM judge; deterministic camera modes avoid only "
+            "the pose-selection VLM call, not final P0b adjudication"
+        )
+    if not 1 <= int(camera_pose_max_views) <= 4:
+        raise ValueError("camera_pose_max_views must be between 1 and 4")
+    if not 0 <= int(camera_pose_max_steps) <= 3:
+        raise ValueError("camera_pose_max_steps must be between 0 and 3")
+    scene_renderer = (
+        BlenderRenderer(
+            blender_bin=blender_bin,
+            timeout_seconds=blender_timeout_seconds,
+            width=render_width,
+            height=render_height,
+            render_engine=blender_render_engine,
+            cycles_device=blender_cycles_device,
+            cycles_samples=blender_cycles_samples,
+            cycles_denoising=blender_cycles_denoising,
+            require_asset_mesh=asset_decision.retrieval_enabled,
+        )
+        if blender_bin
+        else None
     )
+
+    try:
+        loop_result = _run_generation_evaluation_loop(
+            generation_input=generation_input,
+            adapter=adapter,
+            output_dir=output_dir,
+            method_output=method_output,
+            adapter_config=resolved_adapter_config,
+            run_generation=run_generation,
+            iteration_limit=int(iteration_limit),
+            eval_generic_validity=eval_generic_validity,
+            eval_oor=eval_oor,
+            eval_oar=eval_oar,
+            asset_csv=asset_csv,
+            asset_root=asset_root,
+            enrich_assets=resolved_enrich_assets,
+            scene_request=scene_request,
+            object_plan=public_object_plan,
+            reference_annotation=reference_annotation,
+            render_evidence=render_evidence,
+            vlm_judge=evaluator_vlm_judge,
+            scene_renderer=scene_renderer,
+            evaluation_profile=evaluation_profile,
+            spatial_fidelity_ontology=spatial_fidelity_ontology,
+            support_enabled=support_enabled,
+            p0b_official_mode=p0b_official_mode,
+            p0b_local_view_provider=p0b_local_view_provider,
+            camera_pose_mode=resolved_camera_pose_mode,
+            camera_pose_metric_modes=resolved_camera_metric_modes,
+            camera_pose_max_views=int(camera_pose_max_views),
+            camera_pose_max_steps=int(camera_pose_max_steps),
+            collision_pair_overlay=bool(collision_pair_overlay),
+        )
+    finally:
+        # Benchmark artifacts are persisted only after generator code returns.
+        artifacts["scene_request"] = write_json(output_dir / "scene_request.json", scene_request).as_posix()
+        artifacts["generator_structure"] = (
+            write_json(output_dir / "generator_structure.json", public_object_plan).as_posix()
+            if public_object_plan is not None
+            else None
+        )
+        artifacts["reference_annotation"] = (
+            write_json(output_dir / "reference_annotation.json", reference_annotation).as_posix()
+            if reference_annotation is not None
+            else None
+        )
+        artifacts["asset_selection"] = (
+            write_json(output_dir / "asset_selection.json", asset_selection).as_posix()
+            if asset_selection is not None
+            else None
+        )
+        artifacts["generation_input"] = write_json(output_dir / "generation_input.json", generation_input).as_posix()
     artifacts.update(loop_result["artifacts"])
 
     if loop_result.get("evaluation_report"):
@@ -165,6 +355,19 @@ def run_scene_harness(
         "artifacts": artifacts,
         "evaluation_summary": evaluation_summary,
         "self_reflexive": loop_result["self_reflexive"],
+        "data_isolation": {
+            "generator_workspace": "generator/",
+            "benchmark_private_artifacts_written_after_generation": True,
+            "adapter_process_is_trusted": True,
+            "runtime_converter_called": False,
+            "generator_structure_visibility": (
+                "public_generator_input" if public_object_plan is not None else "not_provided"
+            ),
+            "reference_annotation_visibility": (
+                "benchmark_private_evaluator_only" if reference_annotation is not None else "not_provided"
+            ),
+            "reference_annotation_used_for_asset_retrieval": False,
+        },
         "asset_resolution": {
             **asset_decision.as_dict(),
             "capability_source": "adapter",
@@ -172,22 +375,68 @@ def run_scene_harness(
             "selector": "vlm" if use_vlm_asset_selector else "top1",
             "generation_tool_configured": asset_generation_tool is not None,
         },
+        "vlm_assistance": vlm_assistance,
+        "rendering": {
+            "enabled": scene_renderer is not None,
+            "backend": "blender_canonical_scene_v1" if scene_renderer is not None else None,
+            "blender_bin": str(blender_bin) if blender_bin else None,
+            "width": int(render_width),
+            "height": int(render_height),
+            "render_engine": blender_render_engine,
+            "cycles_device": blender_cycles_device,
+            "cycles_samples": int(blender_cycles_samples),
+            "cycles_denoising": bool(blender_cycles_denoising),
+            "require_asset_mesh": asset_decision.retrieval_enabled,
+        },
+        "evaluation": {
+            "profile": evaluation_profile,
+            "gate": {
+                "source": "scene_request.prompt_granularity",
+                "prompt_granularity": resolved_granularity,
+                "evaluation_mode": resolved_evaluation_mode,
+                "category_2": resolved_fidelity_category,
+                "active_categories": [
+                    resolved_fidelity_category,
+                    "structural_validity",
+                    "visual_quality",
+                ],
+            },
+            "spatial_fidelity_ontology_configured": spatial_fidelity_ontology is not None,
+            "support_enabled": bool(support_enabled),
+            "p0b_official_mode": bool(p0b_official_mode),
+            "p0b_local_view_provider_configured": (
+                p0b_local_view_provider is not None or resolved_camera_pose_mode is not None
+            ),
+            "camera_pose": {
+                "mode": resolved_camera_pose_mode,
+                "max_views": int(camera_pose_max_views),
+                "max_steps": int(camera_pose_max_steps) if resolved_camera_pose_mode == "query_cov" else 0,
+                "active": resolved_camera_pose_mode is not None,
+            },
+        },
+        "task_contract": {
+            "architecture": architecture_contract_for_room(resolved_room),
+            "prompt_room_dimensions": prompt_room_dimensions,
+        },
         "adapter": {
             "name": generation_adapter.name,
             "capabilities": generation_adapter.capabilities.as_dict(),
+            "io_contract": io_contract.as_dict(),
             "generator_output_schema": getattr(generation_adapter, "output_schema", None),
         },
+        "prompt_granularity": {
+            "requested": requested_granularity,
+            "resolved": resolved_granularity,
+            "evaluation_mode": resolved_evaluation_mode,
+            "classifier_called": False,
+            "classification": None,
+        },
         "converter": {
-            "called": not object_plan_provided,
-            "model_config_source": (
-                "not_used_object_plan_provided"
-                if object_plan_provided
-                else "explicit"
-                if converter_model_config
-                else "generator_adapter_fallback"
-            ),
-            "endpoint": None if object_plan_provided else resolved_converter_config.get("endpoint") or resolved_converter_config.get("base_url"),
-            "model": None if object_plan_provided else resolved_converter_config.get("model") or resolved_converter_config.get("model_id"),
+            "called": False,
+            "runtime_allowed": False,
+            "role": "offline_reference_annotation_authoring_only",
+            "endpoint": None,
+            "model": None,
         },
     }
     artifacts["run_manifest"] = write_json(output_dir / "run_manifest.json", manifest).as_posix()
@@ -200,7 +449,20 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run the canonical adapter-based scene-construction/evaluation harness.")
     parser.add_argument("--instruction", required=True)
     parser.add_argument("--scene-type", default="room")
-    parser.add_argument("--room-json", default=None)
+    parser.add_argument(
+        "--prompt-granularity",
+        choices=[FINE_GRAINED, COARSE_GRAINED],
+        default=FINE_GRAINED,
+        help="Frozen case metadata. Runtime model-based granularity classification is disabled.",
+    )
+    parser.add_argument(
+        "--room-json",
+        default=None,
+        help=(
+            "Optional explicit room dimensions/boundary. Values are merged with explicit "
+            "natural-language dimensions; conflicts fail and missing axes use the benchmark policy."
+        ),
+    )
     parser.add_argument("--asset-csv", default=None)
     parser.add_argument("--asset-root", default=None)
     parser.add_argument("--asset-index-path", default=None)
@@ -210,7 +472,7 @@ def main() -> None:
         default="off",
         help="Explicit benchmark asset route: disabled, retrieval only, or retrieval with generation fallback.",
     )
-    parser.add_argument("--retrieval-k", type=int, default=5, help="Number of database candidates sent to the asset selector.")
+    parser.add_argument("--retrieval-k", type=int, default=1, help="Number of database candidates sent to the asset selector.")
     parser.add_argument(
         "--asset-selection-strategy",
         choices=["vlm", "top1"],
@@ -221,57 +483,279 @@ def main() -> None:
     parser.add_argument("--asset-selector-endpoint", default=None, help="OpenAI-compatible API/localhost endpoint for the asset selector.")
     parser.add_argument("--asset-selector-model", default=None, help="Served model id for the asset selector.")
     parser.add_argument(
+        "--asset-selector-api-key-env",
+        default=None,
+        help="Environment variable containing the remote asset-selector API key.",
+    )
+    parser.add_argument(
+        "--asset-selector-max-tokens-field",
+        choices=["max_tokens", "max_completion_tokens"],
+        default=None,
+    )
+    parser.add_argument(
+        "--asset-selector-send-temperature",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+    )
+    parser.add_argument(
         "--asset-generator-plugin",
         default=None,
         help="Optional module:attribute or /path/plugin.py:attribute asset-generation tool.",
     )
-    parser.add_argument("--adapter", default="passthrough")
+    parser.add_argument("--adapter", default="layout_json")
     parser.add_argument("--adapter-config", default=None, help="JSON configuration for the selected generation adapter.")
+    parser.add_argument(
+        "--vlm-budget-config",
+        default=str(PROJECT_ROOT / "configs" / "vlm_assistance_budget.yaml"),
+        help="YAML hard limits for optional O2/O3 VLM assistance; all defaults are zero.",
+    )
     parser.add_argument("--generator-endpoint", default=None, help="OpenAI-compatible endpoint override for generation adapters that call an LLM.")
     parser.add_argument("--generator-model", default=None, help="Served model id override for generation adapters that call an LLM.")
-    parser.add_argument("--converter-config", default=None, help="Optional JSON model config for NL-to-object-plan conversion; defaults to generator config.")
-    parser.add_argument("--converter-endpoint", default=None, help="Optional OpenAI-compatible endpoint override for the benchmark converter.")
-    parser.add_argument("--converter-model", default=None, help="Optional served model id override for the benchmark converter.")
-    parser.add_argument("--generated-scene", default=None)
-    parser.add_argument("--run-generation", action="store_true", help="Ask the adapter to run generation when no --generated-scene is supplied.")
+    parser.add_argument(
+        "--generator-api-key-env",
+        default=None,
+        help="Environment variable containing the remote generator API key.",
+    )
+    parser.add_argument(
+        "--generator-max-tokens-field",
+        choices=["max_tokens", "max_completion_tokens"],
+        default=None,
+        help="Chat Completions output-token field required by the selected model.",
+    )
+    parser.add_argument(
+        "--generator-send-temperature",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Include or omit temperature in generator Chat Completions requests.",
+    )
+    parser.add_argument(
+        "--converter-config",
+        default=None,
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument("--converter-endpoint", default=None, help=argparse.SUPPRESS)
+    parser.add_argument("--converter-model", default=None, help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--method-output",
+        default=None,
+        help="Preferred generic name for external O1, O2, or O3 native generator output.",
+    )
+    parser.add_argument("--run-generation", action="store_true", help="Ask the adapter to run generation when no --method-output is supplied.")
     parser.add_argument("--iteration-limit", type=int, default=0, help="Maximum self-reflexive regeneration attempts after the initial evaluation.")
     parser.add_argument(
         "--structure",
         action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Expose benchmark structure to the generator. Asset handling is controlled separately by --asset-mode.",
+        default=None,
+        help=(
+            "Expose an explicitly supplied --generator-structure to an I2 generator. "
+            "When omitted, mode is I2 iff that public structure is supplied; otherwise I1."
+        ),
     )
-    parser.add_argument("--object-plan", default=None)
+    parser.add_argument(
+        "--evaluator-output-type",
+        choices=[O1_OBJECT_STATE, O3_SCENE_PACKAGE],
+        default=O1_OBJECT_STATE,
+        help="Canonical evaluator boundary after any O2 program execution/export.",
+    )
+    parser.add_argument(
+        "--generator-structure",
+        "--object-plan",
+        dest="generator_structure",
+        default=None,
+        help=(
+            "Public structural input intentionally exposed to an I2 generator. "
+            "It is not scoring ground truth; omit it for I1 natural-language-only runs."
+        ),
+    )
+    parser.add_argument(
+        "--reference-annotation",
+        default=None,
+        help="Frozen benchmark-owned reference annotation; never exposed to the generator.",
+    )
     parser.add_argument("--asset-selection", default=None)
     parser.add_argument("--eval-generic-validity", action="store_true")
     parser.add_argument("--eval-oor", action="store_true")
     parser.add_argument("--eval-oar", action="store_true")
+    parser.add_argument(
+        "--support-enabled",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Enable the support-gap metric (default). Use --no-support-enabled when floating objects are allowed.",
+    )
+    parser.add_argument(
+        "--p0b-official-mode",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Fail when enabled Collision/OOB/Support adjudication cannot produce a binary VLM verdict. "
+            "Leave disabled for detector diagnostics."
+        ),
+    )
+    parser.add_argument(
+        "--camera-pose-mode",
+        choices=CAMERA_POSE_MODES,
+        default=None,
+        help=(
+            "P0b camera policy: global_only, frozen bbox_track, deterministic visibility_ranked, "
+            "Support-specific support_contact_plane, bounded same-judge query_cov, or auto for "
+            "frozen per-metric defaults."
+        ),
+    )
+    parser.add_argument(
+        "--camera-pose-metric-mode",
+        action="append",
+        default=[],
+        metavar="METRIC=MODE",
+        help=(
+            "Override one P0b metric camera policy; repeat as needed. Example: "
+            "--camera-pose-metric-mode support=query_cov. Overrides cannot use auto."
+        ),
+    )
+    parser.add_argument("--camera-pose-max-views", type=int, default=2)
+    parser.add_argument(
+        "--camera-pose-max-steps",
+        type=int,
+        default=1,
+        help="Maximum bounded discrete camera adjustments in query_cov mode (0 disables refinement).",
+    )
+    parser.add_argument(
+        "--collision-pair-overlay",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Also render the collision pair overlay in bbox_track mode (A red, B cyan, OBB "
+            "wireframes, closest-point markers). visibility_ranked/support_contact_plane/query_cov use highlighted "
+            "focus evidence for every P0b metric regardless of this legacy collision switch."
+        ),
+    )
     parser.add_argument("--enrich-assets", action="store_true", help="Resolve object metadata from --asset-csv/--asset-root before adapter output/evaluation.")
+    parser.add_argument("--render-evidence", action="append", default=[], help="Standardized render path; repeat for multiple views.")
+    parser.add_argument("--blender-bin", default=None, help="Headless Blender executable. When set, renders each generated canonical scene.")
+    parser.add_argument("--blender-timeout-seconds", type=int, default=900)
+    parser.add_argument("--render-width", type=int, default=768)
+    parser.add_argument("--render-height", type=int, default=768)
+    parser.add_argument(
+        "--blender-render-engine",
+        choices=RENDER_ENGINES,
+        default="BLENDER_EEVEE_NEXT",
+        help="Explicit Blender engine. Use BLENDER_WORKBENCH for proxy diagnostics.",
+    )
+    parser.add_argument(
+        "--blender-cycles-device",
+        choices=CYCLES_DEVICES,
+        default="CPU",
+        help="Cycles compute backend. Explicit CUDA/OPTIX requests fail if unavailable; AUTO may fall back to CPU.",
+    )
+    parser.add_argument("--blender-cycles-samples", type=int, default=16)
+    parser.add_argument(
+        "--blender-cycles-denoising",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+    )
+    parser.add_argument("--vlm-judge-config", default=None, help="JSON config for an OpenAI-compatible local or remote VLM judge.")
+    parser.add_argument("--vlm-judge-endpoint", default=None)
+    parser.add_argument("--vlm-judge-model", default=None)
+    parser.add_argument("--vlm-judge-api-key-env", default=None)
+    parser.add_argument(
+        "--vlm-judge-max-tokens-field",
+        choices=["max_tokens", "max_completion_tokens"],
+        default=None,
+    )
+    parser.add_argument(
+        "--vlm-judge-send-temperature",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+    )
+    parser.add_argument("--vlm-judge-timeout-seconds", type=int, default=None)
+    parser.add_argument("--vlm-judge-max-tokens", type=int, default=None)
+    parser.add_argument("--vlm-judge-context-length", type=int, default=None)
+    parser.add_argument("--vlm-judge-max-images", type=int, default=None)
+    parser.add_argument(
+        "--evaluation-profile",
+        default=str(PROJECT_ROOT / "configs" / "evaluation" / "metric_profile_draft_v1.yaml"),
+    )
+    parser.add_argument(
+        "--spatial-fidelity-ontology",
+        default=None,
+        help="SceneOnto-compatible JSON for coarse-grained Spatial Fidelity.",
+    )
     parser.add_argument("--out-dir", required=True)
     args = parser.parse_args()
+
+    try:
+        camera_pose_metric_modes = parse_metric_camera_modes(args.camera_pose_metric_mode)
+    except (TypeError, ValueError) as exc:
+        parser.error(str(exc))
 
     asset_selector_config = read_json(_path_arg(args.asset_selector_config)) if args.asset_selector_config else {}
     if not isinstance(asset_selector_config, dict):
         parser.error("--asset-selector-config must point to a JSON object")
+    try:
+        _reject_literal_api_key(asset_selector_config, "asset selector config")
+    except ValueError as exc:
+        parser.error(str(exc))
     if args.asset_selector_endpoint:
         asset_selector_config["endpoint"] = args.asset_selector_endpoint
     if args.asset_selector_model:
         asset_selector_config["model"] = args.asset_selector_model
+    if args.asset_selector_api_key_env:
+        asset_selector_config["api_key_env"] = args.asset_selector_api_key_env
+    if args.asset_selector_max_tokens_field:
+        asset_selector_config["max_tokens_field"] = args.asset_selector_max_tokens_field
+    if args.asset_selector_send_temperature is not None:
+        asset_selector_config["send_temperature"] = args.asset_selector_send_temperature
     asset_generation_tool = load_asset_generation_tool(args.asset_generator_plugin)
     adapter_config = read_json(_path_arg(args.adapter_config)) if args.adapter_config else {}
     if not isinstance(adapter_config, dict):
         parser.error("--adapter-config must point to a JSON object")
+    try:
+        _reject_literal_api_key(adapter_config, "adapter config")
+    except ValueError as exc:
+        parser.error(str(exc))
     if args.generator_endpoint:
         adapter_config["endpoint"] = args.generator_endpoint
     if args.generator_model:
         adapter_config["model"] = args.generator_model
-    converter_model_config = read_json(_path_arg(args.converter_config)) if args.converter_config else {}
-    if not isinstance(converter_model_config, dict):
-        parser.error("--converter-config must point to a JSON object")
-    if args.converter_endpoint:
-        converter_model_config["endpoint"] = args.converter_endpoint
-    if args.converter_model:
-        converter_model_config["model"] = args.converter_model
+    if args.generator_api_key_env:
+        adapter_config["api_key_env"] = args.generator_api_key_env
+    if args.generator_max_tokens_field:
+        adapter_config["max_tokens_field"] = args.generator_max_tokens_field
+    if args.generator_send_temperature is not None:
+        adapter_config["send_temperature"] = args.generator_send_temperature
+    vlm_budget_config = load_yaml(_path_arg(args.vlm_budget_config), default={})
+    if not isinstance(vlm_budget_config, dict):
+        parser.error("--vlm-budget-config must point to a YAML object")
+    evaluation_profile = load_yaml(_path_arg(args.evaluation_profile), default={})
+    if not isinstance(evaluation_profile, dict):
+        parser.error("--evaluation-profile must point to a YAML object")
+    if args.converter_config or args.converter_endpoint or args.converter_model:
+        parser.error(
+            "runtime converter options were removed from benchmark execution; create and review "
+            "a frozen annotation with scripts/author_reference_annotation.py"
+        )
+    judge_config = read_json(_path_arg(args.vlm_judge_config)) if args.vlm_judge_config else {}
+    if not isinstance(judge_config, dict):
+        parser.error("--vlm-judge-config must point to a JSON object")
+    try:
+        _reject_literal_api_key(judge_config, "VLM judge config")
+    except ValueError as exc:
+        parser.error(str(exc))
+    for key, value in {
+        "endpoint": args.vlm_judge_endpoint,
+        "model": args.vlm_judge_model,
+        "api_key_env": args.vlm_judge_api_key_env,
+        "max_tokens_field": args.vlm_judge_max_tokens_field,
+        "send_temperature": args.vlm_judge_send_temperature,
+        "timeout_seconds": args.vlm_judge_timeout_seconds,
+        "max_tokens": args.vlm_judge_max_tokens,
+        "context_length": args.vlm_judge_context_length,
+        "max_images": args.vlm_judge_max_images,
+    }.items():
+        if value is not None:
+            judge_config[key] = value
+    if bool(judge_config.get("endpoint") or judge_config.get("base_url")) != bool(judge_config.get("model") or judge_config.get("model_id")):
+        parser.error("VLM judge endpoint and model must be configured together")
+    evaluator_vlm_judge = build_openai_compatible_vlm_judge(judge_config) if judge_config else None
 
     manifest = run_scene_harness(
         instruction=args.instruction,
@@ -287,17 +771,51 @@ def main() -> None:
         asset_mode=args.asset_mode,
         adapter=args.adapter,
         adapter_config=adapter_config or None,
-        converter_model_config=converter_model_config or None,
-        generated_scene=_path_arg(args.generated_scene) if args.generated_scene else None,
+        vlm_budget_config=vlm_budget_config,
+        method_output=_path_arg(args.method_output) if args.method_output else None,
         run_generation=args.run_generation,
         iteration_limit=args.iteration_limit,
         structure=args.structure,
-        object_plan=read_json(_path_arg(args.object_plan)) if args.object_plan else None,
+        prompt_granularity=args.prompt_granularity,
+        generator_structure=(
+            read_json(_path_arg(args.generator_structure))
+            if args.generator_structure
+            else None
+        ),
+        reference_annotation=(
+            read_json(_path_arg(args.reference_annotation))
+            if args.reference_annotation
+            else None
+        ),
         asset_selection=read_json(_path_arg(args.asset_selection)) if args.asset_selection else None,
+        evaluator_output_type=args.evaluator_output_type,
         eval_generic_validity=args.eval_generic_validity,
         eval_oor=args.eval_oor,
         eval_oar=args.eval_oar,
         enrich_assets=args.enrich_assets if args.enrich_assets else None,
+        render_evidence=[str(_path_arg(path)) for path in args.render_evidence],
+        evaluator_vlm_judge=evaluator_vlm_judge,
+        blender_bin=_path_arg(args.blender_bin) if args.blender_bin else None,
+        blender_timeout_seconds=args.blender_timeout_seconds,
+        render_width=args.render_width,
+        render_height=args.render_height,
+        blender_render_engine=args.blender_render_engine,
+        blender_cycles_device=args.blender_cycles_device,
+        blender_cycles_samples=args.blender_cycles_samples,
+        blender_cycles_denoising=args.blender_cycles_denoising,
+        evaluation_profile=evaluation_profile,
+        spatial_fidelity_ontology=(
+            _path_arg(args.spatial_fidelity_ontology)
+            if args.spatial_fidelity_ontology
+            else None
+        ),
+        support_enabled=args.support_enabled,
+        p0b_official_mode=args.p0b_official_mode,
+        camera_pose_mode=args.camera_pose_mode,
+        camera_pose_metric_modes=camera_pose_metric_modes,
+        camera_pose_max_views=args.camera_pose_max_views,
+        camera_pose_max_steps=args.camera_pose_max_steps,
+        collision_pair_overlay=args.collision_pair_overlay,
         out_dir=_path_arg(args.out_dir),
     )
     print(f"status: {manifest['status']}")
@@ -309,7 +827,7 @@ def _run_generation_evaluation_loop(
     generation_input: dict,
     adapter: str,
     output_dir: Path,
-    generated_scene: str | Path | None,
+    method_output: str | Path | None,
     adapter_config: dict,
     run_generation: bool,
     iteration_limit: int,
@@ -319,6 +837,22 @@ def _run_generation_evaluation_loop(
     asset_csv: str | Path | None,
     asset_root: str | Path | None,
     enrich_assets: bool,
+    scene_request: dict,
+    object_plan: dict | None,
+    reference_annotation: dict | None,
+    render_evidence: list[str] | None,
+    vlm_judge: Any | None,
+    scene_renderer: Any | None,
+    evaluation_profile: dict | None,
+    spatial_fidelity_ontology: dict | str | Path | None,
+    support_enabled: bool = True,
+    p0b_official_mode: bool = False,
+    p0b_local_view_provider: object | None = None,
+    camera_pose_mode: str | None = None,
+    camera_pose_metric_modes: dict[str, str] | None = None,
+    camera_pose_max_views: int = 2,
+    camera_pose_max_steps: int = 1,
+    collision_pair_overlay: bool = True,
 ) -> dict:
     attempts: list[dict[str, Any]] = []
     previous_report: dict | None = None
@@ -332,7 +866,7 @@ def _run_generation_evaluation_loop(
             generation_input=generation_input,
             adapter_name=adapter,
             out_dir=attempt_dir,
-            generated_scene=generated_scene if iteration == 0 else None,
+            method_output=method_output if iteration == 0 else None,
             adapter_config=adapter_config,
             run_generation=run_generation,
             evaluation_report=previous_report,
@@ -356,6 +890,43 @@ def _run_generation_evaluation_loop(
             break
 
         previous_scene = read_json(generate_result["generated_scene"])
+        require_scene_matches_architecture(previous_scene, scene_request["room"])
+        attempt_render_evidence = list(render_evidence or [])
+        if scene_renderer is not None:
+            render_dir = attempt_dir / "renders"
+            render_manifest = scene_renderer.render_scene(
+                scene_path=generate_result["generated_scene"],
+                out_dir=render_dir,
+                asset_root=asset_root,
+            )
+            attempt_render_evidence = [
+                str(item["path"])
+                for item in render_manifest.get("views", [])
+                if isinstance(item, dict) and item.get("path")
+            ]
+            attempt_record["render_manifest"] = (render_dir / "render_manifest.json").as_posix()
+            attempt_record["render_evidence"] = attempt_render_evidence
+            collision_geometry = render_manifest.get("collision_geometry")
+        else:
+            collision_geometry = None
+        attempt_local_view_provider = p0b_local_view_provider
+        if camera_pose_mode is not None:
+            blend_file = render_manifest.get("blend_file") if scene_renderer is not None else None
+            if not isinstance(blend_file, str) or not Path(blend_file).is_file():
+                raise RuntimeError("camera pose mode requires the Blender render manifest to contain scene.blend")
+            attempt_local_view_provider = CameraEvidenceProvider(
+                renderer=scene_renderer,
+                blend_file=blend_file,
+                out_dir=attempt_dir / "camera_evidence",
+                mode=camera_pose_mode,
+                metric_modes=camera_pose_metric_modes,
+                selector=vlm_judge,
+                max_views=camera_pose_max_views,
+                max_steps=camera_pose_max_steps,
+                collision_overlay=collision_pair_overlay,
+                collision_geometry=collision_geometry if isinstance(collision_geometry, dict) else None,
+            )
+            attempt_record["camera_evidence_policy"] = attempt_local_view_provider.policy_config
         report = run_evaluate(
             scene=previous_scene,
             out=attempt_dir / "evaluation_report.json",
@@ -365,9 +936,20 @@ def _run_generation_evaluation_loop(
             asset_csv=asset_csv,
             asset_root=asset_root,
             enrich_assets=enrich_assets,
+            scene_request=scene_request,
+            object_plan=object_plan,
+            reference_annotation=reference_annotation,
+            collision_geometry=collision_geometry if isinstance(collision_geometry, dict) else None,
+            render_evidence=attempt_render_evidence,
+            vlm_judge=vlm_judge,
+            evaluation_profile=evaluation_profile,
+            support_enabled=support_enabled,
+            p0b_official_mode=p0b_official_mode,
+            p0b_local_view_provider=attempt_local_view_provider,
+            spatial_fidelity_ontology=spatial_fidelity_ontology,
         )
         attempt_record["evaluation_report"] = (attempt_dir / "evaluation_report.json").as_posix()
-        attempt_record["overall_score"] = report.get("overall_score")
+        attempt_record["benchmark_score"] = report.get("benchmark_score")
         attempt_record["valid"] = _evaluation_is_valid(report)
         attempts.append(attempt_record)
         final_evaluated_attempt = attempt_record
@@ -398,6 +980,8 @@ def _run_generation_evaluation_loop(
             "workflow_status": latest_attempt.get("workflow_status"),
             "adapter_metadata": latest_attempt.get("adapter_metadata"),
             "evaluation_report": final_report_path,
+            "render_manifest": final_attempt.get("render_manifest"),
+            "render_evidence": final_attempt.get("render_evidence"),
             "self_reflexive_history": history_path.as_posix(),
         },
         "self_reflexive": {
@@ -438,14 +1022,20 @@ def _evaluation_is_valid(report: dict) -> bool:
         if isinstance(report.get(key), bool):
             return bool(report[key])
     try:
-        return float(report.get("overall_score", 0.0)) >= 0.999
+        score = report.get("benchmark_score")
+        return isinstance(score, (int, float)) and not isinstance(score, bool) and float(score) >= 0.999
     except (TypeError, ValueError):
         return False
 
 
 def _evaluation_summary(report: dict) -> dict:
     return {
-        "overall_score": report.get("overall_score"),
+        "benchmark_score": report.get("benchmark_score"),
+        "benchmark_score_status": report.get("benchmark_score_status"),
+        "prompt_granularity": report.get("prompt_granularity"),
+        "evaluation_mode": report.get("evaluation_mode"),
+        "active_categories": sorted((report.get("category_reports") or {}).keys()),
+        "coverage": report.get("coverage"),
         "valid": _evaluation_is_valid(report),
         "reports": sorted((report.get("reports") or {}).keys()),
     }
@@ -478,6 +1068,8 @@ def _canonical_object_plan(scene_request: dict, object_plan: dict) -> dict:
         "request_id": scene_request["request_id"],
         "scene_type": object_plan.get("scene_type") or scene_request.get("scene_type"),
         "scene_description": object_plan.get("scene_description") or scene_request.get("instruction"),
+        "prompt_granularity": object_plan.get("prompt_granularity") or scene_request.get("prompt_granularity") or FINE_GRAINED,
+        "explicit_claims": object_plan.get("explicit_claims") if isinstance(object_plan.get("explicit_claims"), list) else [],
         "objects": objects,
         "global_constraints": object_plan.get("global_constraints") if isinstance(object_plan.get("global_constraints"), list) else [],
         "relations": object_plan.get("relations") if isinstance(object_plan.get("relations"), list) else [],
@@ -493,7 +1085,8 @@ def _canonical_asset_selection(scene_request: dict, object_plan: dict, asset_sel
         if not isinstance(item, dict):
             continue
         object_id = str(item.get("object_id") or item.get("id") or f"obj_{index:03d}")
-        object_spec = item.get("object_spec") if isinstance(item.get("object_spec"), dict) else object_specs.get(object_id, {})
+        provided_spec = item.get("object_spec") if isinstance(item.get("object_spec"), dict) else {}
+        object_spec = {**object_specs.get(object_id, {}), **provided_spec}
         selected = item.get("selected_asset") if isinstance(item.get("selected_asset"), dict) else {}
         selection_action = str(item.get("selection_action") or "select")
         selection_reason = str(item.get("selection_reason") or "provided or top retrieval result")
@@ -507,9 +1100,18 @@ def _canonical_asset_selection(scene_request: dict, object_plan: dict, asset_sel
             {
                 "object_id": object_id,
                 "object_spec": {
+                    "role": object_spec.get("role"),
                     "category": object_spec.get("category"),
                     "description": object_spec.get("description"),
                     "estimated_size": object_spec.get("estimated_size"),
+                    "count": object_spec.get("count", 1),
+                },
+                "retrieval_query": item.get("retrieval_query")
+                if isinstance(item.get("retrieval_query"), dict)
+                else {
+                    "description": object_spec.get("description"),
+                    "category": object_spec.get("category"),
+                    "size_constraint": object_spec.get("estimated_size"),
                 },
                 "selected_asset": _canonical_selected_asset(selected),
                 "candidates": item.get("candidates") if isinstance(item.get("candidates"), list) else [],
@@ -559,26 +1161,14 @@ def _request_id(out_dir: Path) -> str:
     return out_dir.name or "scene_request"
 
 
-def _resolve_converter_model_config(converter_config: dict | None, adapter_config: dict | None) -> dict:
-    source = adapter_config if isinstance(adapter_config, dict) else {}
-    allowed = {
-        "endpoint",
-        "base_url",
-        "model",
-        "model_id",
-        "api_key",
-        "temperature",
-        "max_tokens",
-    }
-    resolved = {key: value for key, value in source.items() if key in allowed and value is not None}
-    if converter_config:
-        resolved.update(converter_config)
-    return resolved
-
-
 def _path_arg(value: str) -> Path:
     path = Path(value).expanduser()
     return path if path.is_absolute() else Path.cwd() / path
+
+
+def _reject_literal_api_key(config: dict | None, label: str) -> None:
+    if isinstance(config, dict) and "api_key" in config:
+        raise ValueError(f"{label} must not contain literal api_key; use api_key_env instead")
 
 
 if __name__ == "__main__":

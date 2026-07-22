@@ -1,0 +1,116 @@
+{
+  "request_id": "easy_007",
+  "scene_type": "living_room",
+  "scene_description": "Create a living room with a dark gray tufted sofa against the north wall. Place a teal storage coffee table in front of the sofa and a dark gray ceramic cup on the table. Put a white veined zebra plant to the right of the sofa and a beige geometric carpet near the table.",
+  "prompt_granularity": "fine_grained",
+  "explicit_claims": [],
+  "objects": [
+    {
+      "id": "obj_000",
+      "role": "",
+      "category": "sofa",
+      "description": "dark gray tufted sofa",
+      "count": 1,
+      "placement_intent": {
+        "absolute_relations": [],
+        "relative_relations": []
+      },
+      "metadata": {
+        "description_source": "imaginarium_asset_info.short_desc"
+      }
+    },
+    {
+      "id": "obj_001",
+      "role": "",
+      "category": "table",
+      "description": "teal storage coffee table",
+      "count": 1,
+      "placement_intent": {
+        "absolute_relations": [],
+        "relative_relations": []
+      },
+      "metadata": {
+        "description_source": "imaginarium_asset_info.short_desc"
+      }
+    },
+    {
+      "id": "obj_002",
+      "role": "",
+      "category": "cup",
+      "description": "dark gray ceramic cup",
+      "count": 1,
+      "placement_intent": {
+        "absolute_relations": [],
+        "relative_relations": []
+      },
+      "metadata": {
+        "description_source": "imaginarium_asset_info.short_desc"
+      }
+    },
+    {
+      "id": "obj_003",
+      "role": "",
+      "category": "plant",
+      "description": "white veined zebra plant",
+      "count": 1,
+      "placement_intent": {
+        "absolute_relations": [],
+        "relative_relations": []
+      },
+      "metadata": {
+        "description_source": "imaginarium_asset_info.short_desc"
+      }
+    },
+    {
+      "id": "obj_004",
+      "role": "",
+      "category": "rug",
+      "description": "beige geometric carpet",
+      "count": 1,
+      "placement_intent": {
+        "absolute_relations": [],
+        "relative_relations": []
+      },
+      "metadata": {
+        "description_source": "imaginarium_asset_info.short_desc"
+      }
+    }
+  ],
+  "global_constraints": [],
+  "relations": [
+    {
+      "family": "oar",
+      "subject_id": "obj_000",
+      "type": "against_wall",
+      "target": "north_wall"
+    },
+    {
+      "family": "oor",
+      "subject_id": "obj_001",
+      "type": "in_front_of",
+      "object_id": "obj_000"
+    },
+    {
+      "family": "oor",
+      "subject_id": "obj_002",
+      "type": "on_top_of",
+      "object_id": "obj_001"
+    },
+    {
+      "family": "oor",
+      "subject_id": "obj_003",
+      "type": "right_of",
+      "object_id": "obj_000"
+    },
+    {
+      "family": "oor",
+      "subject_id": "obj_004",
+      "type": "near",
+      "object_id": "obj_001"
+    }
+  ],
+  "metadata": {
+    "fixture_policy": "manual_low_ambiguity_public_structure",
+    "room_dimensions_are_benchmark_fallback": true
+  }
+}

@@ -4,10 +4,10 @@ from pathlib import Path
 
 import pytest
 
-from benchmark.data import DATASET_ADAPTERS, discover_and_normalize_cases
-from benchmark.models import MODEL_ADAPTERS, create_model
-from benchmark.pipeline import run_case_pipeline
-from benchmark.run_config import load_resolved_run_config, pipeline_resources_from_resolved
+from benchmark.legend.data import DATASET_ADAPTERS, discover_and_normalize_cases
+from benchmark.legend.models import MODEL_ADAPTERS, create_model
+from benchmark.legend.pipeline import run_case_pipeline
+from benchmark.legend.run_config import load_resolved_run_config, pipeline_resources_from_resolved
 from benchmark.utils.io import read_json, write_json
 
 

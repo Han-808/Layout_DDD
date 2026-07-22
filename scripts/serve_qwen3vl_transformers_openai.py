@@ -1,3 +1,24 @@
+"""Tiny OpenAI-compatible HTTP server for a local Qwen3-VL transformers model.
+
+Summary:
+    Serves a locally hosted Qwen3-VL model behind an OpenAI-compatible
+    chat-completions API so the benchmark's OpenAI-style judge/generator can talk
+    to it without a heavier serving stack.
+
+Input:
+    - ``--model-path`` (required), ``--host`` / ``--port``, and
+      ``--attn-implementation``.
+    - At runtime: OpenAI chat-completions requests (text plus optional image
+      data URLs).
+
+Output:
+    - A running HTTP service (uvicorn) returning chat-completion responses.
+
+Function:
+    Loads the model once and exposes a minimal ``/v1/chat/completions``-style
+    endpoint backed by transformers.
+"""
+
 from __future__ import annotations
 
 import argparse

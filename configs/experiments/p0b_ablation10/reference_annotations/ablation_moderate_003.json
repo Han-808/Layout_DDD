@@ -1,0 +1,33 @@
+{
+  "annotation_version": "reference_annotation_v1",
+  "validation_status": "confirmed",
+  "source": "manual",
+  "request_id": "ablation_moderate_003",
+  "scene_type": "bedroom",
+  "inventory_policy": "closed_world",
+  "objects": [
+    {"id": "obj_000", "category": "bed", "description": "white upholstered bed", "count": 1, "claim_state": "confirmed"},
+    {"id": "obj_001", "category": "nightstand", "description": "dark brown wooden nightstand", "count": 1, "claim_state": "confirmed"},
+    {"id": "obj_002", "category": "nightstand", "description": "dark brown wooden nightstand", "count": 1, "claim_state": "confirmed"},
+    {"id": "obj_003", "category": "lamp", "description": "beige linen table lamp", "count": 1, "claim_state": "confirmed"},
+    {"id": "obj_004", "category": "lamp", "description": "beige linen table lamp", "count": 1, "claim_state": "confirmed"},
+    {"id": "obj_005", "category": "rug", "description": "beige geometric carpet", "count": 1, "claim_state": "confirmed"},
+    {"id": "obj_006", "category": "pillow", "description": "light gray pillow", "count": 1, "claim_state": "confirmed"},
+    {"id": "obj_007", "category": "book", "description": "dark navy paperback book", "count": 1, "claim_state": "confirmed"}
+  ],
+  "oor_relations": [
+    {"type": "ordered", "object_ids": ["obj_001", "obj_000", "obj_002"], "axis": "x", "direction": "left_to_right", "raw_relation": "one nightstand on each side of the bed", "claim_state": "confirmed"},
+    {"type": "between", "subject_id": "obj_000", "object_ids": ["obj_001", "obj_002"], "claim_state": "confirmed"},
+    {"type": "on_top_of", "subject_id": "obj_003", "object_id": "obj_001", "claim_state": "confirmed"},
+    {"type": "on_top_of", "subject_id": "obj_004", "object_id": "obj_002", "claim_state": "confirmed"},
+    {"type": "in_front", "subject_id": "obj_005", "object_id": "obj_000", "claim_state": "confirmed"},
+    {"type": "on_top_of", "subject_id": "obj_006", "object_id": "obj_000", "claim_state": "confirmed"},
+    {"type": "on_top_of", "subject_id": "obj_007", "object_id": "obj_002", "claim_state": "confirmed"}
+  ],
+  "oar_relations": [
+    {"type": "against_wall", "subject_id": "obj_000", "architectural_element": "north_wall", "claim_state": "confirmed"},
+    {"type": "on_floor", "subject_id": "obj_005", "architectural_element": "floor", "claim_state": "confirmed"}
+  ],
+  "room_constraints": {"claim_state": "not_mentioned"},
+  "provenance": {"origin": "manual_p0b_ablation_conversion", "generator_visible": false, "leaderboard_ground_truth": false, "room_source": "benchmark_fallback", "multi_object_relation": "ordered_and_between"}
+}

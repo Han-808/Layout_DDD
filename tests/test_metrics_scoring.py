@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from benchmark.metrics.aggregate import aggregate_case_results
-from benchmark.workflow.scoring import compute_primary_score, compute_validity_gate
+from benchmark.legend.metrics.aggregate import aggregate_case_results
+from benchmark.legend.workflow.scoring import compute_primary_score, compute_validity_gate
 
 
 def test_primary_score_prompt_only_equals_room_score() -> None:

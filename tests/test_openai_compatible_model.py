@@ -5,13 +5,13 @@ import urllib.request
 
 import pytest
 
-from benchmark.models.base_model import ModelResponseError, build_generation_prompt, build_repair_prompt, compact_bm_instance_for_model, parse_json_object
-from benchmark.models.factory import create_model
-from benchmark.models.openai_compatible_model import OpenAICompatibleModel
+from benchmark.legend.models.base_model import ModelResponseError, build_generation_prompt, build_repair_prompt, compact_bm_instance_for_model, parse_json_object
+from benchmark.legend.models.factory import create_model
+from benchmark.legend.models.openai_compatible_model import OpenAICompatibleModel
 from benchmark.models.prompt_budget import PromptBudgetError
-from benchmark.object_aliasing import ALIAS_MAP_KEY
-from benchmark.pipeline import apply_model_overrides
-from benchmark.workflow.payloads import build_input_payloads
+from benchmark.legend.object_aliasing import ALIAS_MAP_KEY
+from benchmark.legend.pipeline import apply_model_overrides
+from benchmark.legend.workflow.payloads import build_input_payloads
 
 
 class _FakeResponse:

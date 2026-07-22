@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from benchmark.workflow.physical_flags import collect_physical_flags
+from benchmark.legend.workflow.physical_flags import collect_physical_flags
 
 
 ROOM = {

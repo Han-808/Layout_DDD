@@ -2,14 +2,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from benchmark.models.base_model import BaseLayoutModel, ModelResponseError
+from benchmark.legend.models.base_model import BaseLayoutModel, ModelResponseError
 from benchmark.utils.io import read_json
-from benchmark.workflow import run_workflow
-from benchmark.workflow.evaluate import evaluate_layout_v0
+from benchmark.legend.workflow import run_workflow
+from benchmark.legend.workflow.evaluate import evaluate_layout_v0
 
 
 ROOT = Path(__file__).resolve().parents[1]
-HSSD_CASE = ROOT / "data" / "benchmark_cases" / "hssd_small" / "102343992_structured_relation.json"
+HSSD_CASE = ROOT / "Support" / "data" / "benchmark_cases" / "hssd_small" / "102343992_structured_relation.json"
 
 
 class _UnparseableModel(BaseLayoutModel):
@@ -78,7 +78,14 @@ def test_parseable_invalid_layout_still_reaches_vlm_judge(tmp_path: Path) -> Non
         out_dir=tmp_path,
         model_name="mock",
         benchmark_config={"evaluation": {"vlm_judge_input_mode": "json_plus_render"}},
-        layout_schema=read_json(ROOT / "schemas" / "layout.schema.json"),
+        layout_schema=read_json(
+            ROOT
+            / "Support"
+            / "legacy"
+            / "legend"
+            / "schemas"
+            / "legend_layout.schema.json"
+        ),
     )
 
     assert report["overall_valid"] is True
@@ -151,7 +158,14 @@ def test_unparseable_generation_writes_structured_failure(tmp_path: Path) -> Non
             "out_dir": str(tmp_path),
             "model": _UnparseableModel(),
             "model_name": "unparseable",
-            "layout_schema": read_json(ROOT / "schemas" / "layout.schema.json"),
+            "layout_schema": read_json(
+                ROOT
+                / "Support"
+                / "legacy"
+                / "legend"
+                / "schemas"
+                / "legend_layout.schema.json"
+            ),
             "benchmark_config": {"benchmark": {"save_viewer_scene": True}, "evaluation": {"vlm_judge_input_mode": "json_plus_render"}},
             "max_repair_iterations": 0,
         }
@@ -174,7 +188,14 @@ def test_malformed_repair_response_is_recorded_without_aborting_case(tmp_path: P
             "out_dir": str(tmp_path),
             "model": _MalformedRepairModel(),
             "model_name": "malformed_repair",
-            "layout_schema": read_json(ROOT / "schemas" / "layout.schema.json"),
+            "layout_schema": read_json(
+                ROOT
+                / "Support"
+                / "legacy"
+                / "legend"
+                / "schemas"
+                / "legend_layout.schema.json"
+            ),
             "benchmark_config": {"benchmark": {"save_viewer_scene": True}, "evaluation": {"vlm_judge": "mock", "vlm_judge_input_mode": "json_plus_render"}},
             "max_repair_iterations": 1,
         }

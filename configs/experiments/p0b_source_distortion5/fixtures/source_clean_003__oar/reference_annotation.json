@@ -1,0 +1,119 @@
+{
+  "annotation_version": "reference_annotation_v1",
+  "validation_status": "confirmed",
+  "source": "manual",
+  "request_id": "source_clean_003__oar",
+  "scene_type": "bedroom with study room",
+  "inventory_policy": "closed_world",
+  "objects": [
+    {
+      "id": "obj_000",
+      "category": "wardrobe",
+      "description": "gray silver wardrobe",
+      "count": 1,
+      "claim_state": "confirmed"
+    },
+    {
+      "id": "obj_001",
+      "category": "table",
+      "description": "gray baroque bedside table",
+      "count": 1,
+      "claim_state": "confirmed"
+    },
+    {
+      "id": "obj_002",
+      "category": "bed",
+      "description": "gray wooden single bed",
+      "count": 1,
+      "claim_state": "confirmed"
+    },
+    {
+      "id": "obj_003",
+      "category": "table",
+      "description": "brown wooden coffee table",
+      "count": 1,
+      "claim_state": "confirmed"
+    },
+    {
+      "id": "obj_004",
+      "category": "cabinet",
+      "description": "dark green metal cabinet",
+      "count": 1,
+      "claim_state": "confirmed"
+    }
+  ],
+  "oor_relations": [
+    {
+      "type": "left",
+      "subject_id": "obj_001",
+      "object_id": "obj_002",
+      "claim_state": "confirmed",
+      "relation_id": "oor_000"
+    },
+    {
+      "type": "near",
+      "subject_id": "obj_003",
+      "object_id": "obj_002",
+      "claim_state": "confirmed",
+      "relation_id": "oor_001"
+    },
+    {
+      "type": "in_front",
+      "subject_id": "obj_004",
+      "object_id": "obj_002",
+      "claim_state": "confirmed",
+      "relation_id": "oor_002"
+    }
+  ],
+  "oar_relations": [
+    {
+      "type": "against_wall",
+      "subject_id": "obj_000",
+      "architectural_element": "east_wall",
+      "claim_state": "confirmed",
+      "relation_id": "oar_000"
+    },
+    {
+      "type": "against_wall",
+      "subject_id": "obj_001",
+      "architectural_element": "north_wall",
+      "claim_state": "confirmed",
+      "relation_id": "oar_001"
+    },
+    {
+      "type": "against_wall",
+      "subject_id": "obj_004",
+      "architectural_element": "south_wall",
+      "claim_state": "confirmed",
+      "relation_id": "oar_002"
+    },
+    {
+      "type": "against_wall",
+      "subject_id": "obj_003",
+      "architectural_element": "west_wall",
+      "claim_state": "confirmed",
+      "relation_id": "oar_003"
+    }
+  ],
+  "room_constraints": {
+    "claim_state": "confirmed",
+    "shape": "rectangular_enclosed_room",
+    "dimensions": {
+      "width": 5.25,
+      "depth": 3.27,
+      "height": 2.8805
+    }
+  },
+  "review": {
+    "status": "approved",
+    "reviewer": "benchmark_author"
+  },
+  "provenance": {
+    "origin": "manual_source_scene_fixture_conversion",
+    "generator_visible": false,
+    "leaderboard_ground_truth": false,
+    "source_scene_id": "scene_000657_03",
+    "base_case_id": "source_clean_003",
+    "variant_family": "oar"
+  }
+}

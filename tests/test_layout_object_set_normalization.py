@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from benchmark.workflow.layout_normalization import enforce_layout_object_set
+from benchmark.legend.workflow.layout_normalization import enforce_layout_object_set
 
 
 CASE = {

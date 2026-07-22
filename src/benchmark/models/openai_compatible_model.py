@@ -1,26 +1,25 @@
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
+import re
 import time
 import urllib.error
 import urllib.request
-from dataclasses import dataclass
+from urllib.parse import urlparse
 from typing import Any
 
-from benchmark.models.base_model import (
-    BaseLayoutModel,
-    build_generation_prompt,
-    build_generation_prompt_sections,
-    build_repair_prompt,
-    build_repair_prompt_sections,
-    parse_json_object,
-)
 from benchmark.models.prompt_budget import (
     DEFAULT_PROMPT_SAFETY_MARGIN_TOKENS,
     PromptBudgetError,
     build_prompt_budget_report,
 )
+
+
+MAX_HTTP_ERROR_BODY_BYTES = 8_192
+MAX_HTTP_ERROR_DETAIL_CHARS = 2_000
+_ENVIRONMENT_VARIABLE_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 class OpenAICompatibleModelError(RuntimeError):
@@ -39,23 +38,24 @@ class EndpointMalformedResponseError(OpenAICompatibleModelError):
     """Raised when the endpoint response does not match OpenAI chat shape."""
 
 
-@dataclass
-class OpenAICompatibleModel(BaseLayoutModel):
-    """Adapter for local/open-source OpenAI-compatible chat endpoints.
+class MissingAPIKeyError(OpenAICompatibleModelError):
+    """Raised when a credentialed endpoint has no configured API key."""
+
+
+class OpenAICompatibleModel:
+    """Client for local or remote OpenAI-compatible chat endpoints.
 
     This supports servers such as vLLM, Ollama's OpenAI-compatible API, and
-    LM Studio without adding provider-specific SDK dependencies.
+    LM Studio without adding provider-specific SDK dependencies. Generator
+    adapters own task prompts and output conversion; this client has no
+    benchmark-layout generation or repair behavior.
     """
 
     endpoint: str
     model_id: str
     api_key_env: str | None = None
-    api_key: str | None = None
     temperature: float = 0.0
     max_tokens: int | None = None
-    generation_max_tokens: int | None = None
-    repair_max_tokens: int | None = None
-    judge_max_tokens: int | None = None
     context_length: int | None = None
     prompt_safety_margin_tokens: int = DEFAULT_PROMPT_SAFETY_MARGIN_TOKENS
     fail_fast_prompt_budget: bool = True
@@ -64,8 +64,9 @@ class OpenAICompatibleModel(BaseLayoutModel):
     max_retries: int = 0
     retry_backoff_seconds: float = 1.0
     retry_on_status: list[int] | None = None
-    runtime_profile: str | None = None
-    judge_evidence_budgeting: bool = False
+    max_tokens_field: str = "max_tokens"
+    send_temperature: bool = True
+    require_api_key: bool | None = None
 
     def __init__(
         self,
@@ -74,12 +75,8 @@ class OpenAICompatibleModel(BaseLayoutModel):
         endpoint: str,
         model_id: str,
         api_key_env: str | None = None,
-        api_key: str | None = None,
         temperature: float = 0.0,
         max_tokens: int | None = None,
-        generation_max_tokens: int | None = None,
-        repair_max_tokens: int | None = None,
-        judge_max_tokens: int | None = None,
         context_length: int | None = None,
         prompt_safety_margin_tokens: int = DEFAULT_PROMPT_SAFETY_MARGIN_TOKENS,
         fail_fast_prompt_budget: bool = True,
@@ -88,19 +85,22 @@ class OpenAICompatibleModel(BaseLayoutModel):
         max_retries: int = 0,
         retry_backoff_seconds: float = 1.0,
         retry_on_status: list[int] | None = None,
-        runtime_profile: str | None = None,
-        judge_evidence_budgeting: bool = False,
+        max_tokens_field: str = "max_tokens",
+        send_temperature: bool = True,
+        require_api_key: bool | None = None,
     ) -> None:
-        super().__init__(name=name)
+        _validate_endpoint_security(endpoint)
+        self.name = name
         self.endpoint = endpoint
         self.model_id = model_id
-        self.api_key_env = api_key_env
-        self.api_key = api_key
+        official_openai_endpoint = _is_official_openai_endpoint(endpoint)
+        resolved_api_key_env = api_key_env or (
+            "OPENAI_API_KEY" if official_openai_endpoint else None
+        )
+        _validate_api_key_env_name(resolved_api_key_env)
+        self.api_key_env = resolved_api_key_env
         self.temperature = temperature
         self.max_tokens = max_tokens
-        self.generation_max_tokens = generation_max_tokens
-        self.repair_max_tokens = repair_max_tokens
-        self.judge_max_tokens = judge_max_tokens
         self.context_length = context_length
         self.prompt_safety_margin_tokens = prompt_safety_margin_tokens
         self.fail_fast_prompt_budget = fail_fast_prompt_budget
@@ -109,80 +109,19 @@ class OpenAICompatibleModel(BaseLayoutModel):
         self.max_retries = max_retries
         self.retry_backoff_seconds = retry_backoff_seconds
         self.retry_on_status = retry_on_status or [429, 500, 502, 503, 504]
-        self.runtime_profile = runtime_profile
-        self.judge_evidence_budgeting = judge_evidence_budgeting
+        if max_tokens_field not in {"max_tokens", "max_completion_tokens"}:
+            raise ValueError(
+                "max_tokens_field must be 'max_tokens' or 'max_completion_tokens'"
+            )
+        self.max_tokens_field = max_tokens_field
+        self.send_temperature = bool(send_temperature)
+        self.require_api_key = (
+            bool(official_openai_endpoint or api_key_env)
+            if require_api_key is None
+            else bool(require_api_key)
+        )
         self.last_request_metadata: dict[str, Any] = {}
         self.last_response_text = ""
-        self.last_prompt_text = ""
-        self.last_prompt_sections: list[dict[str, Any]] = []
-
-    def generate_layout(self, bm_instance: dict, layout_schema: dict) -> dict:
-        sections = build_generation_prompt_sections(bm_instance, layout_schema)
-        prompt = build_generation_prompt(bm_instance, layout_schema)
-        self.last_prompt_text = prompt
-        self.last_prompt_sections = [_section_metadata(section) for section in sections]
-        response = self._chat(
-            prompt,
-            call_type="generation",
-            prompt_sections=sections,
-            case=bm_instance,
-            max_tokens=self._max_tokens_for_call("generation")[0],
-            max_tokens_source=self._max_tokens_for_call("generation")[1],
-        )
-        return parse_json_object(response)
-
-    def repair_layout(
-        self,
-        bm_instance: dict,
-        current_layout: dict,
-        feedback: dict,
-        layout_schema: dict,
-    ) -> dict:
-        sections = build_repair_prompt_sections(bm_instance, current_layout, feedback, layout_schema)
-        prompt = build_repair_prompt(bm_instance, current_layout, feedback, layout_schema)
-        self.last_prompt_text = prompt
-        self.last_prompt_sections = [_section_metadata(section) for section in sections]
-        response = self._chat(
-            prompt,
-            call_type="repair",
-            prompt_sections=sections,
-            case=bm_instance,
-            iteration=int(feedback.get("iteration", 0)) + 1 if isinstance(feedback, dict) else None,
-            max_tokens=self._max_tokens_for_call("repair")[0],
-            max_tokens_source=self._max_tokens_for_call("repair")[1],
-        )
-        return parse_json_object(response)
-
-    def _chat(
-        self,
-        prompt: str,
-        *,
-        call_type: str = "generation",
-        prompt_sections: list[Any] | None = None,
-        case: dict | None = None,
-        iteration: int | None = None,
-        max_tokens: int | None = None,
-        max_tokens_source: str | None = None,
-    ) -> str:
-        return self.chat_messages(
-            [
-                {
-                    "role": "system",
-                    "content": (
-                        "You generate valid 3D room layout JSON. "
-                        "Return one JSON object only, with no Markdown or explanation."
-                    ),
-                },
-                {"role": "user", "content": prompt},
-            ],
-            response_format_json=self.response_format_json,
-            call_type=call_type,
-            prompt_sections=prompt_sections,
-            case=case,
-            iteration=iteration,
-            max_tokens=max_tokens,
-            max_tokens_source=max_tokens_source,
-        )
 
     def chat_messages(
         self,
@@ -200,10 +139,11 @@ class OpenAICompatibleModel(BaseLayoutModel):
         payload: dict[str, Any] = {
             "model": self.model_id,
             "messages": messages,
-            "temperature": self.temperature,
         }
+        if self.send_temperature:
+            payload["temperature"] = self.temperature
         if resolved_max_tokens is not None:
-            payload["max_tokens"] = resolved_max_tokens
+            payload[self.max_tokens_field] = resolved_max_tokens
         use_json_format = self.response_format_json if response_format_json is None else response_format_json
         if use_json_format:
             payload["response_format"] = {"type": "json_object"}
@@ -234,6 +174,12 @@ class OpenAICompatibleModel(BaseLayoutModel):
             call_type=call_type,
         )
         self.last_request_metadata["prompt_chars"] = _message_text_chars(messages)
+        self.last_request_metadata["api_key_env"] = self.api_key_env
+        self.last_request_metadata["authorization_configured"] = bool(
+            self.api_key_env and os.environ.get(self.api_key_env)
+        )
+        self.last_request_metadata["max_tokens_field"] = self.max_tokens_field
+        self.last_request_metadata["send_temperature"] = self.send_temperature
         self.last_request_metadata["prompt_budget_report"] = budget_report
         self.last_request_metadata["prompt_budget_warning"] = budget_report.get("warning")
         self.last_request_metadata["prompt_budget_exceeded"] = budget_report.get("fits_context") is False
@@ -258,19 +204,6 @@ class OpenAICompatibleModel(BaseLayoutModel):
             }
         )
         return content
-
-    def _max_tokens_for_call(self, call_type: str) -> tuple[int | None, str]:
-        if call_type == "generation" and self.generation_max_tokens is not None:
-            return int(self.generation_max_tokens), "generation_max_tokens"
-        if call_type == "repair":
-            if self.repair_max_tokens is not None:
-                return int(self.repair_max_tokens), "repair_max_tokens"
-            if self.max_tokens is None:
-                return 16000, "safe_repair_default"
-            return min(int(self.max_tokens), 16000), "min(max_tokens, safe_repair_default)"
-        if call_type == "judge" and self.judge_max_tokens is not None:
-            return int(self.judge_max_tokens), "judge_max_tokens"
-        return self.max_tokens, "max_tokens"
 
     def list_models(self) -> dict:
         raw = self._get_json(_models_url(self.endpoint))
@@ -336,10 +269,17 @@ class OpenAICompatibleModel(BaseLayoutModel):
             if attempt > 0:
                 time.sleep(max(0.0, float(self.retry_backoff_seconds)) * attempt)
             try:
-                with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
+                with _urlopen_no_redirect(request, self.timeout_seconds) as response:
                     return response.read().decode("utf-8")
             except urllib.error.HTTPError as exc:
-                detail = exc.read().decode("utf-8", errors="replace")
+                raw_detail = exc.read(MAX_HTTP_ERROR_BODY_BYTES + 1).decode(
+                    "utf-8", errors="replace"
+                )
+                detail = _redacted_error_detail(
+                    raw_detail,
+                    secret=self._resolved_api_key(),
+                    body_truncated=len(raw_detail.encode("utf-8")) > MAX_HTTP_ERROR_BODY_BYTES,
+                )
                 last_error = EndpointHTTPError(f"Model endpoint returned HTTP {exc.code}: {detail}")
                 if exc.code not in self.retry_on_status or attempt == attempts - 1:
                     raise last_error from exc
@@ -351,10 +291,111 @@ class OpenAICompatibleModel(BaseLayoutModel):
 
     def _headers(self) -> dict[str, str]:
         headers = {"Content-Type": "application/json"}
-        token = self.api_key or (os.environ.get(self.api_key_env) if self.api_key_env else None)
+        token = self._resolved_api_key()
         if token:
             headers["Authorization"] = f"Bearer {token}"
+        elif self.require_api_key:
+            env_hint = self.api_key_env or "OPENAI_API_KEY"
+            raise MissingAPIKeyError(
+                f"Endpoint {self.endpoint} requires an API key. Set environment variable "
+                f"{env_hint}; literal API-key values are not accepted by benchmark configs."
+            )
         return headers
+
+    def _resolved_api_key(self) -> str | None:
+        token = os.environ.get(self.api_key_env) if self.api_key_env else None
+        if not isinstance(token, str):
+            return None
+        token = token.strip()
+        return token or None
+
+
+def _is_official_openai_endpoint(endpoint: str) -> bool:
+    try:
+        return (urlparse(endpoint).hostname or "").lower() == "api.openai.com"
+    except ValueError:
+        return False
+
+
+def _validate_endpoint_security(endpoint: str) -> None:
+    try:
+        parsed = urlparse(str(endpoint))
+        hostname = (parsed.hostname or "").strip().lower().rstrip(".")
+    except ValueError as exc:
+        raise ValueError("OpenAI-compatible endpoint is not a valid URL") from exc
+    if parsed.scheme not in {"http", "https"} or not hostname:
+        raise ValueError("OpenAI-compatible endpoint must be an absolute http(s) URL")
+    if parsed.username is not None or parsed.password is not None or parsed.query or parsed.fragment:
+        raise ValueError(
+            "OpenAI-compatible endpoint must not contain credentials, query parameters, or fragments"
+        )
+    if parsed.scheme == "http" and not _is_loopback_hostname(hostname):
+        raise ValueError(
+            "Non-loopback OpenAI-compatible endpoints must use HTTPS; plain HTTP is allowed "
+            "only for localhost/loopback servers"
+        )
+
+
+def _validate_api_key_env_name(value: Any) -> None:
+    if value is None:
+        return
+    if not isinstance(value, str) or not _ENVIRONMENT_VARIABLE_NAME.fullmatch(value):
+        raise ValueError(
+            "api_key_env must be an environment-variable name such as OPENAI_API_KEY; "
+            "literal API-key values are not accepted"
+        )
+
+
+def _is_loopback_hostname(hostname: str) -> bool:
+    if hostname == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(hostname).is_loopback
+    except ValueError:
+        return False
+
+
+class _RejectRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Prevent urllib from forwarding Authorization to a redirect target."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[no-untyped-def]
+        raise urllib.error.HTTPError(
+            req.full_url,
+            code,
+            "redirect responses are not followed",
+            headers,
+            fp,
+        )
+
+
+def _urlopen_no_redirect(
+    request: urllib.request.Request,
+    timeout: int,
+):
+    opener = urllib.request.build_opener(_RejectRedirectHandler())
+    return opener.open(request, timeout=timeout)
+
+
+def _redacted_error_detail(
+    detail: str,
+    *,
+    secret: str | None,
+    body_truncated: bool,
+) -> str:
+    safe = str(detail)
+    if secret:
+        safe = safe.replace(secret, "<redacted>")
+    safe = re.sub(r"(?i)\bbearer\s+[^\s,;\"']+", "Bearer <redacted>", safe)
+    safe = re.sub(
+        r'(?i)(["\']?(?:api[_-]?key|authorization|access[_-]?token|secret)["\']?\s*[:=]\s*)'
+        r'(["\']?)[^\s,;}\]]+\2',
+        r"\1<redacted>",
+        safe,
+    )
+    clipped = safe[:MAX_HTTP_ERROR_DETAIL_CHARS]
+    if body_truncated or len(safe) > MAX_HTTP_ERROR_DETAIL_CHARS:
+        clipped += "...<truncated>"
+    return clipped
 
 
 def _chat_completions_url(endpoint: str) -> str:
@@ -386,6 +427,7 @@ def _request_metadata(*, endpoint: str, url: str, payload: dict[str, Any], timeo
         "model": payload.get("model"),
         "temperature": payload.get("temperature"),
         "max_tokens": payload.get("max_tokens"),
+        "max_completion_tokens": payload.get("max_completion_tokens"),
         "timeout_seconds": timeout_seconds,
         "response_format_json": response_format_json,
         "call_type": call_type,
@@ -418,15 +460,6 @@ def _messages_text(messages: list[dict[str, Any]]) -> str:
                 if isinstance(item, dict) and isinstance(item.get("text"), str):
                     parts.append(item["text"])
     return "\n".join(parts)
-
-
-def _section_metadata(section: Any) -> dict[str, Any]:
-    return {
-        "name": getattr(section, "name", "unknown"),
-        "chars": len(getattr(section, "text", "")),
-        **({"item_count": getattr(section, "item_count")} if getattr(section, "item_count", None) is not None else {}),
-        **({"omitted_count": getattr(section, "omitted_count")} if getattr(section, "omitted_count", None) is not None else {}),
-    }
 
 
 def _tiny_png_data_url() -> str:

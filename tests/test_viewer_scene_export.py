@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from benchmark.visualization import export_viewer_scene
+from benchmark.legend.visualization import export_viewer_scene
 
 
 def _case() -> dict:

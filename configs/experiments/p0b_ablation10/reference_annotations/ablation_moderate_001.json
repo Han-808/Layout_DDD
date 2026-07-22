@@ -1,0 +1,32 @@
+{
+  "annotation_version": "reference_annotation_v1",
+  "validation_status": "confirmed",
+  "source": "manual",
+  "request_id": "ablation_moderate_001",
+  "scene_type": "dining_room",
+  "inventory_policy": "closed_world",
+  "objects": [
+    {"id": "obj_000", "category": "table", "description": "round wooden dining table", "count": 1, "claim_state": "confirmed"},
+    {"id": "obj_001", "category": "chair", "description": "dark brown wooden chair", "count": 1, "claim_state": "confirmed"},
+    {"id": "obj_002", "category": "chair", "description": "dark brown wooden chair", "count": 1, "claim_state": "confirmed"},
+    {"id": "obj_003", "category": "chair", "description": "dark brown wooden chair", "count": 1, "claim_state": "confirmed"},
+    {"id": "obj_004", "category": "chair", "description": "dark brown wooden chair", "count": 1, "claim_state": "confirmed"},
+    {"id": "obj_005", "category": "vase", "description": "white ceramic vase", "count": 1, "claim_state": "confirmed"},
+    {"id": "obj_006", "category": "lamp", "description": "sleek black pendant light", "count": 1, "claim_state": "confirmed"}
+  ],
+  "oor_relations": [
+    {"type": "around", "subject_ids": ["obj_001", "obj_002", "obj_003", "obj_004"], "object_id": "obj_000", "raw_relation": "four chairs around the table, one on each side", "claim_state": "confirmed"},
+    {"type": "left", "subject_id": "obj_001", "object_id": "obj_000", "claim_state": "confirmed"},
+    {"type": "right", "subject_id": "obj_002", "object_id": "obj_000", "claim_state": "confirmed"},
+    {"type": "in_front", "subject_id": "obj_003", "object_id": "obj_000", "claim_state": "confirmed"},
+    {"type": "behind", "subject_id": "obj_004", "object_id": "obj_000", "claim_state": "confirmed"},
+    {"type": "on_top_of", "subject_id": "obj_005", "object_id": "obj_000", "claim_state": "confirmed"},
+    {"type": "above", "subject_id": "obj_006", "object_id": "obj_000", "claim_state": "confirmed"}
+  ],
+  "oar_relations": [
+    {"type": "room_center", "subject_id": "obj_000", "architectural_element": "room_center", "claim_state": "confirmed"},
+    {"type": "hung_from_ceiling", "subject_id": "obj_006", "architectural_element": "ceiling", "claim_state": "confirmed"}
+  ],
+  "room_constraints": {"claim_state": "not_mentioned"},
+  "provenance": {"origin": "manual_p0b_ablation_conversion", "generator_visible": false, "leaderboard_ground_truth": false, "room_source": "benchmark_fallback", "multi_object_relation": "around"}
+}

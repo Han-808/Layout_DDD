@@ -1,0 +1,242 @@
+{
+  "request_id": "prompt_010",
+  "scene_type": "living_room",
+  "scene_description": "Create an 8 m x 9 m living room with a 3 m ceiling. Fit one light-grey L-shaped sectional into the southwest corner, with its two sections following the south and west walls. Put one square black coffee table inside the open side of the sectional. On the table, place one red bowl and one closed magazine side by side. A round side table stands near the short end of the sectional with one table lamp on it. Mount one large television on the north wall opposite the long sofa section, and place two green plants symmetrically below the television.",
+  "prompt_granularity": "fine_grained",
+  "explicit_claims": [
+    "one light-grey L-shaped sectional",
+    "one square black coffee table",
+    "one red bowl",
+    "one closed magazine",
+    "one round side table",
+    "one table lamp",
+    "one large television",
+    "two green plants",
+    "8 m x 9 m living room with 3 m ceiling",
+    "sectional in southwest corner",
+    "coffee table inside open side of sectional",
+    "bowl and magazine side by side on coffee table",
+    "side table near short end of sectional",
+    "television mounted on north wall",
+    "plants symmetrically below television"
+  ],
+  "objects": [
+    {
+      "id": "obj_000",
+      "role": "main seating",
+      "category": "sofa",
+      "description": "light-grey L-shaped sectional",
+      "count": 1,
+      "placement_intent": {
+        "absolute_relations": [],
+        "relative_relations": []
+      },
+      "metadata": {},
+      "estimated_size": [
+        3.0,
+        3.0,
+        0.8
+      ]
+    },
+    {
+      "id": "obj_001",
+      "role": "coffee table",
+      "category": "table",
+      "description": "square black coffee table",
+      "count": 1,
+      "placement_intent": {
+        "absolute_relations": [],
+        "relative_relations": []
+      },
+      "metadata": {},
+      "estimated_size": [
+        1.0,
+        1.0,
+        0.4
+      ]
+    },
+    {
+      "id": "obj_002",
+      "role": "decorative item",
+      "category": "bowl",
+      "description": "red bowl",
+      "count": 1,
+      "placement_intent": {
+        "absolute_relations": [],
+        "relative_relations": []
+      },
+      "metadata": {},
+      "estimated_size": [
+        0.2,
+        0.2,
+        0.1
+      ]
+    },
+    {
+      "id": "obj_003",
+      "role": "decorative item",
+      "category": "magazine",
+      "description": "closed magazine",
+      "count": 1,
+      "placement_intent": {
+        "absolute_relations": [],
+        "relative_relations": []
+      },
+      "metadata": {},
+      "estimated_size": [
+        0.2,
+        0.1,
+        0.05
+      ]
+    },
+    {
+      "id": "obj_004",
+      "role": "side table",
+      "category": "table",
+      "description": "round side table",
+      "count": 1,
+      "placement_intent": {
+        "absolute_relations": [],
+        "relative_relations": []
+      },
+      "metadata": {},
+      "estimated_size": [
+        0.6,
+        0.6,
+        0.5
+      ]
+    },
+    {
+      "id": "obj_005",
+      "role": "lighting",
+      "category": "lamp",
+      "description": "table lamp",
+      "count": 1,
+      "placement_intent": {
+        "absolute_relations": [],
+        "relative_relations": []
+      },
+      "metadata": {},
+      "estimated_size": [
+        0.3,
+        0.3,
+        0.6
+      ]
+    },
+    {
+      "id": "obj_006",
+      "role": "entertainment",
+      "category": "television",
+      "description": "large television",
+      "count": 1,
+      "placement_intent": {
+        "absolute_relations": [],
+        "relative_relations": []
+      },
+      "metadata": {},
+      "estimated_size": [
+        1.2,
+        0.8,
+        0.1
+      ]
+    },
+    {
+      "id": "obj_007",
+      "role": "decorative item",
+      "category": "plant",
+      "description": "green plant",
+      "count": 2,
+      "placement_intent": {
+        "absolute_relations": [],
+        "relative_relations": []
+      },
+      "metadata": {},
+      "estimated_size": [
+        0.4,
+        0.4,
+        0.6
+      ]
+    }
+  ],
+  "global_constraints": [
+    "{'type': 'room_dimensions', 'value': {'width': 8.0, 'depth': 9.0, 'height': 3.0}, 'unit': 'meter'}"
+  ],
+  "relations": [
+    {
+      "family": "oar",
+      "subject_id": "obj_000",
+      "type": "in_corner",
+      "target": "southwest_corner"
+    },
+    {
+      "family": "oar",
+      "subject_id": "obj_000",
+      "type": "against_wall",
+      "target": "south_wall"
+    },
+    {
+      "family": "oar",
+      "subject_id": "obj_000",
+      "type": "against_wall",
+      "target": "west_wall"
+    },
+    {
+      "family": "oor",
+      "subject_id": "obj_001",
+      "type": "inside_open_side",
+      "object_id": "obj_000"
+    },
+    {
+      "family": "oor",
+      "subject_id": "obj_002",
+      "type": "on_top_of",
+      "object_id": "obj_001"
+    },
+    {
+      "family": "oor",
+      "subject_id": "obj_003",
+      "type": "on_top_of",
+      "object_id": "obj_001"
+    },
+    {
+      "family": "oor",
+      "subject_id": "obj_002",
+      "type": "side_by_side",
+      "object_id": "obj_003"
+    },
+    {
+      "family": "oor",
+      "subject_id": "obj_004",
+      "type": "near_short_end",
+      "object_id": "obj_000"
+    },
+    {
+      "family": "oor",
+      "subject_id": "obj_005",
+      "type": "on_top_of",
+      "object_id": "obj_004"
+    },
+    {
+      "family": "oar",
+      "subject_id": "obj_006",
+      "type": "mounted_on",
+      "target": "north_wall"
+    },
+    {
+      "family": "oor",
+      "subject_id": "obj_007",
+      "type": "symmetrically_below",
+      "object_id": "obj_006"
+    },
+    {
+      "family": "oor",
+      "subject_id": "obj_007",
+      "type": "symmetrically_below",
+      "object_id": "obj_006"
+    }
+  ],
+  "metadata": {
+    "fixture_policy": "legacy_plan_schema_sanitization_only",
+    "dropped_relation_count": 0
+  }
+}

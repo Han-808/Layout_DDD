@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from benchmark.workflow.vlm_judge import create_vlm_judge
+from benchmark.legend.workflow.vlm_judge import create_vlm_judge
 
 
 def legend_create_vlm_judge(*args, **kwargs):

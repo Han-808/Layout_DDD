@@ -1,0 +1,18 @@
+version: vlm_assistance_budget_v1
+
+# Generator-side assistance is disabled for the current benchmark. Raising a
+# budget also requires an explicitly injected vlm_assistant handler.
+outputs:
+  o2_scene_program:
+    max_calls: 0
+    max_input_tokens: 0
+    max_output_tokens: 0
+    max_images: 0
+    max_tool_calls: 0
+
+  o3_scene_package:
+    max_calls: 0
+    max_input_tokens: 0
+    max_output_tokens: 0
+    max_images: 0
+    max_tool_calls: 0

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from benchmark.feedback import build_feedback
-from benchmark.feedback.feedback_builder import (
+from benchmark.legend.feedback import build_feedback
+from benchmark.legend.feedback.feedback_builder import (
     DEFAULT_COLLISION_AVOIDANCE_CONFIG,
     _floor_plan_regions,
     _outside_floor_plan_penalty,

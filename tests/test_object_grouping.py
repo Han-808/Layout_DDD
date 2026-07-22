@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import asdict
 
-from benchmark.workflow.grouping import build_object_grouping_report, build_object_groups, resolve_grouping_config
+from benchmark.legend.workflow.grouping import build_object_grouping_report, build_object_groups, resolve_grouping_config
 
 
 def _obj(object_id: str, center: list[float], support_parent: str | None = None) -> dict:

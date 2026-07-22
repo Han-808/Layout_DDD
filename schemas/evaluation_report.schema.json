@@ -3,20 +3,103 @@
   "$id": "https://example.org/layout-ddd/evaluation_report.schema.json",
   "title": "SceneHarnessEvaluationReport",
   "type": "object",
-  "required": ["scene_id", "request_id", "evaluator_version", "overall_score", "reports", "notes"],
+  "required": [
+    "scene_id",
+    "request_id",
+    "evaluator_version",
+    "protocol_scope",
+    "official_submission",
+    "prompt_granularity",
+    "evaluation_mode",
+    "benchmark_score",
+    "benchmark_score_status",
+    "category_reports",
+    "coverage",
+    "reports",
+    "notes"
+  ],
   "additionalProperties": true,
+  "allOf": [
+    {
+      "if": {
+        "properties": {"prompt_granularity": {"const": "fine_grained"}},
+        "required": ["prompt_granularity"]
+      },
+      "then": {
+        "properties": {
+          "evaluation_mode": {"const": "fine_grained_mode"},
+          "category_reports": {"required": ["prompt_fidelity"]}
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {"prompt_granularity": {"const": "coarse_grained"}},
+        "required": ["prompt_granularity"]
+      },
+      "then": {
+        "properties": {
+          "evaluation_mode": {"const": "coarse_grained_mode"},
+          "category_reports": {"required": ["spatial_fidelity"]}
+        }
+      }
+    }
+  ],
   "properties": {
     "scene_id": {"type": ["string", "null"]},
     "request_id": {"type": ["string", "null"]},
-    "evaluator_version": {"const": "scene_harness_evaluator_v0"},
-    "overall_score": {"type": "number"},
+    "evaluator_version": {"const": "scene_harness_evaluator_v1"},
+    "protocol_scope": {
+      "enum": ["diagnostic_evaluation_api", "trusted_case_diagnostic", "official_submission"]
+    },
+    "official_submission": {"type": "boolean"},
+    "prompt_granularity": {"enum": ["fine_grained", "coarse_grained"]},
+    "evaluation_mode": {"enum": ["fine_grained_mode", "coarse_grained_mode"]},
+    "benchmark_score": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
+    "benchmark_score_status": {
+      "enum": ["complete", "insufficient_metric_coverage"]
+    },
+    "category_reports": {
+      "type": "object",
+      "required": ["structural_validity", "visual_quality"],
+      "additionalProperties": true,
+      "properties": {
+        "prompt_fidelity": {"type": "object"},
+        "spatial_fidelity": {"type": "object"},
+        "structural_validity": {"type": "object"},
+        "visual_quality": {"type": "object"}
+      },
+      "oneOf": [
+        {
+          "required": ["prompt_fidelity"],
+          "not": {"required": ["spatial_fidelity"]}
+        },
+        {
+          "required": ["spatial_fidelity"],
+          "not": {"required": ["prompt_fidelity"]}
+        }
+      ]
+    },
+    "coverage": {
+      "type": "object",
+      "required": ["covered_weight", "required_weight", "complete"],
+      "additionalProperties": true,
+      "properties": {
+        "covered_weight": {"type": "number", "minimum": 0, "maximum": 1},
+        "required_weight": {"const": 1},
+        "complete": {"type": "boolean"}
+      }
+    },
     "reports": {
       "type": "object",
       "additionalProperties": true,
       "properties": {
         "generic_validity": {"type": "object"},
         "oor": {"type": "object"},
-        "oar": {"type": "object"}
+        "oar": {"type": "object"},
+        "object_mapping": {"type": "object"},
+        "object_alignment": {"type": "object"},
+        "spatial_fidelity": {"type": "object"}
       }
     },
     "notes": {"type": "array", "items": {"type": "string"}}

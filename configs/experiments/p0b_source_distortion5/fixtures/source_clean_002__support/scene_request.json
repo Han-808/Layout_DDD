@@ -1,0 +1,51 @@
+{
+  "request_id": "source_clean_002__support",
+  "instruction": "Create a compact 2.46 m by 3.51 m bedroom with a 2.45 m ceiling. Place two dark gray minimalist cabinets against the west wall. Include two dark wooden storage boxes, and place a gray wooden single bed near the center of the room.",
+  "scene_type": "bedroom",
+  "structure": false,
+  "prompt_granularity": "fine_grained",
+  "metadata": {
+    "generator_skipped": true,
+    "reference_annotation_visibility": "benchmark_private"
+  },
+  "room": {
+    "boundary": [
+      [
+        0.0,
+        0.0
+      ],
+      [
+        2.46,
+        0.0
+      ],
+      [
+        2.46,
+        3.51
+      ],
+      [
+        0.0,
+        3.51
+      ]
+    ],
+    "height": 2.45,
+    "unit": "meter",
+    "dimensions": {
+      "width": 2.46,
+      "depth": 3.51,
+      "height": 2.45
+    },
+    "explicit_dimensions": {
+      "width": 2.46,
+      "depth": 3.51,
+      "height": 2.45
+    },
+    "dimension_provenance": {
+      "width": "explicit_benchmark_fixture",
+      "depth": "explicit_benchmark_fixture",
+      "height": "explicit_benchmark_fixture"
+    },
+    "resolution_policy": "room_dimension_policy_v1",
+    "topology": "rectangular_enclosed_room",
+    "floor_z": 0.0
+  }
+}

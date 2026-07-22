@@ -12,16 +12,15 @@ def map_relationships(
     model_config: dict | None = None,
     mode: str = "passthrough",
 ) -> dict[str, Any]:
-    """Map object_plan relation intents into future evaluator-ready relation specs.
+    """Separate converter-mapped explicit claims into OOR/OAR families.
 
-    This v0 skeleton is deterministic and does not call any VLM/LLM. The
-    passthrough mode returns an empty relationship_intent document, except for
-    already structured relation dictionaries that are trivially separated by
-    family.
+    The NL converter performs the semantic mapping. This boundary is deliberately
+    lossless: predicates outside the frozen registry remain intact so the
+    evaluator can adjudicate them with visual evidence.
     """
 
     if mode == "vlm":
-        raise NotImplementedError("VLM relationship mapping is not implemented. Use mode='passthrough' or provide manual specs.")
+        raise NotImplementedError("Use the NL converter for VLM relation mapping; this boundary is lossless passthrough only.")
     if mode != "passthrough":
         raise ValueError(f"Unsupported relationship mapper mode: {mode}")
     _ = model_config
@@ -39,7 +38,7 @@ def map_relationships(
         elif family == "oar":
             oar_relations.append(dict(relation))
         else:
-            unsupported.append({"raw_relation": relation, "reason": "family not mapped in passthrough skeleton"})
+            unsupported.append({"raw_relation": relation, "reason": "relation family must be oor or oar"})
     return relationship_intent_document(
         request_id=request_id,
         oor_relations=oor_relations,

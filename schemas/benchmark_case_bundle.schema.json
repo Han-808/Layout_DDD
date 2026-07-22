@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.org/layout-ddd/benchmark_case_bundle.schema.json",
+  "title": "TrustedBenchmarkCaseBundle",
+  "description": "Hash-verified benchmark-private inputs and frozen metric policy for one official case.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["bundle_version", "case_id", "task", "artifacts", "evaluation"],
+  "properties": {
+    "bundle_version": {"const": "benchmark_case_bundle_v1"},
+    "case_id": {"type": "string", "minLength": 1},
+    "task": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["evaluator_output_type"],
+      "properties": {
+        "evaluator_output_type": {"enum": ["o1_object_state", "o3_scene_package"]}
+      }
+    },
+    "artifacts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["scene_request", "evaluation_profile"],
+      "properties": {
+        "scene_request": {"$ref": "#/$defs/artifact"},
+        "reference_annotation": {"$ref": "#/$defs/artifact"},
+        "spatial_fidelity_ontology": {"$ref": "#/$defs/artifact"},
+        "evaluation_profile": {"$ref": "#/$defs/artifact"},
+        "allowed_asset_ids": {"$ref": "#/$defs/artifact"}
+      }
+    },
+    "evaluation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled_evaluators", "p0b_official_mode"],
+      "properties": {
+        "enabled_evaluators": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["oor", "oar", "generic_validity"],
+          "properties": {
+            "oor": {"type": "boolean"},
+            "oar": {"type": "boolean"},
+            "generic_validity": {"type": "boolean"}
+          }
+        },
+        "p0b_official_mode": {"type": "boolean"},
+        "camera_evidence": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "type": ["string", "null"],
+              "enum": [null, "auto", "global_only", "bbox_track", "visibility_ranked", "query_cov"]
+            },
+            "metric_modes": {"type": "object", "additionalProperties": {"type": "string"}},
+            "max_views": {"type": "integer", "minimum": 1, "maximum": 4},
+            "max_steps": {"type": "integer", "minimum": 0, "maximum": 3},
+            "collision_overlay": {"type": "boolean"}
+          }
+        }
+      }
+    },
+    "asset_catalog": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["snapshot_id"],
+      "properties": {"snapshot_id": {"type": "string", "minLength": 1}}
+    }
+  },
+  "$defs": {
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": {"type": "string", "minLength": 1},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    }
+  }
+}

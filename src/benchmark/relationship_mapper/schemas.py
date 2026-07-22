@@ -3,18 +3,24 @@ from __future__ import annotations
 from typing import Any
 
 OOR_RELATION_TYPES = {
-    "near",
     "left",
     "right",
     "in_front",
     "behind",
     "above",
     "below",
-    "aligned_with",
+    "near",
+    "far",
     "contact",
-    "face_to",
+    "on_top_of",
     "within",
-    "out_of",
+    "contains",
+    "aligned",
+    "parallel",
+    "perpendicular",
+    "between",
+    "ordered",
+    "around",
     None,
 }
 
@@ -22,8 +28,14 @@ OAR_RELATION_TYPES = {
     "on_floor",
     "against_wall",
     "near_wall",
-    "below_wall",
     "at_corner",
+    "near_corner",
+    "room_center",
+    "room_region",
+    "along_wall",
+    "mounted_on_wall",
+    "attached_to_ceiling",
+    "hung_from_ceiling",
     None,
 }
 
@@ -40,9 +52,10 @@ def oor_relation_intent(
     source: str = "unknown",
     reason: str = "",
 ) -> dict[str, Any]:
+    canonical_type = _lossless_relation_type(relation_type)
     return {
         "family": "oor",
-        "type": relation_type if relation_type in OOR_RELATION_TYPES else None,
+        "type": canonical_type,
         "subject_id": subject_id,
         "anchor_id": anchor_id,
         "raw_relation": raw_relation,
@@ -64,9 +77,10 @@ def oar_relation_intent(
     source: str = "unknown",
     reason: str = "",
 ) -> dict[str, Any]:
+    canonical_type = _lossless_relation_type(relation_type)
     return {
         "family": "oar",
-        "type": relation_type if relation_type in OAR_RELATION_TYPES else None,
+        "type": canonical_type,
         "subject_id": subject_id,
         "architectural_element_type": architectural_element_type,
         "wall": wall,
@@ -81,7 +95,7 @@ def oar_relation_intent(
 def relationship_intent_document(
     *,
     request_id: str,
-    status: str = "tbd_passthrough",
+    status: str = "mapped",
     oor_relations: list[dict[str, Any]] | None = None,
     oar_relations: list[dict[str, Any]] | None = None,
     unsupported_relations: list[dict[str, Any]] | None = None,
@@ -94,5 +108,15 @@ def relationship_intent_document(
         "oar_relations": oar_relations or [],
         "unsupported_relations": unsupported_relations or [],
         "notes": notes
-        or ["Relationship mapping is a TODO. This module defines the interface only."],
+        or [
+            "The converter maps explicit text to the frozen relation registry.",
+            "Unknown explicit predicates are preserved for evaluator-side VLM adjudication.",
+        ],
     }
+
+
+def _lossless_relation_type(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = "_".join(str(value).strip().lower().replace("-", " ").split())
+    return normalized or None

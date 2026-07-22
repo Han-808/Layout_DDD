@@ -1,3 +1,20 @@
+"""Standalone CLI for the Object-Object Relationship (OOR) evaluator.
+
+Summary:
+    Checks relations between pairs of scene objects. The primary evaluator entry
+    point is root ``evaluate.py``.
+
+Input:
+    - ``--scene``: canonical scene JSON (objects + optional OOR relations).
+    - Optional ``--relations`` spec file and ``--config`` override.
+
+Output:
+    - ``--out``: OOR report JSON; prints score and check/pass/fail counts.
+
+Function:
+    Thin CLI wrapper over ``evaluate_oor(...)`` for deterministic OOR checks.
+"""
+
 from __future__ import annotations
 
 PRIMARY_EVALUATOR_ENTRYPOINT = "evaluate.py"
@@ -28,7 +45,7 @@ def main() -> None:
         parser.error("--config must point to a JSON object.")
     report = evaluate_oor(scene, relation_specs=relation_specs, config=config)
     out_path = write_json(_path_arg(args.out), report)
-    print(f"overall_score: {report['overall_score']}")
+    print(f"score: {report['score']}")
     print(f"num_checks_called: {report['num_checks_called']}")
     print(f"num_passed: {report['num_passed']}")
     print(f"num_failed: {report['num_failed']}")

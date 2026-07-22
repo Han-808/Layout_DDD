@@ -1,0 +1,340 @@
+{
+  "schema_version": "canonical_scene_v1",
+  "scene_id": "source_clean_004__support",
+  "request_id": "source_clean_004__support",
+  "scene_type": "kitchen",
+  "boundary": [
+    [
+      0.0,
+      0.0
+    ],
+    [
+      2.64,
+      0.0
+    ],
+    [
+      2.64,
+      3.29
+    ],
+    [
+      0.0,
+      3.29
+    ]
+  ],
+  "scene_height": 2.3998,
+  "objects": [
+    {
+      "id": "obj_000",
+      "category": "cabinet",
+      "description": "light wood kitchen cabinet",
+      "desc": "Two-drawer kitchen cabinet with light wood front panels and gray concrete countertop",
+      "short_desc": "light wood kitchen cabinet",
+      "jid": "0_SM_Kitchen_bottom_60cm",
+      "size": [
+        0.805,
+        0.6169,
+        0.91
+      ],
+      "center": [
+        1.23,
+        2.47,
+        0.46
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "geometry_provenance": "asset_mesh",
+      "asset_ref": {
+        "source_db": "imaginarium",
+        "asset_key": "0_SM_Kitchen_bottom_60cm",
+        "mesh_uri": null,
+        "pointcloud_uri": null,
+        "metadata_uri": null
+      },
+      "asset_proxy": {
+        "type": "obb_from_source_scene",
+        "bbox_center_local": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "bbox_size": [
+          0.805,
+          0.6169,
+          0.91
+        ]
+      },
+      "metadata": {
+        "source_scene_id": "scene_003609_02",
+        "source_object_index": 0,
+        "fixture_role": "frozen_source_object",
+        "interactive": false
+      }
+    },
+    {
+      "id": "obj_001",
+      "category": "refrigerator",
+      "description": "white rounded refrigerator",
+      "desc": "A tall white refrigerator with rounded edges and top freezer compartment",
+      "short_desc": "white rounded refrigerator",
+      "jid": "19_SM_Fridge",
+      "size": [
+        0.6,
+        0.6329,
+        1.8362
+      ],
+      "center": [
+        0.32,
+        0.34,
+        1.10362
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        -180.0
+      ],
+      "geometry_provenance": "asset_mesh",
+      "asset_ref": {
+        "source_db": "imaginarium",
+        "asset_key": "19_SM_Fridge",
+        "mesh_uri": null,
+        "pointcloud_uri": null,
+        "metadata_uri": null
+      },
+      "asset_proxy": {
+        "type": "obb_from_source_scene",
+        "bbox_center_local": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "bbox_size": [
+          0.6,
+          0.6329,
+          1.8362
+        ]
+      },
+      "metadata": {
+        "source_scene_id": "scene_003609_02",
+        "source_object_index": 1,
+        "fixture_role": "frozen_source_object",
+        "interactive": false
+      }
+    },
+    {
+      "id": "obj_002",
+      "category": "cabinet",
+      "description": "light wood kitchen cabinet",
+      "desc": "Two-drawer kitchen cabinet with light wood front panels and gray concrete countertop",
+      "short_desc": "light wood kitchen cabinet",
+      "jid": "0_SM_Kitchen_bottom_60cm",
+      "size": [
+        0.805,
+        0.6169,
+        0.91
+      ],
+      "center": [
+        0.42,
+        2.47,
+        0.46
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "geometry_provenance": "asset_mesh",
+      "asset_ref": {
+        "source_db": "imaginarium",
+        "asset_key": "0_SM_Kitchen_bottom_60cm",
+        "mesh_uri": null,
+        "pointcloud_uri": null,
+        "metadata_uri": null
+      },
+      "asset_proxy": {
+        "type": "obb_from_source_scene",
+        "bbox_center_local": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "bbox_size": [
+          0.805,
+          0.6169,
+          0.91
+        ]
+      },
+      "metadata": {
+        "source_scene_id": "scene_003609_02",
+        "source_object_index": 2,
+        "fixture_role": "frozen_source_object",
+        "interactive": false
+      }
+    },
+    {
+      "id": "obj_003",
+      "category": "cabinet",
+      "description": "dark wooden kitchen cabinet",
+      "desc": "A wooden kitchen cabinet with dark top, double doors and two drawers with recessed handles",
+      "short_desc": "dark wooden kitchen cabinet",
+      "jid": "e_SM_Kitchen_3",
+      "size": [
+        0.805,
+        0.5,
+        0.91
+      ],
+      "center": [
+        1.72,
+        0.42,
+        0.5800000000000001
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        -90.0
+      ],
+      "geometry_provenance": "asset_mesh",
+      "asset_ref": {
+        "source_db": "imaginarium",
+        "asset_key": "e_SM_Kitchen_3",
+        "mesh_uri": null,
+        "pointcloud_uri": null,
+        "metadata_uri": null
+      },
+      "asset_proxy": {
+        "type": "obb_from_source_scene",
+        "bbox_center_local": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "bbox_size": [
+          0.805,
+          0.5,
+          0.91
+        ]
+      },
+      "metadata": {
+        "source_scene_id": "scene_003609_02",
+        "source_object_index": 3,
+        "fixture_role": "frozen_source_object",
+        "interactive": false
+      }
+    },
+    {
+      "id": "obj_004",
+      "category": "cabinet",
+      "description": "dark wooden kitchen cabinet",
+      "desc": "A wooden kitchen cabinet with dark top, double doors and two drawers with recessed handles",
+      "short_desc": "dark wooden kitchen cabinet",
+      "jid": "e_SM_Kitchen_3",
+      "size": [
+        0.805,
+        0.5,
+        0.91
+      ],
+      "center": [
+        2.37,
+        2.03,
+        0.5800000000000001
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        -90.0
+      ],
+      "geometry_provenance": "asset_mesh",
+      "asset_ref": {
+        "source_db": "imaginarium",
+        "asset_key": "e_SM_Kitchen_3",
+        "mesh_uri": null,
+        "pointcloud_uri": null,
+        "metadata_uri": null
+      },
+      "asset_proxy": {
+        "type": "obb_from_source_scene",
+        "bbox_center_local": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "bbox_size": [
+          0.805,
+          0.5,
+          0.91
+        ]
+      },
+      "metadata": {
+        "source_scene_id": "scene_003609_02",
+        "source_object_index": 4,
+        "fixture_role": "frozen_source_object",
+        "interactive": false
+      }
+    },
+    {
+      "id": "obj_005",
+      "category": "cabinet",
+      "description": "dark wooden kitchen cabinet",
+      "desc": "A wooden kitchen cabinet with dark top, double doors and two drawers with recessed handles",
+      "short_desc": "dark wooden kitchen cabinet",
+      "jid": "e_SM_Kitchen_3",
+      "size": [
+        0.805,
+        0.5,
+        0.91
+      ],
+      "center": [
+        1.72,
+        1.23,
+        0.46
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        -90.0
+      ],
+      "geometry_provenance": "asset_mesh",
+      "asset_ref": {
+        "source_db": "imaginarium",
+        "asset_key": "e_SM_Kitchen_3",
+        "mesh_uri": null,
+        "pointcloud_uri": null,
+        "metadata_uri": null
+      },
+      "asset_proxy": {
+        "type": "obb_from_source_scene",
+        "bbox_center_local": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "bbox_size": [
+          0.805,
+          0.5,
+          0.91
+        ]
+      },
+      "metadata": {
+        "source_scene_id": "scene_003609_02",
+        "source_object_index": 5,
+        "fixture_role": "frozen_source_object",
+        "interactive": false
+      }
+    }
+  ],
+  "metadata": {
+    "coordinate_frame": {
+      "origin": "room_min_corner_floor",
+      "axes": "x_width_y_depth_z_up",
+      "unit": "meter",
+      "rotation_unit": "degree"
+    },
+    "source_scene_id": "scene_003609_02",
+    "source_selection": "strict_zero_candidate_collision_oob_support_screen",
+    "generator_skipped": true,
+    "base_case_id": "source_clean_004",
+    "variant_family": "support"
+  }
+}

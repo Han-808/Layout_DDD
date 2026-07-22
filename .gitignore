@@ -27,5 +27,24 @@ downloads/
 /IntelliScene3-main.tar.gz
 /benchmark_notes.txt
 
+# Non-core repository material lives physically under Support/.
+# Keep accidental root-level reintroductions out of version control.
+/Assets
+/Scenes
+/cal_dataset0
+/cal_dataset1
+/data
+/outputs
+/reports
+/result
+/Support/Assets/
+/Support/Scenes/
+/Support/artifacts/
+/Support/data/
+/Support/datasets/
+/Support/notes/
+/Support/third_party/
+
 # Local documentation and operational notes
 *.md
+!/Support/README.md

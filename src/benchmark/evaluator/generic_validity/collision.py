@@ -1,92 +1,475 @@
+"""P0b object-object collision metric with OBB broad phase and mesh narrow phase."""
+
 from __future__ import annotations
 
+import math
+from copy import deepcopy
 from itertools import combinations
+from pathlib import Path
+from typing import Any
+
+import numpy as np
 
 from benchmark.evaluator.generic_validity.geometry import (
-    NormalizedObject,
     footprint_overlap_area,
-    footprint_overlap_ratio,
-    get_obb_corners,
     normalize_objects,
-    point_in_obb,
     z_interval_overlap,
+)
+from benchmark.evaluator.generic_validity.mesh_collision import evaluate_mesh_pair
+from benchmark.evaluator.generic_validity.mesh_geometry import (
+    TRIANGLE_MESH_REPRESENTATION,
+    geometry_entry_for_object,
+    geometry_unavailable_reason,
+    is_usable_triangle_mesh,
+    load_triangle_mesh,
+)
+from benchmark.evaluator.generic_validity.obb_sat import obb_sat_test
+from benchmark.visual_judge.p0b import (
+    COLLISION_CANDIDATE_SELECTION_POLICY,
+    LocalViewProvider,
+    adjudicate_p0b_event,
 )
 
 
-def check_collision(scene: dict, config: dict | None = None) -> dict:
-    cfg = config or {}
+COLLISION_EVALUATOR_VERSION = "collision_p0b_v2"
+DEFAULT_COLLISION_CONFIG = {
+    "enabled": True,
+    "official_mode": False,
+    "detector_only": False,
+    "obb_sat_eps": 1.0e-6,
+    "mesh_enclosure_eps_m": 1.0e-4,
+    "separation_threshold_m": 0.02,
+    "score_mode": "invalid_pair_count_over_objects",
+}
+
+
+class CollisionEvaluationError(RuntimeError):
+    """Raised when official collision evaluation cannot complete adjudication."""
+
+
+def check_collision(
+    scene: dict,
+    config: dict | None = None,
+    *,
+    collision_geometry: dict | None = None,
+    prompt: str | None = None,
+    relationships: list[dict] | dict | None = None,
+    render_evidence: list[str] | None = None,
+    vlm_judge: object | None = None,
+    local_view_provider: LocalViewProvider | None = None,
+) -> dict[str, Any]:
+    cfg = {**DEFAULT_COLLISION_CONFIG, **(config or {})}
+    _validate_collision_config(cfg)
     objects, object_errors = normalize_objects(scene)
     num_objects = len(objects)
+    geometry_base_dir = _geometry_base_dir(collision_geometry)
     if num_objects == 0:
-        return {
-            "metric": "collision",
-            "status": "not_applicable",
-            "score": 1.0,
-            "collision_count": 0,
-            "collision_pair_count": 0,
-            "collision_object_count": 0,
-            "collision_rate": 0.0,
-            "num_objects": 0,
-            "pairs": [],
-            "object_errors": object_errors,
-        }
+        return _empty_collision_report(object_errors)
 
-    z_overlap_eps = float(cfg.get("z_overlap_eps", 0.03))
-    xy_overlap_area_eps = float(cfg.get("xy_overlap_area_eps", 0.005))
-    ignore_exemptions = bool(cfg.get("ignore_supported_or_contained_pairs", True))
-    collision_pairs = []
+    pairs: list[dict[str, Any]] = []
     collision_object_ids: set[str] = set()
+    requires_vlm_count = 0
+    adjudication_failures: list[str] = []
+    mesh_enclosure_cache: dict[int, dict[str, Any]] = {}
 
     for obj_a, obj_b in combinations(objects, 2):
-        xy_overlap = footprint_overlap_area(obj_a, obj_b)
-        z_overlap = z_interval_overlap(obj_a, obj_b)
-        if xy_overlap <= xy_overlap_area_eps or z_overlap <= z_overlap_eps:
-            continue
-        exempted, exemption_reason = _is_exempt_pair(obj_a, obj_b, cfg) if ignore_exemptions else (False, "")
-        pair = {
-            "object_a": obj_a.id,
-            "object_b": obj_b.id,
-            "xy_overlap_area": float(xy_overlap),
-            "z_overlap": float(z_overlap),
-            "exempted": bool(exempted),
-        }
-        if exemption_reason:
-            pair["exemption_reason"] = exemption_reason
-        collision_pairs.append(pair)
-        if not exempted:
+        pair = _evaluate_pair(
+            scene=scene,
+            obj_a=obj_a,
+            obj_b=obj_b,
+            cfg=cfg,
+            collision_geometry=collision_geometry,
+            geometry_base_dir=geometry_base_dir,
+            prompt=prompt,
+            relationships=relationships,
+            render_evidence=render_evidence,
+            vlm_judge=vlm_judge,
+            local_view_provider=local_view_provider,
+            mesh_enclosure_cache=mesh_enclosure_cache,
+        )
+        pairs.append(pair)
+        if pair.get("requires_vlm"):
+            requires_vlm_count += 1
+        if pair.get("adjudication_error"):
+            adjudication_failures.append(str(pair["adjudication_error"]))
+        if pair.get("final_verdict") == "invalid":
             collision_object_ids.update([obj_a.id, obj_b.id])
 
-    collision_count = sum(1 for pair in collision_pairs if not pair["exempted"])
-    collision_rate = min(float(collision_count) / float(max(num_objects, 1)), 1.0)
+    invalid_count = sum(1 for pair in pairs if pair.get("final_verdict") == "invalid")
+    resolved_pairs = [pair for pair in pairs if pair.get("final_verdict") in {"valid", "invalid"}]
+    official_mode = bool(cfg.get("official_mode"))
+    detector_only = bool(cfg.get("detector_only"))
+
+    if adjudication_failures and official_mode:
+        raise CollisionEvaluationError("; ".join(adjudication_failures))
+    if requires_vlm_count and official_mode and vlm_judge is None:
+        raise CollisionEvaluationError(
+            "collision events require P0b VLM adjudication in official mode, but no judge is configured"
+        )
+
+    unresolved_vlm_count = sum(
+        1
+        for pair in pairs
+        if pair.get("requires_vlm") and pair.get("final_verdict") not in {"valid", "invalid"}
+    )
+
+    if detector_only:
+        score = None
+        status = "detector_only"
+    elif unresolved_vlm_count:
+        score = None
+        status = "requires_vlm"
+    elif not resolved_pairs:
+        score = 1.0
+        status = "checked"
+    else:
+        collision_rate = min(float(invalid_count) / float(max(num_objects, 1)), 1.0)
+        score = float(1.0 - collision_rate)
+        status = "checked"
+
+    obb_only = sum(1 for pair in pairs if pair.get("evidence_level") == "obb")
+    mesh_level = sum(1 for pair in pairs if pair.get("evidence_level") == "mesh")
     return {
         "metric": "collision",
-        "status": "checked",
-        "score": float(1.0 - collision_rate),
-        "collision_count": collision_count,
-        "collision_pair_count": collision_count,
+        "evaluator_version": COLLISION_EVALUATOR_VERSION,
+        "status": status,
+        "score": score,
+        "official_mode": official_mode,
+        "detector_only": detector_only,
+        "score_mode": str(cfg["score_mode"]),
+        "collision_count": invalid_count,
+        "collision_pair_count": invalid_count,
         "collision_object_count": len(collision_object_ids),
-        "collision_rate": collision_rate,
+        "collision_rate": None if score is None else float(1.0 - score),
+        "requires_vlm_count": requires_vlm_count,
+        "resolved_pair_count": len(resolved_pairs),
         "num_objects": num_objects,
-        "pairs": collision_pairs,
+        "pairs": pairs,
         "object_errors": object_errors,
+        "coverage": {
+            "pair_count": len(pairs),
+            "obb_evidence_pairs": obb_only,
+            "mesh_evidence_pairs": mesh_level,
+            "direct_valid_pairs": sum(1 for pair in pairs if str(pair.get("route") or "").startswith("direct_valid")),
+            "vlm_adjudicated_pairs": sum(1 for pair in pairs if pair.get("route") == "vlm_adjudicated"),
+        },
+        "notes": [
+            "Collision is static object-object surface interpenetration only; floor/wall/ceiling penetration belongs to OOB/OAR.",
+            "Deterministic geometry is evidence, not the final semantic judge.",
+            "Candidates are proposed by a high-recall detector; selection carries no verdict prior.",
+            "Only final invalid pairs count as collisions; candidate overlap alone is not penalized.",
+            "Support, containment, assembly, and relation claims never auto-exempt a pair.",
+        ],
     }
 
 
-def _is_exempt_pair(obj_a: NormalizedObject, obj_b: NormalizedObject, config: dict) -> tuple[bool, str]:
-    support_gap = float(config.get("support_gap", 0.06))
-    overlap_ratio = footprint_overlap_ratio(obj_a, obj_b)
-    if abs(obj_a.bottom_z - obj_b.top_z) <= support_gap and overlap_ratio > 0.1:
-        return True, f"{obj_a.id}_supported_by_{obj_b.id}"
-    if abs(obj_b.bottom_z - obj_a.top_z) <= support_gap and overlap_ratio > 0.1:
-        return True, f"{obj_b.id}_supported_by_{obj_a.id}"
-    if _mostly_within(obj_a, obj_b):
-        return True, f"{obj_a.id}_mostly_within_{obj_b.id}"
-    if _mostly_within(obj_b, obj_a):
-        return True, f"{obj_b.id}_mostly_within_{obj_a.id}"
-    return False, ""
+def _evaluate_pair(
+    *,
+    scene: dict,
+    obj_a,
+    obj_b,
+    cfg: dict[str, Any],
+    collision_geometry: dict | None,
+    geometry_base_dir: Path | None,
+    prompt: str | None,
+    relationships: list[dict] | dict | None,
+    render_evidence: list[str] | None,
+    vlm_judge: object | None,
+    local_view_provider: LocalViewProvider | None,
+    mesh_enclosure_cache: dict[int, dict[str, Any]],
+) -> dict[str, Any]:
+    obb = obb_sat_test(obj_a, obj_b, eps=float(cfg.get("obb_sat_eps", 1.0e-6)))
+    diagnostics = {
+        "xy_overlap_area": float(footprint_overlap_area(obj_a, obj_b)),
+        "z_overlap": float(z_interval_overlap(obj_a, obj_b)),
+    }
+    entry_a = geometry_entry_for_object(collision_geometry, obj_a.id)
+    entry_b = geometry_entry_for_object(collision_geometry, obj_b.id)
+    mesh_a = is_usable_triangle_mesh(entry_a, base_dir=geometry_base_dir)
+    mesh_b = is_usable_triangle_mesh(entry_b, base_dir=geometry_base_dir)
+    geometry_provenance = {
+        "object_a": _geometry_provenance(scene, obj_a.id, obj_a, entry_a),
+        "object_b": _geometry_provenance(scene, obj_b.id, obj_b, entry_b),
+    }
+
+    pair = {
+        "object_a": obj_a.id,
+        "object_b": obj_b.id,
+        "obb_evidence": obb,
+        "diagnostics": diagnostics,
+        "geometry_provenance": geometry_provenance,
+        "mesh_enclosure_evidence": None,
+        "mesh_evidence": None,
+        "evidence_level": "obb",
+        "route": None,
+        "requires_vlm": False,
+        "final_verdict": None,
+        "affects_collision_score": False,
+        "judge_result": None,
+        "adjudication_error": None,
+    }
+
+    enclosure_evidence = None
+    enclosure_safe = False
+    # Any direct-valid route that relies on supplied complete mesh geometry must
+    # first establish that the mesh is expressed in the canonical object frame.
+    # This guard is needed for both OBB-separated and OBB-overlapping pairs: a
+    # stale/translated mesh can otherwise manufacture a false separation in the
+    # narrow phase even though the canonical objects overlap.
+    if obb.get("obb_certifiably_separated") or (mesh_a and mesh_b):
+        enclosure_evidence = {
+            "object_a": _cached_mesh_enclosure_evidence(
+                obj_a,
+                entry_a,
+                mesh_usable=mesh_a,
+                base_dir=geometry_base_dir,
+                eps=float(cfg.get("mesh_enclosure_eps_m", 1.0e-4)),
+                cache=mesh_enclosure_cache,
+            ),
+            "object_b": _cached_mesh_enclosure_evidence(
+                obj_b,
+                entry_b,
+                mesh_usable=mesh_b,
+                base_dir=geometry_base_dir,
+                eps=float(cfg.get("mesh_enclosure_eps_m", 1.0e-4)),
+                cache=mesh_enclosure_cache,
+            ),
+        }
+        pair["mesh_enclosure_evidence"] = enclosure_evidence
+        enclosure_safe = all(
+            bool(item.get("safe_for_obb_separation")) for item in enclosure_evidence.values()
+        )
+
+    if obb.get("obb_certifiably_separated"):
+        if enclosure_safe:
+            pair.update(
+                {
+                    "route": "direct_valid_obb_separated",
+                    "final_verdict": "valid",
+                    "affects_collision_score": True,
+                }
+            )
+            return pair
+
+    mesh_evidence = None
+    if mesh_a and mesh_b:
+        mesh_evidence = evaluate_mesh_pair(
+            obj_a.id,
+            obj_b.id,
+            entry_a,
+            entry_b,
+            base_dir=geometry_base_dir,
+            separation_threshold_m=float(cfg.get("separation_threshold_m", 0.02)),
+        )
+        pair["mesh_evidence"] = mesh_evidence
+        pair["evidence_level"] = "mesh"
+        if mesh_evidence.get("mesh_reliable_for_separation") and enclosure_safe:
+            pair.update(
+                {
+                    "route": "direct_valid_mesh_separated",
+                    "final_verdict": "valid",
+                    "affects_collision_score": True,
+                }
+            )
+            return pair
+
+    pair["requires_vlm"] = True
+    if bool(cfg.get("detector_only")):
+        return pair
+
+    if vlm_judge is None:
+        return pair
+
+    event = {
+        "object_a": obj_a.id,
+        "object_b": obj_b.id,
+        "object_ids": [obj_a.id, obj_b.id],
+        "evidence_level": pair["evidence_level"],
+        "candidate_selection_policy": COLLISION_CANDIDATE_SELECTION_POLICY,
+    }
+    detector_evidence = {
+        "candidate_selection_policy": COLLISION_CANDIDATE_SELECTION_POLICY,
+        "obb": obb,
+        "mesh": mesh_evidence,
+        "diagnostics": diagnostics,
+        "geometry_provenance": geometry_provenance,
+        "mesh_enclosure": pair.get("mesh_enclosure_evidence"),
+        "closest_points": mesh_evidence.get("closest_points") if isinstance(mesh_evidence, dict) else None,
+        "focus_region": mesh_evidence.get("focus_region") if isinstance(mesh_evidence, dict) else None,
+        "extracted_relationships_are_claims_only": True,
+    }
+    try:
+        judge_result = adjudicate_p0b_event(
+            metric="collision",
+            event=event,
+            prompt=str(prompt or ""),
+            relationships=relationships,
+            scene=scene,
+            detector_evidence=detector_evidence,
+            judge=vlm_judge,
+            object_ids=[obj_a.id, obj_b.id],
+            overview_render_evidence=list(render_evidence or []),
+            local_view_provider=local_view_provider,
+        )
+    except Exception as exc:
+        pair["adjudication_error"] = f"{type(exc).__name__}: {exc}"
+        pair["route"] = "vlm_adjudication_failed"
+        if bool(cfg.get("official_mode")):
+            raise CollisionEvaluationError(pair["adjudication_error"]) from exc
+        return pair
+
+    verdict = str(judge_result.get("verdict"))
+    pair.update(
+        {
+            "route": "vlm_adjudicated",
+            "final_verdict": verdict,
+            "affects_collision_score": True,
+            "judge_result": deepcopy(judge_result),
+        }
+    )
+    return pair
 
 
-def _mostly_within(inner: NormalizedObject, outer: NormalizedObject, threshold: float = 0.80) -> bool:
-    points = list(get_obb_corners(inner)) + [inner.center]
-    inside = sum(1 for point in points if point_in_obb(point, outer, eps=1.0e-6))
-    return bool(points) and float(inside) / float(len(points)) >= threshold
+def _empty_collision_report(object_errors: dict[str, str]) -> dict[str, Any]:
+    return {
+        "metric": "collision",
+        "evaluator_version": COLLISION_EVALUATOR_VERSION,
+        "status": "not_applicable",
+        "score": None,
+        "reason": "no_physical_objects",
+        "collision_count": 0,
+        "collision_pair_count": 0,
+        "collision_object_count": 0,
+        "collision_rate": None,
+        "requires_vlm_count": 0,
+        "resolved_pair_count": 0,
+        "num_objects": 0,
+        "pairs": [],
+        "object_errors": object_errors,
+        "coverage": {
+            "pair_count": 0,
+            "obb_evidence_pairs": 0,
+            "mesh_evidence_pairs": 0,
+            "direct_valid_pairs": 0,
+            "vlm_adjudicated_pairs": 0,
+        },
+        "notes": [],
+    }
+
+
+def _geometry_provenance(scene: dict, object_id: str, normalized: Any, entry: dict | None) -> Any:
+    if isinstance(entry, dict):
+        runtime = entry.get("geometry_source") or entry.get("representation")
+        if runtime is not None:
+            return runtime
+    for item in scene.get("objects", []) if isinstance(scene, dict) else []:
+        if isinstance(item, dict) and str(item.get("id")) == str(object_id):
+            static = item.get("geometry_provenance")
+            if static is not None:
+                return static
+    asset_ref = getattr(normalized, "asset_ref", None)
+    return asset_ref.get("source_db") if isinstance(asset_ref, dict) else None
+
+
+def _validate_collision_config(config: dict[str, Any]) -> None:
+    if bool(config.get("official_mode")) and bool(config.get("detector_only")):
+        raise ValueError("collision.official_mode and collision.detector_only are mutually exclusive")
+    eps = float(config.get("obb_sat_eps", 1.0e-6))
+    enclosure_eps = float(config.get("mesh_enclosure_eps_m", 1.0e-4))
+    separation = float(config.get("separation_threshold_m", 0.02))
+    if not math.isfinite(eps) or eps < 0.0:
+        raise ValueError("collision.obb_sat_eps must be a finite non-negative number")
+    if not math.isfinite(enclosure_eps) or enclosure_eps < 0.0:
+        raise ValueError("collision.mesh_enclosure_eps_m must be a finite non-negative number")
+    if not math.isfinite(separation) or separation < 0.0:
+        raise ValueError("collision.separation_threshold_m must be a finite non-negative number")
+    if config.get("score_mode") != "invalid_pair_count_over_objects":
+        raise ValueError("collision.score_mode must be 'invalid_pair_count_over_objects'")
+
+
+def _geometry_base_dir(collision_geometry: dict | None) -> Path | None:
+    if not isinstance(collision_geometry, dict):
+        return None
+    manifest_path = collision_geometry.get("manifest_path")
+    if isinstance(manifest_path, str) and manifest_path.strip():
+        return Path(manifest_path).expanduser().resolve().parent
+    return None
+
+
+def _cached_mesh_enclosure_evidence(
+    obj: Any,
+    entry: dict[str, Any] | None,
+    *,
+    mesh_usable: bool,
+    base_dir: Path | None,
+    eps: float,
+    cache: dict[int, dict[str, Any]],
+) -> dict[str, Any]:
+    """Guard an OBB separation certificate against wrong-frame mesh artifacts.
+
+    With no complete triangle mesh, the canonical OBB is the available physical
+    representation and remains a valid certificate.  When a complete mesh is
+    supplied, however, every loaded world-space vertex must lie inside that OBB;
+    otherwise the pair is ambiguous and continues to mesh/VLM adjudication.
+    Results are cached once per object so the normal renderer-exported PLY path
+    is not reloaded for every separated pair.
+    """
+
+    # Use object identity, not the submitted ID, for cache safety. Submission
+    # validation rejects duplicate IDs, but the lower-level diagnostic API may
+    # still receive them with different canonical transforms.
+    cache_key = id(obj)
+    if cache_key in cache:
+        return cache[cache_key]
+    claimed_complete_mesh = bool(
+        isinstance(entry, dict)
+        and entry.get("representation") == TRIANGLE_MESH_REPRESENTATION
+        and entry.get("complete") is True
+    )
+    if not mesh_usable and claimed_complete_mesh:
+        result = {
+            "status": "mesh_enclosure_unavailable",
+            "safe_for_obb_separation": False,
+            "tolerance_m": float(eps),
+            "error": geometry_unavailable_reason(entry),
+        }
+        cache[cache_key] = result
+        return result
+    if not mesh_usable:
+        result = {
+            "status": "not_applicable_canonical_obb_representation",
+            "safe_for_obb_separation": True,
+            "tolerance_m": float(eps),
+        }
+        cache[cache_key] = result
+        return result
+    try:
+        mesh = load_triangle_mesh(entry or {}, base_dir=base_dir)
+        vertices = np.asarray(mesh.get("vertices"), dtype=float)
+        if vertices.ndim != 2 or vertices.shape[1:] != (3,) or len(vertices) == 0:
+            raise ValueError("mesh contains no Nx3 vertices")
+        if not np.all(np.isfinite(vertices)):
+            raise ValueError("mesh contains non-finite vertices")
+        local = (vertices - np.asarray(obj.center, dtype=float)) @ np.asarray(obj.R, dtype=float)
+        excess = np.abs(local) - np.asarray(obj.half, dtype=float)
+        outside_mask = np.any(excess > float(eps), axis=1)
+        maximum_excess = max(0.0, float(np.max(excess)))
+        enclosed = not bool(np.any(outside_mask))
+        result = {
+            "status": "verified_inside" if enclosed else "outside_canonical_obb",
+            "safe_for_obb_separation": enclosed,
+            "vertex_count": int(len(vertices)),
+            "outside_vertex_count": int(np.count_nonzero(outside_mask)),
+            "maximum_excess_m": maximum_excess,
+            "tolerance_m": float(eps),
+            "loader": mesh.get("loader"),
+        }
+    except Exception as exc:
+        result = {
+            "status": "mesh_enclosure_unavailable",
+            "safe_for_obb_separation": False,
+            "tolerance_m": float(eps),
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+    cache[cache_key] = result
+    return result

@@ -1,0 +1,86 @@
+{
+  "schema_version": "controlled_scene_distortion_v1",
+  "case_id": "source_clean_003__collision",
+  "base_case_id": "source_clean_003",
+  "source_scene_id": "scene_000657_03",
+  "generator_skipped": true,
+  "family": "collision",
+  "severity": {
+    "family": "collision",
+    "target_object_count": 1,
+    "object_denominator": 5,
+    "target_object_fraction": 0.2,
+    "target_relation_count": 0,
+    "relation_denominator": 4,
+    "target_relation_fraction": 0.0,
+    "collision_pair_count": 0,
+    "collision_candidate_pair_count": 1
+  },
+  "transforms": [
+    {
+      "object_id": "obj_002",
+      "before_center": [
+        3.22,
+        2.15,
+        0.53
+      ],
+      "after_center": [
+        3.8,
+        2.0,
+        0.52925
+      ],
+      "reason": "co_located_with:obj_000"
+    }
+  ],
+  "expected": {
+    "collision_candidate_pairs": [
+      [
+        "obj_000",
+        "obj_002"
+      ]
+    ],
+    "collision_invalid_pairs": [],
+    "collision_valid_pairs": [
+      [
+        "obj_000",
+        "obj_002"
+      ]
+    ],
+    "oob_invalid_object_ids": [],
+    "support_invalid_object_ids": [],
+    "oar_invalid_relation_indices": []
+  },
+  "gt_policy": "programmatic_transform_plus_coordinate_mesh_audit",
+  "coordinate_audit": {
+    "status": "corrected",
+    "metric": "collision",
+    "event_id": "obj_000|obj_002",
+    "obb_minimum_overlap_depth_proxy_m": 0.14655,
+    "mesh_surface_intersection": false,
+    "mesh_minimum_surface_distance_m": 0.298969640603336,
+    "classification": "valid",
+    "reason": "OBB broad-phase overlap is a candidate only; the wardrobe and bed meshes are positively separated and neither can semantically contain the other."
+  },
+  "deterministic_audit": {
+    "collision_routed_pairs": [
+      [
+        "obj_000",
+        "obj_002"
+      ]
+    ],
+    "oob_routed_object_ids": [],
+    "support_routed_object_ids": [],
+    "oor_pass_vector": [
+      true,
+      true,
+      true
+    ],
+    "oar_pass_vector": [
+      true,
+      true,
+      true,
+      true
+    ],
+    "cross_metric_isolation_verified": true
+  }
+}

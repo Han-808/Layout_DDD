@@ -1,0 +1,26 @@
+{
+  "annotation_version": "reference_annotation_v1",
+  "validation_status": "confirmed",
+  "source": "manual",
+  "request_id": "ablation_easy_004",
+  "scene_type": "entryway",
+  "inventory_policy": "closed_world",
+  "objects": [
+    {"id": "obj_000", "category": "cabinet", "description": "concrete gray shoe cabinet", "count": 1, "claim_state": "confirmed"},
+    {"id": "obj_001", "category": "basket", "description": "brown woven storage basket", "count": 1, "claim_state": "confirmed"},
+    {"id": "obj_002", "category": "plant", "description": "concrete pebble fan palm", "count": 1, "claim_state": "confirmed"},
+    {"id": "obj_003", "category": "lamp", "description": "white cylindrical floor lamp", "count": 1, "claim_state": "confirmed"}
+  ],
+  "oor_relations": [
+    {"type": "left", "subject_id": "obj_001", "object_id": "obj_000", "claim_state": "confirmed"},
+    {"type": "right", "subject_id": "obj_002", "object_id": "obj_000", "claim_state": "confirmed"},
+    {"type": "near", "subject_id": "obj_003", "object_id": "obj_000", "claim_state": "confirmed"}
+  ],
+  "oar_relations": [
+    {"type": "against_wall", "subject_id": "obj_000", "architectural_element": "south_wall", "claim_state": "confirmed"},
+    {"type": "on_floor", "subject_id": "obj_001", "architectural_element": "floor", "claim_state": "confirmed"},
+    {"type": "on_floor", "subject_id": "obj_002", "architectural_element": "floor", "claim_state": "confirmed"}
+  ],
+  "room_constraints": {"claim_state": "not_mentioned"},
+  "provenance": {"origin": "manual_p0b_ablation_conversion", "generator_visible": false, "leaderboard_ground_truth": false, "room_source": "benchmark_fallback"}
+}

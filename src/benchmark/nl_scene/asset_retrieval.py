@@ -20,7 +20,7 @@ def retrieve_assets_for_object_plan(
     object_plan: dict,
     *,
     asset_index_path: str,
-    retrieval_k: int = 5,
+    retrieval_k: int = 1,
     retriever_module_path: str | None = None,
     use_vlm_selector: bool = False,
     model_config: dict | None = None,
@@ -125,9 +125,16 @@ def retrieve_assets_for_object_plan(
             {
                 "object_id": object_id,
                 "object_spec": {
+                    "role": object_spec.get("role"),
                     "category": object_spec.get("category"),
                     "description": object_spec.get("description"),
                     "estimated_size": object_spec.get("estimated_size"),
+                    "count": object_spec.get("count", 1),
+                },
+                "retrieval_query": {
+                    "description": object_spec.get("description"),
+                    "category": object_spec.get("category"),
+                    "size_constraint": object_spec.get("estimated_size"),
                 },
                 "selected_asset": selected_asset,
                 "candidates": normalized_candidates,

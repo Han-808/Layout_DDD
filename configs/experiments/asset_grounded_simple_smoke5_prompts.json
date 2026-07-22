@@ -1,0 +1,38 @@
+{
+  "experiment_id": "asset_grounded_simple_smoke5",
+  "input_mode": "natural_language_plus_public_generator_structure",
+  "prompt_granularity": "fine_grained",
+  "asset_mode": "retrieve",
+  "notes": [
+    "Prompts match the relation density and difficulty of notes/prompt1.md.",
+    "Object descriptions are taken directly from, or minimally inflected from, imaginarium_asset_info.csv short_desc values.",
+    "Asset IDs are omitted from prompts; reviewed public generator structures drive retrieval at runtime."
+  ],
+  "cases": [
+    {
+      "case_id": "prompt_01",
+      "scene_type": "bedroom",
+      "instruction": "Inside a bedroom, place one grey upholstered bed against the back wall. Put one dark brown wooden nightstand to the right of the bed. On top of the nightstand, place one mint green vintage alarm clock to the left of one beige linen table lamp. Leave one pale grey leather bag on the floor to the left of the bed, with one dark hardcover book beside the bag."
+    },
+    {
+      "case_id": "prompt_02",
+      "scene_type": "office",
+      "instruction": "Inside a small office, place one antique wooden desk near the left wall and one brown leather office chair in front of the desk. On top of the desk, put one dark metallic monitor at the center, one light gray laptop to its left, and one green chrome table lamp to its right. Place one white ceramic cup between the laptop and the monitor. Stand one dark wood display cabinet opposite the desk near the right wall."
+    },
+    {
+      "case_id": "prompt_03",
+      "scene_type": "living_room",
+      "instruction": "Inside a living room, place one dark wood coffee table at the center of the room on top of one beige geometric carpet. Put one brown leather chesterfield sofa behind the coffee table and against the back wall. Place one gray upholstered bergere chair to the left of the coffee table, facing the sofa. Put one weathered wood end table to the right of the sofa, with one grey vintage boombox on top. Place one white ceramic vase at the center of the coffee table."
+    },
+    {
+      "case_id": "prompt_04",
+      "scene_type": "cafe",
+      "instruction": "Inside a cafe, place one white marble coffee table at the center of the room and arrange three white wooden chairs around it. On top of the table, place one green translucent soda bottle on the left and one beige matte paper cup on the right, with one white bowl of fruit snacks between them. Put one blue gray wooden bookshelf against the wall opposite the table."
+    },
+    {
+      "case_id": "prompt_05",
+      "scene_type": "reading_room",
+      "instruction": "Inside a reading room, place one white ornate desk near the back wall and one black leather lounge chair opposite the desk. Put one silver gray laptop at the center of the desk, with one teal blue paperback book to its left. Mount one gray round wall clock above the desk. Place one teal velvet bench along the right wall, with one brown leather crossbody bag on top. Lay one burgundy geometric rug between the lounge chair and the desk."
+    }
+  ]
+}

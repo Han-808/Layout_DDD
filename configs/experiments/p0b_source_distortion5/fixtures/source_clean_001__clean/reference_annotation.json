@@ -1,0 +1,147 @@
+{
+  "annotation_version": "reference_annotation_v1",
+  "validation_status": "confirmed",
+  "source": "manual",
+  "request_id": "source_clean_001__clean",
+  "scene_type": "master bedroom",
+  "inventory_policy": "closed_world",
+  "objects": [
+    {
+      "id": "obj_000",
+      "category": "wardrobe",
+      "description": "white wood wardrobe",
+      "count": 1,
+      "claim_state": "confirmed"
+    },
+    {
+      "id": "obj_001",
+      "category": "nightstand",
+      "description": "gray suede nightstand",
+      "count": 1,
+      "claim_state": "confirmed"
+    },
+    {
+      "id": "obj_002",
+      "category": "nightstand",
+      "description": "gray suede nightstand",
+      "count": 1,
+      "claim_state": "confirmed"
+    },
+    {
+      "id": "obj_003",
+      "category": "bed",
+      "description": "light wood bunk bed",
+      "count": 1,
+      "claim_state": "confirmed"
+    },
+    {
+      "id": "obj_004",
+      "category": "projector",
+      "description": "light gray desktop projector",
+      "count": 1,
+      "claim_state": "confirmed"
+    },
+    {
+      "id": "obj_005",
+      "category": "projector",
+      "description": "light gray desktop projector",
+      "count": 1,
+      "claim_state": "confirmed"
+    }
+  ],
+  "oor_relations": [
+    {
+      "type": "above",
+      "subject_id": "obj_004",
+      "object_id": "obj_002",
+      "claim_state": "confirmed",
+      "relation_id": "oor_000"
+    },
+    {
+      "type": "contact",
+      "subject_id": "obj_004",
+      "object_id": "obj_002",
+      "claim_state": "confirmed",
+      "relation_id": "oor_001"
+    },
+    {
+      "type": "above",
+      "subject_id": "obj_005",
+      "object_id": "obj_001",
+      "claim_state": "confirmed",
+      "relation_id": "oor_002"
+    },
+    {
+      "type": "contact",
+      "subject_id": "obj_005",
+      "object_id": "obj_001",
+      "claim_state": "confirmed",
+      "relation_id": "oor_003"
+    },
+    {
+      "type": "near",
+      "subject_id": "obj_001",
+      "object_id": "obj_003",
+      "claim_state": "confirmed",
+      "relation_id": "oor_004"
+    },
+    {
+      "type": "near",
+      "subject_id": "obj_002",
+      "object_id": "obj_003",
+      "claim_state": "confirmed",
+      "relation_id": "oor_005"
+    }
+  ],
+  "oar_relations": [
+    {
+      "type": "against_wall",
+      "subject_id": "obj_000",
+      "architectural_element": "north_wall",
+      "claim_state": "confirmed",
+      "relation_id": "oar_000"
+    },
+    {
+      "type": "room_center",
+      "subject_id": "obj_003",
+      "architectural_element": "center_region",
+      "claim_state": "confirmed",
+      "relation_id": "oar_001"
+    },
+    {
+      "type": "near_wall",
+      "subject_id": "obj_001",
+      "architectural_element": "east_wall",
+      "claim_state": "confirmed",
+      "relation_id": "oar_002"
+    },
+    {
+      "type": "near_wall",
+      "subject_id": "obj_002",
+      "architectural_element": "east_wall",
+      "claim_state": "confirmed",
+      "relation_id": "oar_003"
+    }
+  ],
+  "room_constraints": {
+    "claim_state": "confirmed",
+    "shape": "rectangular_enclosed_room",
+    "dimensions": {
+      "width": 2.81,
+      "depth": 4.2,
+      "height": 2.799
+    }
+  },
+  "review": {
+    "status": "approved",
+    "reviewer": "benchmark_author"
+  },
+  "provenance": {
+    "origin": "manual_source_scene_fixture_conversion",
+    "generator_visible": false,
+    "leaderboard_ground_truth": false,
+    "source_scene_id": "scene_007379_03",
+    "base_case_id": "source_clean_001",
+    "variant_family": "clean"
+  }
+}

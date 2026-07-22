@@ -2,50 +2,68 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://example.org/layout-ddd/generated_scene.schema.json",
   "title": "CanonicalGeneratedScene",
-  "description": "Canonical generated_scene.json for the adapter-based scene harness. Uses objects, real asset jid references, asset_ref, and bbox/OBB asset_proxy geometry.",
-  "version": "1.0.0",
+  "description": "Frozen canonical_scene_v1 generated_scene.json for the adapter-based scene harness. O1 object state is asset-independent; O3 profiles add explicit asset references.",
+  "version": "1.4.0",
   "type": "object",
   "additionalProperties": true,
-  "required": ["scene_id", "request_id", "scene_type", "boundary", "objects"],
+  "required": ["schema_version", "scene_id", "request_id", "scene_type", "boundary", "scene_height", "objects", "metadata"],
   "not": {"required": ["assets"]},
   "properties": {
+    "schema_version": {"const": "canonical_scene_v1"},
     "scene_id": {"type": "string", "minLength": 1},
     "request_id": {"type": "string", "minLength": 1},
     "scene_type": {"type": "string", "minLength": 1},
     "boundary": {"$ref": "#/$defs/boundary"},
     "scene_height": {"type": "number", "exclusiveMinimum": 0},
     "objects": {"type": "array", "items": {"$ref": "#/$defs/object"}},
-    "oor_relations": {"type": "array", "items": {"type": "object", "additionalProperties": true}},
-    "oar_relations": {"type": "array", "items": {"type": "object", "additionalProperties": true}},
-    "relations": {"type": "array", "items": {"type": "object", "additionalProperties": true}},
-    "metadata": {"type": "object", "additionalProperties": true}
+    "oor_relations": {"type": "array", "items": {"$ref": "#/$defs/oorRelation"}},
+    "oar_relations": {"type": "array", "items": {"$ref": "#/$defs/oarRelation"}},
+    "relations": {
+      "type": "array",
+      "items": {"anyOf": [{"$ref": "#/$defs/oorRelation"}, {"$ref": "#/$defs/oarRelation"}]}
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["coordinate_frame"],
+      "properties": {
+        "coordinate_frame": {"$ref": "#/$defs/coordinateFrame"}
+      }
+    }
   },
   "$defs": {
     "boundary": {
       "type": "array",
-      "minItems": 3,
-      "items": {"type": "array", "minItems": 2, "items": {"type": "number"}}
+      "minItems": 4,
+      "maxItems": 4,
+      "items": {"type": "array", "minItems": 2, "maxItems": 2, "items": {"type": "number"}}
     },
     "vec3": {"type": "array", "minItems": 3, "maxItems": 3, "items": {"type": "number"}},
     "positiveVec3": {"type": "array", "minItems": 3, "maxItems": 3, "items": {"type": "number", "exclusiveMinimum": 0}},
     "object": {
       "type": "object",
       "additionalProperties": true,
-      "required": ["id", "jid", "center", "rotation", "asset_ref", "asset_proxy", "metadata"],
+      "required": ["id", "category", "size", "center", "rotation", "metadata"],
       "not": {"required": ["asset_id"]},
       "properties": {
         "id": {"type": "string", "minLength": 1},
         "jid": {"type": "string", "minLength": 1},
-        "category": {"type": "string"},
+        "category": {"type": "string", "minLength": 1},
+        "description": {"type": "string", "minLength": 1},
+        "geometry_provenance": {"enum": ["bbox_proxy", "asset_mesh", "generated_mesh"]},
         "retrieval_category": {"type": "string"},
         "desc": {"type": "string"},
         "short_desc": {"type": "string"},
         "size": {"$ref": "#/$defs/positiveVec3"},
         "center": {"$ref": "#/$defs/vec3"},
-        "rotation": {"$ref": "#/$defs/vec3"},
+        "rotation": {
+          "allOf": [{"$ref": "#/$defs/vec3"}],
+          "description": "Canonical [roll_x, pitch_y, yaw_z] Euler rotation in degrees, applied to local column vectors as Rz(yaw_z) @ Ry(pitch_y) @ Rx(roll_x)."
+        },
         "asset_ref": {
           "type": "object",
           "additionalProperties": true,
+          "required": ["source_db", "asset_key"],
           "properties": {
             "source_db": {"type": "string"},
             "asset_key": {"type": "string"},
@@ -65,11 +83,58 @@
           }
         },
         "metadata": {"type": "object", "additionalProperties": true}
+      }
+    },
+    "coordinateFrame": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["origin", "axes", "unit", "rotation_unit"],
+      "properties": {
+        "origin": {"const": "room_min_corner_floor"},
+        "axes": {"const": "x_width_y_depth_z_up"},
+        "unit": {"const": "meter"},
+        "rotation_unit": {"const": "degree"}
+      }
+    },
+    "oorRelation": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["type"],
+      "properties": {
+        "family": {"enum": ["oor", null]},
+        "relation_id": {"type": "string", "minLength": 1},
+        "subject_id": {"type": "string", "minLength": 1},
+        "subject_ids": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+        "type": {"type": "string", "minLength": 1},
+        "object_id": {"type": "string", "minLength": 1},
+        "object_ids": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+        "axis": {"type": "string"},
+        "direction": {"type": "string"},
+        "raw_relation": {"type": "string"}
       },
       "anyOf": [
-        {"required": ["size"]},
-        {"properties": {"asset_proxy": {"required": ["bbox_size"]}}}
+        {"required": ["subject_id", "object_id"]},
+        {"required": ["subject_id", "object_ids"]},
+        {"required": ["object_ids"]},
+        {"required": ["subject_ids", "object_id"]},
+        {"required": ["subject_ids", "object_ids"]}
       ]
+    },
+    "oarRelation": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["subject_id", "type", "architectural_element"],
+      "properties": {
+        "family": {"enum": ["oar", null]},
+        "relation_id": {"type": "string", "minLength": 1},
+        "subject_id": {"type": "string", "minLength": 1},
+        "type": {"type": "string", "minLength": 1},
+        "architectural_element": {"type": "string", "minLength": 1},
+        "raw_relation": {"type": "string"},
+        "wall": {"type": "string"},
+        "corner": {"type": "string"},
+        "region": {"type": "string"}
+      }
     }
   }
 }

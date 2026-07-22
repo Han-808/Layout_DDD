@@ -1,0 +1,233 @@
+{
+  "request_id": "prompt_005",
+  "scene_type": "children_bedroom",
+  "scene_description": "A 7 m x 7 m children's bedroom has four walls and a 2.8 m ceiling. Place one white bunk bed against the west wall. Put one blue desk opposite the bunk bed against the east wall, with one yellow chair centered in front of the desk. One laptop and two closed books sit on the desk, with the laptop between the books. Mount one shelf on the wall above the desk and place three toy boxes side by side below the shelf. Put one red floor lamp beside the head of the bunk bed and one round green rug between the bed and desk.",
+  "prompt_granularity": "fine_grained",
+  "explicit_claims": [
+    "one white bunk bed",
+    "one blue desk",
+    "one yellow chair",
+    "one laptop",
+    "two closed books",
+    "one shelf",
+    "three toy boxes",
+    "one red floor lamp",
+    "one round green rug"
+  ],
+  "objects": [
+    {
+      "id": "obj_000",
+      "role": "bed",
+      "category": "bunk_bed",
+      "description": "white bunk bed",
+      "count": 1,
+      "placement_intent": {
+        "absolute_relations": [],
+        "relative_relations": []
+      },
+      "metadata": {},
+      "estimated_size": [
+        2.0,
+        1.5,
+        1.8
+      ]
+    },
+    {
+      "id": "obj_001",
+      "role": "desk",
+      "category": "desk",
+      "description": "blue desk",
+      "count": 1,
+      "placement_intent": {
+        "absolute_relations": [],
+        "relative_relations": []
+      },
+      "metadata": {},
+      "estimated_size": [
+        1.2,
+        0.7,
+        0.75
+      ]
+    },
+    {
+      "id": "obj_002",
+      "role": "chair",
+      "category": "chair",
+      "description": "yellow chair",
+      "count": 1,
+      "placement_intent": {
+        "absolute_relations": [],
+        "relative_relations": []
+      },
+      "metadata": {},
+      "estimated_size": [
+        0.5,
+        0.5,
+        0.8
+      ]
+    },
+    {
+      "id": "obj_003",
+      "role": "electronic_device",
+      "category": "laptop",
+      "description": "laptop",
+      "count": 1,
+      "placement_intent": {
+        "absolute_relations": [],
+        "relative_relations": []
+      },
+      "metadata": {},
+      "estimated_size": [
+        0.35,
+        0.25,
+        0.02
+      ]
+    },
+    {
+      "id": "obj_004",
+      "role": "book",
+      "category": "book",
+      "description": "closed book",
+      "count": 2,
+      "placement_intent": {
+        "absolute_relations": [],
+        "relative_relations": []
+      },
+      "metadata": {},
+      "estimated_size": [
+        0.2,
+        0.15,
+        0.05
+      ]
+    },
+    {
+      "id": "obj_005",
+      "role": "storage",
+      "category": "shelf",
+      "description": "shelf",
+      "count": 1,
+      "placement_intent": {
+        "absolute_relations": [],
+        "relative_relations": []
+      },
+      "metadata": {},
+      "estimated_size": [
+        1.2,
+        0.3,
+        0.2
+      ]
+    },
+    {
+      "id": "obj_006",
+      "role": "storage",
+      "category": "toy_box",
+      "description": "toy box",
+      "count": 3,
+      "placement_intent": {
+        "absolute_relations": [],
+        "relative_relations": []
+      },
+      "metadata": {},
+      "estimated_size": [
+        0.4,
+        0.3,
+        0.3
+      ]
+    },
+    {
+      "id": "obj_007",
+      "role": "lighting",
+      "category": "floor_lamp",
+      "description": "red floor lamp",
+      "count": 1,
+      "placement_intent": {
+        "absolute_relations": [],
+        "relative_relations": []
+      },
+      "metadata": {},
+      "estimated_size": [
+        0.4,
+        0.4,
+        1.5
+      ]
+    },
+    {
+      "id": "obj_008",
+      "role": "floor_covering",
+      "category": "rug",
+      "description": "round green rug",
+      "count": 1,
+      "placement_intent": {
+        "absolute_relations": [],
+        "relative_relations": []
+      },
+      "metadata": {},
+      "estimated_size": [
+        1.5,
+        1.5,
+        0.02
+      ]
+    }
+  ],
+  "global_constraints": [],
+  "relations": [
+    {
+      "family": "oar",
+      "subject_id": "obj_000",
+      "type": "against_wall",
+      "target": "west_wall"
+    },
+    {
+      "family": "oar",
+      "subject_id": "obj_001",
+      "type": "against_wall",
+      "target": "east_wall"
+    },
+    {
+      "family": "oor",
+      "subject_id": "obj_002",
+      "type": "in_front_of",
+      "object_id": "obj_001"
+    },
+    {
+      "family": "oor",
+      "subject_id": "obj_003",
+      "type": "on_top_of",
+      "object_id": "obj_001"
+    },
+    {
+      "family": "oor",
+      "subject_id": "obj_004",
+      "type": "on_top_of",
+      "object_id": "obj_001"
+    },
+    {
+      "family": "oar",
+      "subject_id": "obj_005",
+      "type": "mounted_on_wall",
+      "target": "east_wall"
+    },
+    {
+      "family": "oor",
+      "subject_id": "obj_006",
+      "type": "below",
+      "object_id": "obj_005"
+    },
+    {
+      "family": "oor",
+      "subject_id": "obj_006",
+      "type": "side_by_side",
+      "object_id": "obj_006"
+    },
+    {
+      "family": "oor",
+      "subject_id": "obj_007",
+      "type": "beside",
+      "object_id": "obj_000"
+    }
+  ],
+  "metadata": {
+    "fixture_policy": "legacy_plan_schema_sanitization_only",
+    "dropped_relation_count": 3
+  }
+}

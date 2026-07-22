@@ -226,4 +226,4 @@ viewer:
     yaw_tolerance_degrees: 1.0
 
 hssd:
-  root: "data/external/hssd-hab"
+  root: "Support/data/external/hssd-hab"

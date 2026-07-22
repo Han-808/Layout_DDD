@@ -218,6 +218,7 @@ def build_asset_index_from_asset_info(
     output_path: str | Path,
     *,
     embedding_model: str = "Qwen/Qwen3-Embedding-0.6B",
+    show_progress: bool = False,
 ) -> AssetIndex:
     """Build an asset index from an Imaginarium-style asset_info CSV."""
 
@@ -229,38 +230,54 @@ def build_asset_index_from_asset_info(
     model = SentenceTransformer(embedding_model)
     asset_root = Path(asset_dir)
     with Path(asset_info_csv_path).open("r", encoding="utf-8-sig", newline="") as handle:
-        for row in csv.DictReader(handle):
-            jid = _clean_text(row.get("jid") or row.get("name_en"))
-            if not jid:
-                continue
-            asset_path = asset_root / jid
-            if not asset_path.exists():
-                continue
-            short_desc = _clean_text(row.get("short_desc"))
-            description = _clean_text(row.get("desc") or row.get("caption_en")) or short_desc
-            category = _clean_text(row.get("category")).lower().replace("_", " ")
-            size = _parse_size_field(row.get("size") or row.get("bbx"))
-            metadata_path = asset_path / f"{jid}_metadata.json"
-            if metadata_path.exists():
-                with metadata_path.open("r", encoding="utf-8") as handle:
-                    metadata = json.load(handle)
-                if "transformed_size" in metadata:
-                    size = metadata["transformed_size"]
-            if not short_desc:
-                raise ValueError(f"Asset {jid} is missing short_desc in asset info CSV.")
-            if not size or len(size) != 3:
-                raise ValueError(f"Asset {jid} is missing valid size in asset info and metadata.")
-            embedding = model.encode(short_desc, convert_to_numpy=True)
-            preview_uri = _resolve_preview_uri(row, asset_path=asset_path, asset_root=asset_root)
-            index.add_asset(
-                jid=jid,
-                short_desc=short_desc,
-                size=[max(float(item), 0.01) for item in size],
-                category=category,
-                description=description,
-                embedding=embedding,
-                preview_uri=preview_uri,
-            )
+        rows = list(csv.DictReader(handle))
+    iterator: Any = rows
+    progress = None
+    if show_progress:
+        from tqdm import tqdm
+
+        progress = tqdm(rows, desc="Embedding assets", unit="asset", dynamic_ncols=True)
+        iterator = progress
+    skipped = 0
+    for row in iterator:
+        jid = _clean_text(row.get("jid") or row.get("name_en"))
+        if not jid:
+            skipped += 1
+            continue
+        asset_path = asset_root / jid
+        if not asset_path.exists():
+            skipped += 1
+            continue
+        short_desc = _clean_text(row.get("short_desc"))
+        description = _clean_text(row.get("desc") or row.get("caption_en")) or short_desc
+        category = _clean_text(row.get("category")).lower().replace("_", " ")
+        size = _parse_size_field(row.get("size") or row.get("bbx"))
+        metadata_path = asset_path / f"{jid}_metadata.json"
+        if metadata_path.exists():
+            with metadata_path.open("r", encoding="utf-8") as handle:
+                metadata = json.load(handle)
+            if "transformed_size" in metadata:
+                size = metadata["transformed_size"]
+        if not short_desc:
+            raise ValueError(f"Asset {jid} is missing short_desc in asset info CSV.")
+        if not size or len(size) != 3:
+            raise ValueError(f"Asset {jid} is missing valid size in asset info and metadata.")
+        embedding = model.encode(short_desc, convert_to_numpy=True)
+        preview_uri = _resolve_preview_uri(row, asset_path=asset_path, asset_root=asset_root)
+        index.add_asset(
+            jid=jid,
+            short_desc=short_desc,
+            size=[max(float(item), 0.01) for item in size],
+            category=category,
+            description=description,
+            embedding=embedding,
+            preview_uri=preview_uri,
+        )
+        if progress is not None:
+            progress.set_postfix(indexed=len(index), skipped=skipped, refresh=False)
+    if progress is not None:
+        progress.set_postfix(indexed=len(index), skipped=skipped, refresh=True)
+        progress.close()
     index.save(output_path)
     return index
 

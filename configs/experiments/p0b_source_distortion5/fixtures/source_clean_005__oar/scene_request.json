@@ -1,0 +1,51 @@
+{
+  "request_id": "source_clean_005__oar",
+  "instruction": "Create a simple 4.50 m by 12.87 m living room with a 2.797 m ceiling. Put a gray wooden storage locker near the north wall and a dark gray round coffee table near it. Place a black leather sofa in the south part of the room. Put one gray textured potted plant at the southwest corner and a second potted plant near the east wall and near the sofa. Place a gray open shelving wardrobe in the east part of the room.",
+  "scene_type": "living room",
+  "structure": false,
+  "prompt_granularity": "fine_grained",
+  "metadata": {
+    "generator_skipped": true,
+    "reference_annotation_visibility": "benchmark_private"
+  },
+  "room": {
+    "boundary": [
+      [
+        0.0,
+        0.0
+      ],
+      [
+        4.5,
+        0.0
+      ],
+      [
+        4.5,
+        12.87
+      ],
+      [
+        0.0,
+        12.87
+      ]
+    ],
+    "height": 2.7969,
+    "unit": "meter",
+    "dimensions": {
+      "width": 4.5,
+      "depth": 12.87,
+      "height": 2.7969
+    },
+    "explicit_dimensions": {
+      "width": 4.5,
+      "depth": 12.87,
+      "height": 2.7969
+    },
+    "dimension_provenance": {
+      "width": "explicit_benchmark_fixture",
+      "depth": "explicit_benchmark_fixture",
+      "height": "explicit_benchmark_fixture"
+    },
+    "resolution_policy": "room_dimension_policy_v1",
+    "topology": "rectangular_enclosed_room",
+    "floor_z": 0.0
+  }
+}

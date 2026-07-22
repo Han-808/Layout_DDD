@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from benchmark.data.scene_adapters import layout_to_scene, scene_to_layout
+from benchmark.legend.data.scene_adapters import layout_to_scene, scene_to_layout
 
 
 def legend_layout_to_scene(layout: dict, case: dict | None = None) -> dict:

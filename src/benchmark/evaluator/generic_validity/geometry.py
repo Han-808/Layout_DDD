@@ -266,9 +266,6 @@ def _rotation_degrees(obj: dict, pose: dict, placement: dict) -> tuple[np.ndarra
     vector = _vector3(rotation_value)
     if vector is None:
         vector = np.zeros(3, dtype=float)
-    max_abs = float(np.max(np.abs(vector))) if vector.size else 0.0
-    if max_abs <= (2.0 * math.pi + 1.0e-6):
-        vector = np.degrees(vector)
     return vector.astype(float), float(vector[2])
 
 

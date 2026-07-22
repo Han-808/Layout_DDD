@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import json
 
-from benchmark.workflow.judge_summaries import (
+from benchmark.legend.workflow.judge_summaries import (
     build_judge_prompt_payload,
     build_layout_summary,
     build_scene_summary,
     text_budget_config,
 )
-from benchmark.workflow.vlm_judge import normalize_vlm_judgement
+from benchmark.legend.workflow.vlm_judge import normalize_vlm_judgement
 
 
 def _case() -> dict:

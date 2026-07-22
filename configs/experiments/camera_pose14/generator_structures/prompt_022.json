@@ -1,0 +1,241 @@
+{
+  "request_id": "prompt_022",
+  "scene_type": "library",
+  "scene_description": "A 12 m x 9 m library reading room has a 3.5 m ceiling. Line the west and east walls with two long bookcases facing each other. Place three rectangular study tables in one row through the center, parallel to the bookcases. Put two chairs on each long side of every table and one green reading lamp at the center of each table. Arrange four books upright on the middle shelf of the west bookcase. Place one librarian desk near the south wall with one chair behind it, and keep one return cart beside the desk.",
+  "prompt_granularity": "fine_grained",
+  "explicit_claims": [
+    "two long bookcases",
+    "three rectangular study tables",
+    "two chairs on each long side of every table",
+    "one green reading lamp at the center of each table",
+    "four books upright on the middle shelf of the west bookcase",
+    "one librarian desk",
+    "one chair behind the librarian desk",
+    "one return cart beside the librarian desk",
+    "bookcases lined along west and east walls",
+    "study tables in one row through the center, parallel to bookcases",
+    "librarian desk near the south wall"
+  ],
+  "objects": [
+    {
+      "id": "obj_000",
+      "role": "bookcase",
+      "category": "bookcase",
+      "description": "long bookcase",
+      "count": 1,
+      "placement_intent": {
+        "absolute_relations": [],
+        "relative_relations": []
+      },
+      "metadata": {},
+      "estimated_size": [
+        11.0,
+        0.5,
+        2.0
+      ]
+    },
+    {
+      "id": "obj_001",
+      "role": "bookcase",
+      "category": "bookcase",
+      "description": "long bookcase",
+      "count": 1,
+      "placement_intent": {
+        "absolute_relations": [],
+        "relative_relations": []
+      },
+      "metadata": {},
+      "estimated_size": [
+        11.0,
+        0.5,
+        2.0
+      ]
+    },
+    {
+      "id": "obj_002",
+      "role": "study_table",
+      "category": "table",
+      "description": "rectangular study table",
+      "count": 3,
+      "placement_intent": {
+        "absolute_relations": [],
+        "relative_relations": []
+      },
+      "metadata": {},
+      "estimated_size": [
+        2.0,
+        0.8,
+        0.75
+      ]
+    },
+    {
+      "id": "obj_003",
+      "role": "chair",
+      "category": "chair",
+      "description": "standard chair",
+      "count": 6,
+      "placement_intent": {
+        "absolute_relations": [],
+        "relative_relations": []
+      },
+      "metadata": {},
+      "estimated_size": [
+        0.5,
+        0.5,
+        0.9
+      ]
+    },
+    {
+      "id": "obj_004",
+      "role": "reading_lamp",
+      "category": "lamp",
+      "description": "green reading lamp",
+      "count": 3,
+      "placement_intent": {
+        "absolute_relations": [],
+        "relative_relations": []
+      },
+      "metadata": {},
+      "estimated_size": [
+        0.3,
+        0.3,
+        0.6
+      ]
+    },
+    {
+      "id": "obj_005",
+      "role": "book",
+      "category": "book",
+      "description": "upright book",
+      "count": 4,
+      "placement_intent": {
+        "absolute_relations": [],
+        "relative_relations": []
+      },
+      "metadata": {},
+      "estimated_size": [
+        0.2,
+        0.05,
+        0.25
+      ]
+    },
+    {
+      "id": "obj_006",
+      "role": "librarian_desk",
+      "category": "desk",
+      "description": "librarian desk",
+      "count": 1,
+      "placement_intent": {
+        "absolute_relations": [],
+        "relative_relations": []
+      },
+      "metadata": {},
+      "estimated_size": [
+        1.5,
+        0.75,
+        0.75
+      ]
+    },
+    {
+      "id": "obj_007",
+      "role": "chair",
+      "category": "chair",
+      "description": "chair behind librarian desk",
+      "count": 1,
+      "placement_intent": {
+        "absolute_relations": [],
+        "relative_relations": []
+      },
+      "metadata": {},
+      "estimated_size": [
+        0.5,
+        0.5,
+        0.9
+      ]
+    },
+    {
+      "id": "obj_008",
+      "role": "return_cart",
+      "category": "cart",
+      "description": "book return cart",
+      "count": 1,
+      "placement_intent": {
+        "absolute_relations": [],
+        "relative_relations": []
+      },
+      "metadata": {},
+      "estimated_size": [
+        0.8,
+        0.5,
+        0.9
+      ]
+    }
+  ],
+  "global_constraints": [],
+  "relations": [
+    {
+      "family": "oar",
+      "subject_id": "obj_000",
+      "type": "against_wall",
+      "target": "west_wall"
+    },
+    {
+      "family": "oar",
+      "subject_id": "obj_001",
+      "type": "against_wall",
+      "target": "east_wall"
+    },
+    {
+      "family": "oar",
+      "subject_id": "obj_002",
+      "type": "parallel_to",
+      "target": "west_wall"
+    },
+    {
+      "family": "oar",
+      "subject_id": "obj_002",
+      "type": "centered_on",
+      "target": "floor"
+    },
+    {
+      "family": "oor",
+      "subject_id": "obj_003",
+      "type": "adjacent_to",
+      "object_id": "obj_002"
+    },
+    {
+      "family": "oor",
+      "subject_id": "obj_004",
+      "type": "on_top_of",
+      "object_id": "obj_002"
+    },
+    {
+      "family": "oor",
+      "subject_id": "obj_005",
+      "type": "on_shelf_of",
+      "object_id": "obj_000"
+    },
+    {
+      "family": "oar",
+      "subject_id": "obj_006",
+      "type": "near",
+      "target": "south_wall"
+    },
+    {
+      "family": "oor",
+      "subject_id": "obj_007",
+      "type": "behind",
+      "object_id": "obj_006"
+    },
+    {
+      "family": "oor",
+      "subject_id": "obj_008",
+      "type": "beside",
+      "object_id": "obj_006"
+    }
+  ],
+  "metadata": {
+    "fixture_policy": "legacy_plan_schema_sanitization_only",
+    "dropped_relation_count": 0
+  }
+}

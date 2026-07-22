@@ -8,44 +8,66 @@ version = "0.1.0"
 description = "Adapter-based scene construction and deterministic evaluation harness."
 requires-python = ">=3.10"
 dependencies = [
-  "httpx>=0.28.1",
   "jsonschema>=4.22",
-  "langchain>=1.3.11",
-  "langchain-core>=0.3",
-  "langchain-openai>=1.3.3",
   "networkx>=3.4.2",
   "numpy>=1.26",
-  "openai>=2.44.0",
   "pillow>=10.0.0",
-  "pydantic>=2.13.4",
   "pyyaml>=6.0",
-  "requests>=2.34.2",
   "shapely>=2.0",
   "tqdm>=4.68.3",
 ]
+
+[project.scripts]
+layout-ddd-generate = "benchmark.api.generation:main"
+layout-ddd-evaluate = "benchmark.api.evaluation:main"
+layout-ddd-evaluate-submission = "benchmark.api.submission:main"
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
 retrieval = [
     "sentence-transformers>=5.6.0",
 ]
+mesh-collision = [
+    "trimesh>=4.5.0,<5",
+    "python-fcl>=0.7.0,<0.8",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]
+exclude = ["benchmark.legend", "benchmark.legend.*"]
+
+[tool.setuptools]
+include-package-data = false
 
 [tool.pytest.ini_options]
 testpaths = [
+  "tests/test_adapter_io_contracts.py",
   "tests/test_asset_retriever.py",
+  "tests/test_blender_mesh_fit.py",
+  "tests/test_blender_renderer.py",
+  "tests/test_camera_pose_modes.py",
+  "tests/test_current_namespace_boundaries.py",
+  "tests/test_current_evaluation_profile.py",
   "tests/test_generic_validity.py",
   "tests/test_input_chain_boundaries.py",
   "tests/test_layout_json_adapter.py",
   "tests/test_nl_scene_mvp.py",
   "tests/test_oar_evaluator.py",
+  "tests/test_openai_vlm_judge.py",
+  "tests/test_object_mapping.py",
   "tests/test_oor_evaluator.py",
+  "tests/test_p0b_adjudication.py",
+  "tests/test_p0b_collision.py",
+  "tests/test_p0b_collision_overlay.py",
+  "tests/test_p0b_oob.py",
+  "tests/test_p0b_support.py",
+  "tests/test_p0a_reference_and_geometry.py",
   "tests/test_relationship_mapper.py",
   "tests/test_scene_harness.py",
+  "tests/test_spatial_fidelity.py",
+  "tests/test_submission_api.py",
 ]
-pythonpath = ["src"]
+pythonpath = ["src", "."]
 addopts = "-q"
 
 [dependency-groups]

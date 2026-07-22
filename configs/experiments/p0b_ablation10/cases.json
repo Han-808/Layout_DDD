@@ -1,0 +1,105 @@
+{
+  "experiment_id": "p0b_evidence_camera_ablation10_v1",
+  "input_mode": "natural_language_only",
+  "prompt_granularity": "fine_grained",
+  "converted_schema_visibility": "benchmark_private_evaluator_only",
+  "room_policy": "benchmark_fallback_7x5x3",
+  "notes": [
+    "The generator receives natural language and the shared room contract, never the reference annotation.",
+    "All experimental arms must reuse the same generated canonical scene for each case.",
+    "Easy cases use only binary relations; moderate cases include an explicit multi-object relation.",
+    "These cases calibrate P0b evidence and camera policies, not final leaderboard scores."
+  ],
+  "cases": [
+    {
+      "case_id": "ablation_easy_001",
+      "difficulty": "easy",
+      "scene_type": "bedroom",
+      "object_count": 5,
+      "instruction": "Create a compact bedroom. Place a grey upholstered bed against the north wall. Put a dark brown wooden nightstand to the right of the bed and a mint green vintage alarm clock on the nightstand. Place a dark gray angular floor lamp to the left of the bed and a light gray pillow on the bed.",
+      "room": {"boundary": [[0, 0], [7, 0], [7, 5], [0, 5]], "height": 3.0, "unit": "meter"},
+      "relation_focus": ["right", "left", "on_top_of", "against_wall"]
+    },
+    {
+      "case_id": "ablation_easy_002",
+      "difficulty": "easy",
+      "scene_type": "living_room",
+      "object_count": 5,
+      "instruction": "Create a small living room. Place a brown leather chesterfield sofa against the west wall. Put a dark wood coffee table in front of and parallel to the sofa, with a white ceramic vase on the table. Lay a deep red floral carpet on the floor in front of the sofa and place a dark gray angular floor lamp to the right of the sofa.",
+      "room": {"boundary": [[0, 0], [7, 0], [7, 5], [0, 5]], "height": 3.0, "unit": "meter"},
+      "relation_focus": ["in_front", "parallel", "on_top_of", "right", "against_wall", "on_floor"]
+    },
+    {
+      "case_id": "ablation_easy_003",
+      "difficulty": "easy",
+      "scene_type": "study",
+      "object_count": 5,
+      "instruction": "Create a study area. Place a dark angular wooden desk against the east wall and a brown leather office chair in front of it. Put a dark metallic monitor on the desk, with a teal blue paperback book to the left of the monitor and a vibrant green rosemary plant to its right.",
+      "room": {"boundary": [[0, 0], [7, 0], [7, 5], [0, 5]], "height": 3.0, "unit": "meter"},
+      "relation_focus": ["in_front", "left", "right", "on_top_of", "against_wall"]
+    },
+    {
+      "case_id": "ablation_easy_004",
+      "difficulty": "easy",
+      "scene_type": "entryway",
+      "object_count": 4,
+      "instruction": "Create a simple entryway. Place a concrete gray shoe cabinet against the south wall. Put a brown woven storage basket on the floor to the left of the cabinet, a concrete pebble fan palm on the floor to its right, and a white cylindrical floor lamp near the cabinet.",
+      "room": {"boundary": [[0, 0], [7, 0], [7, 5], [0, 5]], "height": 3.0, "unit": "meter"},
+      "relation_focus": ["left", "right", "near", "against_wall", "on_floor"]
+    },
+    {
+      "case_id": "ablation_easy_005",
+      "difficulty": "easy",
+      "scene_type": "cafe_corner",
+      "object_count": 5,
+      "instruction": "Create a cafe corner. Put a white marble coffee table near the center of the room. Place a gray metal bar stool to the left of the table and a light wood bar stool to its right. Set a dark gray ceramic mug and a white speckled ceramic bowl on the table, with the mug to the left of the bowl.",
+      "room": {"boundary": [[0, 0], [7, 0], [7, 5], [0, 5]], "height": 3.0, "unit": "meter"},
+      "relation_focus": ["left", "right", "on_top_of", "room_center"]
+    },
+    {
+      "case_id": "ablation_moderate_001",
+      "difficulty": "moderate",
+      "scene_type": "dining_room",
+      "object_count": 7,
+      "instruction": "Create a dining room with a round wooden dining table at the center. Arrange four dark brown wooden chairs around the table, one on each side. Put a white ceramic vase on the table. Hang a sleek black pendant light from the ceiling directly above the table.",
+      "room": {"boundary": [[0, 0], [7, 0], [7, 5], [0, 5]], "height": 3.0, "unit": "meter"},
+      "relation_focus": ["around", "on_top_of", "above", "room_center", "hung_from_ceiling"]
+    },
+    {
+      "case_id": "ablation_moderate_002",
+      "difficulty": "moderate",
+      "scene_type": "shared_office",
+      "object_count": 8,
+      "instruction": "Create a shared office. Arrange three light wood school desks in one straight row from west to east. Put one brown leather office chair behind each desk. Place a dark metallic monitor on the middle desk and a concrete pebble fan palm to the right of the eastern desk.",
+      "room": {"boundary": [[0, 0], [7, 0], [7, 5], [0, 5]], "height": 3.0, "unit": "meter"},
+      "relation_focus": ["ordered", "behind", "on_top_of", "right"]
+    },
+    {
+      "case_id": "ablation_moderate_003",
+      "difficulty": "moderate",
+      "scene_type": "bedroom",
+      "object_count": 8,
+      "instruction": "Create a bedroom with a white upholstered bed against the north wall. Place one dark brown wooden nightstand on each side so that the bed is between them. Put a beige linen table lamp on each nightstand. Lay a beige geometric carpet on the floor in front of the bed, place a light gray pillow on the bed, and put a dark navy paperback book on the right nightstand.",
+      "room": {"boundary": [[0, 0], [7, 0], [7, 5], [0, 5]], "height": 3.0, "unit": "meter"},
+      "relation_focus": ["ordered", "between", "on_top_of", "in_front", "against_wall", "on_floor"]
+    },
+    {
+      "case_id": "ablation_moderate_004",
+      "difficulty": "moderate",
+      "scene_type": "lounge",
+      "object_count": 8,
+      "instruction": "Create a lounge with a round carved mahogany coffee table near the center. Arrange three black leather lounge chairs around the table. Place a dark gray fabric sofa behind and parallel to the table. Put a natural wooden bowl on the table, a dark gray angular floor lamp to the left of the sofa, and a burgundy geometric rug on the floor centered beneath the table.",
+      "room": {"boundary": [[0, 0], [7, 0], [7, 5], [0, 5]], "height": 3.0, "unit": "meter"},
+      "relation_focus": ["around", "behind", "parallel", "on_top_of", "left", "below", "on_floor"]
+    },
+    {
+      "case_id": "ablation_moderate_005",
+      "difficulty": "moderate",
+      "scene_type": "library_study",
+      "object_count": 8,
+      "instruction": "Create a library study. Place a light wood shelving unit against the west wall. Arrange a teal blue paperback book, an aged parchment book, and a dark navy paperback book from left to right on its middle shelf. Put a dark brown wooden desk in front of the shelf with a brown leather office chair in front of the desk. Set a dark metallic monitor on the desk and place a brown woven storage basket to the right of the desk.",
+      "room": {"boundary": [[0, 0], [7, 0], [7, 5], [0, 5]], "height": 3.0, "unit": "meter"},
+      "relation_focus": ["ordered", "on_shelf", "in_front", "on_top_of", "right", "against_wall"]
+    }
+  ]
+}

@@ -1,0 +1,106 @@
+{
+  "schema_version": "controlled_scene_distortion_v1",
+  "case_id": "source_clean_005__oar",
+  "base_case_id": "source_clean_005",
+  "source_scene_id": "scene_011841_04",
+  "generator_skipped": true,
+  "family": "oar",
+  "severity": {
+    "family": "oar",
+    "target_object_count": 4,
+    "object_denominator": 6,
+    "target_object_fraction": 0.6666666666666666,
+    "target_relation_count": 4,
+    "relation_denominator": 6,
+    "target_relation_fraction": 0.6666666666666666,
+    "collision_pair_count": 0
+  },
+  "transforms": [
+    {
+      "object_id": "obj_003",
+      "before_center": [
+        0.52,
+        0.41,
+        0.78
+      ],
+      "after_center": [
+        0.6,
+        4.5,
+        0.775
+      ],
+      "reason": "violates_oar_relation:0"
+    },
+    {
+      "object_id": "obj_000",
+      "before_center": [
+        3.01,
+        11.73,
+        1.25
+      ],
+      "after_center": [
+        3.0,
+        9.5,
+        1.25
+      ],
+      "reason": "violates_oar_relation:2"
+    },
+    {
+      "object_id": "obj_002",
+      "before_center": [
+        2.72,
+        2.9,
+        0.59
+      ],
+      "after_center": [
+        2.7,
+        6.0,
+        0.5850072232672524
+      ],
+      "reason": "violates_oar_relation:4"
+    },
+    {
+      "object_id": "obj_005",
+      "before_center": [
+        3.19,
+        7.92,
+        1.25
+      ],
+      "after_center": [
+        0.6,
+        8.5,
+        1.25
+      ],
+      "reason": "violates_oar_relation:5"
+    }
+  ],
+  "expected": {
+    "collision_invalid_pairs": [],
+    "oob_invalid_object_ids": [],
+    "support_invalid_object_ids": [],
+    "oar_invalid_relation_indices": [
+      0,
+      2,
+      4,
+      5
+    ]
+  },
+  "gt_policy": "programmatic_from_frozen_transform_not_from_evaluator_prediction",
+  "deterministic_audit": {
+    "collision_routed_pairs": [],
+    "oob_routed_object_ids": [],
+    "support_routed_object_ids": [],
+    "oor_pass_vector": [
+      true,
+      true
+    ],
+    "oar_pass_vector": [
+      false,
+      true,
+      false,
+      true,
+      false,
+      false
+    ],
+    "cross_metric_isolation_verified": true
+  }
+}

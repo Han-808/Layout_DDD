@@ -101,7 +101,7 @@ def normalize_object(obj: dict, *, asset_csv_path: str | None = None, asset_root
     jid = obj.get("jid") or asset_ref.get("asset_key")
     category = obj.get("category")
     retrieval_category = obj.get("retrieval_category") or category
-    desc = obj.get("desc")
+    desc = obj.get("description") or obj.get("desc")
     short_desc = obj.get("short_desc") or desc
     return NormalizedObject(
         id=str(object_id),
@@ -181,9 +181,6 @@ def _rotation_degrees(obj: dict) -> tuple[np.ndarray, float]:
     vector = _vector3(rotation_value)
     if vector is None:
         vector = np.zeros(3, dtype=float)
-    max_abs = float(np.max(np.abs(vector))) if vector.size else 0.0
-    if max_abs <= (2.0 * math.pi + 1.0e-6):
-        vector = np.degrees(vector)
     return vector.astype(float), float(vector[2])
 
 

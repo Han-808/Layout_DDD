@@ -1,0 +1,294 @@
+{
+  "request_id": "prompt_001",
+  "scene_type": "bedroom",
+  "scene_description": "An 8 m x 8 m bedroom with a height of 2.8 m is enclosed by four walls. Place one tall red bed beside the right wall and one dark wooden cabinet immediately to its left. Arrange one silver can, one yellow lemon, and one white spray bottle from left to right on top of the cabinet. Put one brown leather sofa opposite the bed and parallel to it. A floor lamp stands between the sofa and the left wall. Place one light-grey pillow at the head of the bed, and put one magazine beside one art book on the floor near the foot of the sofa.",
+  "prompt_granularity": "fine_grained",
+  "explicit_claims": [
+    "one tall red bed",
+    "one dark wooden cabinet",
+    "one silver can",
+    "one yellow lemon",
+    "one white spray bottle",
+    "one brown leather sofa",
+    "one floor lamp",
+    "one light-grey pillow",
+    "one magazine",
+    "one art book",
+    "bed beside the right wall",
+    "cabinet immediately to the left of the bed",
+    "silver can, yellow lemon, white spray bottle arranged from left to right on top of the cabinet",
+    "sofa opposite the bed and parallel to it",
+    "floor lamp between the sofa and the left wall",
+    "pillow at the head of the bed",
+    "magazine beside art book on the floor near the foot of the sofa"
+  ],
+  "objects": [
+    {
+      "id": "obj_000",
+      "role": "main sleeping furniture",
+      "category": "bed",
+      "description": "tall red bed",
+      "count": 1,
+      "placement_intent": {
+        "absolute_relations": [],
+        "relative_relations": []
+      },
+      "metadata": {},
+      "estimated_size": [
+        2.0,
+        1.8,
+        1.2
+      ]
+    },
+    {
+      "id": "obj_001",
+      "role": "storage furniture",
+      "category": "cabinet",
+      "description": "dark wooden cabinet",
+      "count": 1,
+      "placement_intent": {
+        "absolute_relations": [],
+        "relative_relations": []
+      },
+      "metadata": {},
+      "estimated_size": [
+        1.0,
+        0.5,
+        0.8
+      ]
+    },
+    {
+      "id": "obj_002",
+      "role": "container",
+      "category": "can",
+      "description": "silver can",
+      "count": 1,
+      "placement_intent": {
+        "absolute_relations": [],
+        "relative_relations": []
+      },
+      "metadata": {},
+      "estimated_size": [
+        0.1,
+        0.1,
+        0.15
+      ]
+    },
+    {
+      "id": "obj_003",
+      "role": "food item",
+      "category": "lemon",
+      "description": "yellow lemon",
+      "count": 1,
+      "placement_intent": {
+        "absolute_relations": [],
+        "relative_relations": []
+      },
+      "metadata": {},
+      "estimated_size": [
+        0.08,
+        0.08,
+        0.08
+      ]
+    },
+    {
+      "id": "obj_004",
+      "role": "container",
+      "category": "spray bottle",
+      "description": "white spray bottle",
+      "count": 1,
+      "placement_intent": {
+        "absolute_relations": [],
+        "relative_relations": []
+      },
+      "metadata": {},
+      "estimated_size": [
+        0.08,
+        0.08,
+        0.2
+      ]
+    },
+    {
+      "id": "obj_005",
+      "role": "main seating",
+      "category": "sofa",
+      "description": "brown leather sofa",
+      "count": 1,
+      "placement_intent": {
+        "absolute_relations": [],
+        "relative_relations": []
+      },
+      "metadata": {},
+      "estimated_size": [
+        2.4,
+        0.9,
+        0.8
+      ]
+    },
+    {
+      "id": "obj_006",
+      "role": "lighting",
+      "category": "floor lamp",
+      "description": "floor lamp",
+      "count": 1,
+      "placement_intent": {
+        "absolute_relations": [],
+        "relative_relations": []
+      },
+      "metadata": {},
+      "estimated_size": [
+        0.4,
+        0.4,
+        1.8
+      ]
+    },
+    {
+      "id": "obj_007",
+      "role": "bedding",
+      "category": "pillow",
+      "description": "light-grey pillow",
+      "count": 1,
+      "placement_intent": {
+        "absolute_relations": [],
+        "relative_relations": []
+      },
+      "metadata": {},
+      "estimated_size": [
+        0.5,
+        0.5,
+        0.2
+      ]
+    },
+    {
+      "id": "obj_008",
+      "role": "reading material",
+      "category": "magazine",
+      "description": "magazine",
+      "count": 1,
+      "placement_intent": {
+        "absolute_relations": [],
+        "relative_relations": []
+      },
+      "metadata": {},
+      "estimated_size": [
+        0.2,
+        0.05,
+        0.02
+      ]
+    },
+    {
+      "id": "obj_009",
+      "role": "reading material",
+      "category": "art book",
+      "description": "art book",
+      "count": 1,
+      "placement_intent": {
+        "absolute_relations": [],
+        "relative_relations": []
+      },
+      "metadata": {},
+      "estimated_size": [
+        0.25,
+        0.05,
+        0.03
+      ]
+    }
+  ],
+  "global_constraints": [],
+  "relations": [
+    {
+      "family": "oar",
+      "subject_id": "obj_000",
+      "type": "beside",
+      "target": "east_wall"
+    },
+    {
+      "family": "oor",
+      "subject_id": "obj_001",
+      "type": "immediately_left_of",
+      "object_id": "obj_000"
+    },
+    {
+      "family": "oor",
+      "subject_id": "obj_002",
+      "type": "on_top_of",
+      "object_id": "obj_001"
+    },
+    {
+      "family": "oor",
+      "subject_id": "obj_003",
+      "type": "on_top_of",
+      "object_id": "obj_001"
+    },
+    {
+      "family": "oor",
+      "subject_id": "obj_004",
+      "type": "on_top_of",
+      "object_id": "obj_001"
+    },
+    {
+      "family": "oor",
+      "subject_id": "obj_002",
+      "type": "left_of",
+      "object_id": "obj_003"
+    },
+    {
+      "family": "oor",
+      "subject_id": "obj_003",
+      "type": "left_of",
+      "object_id": "obj_004"
+    },
+    {
+      "family": "oor",
+      "subject_id": "obj_005",
+      "type": "opposite",
+      "object_id": "obj_000"
+    },
+    {
+      "family": "oor",
+      "subject_id": "obj_005",
+      "type": "parallel_to",
+      "object_id": "obj_000"
+    },
+    {
+      "family": "oor",
+      "subject_id": "obj_007",
+      "type": "at_head_of",
+      "object_id": "obj_000"
+    },
+    {
+      "family": "oor",
+      "subject_id": "obj_008",
+      "type": "beside",
+      "object_id": "obj_009"
+    },
+    {
+      "family": "oar",
+      "subject_id": "obj_008",
+      "type": "on",
+      "target": "floor"
+    },
+    {
+      "family": "oar",
+      "subject_id": "obj_009",
+      "type": "on",
+      "target": "floor"
+    },
+    {
+      "family": "oor",
+      "subject_id": "obj_008",
+      "type": "near",
+      "object_id": "obj_005"
+    },
+    {
+      "family": "oor",
+      "subject_id": "obj_009",
+      "type": "near",
+      "object_id": "obj_005"
+    }
+  ],
+  "metadata": {
+    "fixture_policy": "legacy_plan_schema_sanitization_only",
+    "dropped_relation_count": 2
+  }
+}

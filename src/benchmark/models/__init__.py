@@ -1,8 +1,11 @@
-"""Model adapters for layout generation and repair."""
+"""Current model clients shared by generator and converter adapters."""
 
-from benchmark.models.base_model import BaseLayoutModel
-from benchmark.models.factory import MODEL_ADAPTERS, create_model
-from benchmark.models.mock_model import MockModel
-from benchmark.models.openai_compatible_model import OpenAICompatibleModel
+from benchmark.models.json_response import ModelResponseError, parse_json_object
+from benchmark.models.openai_compatible_model import MissingAPIKeyError, OpenAICompatibleModel
 
-__all__ = ["BaseLayoutModel", "MODEL_ADAPTERS", "MockModel", "OpenAICompatibleModel", "create_model"]
+__all__ = [
+    "MissingAPIKeyError",
+    "ModelResponseError",
+    "OpenAICompatibleModel",
+    "parse_json_object",
+]

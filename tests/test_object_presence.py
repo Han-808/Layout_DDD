@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from benchmark.workflow.scoring import compute_object_presence
+from benchmark.legend.workflow.scoring import compute_object_presence
 
 
 def test_id_based_presence() -> None:

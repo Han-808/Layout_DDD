@@ -1,3 +1,21 @@
+"""Build a relationship-intent skeleton from an object plan.
+
+Summary:
+    Maps the relation intents declared in an object plan into the canonical
+    ``relationship_intent.json`` structure used by downstream alignment (this is
+    non-scoring alignment infrastructure, not a metric).
+
+Input:
+    - ``--scene-request`` and ``--object-plan`` JSON.
+    - ``--mode``: ``passthrough`` (deterministic) or ``vlm``.
+
+Output:
+    - ``--out``: relationship_intent JSON; prints the written path.
+
+Function:
+    Thin CLI wrapper over ``map_relationships(...)``.
+"""
+
 from __future__ import annotations
 
 import argparse

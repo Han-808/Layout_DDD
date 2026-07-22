@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from benchmark.metrics.aggregate import aggregate_case_results
+from benchmark.legend.metrics.aggregate import aggregate_case_results
 
 
 def test_benchmark_summary_separates_failure_types_by_input_mode() -> None:
