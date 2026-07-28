@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from dataclasses import asdict
 
-from benchmark.legend.workflow.grouping import build_object_grouping_report, build_object_groups, resolve_grouping_config
+from benchmark.evaluator.object_grouping import (
+    build_object_grouping_report,
+    build_object_groups,
+    resolve_grouping_config,
+)
 
 
 def _obj(object_id: str, center: list[float], support_parent: str | None = None) -> dict:
@@ -32,6 +36,14 @@ def _grouping_config(**overrides: object) -> dict:
         else:
             grouping[key] = value
     return {"grouping": grouping}
+
+
+def test_legacy_import_path_reexports_canonical_implementation() -> None:
+    from benchmark.legend.workflow import grouping as legacy
+
+    assert legacy.build_object_grouping_report is build_object_grouping_report
+    assert legacy.build_object_groups is build_object_groups
+    assert legacy.resolve_grouping_config is resolve_grouping_config
 
 
 def test_grouping_assigns_every_object_once_and_splits_far_objects() -> None:

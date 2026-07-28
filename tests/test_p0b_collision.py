@@ -279,7 +279,13 @@ def test_offset_near_contact_is_conservative(tmp_path: Path) -> None:
     report = check_collision(scene, {"separation_threshold_m": 0.02}, collision_geometry=geometry, vlm_judge=judge)
     pair = report["pairs"][0]
     assert pair["mesh_evidence"]["mesh_reliable_for_separation"] is False
-    assert pair["mesh_evidence"]["minimum_surface_distance_is_lower_bound"] is True
+    mesh_evidence = pair["mesh_evidence"]
+    if mesh_evidence["minimum_surface_distance_backend"] == "trimesh_fcl":
+        assert mesh_evidence["minimum_surface_distance_is_lower_bound"] is False
+        assert mesh_evidence["minimum_surface_distance_m"] == pytest.approx(0.01)
+    else:
+        assert mesh_evidence["minimum_surface_distance_backend"] == "numpy_aabb_gap"
+        assert mesh_evidence["minimum_surface_distance_is_lower_bound"] is True
     assert pair["route"] == "vlm_adjudicated"
     assert judge.calls == 1
 

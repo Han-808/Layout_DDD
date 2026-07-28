@@ -34,11 +34,24 @@ from benchmark.rendering.collision_overlay import (
     rank_focus_candidates,
     rank_support_contact_candidates,
 )
+from benchmark.rendering.segmentation_contour import (
+    compose_segmentation_contour_manifest,
+)
+from benchmark.visual_judge.active_policy import (
+    ACTIVE_CORRECTIVE_PROPOSAL_VERSION,
+    generate_corrective_camera_proposals,
+    pose_fingerprint,
+)
+from benchmark.visual_judge.evidence_sufficiency import (
+    SUFFICIENT,
+    assess_preview_selection_sufficiency,
+)
+from benchmark.visual_judge.visual_config import DEFAULT_P0B_VISUAL_CONFIGS
 
 
 FOCUS_CAMERA_MODES = {"visibility_ranked", "support_contact_plane", "query_cov"}
 HIGHLIGHTED_GLOBAL_POSE_POLICIES = {"global_top", "legacy_metric"}
-CAMERA_EVIDENCE_CACHE_CONTRACT_VERSION = "camera_evidence_cache_contract_v2"
+CAMERA_EVIDENCE_CACHE_CONTRACT_VERSION = "camera_evidence_cache_contract_v4"
 _CAMERA_EVIDENCE_IMPLEMENTATION_FILES = (
     "src/benchmark/rendering/blender.py",
     "src/benchmark/rendering/blender_camera_worker.py",
@@ -47,6 +60,11 @@ _CAMERA_EVIDENCE_IMPLEMENTATION_FILES = (
     "src/benchmark/rendering/blender_focus_bundle_worker.py",
     "src/benchmark/rendering/camera_pose.py",
     "src/benchmark/rendering/collision_overlay.py",
+    "src/benchmark/rendering/segmentation_contour.py",
+    "src/benchmark/visual_judge/active_fallback.py",
+    "src/benchmark/visual_judge/active_policy.py",
+    "src/benchmark/visual_judge/evidence_sufficiency.py",
+    "src/benchmark/visual_judge/openai_compatible.py",
     "src/benchmark/visual_judge/render_views.py",
 )
 _BLEND_HASH_CACHE: dict[tuple[str, int, int], str] = {}
@@ -68,10 +86,12 @@ class CameraEvidenceProvider:
         candidate_count: int = 6,
         metric_modes: dict[str, str] | None = None,
         collision_overlay: bool = False,
+        collision_contour: bool = False,
         collision_geometry: dict[str, Any] | None = None,
         frozen_view_ids: list[str] | tuple[str, ...] | None = None,
         highlighted_global_pose_policy: str = "global_top",
         candidate_policy: str = DEFAULT_CAMERA_CANDIDATE_POLICY,
+        active_repair: bool = False,
     ) -> None:
         self.renderer = renderer
         self.blend_file = Path(blend_file).expanduser().resolve()
@@ -88,6 +108,7 @@ class CameraEvidenceProvider:
         self.max_steps = int(max_steps)
         self.candidate_count = int(candidate_count)
         self.candidate_policy = str(candidate_policy).strip().lower()
+        self.active_repair = bool(active_repair)
         if self.candidate_policy not in CAMERA_CANDIDATE_POLICIES:
             raise ValueError(
                 "camera candidate policy must be one of "
@@ -96,6 +117,12 @@ class CameraEvidenceProvider:
         # Collision-only paired RGB + diagnostic-overlay evidence. Opt-in so OOB
         # and Support camera behavior is completely unchanged.
         self.collision_overlay = bool(collision_overlay)
+        # The production Collision presentation pairs one raw local view with a
+        # same-pose segmentation contour. It remains separately opt-in so
+        # historical passthrough experiments keep their original evidence arms.
+        self.collision_contour = bool(collision_contour)
+        if self.collision_contour and not self.collision_overlay:
+            raise ValueError("collision_contour requires collision_overlay")
         self.collision_geometry = collision_geometry if isinstance(collision_geometry, dict) else None
         self.collision_geometry_contract = _collision_geometry_contract(
             self.collision_geometry
@@ -181,6 +208,12 @@ class CameraEvidenceProvider:
                 if query_cov_enabled and self.frozen_view_ids is None and self.max_steps > 0
                 else []
             ),
+            "active_repair": self.active_repair,
+            "active_corrective_proposal_version": (
+                ACTIVE_CORRECTIVE_PROPOSAL_VERSION
+                if self.active_repair
+                else None
+            ),
             "selection_source": (
                 "frozen_vlm_selected_view_ids"
                 if self.frozen_view_ids is not None
@@ -189,8 +222,9 @@ class CameraEvidenceProvider:
                 else "deterministic"
             ),
             "collision_overlay": self.collision_overlay,
+            "collision_contour": self.collision_contour,
             "focus_highlighting": "visibility_ranked_support_contact_plane_and_query_cov",
-            "global_context_source": "metric_highlighted_global",
+            "global_context_source": "metric_highlighted_global_when_required",
             "highlighted_global_pose_policy": self.highlighted_global_pose_policy,
         }
 
@@ -308,6 +342,7 @@ class CameraEvidenceProvider:
             "selected_poses": selected,
             "render_manifest": str(event_dir / "final" / "camera_render_manifest.json"),
             "render_evidence": [str(path) for path in paths],
+            "render_evidence_artifacts": _freeze_evidence_paths(paths),
         }
         _write_json(event_dir / "camera_evidence_manifest.json", manifest)
         return paths
@@ -321,6 +356,16 @@ class CameraEvidenceProvider:
         overlay_spec: dict[str, Any] | None = None,
     ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         current = [deepcopy(item) for item in candidates]
+        if (
+            self.active_repair
+            and request.get("_camera_selection_phase") == "active_fallback"
+        ):
+            return self._active_repair_selection(
+                request,
+                current,
+                event_dir,
+                overlay_spec=overlay_spec,
+            )
         if self.frozen_view_ids is not None:
             by_id = {str(item["id"]): item for item in current}
             unknown = [item_id for item_id in self.frozen_view_ids if item_id not in by_id]
@@ -340,6 +385,7 @@ class CameraEvidenceProvider:
             }
         steps: list[dict[str, Any]] = []
         final_ids: list[str] = []
+        latest_visibility_by_id: dict[str, dict[str, Any]] = {}
         for step in range(self.max_steps + 1):
             preview_dir = event_dir / "previews" / f"step_{step:02d}"
             preview_role = "rgb"
@@ -375,10 +421,31 @@ class CameraEvidenceProvider:
                 for item in preview_manifest.get("views", [])
                 if isinstance(item, dict) and item.get("id") and item.get("path")
             }
+            preview_visibility_warning = None
+            latest_visibility_by_id = {}
             if overlay_spec is not None and preview_role == "highlighted_focus":
-                _require_visible_selector_targets(preview_by_id, overlay_spec)
+                targets = [
+                    target
+                    for target in overlay_spec.get("targets", [])
+                    if isinstance(target, dict)
+                ]
+                visibility_options = _focus_visibility_options(overlay_spec)
+                latest_visibility_by_id = {
+                    candidate_id: measure_focus_visibility(
+                        path,
+                        targets=targets,
+                        **visibility_options,
+                    )
+                    for candidate_id, path in preview_by_id.items()
+                }
+                preview_visibility_warning = _selector_preview_visibility_warning(
+                    latest_visibility_by_id,
+                    overlay_spec,
+                )
             selector_request = {
                 "mode": "query_cov",
+                "selection_phase": request.get("_camera_selection_phase"),
+                "evidence_deficiency": request.get("_camera_evidence_deficiency"),
                 "metric": request.get("metric"),
                 "event": request.get("event"),
                 "object_ids": request.get("object_ids"),
@@ -401,6 +468,7 @@ class CameraEvidenceProvider:
                 "selection_role": "choose_evidence_views_only_do_not_judge_metric",
                 "preview_role": preview_role,
                 "preview_degradation": preview_degradation,
+                "preview_visibility_warning": preview_visibility_warning,
                 "color_legend": overlay_spec.get("legend") if overlay_spec is not None else None,
             }
             decision = self.selector.select_camera_views(selector_request)
@@ -417,6 +485,7 @@ class CameraEvidenceProvider:
                 "decision": decision,
                 "preview_role": preview_role,
                 "preview_degradation": preview_degradation,
+                "preview_visibility_warning": preview_visibility_warning,
             }
             steps.append(step_record)
             final_ids = selected_ids
@@ -436,6 +505,352 @@ class CameraEvidenceProvider:
             "selector": type(self.selector).__name__,
             "selected_view_ids": final_ids,
             "steps": steps,
+            "selection_phase": request.get("_camera_selection_phase") or "direct_query_cov",
+            "selected_preview_visibility": {
+                item_id: latest_visibility_by_id[item_id]
+                for item_id in final_ids
+                if item_id in latest_visibility_by_id
+            },
+        }
+
+    def _active_repair_selection(
+        self,
+        request: dict[str, Any],
+        candidates: list[dict[str, Any]],
+        event_dir: Path,
+        *,
+        overlay_spec: dict[str, Any] | None,
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        """Run bounded, metric-specific camera repair with stepwise checks.
+
+        The selector chooses a proposal ID from a deterministic, feasible
+        proposal set.  It never authors a free-form camera pose and never
+        returns a metric verdict.  After every selector call/action, the same
+        deterministic preview sufficiency gate is rerun and the best measured
+        packet is retained.
+        """
+
+        metric = str(request.get("metric") or "").strip().lower()
+        metric_family = (
+            "oob" if metric == "object_architecture_penetration" else metric
+        )
+        config = DEFAULT_P0B_VISUAL_CONFIGS.get(metric_family)
+        if not isinstance(config, dict):
+            raise ValueError(
+                f"active camera repair does not support metric {metric!r}"
+            )
+        local_budget = min(
+            self.max_views,
+            max(1, int(config.get("local_view_count") or 1)),
+        )
+        current = [deepcopy(item) for item in candidates]
+        trajectory: list[dict[str, Any]] = []
+        action_history: list[dict[str, Any]] = []
+        seen_proposals: set[str] = set()
+        seen_poses = {
+            pose_fingerprint(item)
+            for item in current
+        }
+        best_selected: list[dict[str, Any]] = []
+        best_ids: list[str] = []
+        best_visibility: dict[str, dict[str, Any]] = {}
+        best_assessment: dict[str, Any] | None = None
+        previous_assessment: dict[str, Any] | None = None
+        stop_reason = "selector_budget_exhausted"
+        selector_calls = 0
+        actions_executed = 0
+
+        deficiency = request.get("_camera_evidence_deficiency")
+        for step in range(self.max_steps + 1):
+            preview_dir = event_dir / "active_previews" / f"step_{step:02d}"
+            preview_role = "rgb_fallback"
+            preview_degradation: str | None = None
+            if overlay_spec is not None:
+                try:
+                    preview_manifest = self._render_overlay_views(
+                        request=request,
+                        out_dir=preview_dir,
+                        camera_views=current,
+                        overlay_spec=overlay_spec,
+                        preview=True,
+                    )
+                    preview_role = "highlighted_focus"
+                except Exception as exc:
+                    preview_degradation = (
+                        "focus_preview_failed: "
+                        f"{type(exc).__name__}: {exc}"
+                    )
+                    preview_manifest = self.renderer.render_camera_views(
+                        blend_file=self.blend_file,
+                        out_dir=preview_dir / "rgb_fallback",
+                        camera_views=current,
+                        preview=True,
+                    )
+            else:
+                preview_manifest = self.renderer.render_camera_views(
+                    blend_file=self.blend_file,
+                    out_dir=preview_dir,
+                    camera_views=current,
+                    preview=True,
+                )
+            preview_by_id = {
+                str(item.get("id")): str(item.get("path"))
+                for item in preview_manifest.get("views", [])
+                if isinstance(item, dict)
+                and item.get("id")
+                and item.get("path")
+            }
+            visibility_by_id: dict[str, dict[str, Any]] = {}
+            preview_warning = None
+            if overlay_spec is not None and preview_role == "highlighted_focus":
+                targets = [
+                    target
+                    for target in overlay_spec.get("targets", [])
+                    if isinstance(target, dict)
+                ]
+                visibility_options = _focus_visibility_options(overlay_spec)
+                visibility_by_id = {
+                    candidate_id: measure_focus_visibility(
+                        path,
+                        targets=targets,
+                        **visibility_options,
+                    )
+                    for candidate_id, path in preview_by_id.items()
+                }
+                preview_warning = _selector_preview_visibility_warning(
+                    visibility_by_id,
+                    overlay_spec,
+                )
+
+            active_deficiency = (
+                previous_assessment
+                if previous_assessment is not None
+                else deficiency
+            )
+            proposals = (
+                generate_corrective_camera_proposals(
+                    metric=metric_family,
+                    candidates=current,
+                    deficiency=(
+                        active_deficiency
+                        if isinstance(active_deficiency, dict)
+                        else None
+                    ),
+                    history=action_history,
+                    request=request,
+                )
+                if step < self.max_steps
+                else []
+            )
+            selector_request = {
+                "mode": "query_cov",
+                "selection_phase": "active_fallback",
+                "evidence_deficiency": active_deficiency,
+                "metric": metric_family,
+                "event": request.get("event"),
+                "object_ids": request.get("object_ids"),
+                "detector_evidence": request.get("detector_evidence"),
+                "natural_language_prompt": request.get(
+                    "natural_language_prompt"
+                ),
+                "extracted_relationships": request.get(
+                    "extracted_relationships"
+                ),
+                "candidates": [
+                    {
+                        "id": pose["id"],
+                        "pose": pose,
+                        "image_path": preview_by_id.get(str(pose["id"])),
+                    }
+                    for pose in current
+                    if preview_by_id.get(str(pose.get("id")))
+                ],
+                "corrective_proposals": proposals,
+                "max_views": local_budget,
+                "step": step,
+                "max_steps": self.max_steps,
+                "allow_adjustment": bool(proposals),
+                "allowed_actions": (
+                    list(CAMERA_ACTIONS) if proposals else []
+                ),
+                "selection_role": (
+                    "choose_evidence_views_and_optional_bounded_repair_only"
+                ),
+                "preview_role": preview_role,
+                "preview_degradation": preview_degradation,
+                "preview_visibility_warning": preview_warning,
+                "color_legend": (
+                    overlay_spec.get("legend")
+                    if overlay_spec is not None
+                    else None
+                ),
+            }
+            decision = self.selector.select_camera_views(selector_request)
+            selector_calls += 1
+            selected_ids, action = _validate_selector_decision(
+                decision,
+                current,
+                max_views=local_budget,
+                allow_adjustment=bool(proposals),
+            )
+            assessment = assess_preview_selection_sufficiency(
+                metric_family,
+                selected_ids,
+                visibility_by_id,
+                request=request,
+                poses_by_id={
+                    str(item.get("id")): item
+                    for item in current
+                },
+            )
+            by_id = {str(item.get("id")): item for item in current}
+            selected_poses = [
+                deepcopy(by_id[item_id])
+                for item_id in selected_ids
+                if item_id in by_id
+            ]
+            if _assessment_is_better(assessment, best_assessment):
+                best_assessment = deepcopy(assessment)
+                best_ids = list(selected_ids)
+                best_selected = selected_poses
+                best_visibility = {
+                    item_id: deepcopy(visibility_by_id[item_id])
+                    for item_id in selected_ids
+                    if item_id in visibility_by_id
+                }
+
+            step_record: dict[str, Any] = {
+                "step": step,
+                "candidate_ids": [str(item.get("id")) for item in current],
+                "preview_paths": {
+                    candidate_id: path
+                    for candidate_id, path in preview_by_id.items()
+                },
+                "preview_role": preview_role,
+                "preview_degradation": preview_degradation,
+                "preview_visibility_warning": preview_warning,
+                "corrective_proposals": proposals,
+                "decision": decision,
+                "selected_view_ids": list(selected_ids),
+                "sufficiency": assessment,
+                "gain_from_previous": _assessment_gain(
+                    previous_assessment,
+                    assessment,
+                ),
+                "remaining_budget": {
+                    "selector_calls": self.max_steps + 1 - selector_calls,
+                    "camera_actions": self.max_steps - actions_executed,
+                },
+            }
+            trajectory.append(step_record)
+
+            if assessment.get("status") == SUFFICIENT:
+                stop_reason = "sufficient_evidence"
+                break
+            if previous_assessment is not None and not _assessment_is_better(
+                assessment,
+                previous_assessment,
+            ):
+                stop_reason = "no_measured_evidence_gain"
+                break
+            if step >= self.max_steps:
+                stop_reason = "camera_action_budget_exhausted"
+                break
+            if not bool(assessment.get("camera_repairable")):
+                stop_reason = "deficiency_not_camera_repairable"
+                break
+            if action is None:
+                stop_reason = "selector_stopped_without_action"
+                break
+            proposal = _resolve_corrective_proposal(action, proposals)
+            if proposal is None:
+                raise ValueError(
+                    "active camera selector action does not reference an "
+                    "offered corrective proposal"
+                )
+            proposal_fingerprint = str(
+                proposal.get("proposal_fingerprint") or ""
+            )
+            result_pose = deepcopy(proposal.get("result_pose"))
+            result_fingerprint = str(
+                proposal.get("result_pose_fingerprint") or ""
+            )
+            if (
+                not proposal_fingerprint
+                or proposal_fingerprint in seen_proposals
+                or not result_fingerprint
+                or result_fingerprint in seen_poses
+            ):
+                stop_reason = "repeated_action_or_pose"
+                step_record["action_execution"] = {
+                    "executed": False,
+                    "reason": stop_reason,
+                }
+                break
+            parent_id = str(proposal.get("parent_view_id") or "")
+            if parent_id not in by_id or not isinstance(result_pose, dict):
+                raise ValueError(
+                    "corrective proposal references an unavailable parent pose"
+                )
+            current = [
+                result_pose if str(item.get("id")) == parent_id else item
+                for item in current
+            ]
+            seen_proposals.add(proposal_fingerprint)
+            seen_poses.add(result_fingerprint)
+            actions_executed += 1
+            action_record = {
+                "proposal_id": proposal.get("proposal_id"),
+                "proposal_fingerprint": proposal_fingerprint,
+                "parent_view_id": parent_id,
+                "action_primitive": proposal.get("action_primitive"),
+                "family": proposal.get("family"),
+                "result_view_id": result_pose.get("id"),
+                "result_pose_fingerprint": result_fingerprint,
+            }
+            action_history.append(action_record)
+            step_record["action_execution"] = {
+                "executed": True,
+                **action_record,
+            }
+            previous_assessment = assessment
+
+        if not best_selected:
+            best_selected = select_bbox_track_views(
+                current,
+                max_views=local_budget,
+            )
+            best_ids = [
+                str(item.get("id"))
+                for item in best_selected
+            ]
+            best_assessment = assess_preview_selection_sufficiency(
+                metric_family,
+                best_ids,
+                {},
+                request=request,
+                poses_by_id={
+                    str(item.get("id")): item
+                    for item in current
+                },
+            )
+        return best_selected, {
+            "schema_version": "active_camera_trajectory_v1",
+            "mode": "query_cov",
+            "selector": type(self.selector).__name__,
+            "selection_phase": "active_fallback",
+            "selected_view_ids": best_ids,
+            "selected_preview_visibility": best_visibility,
+            "final_preview_assessment": best_assessment,
+            "steps": trajectory,
+            "selector_call_count": selector_calls,
+            "camera_action_count": actions_executed,
+            "stop_reason": stop_reason,
+            "budget": {
+                "local_view_count": local_budget,
+                "max_selector_calls": self.max_steps + 1,
+                "max_camera_actions": self.max_steps,
+            },
         }
 
     def _collision_overlay_evidence(
@@ -480,6 +895,9 @@ class CameraEvidenceProvider:
                 event_dir,
                 overlay_spec=spec,
             )
+            visibility_by_id = dict(
+                selection_log.get("selected_preview_visibility") or {}
+            )
 
         _write_json(event_dir / "collision_overlay_spec.json", spec)
 
@@ -499,23 +917,28 @@ class CameraEvidenceProvider:
             raise RuntimeError(
                 "collision evidence produced no usable raw view from any permitted candidate"
             )
-        # Raw RGB is authoritative and always kept; the same-pose overlay is
-        # best-effort and never removes its raw counterpart.
+        # Raw RGB is authoritative and always kept. Production contour mode
+        # replaces the full-recolor Legacy presentation; passthrough experiments
+        # can leave contour mode disabled and retain the historical overlay.
         overlay_manifest: dict[str, Any] = {"views": []}
-        try:
-            overlay_manifest = self.renderer.render_collision_overlay_views(
-                blend_file=self.blend_file,
-                out_dir=event_dir / "final_overlay",
-                camera_views=rendered_selected,
-                overlay_spec=spec,
-                preview=False,
-            )
-        except Exception as exc:
-            overlay_degradation = "; ".join(
-                value
-                for value in [overlay_degradation, f"final_overlay_failed: {type(exc).__name__}: {exc}"]
-                if value
-            )
+        if not self.collision_contour:
+            try:
+                overlay_manifest = self.renderer.render_collision_overlay_views(
+                    blend_file=self.blend_file,
+                    out_dir=event_dir / "final_overlay",
+                    camera_views=rendered_selected,
+                    overlay_spec=spec,
+                    preview=False,
+                )
+            except Exception as exc:
+                overlay_degradation = "; ".join(
+                    value
+                    for value in [
+                        overlay_degradation,
+                        f"final_overlay_failed: {type(exc).__name__}: {exc}",
+                    ]
+                    if value
+                )
         pairs, items = _pair_rgb_overlay(
             selected=rendered_selected,
             rgb_manifest=rgb_manifest,
@@ -524,14 +947,39 @@ class CameraEvidenceProvider:
             visibility_by_id=visibility_by_id,
             degradation_reason=overlay_degradation,
         )
-        global_items, global_degradation = self._highlighted_global_evidence(
-            request=request,
-            event_dir=event_dir,
-            overlay_spec=spec,
-            resolved_mode=resolved_mode,
-        )
-        # Keep the highlighted overview first so a downstream image budget can
-        # never consume all slots on local pairs and drop global context.
+        contour_manifest: dict[str, Any] | None = None
+        if self.collision_contour:
+            contour_manifest, contour_items = self._render_collision_contour_evidence(
+                event_dir=event_dir,
+                selected=rendered_selected,
+                overlay_spec=spec,
+                raw_items=items,
+            )
+            items.extend(contour_items)
+            contour_by_view = {
+                str(item.get("view_id")): item
+                for item in contour_items
+                if item.get("view_id") is not None
+            }
+            for pair in pairs:
+                view_id = str(pair.get("view_id") or "")
+                contour_item = contour_by_view.get(view_id)
+                pair["metric_local_contour"] = (
+                    contour_item.get("path") if contour_item is not None else None
+                )
+                pair["contour_available"] = contour_item is not None
+        if self.collision_contour:
+            # The calibrated Collision v2 bundle is local-only. Do not spend a
+            # render or image-budget slot on unused global context.
+            global_items, global_degradation = [], None
+        else:
+            global_items, global_degradation = self._highlighted_global_evidence(
+                request=request,
+                event_dir=event_dir,
+                overlay_spec=spec,
+                resolved_mode=resolved_mode,
+            )
+        # Legacy/passthrough packets retain their historical global-first order.
         items = global_items + items
         if global_degradation:
             overlay_degradation = "; ".join(
@@ -558,13 +1006,188 @@ class CameraEvidenceProvider:
             "candidate_visibility": visibility_by_id,
             "backfill": backfill_log,
             "overlay_degradation_reason": overlay_degradation,
+            "contour_manifest": (
+                contour_manifest.get("manifest_path")
+                if isinstance(contour_manifest, dict)
+                else None
+            ),
             "selected_poses": rendered_selected,
             "pairs": pairs,
             "render_evidence": [item["path"] for item in items],
+            "render_evidence_artifacts": _freeze_evidence_items(items),
             "render_evidence_items": items,
         }
         _write_json(event_dir / "camera_evidence_manifest.json", manifest)
         return items
+
+    def _render_collision_contour_evidence(
+        self,
+        *,
+        event_dir: Path,
+        selected: list[dict[str, Any]],
+        overlay_spec: dict[str, Any],
+        raw_items: list[dict[str, Any]],
+    ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+        """Render the calibrated same-pose Collision contour presentation."""
+
+        annotation_spec = deepcopy(overlay_spec)
+        annotation_spec["object_presentation"] = "annotations_only"
+        annotation_spec["role"] = "metric_contour_annotation_base"
+        annotation_manifest = self.renderer.render_focus_overlay_views(
+            blend_file=self.blend_file,
+            out_dir=event_dir / "final_contour_annotation",
+            camera_views=selected,
+            overlay_spec=annotation_spec,
+            preview=False,
+            allow_blank_views=True,
+        )
+        mask_manifest = self.renderer.render_target_id_masks(
+            blend_file=self.blend_file,
+            out_dir=event_dir / "final_contour_masks",
+            camera_views=selected,
+            overlay_spec=overlay_spec,
+            preview=False,
+            respect_occlusion=True,
+        )
+        composed = compose_segmentation_contour_manifest(
+            rgb_manifest=annotation_manifest,
+            mask_manifest=mask_manifest,
+            overlay_spec=overlay_spec,
+            out_dir=event_dir / "final_contour",
+        )
+        raw_by_view = {
+            str(item.get("view_id") or ""): item
+            for item in raw_items
+            if str(item.get("role") or "") == "collision_rgb"
+        }
+        contour_items: list[dict[str, Any]] = []
+        focus_visibility_options = _focus_visibility_options(overlay_spec)
+        focus_roi_defined = focus_visibility_options.get("focus_color") is not None
+        for view in composed.get("views", []):
+            if not isinstance(view, dict) or not view.get("output_path"):
+                continue
+            view_id = str(view.get("view_id") or "")
+            raw = raw_by_view.get(view_id, {})
+            image_size = view.get("image_size")
+            image_pixel_count = (
+                int(image_size[0]) * int(image_size[1])
+                if isinstance(image_size, list)
+                and len(image_size) == 2
+                else 0
+            )
+            target_visibility = {
+                str(target.get("id")): {
+                    "visible_pixels": int(
+                        target.get(
+                            "visible_pixels_at_composite_resolution"
+                        )
+                        or 0
+                    ),
+                    "normalized_visibility": (
+                        int(
+                            target.get(
+                                "visible_pixels_at_composite_resolution"
+                            )
+                            or 0
+                        )
+                        / image_pixel_count
+                        if image_pixel_count > 0
+                        else 0.0
+                    ),
+                }
+                for target in view.get("targets", [])
+                if isinstance(target, dict) and target.get("id") is not None
+            }
+            focus_visibility = (
+                measure_focus_visibility(
+                    str(view["output_path"]),
+                    targets=[],
+                    **focus_visibility_options,
+                )
+                if focus_roi_defined
+                else None
+            )
+            focus_measured = bool(
+                isinstance(focus_visibility, dict)
+                and focus_visibility.get("measured") is True
+            )
+            focus_pixel_fraction = (
+                float(focus_visibility.get("focus_pixel_fraction") or 0.0)
+                if focus_measured
+                else None
+            )
+            focus_in_frame = (
+                bool(focus_visibility.get("focus_in_frame"))
+                if focus_measured
+                and focus_visibility.get("focus_in_frame") is not None
+                else None
+            )
+            focus_measurement_status = (
+                "measured"
+                if focus_measured
+                else "measurement_failed"
+                if focus_roi_defined
+                else "unavailable_no_collision_focus_roi"
+            )
+            final_visibility = {
+                "schema_version": "final_collision_contour_visibility_v1",
+                "status": "ok",
+                "image_pixel_count": image_pixel_count,
+                "targets": target_visibility,
+                "focus_roi_defined": focus_roi_defined,
+                "focus_measurement_status": focus_measurement_status,
+                "focus_pixel_fraction": focus_pixel_fraction,
+                "focus_in_frame": focus_in_frame,
+                "measurement_source": (
+                    "final_resolution_visible_object_identity_masks"
+                    "+final_contour_focus_annotation_pixels"
+                    if focus_roi_defined
+                    else "final_resolution_visible_object_identity_masks"
+                ),
+            }
+            if (
+                isinstance(focus_visibility, dict)
+                and focus_visibility.get("error") is not None
+            ):
+                final_visibility["focus_measurement_error"] = str(
+                    focus_visibility["error"]
+                )
+            if isinstance(raw, dict):
+                raw["visibility"] = deepcopy(final_visibility)
+            contour_items.append(
+                {
+                    "path": str(view["output_path"]),
+                    "role": "metric_local_contour",
+                    "evidence_style": "raw_plus_segmentation_contour",
+                    "view_id": view_id,
+                    "pair_id": view_id,
+                    "pose": deepcopy(raw.get("pose") or view.get("pose")),
+                    "target_ids": [
+                        str(target.get("id"))
+                        for target in overlay_spec.get("targets", [])
+                        if isinstance(target, dict) and target.get("id") is not None
+                    ],
+                    "color_legend": deepcopy(overlay_spec.get("legend")),
+                    "representation_level": overlay_spec.get("representation_level"),
+                    "visibility": deepcopy(final_visibility),
+                    "segmentation_contour": {
+                        "target_interior_policy": "preserve_annotation_only_rgb",
+                        "mask_occlusion_policy": "respect_scene_occlusion",
+                        "band_width_px": composed.get("band_width_px"),
+                        "outline_width_px": composed.get("outline_width_px"),
+                        "band_alpha": composed.get("band_alpha"),
+                        "outline_alpha": composed.get("outline_alpha"),
+                    },
+                }
+            )
+        expected_ids = {str(item.get("id")) for item in selected}
+        actual_ids = {str(item.get("view_id")) for item in contour_items}
+        if expected_ids != actual_ids:
+            raise RuntimeError(
+                "collision contour evidence is incomplete; "
+                f"expected views={sorted(expected_ids)}, actual={sorted(actual_ids)}"
+            )
+        return composed, contour_items
 
     def _rank_by_mask_visibility(
         self,
@@ -702,7 +1325,19 @@ class CameraEvidenceProvider:
         except Exception:
             pass
 
-        by_id = {str(candidate.get("id")): candidate for candidate in candidates}
+        by_id = {
+            str(candidate.get("id")): candidate
+            for candidate in candidates
+            if candidate.get("id") is not None
+        }
+        # Active camera repair may select a bounded, modified pose that is not
+        # present in the original frozen candidate bank.  Keep the exact
+        # selected pose authoritative during per-view backfill; otherwise a
+        # failed batch render can silently drop it (or replace a same-ID pose
+        # with the original geometry).
+        for pose in selected:
+            if pose.get("id") is not None:
+                by_id[str(pose.get("id"))] = pose
         ranked_ids = [str(entry.get("id")) for entry in (ranking_log.get("ranked") if ranking_log else [])]
         ordered_ids: list[str] = []
         for candidate_id in [str(pose.get("id")) for pose in selected] + ranked_ids + list(by_id):
@@ -769,6 +1404,9 @@ class CameraEvidenceProvider:
                 event_dir,
                 overlay_spec=spec,
             )
+            visibility_by_id = dict(
+                selection_log.get("selected_preview_visibility") or {}
+            )
 
         (
             rgb_manifest,
@@ -824,6 +1462,7 @@ class CameraEvidenceProvider:
             "backfill": backfill_log,
             "pairs": pairs,
             "render_evidence": [item["path"] for item in items],
+            "render_evidence_artifacts": _freeze_evidence_items(items),
             "render_evidence_items": items,
         }
         _write_json(event_dir / "camera_evidence_manifest.json", manifest)
@@ -1023,11 +1662,7 @@ class CameraEvidenceProvider:
                     measure_focus_visibility(
                         path,
                         targets=targets,
-                        focus_color=(
-                            (spec.get("colors") or {}).get("marker")
-                            if resolved_mode == "support_contact_plane"
-                            else None
-                        ),
+                        **_focus_visibility_options(spec),
                     )
                     if path is not None
                     else {
@@ -1253,7 +1888,7 @@ def _validate_selector_decision(
     *,
     max_views: int,
     allow_adjustment: bool,
-) -> tuple[list[str], dict[str, str] | None]:
+) -> tuple[list[str], dict[str, Any] | None]:
     if not isinstance(decision, dict):
         raise ValueError("camera selector response must be a JSON object")
     available = {str(item.get("id")) for item in candidates}
@@ -1274,7 +1909,85 @@ def _validate_selector_decision(
     action_type = str(raw_action.get("type") or "")
     if view_id not in available or action_type not in CAMERA_ACTIONS:
         raise ValueError("camera selector requested an invalid bounded action")
-    return selected, {"view_id": view_id, "type": action_type}
+    resolved: dict[str, Any] = {
+        "view_id": view_id,
+        "type": action_type,
+    }
+    if raw_action.get("proposal_id") is not None:
+        resolved["proposal_id"] = str(raw_action.get("proposal_id"))
+    return selected, resolved
+
+
+def _resolve_corrective_proposal(
+    action: dict[str, Any],
+    proposals: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    proposal_id = str(action.get("proposal_id") or "")
+    if proposal_id:
+        matches = [
+            proposal
+            for proposal in proposals
+            if str(proposal.get("proposal_id") or "") == proposal_id
+        ]
+        return matches[0] if len(matches) == 1 else None
+    view_id = str(action.get("view_id") or "")
+    action_type = str(action.get("type") or "")
+    matches = [
+        proposal
+        for proposal in proposals
+        if str(proposal.get("parent_view_id") or "") == view_id
+        and str(proposal.get("action_primitive") or "") == action_type
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
+def _assessment_rank(value: dict[str, Any] | None) -> tuple[int, float, int]:
+    if not isinstance(value, dict):
+        return (-1, -1.0, -1)
+    status_rank = {
+        "unknown": 0,
+        "insufficient": 1,
+        "sufficient": 2,
+    }.get(str(value.get("status") or ""), -1)
+    return (
+        status_rank,
+        float(value.get("evidence_utility") or 0.0),
+        int(value.get("usable_local_view_count") or 0),
+    )
+
+
+def _assessment_is_better(
+    candidate: dict[str, Any] | None,
+    reference: dict[str, Any] | None,
+) -> bool:
+    return _assessment_rank(candidate) > _assessment_rank(reference)
+
+
+def _assessment_gain(
+    previous: dict[str, Any] | None,
+    current: dict[str, Any],
+) -> dict[str, Any]:
+    if previous is None:
+        return {
+            "comparable": False,
+            "status_improved": False,
+            "utility_delta": None,
+            "usable_view_delta": None,
+        }
+    return {
+        "comparable": True,
+        "status_improved": (
+            _assessment_rank(current)[0] > _assessment_rank(previous)[0]
+        ),
+        "utility_delta": (
+            float(current.get("evidence_utility") or 0.0)
+            - float(previous.get("evidence_utility") or 0.0)
+        ),
+        "usable_view_delta": (
+            int(current.get("usable_local_view_count") or 0)
+            - int(previous.get("usable_local_view_count") or 0)
+        ),
+    }
 
 
 def _pair_rgb_overlay(
@@ -1308,6 +2021,25 @@ def _pair_rgb_overlay(
         if rgb_path is None:
             continue
         visibility = visibility_by_id.get(view_id)
+        if overlay_path is not None:
+            try:
+                visibility = measure_focus_visibility(
+                    overlay_path,
+                    targets=[
+                        target
+                        for target in spec.get("targets", [])
+                        if isinstance(target, dict)
+                    ],
+                    **_focus_visibility_options(spec),
+                )
+                if isinstance(visibility, dict):
+                    visibility["measurement_source"] = (
+                        "final_resolution_highlight"
+                    )
+            except (OSError, TypeError, ValueError):
+                # Preview statistics remain an auditable degradation, never a
+                # silent claim that final-resolution visibility was measured.
+                visibility = None
         pairs.append(
             {
                 "pair_id": view_id,
@@ -1358,6 +2090,23 @@ def _pair_metric_focus_evidence(
         if rgb_path is None:
             continue
         visibility = visibility_by_id.get(view_id)
+        if overlay_path is not None:
+            try:
+                visibility = measure_focus_visibility(
+                    overlay_path,
+                    targets=[
+                        target
+                        for target in spec.get("targets", [])
+                        if isinstance(target, dict)
+                    ],
+                    **_focus_visibility_options(spec),
+                )
+                if isinstance(visibility, dict):
+                    visibility["measurement_source"] = (
+                        "final_resolution_highlight"
+                    )
+            except (OSError, TypeError, ValueError):
+                visibility = None
         pair = {
             "view_id": view_id,
             "pose": pose,
@@ -1410,6 +2159,33 @@ def _global_items_from_bundle(
     return items
 
 
+def _focus_visibility_options(
+    overlay_spec: dict[str, Any],
+) -> dict[str, Any]:
+    colors = (
+        overlay_spec.get("colors")
+        if isinstance(overlay_spec.get("colors"), dict)
+        else {}
+    )
+    # Only markers/connectors are actually rendered in the annotation pass.
+    # A numeric ``focus`` record by itself is useful geometry metadata, but it
+    # is not visual evidence and must not be treated as a measurable ROI.
+    has_focus_annotation = bool(
+        overlay_spec.get("markers") or overlay_spec.get("connectors")
+    )
+    has_architecture_plane = bool(overlay_spec.get("architecture_planes"))
+    return {
+        "focus_color": (
+            colors.get("marker") if has_focus_annotation else None
+        ),
+        "region_colors": (
+            {"architecture_plane": colors.get("architecture")}
+            if has_architecture_plane and colors.get("architecture") is not None
+            else None
+        ),
+    }
+
+
 def _require_visible_selector_targets(
     preview_by_id: dict[str, str],
     overlay_spec: dict[str, Any],
@@ -1435,6 +2211,48 @@ def _require_visible_selector_targets(
         ):
             return
     raise RuntimeError(
+        "selector previews do not visibly expose every required highlighted target: "
+        + ", ".join(required_ids)
+    )
+
+
+def _selector_preview_visibility_warning(
+    visibility_by_id: dict[str, dict[str, Any]],
+    overlay_spec: dict[str, Any],
+    *,
+    min_visible_fraction: float = 0.001,
+) -> str | None:
+    """Return an advisory warning without excluding a selector event.
+
+    Active view search is specifically needed when the frozen previews are
+    imperfect.  Incomplete highlight coverage therefore informs the selector
+    but must not become a fatal pre-selection gate.
+    """
+
+    targets = [
+        target for target in overlay_spec.get("targets", []) if isinstance(target, dict)
+    ]
+    required_ids = [
+        str(target.get("id"))
+        for target in targets
+        if target.get("required_for_visibility") and target.get("id") is not None
+    ]
+    if not required_ids:
+        required_ids = [str(targets[0].get("id"))] if targets else []
+    if not required_ids:
+        return "selector overlay contains no required target IDs"
+    for stats in visibility_by_id.values():
+        fractions = (
+            stats.get("target_pixel_fractions")
+            if isinstance(stats, dict)
+            else None
+        )
+        if isinstance(fractions, dict) and all(
+            float(fractions.get(object_id) or 0.0) >= min_visible_fraction
+            for object_id in required_ids
+        ):
+            return None
+    return (
         "selector previews do not visibly expose every required highlighted target: "
         + ", ".join(required_ids)
     )
@@ -1579,6 +2397,59 @@ def _write_json(path: Path, value: Any) -> None:
     path.write_text(json.dumps(value, indent=2, ensure_ascii=True, default=str), encoding="utf-8")
 
 
+def _freeze_evidence_paths(paths: list[Path]) -> list[dict[str, Any]]:
+    return [
+        {
+            "slot": index,
+            "path": str(path),
+            "sha256": _content_sha256(path),
+        }
+        for index, path in enumerate(paths)
+    ]
+
+
+def _freeze_evidence_items(
+    items: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    return [
+        {
+            "slot": index,
+            "role": item.get("role"),
+            "view_id": _evidence_view_id(item),
+            "path": str(item["path"]),
+            "sha256": _content_sha256(Path(str(item["path"]))),
+        }
+        for index, item in enumerate(items)
+        if item.get("path")
+    ]
+
+
+def _evidence_view_id(item: dict[str, Any]) -> str:
+    value = item.get("view_id")
+    if value is None and isinstance(item.get("pose"), dict):
+        value = item["pose"].get("id")
+    return str(value or "")
+
+
+def _cached_artifacts_valid(
+    manifest: dict[str, Any],
+    paths: list[Path],
+) -> bool:
+    artifacts = manifest.get("render_evidence_artifacts")
+    if not isinstance(artifacts, list) or len(artifacts) != len(paths):
+        return False
+    for index, (record, path) in enumerate(zip(artifacts, paths)):
+        if (
+            not isinstance(record, dict)
+            or int(record.get("slot", -1)) != index
+            or Path(str(record.get("path") or "")) != path
+            or not path.is_file()
+            or str(record.get("sha256") or "") != _content_sha256(path)
+        ):
+            return False
+    return True
+
+
 def _cached_paths(path: Path) -> list[Path] | None:
     if not path.is_file():
         return None
@@ -1590,7 +2461,7 @@ def _cached_paths(path: Path) -> list[Path] | None:
     if not isinstance(values, list) or not values:
         return None
     paths = [Path(str(value)) for value in values]
-    return paths if all(item.is_file() for item in paths) else None
+    return paths if _cached_artifacts_valid(manifest, paths) else None
 
 
 def _cached_items(
@@ -1615,7 +2486,9 @@ def _cached_items(
     items = manifest.get("render_evidence_items") if isinstance(manifest, dict) else None
     if not isinstance(items, list) or not items:
         return None
+    paths: list[Path] = []
     for item in items:
         if not isinstance(item, dict) or not item.get("path") or not Path(str(item["path"])).is_file():
             return None
-    return items
+        paths.append(Path(str(item["path"])))
+    return items if _cached_artifacts_valid(manifest, paths) else None

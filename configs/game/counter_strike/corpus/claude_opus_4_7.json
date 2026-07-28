@@ -1,0 +1,30 @@
+{
+  "contract_version": "counter_strike_case_contract_v1",
+  "case_id": "cs_fps_claude_opus_4_7",
+  "corpus_id": "Claude-Opus-4_7",
+  "source_frame": {
+    "up_axis": "y",
+    "unit_scale": 1.0
+  },
+  "source_assertions": [
+    {
+      "path": "game.js",
+      "sha256": "4396d6fea4f86dfa2a3d93cbf4c5c741887ddc045aa5f4c7e1fb891d9d7cff9f",
+      "evidence": "beginRound spawn declarations"
+    }
+  ],
+  "team_spawns": {
+    "team_a": {
+      "points": [[20.0, 0.0, 22.0]],
+      "jitter_radius_m": 3.0
+    },
+    "team_b": {
+      "points": [[-20.0, 0.0, -22.0], [-22.0, 0.0, -18.0], [-18.0, 0.0, -22.0]],
+      "jitter_radius_m": 0.0
+    }
+  },
+  "annotation": {
+    "source": "benchmark_audited_source_declaration",
+    "score_authority": false
+  }
+}

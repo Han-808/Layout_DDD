@@ -208,7 +208,10 @@ def validate_generation_input(generation_input: dict) -> dict:
 
 
 CANONICAL_SCENE_SCHEMA_VERSION = "canonical_scene_v1"
-GEOMETRY_PROVENANCE_VALUES = ("bbox_proxy", "asset_mesh", "generated_mesh")
+BBOX_PROXY_GEOMETRY = "bbox_proxy"
+ASSET_MESH_GEOMETRY = "asset_mesh"
+GENERATED_MESH_GEOMETRY = "generated_mesh"
+GEOMETRY_PROVENANCE_VALUES = (BBOX_PROXY_GEOMETRY, ASSET_MESH_GEOMETRY, GENERATED_MESH_GEOMETRY)
 
 
 def validate_generated_scene(scene: dict) -> dict:

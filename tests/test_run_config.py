@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+import benchmark.legend.run_config as legacy_run_config_module
 from benchmark.legend.data import DATASET_ADAPTERS, discover_and_normalize_cases
 from benchmark.legend.models import MODEL_ADAPTERS, create_model
 from benchmark.legend.pipeline import run_case_pipeline
@@ -14,7 +15,24 @@ from benchmark.utils.io import read_json, write_json
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_component_experiment_resolves_and_saves_config(tmp_path: Path) -> None:
+def test_component_experiment_resolves_and_saves_config(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    # The installed ``benchmark.legend`` Python compatibility package remains
+    # importable, while its non-core schema fixture now lives under Support.
+    # Keep that retired resource relocation scoped to this legacy test instead
+    # of adding a second schema path to the canonical runtime.
+    legacy_schema = (
+        ROOT / "Support" / "legacy" / "legend" / "schemas" / "legend_layout.schema.json"
+    )
+    assert legacy_schema.is_file()
+    monkeypatch.setattr(
+        legacy_run_config_module,
+        "_legend_layout_schema_path",
+        lambda _root: legacy_schema,
+    )
+
     resolved = load_resolved_run_config(
         ROOT,
         experiment_config_path="configs/experiments/hssd_small_room_mock.yaml",
@@ -129,6 +147,12 @@ def _absolute_dataset_config(dataset_config: dict) -> dict:
     for key in ["path", "root", "cases_dir", "case", "source_path"]:
         if config.get(key):
             path = Path(config[key])
-            config[key] = str(path if path.is_absolute() else ROOT / path)
+            if path.is_absolute():
+                resolved = path
+            else:
+                original = ROOT / path
+                relocated = ROOT / "Support" / path
+                resolved = original if original.exists() else relocated
+            config[key] = str(resolved)
             break
     return config

@@ -124,13 +124,53 @@ def evaluate_spatial_fidelity(
             **dict(ontology_index.identity),
             "available": ontology_index.available,
         },
+        "canonical_ownership": _canonical_ownership(),
         "metrics": metrics,
         "notes": [
             "Spatial Fidelity is active only for the coarse-grained evaluation plan.",
             "Statistical priors certify ordinary cases and route suspicious cases; rarity or an outlier alone is not a semantic invalidity verdict.",
             "Unknown ontology data remains visible as incomplete coverage and cannot silently increase a score.",
             "Functional Grouping is an explicit zero-weight placeholder and Functionality is out of scope.",
+            "LEGACY OWNERSHIP: generic Scale and category/role Co-occurrence coherence are canonically owned by L3 Scene Quality (scale_consistency / object_pairing_consistency). Pairing excludes position, angle, orientation, and functional arrangement. These L2 implementations remain compatibility-only scored versions while L3 is a placeholder.",
         ],
+    }
+
+
+def _canonical_ownership() -> dict[str, Any]:
+    """Legacy-ownership provenance for the coarse Spatial Fidelity metrics.
+
+    This is documentation-only metadata; it does not change any score, weight, or
+    routing. It records that generic scale/pairing coherence has moved to L3
+    Scene Quality while the legacy L2 implementations are retained for
+    backward compatibility.
+    """
+
+    return {
+        "status": "legacy_compatibility",
+        "canonical_layer": "L2_specification_fidelity_coarse",
+        "scale": {
+            "legacy": True,
+            "still_scored": True,
+            "canonical_owner": "scene_quality.scale_consistency (L3 semantic_coherence)",
+        },
+        "cooccurrence_plausibility": {
+            "legacy": True,
+            "still_scored": True,
+            "canonical_owner": "scene_quality.object_pairing_consistency (L3 semantic_coherence)",
+            "canonical_scope": "group_member_category_and_role_compatibility_only",
+            "excluded_from_canonical_scope": [
+                "position",
+                "distance",
+                "angle",
+                "orientation",
+                "functional_arrangement",
+            ],
+        },
+        "note": (
+            "Prompt-specific scale/pairing requirements remain an L2 'did the scene follow the prompt?' "
+            "judgment; generic scale/pairing coherence is the L3 'is the scene coherent?' judgment. "
+            "L3 Scene Quality is placeholder-only, so no metric is double counted."
+        ),
     }
 
 
@@ -281,6 +321,7 @@ def _disabled_report(config: dict[str, Any]) -> dict[str, Any]:
             "category_count": 0,
             "available": False,
         },
+        "canonical_ownership": _canonical_ownership(),
         "metrics": {},
         "notes": [],
     }

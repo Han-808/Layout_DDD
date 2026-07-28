@@ -16,16 +16,17 @@ Output:
       and the aggregated benchmark score); a short summary is printed to stdout.
 
 Function:
-    Runs the enabled evaluators - generic structural validity (collision, OOB,
-    support, navigability, accessibility) plus one mode-specific category-2
-    track. Fine-grained mode runs object/relation prompt fidelity; coarse-grained
-    mode runs scale and co-occurrence spatial fidelity. Unresolved detector
-    events keep ``score=None`` rather than silently passing.
+    Runs one canonical L0--L4 workflow. Prompt granularity is reporting metadata,
+    L2 activation comes only from the frozen specification contract, and L3
+    contains Scale, Object Pairing, and Style Consistency. Unresolved evidence
+    keeps ``score=None`` rather than silently passing. The checked-in Game
+    profile is the only isolated compatibility adapter.
 """
 
 from __future__ import annotations
 
 import argparse
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
@@ -33,16 +34,41 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 from benchmark.evaluator import (
     build_evaluation_plan,
+    build_specification_fidelity_report,
+    evaluate_functional_semantic_fidelity,
     evaluate_generic_validity,
     evaluate_oar,
     evaluate_object_alignment,
     evaluate_object_mapping,
     evaluate_oor,
-    evaluate_spatial_fidelity,
+    evaluate_scene_quality_interfaces,
+    compile_visual_style_prompt,
+    resolve_asset_policy,
     route_relationship_intents,
+    scene_quality_applicability,
+    specification_activation_mode,
+    specification_contract_from_reference_annotation,
+    validate_specification_contract,
+    validate_visual_style_spec,
+    visual_style_spec_summary,
 )
 from benchmark.evaluator.profile import weighted_benchmark_score
+from benchmark.evaluator.profile import (
+    CANONICAL_PROFILE_VERSION,
+    L0,
+    L1,
+    L1_METRICS,
+    L2,
+    L2_METRICS,
+    L3,
+    L3_METRICS,
+    L4,
+    canonical_score_coverage,
+    is_legacy_game_profile,
+    resolve_evaluation_profile,
+)
 from benchmark.evaluator.generic_validity.mesh_geometry import load_collision_geometry_manifest
+from benchmark.evaluator.object_grouping import build_object_grouping_report
 from benchmark.nl_scene.converter import COARSE_GRAINED, FINE_GRAINED
 from benchmark.reference_annotation import (
     ReferenceAnnotationError,
@@ -63,10 +89,380 @@ from benchmark.scene_io.normalize import normalize_scene
 from benchmark.scene_io.validate import validate_object_plan
 from benchmark.task_contract import require_scene_matches_architecture
 from benchmark.utils.io import load_yaml, read_json, write_json
-from benchmark.visual_judge import CameraEvidenceProvider, build_openai_compatible_vlm_judge, evaluate_vlm_category
+from benchmark.visual_judge import (
+    CameraEvidenceProvider,
+    build_conditional_active_camera_evidence_provider,
+    build_openai_compatible_vlm_judge,
+    evaluate_vlm_category,
+)
 
 
 def run_evaluate(
+    **kwargs: Any,
+) -> dict:
+    """Evaluate through the single canonical scene workflow.
+
+    The checked-in Game profile is the sole compatibility exception. Its
+    profile shape and historical report remain isolated in the legacy adapter;
+    every ordinary scene uses the same L0--L4 workflow regardless of prompt
+    granularity or asset strategy.
+    """
+
+    profile = kwargs.get("evaluation_profile")
+    if is_legacy_game_profile(profile):
+        return _run_legacy_game_evaluate(**kwargs)
+    return _run_canonical_evaluate(**kwargs)
+
+
+def _run_canonical_evaluate(
+    *,
+    scene: dict,
+    out: str | Path,
+    eval_oor: bool = False,
+    eval_oar: bool = False,
+    eval_generic_validity: bool = False,
+    asset_csv: str | Path | None = None,
+    asset_root: str | Path | None = None,
+    enrich_assets: bool = False,
+    scene_request: dict | None = None,
+    object_plan: dict | None = None,
+    reference_annotation: dict | None = None,
+    collision_geometry: dict | None = None,
+    render_evidence: list[str] | dict[str, list[str]] | None = None,
+    vlm_judge: object | None = None,
+    evaluation_profile: dict | None = None,
+    support_enabled: bool | None = None,
+    p0b_official_mode: bool = False,
+    p0b_local_view_provider: object | None = None,
+    metric_applicability: dict[str, bool] | None = None,
+    spatial_fidelity_ontology: dict | str | Path | None = None,
+    visual_style_spec: dict | str | Path | None = None,
+    scene_quality_config: dict | None = None,
+    functional_semantic_config: dict | None = None,
+    object_grouping_report: dict | list | None = None,
+    authorized_deviations: list | None = None,
+    asset_policy: dict | None = None,
+    specification_contract: dict | None = None,
+) -> dict:
+    """Run the canonical L0--L4 evaluator.
+
+    Fine/coarse granularity and asset policy are orthogonal metadata. L2 is
+    activated only by frozen claims; L3 always uses its three canonical metric
+    boundaries. Legacy Category-2 and holistic Visual Quality code is not called.
+    """
+
+    if spatial_fidelity_ontology is not None:
+        raise ValueError(
+            "spatial_fidelity_ontology belongs to the retired non-game workflow; "
+            "canonical L2 accepts only benchmark-owned specification_contract claims"
+        )
+    del eval_oor, eval_oar, eval_generic_validity
+
+    normalized_scene = normalize_scene(
+        scene,
+        asset_csv=asset_csv,
+        asset_root=asset_root,
+        enrich_assets=enrich_assets,
+    )
+    request = scene_request if isinstance(scene_request, dict) else {}
+    _require_matching_request_id(request, normalized_scene, artifact_name="scene_request")
+    if isinstance(request.get("room"), dict):
+        require_scene_matches_architecture(normalized_scene, request["room"])
+    plan = object_plan if isinstance(object_plan, dict) else None
+    if plan is not None:
+        validate_object_plan(plan)
+        _require_matching_request_id(plan, normalized_scene, artifact_name="object_plan")
+
+    prompt_granularity, granularity_source = _prompt_granularity_gate(request)
+    prompt = str(request.get("instruction") or "")
+    if isinstance(reference_annotation, dict):
+        reference_annotation = ensure_reference_relation_ids(reference_annotation)
+    annotation_gate = (
+        _reference_annotation_gate(reference_annotation, normalized_scene)
+        if isinstance(reference_annotation, dict)
+        else None
+    )
+    confirmed_reference = bool(annotation_gate and annotation_gate.get("official_scoreable"))
+    resolved_contract = _resolve_specification_contract(
+        specification_contract=specification_contract,
+        reference_annotation=reference_annotation,
+        confirmed_reference=confirmed_reference,
+        request=request,
+    )
+    if resolved_contract is not None:
+        resolved_contract = validate_specification_contract(
+            resolved_contract,
+            valid_object_ids=None,
+        )
+        contract_request_id = resolved_contract.get("request_id")
+        request_id = request.get("request_id")
+        if (
+            contract_request_id is not None
+            and request_id is not None
+            and str(contract_request_id) != str(request_id)
+        ):
+            raise ValueError(
+                "specification_contract.request_id must match "
+                "scene_request.request_id"
+            )
+    active_l2_metrics = _active_specification_families(resolved_contract)
+    resolved_profile = resolve_evaluation_profile(evaluation_profile)
+    l3_render_evidence = _normalize_canonical_render_evidence(render_evidence)
+    overview_render_evidence = _overview_render_evidence(l3_render_evidence)
+    evaluation_plan = build_evaluation_plan(
+        prompt_granularity=prompt_granularity,
+        render_evidence_count=_render_evidence_count(l3_render_evidence),
+        profile=resolved_profile,
+        active_l2_metrics=active_l2_metrics,
+    )
+    evaluation_plan["prompt_granularity_resolution_source"] = granularity_source
+
+    renders = overview_render_evidence
+    resolved_asset_policy = resolve_asset_policy(
+        asset_policy if asset_policy is not None else request.get("asset_policy")
+    )
+    resolved_authorized_deviations = (
+        authorized_deviations
+        if authorized_deviations is not None
+        else request.get("authorized_deviations")
+    )
+    resolved_visual_style_spec = _resolve_visual_style_spec(visual_style_spec)
+
+    reports: dict[str, dict] = {}
+    alignment_plan = (
+        object_plan_from_reference_annotation(reference_annotation)
+        if confirmed_reference and isinstance(reference_annotation, dict)
+        else None
+    )
+    if alignment_plan is not None:
+        reports["object_mapping"] = evaluate_object_mapping(alignment_plan, normalized_scene)
+        reports["object_mapping"].update(
+            {
+                "reference_source": "frozen_reference_annotation",
+                "official_scoreable": True,
+                "metric_role": "identity_infrastructure_only",
+                "affects_score": False,
+            }
+        )
+        reports["object_alignment"] = _object_alignment_report(
+            reference_annotation,
+            normalized_scene,
+            mapping_report=reports["object_mapping"],
+            annotation_gate=annotation_gate,
+        )
+
+    relationship_intents = _canonical_relationship_intents(
+        contract=resolved_contract,
+        reference_annotation=reference_annotation,
+        confirmed_reference=confirmed_reference,
+        mapping_report=reports.get("object_mapping"),
+    )
+
+    l1_config = resolved_profile[L1]
+    l1_metric_config = deepcopy(l1_config.get("metric_config") or {})
+    l1_applicability = {
+        name: bool(metric.get("enabled"))
+        for name, metric in l1_config["metrics"].items()
+    }
+    if metric_applicability is not None:
+        unknown = sorted(set(metric_applicability) - set(l1_applicability))
+        if unknown:
+            raise ValueError(f"metric_applicability contains unknown metrics: {unknown}")
+        for name, applicable in metric_applicability.items():
+            if not isinstance(applicable, bool):
+                raise ValueError(f"metric_applicability.{name} must be boolean")
+            # Runtime input may narrow a frozen metric but may never enable a
+            # profile-disabled metric.
+            l1_applicability[name] = bool(l1_applicability[name] and applicable)
+    reports["generic_validity"] = evaluate_generic_validity(
+        normalized_scene,
+        deepcopy(l1_metric_config),
+        prompt=prompt,
+        relationships=[],
+        render_evidence=renders,
+        vlm_judge=vlm_judge,
+        local_view_provider=p0b_local_view_provider,
+        collision_geometry=collision_geometry,
+        support_enabled=None,
+        p0b_official_mode=p0b_official_mode,
+        metric_applicability=l1_applicability,
+    )
+    l1_report = _canonical_l1_report(reports["generic_validity"])
+
+    if "oor" in active_l2_metrics:
+        generic_metrics = reports["generic_validity"].get("metrics") or {}
+        reports["oor"] = evaluate_oor(
+            normalized_scene,
+            relation_specs=relationship_intents["oor_relations"],
+            prompt=prompt,
+            render_evidence=renders,
+            vlm_judge=vlm_judge,
+            collision_geometry=collision_geometry,
+            support_report=generic_metrics.get("support"),
+        )
+    if "oar" in active_l2_metrics:
+        reports["oar"] = evaluate_oar(
+            normalized_scene,
+            relation_specs=relationship_intents["oar_relations"],
+            prompt=prompt,
+            render_evidence=renders,
+            vlm_judge=vlm_judge,
+        )
+
+    grouping_report = _resolve_object_grouping_report(
+        object_grouping_report,
+        scene=normalized_scene,
+        request=request,
+    )
+    reports["object_grouping"] = grouping_report
+
+    functional_report = evaluate_functional_semantic_fidelity(
+        normalized_scene,
+        config=functional_semantic_config,
+        profile=resolved_profile,
+        prompt=prompt,
+        specification_contract=resolved_contract,
+        render_evidence=renders,
+        camera_evidence_provider=p0b_local_view_provider,
+        vlm_judge=vlm_judge,
+        object_grouping_report=grouping_report,
+        authorized_deviations=resolved_authorized_deviations,
+        asset_policy=resolved_asset_policy,
+    )
+    reports["functional_semantic_fidelity"] = functional_report
+    l2_report = build_specification_fidelity_report(
+        contract=resolved_contract,
+        prompt_granularity=prompt_granularity,
+        activation_mode="specification_contract",
+        oor_report=reports.get("oor"),
+        oar_report=reports.get("oar"),
+        functional_semantic_report=functional_report,
+        official=False,
+    )
+    reports["specification_fidelity"] = l2_report
+
+    scene_quality_report = evaluate_scene_quality_interfaces(
+        normalized_scene,
+        config=scene_quality_config,
+        profile=resolved_profile,
+        prompt=prompt,
+        vlm_judge=vlm_judge,
+        object_grouping_report=grouping_report,
+        render_evidence=l3_render_evidence,
+        camera_evidence_provider=p0b_local_view_provider,
+        authorized_deviations=resolved_authorized_deviations,
+        metric_applicability=scene_quality_applicability(resolved_asset_policy),
+        visual_style_spec=resolved_visual_style_spec,
+    )
+    reports["scene_quality"] = scene_quality_report
+
+    l0_report = {
+        "layer": L0,
+        "status": "passed",
+        "score": None,
+        "affects_score": False,
+        "checks": deepcopy(resolved_profile[L0]["checks"]),
+        "reason": None,
+    }
+    l4_report = {
+        "layer": L4,
+        "status": "not_implemented",
+        "score": None,
+        "affects_score": False,
+        "reason": "downstream_task_type_not_frozen",
+        "metrics": {},
+    }
+    layer_reports = {
+        L0: l0_report,
+        L1: l1_report,
+        L2: _canonical_layer_envelope(L2, l2_report),
+        L3: _canonical_layer_envelope(L3, scene_quality_report),
+        L4: l4_report,
+    }
+    scoring_reports = {name: layer_reports[name] for name in (L1, L2, L3, L4)}
+    layer_weights = resolved_profile["layer_weights"]
+    benchmark_score = weighted_benchmark_score(scoring_reports, layer_weights)
+    coverage = canonical_score_coverage(
+        scoring_reports,
+        layer_weights,
+        profile_version=CANONICAL_PROFILE_VERSION,
+    )
+
+    report = {
+        "report_schema_version": "scene_evaluation_report_v2",
+        "scene_id": normalized_scene.get("scene_id"),
+        "request_id": normalized_scene.get("request_id"),
+        "evaluator_version": "scene_harness_evaluator_v2",
+        "profile_version": CANONICAL_PROFILE_VERSION,
+        "workflow": "canonical_l0_l4",
+        "protocol_scope": "diagnostic_evaluation_api",
+        "official_submission": False,
+        "prompt_granularity": prompt_granularity,
+        "prompt_granularity_role": "metadata_only",
+        "evaluation_status": (
+            "complete" if coverage["complete"] else "incomplete"
+        ),
+        "benchmark_score": benchmark_score,
+        "benchmark_score_status": (
+            "complete" if benchmark_score is not None else "insufficient_metric_coverage"
+        ),
+        "evaluation_plan": evaluation_plan,
+        "layer_reports": layer_reports,
+        # Alias retained at the wire boundary, but contains canonical layers
+        # only. Legacy category names never appear in a canonical report.
+        "category_reports": layer_reports,
+        "coverage": coverage,
+        "reports": reports,
+        "evaluation_config": {
+            "prompt_granularity_resolution_source": granularity_source,
+            "asset_policy": resolved_asset_policy,
+            "authorized_deviations": resolved_authorized_deviations,
+            "metric_applicability": {
+                L1: l1_applicability,
+                L2: {name: name in active_l2_metrics for name in resolved_profile[L2]["metrics"]},
+                L3: scene_quality_applicability(resolved_asset_policy),
+                L4: {},
+            },
+            # Threshold overrides change verdicts, so the report has to state
+            # which ones were in force. L1 is the only layer that takes them.
+            "metric_config": {L1: deepcopy(l1_metric_config)},
+            "specification_activation": {
+                "source": "benchmark_owned_specification_contract",
+                "contract_present": resolved_contract is not None,
+                "active_metrics": active_l2_metrics,
+                "prompt_granularity_controls_activation": False,
+            },
+            "object_grouping": {
+                "policy": "deterministic_metadata_geometry",
+                "source": grouping_report.get("source"),
+                "affects_score_directly": False,
+            },
+            "visual_config_unchanged": True,
+            "deprecated_runtime_inputs": {
+                "eval_oor": "ignored; contract claims activate OOR",
+                "eval_oar": "ignored; contract claims activate OAR",
+                "eval_generic_validity": "ignored; L1 always follows the frozen profile",
+                "support_enabled": (
+                    "ignored; canonical Support applicability is profile-owned"
+                ),
+            },
+        },
+        "notes": [
+            "L0 is a non-scoring structural gate.",
+            "L1 contains five frozen metrics; navigability and accessibility are disabled by default.",
+            "L2 contains only OOR, OAR, and functional semantic fidelity.",
+            "L3 contains only scale, object pairing, and style consistency.",
+            "L4 is deferred until downstream task types are frozen.",
+        ],
+    }
+    out_path = Path(out)
+    if out_path.suffix.lower() != ".json":
+        out_path = out_path / "evaluation_report.json"
+    write_json(out_path, report)
+    return report
+
+
+def _run_legacy_game_evaluate(
     *,
     scene: dict,
     out: str | Path,
@@ -88,6 +484,14 @@ def run_evaluate(
     p0b_local_view_provider: object | None = None,
     metric_applicability: dict[str, bool] | None = None,
     spatial_fidelity_ontology: dict | str | Path | None = None,
+    visual_style_spec: dict | str | Path | None = None,
+    scene_quality_interfaces_config: dict | None = None,
+    coarse_specification_config: dict | None = None,
+    visual_quality_interfaces_config: dict | None = None,
+    object_grouping_report: dict | list | None = None,
+    authorized_deviations: list | None = None,
+    asset_policy: dict | None = None,
+    specification_contract: dict | None = None,
 ) -> dict:
     if not eval_oor and not eval_oar and not eval_generic_validity:
         eval_generic_validity = True
@@ -116,22 +520,28 @@ def run_evaluate(
         else None
     )
     renders = [str(path) for path in (render_evidence or []) if str(path).strip()]
+    resolved_visual_style_spec = _resolve_visual_style_spec(visual_style_spec)
+    resolved_visual_style_prompt = (
+        compile_visual_style_prompt(resolved_visual_style_spec)
+        if resolved_visual_style_spec is not None
+        else None
+    )
     # Prompt granularity is benchmark-case metadata. Public generator structure
     # must never change metric activation or weights.
     evaluation_plan = build_evaluation_plan(
         prompt_granularity=prompt_granularity,
-        has_object_plan=confirmed_reference,
         render_evidence_count=len(renders),
-        has_spatial_fidelity_ontology=spatial_fidelity_ontology is not None,
         profile=evaluation_profile,
     )
     evaluation_plan["gate"]["resolution_source"] = granularity_source
     weights = evaluation_plan["weights"]
+    structural_plan = evaluation_plan["categories"]["structural_validity"]
     frozen_metric_applicability = metric_applicability
     if frozen_metric_applicability is None:
-        structural_plan = evaluation_plan["categories"]["structural_validity"]
         value = structural_plan.get("applicability")
         frozen_metric_applicability = dict(value) if isinstance(value, dict) else None
+    frozen_metric_config = structural_plan.get("metric_config")
+    frozen_metric_config = deepcopy(frozen_metric_config) if isinstance(frozen_metric_config, dict) else {}
     raw_relationship_intents = (
         relationship_intents_from_reference_annotation(reference_annotation)
         if fine_grained_mode and confirmed_reference
@@ -163,6 +573,7 @@ def run_evaluate(
         # inside Prompt Fidelity and never alter P0b detector/VLM inputs.
         reports["generic_validity"] = evaluate_generic_validity(
             normalized_scene,
+            frozen_metric_config,
             prompt=str(request.get("instruction") or ""),
             relationships=[],
             render_evidence=renders,
@@ -180,7 +591,7 @@ def run_evaluate(
     shared_visual_report = (
         evaluate_vlm_category(
             category="visual_quality",
-            prompt=None,
+            prompt=resolved_visual_style_prompt,
             scene=normalized_scene,
             render_evidence=renders,
             judge=vlm_judge,
@@ -236,6 +647,11 @@ def run_evaluate(
             category_2_report = _zero_weight_category_report(category_2)
     else:
         if float(weights[category_2]) > 0.0:
+            # The retired Spatial Fidelity implementation is imported only
+            # inside the preserved Game adapter. It is intentionally absent
+            # from the canonical public evaluator namespace.
+            from benchmark.evaluator.spatial_fidelity import evaluate_spatial_fidelity
+
             category_2_report = evaluate_spatial_fidelity(
                 normalized_scene,
                 ontology=spatial_fidelity_ontology,
@@ -247,6 +663,81 @@ def run_evaluate(
             reports["spatial_fidelity"] = category_2_report
         else:
             category_2_report = _zero_weight_category_report(category_2)
+    # Asset policy is orthogonal to prompt granularity. It is read (never
+    # inferred from granularity), validated, and used only for declarative L3
+    # metric-applicability metadata. Absence keeps output backward compatible.
+    resolved_asset_policy = resolve_asset_policy(
+        asset_policy if asset_policy is not None else request.get("asset_policy")
+    )
+    resolved_authorized_deviations = (
+        authorized_deviations
+        if authorized_deviations is not None
+        else request.get("authorized_deviations")
+    )
+    # Optional, non-scoring L3 Scene Quality interfaces. Disabled by default, so
+    # an old config produces byte-identical output. When enabled they attach to a
+    # dedicated ``scene_quality_interfaces`` report namespace and never enter
+    # category_reports, weights, coverage, or the benchmark score. The former
+    # ``visual_quality_interfaces_config`` name is accepted as a compatibility
+    # fallback.
+    legacy_scene_quality_config = (
+        scene_quality_interfaces_config
+        if scene_quality_interfaces_config is not None
+        else visual_quality_interfaces_config
+    )
+    if legacy_scene_quality_config is not None:
+        scene_quality_interfaces = evaluate_scene_quality_interfaces(
+            normalized_scene,
+            config=legacy_scene_quality_config,
+            object_grouping_report=object_grouping_report,
+            render_evidence=renders,
+            camera_evidence_provider=p0b_local_view_provider,
+            authorized_deviations=resolved_authorized_deviations,
+            metric_applicability=scene_quality_applicability(resolved_asset_policy),
+            profile=None,
+        )
+        if scene_quality_interfaces.get("enabled"):
+            reports["scene_quality_interfaces"] = scene_quality_interfaces
+    # Optional, non-scoring high-level L2 specification interface. Disabled by
+    # default. Room type, broad visual-functional intent, required areas, and
+    # explicitly prompt-specified local functionality are components of one
+    # ``functional_semantic_fidelity`` family. Generic scale/pairing coherence is
+    # not owned here.
+    if coarse_specification_config is not None:
+        from benchmark.evaluator.specification_fidelity.coarse_interfaces import (
+            evaluate_coarse_specification_interfaces,
+        )
+
+        coarse_specification_interfaces = evaluate_coarse_specification_interfaces(
+            normalized_scene,
+            config=coarse_specification_config,
+            profile=None,
+        )
+        if coarse_specification_interfaces.get("enabled"):
+            reports["coarse_specification_interfaces"] = coarse_specification_interfaces
+    # Phase A claim-driven L2: compile the benchmark-owned specification contract
+    # and emit the canonical, non-scoring ``specification_fidelity`` report. This
+    # references already-executed OOR/OAR and object-alignment outputs; it never
+    # re-runs, re-scores, or changes category_reports / benchmark_score. Prompt
+    # granularity is metadata, not the activation source, under v2.
+    activation_mode = specification_activation_mode(evaluation_plan.get("profile_version"))
+    resolved_contract = _resolve_specification_contract(
+        specification_contract=specification_contract,
+        reference_annotation=reference_annotation,
+        confirmed_reference=confirmed_reference,
+        request=request,
+    )
+    if resolved_contract is not None or activation_mode == "specification_contract":
+        reports["specification_fidelity"] = build_specification_fidelity_report(
+            contract=resolved_contract,
+            prompt_granularity=prompt_granularity,
+            activation_mode=activation_mode,
+            oor_report=reports.get("oor"),
+            oar_report=reports.get("oar"),
+            object_alignment_report=reports.get("object_alignment"),
+            official=False,
+            legacy_category_alias=category_2,
+        )
     category_reports = {
         category_2: category_2_report,
         "structural_validity": shared_structural_report,
@@ -294,6 +785,8 @@ def run_evaluate(
                 else None
             ),
             "metric_applicability": frozen_metric_applicability,
+            "structural_metric_config": frozen_metric_config,
+            "visual_style_spec": visual_style_spec_summary(resolved_visual_style_spec),
             "reference_annotation": annotation_gate
             or {
                 "official_scoreable": False,
@@ -305,6 +798,25 @@ def run_evaluate(
                 ),
             },
             "public_generator_structure_used_as_scoring_reference": False,
+            "specification_activation": {
+                "routing_mode": activation_mode,
+                "profile_version": evaluation_plan.get("profile_version"),
+                "activation_source": (
+                    "benchmark_owned_specification_contract"
+                    if activation_mode == "specification_contract"
+                    else "legacy_prompt_granularity_gate"
+                ),
+                "prompt_granularity_role": "metadata_and_reporting_slice",
+                "specification_contract_present": resolved_contract is not None,
+                "specification_contract_source": (
+                    resolved_contract.get("source") if isinstance(resolved_contract, dict) else None
+                ),
+                "specification_contract_frozen": (
+                    bool(resolved_contract.get("frozen")) if isinstance(resolved_contract, dict) else None
+                ),
+                "legacy_category_alias": category_2,
+                "numeric_aggregation": "phase_a_legacy_aggregation_preserved",
+            },
         },
         "category_reports": category_reports,
         "coverage": {
@@ -315,6 +827,15 @@ def run_evaluate(
         "reports": reports,
         "notes": notes,
     }
+    # Asset policy is recorded for provenance only when declared. Its absence
+    # leaves the report byte-identical to legacy behavior. It is an orthogonal
+    # dimension and never inferred from prompt granularity.
+    if resolved_asset_policy is not None:
+        report["evaluation_config"]["asset_policy"] = {
+            "policy": resolved_asset_policy,
+            "orthogonal_to_prompt_granularity": True,
+            "source": "runtime_argument" if asset_policy is not None else "scene_request",
+        }
     out_path = Path(out)
     if out_path.suffix.lower() != ".json":
         out_path = out_path / "evaluation_report.json"
@@ -326,16 +847,28 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Evaluate canonical generated_scene.json.")
     parser.add_argument("--scene", required=True)
     parser.add_argument("--out", required=True)
-    parser.add_argument("--eval-oor", action="store_true")
-    parser.add_argument("--eval-oar", action="store_true")
-    parser.add_argument("--eval-generic-validity", action="store_true")
+    parser.add_argument(
+        "--eval-oor",
+        action="store_true",
+        help="Legacy Game-profile compatibility only; canonical L2 is contract-driven.",
+    )
+    parser.add_argument(
+        "--eval-oar",
+        action="store_true",
+        help="Legacy Game-profile compatibility only; canonical L2 is contract-driven.",
+    )
+    parser.add_argument(
+        "--eval-generic-validity",
+        action="store_true",
+        help="Legacy Game-profile compatibility only; canonical L1 follows the frozen profile.",
+    )
     parser.add_argument(
         "--support-enabled",
         action=argparse.BooleanOptionalAction,
         default=None,
         help=(
-            "Diagnostic override for the support-gap metric. When omitted, the frozen "
-            "evaluation profile controls applicability."
+            "Legacy Game-profile compatibility only. Canonical L1 applicability "
+            "is owned by the frozen profile."
         ),
     )
     parser.add_argument(
@@ -363,6 +896,41 @@ def main() -> None:
     parser.add_argument("--camera-evidence-dir", default=None)
     parser.add_argument("--camera-pose-max-views", type=int, default=2)
     parser.add_argument("--camera-pose-max-steps", type=int, default=1)
+    parser.add_argument(
+        "--camera-active-fallback",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Invoke bounded VLM-active camera search only after deterministic "
+            "evidence is measured as insufficient."
+        ),
+    )
+    parser.add_argument(
+        "--camera-active-candidate-count",
+        type=int,
+        default=5,
+        help=(
+            "Frozen candidate-bank size for bounded active-camera fallback "
+            "(default: 5, matching the checked-in selector max_images)."
+        ),
+    )
+    parser.add_argument(
+        "--camera-active-shadow-mode",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Keep deterministic evidence as the official judge packet while "
+            "recording counterfactual active-camera results."
+        ),
+    )
+    parser.add_argument(
+        "--camera-selector-config",
+        default=None,
+        help=(
+            "Independent OpenAI-compatible camera-selector JSON config. Required "
+            "for query_cov or --camera-active-fallback."
+        ),
+    )
     parser.add_argument("--blender-bin", default=None)
     parser.add_argument("--blender-timeout-seconds", type=int, default=900)
     parser.add_argument("--camera-render-width", type=int, default=512)
@@ -404,6 +972,45 @@ def main() -> None:
         help="Frozen benchmark reference annotation. Only a confirmed annotation enters official scoring.",
     )
     parser.add_argument(
+        "--specification-contract",
+        default=None,
+        help=(
+            "Frozen benchmark-owned specification_contract_v1. It is the only "
+            "canonical L2 activation source; prompt granularity is metadata."
+        ),
+    )
+    parser.add_argument(
+        "--functional-semantic-config",
+        default=None,
+        help=(
+            "Optional canonical Functional Semantic Fidelity config override "
+            "(JSON or YAML)."
+        ),
+    )
+    parser.add_argument(
+        "--scene-quality-config",
+        default=None,
+        help="Optional canonical L3 Scene Quality config override (JSON or YAML).",
+    )
+    parser.add_argument(
+        "--object-grouping-report",
+        default=None,
+        help=(
+            "Optional frozen object-grouping report. When omitted, the canonical "
+            "deterministic grouping algorithm runs."
+        ),
+    )
+    parser.add_argument(
+        "--asset-policy",
+        default=None,
+        help="Optional asset-policy JSON; orthogonal to prompt granularity.",
+    )
+    parser.add_argument(
+        "--authorized-deviations",
+        default=None,
+        help="Optional JSON list of prompt-authorized semantic/appearance deviations.",
+    )
+    parser.add_argument(
         "--collision-geometry",
         default=None,
         help="Optional collision_geometry_v1 manifest JSON for mesh narrow-phase collision.",
@@ -412,7 +1019,15 @@ def main() -> None:
         "--spatial-fidelity-ontology",
         default=None,
         help=(
-            "SceneOnto-compatible JSON used only by the coarse-grained Spatial Fidelity track. "
+            "Compatibility-only SceneOnto artifact for frozen legacy experiments. "
+            "The canonical L0-L4 evaluator does not route by prompt granularity."
+        ),
+    )
+    parser.add_argument(
+        "--visual-style-spec",
+        default=None,
+        help=(
+            "visual_style_spec_v1 JSON compiled into the L3 Style Consistency prompt. "
             "Official runs obtain this from the hash-verified case bundle."
         ),
     )
@@ -437,7 +1052,12 @@ def main() -> None:
     parser.add_argument("--vlm-judge-max-images", type=int, default=None)
     parser.add_argument(
         "--evaluation-profile",
-        default=str(PROJECT_ROOT / "configs" / "evaluation" / "metric_profile_draft_v1.yaml"),
+        default=str(
+            PROJECT_ROOT
+            / "configs"
+            / "evaluation"
+            / "metric_profile_canonical_v1.yaml"
+        ),
     )
     args = parser.parse_args()
 
@@ -446,7 +1066,9 @@ def main() -> None:
     except (TypeError, ValueError) as exc:
         parser.error(str(exc))
     resolved_camera_pose_mode = args.camera_pose_mode
-    if camera_pose_metric_modes and resolved_camera_pose_mode is None:
+    if (
+        camera_pose_metric_modes or args.camera_active_fallback
+    ) and resolved_camera_pose_mode is None:
         resolved_camera_pose_mode = "auto"
 
     judge_config = read_json(_path_arg(args.vlm_judge_config)) if args.vlm_judge_config else {}
@@ -468,6 +1090,18 @@ def main() -> None:
     if bool(judge_config.get("endpoint") or judge_config.get("base_url")) != bool(judge_config.get("model") or judge_config.get("model_id")):
         parser.error("VLM judge endpoint and model must be configured together")
     vlm_judge = build_openai_compatible_vlm_judge(judge_config) if judge_config else None
+    camera_selector_config = (
+        read_json(_path_arg(args.camera_selector_config))
+        if args.camera_selector_config
+        else {}
+    )
+    if not isinstance(camera_selector_config, dict):
+        parser.error("--camera-selector-config must point to a JSON object")
+    camera_selector = (
+        build_openai_compatible_vlm_judge(camera_selector_config)
+        if camera_selector_config
+        else None
+    )
     collision_geometry = _load_collision_geometry_arg(args.collision_geometry)
     local_view_provider = None
     if resolved_camera_pose_mode is not None:
@@ -478,8 +1112,31 @@ def main() -> None:
                 "camera pose mode requires a configured VLM judge; bbox_track avoids only "
                 "the pose-selection VLM call"
             )
+        query_cov_requested = resolved_camera_pose_mode == "query_cov" or (
+            "query_cov" in camera_pose_metric_modes.values()
+        )
+        if args.camera_active_fallback and query_cov_requested:
+            parser.error(
+                "--camera-active-fallback requires a deterministic base camera mode"
+            )
+        if (args.camera_active_fallback or query_cov_requested) and not callable(
+            getattr(camera_selector, "select_camera_views", None)
+        ):
+            parser.error(
+                "VLM-active camera selection requires --camera-selector-config; "
+                "the final judge is not reused as selector"
+            )
         if not 1 <= args.camera_pose_max_views <= 4 or not 0 <= args.camera_pose_max_steps <= 3:
             parser.error("camera pose max views must be 1..4 and max steps must be 0..3")
+        if args.camera_active_fallback and not (
+            args.camera_pose_max_views
+            <= args.camera_active_candidate_count
+            <= 8
+        ):
+            parser.error(
+                "camera active candidate count must be between camera pose max "
+                "views and 8"
+            )
         renderer = BlenderRenderer(
             blender_bin=_path_arg(args.blender_bin),
             timeout_seconds=args.blender_timeout_seconds,
@@ -499,17 +1156,37 @@ def main() -> None:
             if args.camera_evidence_dir
             else _path_arg(args.out).parent / "camera_evidence"
         )
-        local_view_provider = CameraEvidenceProvider(
-            renderer=renderer,
-            blend_file=_path_arg(args.camera_blend_file),
-            out_dir=evidence_dir,
-            mode=resolved_camera_pose_mode,
-            metric_modes=camera_pose_metric_modes,
-            selector=vlm_judge,
-            max_views=args.camera_pose_max_views,
-            max_steps=args.camera_pose_max_steps,
-            collision_geometry=collision_geometry,
-        )
+        if args.camera_active_fallback:
+            local_view_provider = build_conditional_active_camera_evidence_provider(
+                renderer=renderer,
+                blend_file=_path_arg(args.camera_blend_file),
+                out_dir=evidence_dir,
+                deterministic_mode=resolved_camera_pose_mode,
+                metric_modes=camera_pose_metric_modes,
+                selector=camera_selector,
+                max_views=args.camera_pose_max_views,
+                max_steps=args.camera_pose_max_steps,
+                candidate_count=args.camera_active_candidate_count,
+                collision_overlay=True,
+                collision_contour=True,
+                collision_geometry=collision_geometry,
+                fail_on_exhausted=True,
+                shadow_mode=args.camera_active_shadow_mode,
+            )
+        else:
+            local_view_provider = CameraEvidenceProvider(
+                renderer=renderer,
+                blend_file=_path_arg(args.camera_blend_file),
+                out_dir=evidence_dir,
+                mode=resolved_camera_pose_mode,
+                metric_modes=camera_pose_metric_modes,
+                selector=camera_selector,
+                max_views=args.camera_pose_max_views,
+                max_steps=args.camera_pose_max_steps,
+                collision_overlay=True,
+                collision_contour=True,
+                collision_geometry=collision_geometry,
+            )
 
     report = run_evaluate(
         scene=read_json(_path_arg(args.scene)),
@@ -523,6 +1200,11 @@ def main() -> None:
         scene_request=read_json(_path_arg(args.scene_request)) if args.scene_request else None,
         object_plan=read_json(_path_arg(args.object_plan)) if args.object_plan else None,
         reference_annotation=read_json(_path_arg(args.reference_annotation)) if args.reference_annotation else None,
+        specification_contract=(
+            read_json(_path_arg(args.specification_contract))
+            if args.specification_contract
+            else None
+        ),
         collision_geometry=collision_geometry,
         render_evidence=[str(_path_arg(path)) for path in args.render_evidence],
         vlm_judge=vlm_judge,
@@ -535,9 +1217,97 @@ def main() -> None:
             if args.spatial_fidelity_ontology
             else None
         ),
+        visual_style_spec=(
+            _path_arg(args.visual_style_spec) if args.visual_style_spec else None
+        ),
+        functional_semantic_config=(
+            load_yaml(_path_arg(args.functional_semantic_config), default={})
+            if args.functional_semantic_config
+            else None
+        ),
+        scene_quality_config=(
+            load_yaml(_path_arg(args.scene_quality_config), default={})
+            if args.scene_quality_config
+            else None
+        ),
+        object_grouping_report=(
+            read_json(_path_arg(args.object_grouping_report))
+            if args.object_grouping_report
+            else None
+        ),
+        asset_policy=(
+            read_json(_path_arg(args.asset_policy)) if args.asset_policy else None
+        ),
+        authorized_deviations=(
+            read_json(_path_arg(args.authorized_deviations))
+            if args.authorized_deviations
+            else None
+        ),
     )
     print(f"benchmark_score: {report['benchmark_score']}")
     print(f"evaluators: {', '.join(report['reports'].keys())}")
+
+
+def _normalize_canonical_render_evidence(
+    value: list[str] | dict[str, list[str]] | None,
+) -> list[str] | dict[str, list[str]]:
+    """Preserve metric-scoped L3 packets while normalizing path strings."""
+
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return list(
+            dict.fromkeys(
+                str(item)
+                for item in value
+                if isinstance(item, (str, Path)) and str(item).strip()
+            )
+        )
+    if not isinstance(value, dict):
+        raise TypeError(
+            "render_evidence must be a path list or a metric/scope-keyed mapping"
+        )
+    normalized: dict[str, list[str]] = {}
+    for raw_key, raw_paths in value.items():
+        key = str(raw_key).strip()
+        if not key:
+            raise ValueError("render_evidence mapping keys must be non-empty")
+        if not isinstance(raw_paths, list):
+            raise TypeError(f"render_evidence.{key} must be a path list")
+        normalized[key] = list(
+            dict.fromkeys(
+                str(item)
+                for item in raw_paths
+                if isinstance(item, (str, Path)) and str(item).strip()
+            )
+        )
+    return normalized
+
+
+def _overview_render_evidence(
+    value: list[str] | dict[str, list[str]],
+) -> list[str]:
+    if isinstance(value, list):
+        return list(value)
+    for key in ("global", "global_context", "default", "all"):
+        paths = value.get(key)
+        if paths:
+            return list(paths)
+    return []
+
+
+def _render_evidence_count(
+    value: list[str] | dict[str, list[str]],
+) -> int:
+    if isinstance(value, list):
+        return len(value)
+    return len(
+        {
+            path
+            for paths in value.values()
+            for path in paths
+        }
+    )
 
 
 def _path_arg(value: str) -> Path:
@@ -575,6 +1345,15 @@ def _prompt_granularity(scene_request: dict) -> str:
     """Backward-compatible helper for callers that only need the wire value."""
 
     return _prompt_granularity_gate(scene_request)[0]
+
+
+def _resolve_visual_style_spec(value: dict | str | Path | None) -> dict | None:
+    """Load and validate an optional benchmark-owned visual style spec."""
+
+    if value is None:
+        return None
+    spec = value if isinstance(value, dict) else read_json(Path(value))
+    return validate_visual_style_spec(spec)
 
 
 def _zero_weight_category_report(category: str) -> dict[str, Any]:
@@ -855,6 +1634,287 @@ def _object_alignment_report(
     if not isinstance(mapping_report, dict):
         raise RuntimeError("confirmed reference annotation requires a deterministic object-mapping report")
     return evaluate_object_alignment(reference_annotation, scene, mapping_report)
+
+
+def _resolve_specification_contract(
+    *,
+    specification_contract: dict | None,
+    reference_annotation: dict | None,
+    confirmed_reference: bool,
+    request: dict,
+) -> dict | None:
+    """Resolve the benchmark-owned specification contract for claim-driven L2.
+
+    Priority: an explicitly supplied contract, then a scene-request-carried
+    contract, then a compiler over the confirmed frozen reference annotation.
+    Runtime prompt parsing and public generator structure are never accepted as
+    contract sources here.
+    """
+
+    if isinstance(specification_contract, dict):
+        return validate_specification_contract(specification_contract)
+    if isinstance(request, dict) and isinstance(request.get("specification_contract"), dict):
+        return validate_specification_contract(request["specification_contract"])
+    if confirmed_reference and isinstance(reference_annotation, dict):
+        return specification_contract_from_reference_annotation(reference_annotation)
+    return None
+
+
+def _active_specification_families(contract: dict | None) -> list[str]:
+    if not isinstance(contract, dict):
+        return []
+    claims = contract.get("claims")
+    if not isinstance(claims, dict):
+        return []
+    functional_claims = list(claims.get("functional_semantic_fidelity") or [])
+    # Input aliases are normalized at the contract boundary. They do not create
+    # separate runtime metrics.
+    functional_claims.extend(claims.get("room_scene_type") or [])
+    functional_claims.extend(claims.get("broad_semantic_intent") or [])
+    functional_claims.extend(claims.get("required_functional_areas") or [])
+    active = [
+        name
+        for name, values in (
+            ("oor", claims.get("oor")),
+            ("oar", claims.get("oar")),
+            ("functional_semantic_fidelity", functional_claims),
+        )
+        if isinstance(values, list) and values
+    ]
+    return active
+
+
+def _canonical_relationship_intents(
+    *,
+    contract: dict | None,
+    reference_annotation: dict | None,
+    confirmed_reference: bool,
+    mapping_report: dict | None,
+) -> dict[str, list[dict]]:
+    if confirmed_reference and isinstance(reference_annotation, dict):
+        raw = relationship_intents_from_reference_annotation(reference_annotation)
+        routed = route_relationship_intents(raw, mapping_report)
+        if isinstance(routed, dict):
+            return {
+                "oor_relations": list(routed.get("oor_relations") or []),
+                "oar_relations": list(routed.get("oar_relations") or []),
+            }
+
+    claims = contract.get("claims") if isinstance(contract, dict) else {}
+    claims = claims if isinstance(claims, dict) else {}
+    oor_relations = [
+        _oor_specification_claim_to_relation(claim)
+        for claim in claims.get("oor", [])
+        if isinstance(claim, dict)
+    ]
+    oar_relations = [
+        _oar_specification_claim_to_relation(claim)
+        for claim in claims.get("oar", [])
+        if isinstance(claim, dict)
+    ]
+    return {"oor_relations": oor_relations, "oar_relations": oar_relations}
+
+
+def _oor_specification_claim_to_relation(claim: dict[str, Any]) -> dict[str, Any]:
+    expected = claim.get("expected")
+    expected = expected if isinstance(expected, dict) else {}
+    target_ids = [str(value) for value in claim.get("target_ids", []) if str(value)]
+    relation = {
+        "relation_id": str(claim.get("relation_id") or claim.get("claim_id") or ""),
+        "type": str(
+            claim.get("relation_type")
+            or claim.get("type")
+            or expected.get("relation_type")
+            or ""
+        ),
+        "subject_id": str(
+            claim.get("subject_id")
+            or expected.get("subject_id")
+            or (target_ids[0] if target_ids else "")
+        ),
+        "object_id": str(
+            claim.get("object_id")
+            or expected.get("object_id")
+            or (target_ids[1] if len(target_ids) > 1 else "")
+        ),
+        "target_ids": target_ids,
+        "object_ids": list(claim.get("object_ids") or expected.get("object_ids") or []),
+        "subject_ids": list(claim.get("subject_ids") or expected.get("subject_ids") or []),
+        "source": "specification_contract",
+    }
+    return relation
+
+
+def _oar_specification_claim_to_relation(claim: dict[str, Any]) -> dict[str, Any]:
+    expected = claim.get("expected")
+    expected = expected if isinstance(expected, dict) else {}
+    target_ids = [str(value) for value in claim.get("target_ids", []) if str(value)]
+    return {
+        "relation_id": str(claim.get("relation_id") or claim.get("claim_id") or ""),
+        "type": str(
+            claim.get("relation_type")
+            or claim.get("type")
+            or expected.get("relation_type")
+            or ""
+        ),
+        "subject_id": str(
+            claim.get("subject_id")
+            or expected.get("subject_id")
+            or (target_ids[0] if target_ids else "")
+        ),
+        "architectural_element": str(
+            claim.get("architectural_element")
+            or expected.get("architectural_element")
+            or expected.get("target")
+            or ""
+        ),
+        "wall": claim.get("wall") or expected.get("wall"),
+        "corner": claim.get("corner") or expected.get("corner"),
+        "region": claim.get("region") or expected.get("region"),
+        "source": "specification_contract",
+    }
+
+
+def _resolve_object_grouping_report(
+    value: dict | list | None,
+    *,
+    scene: dict,
+    request: dict,
+) -> dict[str, Any]:
+    if isinstance(value, dict):
+        result = deepcopy(value)
+        result.setdefault("source", "caller_supplied_frozen_grouping")
+        return result
+    if isinstance(value, list):
+        return {
+            "object_groups": deepcopy(value),
+            "source": "caller_supplied_frozen_grouping",
+        }
+    grouping_config_path = (
+        PROJECT_ROOT / "configs" / "grouping" / "deterministic_metadata_geometry.yaml"
+    )
+    grouping_config = (
+        load_yaml(grouping_config_path, default={})
+        if grouping_config_path.exists()
+        else {}
+    )
+    grouping_case = deepcopy(request)
+    if "room" not in grouping_case and isinstance(scene.get("room"), dict):
+        grouping_case["room"] = deepcopy(scene["room"])
+    result = build_object_grouping_report(scene, grouping_case, grouping_config)
+    result["source"] = "canonical_runtime_default"
+    result["policy_id"] = "deterministic_metadata_geometry"
+    return result
+
+
+def _is_canonical_score(value: Any) -> bool:
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and 0.0 <= float(value) <= 1.0
+    )
+
+
+def _canonical_l1_report(validity: dict[str, Any]) -> dict[str, Any]:
+    score = validity.get("score")
+    status = (
+        "evaluated"
+        if isinstance(score, (int, float)) and not isinstance(score, bool)
+        else "incomplete"
+        if validity.get("status") == "incomplete"
+        else "not_applicable"
+    )
+    metric_reports = validity.get("metrics") or {}
+    active_metrics = [
+        name
+        for name in L1_METRICS
+        if isinstance(metric_reports.get(name), dict)
+        and metric_reports[name].get("status") != "not_applicable"
+    ]
+    resolved_metrics = [
+        name
+        for name in active_metrics
+        if _is_canonical_score(metric_reports[name].get("score"))
+    ]
+    return {
+        "layer": L1,
+        "category": "physical_plausibility",
+        "status": status,
+        "score": float(score) if status == "evaluated" else None,
+        "partial_score": validity.get("partial_score"),
+        "affects_score": status != "not_applicable",
+        "metrics": deepcopy(metric_reports),
+        "active_metrics": active_metrics,
+        "resolved_metrics": resolved_metrics,
+        "active_metric_signature": (
+            "+".join(active_metrics) if active_metrics else "none"
+        ),
+        "coverage": {
+            "active_metric_count": int(validity.get("active_metric_count") or 0),
+            "unresolved_metrics": list(validity.get("unresolved_metrics") or []),
+            "disabled_metrics": list(validity.get("disabled_metrics") or []),
+            "complete": status == "evaluated",
+        },
+        "backend_report": validity,
+    }
+
+
+def _canonical_layer_envelope(layer: str, report: dict[str, Any]) -> dict[str, Any]:
+    score = report.get("score") if isinstance(report, dict) else None
+    partial_score = report.get("partial_score") if isinstance(report, dict) else None
+    if partial_score is None and isinstance(report, dict):
+        partial_score = report.get("resolved_score")
+    raw_status = str(report.get("status") or "") if isinstance(report, dict) else ""
+    if raw_status in {"not_applicable", "disabled"}:
+        status = "not_applicable"
+    elif isinstance(score, (int, float)) and not isinstance(score, bool):
+        status = "evaluated"
+    else:
+        status = "incomplete"
+    metric_reports = (
+        report.get("claim_family_reports")
+        or report.get("metrics")
+        or {}
+    )
+    if layer == L2:
+        active_source = report.get("active_claim_families") or []
+        metric_order = L2_METRICS
+    else:
+        active_source = report.get("active_metrics") or []
+        metric_order = L3_METRICS
+    active_set = {str(name) for name in active_source}
+    active_metrics = [name for name in metric_order if name in active_set]
+    if layer == L3:
+        resolved_set = {
+            str(name) for name in (report.get("resolved_metrics") or [])
+        }
+    else:
+        resolved_set = {
+            name
+            for name in active_metrics
+            if isinstance(metric_reports.get(name), dict)
+            and metric_reports[name].get("status") == "evaluated"
+            and _is_canonical_score(metric_reports[name].get("score"))
+        }
+    resolved_metrics = [name for name in active_metrics if name in resolved_set]
+    return {
+        "layer": layer,
+        "category": (
+            "specification_fidelity" if layer == L2 else "scene_quality"
+        ),
+        "status": status,
+        "score": float(score) if status == "evaluated" else None,
+        "partial_score": partial_score,
+        "affects_score": status != "not_applicable",
+        "metrics": deepcopy(metric_reports),
+        "active_metrics": active_metrics,
+        "resolved_metrics": resolved_metrics,
+        "active_metric_signature": (
+            "+".join(active_metrics) if active_metrics else "none"
+        ),
+        "coverage": deepcopy(report.get("coverage") or {}),
+        "report": report,
+    }
 
 
 def _shared_visual_evidence(reports: dict[str, dict]) -> dict[str, dict]:

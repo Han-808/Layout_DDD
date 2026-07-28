@@ -21,12 +21,28 @@ P0B_CAMERA_METRICS = (
     "object_architecture_penetration",
     "oob",
     "support",
+    "functional_semantic_fidelity",
 )
+L3_CAMERA_METRICS = (
+    "scale_consistency",
+    "object_pairing_consistency",
+    "style_consistency",
+)
+CAMERA_EVIDENCE_METRICS = (*P0B_CAMERA_METRICS, *L3_CAMERA_METRICS)
 DEFAULT_CAMERA_MODE_BY_METRIC = {
     "collision": "visibility_ranked",
     "object_architecture_penetration": "visibility_ranked",
     "oob": "visibility_ranked",
     "support": "support_contact_plane",
+    # Canonical L2 local requests are already scoped by a frozen prompt claim;
+    # visibility ranking chooses evidence views but never judges the claim.
+    "functional_semantic_fidelity": "visibility_ranked",
+    # Canonical L3 local policies use the same geometry-only candidate
+    # generation. These mappings do not alter any frozen L1 VisualConfig.
+    "scale_consistency": "visibility_ranked",
+    "object_pairing_consistency": "visibility_ranked",
+    # Style consumes the trusted overview packet by default.
+    "style_consistency": "global_only",
 }
 CAMERA_ACTIONS = (
     "orbit_left",
@@ -36,6 +52,19 @@ CAMERA_ACTIONS = (
     "dolly_in",
     "dolly_out",
 )
+CAMERA_ACTION_PROTOCOL_VERSION = "bounded_camera_action_v3"
+CAMERA_ACTION_PARAMETERS: dict[str, dict[str, float | str]] = {
+    "orbit_left": {"axis": "target_z", "delta_degrees": 20.0},
+    "orbit_right": {"axis": "target_z", "delta_degrees": -20.0},
+    "elevate": {"delta_degrees": 12.0, "maximum_degrees": 75.0},
+    "lower": {
+        "delta_degrees": -10.0,
+        "minimum_feasible_degrees": -75.0,
+        "minimum_legacy_degrees": 5.0,
+    },
+    "dolly_in": {"radius_scale": 0.75, "minimum_distance_m": 0.5},
+    "dolly_out": {"radius_scale": 1.25},
+}
 CAMERA_CANDIDATE_POLICIES = ("feasible_v2", "legacy_v1")
 DEFAULT_CAMERA_CANDIDATE_POLICY = "feasible_v2"
 CAMERA_SENSOR_WIDTH_MM = 36.0
@@ -78,9 +107,10 @@ def validate_metric_camera_modes(value: dict[str, str] | None) -> dict[str, str]
     resolved: dict[str, str] = {}
     for raw_metric, raw_mode in value.items():
         metric = str(raw_metric).strip().lower()
-        if metric not in P0B_CAMERA_METRICS:
+        if metric not in CAMERA_EVIDENCE_METRICS:
             raise ValueError(
-                f"camera metric must be one of {list(P0B_CAMERA_METRICS)}, got {raw_metric!r}"
+                "camera metric must be one of "
+                f"{list(CAMERA_EVIDENCE_METRICS)}, got {raw_metric!r}"
             )
         mode = validate_camera_pose_mode(raw_mode)
         if mode in {None, "auto"}:
@@ -1062,8 +1092,20 @@ def generate_global_context_poses(scene: dict[str, Any]) -> list[dict[str, Any]]
     ]
 
 
-def apply_camera_action(pose: dict[str, Any], action: str) -> dict[str, Any]:
-    """Apply one bounded CoV-style action to a candidate pose."""
+def apply_camera_action(
+    pose: dict[str, Any],
+    action: str,
+    *,
+    scene: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Apply one bounded CoV-style action and revalidate its proxy geometry.
+
+    ``feasible_v2`` actions preserve the original look-at target, stay on a
+    feasible room-interior ray, and, when the canonical scene is available,
+    reject camera locations inside any object OBB.  Proxy framing is recomputed
+    after motion so an action cannot silently turn a fitted proposal into a
+    clipped one.
+    """
 
     action_name = str(action)
     if action_name not in CAMERA_ACTIONS:
@@ -1077,18 +1119,47 @@ def apply_camera_action(pose: dict[str, Any], action: str) -> dict[str, Any]:
     elevation = math.asin(float(np.clip(delta[2] / radius, -1.0, 1.0)))
     feasible_policy = str(result.get("candidate_policy") or "") == "feasible_v2"
     if action_name == "orbit_left":
-        azimuth += math.radians(20.0)
+        azimuth += math.radians(
+            float(CAMERA_ACTION_PARAMETERS[action_name]["delta_degrees"])
+        )
     elif action_name == "orbit_right":
-        azimuth -= math.radians(20.0)
+        azimuth += math.radians(
+            float(CAMERA_ACTION_PARAMETERS[action_name]["delta_degrees"])
+        )
     elif action_name == "elevate":
-        elevation = min(math.radians(75.0), elevation + math.radians(12.0))
+        elevation = min(
+            math.radians(
+                float(CAMERA_ACTION_PARAMETERS[action_name]["maximum_degrees"])
+            ),
+            elevation
+            + math.radians(
+                float(CAMERA_ACTION_PARAMETERS[action_name]["delta_degrees"])
+            ),
+        )
     elif action_name == "lower":
-        lower_bound = math.radians(-75.0 if feasible_policy else 5.0)
-        elevation = max(lower_bound, elevation - math.radians(10.0))
+        minimum_key = (
+            "minimum_feasible_degrees"
+            if feasible_policy
+            else "minimum_legacy_degrees"
+        )
+        lower_bound = math.radians(
+            float(CAMERA_ACTION_PARAMETERS[action_name][minimum_key])
+        )
+        elevation = max(
+            lower_bound,
+            elevation
+            + math.radians(
+                float(CAMERA_ACTION_PARAMETERS[action_name]["delta_degrees"])
+            ),
+        )
     elif action_name == "dolly_in":
-        radius = max(0.5, radius * 0.75)
+        radius = max(
+            float(CAMERA_ACTION_PARAMETERS[action_name]["minimum_distance_m"]),
+            radius
+            * float(CAMERA_ACTION_PARAMETERS[action_name]["radius_scale"]),
+        )
     elif action_name == "dolly_out":
-        radius *= 1.25
+        radius *= float(CAMERA_ACTION_PARAMETERS[action_name]["radius_scale"])
     horizontal = radius * math.cos(elevation)
     moved = target + np.array(
         [
@@ -1114,6 +1185,59 @@ def apply_camera_action(pose: dict[str, Any], action: str) -> dict[str, Any]:
             result["feasibility"] = feasibility
         else:
             moved = _clamp_to_room(moved, resolved_room)
+    validation = {
+        "room_interior_checked": bool(
+            isinstance(room, list) and len(room) == 6
+        ),
+        "canonical_obb_clearance_checked": False,
+        "proxy_framing_checked": False,
+    }
+    if isinstance(scene, dict):
+        scene_objects = _target_objects(scene, [])
+        validation["canonical_obb_clearance_checked"] = True
+        if any(
+            _point_inside_object_obb(moved, obj, clearance_m=0.03)
+            for obj in scene_objects
+        ):
+            raise ValueError(
+                f"camera action {action_name!r} places the camera inside an "
+                "object clearance proxy"
+            )
+    raw_framing_bounds = result.get("proxy_framing_bounds")
+    if (
+        isinstance(raw_framing_bounds, list)
+        and len(raw_framing_bounds) == 2
+    ):
+        try:
+            framing_bounds = (
+                _vector3(raw_framing_bounds[0], "proxy framing minimum"),
+                _vector3(raw_framing_bounds[1], "proxy framing maximum"),
+            )
+            prior_framing = (
+                result.get("proxy_framing")
+                if isinstance(result.get("proxy_framing"), dict)
+                else {}
+            )
+            aspect_ratio = float(prior_framing.get("aspect_ratio") or 1.0)
+            lens, framing = _fit_proxy_framing_lens(
+                location=moved,
+                target=target,
+                bounds=framing_bounds,
+                preferred_lens_mm=float(result.get("lens_mm") or 50.0),
+                aspect_ratio=aspect_ratio,
+            )
+        except (TypeError, ValueError):
+            raise ValueError(
+                f"camera action {action_name!r} has invalid proxy framing metadata"
+            ) from None
+        validation["proxy_framing_checked"] = True
+        if not framing.get("proxy_bounds_fit"):
+            raise ValueError(
+                f"camera action {action_name!r} clips the proxy framing bounds"
+            )
+        framing["validation_status"] = "fits_proxy_bounds"
+        result["lens_mm"] = float(lens)
+        result["proxy_framing"] = framing
     actual_azimuth, actual_elevation, actual_distance = _pose_angles(moved, target)
     result["location"] = _vector_list(moved)
     result["intended_azimuth_degrees"] = float(math.degrees(azimuth) % 360.0)
@@ -1126,7 +1250,12 @@ def apply_camera_action(pose: dict[str, Any], action: str) -> dict[str, Any]:
     result["name"] = f"{result.get('name') or 'view'} {action_name}"
     result["parent_view_id"] = pose.get("id")
     result["camera_action"] = action_name
-    result["policy_source"] = "query_cov_bounded_action_v1"
+    result["camera_action_protocol"] = CAMERA_ACTION_PROTOCOL_VERSION
+    result["camera_action_parameters"] = deepcopy(
+        CAMERA_ACTION_PARAMETERS[action_name]
+    )
+    result["active_action_validation"] = validation
+    result["policy_source"] = CAMERA_ACTION_PROTOCOL_VERSION
     return result
 
 

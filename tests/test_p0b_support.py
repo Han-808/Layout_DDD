@@ -865,7 +865,7 @@ def test_mesh_center_support_is_diagnostic_not_a_route_gate(tmp_path: Path) -> N
     assert record["route"] == "direct_valid_contact"
 
 
-def test_enabled_unresolved_support_blocks_structural_category(tmp_path: Path) -> None:
+def test_enabled_unresolved_support_blocks_l1_category(tmp_path: Path) -> None:
     from evaluate import run_evaluate
 
     scene = {
@@ -879,10 +879,10 @@ def test_enabled_unresolved_support_blocks_structural_category(tmp_path: Path) -
         support_enabled=True,
     )
 
-    structural = report["category_reports"]["structural_validity"]
-    assert structural["status"] == "not_evaluable"
-    assert structural["score"] is None
-    assert structural["reason"] == "generic_validity_incomplete"
+    physical = report["category_reports"]["l1_physical_plausibility"]
+    assert physical["status"] == "incomplete"
+    assert physical["score"] is None
+    assert physical["coverage"]["unresolved_metrics"] == ["support"]
     assert report["benchmark_score"] is None
 
 
@@ -1178,9 +1178,9 @@ def test_support_rejects_invalid_configuration(config: dict, match: str) -> None
 
 
 # --------------------------------------------------------------------------- #
-# 16. CLI and scene harness propagate the option end to end
+# 16. The legacy runtime support flag cannot mutate the canonical profile
 # --------------------------------------------------------------------------- #
-def test_cli_propagates_no_support_enabled(tmp_path: Path) -> None:
+def test_cli_ignores_no_support_enabled_for_canonical_profile(tmp_path: Path) -> None:
     scene = {**_scene([_canonical_obj("floating", [1.0, 1.0, 1.2], [0.5, 0.5, 0.5])]), "request_id": "cli_support"}
     scene_path = tmp_path / "scene.json"
     out_path = tmp_path / "report.json"
@@ -1203,12 +1203,12 @@ def test_cli_propagates_no_support_enabled(tmp_path: Path) -> None:
     )
 
     validity = read_json(out_path)["reports"]["generic_validity"]
-    assert validity["metrics"]["support"]["status"] == "not_applicable"
-    assert validity["metrics"]["support"]["reason"] == "disabled_by_configuration"
-    assert "support" in validity["disabled_metrics"]
+    assert validity["metrics"]["support"]["status"] == "requires_vlm"
+    assert validity["metrics"]["support"]["enabled"] is True
+    assert "support" not in validity["disabled_metrics"]
 
 
-def test_scene_harness_propagates_no_support_enabled(tmp_path: Path) -> None:
+def test_scene_harness_ignores_no_support_enabled_for_canonical_profile(tmp_path: Path) -> None:
     plan_path = tmp_path / "plan.json"
     selection_path = tmp_path / "selection.json"
     generated_path = tmp_path / "generated.json"
@@ -1248,11 +1248,12 @@ def test_scene_harness_propagates_no_support_enabled(tmp_path: Path) -> None:
     )
 
     validity = read_json(out_dir / "evaluation_report.json")["reports"]["generic_validity"]
-    assert validity["metrics"]["support"]["status"] == "not_applicable"
-    assert validity["metrics"]["support"]["reason"] == "disabled_by_configuration"
-    assert "support" in validity["disabled_metrics"]
+    assert validity["metrics"]["support"]["status"] == "requires_vlm"
+    assert validity["metrics"]["support"]["enabled"] is True
+    assert "support" not in validity["disabled_metrics"]
     manifest = read_json(out_dir / "run_manifest.json")
-    assert manifest["evaluation"]["support_enabled"] is False
+    assert manifest["evaluation"]["l1_applicability_source"] == "frozen_canonical_profile"
+    assert "support_enabled" not in manifest["evaluation"]
     assert manifest["evaluation"]["p0b_official_mode"] is False
     assert manifest["evaluation"]["p0b_local_view_provider_configured"] is False
 

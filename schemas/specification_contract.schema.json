@@ -1,0 +1,148 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.org/layout-ddd/specification_contract.schema.json",
+  "title": "CanonicalSpecificationContract",
+  "description": "Benchmark-owned activation contract for canonical L2 Specification Fidelity. Only oor, oar, and functional_semantic_fidelity are accepted claim families.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["contract_version", "source", "frozen", "claims"],
+  "properties": {
+    "contract_version": {
+      "const": "specification_contract_v1"
+    },
+    "source": {
+      "enum": [
+        "benchmark_annotation",
+        "benchmark_owned",
+        "trusted_case_bundle",
+        "manual",
+        "programmatic",
+        "diagnostic"
+      ],
+      "description": "Official contracts must use a benchmark-owned source. Runtime prompt parsing and generated output are never scoring-truth sources."
+    },
+    "frozen": {
+      "type": "boolean"
+    },
+    "compiled_from": {
+      "type": "string"
+    },
+    "request_id": {
+      "type": "string"
+    },
+    "scene_type": {
+      "type": "string"
+    },
+    "claims": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "oor": {
+          "type": "array",
+          "description": "Canonical Object-Object Relation Fidelity claims.",
+          "items": {
+            "$ref": "#/$defs/oorClaim"
+          }
+        },
+        "oar": {
+          "type": "array",
+          "description": "Canonical Object-Architecture Relation Fidelity claims.",
+          "items": {
+            "$ref": "#/$defs/oarClaim"
+          }
+        },
+        "functional_semantic_fidelity": {
+          "type": "array",
+          "description": "Canonical functional-semantic family. Components remain auditable but are not separately weighted metrics.",
+          "items": {
+            "$ref": "#/$defs/functionalSemanticClaim"
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "baseClaim": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["claim_id"],
+      "properties": {
+        "claim_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "required": {
+          "type": "boolean"
+        },
+        "target_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "source_span": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source_ref": {
+          "type": "object"
+        }
+      }
+    },
+    "oorClaim": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/baseClaim"
+        },
+        {
+          "properties": {
+            "claim_family": {
+              "const": "oor"
+            }
+          }
+        }
+      ]
+    },
+    "oarClaim": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/baseClaim"
+        },
+        {
+          "properties": {
+            "claim_family": {
+              "const": "oar"
+            }
+          }
+        }
+      ]
+    },
+    "functionalSemanticClaim": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/baseClaim"
+        },
+        {
+          "required": [
+            "component"
+          ],
+          "properties": {
+            "claim_family": {
+              "const": "functional_semantic_fidelity"
+            },
+            "component": {
+              "enum": [
+                "room_scene_type",
+                "visual_functional_intent",
+                "required_functional_areas",
+                "local_functionality"
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+}

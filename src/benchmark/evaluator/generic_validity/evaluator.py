@@ -23,7 +23,12 @@ DEFAULT_GENERIC_VALIDITY_CONFIG = {
         "enabled": True,
         "official_mode": False,
         "detector_only": False,
+        # numerical_eps is floating-point robustness for the wall and ceiling
+        # planes only. floor_contact_tolerance_m is the separate semantic contact
+        # tolerance for the floor plane so ordinary shallow floor sink stays valid
+        # instead of being routed as a candidate OOB violation.
         "numerical_eps": 1.0e-6,
+        "floor_contact_tolerance_m": 0.005,
         "score_mode": "invalid_object_count_over_objects",
     },
     "navigability": {
@@ -58,7 +63,9 @@ DEFAULT_GENERIC_VALIDITY_CONFIG = {
 GENERIC_VALIDITY_NOTES = [
     "generic_validity_v0 uses canonical OBB proxies for navigability and accessibility.",
     "Collision uses collision_p0b_v2 with OBB SAT broad phase, guarded mesh/OBB frame contracts, and optional mesh narrow phase.",
-    "OOB uses oob_p0b_v1 with exact OBB-vs-six-room-plane evidence and conservative VLM adjudication.",
+    "OOB uses oob_p0b_v2 with exact OBB-vs-six-room-plane evidence and conservative VLM adjudication; the floor "
+    "plane uses a separate semantic floor_contact_tolerance_m so ordinary shallow floor sink is not routed, and "
+    "raw per-plane penetration is preserved in plane_penetration_m.",
     "Support uses support_p0b_v7: scale-aware 2-3.5 cm tolerance contact with a fixed-point path to the floor bypasses VLM; larger gaps, ungrounded stacks/cycles, attachment, and degraded geometry route to conservative VLM adjudication.",
     "Collision, OOB, and support are independent multi-label metrics; a Collision/OOB failure never implies a Support failure.",
     "Collision, OOB, and support never use physics simulation; VLM adjudicates ambiguous geometric events only.",

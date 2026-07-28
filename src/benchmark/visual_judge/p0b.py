@@ -40,17 +40,24 @@ P0B_METRIC_RUBRICS = {
         "attachment/contact. Treat detector geometry as measured evidence, not as a semantic verdict."
     ),
     "oob": (
-        "The deterministic detector has already established that this object crosses one or more flagged room "
-        "planes by more than numerical_eps. Treat the reported plane flags, room bounds, object intervals, and "
-        "crossing measurements as authoritative facts; do not reinterpret, round away, or dispute them. "
-        "Return invalid by default. Return valid only when supplied positive evidence establishes that this exact "
-        "boundary crossing is an explicitly permitted structural condition, such as a genuinely wall-embedded, "
-        "wall-mounted, ceiling-mounted, or pass-through element whose attachment mode and geometry are compatible "
-        "with crossing that plane. A natural-language or extracted relationship is a claim, not proof of the "
-        "exception. In particular, near_wall, against_wall, at_corner, near_corner, along_wall, and room_region "
-        "never exempt ordinary furniture or decor from remaining inside the room. Ordinary contact with a wall is "
-        "not boundary crossing. If qualifying structural evidence is absent, return invalid. Judge only OOB here; "
-        "do not use prompt fidelity, style, or general visual plausibility to excuse the measured crossing."
+        "The deterministic detector routed this object because its oriented bounding box crosses one or more "
+        "flagged room planes beyond the applicable threshold: numerical_eps for the wall and ceiling planes, and "
+        "the separate floor_contact_tolerance_m semantic contact tolerance for the floor plane. Treat the reported "
+        "plane flags, room bounds, object intervals, and measured crossing depths as authoritative facts; do not "
+        "reinterpret, round away, or dispute them. Being routed here is a request for adjudication and carries no "
+        "verdict prior: a measured crossing is not by itself sufficient to return invalid. Judge whether this "
+        "object substantively protrudes outside the room envelope in a way that is not a permitted structural "
+        "condition. Return invalid only when the evidence shows a real, unintended out-of-bounds protrusion. "
+        "Return valid when the crossing is an explicitly permitted structural condition, such as a genuinely "
+        "wall-embedded, wall-mounted, ceiling-mounted, or pass-through element whose attachment mode and geometry "
+        "are compatible with crossing that plane, or when the apparent crossing is ordinary surface contact or "
+        "placement tolerance rather than a substantive protrusion. Shallow floor sink within "
+        "floor_contact_tolerance_m is already accepted deterministically and is never routed here. A "
+        "natural-language or extracted relationship is a claim, not proof of the exception. In particular, "
+        "near_wall, against_wall, at_corner, near_corner, along_wall, and room_region never exempt ordinary "
+        "furniture or decor from remaining inside the room. Ordinary contact with a wall is not boundary crossing. "
+        "Judge only OOB here; do not use prompt fidelity, style, or general visual plausibility to excuse or "
+        "manufacture the measured crossing."
     ),
     "support": (
         "Judge only whether an object has an unexplained positive support gap along gravity, or is instead "
@@ -72,12 +79,12 @@ P0B_METRIC_RUBRICS = {
 # pairing and diagnostic colors are unambiguous and geometry stays authoritative.
 COLLISION_EVIDENCE_STYLE_GUIDE = (
     "Collision evidence may include paired same-pose views that share a pair_id/view_id: first the raw RGB "
-    "render, then a deterministic diagnostic overlay of the exact same camera pose. The overlay is a diagnostic "
-    "visualization, not a physically rendered appearance. In the overlay: object A is red, object B is cyan, other "
-    "context geometry is gray, thin wireframes outline each target's oriented bounding box, yellow marks the "
-    "closest/contact point or the focus region, and a transparent/x-ray target reveals a partner that is contained "
-    "inside or fully occluded by it. Decorative wireframes, markers, and colors are annotations only. Object IDs, "
-    "categories, colors, and representation types are provided as structured metadata. Treat the exact detector and "
+    "render, then a deterministic segmentation-contour view of the exact same camera pose. The contour view preserves "
+    "the target interiors and scene appearance; object A and object B receive distinct exterior color bands and thin "
+    "outer contours from occlusion-aware Blender object-ID masks. Thin wireframes may outline each target's oriented "
+    "bounding box, and yellow may mark the closest/contact point or focus region. These bands, contours, wireframes, "
+    "markers, and colors are diagnostic annotations, not physically rendered appearance. Object IDs, categories, "
+    "colors, and representation types are provided as structured metadata. Treat the exact detector and "
     "mesh measurements as authoritative evidence and never invent or overwrite them; use the images to judge "
     "whether the measured overlap or intersection is an unintended physical collision, and return one binary verdict."
 )
@@ -146,7 +153,7 @@ def adjudicate_p0b_event(
     if (
         visual_config_policy == "metric_default"
         and metric_name in DEFAULT_P0B_VISUAL_CONFIGS
-        and is_metric_focus_evidence(local_metadata)
+        and is_metric_focus_evidence(local_metadata, metric=metric_name)
     ):
         selected_items, applied_visual_config = compose_default_p0b_visual_evidence(
             metric_name,

@@ -3,6 +3,9 @@ __pycache__/
 .pytest_cache/
 *.egg-info/
 .venv/
+.DS_Store
+/build/
+*.blend1
 
 outputs/*
 !outputs/.gitkeep
@@ -40,6 +43,7 @@ downloads/
 /Support/Assets/
 /Support/Scenes/
 /Support/artifacts/
+/Support/experiment_analysis/
 /Support/data/
 /Support/datasets/
 /Support/notes/
@@ -48,3 +52,6 @@ downloads/
 # Local documentation and operational notes
 *.md
 !/Support/README.md
+!/docs/
+!/docs/game/
+!/docs/game/counter_strike_benchmark.md

@@ -212,7 +212,12 @@ class OpenAICompatibleModel:
         except json.JSONDecodeError as exc:
             raise EndpointMalformedResponseError(f"Unexpected /models response: {raw[:500]}") from exc
 
-    def health_check(self, *, multimodal: bool = False) -> dict:
+    def health_check(
+        self,
+        *,
+        multimodal: bool = False,
+        image_data_url: str | None = None,
+    ) -> dict:
         models = self.list_models()
         text_ok = bool(
             self.chat_messages(
@@ -240,7 +245,10 @@ class OpenAICompatibleModel:
                             "role": "user",
                             "content": [
                                 {"type": "text", "text": "Return {\"ok\": true} for this image."},
-                                {"type": "image_url", "image_url": {"url": _tiny_png_data_url()}},
+                                {
+                                    "type": "image_url",
+                                    "image_url": {"url": image_data_url or _tiny_png_data_url()},
+                                },
                             ],
                         },
                     ],

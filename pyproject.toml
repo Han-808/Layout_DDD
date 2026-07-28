@@ -21,6 +21,7 @@ dependencies = [
 layout-ddd-generate = "benchmark.api.generation:main"
 layout-ddd-evaluate = "benchmark.api.evaluation:main"
 layout-ddd-evaluate-submission = "benchmark.api.submission:main"
+layout-ddd-evaluate-game = "benchmark.game_scene.route:main"
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
@@ -30,6 +31,10 @@ retrieval = [
 mesh-collision = [
     "trimesh>=4.5.0,<5",
     "python-fcl>=0.7.0,<0.8",
+    "rtree>=1.4.0,<2",
+]
+browser = [
+    "playwright>=1.40",
 ]
 
 [tool.setuptools.packages.find]
@@ -39,15 +44,25 @@ exclude = ["benchmark.legend", "benchmark.legend.*"]
 [tool.setuptools]
 include-package-data = false
 
+[tool.setuptools.package-data]
+"benchmark.game_scene" = ["*.js", "*.mjs"]
+
 [tool.pytest.ini_options]
 testpaths = [
   "tests/test_adapter_io_contracts.py",
+  "tests/test_asset_policy.py",
   "tests/test_asset_retriever.py",
   "tests/test_blender_mesh_fit.py",
   "tests/test_blender_renderer.py",
+  "tests/test_browser_renderer.py",
   "tests/test_camera_pose_modes.py",
   "tests/test_current_namespace_boundaries.py",
   "tests/test_current_evaluation_profile.py",
+  "tests/test_evidence_contract.py",
+  "tests/test_game_canonical_track.py",
+  "tests/test_game_harness.py",
+  "tests/test_game_mode.py",
+  "tests/test_game_scene_export.py",
   "tests/test_generic_validity.py",
   "tests/test_input_chain_boundaries.py",
   "tests/test_layout_json_adapter.py",
@@ -55,6 +70,7 @@ testpaths = [
   "tests/test_oar_evaluator.py",
   "tests/test_openai_vlm_judge.py",
   "tests/test_object_mapping.py",
+  "tests/test_object_grouping.py",
   "tests/test_oor_evaluator.py",
   "tests/test_p0b_adjudication.py",
   "tests/test_p0b_collision.py",
@@ -64,8 +80,11 @@ testpaths = [
   "tests/test_p0a_reference_and_geometry.py",
   "tests/test_relationship_mapper.py",
   "tests/test_scene_harness.py",
-  "tests/test_spatial_fidelity.py",
+  "tests/test_scene_quality_interfaces.py",
+  "tests/test_coarse_specification_interfaces.py",
+  "tests/test_specification_contract.py",
   "tests/test_submission_api.py",
+  "tests/test_visual_style_spec.py",
 ]
 pythonpath = ["src", "."]
 addopts = "-q"

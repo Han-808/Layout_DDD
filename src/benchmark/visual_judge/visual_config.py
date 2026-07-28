@@ -4,19 +4,20 @@ from copy import deepcopy
 from typing import Any
 
 
-DEFAULT_P0B_VISUAL_CONFIG_VERSION = "p0b_metric_visual_config_v1"
+DEFAULT_P0B_VISUAL_CONFIG_VERSION = "p0b_metric_visual_config_v2"
 
 # These are production defaults, calibrated from the 7/22 deterministic-camera
-# evidence audit. Experiment scripts may explicitly request passthrough evidence
-# so their historical arms keep their original meaning.
+# audit and the 7/24 local-highlight ablation. Experiment scripts may explicitly
+# request passthrough evidence so their historical arms keep their original
+# meaning.
 DEFAULT_P0B_VISUAL_CONFIGS: dict[str, dict[str, Any]] = {
     "collision": {
-        "config_id": "collision_local_global_top_budget2_v1",
+        "config_id": "collision_local_raw_contour_budget2_v2",
         "image_budget": 2,
-        "image_order": ["deterministic_local", "global_top"],
+        "image_order": ["deterministic_local_raw", "deterministic_local_contour"],
         "local_view_count": 1,
-        "presentation": "highlight_only",
-        "global_pose": "global_top",
+        "presentation": "same_pose_raw_plus_segmentation_contour",
+        "global_pose": None,
         "require_flagged_boundary_highlight": False,
     },
     "oob": {
@@ -29,25 +30,43 @@ DEFAULT_P0B_VISUAL_CONFIGS: dict[str, dict[str, Any]] = {
         "require_flagged_boundary_highlight": True,
     },
     "support": {
-        "config_id": "support_local2_global_top_budget3_v1",
+        "config_id": "support_local2_raw_global_top_budget3_v2",
         "image_budget": 3,
-        "image_order": ["deterministic_local", "deterministic_local", "global_top"],
+        "image_order": [
+            "deterministic_local_raw",
+            "deterministic_local_raw",
+            "global_top",
+        ],
         "local_view_count": 2,
-        "presentation": "highlight_only",
+        "presentation": "distinct_local_raw_plus_global_top",
         "global_pose": "global_top",
         "require_flagged_boundary_highlight": False,
     },
 }
 
 _GLOBAL_ROLE = "metric_highlighted_global"
+_LOCAL_RAW_ROLES = {"metric_local_rgb", "collision_rgb"}
 _LOCAL_HIGHLIGHT_ROLES = {"metric_local_highlight", "collision_pair_overlay"}
+_LOCAL_CONTOUR_ROLES = {"metric_local_contour"}
 
 
-def is_metric_focus_evidence(items: list[dict[str, Any]]) -> bool:
-    """Return whether rich provider output carries the complete global/local bundle."""
+def is_metric_focus_evidence(
+    items: list[dict[str, Any]],
+    *,
+    metric: str | None = None,
+) -> bool:
+    """Return whether provider output carries role-aware local evidence.
+
+    Collision is recognized only when its new contour role is present; this
+    keeps older rich raw/Legacy providers backward compatible. OOB and Support
+    retain the historical global-plus-local recognition contract.
+    """
 
     roles = {str(item.get("role") or "") for item in items}
-    return _GLOBAL_ROLE in roles and bool(roles & _LOCAL_HIGHLIGHT_ROLES)
+    local_roles = _LOCAL_RAW_ROLES | _LOCAL_HIGHLIGHT_ROLES | _LOCAL_CONTOUR_ROLES
+    if str(metric or "").strip().lower() == "collision":
+        return bool(roles & _LOCAL_RAW_ROLES) and bool(roles & _LOCAL_CONTOUR_ROLES)
+    return _GLOBAL_ROLE in roles and bool(roles & local_roles)
 
 
 def compose_default_p0b_visual_evidence(
@@ -56,9 +75,10 @@ def compose_default_p0b_visual_evidence(
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Select the exact calibrated evidence bundle for one P0b metric.
 
-    The composer is deliberately fail-closed. Missing highlight images, a
-    non-top global pose, or an OOB local overlay without the flagged boundary
-    plane must not be silently represented as the calibrated default.
+    The composer is deliberately fail-closed. Missing required raw/contour
+    images, a non-top required global pose, or an OOB local overlay without the
+    flagged boundary plane must not be silently represented as the calibrated
+    default.
     """
 
     metric_name = str(metric).strip().lower()
@@ -68,25 +88,48 @@ def compose_default_p0b_visual_evidence(
         raise TypeError("default P0b VisualConfig requires rich evidence objects")
 
     config = deepcopy(DEFAULT_P0B_VISUAL_CONFIGS[metric_name])
-    global_items = [item for item in items if str(item.get("role") or "") == _GLOBAL_ROLE]
+    global_items = [
+        item for item in items if str(item.get("role") or "") == _GLOBAL_ROLE
+    ]
     global_top = [item for item in global_items if _view_id(item) == "global_top"]
-    if len(global_top) != 1:
+    if config["global_pose"] == "global_top" and len(global_top) != 1:
         available = [_view_id(item) for item in global_items]
         raise RuntimeError(
             "default P0b VisualConfig requires exactly one highlighted global_top view; "
             f"available global views: {available}"
         )
 
-    local_items = _unique_local_highlights(
+    local_raw = _unique_local_items(
+        [item for item in items if str(item.get("role") or "") in _LOCAL_RAW_ROLES]
+    )
+    local_highlight = _unique_local_items(
         [item for item in items if str(item.get("role") or "") in _LOCAL_HIGHLIGHT_ROLES]
     )
+    local_contour = _unique_local_items(
+        [item for item in items if str(item.get("role") or "") in _LOCAL_CONTOUR_ROLES]
+    )
     required_local = int(config["local_view_count"])
-    if len(local_items) < required_local:
+    required_role = (
+        "highlighted"
+        if metric_name == "oob"
+        else "raw"
+    )
+    required_items = local_highlight if required_role == "highlighted" else local_raw
+    if len(required_items) < required_local:
         raise RuntimeError(
-            f"{metric_name} default P0b VisualConfig requires {required_local} highlighted "
-            f"local view(s), but only {len(local_items)} are available"
+            f"{metric_name} default P0b VisualConfig requires {required_local} {required_role} "
+            f"local view(s), but only {len(required_items)} are available"
         )
-    chosen_local = local_items[:required_local]
+    chosen_local = required_items[:required_local]
+
+    contour_by_view = {_view_id(item): item for item in local_contour}
+    if metric_name == "collision":
+        chosen_view_id = _view_id(chosen_local[0])
+        if chosen_view_id not in contour_by_view:
+            raise RuntimeError(
+                "collision default P0b VisualConfig requires a same-pose segmentation "
+                f"contour for raw local view {chosen_view_id!r}"
+            )
 
     boundary_verified = False
     if bool(config["require_flagged_boundary_highlight"]):
@@ -105,8 +148,11 @@ def compose_default_p0b_visual_evidence(
     for slot in config["image_order"]:
         if slot == "global_top":
             selected.append(deepcopy(global_top[0]))
-        elif slot == "deterministic_local":
+        elif slot in {"deterministic_local", "deterministic_local_raw"}:
             selected.append(deepcopy(next(local_iter)))
+        elif slot == "deterministic_local_contour":
+            raw_view_id = _view_id(selected[-1]) if selected else _view_id(chosen_local[0])
+            selected.append(deepcopy(contour_by_view[raw_view_id]))
         else:  # pragma: no cover - constant-table integrity guard
             raise RuntimeError(f"unsupported P0b VisualConfig slot {slot!r}")
 
@@ -136,7 +182,7 @@ def _view_id(item: dict[str, Any]) -> str:
     return str(value or "")
 
 
-def _unique_local_highlights(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _unique_local_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     result: list[dict[str, Any]] = []
     seen: set[str] = set()
     for item in items:

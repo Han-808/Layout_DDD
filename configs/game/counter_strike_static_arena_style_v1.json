@@ -1,0 +1,29 @@
+{
+  "spec_version": "visual_style_spec_v1",
+  "source": "benchmark_owned",
+  "frozen": true,
+  "compiled_from": "configs/game/game_mode_canonical_v1.yaml",
+  "scene_type": "counter_strike_static_arena",
+  "directives": [
+    {
+      "directive_id": "cs_environment_scope",
+      "statement": "Judge only the static 3D arena environment as a Counter-Strike-like tactical first-person-shooter space. Do not judge gameplay, competitive balance, routes, collision, weapons, controls, HUD, animation, or player skill.",
+      "required": true
+    },
+    {
+      "directive_id": "cs_environment_visual_language",
+      "statement": "The arena should have a coherent tactical-FPS environmental visual language across architecture, cover, crates, props, surfaces, and level markings. Industrial, urban, training-map, stylized, low-poly, or simplified variants are all allowed; exact fidelity to licensed Counter-Strike assets is not required.",
+      "required": true
+    },
+    {
+      "directive_id": "cs_internal_style_consistency",
+      "statement": "Judge whether abstraction level, material treatment, shading, geometric detail, and color treatment are internally coherent. Mark invalid only when one or more explicit, significant visible style outliers are present; minor variation or ordinary material diversity is valid.",
+      "required": true
+    },
+    {
+      "directive_id": "cs_allowed_markings",
+      "statement": "Team-color accents, zone markings, signs, warning colors, and deliberately distinct landmark materials are allowed and must not be treated as style inconsistency merely because they differ from nearby surfaces.",
+      "required": true
+    }
+  ]
+}

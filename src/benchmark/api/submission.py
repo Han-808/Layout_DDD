@@ -17,7 +17,24 @@ from pathlib import Path
 from typing import Any
 
 from benchmark.api.evaluation import run_evaluate
-from benchmark.evaluator.profile import resolve_evaluation_profile
+from benchmark.evaluator.profile import (
+    L1,
+    L3,
+    is_legacy_game_profile,
+    resolve_evaluation_profile,
+    specification_activation_mode,
+)
+from benchmark.evaluator.asset_policy import (
+    resolve_asset_policy,
+    scene_quality_applicability,
+)
+from benchmark.evaluator.scene_quality import resolve_scene_quality_config
+from benchmark.evaluator.visual_style_spec import VisualStyleSpecError, validate_visual_style_spec
+from benchmark.evaluator.specification_fidelity import (
+    SpecificationContractError,
+    specification_contract_from_reference_annotation,
+    validate_specification_contract,
+)
 from benchmark.io_contracts import O1_OBJECT_STATE, O3_SCENE_PACKAGE
 from benchmark.reference_annotation import annotation_scoring_gate, validate_reference_annotation
 from benchmark.rendering import BlenderRenderer
@@ -25,16 +42,30 @@ from benchmark.rendering.camera_pose import validate_camera_pose_mode, validate_
 from benchmark.scene_io.assets import load_asset_csv
 from benchmark.scene_io.normalize import normalize_scene
 from benchmark.scene_io.validate import (
+    GENERATED_MESH_GEOMETRY,
     validate_generated_scene,
     validate_scene_package,
     validate_scene_request,
 )
 from benchmark.utils.io import load_yaml, read_json, write_json
-from benchmark.visual_judge import CameraEvidenceProvider, build_openai_compatible_vlm_judge
+from benchmark.visual_judge import (
+    CameraEvidenceProvider,
+    build_conditional_active_camera_evidence_provider,
+    build_openai_compatible_vlm_judge,
+)
 
 
 CASE_BUNDLE_VERSION = "benchmark_case_bundle_v1"
-SUBMISSION_RUNNER_VERSION = "trusted_submission_runner_v2"
+SUBMISSION_RUNNER_VERSION = "trusted_submission_runner_v3"
+
+# Render input policies. O1 normally renders as a benchmark-owned bbox proxy, so
+# its appearance carries no generator signal. An O1 scene whose objects all
+# declare ``generated_mesh`` is different in kind: the generator authored that
+# geometry itself, so the proxy argument does not apply and canonical L3 Scene
+# Quality stays scoreable.
+O1_PROXY_RENDER_POLICY = "trusted_bbox_proxy_projection"
+O1_GENERATED_MESH_RENDER_POLICY = "trusted_generator_authored_geometry"
+O3_CATALOG_RENDER_POLICY = "validated_fixed_catalog_scene_package"
 
 
 class CaseBundleError(ValueError):
@@ -54,8 +85,17 @@ class TrustedCaseBundle:
     evaluator_output_type: str
     scene_request: dict[str, Any]
     reference_annotation: dict[str, Any] | None
+    specification_contract: dict[str, Any] | None
+    specification_activation_mode: str
+    functional_semantic_config: dict[str, Any] | None
+    scene_quality_config: dict[str, Any] | None
+    object_grouping_report: dict[str, Any] | list[Any] | None
+    asset_policy: dict[str, Any] | None
+    authorized_deviations: list[Any] | None
     spatial_fidelity_ontology: dict[str, Any] | None
+    visual_style_spec: dict[str, Any] | None
     evaluation_profile: dict[str, Any]
+    workflow: str
     enabled_evaluators: dict[str, bool]
     p0b_official_mode: bool
     camera_evidence: dict[str, Any]
@@ -65,7 +105,12 @@ class TrustedCaseBundle:
 
     @property
     def metric_applicability(self) -> dict[str, bool]:
-        return dict(self.evaluation_profile["structural_validity"]["applicability"])
+        if is_legacy_game_profile(self.evaluation_profile):
+            return dict(self.evaluation_profile["structural_validity"]["applicability"])
+        return {
+            name: bool(metric.get("enabled"))
+            for name, metric in self.evaluation_profile[L1]["metrics"].items()
+        }
 
     @property
     def spatial_fidelity_ontology_path(self) -> Path | None:
@@ -98,7 +143,14 @@ def load_case_bundle(path: str | Path) -> TrustedCaseBundle:
     for name in (
         "scene_request",
         "reference_annotation",
+        "specification_contract",
+        "functional_semantic_config",
+        "scene_quality_config",
+        "object_grouping_report",
+        "asset_policy",
+        "authorized_deviations",
         "spatial_fidelity_ontology",
+        "visual_style_spec",
         "evaluation_profile",
         "allowed_asset_ids",
     ):
@@ -135,12 +187,54 @@ def load_case_bundle(path: str | Path) -> TrustedCaseBundle:
         validate_reference_annotation(annotation)
         if str(annotation.get("request_id")) != str(scene_request.get("request_id")):
             raise CaseBundleError("reference_annotation.request_id must match scene_request.request_id")
-    if granularity == "fine_grained":
+    legacy_game_profile = is_legacy_game_profile(evaluation_profile)
+    if legacy_game_profile and granularity == "fine_grained":
         gate = annotation_scoring_gate(annotation) if isinstance(annotation, dict) else None
         if not gate or not gate.get("official_scoreable"):
             raise CaseBundleError(
                 "fine-grained official cases require a confirmed, scoreable reference_annotation"
             )
+
+    # Claim-driven L2 (profile v2): the specification contract is benchmark-owned,
+    # frozen, and drives module activation. Prompt granularity does not
+    # independently activate modules, and public generator output cannot create
+    # or remove official claims. Legacy v1 bundles are unaffected.
+    activation_mode = specification_activation_mode(evaluation_profile.get("profile_version"))
+    valid_object_ids = (
+        {
+            str(obj.get("id"))
+            for obj in annotation.get("objects", [])
+            if isinstance(annotation, dict) and isinstance(obj, dict) and obj.get("id") is not None
+        }
+        if isinstance(annotation, dict)
+        else None
+    )
+    specification_contract = loaded.get("specification_contract")
+    if specification_contract is not None:
+        try:
+            validate_specification_contract(
+                specification_contract,
+                valid_object_ids=valid_object_ids,
+                require_trusted=True,
+                require_frozen=True,
+            )
+        except SpecificationContractError as exc:
+            raise CaseBundleError(str(exc)) from exc
+        if str(specification_contract.get("request_id") or scene_request.get("request_id")) != str(
+            scene_request.get("request_id")
+        ):
+            raise CaseBundleError("specification_contract.request_id must match scene_request.request_id")
+    elif activation_mode == "specification_contract":
+        gate = annotation_scoring_gate(annotation) if isinstance(annotation, dict) else None
+        if not isinstance(annotation, dict) or not gate or not gate.get("official_scoreable"):
+            raise CaseBundleError(
+                "canonical official cases require a benchmark-owned specification_contract "
+                "artifact or a confirmed reference_annotation to compile one"
+            )
+        try:
+            specification_contract = specification_contract_from_reference_annotation(annotation)
+        except SpecificationContractError as exc:
+            raise CaseBundleError(str(exc)) from exc
     spatial_fidelity_ontology = loaded.get("spatial_fidelity_ontology")
     if spatial_fidelity_ontology is not None:
         ontology_record = records["spatial_fidelity_ontology"]
@@ -149,7 +243,43 @@ def load_case_bundle(path: str | Path) -> TrustedCaseBundle:
                 "spatial_fidelity_ontology must be a JSON artifact so its file-byte "
                 "SHA-256 identity is preserved by the evaluator"
             )
-    if granularity == "coarse_grained" and float(evaluation_profile["weights"]["spatial_fidelity"]) > 0.0:
+        if not legacy_game_profile:
+            raise CaseBundleError(
+                "spatial_fidelity_ontology belongs to the retired non-game "
+                "workflow; canonical L2 accepts only specification_contract claims"
+            )
+    functional_semantic_config = loaded.get("functional_semantic_config")
+    if functional_semantic_config is not None and not isinstance(
+        functional_semantic_config, dict
+    ):
+        raise CaseBundleError("functional_semantic_config must be a JSON/YAML object")
+    scene_quality_config = loaded.get("scene_quality_config")
+    if scene_quality_config is not None and not isinstance(scene_quality_config, dict):
+        raise CaseBundleError("scene_quality_config must be a JSON/YAML object")
+    object_grouping_report = loaded.get("object_grouping_report")
+    if object_grouping_report is not None and not isinstance(
+        object_grouping_report, (dict, list)
+    ):
+        raise CaseBundleError("object_grouping_report must be a JSON object or list")
+    asset_policy = loaded.get("asset_policy")
+    if asset_policy is not None and not isinstance(asset_policy, dict):
+        raise CaseBundleError("asset_policy must be a JSON object")
+    authorized_deviations = loaded.get("authorized_deviations")
+    if authorized_deviations is not None and not isinstance(
+        authorized_deviations, list
+    ):
+        raise CaseBundleError("authorized_deviations must be a JSON list")
+    visual_style_spec = loaded.get("visual_style_spec")
+    if visual_style_spec is not None:
+        try:
+            validate_visual_style_spec(visual_style_spec, require_trusted_source=True)
+        except VisualStyleSpecError as exc:
+            raise CaseBundleError(str(exc)) from exc
+    if (
+        legacy_game_profile
+        and granularity == "coarse_grained"
+        and float(evaluation_profile["weights"]["spatial_fidelity"]) > 0.0
+    ):
         if not isinstance(spatial_fidelity_ontology, dict) or not spatial_fidelity_ontology:
             raise CaseBundleError(
                 "coarse-grained cases with active spatial_fidelity require a non-empty, "
@@ -168,12 +298,27 @@ def load_case_bundle(path: str | Path) -> TrustedCaseBundle:
         raise CaseBundleError("case bundle evaluation must be a JSON object")
     enabled = evaluation.get("enabled_evaluators")
     expected_evaluators = {"oor", "oar", "generic_validity"}
-    if not isinstance(enabled, dict) or set(enabled) != expected_evaluators:
-        raise CaseBundleError(
-            f"evaluation.enabled_evaluators must contain exactly {sorted(expected_evaluators)}"
-        )
-    if any(not isinstance(value, bool) for value in enabled.values()):
-        raise CaseBundleError("evaluation.enabled_evaluators values must be boolean")
+    if legacy_game_profile:
+        workflow = "legacy_game_profile"
+        if not isinstance(enabled, dict) or set(enabled) != expected_evaluators:
+            raise CaseBundleError(
+                "legacy Game evaluation.enabled_evaluators must contain exactly "
+                f"{sorted(expected_evaluators)}"
+            )
+        if any(not isinstance(value, bool) for value in enabled.values()):
+            raise CaseBundleError("evaluation.enabled_evaluators values must be boolean")
+    else:
+        workflow = str(evaluation.get("workflow") or "")
+        if workflow != "canonical_l0_l4":
+            raise CaseBundleError(
+                "canonical case bundles require evaluation.workflow='canonical_l0_l4'"
+            )
+        if enabled is not None:
+            raise CaseBundleError(
+                "canonical case bundles must not declare enabled_evaluators; "
+                "the frozen canonical profile and specification contract own routing"
+            )
+        enabled = {}
     p0b_official_mode = evaluation.get("p0b_official_mode")
     if not isinstance(p0b_official_mode, bool):
         raise CaseBundleError("evaluation.p0b_official_mode must be boolean")
@@ -206,8 +351,17 @@ def load_case_bundle(path: str | Path) -> TrustedCaseBundle:
         evaluator_output_type=evaluator_output_type,
         scene_request=scene_request,
         reference_annotation=annotation,
+        specification_contract=specification_contract,
+        specification_activation_mode=activation_mode,
+        functional_semantic_config=functional_semantic_config,
+        scene_quality_config=scene_quality_config,
+        object_grouping_report=object_grouping_report,
+        asset_policy=asset_policy,
+        authorized_deviations=authorized_deviations,
         spatial_fidelity_ontology=spatial_fidelity_ontology,
+        visual_style_spec=visual_style_spec,
         evaluation_profile=evaluation_profile,
+        workflow=workflow,
         enabled_evaluators={str(key): bool(value) for key, value in enabled.items()},
         p0b_official_mode=p0b_official_mode,
         camera_evidence=camera_evidence,
@@ -224,6 +378,7 @@ def evaluate_submission(
     out_dir: str | Path,
     renderer: Any | None = None,
     vlm_judge: Any | None = None,
+    camera_selector: Any | None = None,
     asset_root: str | Path | None = None,
     asset_csv: str | Path | None = None,
     official_mode: bool = True,
@@ -240,6 +395,17 @@ def evaluate_submission(
     destination = Path(out_dir).expanduser().resolve()
     destination.mkdir(parents=True, exist_ok=True)
     submitted_scene, submission_source = _load_submission_scene(scene)
+    generator_authored_geometry = (
+        bundle.evaluator_output_type == O1_OBJECT_STATE
+        and _declared_geometry_provenance(submitted_scene) == GENERATED_MESH_GEOMETRY
+    )
+    render_input_policy = (
+        O3_CATALOG_RENDER_POLICY
+        if bundle.evaluator_output_type == O3_SCENE_PACKAGE
+        else O1_GENERATED_MESH_RENDER_POLICY
+        if generator_authored_geometry
+        else O1_PROXY_RENDER_POLICY
+    )
     catalog_rows: dict[str, dict[str, Any]] | None = None
     if official_mode and bundle.evaluator_output_type == O3_SCENE_PACKAGE:
         if asset_root is None:
@@ -259,7 +425,11 @@ def evaluate_submission(
             catalog_rows=catalog_rows,
         )
     elif official_mode and bundle.evaluator_output_type == O1_OBJECT_STATE:
-        normalization_input = _o1_proxy_render_scene(submitted_scene)
+        normalization_input = (
+            _o1_generated_mesh_render_scene(submitted_scene)
+            if generator_authored_geometry
+            else _o1_proxy_render_scene(submitted_scene)
+        )
     else:
         normalization_input = submitted_scene
     normalized = normalize_scene(
@@ -280,13 +450,25 @@ def evaluate_submission(
     else:
         validate_generated_scene(normalized)
 
-    weights = bundle.evaluation_profile["weights"]
-    if official_mode and bundle.evaluator_output_type == O1_OBJECT_STATE:
-        if float(weights["visual_quality"]) != 0.0:
-            raise SubmissionEvaluationError(
-                "official O1 JSON-only cases must set visual_quality weight to 0; "
-                "proxy-render appearance is not generator visual quality"
-            )
+    legacy_game_profile = is_legacy_game_profile(bundle.evaluation_profile)
+    visual_signal_required = (
+        float(bundle.evaluation_profile["weights"]["visual_quality"]) > 0.0
+        if legacy_game_profile
+        else _canonical_l3_visual_signal_required(bundle)
+    )
+    if (
+        official_mode
+        and bundle.evaluator_output_type == O1_OBJECT_STATE
+        and not generator_authored_geometry
+        and visual_signal_required
+    ):
+        raise SubmissionEvaluationError(
+            "official O1 proxy-render cases cannot score active L3 Scene Quality; "
+            "proxy-render appearance is not generator-authored. Disable the L3 "
+            "metrics for this case or declare "
+            f"geometry_provenance={GENERATED_MESH_GEOMETRY!r} on every object when the "
+            "generator authored its own geometry"
+        )
 
     canonical_path = write_json(destination / "generated_scene.json", normalized)
     if official_mode and renderer is None:
@@ -302,13 +484,12 @@ def evaluate_submission(
     local_view_provider = None
     if renderer is not None:
         render_dir = destination / "renders"
-        render_input = (
-            _o1_proxy_render_scene(normalized)
-            if bundle.evaluator_output_type == O1_OBJECT_STATE
-            else _o3_fixed_catalog_scene(normalized, catalog_rows=catalog_rows)
-            if official_mode
-            else normalized
-        )
+        if bundle.evaluator_output_type == O1_OBJECT_STATE:
+            render_input = normalized if generator_authored_geometry else _o1_proxy_render_scene(normalized)
+        elif official_mode:
+            render_input = _o3_fixed_catalog_scene(normalized, catalog_rows=catalog_rows)
+        else:
+            render_input = normalized
         render_input_path = write_json(destination / "render_input_scene.json", render_input)
         render_manifest = renderer.render_scene(
             scene_path=render_input_path,
@@ -328,26 +509,73 @@ def evaluate_submission(
                 raise SubmissionEvaluationError(
                     "frozen camera evidence mode requires scene.blend from the trusted renderer"
                 )
-            local_view_provider = CameraEvidenceProvider(
-                renderer=renderer,
-                blend_file=blend_file,
-                out_dir=destination / "camera_evidence",
-                mode=camera_mode,
-                metric_modes=bundle.camera_evidence["metric_modes"],
-                selector=vlm_judge,
-                max_views=bundle.camera_evidence["max_views"],
-                max_steps=bundle.camera_evidence["max_steps"],
-                collision_overlay=bundle.camera_evidence["collision_overlay"],
-                collision_geometry=collision_geometry,
+            active_config = bundle.camera_evidence["active_fallback"]
+            requires_selector = bool(active_config["enabled"]) or (
+                camera_mode == "query_cov"
+                or "query_cov" in bundle.camera_evidence["metric_modes"].values()
             )
+            if requires_selector and not callable(
+                getattr(camera_selector, "select_camera_views", None)
+            ):
+                raise SubmissionEvaluationError(
+                    "VLM-active camera policy requires a separately configured "
+                    "camera selector; the final judge is not reused as selector"
+                )
+            if requires_selector and camera_selector is vlm_judge:
+                raise SubmissionEvaluationError(
+                    "camera selector and final metric judge must be separate runtime "
+                    "objects, even when they use the same model config"
+                )
+            if active_config["enabled"]:
+                local_view_provider = build_conditional_active_camera_evidence_provider(
+                    renderer=renderer,
+                    blend_file=blend_file,
+                    out_dir=destination / "camera_evidence",
+                    deterministic_mode=camera_mode,
+                    metric_modes=bundle.camera_evidence["metric_modes"],
+                    selector=camera_selector,
+                    max_views=bundle.camera_evidence["max_views"],
+                    max_steps=active_config["max_steps"],
+                    candidate_count=active_config["candidate_count"],
+                    collision_overlay=bundle.camera_evidence["collision_overlay"],
+                    collision_contour=bundle.camera_evidence["collision_contour"],
+                    collision_geometry=collision_geometry,
+                    fail_on_exhausted=active_config["fail_on_exhausted"],
+                    shadow_mode=active_config["shadow_mode"],
+                )
+            else:
+                local_view_provider = CameraEvidenceProvider(
+                    renderer=renderer,
+                    blend_file=blend_file,
+                    out_dir=destination / "camera_evidence",
+                    mode=camera_mode,
+                    metric_modes=bundle.camera_evidence["metric_modes"],
+                    selector=camera_selector,
+                    max_views=bundle.camera_evidence["max_views"],
+                    max_steps=bundle.camera_evidence["max_steps"],
+                    collision_overlay=bundle.camera_evidence["collision_overlay"],
+                    collision_contour=bundle.camera_evidence["collision_contour"],
+                    collision_geometry=collision_geometry,
+                )
+        if (
+            local_view_provider is None
+            and callable(
+                getattr(renderer, "provide_scene_quality_evidence", None)
+            )
+        ):
+            # Browser-game captures freeze their original-runtime local style
+            # bank during the one trusted capture. The renderer can expose
+            # those pixels as evidence, but it never supplies a metric verdict.
+            local_view_provider = renderer
 
     report_path = destination / "evaluation_report.json"
+    legacy_flags = bundle.enabled_evaluators if legacy_game_profile else {}
     report = run_evaluate(
         scene=normalized,
         out=report_path,
-        eval_oor=bundle.enabled_evaluators["oor"],
-        eval_oar=bundle.enabled_evaluators["oar"],
-        eval_generic_validity=bundle.enabled_evaluators["generic_validity"],
+        eval_oor=bool(legacy_flags.get("oor", False)),
+        eval_oar=bool(legacy_flags.get("oar", False)),
+        eval_generic_validity=bool(legacy_flags.get("generic_validity", False)),
         asset_csv=asset_csv,
         asset_root=asset_root,
         enrich_assets=bool(asset_csv or asset_root),
@@ -361,34 +589,69 @@ def evaluate_submission(
         p0b_official_mode=bool(official_mode and bundle.p0b_official_mode),
         p0b_local_view_provider=local_view_provider,
         metric_applicability=bundle.metric_applicability,
-        spatial_fidelity_ontology=bundle.spatial_fidelity_ontology_path,
+        spatial_fidelity_ontology=(
+            bundle.spatial_fidelity_ontology_path if legacy_game_profile else None
+        ),
+        visual_style_spec=bundle.visual_style_spec,
+        specification_contract=bundle.specification_contract,
+        functional_semantic_config=bundle.functional_semantic_config,
+        scene_quality_config=bundle.scene_quality_config,
+        object_grouping_report=bundle.object_grouping_report,
+        asset_policy=bundle.asset_policy,
+        authorized_deviations=bundle.authorized_deviations,
     )
     complete = report.get("benchmark_score_status") == "complete"
+    case_bundle_record = {
+        "case_id": bundle.case_id,
+        "bundle_version": CASE_BUNDLE_VERSION,
+        "manifest_sha256": bundle.manifest_sha256,
+        "artifact_records": bundle.artifact_records,
+        "evaluator_output_type": bundle.evaluator_output_type,
+        "asset_catalog_snapshot_id": bundle.catalog_snapshot_id,
+        "workflow": bundle.workflow,
+        "specification_contract_sha256": (
+            bundle.artifact_records.get("specification_contract", {}).get("sha256")
+        ),
+    }
+    evidence_provenance = {
+        "render_evidence": (
+            "benchmark_generated" if renderer is not None else "not_generated"
+        ),
+        "collision_geometry": (
+            "benchmark_generated"
+            if collision_geometry is not None
+            else "not_available"
+        ),
+        "render_input_policy": render_input_policy,
+        "submitted_evidence_accepted": False,
+        "specification_contract": (
+            "benchmark_hash_verified"
+            if bundle.artifact_records.get("specification_contract")
+            else "compiled_from_hash_verified_reference_annotation"
+            if bundle.specification_contract is not None
+            else "not_applicable"
+        ),
+        "visual_style_spec": (
+            "benchmark_hash_verified"
+            if bundle.visual_style_spec is not None
+            else "not_applicable"
+        ),
+    }
+    if legacy_game_profile:
+        case_bundle_record["spatial_fidelity_ontology_sha256"] = (
+            bundle.artifact_records.get("spatial_fidelity_ontology", {}).get("sha256")
+        )
+        evidence_provenance["spatial_fidelity_ontology"] = (
+            "benchmark_hash_verified"
+            if bundle.spatial_fidelity_ontology is not None
+            else "not_applicable"
+        )
     report.update(
         {
             "protocol_scope": "official_submission" if official_mode else "trusted_case_diagnostic",
             "official_submission": bool(official_mode and complete),
-            "case_bundle": {
-                "case_id": bundle.case_id,
-                "bundle_version": CASE_BUNDLE_VERSION,
-                "manifest_sha256": bundle.manifest_sha256,
-                "artifact_records": bundle.artifact_records,
-                "evaluator_output_type": bundle.evaluator_output_type,
-                "asset_catalog_snapshot_id": bundle.catalog_snapshot_id,
-                "spatial_fidelity_ontology_sha256": (
-                    bundle.artifact_records.get("spatial_fidelity_ontology", {}).get("sha256")
-                ),
-            },
-            "evidence_provenance": {
-                "render_evidence": "benchmark_generated" if renderer is not None else "not_generated",
-                "collision_geometry": "benchmark_generated" if collision_geometry is not None else "not_available",
-                "submitted_evidence_accepted": False,
-                "spatial_fidelity_ontology": (
-                    "benchmark_hash_verified"
-                    if bundle.spatial_fidelity_ontology is not None
-                    else "not_applicable"
-                ),
-            },
+            "case_bundle": case_bundle_record,
+            "evidence_provenance": evidence_provenance,
         }
     )
     write_json(report_path, report)
@@ -405,28 +668,21 @@ def evaluate_submission(
             "canonical_sha256": _sha256(canonical_path),
             "evaluator_output_type": bundle.evaluator_output_type,
             "normalization_policy": (
-                "trusted_bbox_proxy_projection"
-                if official_mode and bundle.evaluator_output_type == O1_OBJECT_STATE
-                else "fixed_catalog_asset_key_projection"
-                if official_mode
-                else "diagnostic_passthrough"
+                render_input_policy if official_mode else "diagnostic_passthrough"
             ),
         },
         "case_bundle": {
             "manifest_path": bundle.manifest_path.as_posix(),
             "manifest_sha256": bundle.manifest_sha256,
             "artifact_records": bundle.artifact_records,
-            "spatial_fidelity_ontology_sha256": (
-                bundle.artifact_records.get("spatial_fidelity_ontology", {}).get("sha256")
+            "workflow": bundle.workflow,
+            "specification_contract_sha256": (
+                bundle.artifact_records.get("specification_contract", {}).get("sha256")
             ),
         },
         "rendering": {
             "performed": renderer is not None,
-            "input_policy": (
-                "trusted_bbox_proxy_projection"
-                if bundle.evaluator_output_type == O1_OBJECT_STATE
-                else "validated_fixed_catalog_scene_package"
-            ),
+            "input_policy": render_input_policy,
             "input_path": (
                 (destination / "render_input_scene.json").as_posix()
                 if render_manifest is not None
@@ -438,11 +694,20 @@ def evaluate_submission(
                 else None
             ),
             "overview_views": render_paths,
+            "camera_evidence_policy": (
+                deepcopy(getattr(local_view_provider, "policy_config", None))
+                if local_view_provider is not None
+                else None
+            ),
         },
         "evaluation_report": report_path.as_posix(),
         "benchmark_score": report.get("benchmark_score"),
         "benchmark_score_status": report.get("benchmark_score_status"),
     }
+    if legacy_game_profile:
+        manifest["case_bundle"]["spatial_fidelity_ontology_sha256"] = (
+            bundle.artifact_records.get("spatial_fidelity_ontology", {}).get("sha256")
+        )
     manifest_path = write_json(destination / "submission_run_manifest.json", manifest)
     manifest["manifest_path"] = manifest_path.as_posix()
     if official_mode and not complete:
@@ -471,12 +736,33 @@ def main() -> None:
     parser.add_argument("--cycles-samples", type=int, default=16)
     parser.add_argument("--cycles-denoising", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--vlm-judge-config", default=None)
+    parser.add_argument(
+        "--camera-selector-config",
+        default=None,
+        help=(
+            "Independent OpenAI-compatible camera-selector config. Required by "
+            "query_cov or active_fallback; never reused as the metric judge."
+        ),
+    )
     parser.add_argument("--diagnostic", action="store_true")
     args = parser.parse_args()
 
     bundle = load_case_bundle(args.case_bundle)
     judge_config = read_json(args.vlm_judge_config) if args.vlm_judge_config else None
+    selector_config = (
+        read_json(args.camera_selector_config)
+        if args.camera_selector_config
+        else None
+    )
+    if selector_config is not None and not isinstance(selector_config, dict):
+        parser.error("--camera-selector-config must point to a JSON object")
+    _reject_literal_api_key(selector_config, "camera selector config")
     judge = build_openai_compatible_vlm_judge(judge_config) if judge_config else None
+    selector = (
+        build_openai_compatible_vlm_judge(selector_config)
+        if selector_config
+        else None
+    )
     renderer = (
         BlenderRenderer(
             blender_bin=args.blender_bin,
@@ -498,6 +784,7 @@ def main() -> None:
         out_dir=args.out_dir,
         renderer=renderer,
         vlm_judge=judge,
+        camera_selector=selector,
         asset_root=args.asset_root,
         asset_csv=args.asset_csv,
         official_mode=not args.diagnostic,
@@ -543,6 +830,14 @@ def _validate_camera_evidence(value: Any) -> dict[str, Any]:
             "max_views": 2,
             "max_steps": 0,
             "collision_overlay": True,
+            "collision_contour": True,
+            "active_fallback": {
+                "enabled": False,
+                "max_steps": 1,
+                "candidate_count": 5,
+                "fail_on_exhausted": True,
+                "shadow_mode": True,
+            },
         }
     if not isinstance(value, dict):
         raise CaseBundleError("evaluation.camera_evidence must be a JSON object")
@@ -553,18 +848,79 @@ def _validate_camera_evidence(value: Any) -> dict[str, Any]:
     max_views = int(value.get("max_views", 2))
     max_steps = int(value.get("max_steps", 0))
     collision_overlay = value.get("collision_overlay", True)
+    collision_contour = value.get("collision_contour", collision_overlay)
+    active_raw = value.get("active_fallback", {})
+    if not isinstance(active_raw, dict):
+        raise CaseBundleError(
+            "evaluation.camera_evidence.active_fallback must be a JSON object"
+        )
+    active_enabled = active_raw.get("enabled", False)
+    active_max_steps = int(active_raw.get("max_steps", 1))
+    active_candidate_count = int(active_raw.get("candidate_count", 5))
+    fail_on_exhausted = active_raw.get("fail_on_exhausted", True)
+    shadow_mode = active_raw.get("shadow_mode", True)
     if not 1 <= max_views <= 4:
         raise CaseBundleError("evaluation.camera_evidence.max_views must be between 1 and 4")
     if not 0 <= max_steps <= 3:
         raise CaseBundleError("evaluation.camera_evidence.max_steps must be between 0 and 3")
     if not isinstance(collision_overlay, bool):
         raise CaseBundleError("evaluation.camera_evidence.collision_overlay must be boolean")
+    if not isinstance(collision_contour, bool):
+        raise CaseBundleError("evaluation.camera_evidence.collision_contour must be boolean")
+    if collision_contour and not collision_overlay:
+        raise CaseBundleError(
+            "evaluation.camera_evidence.collision_contour requires collision_overlay=true"
+        )
+    if not isinstance(active_enabled, bool):
+        raise CaseBundleError(
+            "evaluation.camera_evidence.active_fallback.enabled must be boolean"
+        )
+    if not 0 <= active_max_steps <= 3:
+        raise CaseBundleError(
+            "evaluation.camera_evidence.active_fallback.max_steps must be between 0 and 3"
+        )
+    if not 1 <= active_candidate_count <= 8:
+        raise CaseBundleError(
+            "evaluation.camera_evidence.active_fallback.candidate_count must be "
+            "between 1 and 8"
+        )
+    if active_enabled and active_candidate_count < max_views:
+        raise CaseBundleError(
+            "evaluation.camera_evidence.active_fallback.candidate_count must be "
+            "at least evaluation.camera_evidence.max_views"
+        )
+    if not isinstance(fail_on_exhausted, bool):
+        raise CaseBundleError(
+            "evaluation.camera_evidence.active_fallback.fail_on_exhausted must be boolean"
+        )
+    if not isinstance(shadow_mode, bool):
+        raise CaseBundleError(
+            "evaluation.camera_evidence.active_fallback.shadow_mode must be boolean"
+        )
+    if active_enabled and mode is None:
+        raise CaseBundleError(
+            "active camera fallback requires an active deterministic camera mode"
+        )
+    if active_enabled and (
+        mode == "query_cov" or "query_cov" in metric_modes.values()
+    ):
+        raise CaseBundleError(
+            "active camera fallback cannot wrap query_cov; its base policy must be deterministic"
+        )
     return {
         "mode": mode,
         "metric_modes": metric_modes,
         "max_views": max_views,
         "max_steps": max_steps,
         "collision_overlay": collision_overlay,
+        "collision_contour": collision_contour,
+        "active_fallback": {
+            "enabled": active_enabled,
+            "max_steps": active_max_steps,
+            "candidate_count": active_candidate_count,
+            "fail_on_exhausted": fail_on_exhausted,
+            "shadow_mode": shadow_mode,
+        },
     }
 
 
@@ -579,6 +935,63 @@ def _load_submission_scene(value: dict[str, Any] | str | Path) -> tuple[dict[str
     if not isinstance(payload, dict):
         raise ValueError("submitted scene must be a JSON object")
     return payload, {"type": "json_file", "path": path.as_posix(), "sha256": _sha256(path)}
+
+
+def _declared_geometry_provenance(scene: dict[str, Any]) -> str | None:
+    """Return the provenance every object declares, or None when not unanimous."""
+
+    objects = [obj for obj in scene.get("objects", []) if isinstance(obj, dict)]
+    if not objects:
+        return None
+    declared = {str(obj.get("geometry_provenance") or "") for obj in objects}
+    if len(declared) != 1:
+        return None
+    return declared.pop() or None
+
+
+def _canonical_l3_visual_signal_required(bundle: TrustedCaseBundle) -> bool:
+    """Whether this case actually scores an appearance-dependent L3 metric.
+
+    Profile enablement alone is insufficient. Asset policy controls
+    applicability inside the same canonical workflow, and a case-level Scene
+    Quality config may disable a metric. ``pending`` remains unresolved later;
+    it is not mislabeled here as a proxy-render incompatibility.
+    """
+
+    config = resolve_scene_quality_config(
+        bundle.scene_quality_config,
+        profile=bundle.evaluation_profile,
+    )
+    if not bool(config.get("enabled")):
+        return False
+    applicability = scene_quality_applicability(
+        resolve_asset_policy(bundle.asset_policy)
+    )
+    return any(
+        bool(metric.get("enabled"))
+        and float(metric.get("weight") or 0.0) > 0.0
+        and applicability.get(metric_name, {}).get("applicability") == "relevant"
+        for metric_name, metric in config["metrics"].items()
+    )
+
+
+def _o1_generated_mesh_render_scene(scene: dict[str, Any]) -> dict[str, Any]:
+    """Keep generator-authored geometry while dropping submitter asset paths.
+
+    Asset references are still discarded because the runner never dereferences
+    submitter-controlled mesh or metadata URIs. The geometry itself is produced
+    inside the runner when it executes the submission, so appearance remains
+    benchmark-generated evidence.
+    """
+
+    projected = deepcopy(scene)
+    for obj in projected.get("objects", []):
+        if not isinstance(obj, dict):
+            continue
+        obj.pop("jid", None)
+        obj.pop("asset_ref", None)
+        obj["geometry_provenance"] = GENERATED_MESH_GEOMETRY
+    return projected
 
 
 def _o1_proxy_render_scene(scene: dict[str, Any]) -> dict[str, Any]:

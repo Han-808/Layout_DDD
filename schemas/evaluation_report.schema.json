@@ -2,64 +2,1027 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://example.org/layout-ddd/evaluation_report.schema.json",
   "title": "SceneHarnessEvaluationReport",
-  "type": "object",
-  "required": [
-    "scene_id",
-    "request_id",
-    "evaluator_version",
-    "protocol_scope",
-    "official_submission",
-    "prompt_granularity",
-    "evaluation_mode",
-    "benchmark_score",
-    "benchmark_score_status",
-    "category_reports",
-    "coverage",
-    "reports",
-    "notes"
+  "description": "Version-discriminated wire contract. Ordinary scenes use the strict canonical L0-L4 v2 report; the historical v1 shape is accepted only for the frozen Game compatibility profile.",
+  "oneOf": [
+    {"$ref": "#/$defs/canonicalReportV2"},
+    {"$ref": "#/$defs/legacyGameReportV1"}
   ],
-  "additionalProperties": true,
-  "allOf": [
-    {
-      "if": {
-        "properties": {"prompt_granularity": {"const": "fine_grained"}},
-        "required": ["prompt_granularity"]
+  "$defs": {
+    "score": {
+      "type": ["number", "null"],
+      "minimum": 0,
+      "maximum": 1
+    },
+    "canonicalLayerName": {
+      "enum": [
+        "l0_structural_validity",
+        "l1_physical_plausibility",
+        "l2_specification_fidelity",
+        "l3_scene_quality",
+        "l4_downstream_task_functionality"
+      ]
+    },
+    "canonicalScoringLayerName": {
+      "enum": [
+        "l1_physical_plausibility",
+        "l2_specification_fidelity",
+        "l3_scene_quality",
+        "l4_downstream_task_functionality"
+      ]
+    },
+    "canonicalReportV2": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "report_schema_version",
+        "scene_id",
+        "request_id",
+        "evaluator_version",
+        "profile_version",
+        "workflow",
+        "protocol_scope",
+        "official_submission",
+        "prompt_granularity",
+        "prompt_granularity_role",
+        "evaluation_status",
+        "benchmark_score",
+        "benchmark_score_status",
+        "evaluation_plan",
+        "layer_reports",
+        "category_reports",
+        "coverage",
+        "reports",
+        "evaluation_config",
+        "notes"
+      ],
+      "properties": {
+        "report_schema_version": {"const": "scene_evaluation_report_v2"},
+        "scene_id": {"type": ["string", "null"]},
+        "request_id": {"type": ["string", "null"]},
+        "evaluator_version": {"const": "scene_harness_evaluator_v2"},
+        "profile_version": {"const": "canonical_scene_evaluation_v1"},
+        "workflow": {"const": "canonical_l0_l4"},
+        "protocol_scope": {
+          "enum": [
+            "diagnostic_evaluation_api",
+            "trusted_case_diagnostic",
+            "official_submission"
+          ]
+        },
+        "official_submission": {"type": "boolean"},
+        "prompt_granularity": {
+          "enum": ["fine_grained", "coarse_grained"]
+        },
+        "prompt_granularity_role": {"const": "metadata_only"},
+        "evaluation_status": {
+          "enum": ["complete", "incomplete"]
+        },
+        "benchmark_score": {"$ref": "#/$defs/score"},
+        "benchmark_score_status": {
+          "enum": ["complete", "insufficient_metric_coverage"]
+        },
+        "evaluation_plan": {
+          "$ref": "#/$defs/canonicalEvaluationPlan"
+        },
+        "layer_reports": {
+          "$ref": "#/$defs/canonicalLayerMap"
+        },
+        "category_reports": {
+          "$ref": "#/$defs/canonicalLayerMap"
+        },
+        "coverage": {
+          "$ref": "#/$defs/canonicalScoreCoverage"
+        },
+        "reports": {
+          "$ref": "#/$defs/canonicalModuleReports"
+        },
+        "evaluation_config": {
+          "$ref": "#/$defs/canonicalEvaluationConfig"
+        },
+        "case_bundle": {
+          "$ref": "#/$defs/caseBundleProvenance"
+        },
+        "evidence_provenance": {
+          "$ref": "#/$defs/evidenceProvenance"
+        },
+        "notes": {
+          "type": "array",
+          "items": {"type": "string"}
+        }
       },
-      "then": {
-        "properties": {
-          "evaluation_mode": {"const": "fine_grained_mode"},
-          "category_reports": {"required": ["prompt_fidelity"]}
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "protocol_scope": {
+                "enum": [
+                  "trusted_case_diagnostic",
+                  "official_submission"
+                ]
+              }
+            },
+            "required": ["protocol_scope"]
+          },
+          "then": {
+            "required": ["case_bundle", "evidence_provenance"]
+          }
+        }
+      ]
+    },
+    "canonicalLayerMap": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "l0_structural_validity",
+        "l1_physical_plausibility",
+        "l2_specification_fidelity",
+        "l3_scene_quality",
+        "l4_downstream_task_functionality"
+      ],
+      "properties": {
+        "l0_structural_validity": {
+          "$ref": "#/$defs/l0Report"
+        },
+        "l1_physical_plausibility": {
+          "$ref": "#/$defs/l1Report"
+        },
+        "l2_specification_fidelity": {
+          "$ref": "#/$defs/l2Report"
+        },
+        "l3_scene_quality": {
+          "$ref": "#/$defs/l3Report"
+        },
+        "l4_downstream_task_functionality": {
+          "$ref": "#/$defs/l4Report"
         }
       }
     },
-    {
-      "if": {
-        "properties": {"prompt_granularity": {"const": "coarse_grained"}},
-        "required": ["prompt_granularity"]
-      },
-      "then": {
-        "properties": {
-          "evaluation_mode": {"const": "coarse_grained_mode"},
-          "category_reports": {"required": ["spatial_fidelity"]}
+    "l0Report": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "layer",
+        "status",
+        "score",
+        "affects_score",
+        "checks",
+        "reason"
+      ],
+      "properties": {
+        "layer": {"const": "l0_structural_validity"},
+        "status": {
+          "enum": ["passed", "failed", "incomplete"]
+        },
+        "score": {"type": "null"},
+        "affects_score": {"const": false},
+        "checks": {
+          "type": "array",
+          "items": {"type": "string"},
+          "minItems": 1
+        },
+        "reason": {"type": ["string", "null"]}
+      }
+    },
+    "l1Report": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "layer",
+        "category",
+        "status",
+        "score",
+        "partial_score",
+        "affects_score",
+        "metrics",
+        "active_metrics",
+        "resolved_metrics",
+        "active_metric_signature",
+        "coverage",
+        "backend_report"
+      ],
+      "properties": {
+        "layer": {"const": "l1_physical_plausibility"},
+        "category": {"const": "physical_plausibility"},
+        "status": {
+          "enum": ["evaluated", "incomplete", "not_applicable"]
+        },
+        "score": {"$ref": "#/$defs/score"},
+        "partial_score": {"$ref": "#/$defs/score"},
+        "affects_score": {"type": "boolean"},
+        "metrics": {"type": "object"},
+        "active_metrics": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "collision",
+              "oob",
+              "support",
+              "navigability",
+              "accessibility"
+            ]
+          },
+          "uniqueItems": true
+        },
+        "resolved_metrics": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "collision",
+              "oob",
+              "support",
+              "navigability",
+              "accessibility"
+            ]
+          },
+          "uniqueItems": true
+        },
+        "active_metric_signature": {"type": "string"},
+        "coverage": {
+          "$ref": "#/$defs/l1Coverage"
+        },
+        "backend_report": {"type": "object"}
+      }
+    },
+    "l1Coverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "active_metric_count",
+        "unresolved_metrics",
+        "disabled_metrics",
+        "complete"
+      ],
+      "properties": {
+        "active_metric_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "unresolved_metrics": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "collision",
+              "oob",
+              "support",
+              "navigability",
+              "accessibility"
+            ]
+          },
+          "uniqueItems": true
+        },
+        "disabled_metrics": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "collision",
+              "oob",
+              "support",
+              "navigability",
+              "accessibility"
+            ]
+          },
+          "uniqueItems": true
+        },
+        "complete": {"type": "boolean"}
+      }
+    },
+    "l2Report": {
+      "allOf": [
+        {"$ref": "#/$defs/canonicalMetricLayerReport"},
+        {
+          "properties": {
+            "layer": {"const": "l2_specification_fidelity"},
+            "category": {"const": "specification_fidelity"},
+            "metrics": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "oor": {"type": "object"},
+                "oar": {"type": "object"},
+                "functional_semantic_fidelity": {"type": "object"}
+              }
+            }
+          }
+        }
+      ]
+    },
+    "l3Report": {
+      "allOf": [
+        {"$ref": "#/$defs/canonicalMetricLayerReport"},
+        {
+          "properties": {
+            "layer": {"const": "l3_scene_quality"},
+            "category": {"const": "scene_quality"},
+            "metrics": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "scale_consistency": {"type": "object"},
+                "object_pairing_consistency": {"type": "object"},
+                "style_consistency": {"type": "object"}
+              }
+            }
+          }
+        }
+      ]
+    },
+    "canonicalMetricLayerReport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "layer",
+        "category",
+        "status",
+        "score",
+        "partial_score",
+        "affects_score",
+        "metrics",
+        "active_metrics",
+        "resolved_metrics",
+        "active_metric_signature",
+        "coverage",
+        "report"
+      ],
+      "properties": {
+        "layer": {"$ref": "#/$defs/canonicalScoringLayerName"},
+        "category": {
+          "enum": ["specification_fidelity", "scene_quality"]
+        },
+        "status": {
+          "enum": ["evaluated", "incomplete", "not_applicable"]
+        },
+        "score": {"$ref": "#/$defs/score"},
+        "partial_score": {"$ref": "#/$defs/score"},
+        "affects_score": {"type": "boolean"},
+        "metrics": {"type": "object"},
+        "active_metrics": {
+          "type": "array",
+          "items": {"type": "string"},
+          "uniqueItems": true
+        },
+        "resolved_metrics": {
+          "type": "array",
+          "items": {"type": "string"},
+          "uniqueItems": true
+        },
+        "active_metric_signature": {"type": "string"},
+        "coverage": {"type": "object"},
+        "report": {"type": "object"}
+      }
+    },
+    "l4Report": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "layer",
+        "status",
+        "score",
+        "affects_score",
+        "reason",
+        "metrics"
+      ],
+      "properties": {
+        "layer": {
+          "const": "l4_downstream_task_functionality"
+        },
+        "status": {
+          "enum": ["not_implemented", "disabled", "not_applicable"]
+        },
+        "score": {"type": "null"},
+        "affects_score": {"const": false},
+        "reason": {"type": ["string", "null"]},
+        "metrics": {
+          "type": "object",
+          "maxProperties": 0
         }
       }
-    }
-  ],
-  "properties": {
-    "scene_id": {"type": ["string", "null"]},
-    "request_id": {"type": ["string", "null"]},
-    "evaluator_version": {"const": "scene_harness_evaluator_v1"},
-    "protocol_scope": {
-      "enum": ["diagnostic_evaluation_api", "trusted_case_diagnostic", "official_submission"]
     },
-    "official_submission": {"type": "boolean"},
-    "prompt_granularity": {"enum": ["fine_grained", "coarse_grained"]},
-    "evaluation_mode": {"enum": ["fine_grained_mode", "coarse_grained_mode"]},
-    "benchmark_score": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
-    "benchmark_score_status": {
-      "enum": ["complete", "insufficient_metric_coverage"]
+    "canonicalScoreCoverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "active_layers",
+        "covered_layers",
+        "active_layer_signature",
+        "active_metrics_by_layer",
+        "resolved_metrics_by_layer",
+        "active_metric_signatures",
+        "per_layer_active_metric_signature",
+        "layer_weight_signature",
+        "comparability_signature",
+        "covered_weight",
+        "required_weight",
+        "complete",
+        "aggregation_denominator",
+        "case_comparability"
+      ],
+      "properties": {
+        "active_layers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/canonicalScoringLayerName"
+          },
+          "uniqueItems": true
+        },
+        "covered_layers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/canonicalScoringLayerName"
+          },
+          "uniqueItems": true
+        },
+        "active_layer_signature": {"type": "string"},
+        "active_metrics_by_layer": {
+          "$ref": "#/$defs/canonicalMetricsByLayer"
+        },
+        "resolved_metrics_by_layer": {
+          "$ref": "#/$defs/canonicalMetricsByLayer"
+        },
+        "active_metric_signatures": {
+          "$ref": "#/$defs/canonicalMetricSignaturesByLayer"
+        },
+        "per_layer_active_metric_signature": {"type": "string"},
+        "layer_weight_signature": {"type": "string"},
+        "comparability_signature": {"type": "string"},
+        "covered_weight": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "required_weight": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "complete": {"type": "boolean"},
+        "aggregation_denominator": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "case_comparability": {
+          "const": "compare_only_with_same_profile_version_layer_weight_signature_and_per_layer_active_metric_signatures"
+        }
+      }
     },
-    "category_reports": {
+    "canonicalMetricsByLayer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "l1_physical_plausibility",
+        "l2_specification_fidelity",
+        "l3_scene_quality",
+        "l4_downstream_task_functionality"
+      ],
+      "properties": {
+        "l1_physical_plausibility": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "collision",
+              "oob",
+              "support",
+              "navigability",
+              "accessibility"
+            ]
+          },
+          "uniqueItems": true
+        },
+        "l2_specification_fidelity": {
+          "type": "array",
+          "items": {
+            "enum": ["oor", "oar", "functional_semantic_fidelity"]
+          },
+          "uniqueItems": true
+        },
+        "l3_scene_quality": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "scale_consistency",
+              "object_pairing_consistency",
+              "style_consistency"
+            ]
+          },
+          "uniqueItems": true
+        },
+        "l4_downstream_task_functionality": {
+          "type": "array",
+          "maxItems": 0
+        }
+      }
+    },
+    "canonicalMetricSignaturesByLayer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "l1_physical_plausibility",
+        "l2_specification_fidelity",
+        "l3_scene_quality",
+        "l4_downstream_task_functionality"
+      ],
+      "properties": {
+        "l1_physical_plausibility": {"type": "string"},
+        "l2_specification_fidelity": {"type": "string"},
+        "l3_scene_quality": {"type": "string"},
+        "l4_downstream_task_functionality": {"const": "none"}
+      }
+    },
+    "canonicalEvaluationPlan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "profile_version",
+        "profile_status",
+        "workflow",
+        "prompt_granularity",
+        "prompt_granularity_role",
+        "activation_source",
+        "hierarchy",
+        "layer_weights",
+        "layers",
+        "prompt_granularity_resolution_source"
+      ],
+      "properties": {
+        "profile_version": {
+          "const": "canonical_scene_evaluation_v1"
+        },
+        "profile_status": {"const": "frozen"},
+        "workflow": {"const": "canonical_l0_l4"},
+        "prompt_granularity": {
+          "enum": ["fine_grained", "coarse_grained"]
+        },
+        "prompt_granularity_role": {"const": "metadata_only"},
+        "activation_source": {
+          "const": "canonical_profile_plus_specification_contract"
+        },
+        "hierarchy": {"type": "object"},
+        "layer_weights": {
+          "$ref": "#/$defs/canonicalLayerWeights"
+        },
+        "layers": {
+          "$ref": "#/$defs/canonicalPlanLayers"
+        },
+        "prompt_granularity_resolution_source": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "canonicalLayerWeights": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "l1_physical_plausibility",
+        "l2_specification_fidelity",
+        "l3_scene_quality",
+        "l4_downstream_task_functionality"
+      ],
+      "properties": {
+        "l1_physical_plausibility": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "l2_specification_fidelity": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "l3_scene_quality": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "l4_downstream_task_functionality": {"const": 0.0}
+      }
+    },
+    "canonicalPlanLayers": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "l0_structural_validity",
+        "l1_physical_plausibility",
+        "l2_specification_fidelity",
+        "l3_scene_quality",
+        "l4_downstream_task_functionality"
+      ],
+      "properties": {
+        "l0_structural_validity": {"type": "object"},
+        "l1_physical_plausibility": {"type": "object"},
+        "l2_specification_fidelity": {"type": "object"},
+        "l3_scene_quality": {"type": "object"},
+        "l4_downstream_task_functionality": {"type": "object"}
+      }
+    },
+    "canonicalModuleReports": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "generic_validity",
+        "object_grouping",
+        "functional_semantic_fidelity",
+        "specification_fidelity",
+        "scene_quality"
+      ],
+      "properties": {
+        "generic_validity": {"type": "object"},
+        "object_mapping": {"type": "object"},
+        "object_alignment": {"type": "object"},
+        "oor": {"type": "object"},
+        "oar": {"type": "object"},
+        "object_grouping": {"type": "object"},
+        "functional_semantic_fidelity": {"type": "object"},
+        "specification_fidelity": {"type": "object"},
+        "scene_quality": {"type": "object"}
+      }
+    },
+    "canonicalEvaluationConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "prompt_granularity_resolution_source",
+        "asset_policy",
+        "authorized_deviations",
+        "metric_applicability",
+        "metric_config",
+        "specification_activation",
+        "object_grouping",
+        "visual_config_unchanged",
+        "deprecated_runtime_inputs"
+      ],
+      "properties": {
+        "prompt_granularity_resolution_source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "asset_policy": {
+          "type": ["object", "null"]
+        },
+        "authorized_deviations": {
+          "type": ["array", "null"]
+        },
+        "metric_applicability": {
+          "$ref": "#/$defs/canonicalMetricApplicability"
+        },
+        "metric_config": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["l1_physical_plausibility"],
+          "properties": {
+            "l1_physical_plausibility": {"type": "object"}
+          }
+        },
+        "specification_activation": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "source",
+            "contract_present",
+            "active_metrics",
+            "prompt_granularity_controls_activation"
+          ],
+          "properties": {
+            "source": {
+              "const": "benchmark_owned_specification_contract"
+            },
+            "contract_present": {"type": "boolean"},
+            "active_metrics": {
+              "type": "array",
+              "items": {
+                "enum": [
+                  "oor",
+                  "oar",
+                  "functional_semantic_fidelity"
+                ]
+              },
+              "uniqueItems": true
+            },
+            "prompt_granularity_controls_activation": {
+              "const": false
+            }
+          }
+        },
+        "object_grouping": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["policy", "source", "affects_score_directly"],
+          "properties": {
+            "policy": {
+              "const": "deterministic_metadata_geometry"
+            },
+            "source": {"type": "string"},
+            "affects_score_directly": {"const": false}
+          }
+        },
+        "visual_config_unchanged": {"const": true},
+        "deprecated_runtime_inputs": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "eval_oor",
+            "eval_oar",
+            "eval_generic_validity",
+            "support_enabled"
+          ],
+          "properties": {
+            "eval_oor": {"type": "string"},
+            "eval_oar": {"type": "string"},
+            "eval_generic_validity": {"type": "string"},
+            "support_enabled": {"type": "string"}
+          }
+        }
+      }
+    },
+    "canonicalMetricApplicability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "l1_physical_plausibility",
+        "l2_specification_fidelity",
+        "l3_scene_quality",
+        "l4_downstream_task_functionality"
+      ],
+      "properties": {
+        "l1_physical_plausibility": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "collision",
+            "oob",
+            "support",
+            "navigability",
+            "accessibility"
+          ],
+          "properties": {
+            "collision": {"type": "boolean"},
+            "oob": {"type": "boolean"},
+            "support": {"type": "boolean"},
+            "navigability": {"type": "boolean"},
+            "accessibility": {"type": "boolean"}
+          }
+        },
+        "l2_specification_fidelity": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "oor",
+            "oar",
+            "functional_semantic_fidelity"
+          ],
+          "properties": {
+            "oor": {"type": "boolean"},
+            "oar": {"type": "boolean"},
+            "functional_semantic_fidelity": {"type": "boolean"}
+          }
+        },
+        "l3_scene_quality": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "scale_consistency",
+            "object_pairing_consistency",
+            "style_consistency"
+          ],
+          "properties": {
+            "scale_consistency": {"type": "object"},
+            "object_pairing_consistency": {"type": "object"},
+            "style_consistency": {"type": "object"}
+          }
+        },
+        "l4_downstream_task_functionality": {
+          "type": "object",
+          "maxProperties": 0
+        }
+      }
+    },
+    "caseBundleProvenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "case_id",
+        "bundle_version",
+        "manifest_sha256",
+        "artifact_records",
+        "evaluator_output_type",
+        "asset_catalog_snapshot_id",
+        "workflow",
+        "specification_contract_sha256"
+      ],
+      "properties": {
+        "case_id": {"type": "string"},
+        "bundle_version": {"type": "string"},
+        "manifest_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{64}$"
+        },
+        "artifact_records": {"type": "object"},
+        "evaluator_output_type": {"type": "string"},
+        "asset_catalog_snapshot_id": {
+          "type": ["string", "null"]
+        },
+        "workflow": {
+          "const": "canonical_l0_l4"
+        },
+        "specification_contract_sha256": {
+          "type": ["string", "null"],
+          "pattern": "^[0-9a-fA-F]{64}$"
+        }
+      }
+    },
+    "evidenceProvenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "render_evidence",
+        "collision_geometry",
+        "render_input_policy",
+        "submitted_evidence_accepted",
+        "specification_contract",
+        "visual_style_spec"
+      ],
+      "properties": {
+        "render_evidence": {
+          "enum": ["benchmark_generated", "not_generated"]
+        },
+        "collision_geometry": {
+          "enum": ["benchmark_generated", "not_available"]
+        },
+        "render_input_policy": {"type": "string"},
+        "submitted_evidence_accepted": {"const": false},
+        "specification_contract": {
+          "enum": [
+            "benchmark_hash_verified",
+            "compiled_from_hash_verified_reference_annotation",
+            "not_applicable"
+          ]
+        },
+        "visual_style_spec": {
+          "enum": ["benchmark_hash_verified", "not_applicable"]
+        }
+      }
+    },
+    "legacyGameReportV1": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "scene_id",
+        "request_id",
+        "evaluator_version",
+        "protocol_scope",
+        "official_submission",
+        "prompt_granularity",
+        "evaluation_mode",
+        "benchmark_score",
+        "benchmark_score_status",
+        "evaluation_plan",
+        "category_reports",
+        "coverage",
+        "reports",
+        "notes"
+      ],
+      "properties": {
+        "report_schema_version": false,
+        "profile_version": false,
+        "layer_reports": false,
+        "scene_id": {"type": ["string", "null"]},
+        "request_id": {"type": ["string", "null"]},
+        "evaluator_version": {
+          "const": "scene_harness_evaluator_v1"
+        },
+        "protocol_scope": {
+          "enum": [
+            "diagnostic_evaluation_api",
+            "trusted_case_diagnostic",
+            "official_submission"
+          ]
+        },
+        "official_submission": {"type": "boolean"},
+        "prompt_granularity": {
+          "enum": ["fine_grained", "coarse_grained"]
+        },
+        "evaluation_mode": {
+          "enum": ["fine_grained_mode", "coarse_grained_mode"]
+        },
+        "benchmark_score": {"$ref": "#/$defs/score"},
+        "benchmark_score_status": {
+          "enum": ["complete", "insufficient_metric_coverage"]
+        },
+        "evaluation_plan": {
+          "$ref": "#/$defs/legacyGameEvaluationPlan"
+        },
+        "category_reports": {
+          "$ref": "#/$defs/legacyCategoryReports"
+        },
+        "coverage": {
+          "$ref": "#/$defs/legacyCoverage"
+        },
+        "reports": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "notes": {
+          "type": "array",
+          "items": {"type": "string"}
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "prompt_granularity": {"const": "fine_grained"}
+            },
+            "required": ["prompt_granularity"]
+          },
+          "then": {
+            "properties": {
+              "evaluation_mode": {"const": "fine_grained_mode"},
+              "category_reports": {
+                "required": ["prompt_fidelity"]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "prompt_granularity": {"const": "coarse_grained"}
+            },
+            "required": ["prompt_granularity"]
+          },
+          "then": {
+            "properties": {
+              "evaluation_mode": {"const": "coarse_grained_mode"},
+              "category_reports": {
+                "required": ["spatial_fidelity"]
+              }
+            }
+          }
+        }
+      ]
+    },
+    "legacyGameEvaluationPlan": {
+      "type": "object",
+      "required": [
+        "profile_version",
+        "profile_status",
+        "prompt_granularity",
+        "evaluation_mode",
+        "gate",
+        "weights",
+        "categories"
+      ],
+      "properties": {
+        "profile_version": {
+          "const": "scene_evaluation_draft_v1"
+        },
+        "profile_status": {"const": "initial_not_frozen"},
+        "prompt_granularity": {
+          "enum": ["fine_grained", "coarse_grained"]
+        },
+        "evaluation_mode": {
+          "enum": ["fine_grained_mode", "coarse_grained_mode"]
+        },
+        "gate": {"type": "object"},
+        "weights": {
+          "$ref": "#/$defs/legacyGameWeights"
+        },
+        "categories": {"type": "object"}
+      }
+    },
+    "legacyGameWeights": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "prompt_fidelity",
+            "structural_validity",
+            "visual_quality"
+          ],
+          "properties": {
+            "prompt_fidelity": {"const": 0.0},
+            "structural_validity": {"const": 0.4},
+            "visual_quality": {"const": 0.6}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "spatial_fidelity",
+            "structural_validity",
+            "visual_quality"
+          ],
+          "properties": {
+            "spatial_fidelity": {"const": 0.0},
+            "structural_validity": {"const": 0.4},
+            "visual_quality": {"const": 0.6}
+          }
+        }
+      ]
+    },
+    "legacyCategoryReports": {
       "type": "object",
       "required": ["structural_validity", "visual_quality"],
       "additionalProperties": true,
@@ -72,36 +1035,35 @@
       "oneOf": [
         {
           "required": ["prompt_fidelity"],
-          "not": {"required": ["spatial_fidelity"]}
+          "not": {
+            "required": ["spatial_fidelity"]
+          }
         },
         {
           "required": ["spatial_fidelity"],
-          "not": {"required": ["prompt_fidelity"]}
+          "not": {
+            "required": ["prompt_fidelity"]
+          }
         }
       ]
     },
-    "coverage": {
+    "legacyCoverage": {
       "type": "object",
-      "required": ["covered_weight", "required_weight", "complete"],
+      "required": [
+        "covered_weight",
+        "required_weight",
+        "complete"
+      ],
       "additionalProperties": true,
       "properties": {
-        "covered_weight": {"type": "number", "minimum": 0, "maximum": 1},
+        "covered_weight": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
         "required_weight": {"const": 1},
         "complete": {"type": "boolean"}
       }
-    },
-    "reports": {
-      "type": "object",
-      "additionalProperties": true,
-      "properties": {
-        "generic_validity": {"type": "object"},
-        "oor": {"type": "object"},
-        "oar": {"type": "object"},
-        "object_mapping": {"type": "object"},
-        "object_alignment": {"type": "object"},
-        "spatial_fidelity": {"type": "object"}
-      }
-    },
-    "notes": {"type": "array", "items": {"type": "string"}}
+    }
   }
 }

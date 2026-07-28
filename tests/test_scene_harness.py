@@ -16,7 +16,7 @@ from benchmark.scene_io.validate import (
     validate_object_plan,
     validate_scene_request,
 )
-from benchmark.utils.io import read_json, write_json
+from benchmark.utils.io import load_yaml, read_json, write_json
 from evaluate import run_evaluate
 from generate import run_generate, run_generate_from_natural_language
 from scripts.run_scene_harness import run_scene_harness
@@ -429,6 +429,77 @@ def test_scene_harness_rejects_literal_api_key_in_programmatic_configs(
         run_scene_harness(**kwargs)
 
     assert secret not in str(captured.value)
+
+
+@pytest.mark.parametrize("granularity", ["fine_grained", "coarse_grained"])
+def test_scene_harness_uses_one_canonical_workflow_for_both_granularities(
+    tmp_path: Path,
+    granularity: str,
+) -> None:
+    manifest = run_scene_harness(
+        instruction="Create a bedroom.",
+        scene_type="bedroom",
+        prompt_granularity=granularity,
+        out_dir=tmp_path / granularity,
+    )
+
+    assert manifest["evaluation"]["gate"]["workflow"] == "canonical_l0_l4"
+    assert manifest["evaluation"]["gate"]["prompt_granularity_role"] == "metadata_only"
+    assert "evaluation_mode" not in manifest["evaluation"]["gate"]
+    assert manifest["prompt_granularity"] == {
+        "requested": granularity,
+        "resolved": granularity,
+        "role": "metadata_only",
+        "classifier_called": False,
+        "classification": None,
+    }
+
+
+def test_scene_harness_rejects_retired_non_game_spatial_ontology(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(ValueError, match="retired non-game workflow"):
+        run_scene_harness(
+            instruction="Create a bedroom.",
+            scene_type="bedroom",
+            spatial_fidelity_ontology={"categories": {}},
+            out_dir=tmp_path / "retired",
+        )
+
+
+def test_scene_harness_preserves_the_frozen_legacy_game_gate(tmp_path: Path) -> None:
+    profile = load_yaml(
+        ROOT / "configs" / "evaluation" / "metric_profile_game_v1.yaml"
+    )
+    manifest = run_scene_harness(
+        instruction="Run the frozen Game profile.",
+        scene_type="game",
+        prompt_granularity="fine_grained",
+        evaluation_profile=profile,
+        support_enabled=False,
+        out_dir=tmp_path / "legacy_game",
+    )
+
+    assert manifest["evaluation"]["gate"] == {
+        "source": "scene_request.prompt_granularity",
+        "prompt_granularity": "fine_grained",
+        "evaluation_mode": "fine_grained_mode",
+        "category_2": "prompt_fidelity",
+        "active_categories": [
+            "prompt_fidelity",
+            "structural_validity",
+            "visual_quality",
+        ],
+    }
+    assert manifest["evaluation"]["support_enabled"] is False
+    assert "canonical_configs" not in manifest["evaluation"]
+    assert manifest["prompt_granularity"] == {
+        "requested": "fine_grained",
+        "resolved": "fine_grained",
+        "evaluation_mode": "fine_grained_mode",
+        "classifier_called": False,
+        "classification": None,
+    }
 
 
 def test_scene_harness_resolves_prompt_room_once_for_generator_and_manifest(tmp_path: Path) -> None:

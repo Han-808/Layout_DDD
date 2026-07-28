@@ -307,7 +307,14 @@ def _containment(inner_vertices: np.ndarray, outer_mesh: dict[str, Any]) -> str 
         import trimesh  # type: ignore
 
         outer = trimesh.Trimesh(vertices=outer_mesh["vertices"], faces=outer_mesh["faces"], process=False)
-        if not outer.is_watertight or not outer.is_volume:
+        if not outer.is_watertight:
+            return "unknown"
+        # Exported closed meshes can be watertight while carrying inconsistent
+        # face winding.  Repair normals on this private trimesh copy before the
+        # volume/contains checks; never mutate the canonical mesh evidence.
+        if not outer.is_winding_consistent or not outer.is_volume:
+            outer.fix_normals(multibody=True)
+        if not outer.is_winding_consistent or not outer.is_volume:
             return "unknown"
         inside = outer.contains(inner_vertices)
         if inside.size == 0:
@@ -372,6 +379,11 @@ def _mesh_state(
     if intersects:
         return "surface_intersection"
     if not intersection_definitive:
+        return "unknown"
+    # Exact positive shell distance does not rule out one closed mesh being
+    # wholly contained inside another.  Preserve the conservative state until
+    # both directional containment checks are definitive.
+    if containment_a_in_b == "unknown" or containment_b_in_a == "unknown":
         return "unknown"
     if minimum_distance is None or not math.isfinite(float(minimum_distance)):
         return "unknown"

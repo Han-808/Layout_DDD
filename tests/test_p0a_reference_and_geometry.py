@@ -122,10 +122,9 @@ def test_converter_draft_is_not_official_reference(tmp_path) -> None:
         out=tmp_path / "report.json",
         reference_annotation=draft,
     )
-    alignment = report["reports"]["object_alignment"]
-    assert alignment["official_scoreable"] is False
-    assert alignment["metric_role"] == "alignment_only"
-    assert alignment["score"] is None
+    assert "object_mapping" not in report["reports"]
+    assert "object_alignment" not in report["reports"]
+    assert report["category_reports"]["l2_specification_fidelity"]["score"] is None
 
 
 def test_model_assisted_reference_requires_human_approval_and_preserves_claim_states() -> None:
@@ -642,9 +641,9 @@ def test_reference_annotation_request_id_mismatch_is_excluded(tmp_path) -> None:
         out=tmp_path / "report.json",
         reference_annotation=annotation,
     )
-    alignment = report["reports"]["object_alignment"]
-    assert alignment["official_scoreable"] is False
-    assert alignment["reason"] == "reference_annotation_request_id_mismatch"
+    assert "object_mapping" not in report["reports"]
+    assert "object_alignment" not in report["reports"]
+    assert report["category_reports"]["l2_specification_fidelity"]["score"] is None
 
 
 def test_direct_evaluator_rejects_cross_request_prompt_and_plan_context(tmp_path) -> None:
@@ -748,13 +747,13 @@ def test_public_generator_structure_never_routes_or_scores_relations(tmp_path) -
     )
 
     assert "object_mapping" not in report["reports"]
-    assert report["reports"]["oor"]["status"] == "no_checks_called"
-    assert report["reports"]["oor"]["num_checks_called"] == 0
-    fidelity = report["category_reports"]["prompt_fidelity"]
+    assert "object_alignment" not in report["reports"]
+    assert "oor" not in report["reports"]
+    fidelity = report["reports"]["specification_fidelity"]
     assert fidelity["status"] == "not_evaluable"
-    assert fidelity["reason"] == "confirmed_reference_annotation_required"
-    assert fidelity["public_generator_structure_available"] is True
-    assert fidelity["public_generator_structure_used_for_scoring"] is False
+    assert fidelity["reason"] == "missing_specification_contract"
+    assert fidelity["activation_source"] == "benchmark_owned_specification_contract"
+    assert fidelity["active_claim_families"] == []
 
 
 def test_harness_keeps_reference_annotation_private_and_uses_public_room_fallback(tmp_path) -> None:

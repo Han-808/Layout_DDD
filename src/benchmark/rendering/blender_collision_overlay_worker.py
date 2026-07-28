@@ -67,6 +67,9 @@ def main() -> None:
         "target_ids": [target.get("id") for target in targets],
         "legend": overlay_spec.get("legend"),
         "representation_level": overlay_spec.get("representation_level"),
+        "object_presentation": str(
+            overlay_spec.get("object_presentation") or "full_recolor"
+        ),
         "object_a_id": (overlay_spec.get("object_a") or {}).get("id"),
         "object_b_id": (overlay_spec.get("object_b") or {}).get("id"),
         "diagnostic_degradations": degradations,
@@ -100,10 +103,16 @@ def _apply_overlay(spec: dict) -> list[str]:
 
     degradations: list[str] = []
     scene = bpy.context.scene
-    try:
-        scene.display.shading.color_type = "OBJECT"
-    except Exception as exc:  # pragma: no cover - depends on Blender build
-        degradations.append(f"object_color_shading_unavailable: {type(exc).__name__}: {exc}")
+    object_presentation = str(spec.get("object_presentation") or "full_recolor")
+    if object_presentation not in {"full_recolor", "annotations_only"}:
+        raise ValueError(
+            "object_presentation must be 'full_recolor' or 'annotations_only'"
+        )
+    if object_presentation == "full_recolor":
+        try:
+            scene.display.shading.color_type = "OBJECT"
+        except Exception as exc:  # pragma: no cover - depends on Blender build
+            degradations.append(f"object_color_shading_unavailable: {type(exc).__name__}: {exc}")
 
     resolver = _CanonicalResolver()
     targets = _overlay_targets(spec)
@@ -114,12 +123,13 @@ def _apply_overlay(spec: dict) -> list[str]:
     }
     color_context = _rgba((spec.get("colors") or {}).get("context"), (0.34, 0.34, 0.38))
 
-    for obj in list(bpy.data.objects):
-        canonical = resolver.resolve(obj)
-        if canonical in target_colors:
-            _set_color(obj, target_colors[canonical])
-        elif obj.type == "MESH":
-            _set_color(obj, color_context)
+    if object_presentation == "full_recolor":
+        for obj in list(bpy.data.objects):
+            canonical = resolver.resolve(obj)
+            if canonical in target_colors:
+                _set_color(obj, target_colors[canonical])
+            elif obj.type == "MESH":
+                _set_color(obj, color_context)
 
     for target in targets:
         obb = target.get("obb") or {}
@@ -162,7 +172,8 @@ def _apply_overlay(spec: dict) -> list[str]:
     # The legend is delivered to the VLM as structured metadata (colors, IDs,
     # categories, representations); no large world-space legend text is drawn, so
     # it can never clip in the frame or contaminate mask-based visibility.
-    _apply_xray_targets(spec)
+    if object_presentation == "full_recolor":
+        _apply_xray_targets(spec)
     bpy.context.view_layer.update()
     return degradations
 
@@ -278,6 +289,54 @@ def _object_color_material():
     return material
 
 
+def _set_annotation_color(obj, color) -> None:
+    """Give an ephemeral annotation an explicit material color.
+
+    ``annotations_only`` intentionally leaves Workbench in ``MATERIAL`` color
+    mode so the underlying raw scene keeps its original appearance.  The
+    object-info material used by full recoloring therefore appears gray on
+    helper curves in that mode.  Annotation helpers use a small per-color
+    material instead; this colors only the wire/marker/plane and never mutates
+    a source-scene object's material.
+    """
+
+    try:
+        obj.color = color
+    except Exception:  # pragma: no cover
+        pass
+    data = getattr(obj, "data", None)
+    materials = getattr(data, "materials", None)
+    if materials is None:
+        return
+    try:
+        materials.clear()
+        materials.append(_annotation_material(color))
+    except Exception:  # pragma: no cover - linked/read-only Blender data
+        pass
+
+
+def _annotation_material(color):
+    rgba = tuple(float(component) for component in color)
+    name = "benchmark_focus_annotation_" + "_".join(
+        f"{max(0, min(255, int(round(component * 255.0)))):03d}"
+        for component in rgba
+    )
+    material = bpy.data.materials.get(name)
+    if material is not None:
+        return material
+    material = bpy.data.materials.new(name)
+    material.diffuse_color = rgba
+    material.use_nodes = True
+    nodes = material.node_tree.nodes
+    nodes.clear()
+    output = nodes.new("ShaderNodeOutputMaterial")
+    emission = nodes.new("ShaderNodeEmission")
+    emission.inputs["Color"].default_value = rgba
+    emission.inputs["Strength"].default_value = 1.0
+    material.node_tree.links.new(emission.outputs["Emission"], output.inputs["Surface"])
+    return material
+
+
 def _draw_wireframe(name: str, corners, edges, color) -> None:
     if not corners or not edges:
         return
@@ -296,7 +355,7 @@ def _draw_wireframe(name: str, corners, edges, color) -> None:
         spline.points[0].co = (*points[edge[0]], 1.0)
         spline.points[1].co = (*points[edge[1]], 1.0)
     obj = bpy.data.objects.new(name, curve)
-    _set_color(obj, color)
+    _set_annotation_color(obj, color)
     obj[CANONICAL_ID_PROPERTY] = name
     bpy.context.collection.objects.link(obj)
 
@@ -307,7 +366,7 @@ def _draw_marker(name: str, position, color) -> None:
     bpy.ops.mesh.primitive_uv_sphere_add(radius=0.04, location=tuple(float(v) for v in position))
     obj = bpy.context.object
     obj.name = name
-    _set_color(obj, color)
+    _set_annotation_color(obj, color)
     obj[CANONICAL_ID_PROPERTY] = name
 
 
@@ -326,7 +385,7 @@ def _draw_line(name: str, start, end, color) -> None:
     spline.points[0].co = (*start_point, 1.0)
     spline.points[1].co = (*end_point, 1.0)
     obj = bpy.data.objects.new(name, curve)
-    _set_color(obj, color)
+    _set_annotation_color(obj, color)
     obj[CANONICAL_ID_PROPERTY] = name
     bpy.context.collection.objects.link(obj)
 

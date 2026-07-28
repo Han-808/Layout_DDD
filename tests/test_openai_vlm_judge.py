@@ -39,9 +39,20 @@ def _request(image_path: Path) -> dict:
     }
 
 
+def _write_test_png(path: Path, *, private_text: str | None = None) -> None:
+    metadata = None
+    if private_text is not None:
+        metadata = PngImagePlugin.PngInfo()
+        metadata.add_text("private_source", private_text)
+    Image.new("RGBA", (4, 3), (12, 34, 56, 128)).save(
+        path,
+        pnginfo=metadata,
+    )
+
+
 def test_openai_compatible_vlm_judge_sends_images_and_structured_prior(tmp_path: Path) -> None:
     image_path = tmp_path / "standardized_top.png"
-    image_path.write_bytes(b"fake png")
+    _write_test_png(image_path, private_text="must-not-leave-process")
     model = FakeMultimodalModel(
         {"applicable": True, "score": 0.75, "confidence": 0.8, "summary": "plausible", "issues": [], "evidence": ["top view"]}
     )
@@ -54,14 +65,125 @@ def test_openai_compatible_vlm_judge_sends_images_and_structured_prior(tmp_path:
     assert "generic_validity" in content[0]["text"]
     assert content[1]["type"] == "image_url"
     assert content[1]["image_url"]["url"].startswith("data:image/png;base64,")
+    encoded = content[1]["image_url"]["url"].split(",", 1)[1]
+    with Image.open(BytesIO(base64.b64decode(encoded))) as normalized:
+        assert normalized.mode == "RGB"
+        assert normalized.info == {}
     assert model.calls[0]["kwargs"]["response_format_json"] is True
     assert result["score"] == 0.75
     assert result["model"] == "Qwen3-VL-32B-Instruct-64K"
 
 
+def test_canonical_scene_quality_adapter_preserves_style_contract(
+    tmp_path: Path,
+) -> None:
+    image_path = tmp_path / "style.png"
+    _write_test_png(image_path)
+    model = FakeMultimodalModel(
+        {
+            "evidence_status": "sufficient",
+            "verdict": "valid",
+            "confidence": 0.9,
+            "reason": "No significant style inconsistency.",
+            "missing_evidence": [],
+            "defects": [],
+        }
+    )
+    judge = OpenAICompatibleVLMJudge(model)
+    style_spec = {
+        "spec_version": "visual_style_spec_v1",
+        "source": "benchmark_owned",
+        "frozen": True,
+        "directives": [
+            {
+                "directive_id": "s1",
+                "statement": "Use a consistent low-poly style.",
+                "required": True,
+            }
+        ],
+    }
+
+    result = judge.adjudicate_scene_quality(
+        {
+            "metric": "style_consistency",
+            "prompt": "A low-poly room.",
+            "judgment_scope": {
+                "included": ["significant_visible_style_incompatibility"]
+            },
+            "visual_style_spec": style_spec,
+            "scene_summary": {"objects": [{"id": "chair"}]},
+            "render_evidence": [str(image_path)],
+        }
+    )
+
+    assert result["verdict"] == "valid"
+    context = json.loads(
+        model.calls[0]["messages"][1]["content"][0]["text"].split("\n", 1)[1]
+    )
+    assert context["visual_style_spec"] == style_spec
+    assert model.calls[0]["kwargs"]["call_type"] == (
+        "vlm_judge.canonical.style_consistency"
+    )
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        {
+            "evidence_status": "sufficient",
+            "verdict": "invalid",
+            "confidence": 0.8,
+            "reason": "bad",
+            "missing_evidence": [],
+            "defects": [{"scope": "wrong", "target_ids": ["chair"], "relation": "x", "reason": "bad"}],
+        },
+        {
+            "evidence_status": "sufficient",
+            "verdict": "invalid",
+            "confidence": 0.8,
+            "reason": "bad",
+            "missing_evidence": [],
+            "defects": [
+                {
+                    "scope": "significant_visible_style_incompatibility",
+                    "target_ids": [],
+                    "relation": "x",
+                    "reason": "bad",
+                }
+            ],
+        },
+        {
+            "evidence_status": "insufficient",
+            "verdict": "ambiguous",
+            "confidence": 0.2,
+            "reason": "occluded",
+            "missing_evidence": [],
+            "defects": [],
+        },
+    ],
+)
+def test_canonical_scene_quality_adapter_rejects_malformed_contract(
+    tmp_path: Path,
+    response: dict,
+) -> None:
+    image_path = tmp_path / "style.png"
+    _write_test_png(image_path)
+    judge = OpenAICompatibleVLMJudge(FakeMultimodalModel(response))
+    with pytest.raises(ValueError):
+        judge.adjudicate_scene_quality(
+            {
+                "metric": "style_consistency",
+                "judgment_scope": {
+                    "included": ["significant_visible_style_incompatibility"]
+                },
+                "render_evidence": [str(image_path)],
+            }
+        )
+
+
 def test_vlm_category_supports_not_applicable_response(tmp_path: Path) -> None:
     image_path = tmp_path / "view.png"
-    image_path.write_bytes(b"fake png")
+    _write_test_png(image_path)
     model = FakeMultimodalModel(
         {"applicable": False, "score": None, "confidence": 0.2, "summary": "object is occluded", "issues": [], "evidence": []}
     )
@@ -81,7 +203,7 @@ def test_vlm_category_supports_not_applicable_response(tmp_path: Path) -> None:
 
 def test_vlm_category_preserves_canonical_description_and_proxy_status(tmp_path: Path) -> None:
     image_path = tmp_path / "view.png"
-    image_path.write_bytes(b"fake png")
+    _write_test_png(image_path)
     model = FakeMultimodalModel(
         {"applicable": True, "score": 0.5, "confidence": 0.7, "summary": "layout only", "issues": [], "evidence": []}
     )
@@ -128,7 +250,7 @@ def test_judge_builder_supports_mnet_and_remote_api_config() -> None:
 
 def test_relation_judge_is_binary_and_receives_prompt_claim_and_image(tmp_path: Path) -> None:
     image_path = tmp_path / "local_relation_view.png"
-    image_path.write_bytes(b"fake png")
+    _write_test_png(image_path)
     model = FakeMultimodalModel(
         {"verdict": "valid", "confidence": 0.85, "reason": "the requested relation is visible"}
     )
@@ -161,7 +283,7 @@ def test_spatial_fidelity_judge_is_binary_and_treats_rarity_as_routing_only(
     tmp_path: Path,
 ) -> None:
     image_path = tmp_path / "spatial_pair.png"
-    image_path.write_bytes(b"fake png")
+    _write_test_png(image_path)
     model = FakeMultimodalModel(
         {
             "verdict": "valid",
@@ -205,7 +327,7 @@ def test_relation_context_budget_preserves_detector_packet_ahead_of_large_scene(
     tmp_path: Path,
 ) -> None:
     image_path = tmp_path / "relation.png"
-    image_path.write_bytes(b"fake png")
+    _write_test_png(image_path)
     model = FakeMultimodalModel(
         {"verdict": "invalid", "confidence": 0.9, "reason": "proxy and image disagree"}
     )
@@ -241,7 +363,7 @@ def test_relation_context_budget_preserves_detector_packet_ahead_of_large_scene(
 
 def test_p0b_context_budget_reserves_every_priority_field(tmp_path: Path) -> None:
     image_path = tmp_path / "p0b.png"
-    image_path.write_bytes(b"fake png")
+    _write_test_png(image_path)
     model = FakeMultimodalModel(
         {"verdict": "valid", "confidence": 0.9, "reason": "test"}
     )
@@ -281,6 +403,52 @@ def test_p0b_context_budget_reserves_every_priority_field(tmp_path: Path) -> Non
     ):
         assert key in context
     assert "detector_sentinel" in context["detector_evidence"]["json_prefix"]
+
+
+def test_p0b_outbound_context_hides_local_paths_hashes_and_dataset_linkage(
+    tmp_path: Path,
+) -> None:
+    image_path = tmp_path / "private_case_name.png"
+    _write_test_png(image_path)
+    model = FakeMultimodalModel(
+        {"verdict": "invalid", "confidence": 0.9, "reason": "visible gap"}
+    )
+    judge = OpenAICompatibleVLMJudge(model)
+
+    judge.adjudicate_p0b(
+        {
+            "metric": "support",
+            "event": {"object_id": "obj_000"},
+            "detector_evidence": {"gap_m": 0.1},
+            "natural_language_prompt": "Create a room.",
+            "local_render_evidence_metadata": [
+                {
+                    "path": "/private/local/exp1_1/case.png",
+                    "sha256": "private-content-hash",
+                    "case_id": "private-case-id",
+                    "geometry_provenance": "private-asset-source",
+                    "role": "metric_local_highlight",
+                    "view_id": "support_contact_060",
+                }
+            ],
+            "render_evidence": [str(image_path)],
+        }
+    )
+
+    text = model.calls[0]["messages"][1]["content"][0]["text"]
+    context = json.loads(text.split("\n", 1)[1])
+    serialized = json.dumps(context)
+    assert context["view_names"] == ["image_00"]
+    assert context["view_evidence"] == [
+        {
+            "role": "metric_local_highlight",
+            "view_id": "slot_00",
+        }
+    ]
+    assert "private/local" not in serialized
+    assert "private-content-hash" not in serialized
+    assert "private-case-id" not in serialized
+    assert "private-asset-source" not in serialized
 
 
 def test_query_cov_camera_selector_chooses_views_without_metric_verdict(tmp_path: Path) -> None:
@@ -402,6 +570,63 @@ def test_query_cov_camera_selector_chooses_views_without_metric_verdict(tmp_path
     with Image.open(BytesIO(base64.b64decode(encoded))) as normalized:
         assert normalized.mode == "RGB"
         assert normalized.info == {}
+
+
+def test_active_camera_selector_receives_only_sanitized_deficiency(
+    tmp_path: Path,
+) -> None:
+    image = tmp_path / "candidate.png"
+    Image.new("RGB", (3, 2), (128, 128, 128)).save(image)
+    model = FakeMultimodalModel(
+        {
+            "selected_view_ids": ["candidate_00"],
+            "action": None,
+            "reason": "best available corrective view",
+        }
+    )
+    judge = OpenAICompatibleVLMJudge(model)
+
+    judge.select_camera_views(
+        {
+            "selection_phase": "active_fallback",
+            "evidence_deficiency": {
+                "status": "insufficient",
+                "reason_codes": [
+                    "measured_local_visibility_insufficient",
+                    "private-case-sentinel",
+                ],
+                "required_local_view_count": 2,
+                "usable_local_view_count": 0,
+                "local_path": "/private/case/path",
+            },
+            "metric": "support",
+            "candidates": [
+                {
+                    "id": "private_candidate_id",
+                    "pose": {"azimuth_degrees": 20.0},
+                    "image_path": image.as_posix(),
+                }
+            ],
+            "max_views": 1,
+            "allow_adjustment": False,
+            "allowed_actions": [],
+            "preview_role": "highlighted_focus",
+        }
+    )
+
+    assert model.calls[0]["kwargs"]["call_type"] == "vlm_camera_pose.active_fallback"
+    context = json.loads(
+        model.calls[0]["messages"][1]["content"][0]["text"].split("\n", 1)[1]
+    )
+    assert context["selection_phase"] == "active_fallback"
+    assert context["evidence_deficiency"] == {
+        "status": "insufficient",
+        "reason_codes": ["measured_local_visibility_insufficient"],
+        "required_local_view_count": 2,
+        "usable_local_view_count": 0,
+    }
+    assert "private-case-sentinel" not in json.dumps(context)
+    assert "/private/case/path" not in json.dumps(context)
 
 
 def test_query_cov_camera_selector_excludes_blank_candidate_previews(tmp_path: Path) -> None:

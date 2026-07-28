@@ -24,7 +24,23 @@
       "properties": {
         "scene_request": {"$ref": "#/$defs/artifact"},
         "reference_annotation": {"$ref": "#/$defs/artifact"},
-        "spatial_fidelity_ontology": {"$ref": "#/$defs/artifact"},
+        "specification_contract": {
+          "$ref": "#/$defs/artifact",
+          "description": "Optional benchmark-owned frozen specification_contract_v1 that is the sole canonical L2 activation source."
+        },
+        "functional_semantic_config": {"$ref": "#/$defs/artifact"},
+        "scene_quality_config": {"$ref": "#/$defs/artifact"},
+        "object_grouping_report": {"$ref": "#/$defs/artifact"},
+        "asset_policy": {"$ref": "#/$defs/artifact"},
+        "authorized_deviations": {"$ref": "#/$defs/artifact"},
+        "spatial_fidelity_ontology": {
+          "$ref": "#/$defs/artifact",
+          "description": "Legacy Game-profile compatibility only; rejected by canonical non-game bundles."
+        },
+        "visual_style_spec": {
+          "$ref": "#/$defs/artifact",
+          "description": "Optional benchmark-owned frozen visual_style_spec_v1 compiled into the Visual Quality judge prompt. Cases without an appearance contract omit it."
+        },
         "evaluation_profile": {"$ref": "#/$defs/artifact"},
         "allowed_asset_ids": {"$ref": "#/$defs/artifact"}
       }
@@ -32,8 +48,9 @@
     "evaluation": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["enabled_evaluators", "p0b_official_mode"],
+      "required": ["p0b_official_mode"],
       "properties": {
+        "workflow": {"const": "canonical_l0_l4"},
         "enabled_evaluators": {
           "type": "object",
           "additionalProperties": false,
@@ -51,15 +68,39 @@
           "properties": {
             "mode": {
               "type": ["string", "null"],
-              "enum": [null, "auto", "global_only", "bbox_track", "visibility_ranked", "query_cov"]
+              "enum": [null, "auto", "global_only", "bbox_track", "visibility_ranked", "support_contact_plane", "query_cov"]
             },
             "metric_modes": {"type": "object", "additionalProperties": {"type": "string"}},
             "max_views": {"type": "integer", "minimum": 1, "maximum": 4},
             "max_steps": {"type": "integer", "minimum": 0, "maximum": 3},
-            "collision_overlay": {"type": "boolean"}
+            "collision_overlay": {"type": "boolean"},
+            "collision_contour": {"type": "boolean"},
+            "active_fallback": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": {"type": "boolean"},
+                "max_steps": {"type": "integer", "minimum": 0, "maximum": 3},
+                "candidate_count": {"type": "integer", "minimum": 1, "maximum": 8},
+                "fail_on_exhausted": {"type": "boolean"},
+                "shadow_mode": {"type": "boolean"}
+              }
+            }
           }
         }
-      }
+      },
+      "oneOf": [
+        {
+          "title": "Canonical L0-L4 routing",
+          "required": ["workflow"],
+          "not": {"required": ["enabled_evaluators"]}
+        },
+        {
+          "title": "Preserved legacy Game routing",
+          "required": ["enabled_evaluators"],
+          "not": {"required": ["workflow"]}
+        }
+      ]
     },
     "asset_catalog": {
       "type": "object",

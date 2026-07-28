@@ -169,7 +169,7 @@ def test_judge_resume_contract_covers_effective_config_without_key_value() -> No
 )
 def test_qwen235b_launcher_does_not_reuse_stdin_for_models_json(launcher: str) -> None:
     script = (
-        Path(__file__).resolve().parents[1] / "scripts" / "mnet" / launcher
+        Path(__file__).resolve().parents[1] / "Support" / "bash" / "mnet" / launcher
     ).read_text(encoding="utf-8")
 
     assert "</tmp/qwen235b_models.json <<'PY'" not in script

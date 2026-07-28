@@ -486,6 +486,7 @@ class BlenderRenderer:
         camera_views: list[dict[str, Any]],
         overlay_spec: dict[str, Any],
         preview: bool = True,
+        respect_occlusion: bool = False,
     ) -> dict[str, Any]:
         """Render per-candidate, per-target binary identity masks, read-only.
 
@@ -514,10 +515,11 @@ class BlenderRenderer:
         overlay_path = destination / "mask_overlay_spec.json"
         overlay_path.write_text(json.dumps(overlay_spec, indent=2), encoding="utf-8")
         worker = Path(__file__).with_name("blender_collision_mask_worker.py").resolve()
-        # Masks are always cheap: preview resolution and the cheapest reliable
-        # engine, regardless of the final evidence engine.
-        width = min(self.width, self.preview_width)
-        height = min(self.height, self.preview_height)
+        # Candidate ranking uses cheap preview masks.  Opt-in presentation
+        # variants may request full-resolution masks so a 2D segmentation
+        # contour aligns exactly with the final RGB evidence.
+        width = min(self.width, self.preview_width) if preview else self.width
+        height = min(self.height, self.preview_height) if preview else self.height
         command = [
             str(self.blender_bin),
             "--background",
@@ -540,6 +542,8 @@ class BlenderRenderer:
             "--height",
             str(height),
         ]
+        if respect_occlusion:
+            command.append("--respect-occlusion")
         try:
             completed = subprocess.run(
                 command,
@@ -572,6 +576,11 @@ class BlenderRenderer:
         manifest["camera_evidence"] = {
             "preview": bool(preview),
             "role": "target_id_masks",
+            "occlusion_policy": (
+                "respect_scene_occlusion"
+                if respect_occlusion
+                else "ignore_scene_occlusion_projection_proxy"
+            ),
             "source_blend": str(source),
             "source_blend_modified": False,
             "source_blend_sha256_before": source_hash_before,

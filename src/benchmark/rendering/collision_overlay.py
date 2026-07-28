@@ -867,6 +867,7 @@ def measure_focus_visibility(
     *,
     targets: list[dict[str, Any]],
     focus_color: list[float] | None = None,
+    region_colors: dict[str, list[float]] | None = None,
     tolerance: float = 0.22,
 ) -> dict[str, Any]:
     """Measure highlighted target pixels in a generic focus-overlay image."""
@@ -899,9 +900,22 @@ def measure_focus_visibility(
         color = np.asarray(focus_color, dtype=float)
         mask = _display_chromaticity_mask(flat, color, tolerance=tolerance)
         focus_fraction = float(np.count_nonzero(mask)) / float(pixel_count)
+    region_fractions: dict[str, float] = {}
+    for role, raw_color in (region_colors or {}).items():
+        if not str(role) or pixel_count == 0:
+            continue
+        color = np.asarray(raw_color, dtype=float)
+        mask = _display_chromaticity_mask(flat, color, tolerance=tolerance)
+        region_fractions[str(role)] = (
+            float(np.count_nonzero(mask)) / float(pixel_count)
+        )
     return {
         "target_pixel_fractions": fractions,
         "focus_pixel_fraction": focus_fraction,
+        "focus_in_frame": (
+            focus_fraction > 0.0 if focus_color is not None else None
+        ),
+        "region_pixel_fractions": region_fractions,
         "pixel_count": pixel_count,
         "measured": True,
     }

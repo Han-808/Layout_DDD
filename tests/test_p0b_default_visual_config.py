@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from pathlib import Path
 
 import pytest
@@ -34,6 +35,7 @@ def _bundle(tmp_path: Path, *, boundary: bool = True) -> list[dict]:
         _item(tmp_path / "perspective.png", "metric_highlighted_global", "global_perspective"),
         _item(tmp_path / "top.png", "metric_highlighted_global", "global_top"),
         _item(tmp_path / "local_1_raw.png", "metric_local_rgb", "local_1"),
+        _item(tmp_path / "local_1_contour.png", "metric_local_contour", "local_1"),
         _item(
             tmp_path / "local_1_highlight.png",
             "metric_local_highlight",
@@ -41,6 +43,7 @@ def _bundle(tmp_path: Path, *, boundary: bool = True) -> list[dict]:
             boundary=boundary,
         ),
         _item(tmp_path / "local_2_raw.png", "metric_local_rgb", "local_2"),
+        _item(tmp_path / "local_2_contour.png", "metric_local_contour", "local_2"),
         _item(
             tmp_path / "local_2_highlight.png",
             "metric_local_highlight",
@@ -55,8 +58,8 @@ def _bundle(tmp_path: Path, *, boundary: bool = True) -> list[dict]:
     [
         (
             "collision",
-            ["metric_local_highlight", "metric_highlighted_global"],
-            ["local_1", "global_top"],
+            ["metric_local_rgb", "metric_local_contour"],
+            ["local_1", "local_1"],
             2,
         ),
         (
@@ -67,13 +70,13 @@ def _bundle(tmp_path: Path, *, boundary: bool = True) -> list[dict]:
         ),
         (
             "support",
-            ["metric_local_highlight", "metric_local_highlight", "metric_highlighted_global"],
+            ["metric_local_rgb", "metric_local_rgb", "metric_highlighted_global"],
             ["local_1", "local_2", "global_top"],
             3,
         ),
     ],
 )
-def test_metric_default_composes_exact_highlight_budget(
+def test_metric_default_composes_exact_calibrated_budget(
     tmp_path: Path,
     metric: str,
     roles: list[str],
@@ -93,6 +96,19 @@ def test_metric_default_composes_exact_highlight_budget(
 def test_oob_default_requires_boundary_plane_in_local_highlight(tmp_path: Path) -> None:
     with pytest.raises(RuntimeError, match="flagged room boundary plane"):
         compose_default_p0b_visual_evidence("oob", _bundle(tmp_path, boundary=False))
+
+
+def test_collision_default_requires_same_pose_contour(tmp_path: Path) -> None:
+    items = [
+        item
+        for item in _bundle(tmp_path)
+        if not (
+            item["role"] == "metric_local_contour"
+            and item["view_id"] == "local_1"
+        )
+    ]
+    with pytest.raises(RuntimeError, match="same-pose segmentation contour"):
+        compose_default_p0b_visual_evidence("collision", items)
 
 
 def test_p0b_request_and_result_record_applied_metric_default(tmp_path: Path) -> None:
@@ -115,7 +131,10 @@ def test_p0b_request_and_result_record_applied_metric_default(tmp_path: Path) ->
 
     request = captured[0]
     assert len(request["render_evidence"]) == 3
-    assert request["visual_evidence_policy"]["config_id"] == "support_local2_global_top_budget3_v1"
+    assert (
+        request["visual_evidence_policy"]["config_id"]
+        == "support_local2_raw_global_top_budget3_v2"
+    )
     assert report["visual_evidence_policy"] == request["visual_evidence_policy"]
 
 
@@ -189,6 +208,13 @@ def test_cached_rich_evidence_is_invalidated_when_global_pose_policy_changes(
             {
                 "policy": {"highlighted_global_pose_policy": "legacy_metric"},
                 "render_evidence_items": [{"path": str(image), "role": "metric_highlighted_global"}],
+                "render_evidence_artifacts": [
+                    {
+                        "slot": 0,
+                        "path": str(image),
+                        "sha256": hashlib.sha256(image.read_bytes()).hexdigest(),
+                    }
+                ],
             }
         ),
         encoding="utf-8",

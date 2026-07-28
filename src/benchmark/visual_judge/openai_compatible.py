@@ -5,11 +5,11 @@ import hashlib
 from io import BytesIO
 import json
 import math
-import mimetypes
 from pathlib import Path
 from typing import Any
 
 from benchmark.models import OpenAICompatibleModel, parse_json_object
+from benchmark.visual_judge.active_policy import selector_safe_proposals
 
 
 SYSTEM_PROMPT = """You are the visual judge for a 3D scene-generation benchmark.
@@ -19,6 +19,18 @@ objects or relations. Return exactly one JSON object with:
 {"applicable":true,"score":0.0,"confidence":0.0,"summary":"...","issues":["..."],"evidence":["..."]}.
 score and confidence must be between 0 and 1. If the supplied views cannot support this category,
 return applicable=false, score=null, and explain why in summary."""
+
+CANONICAL_METRIC_SYSTEM_PROMPT = """You judge one narrowly scoped canonical metric for a
+3D scene benchmark. Use the original prompt, prompt-authorized deviations, structured context,
+and supplied images. Do not judge neighboring metrics. Evidence insufficiency is not validity.
+Return exactly one JSON object:
+{"evidence_status":"sufficient","verdict":"valid","confidence":0.0,"reason":"...",
+"missing_evidence":[],"defects":[]}.
+evidence_status must be sufficient or insufficient. verdict must be valid, invalid, or ambiguous.
+If evidence is insufficient, verdict must be ambiguous and missing_evidence must name what is
+missing. Invalid requires one or more explicit significant defects in defects; otherwise return
+valid when evidence is sufficient. Each defect should contain scope, target_ids, relation, and
+reason when available. confidence must be between 0 and 1."""
 
 P0B_SYSTEM_PROMPT = """You adjudicate one ambiguous geometry event in a 3D scene benchmark.
 Use the natural-language prompt and extracted relationships only to understand intended semantics.
@@ -57,13 +69,19 @@ specified event easiest to inspect. Prefer views where all target objects and th
 gap, overlap, or room plane are visible and well framed. In highlighted previews, use the supplied
 color legend and treat gray geometry as non-target context. A preview_warning_class means only
 that deterministic highlight-pixel coverage was incomplete; do not infer target absence from it.
+When selection_phase is active_fallback, evidence_deficiency states why the deterministic packet was
+not sufficient and corrective_proposals lists the only permitted metric-specific repairs. Use it only
+to choose views or one proposal that repairs the named evidence gap. Never invent pose coordinates or
+an unlisted action.
 Candidates marked render_status=blank are unusable camera evidence. Do not select them when any
 render_status=ok candidate exists.
 You may request at most one listed discrete
 camera action when adjustment is allowed. Return exactly one JSON object:
 {"selected_view_ids":["candidate_id"],"action":null,"reason":"..."}.
-selected_view_ids must contain between one and max_views candidate IDs. action must be null when
-allow_adjustment is false; otherwise it may be null or
+selected_view_ids must contain between one and max_views candidate IDs in evidence-priority order,
+best view first. action must be null when
+allow_adjustment is false. In active_fallback it may be null or
+{"proposal_id":"one listed proposal ID"}; otherwise it may be null or
 {"view_id":"candidate_id","type":"one allowed action"}. Do not return a metric verdict or score."""
 
 CATEGORY_RUBRICS = {
@@ -83,6 +101,33 @@ CATEGORY_RUBRICS = {
     "structural_validity": (
         "Use the images to resolve only ambiguous structural findings called out by deterministic evidence. "
         "Do not override exact schema, boundary, or collision calculations without visible contradictory evidence."
+    ),
+    "functional_semantic_fidelity": (
+        "Judge prompt-conditioned functional semantics only. Global evidence checks the requested "
+        "room/scene type, broad functional intent, and required functional areas. Check local "
+        "functionality only when the frozen prompt contract explicitly requests that function. "
+        "Do not judge generic object pairing, scale, style, physical plausibility, or unspecified "
+        "local functionality. Invalid requires at least one explicit significant unmet requirement; "
+        "otherwise return valid when evidence is sufficient."
+    ),
+    "scale_consistency": (
+        "Judge generic visible relative scale coherence only. Apply exact prompt-authorized "
+        "surreal or unusual scale deviations before judging. Do not judge object pairing, layout, "
+        "orientation, function, style, or physical plausibility. Invalid requires an explicit "
+        "significant scale defect; otherwise return valid when evidence is sufficient."
+    ),
+    "object_pairing_consistency": (
+        "Judge only whether members of each supplied object group have broadly compatible object "
+        "categories and roles. Do not judge position, distance, direction, angle, orientation, "
+        "access, local functional arrangement, style, scale, or whether the prompt was followed. "
+        "Apply exact prompt-authorized pair deviations. Invalid requires an explicit significant "
+        "category/role incompatibility; otherwise return valid when evidence is sufficient."
+    ),
+    "style_consistency": (
+        "Judge visible style consistency only, after applying prompt-authorized style deviations. "
+        "Do not judge scale, pairing, layout, orientation, function, prompt fidelity, or physical "
+        "plausibility. Invalid requires one or more explicit significant style inconsistencies; "
+        "otherwise return valid when evidence is sufficient."
     ),
 }
 
@@ -123,7 +168,7 @@ class OpenAICompatibleVLMJudge:
             "natural_language_request": request.get("prompt"),
             "canonical_scene": request.get("scene_summary"),
             "deterministic_evidence": request.get("deterministic_evidence"),
-            "view_names": [path.name for path in selected],
+            "view_names": _generic_view_names(selected),
         }
         context_text = _budgeted_context_json(
             context,
@@ -171,6 +216,237 @@ class OpenAICompatibleVLMJudge:
         result["request_metadata"] = dict(self.model.last_request_metadata)
         return result
 
+    def adjudicate_scene_quality(self, request: dict) -> dict:
+        """Return the strict canonical L3 verdict contract."""
+
+        return self._adjudicate_canonical_metric(request, family="scene_quality")
+
+    def adjudicate_functional_semantic(self, request: dict) -> dict:
+        """Return the strict canonical L2 functional-semantic verdict contract."""
+
+        result = self._adjudicate_canonical_metric(
+            request,
+            family="specification_fidelity",
+        )
+        if result.get("verdict") == "ambiguous":
+            result["verdict"] = "insufficient_evidence"
+        result.setdefault(
+            "router_state",
+            "not_suspicious"
+            if result.get("verdict") == "valid"
+            else "suspicious"
+            if result.get("verdict") == "invalid"
+            else "insufficient_evidence",
+        )
+        return result
+
+    def _adjudicate_canonical_metric(
+        self,
+        request: dict,
+        *,
+        family: str,
+    ) -> dict:
+        if not isinstance(request, dict):
+            raise TypeError("canonical metric judge request must be a JSON object")
+        metric = str(request.get("metric") or request.get("category") or "")
+        if metric not in {
+            "functional_semantic_fidelity",
+            "scale_consistency",
+            "object_pairing_consistency",
+            "style_consistency",
+        }:
+            raise ValueError(f"unsupported canonical metric {metric!r}")
+        paths = [
+            Path(str(value)).expanduser()
+            for value in request.get("render_evidence", [])
+        ]
+        selected = paths[: self.max_images]
+        missing_paths = [str(path) for path in selected if not path.is_file()]
+        if missing_paths:
+            raise FileNotFoundError(
+                f"canonical metric render evidence does not exist: {missing_paths}"
+            )
+        if not selected:
+            return {
+                "evidence_status": "insufficient",
+                "verdict": "ambiguous",
+                "confidence": 0.0,
+                "reason": "no rendered evidence was supplied",
+                "missing_evidence": ["metric_scoped_render_evidence"],
+                "defects": [],
+                "model": self.model.model_id,
+                "endpoint": self.model.endpoint,
+                "images_used": [],
+                "request_metadata": {},
+            }
+        context = {
+            "family": family,
+            "metric": metric,
+            "rubric": CATEGORY_RUBRICS[metric],
+            "metric_rubric": request.get("metric_rubric"),
+            "natural_language_request": request.get("prompt"),
+            "authorized_deviations": request.get("authorized_deviations"),
+            "metric_scope": request.get("judgment_scope"),
+            "claims": request.get("claims"),
+            "components": request.get("components"),
+            "object_groups": request.get("object_groups"),
+            "visual_style_spec": request.get("visual_style_spec"),
+            "canonical_scene": request.get("scene_summary"),
+            "deterministic_evidence": request.get("deterministic_evidence"),
+            "evidence_phase": request.get("evidence_phase"),
+            "decision_mode": request.get("decision_mode"),
+            "phase_instruction": (
+                "This is the global screening pass. Return valid when the global "
+                "views are sufficient and show no significant in-scope style "
+                "defect. Return invalid only with explicit target IDs for a "
+                "significant visible defect. Return ambiguous/insufficient when "
+                "closer local evidence is needed; do not guess."
+                if metric == "style_consistency"
+                and request.get("evidence_phase") == "global_screen"
+                else
+                "This is the final local-confirmation pass. Use the local views "
+                "first and the global views as context; independently confirm or "
+                "reject the suspected style defect."
+                if metric == "style_consistency"
+                and request.get("evidence_phase") == "local_confirmation"
+                else None
+            ),
+            "view_names": _generic_view_names(selected),
+        }
+        context_text = _budgeted_context_json(
+            context,
+            self.max_context_chars,
+            priority_keys=(
+                "metric",
+                "rubric",
+                "metric_rubric",
+                "natural_language_request",
+                "authorized_deviations",
+                "metric_scope",
+                "claims",
+                "components",
+                "object_groups",
+                "visual_style_spec",
+                "deterministic_evidence",
+                "evidence_phase",
+                "decision_mode",
+                "phase_instruction",
+                "view_names",
+            ),
+        )
+        content: list[dict[str, Any]] = [
+            {
+                "type": "text",
+                "text": "Adjudicate this canonical metric only.\n" + context_text,
+            }
+        ]
+        content.extend(
+            {"type": "image_url", "image_url": {"url": _image_data_url(path)}}
+            for path in selected
+        )
+        raw = self.model.chat_messages(
+            [
+                {"role": "system", "content": CANONICAL_METRIC_SYSTEM_PROMPT},
+                {"role": "user", "content": content},
+            ],
+            response_format_json=self.response_format_json,
+            call_type=f"vlm_judge.canonical.{metric}",
+        )
+        result = parse_json_object(raw)
+        evidence_status = result.get("evidence_status")
+        verdict = result.get("verdict")
+        if evidence_status not in {"sufficient", "insufficient"}:
+            raise ValueError(
+                "canonical metric evidence_status must be sufficient or insufficient"
+            )
+        if verdict not in {"valid", "invalid", "ambiguous"}:
+            raise ValueError(
+                "canonical metric verdict must be valid, invalid, or ambiguous"
+            )
+        if evidence_status == "insufficient" and verdict != "ambiguous":
+            raise ValueError(
+                "insufficient canonical metric evidence requires verdict=ambiguous"
+            )
+        _score(result.get("confidence"), "confidence")
+        defects = result.get("defects")
+        if not isinstance(defects, list):
+            raise ValueError("canonical metric defects must be a JSON list")
+        if verdict == "invalid" and not defects:
+            raise ValueError(
+                "canonical metric invalid verdict requires an explicit significant defect"
+            )
+        if verdict == "valid" and defects:
+            raise ValueError(
+                "canonical metric valid verdict cannot retain defect records"
+            )
+        allowed_scopes = set(
+            (
+                request.get("judgment_scope")
+                if isinstance(request.get("judgment_scope"), dict)
+                else {}
+            ).get("included")
+            or []
+        )
+        for defect in defects:
+            if not isinstance(defect, dict):
+                raise ValueError(
+                    "canonical metric defects must contain JSON objects"
+                )
+            if not str(defect.get("scope") or "").strip():
+                raise ValueError(
+                    "canonical metric defects must identify their metric scope"
+                )
+            if allowed_scopes and defect.get("scope") not in allowed_scopes:
+                raise ValueError(
+                    "canonical metric defect scope is outside the requested metric"
+                )
+            if not str(defect.get("reason") or "").strip():
+                raise ValueError(
+                    "canonical metric defects must explain the significant defect"
+                )
+            target_ids = defect.get("target_ids")
+            if (
+                not isinstance(target_ids, list)
+                or not target_ids
+                or any(
+                    not isinstance(item, str) or not item.strip()
+                    for item in target_ids
+                )
+            ):
+                raise ValueError(
+                    "canonical metric defects must identify non-empty target_ids"
+                )
+            if not str(defect.get("relation") or "").strip():
+                raise ValueError(
+                    "canonical metric defects must identify the defective relation"
+                )
+        missing_evidence = result.get("missing_evidence")
+        if not isinstance(missing_evidence, list):
+            raise ValueError("canonical metric missing_evidence must be a JSON list")
+        if evidence_status == "insufficient" and (
+            not missing_evidence
+            or any(
+                not isinstance(item, str) or not item.strip()
+                for item in missing_evidence
+            )
+        ):
+            raise ValueError(
+                "insufficient canonical metric evidence must name missing evidence"
+            )
+        if evidence_status == "insufficient" and defects:
+            raise ValueError(
+                "insufficient canonical metric evidence cannot assert defects"
+            )
+        if evidence_status == "sufficient" and missing_evidence:
+            raise ValueError(
+                "sufficient canonical metric evidence cannot retain missing_evidence"
+            )
+        result["model"] = self.model.model_id
+        result["endpoint"] = self.model.endpoint
+        result["images_used"] = [str(path.resolve()) for path in selected]
+        result["request_metadata"] = dict(self.model.last_request_metadata)
+        return result
+
     def adjudicate_p0b(self, request: dict) -> dict:
         if not isinstance(request, dict):
             raise TypeError("P0b judge request must be a JSON object")
@@ -191,8 +467,10 @@ class OpenAICompatibleVLMJudge:
             "architecture": request.get("architecture"),
             "natural_language_prompt": request.get("natural_language_prompt"),
             "extracted_relationships": request.get("extracted_relationships"),
-            "view_names": [path.name for path in selected],
-            "view_evidence": request.get("local_render_evidence_metadata"),
+            "view_names": _generic_view_names(selected),
+            "view_evidence": _sanitize_outbound_view_evidence(
+                request.get("local_render_evidence_metadata")
+            ),
         }
         context_text = _budgeted_context_json(
             context,
@@ -255,7 +533,7 @@ class OpenAICompatibleVLMJudge:
             "detector_evidence": request.get("detector_evidence"),
             "involved_objects": request.get("involved_objects"),
             "canonical_scene": request.get("scene_summary"),
-            "view_names": [path.name for path in selected],
+            "view_names": _generic_view_names(selected),
         }
         context_text = _budgeted_context_json(
             context,
@@ -314,7 +592,7 @@ class OpenAICompatibleVLMJudge:
             "involved_objects": request.get("involved_objects"),
             "canonical_scene": request.get("scene_summary"),
             "natural_language_prompt": request.get("natural_language_prompt"),
-            "view_names": [path.name for path in selected],
+            "view_names": _generic_view_names(selected),
         }
         context_text = _budgeted_context_json(
             context,
@@ -369,6 +647,12 @@ class OpenAICompatibleVLMJudge:
         ]
         if not usable_candidates:
             raise ValueError("camera selector received no non-blank candidate previews")
+        if len(usable_candidates) > self.max_images:
+            raise ValueError(
+                "camera selector candidate bank exceeds max_images; implicit "
+                f"truncation is forbidden ({len(usable_candidates)} > "
+                f"{self.max_images})"
+            )
         internal_ids = [str(item.get("id") or "") for item in usable_candidates]
         if any(not value for value in internal_ids) or len(set(internal_ids)) != len(internal_ids):
             raise ValueError("camera selector candidates require unique non-empty internal IDs")
@@ -379,16 +663,36 @@ class OpenAICompatibleVLMJudge:
         selected_candidates = sorted(
             usable_candidates,
             key=_selector_candidate_order_key,
-        )[: self.max_images]
+        )
         paths = [Path(str(item.get("image_path"))).expanduser() for item in selected_candidates]
         max_views = max(1, min(int(request.get("max_views") or 1), len(selected_candidates)))
         alias_to_internal = {
             f"candidate_{index:02d}": str(item.get("id"))
             for index, item in enumerate(selected_candidates)
         }
+        internal_to_alias = {
+            internal: alias
+            for alias, internal in alias_to_internal.items()
+        }
         aliases = list(alias_to_internal)
         allowed_actions = _selector_allowed_actions(request.get("allowed_actions"))
-        allow_adjustment = bool(request.get("allow_adjustment")) and bool(allowed_actions)
+        selection_phase = str(request.get("selection_phase") or "").strip().lower()
+        corrective_proposals: list[dict[str, Any]] = []
+        proposal_lookup: dict[str, dict[str, Any]] = {}
+        if selection_phase == "active_fallback":
+            corrective_proposals, proposal_lookup = selector_safe_proposals(
+                [
+                    item
+                    for item in request.get("corrective_proposals", [])
+                    if isinstance(item, dict)
+                ],
+                internal_to_alias=internal_to_alias,
+            )
+        allow_adjustment = bool(request.get("allow_adjustment")) and bool(
+            corrective_proposals
+            if selection_phase == "active_fallback"
+            else allowed_actions
+        )
         context = {
             "candidates": [
                 {
@@ -409,6 +713,14 @@ class OpenAICompatibleVLMJudge:
             ),
             "color_legend": _sanitize_selector_legend(request.get("color_legend")),
         }
+        if selection_phase == "active_fallback":
+            context["selection_phase"] = "active_fallback"
+            context["evidence_deficiency"] = _sanitize_selector_deficiency(
+                request.get("evidence_deficiency")
+            )
+            context["corrective_proposals"] = (
+                corrective_proposals if allow_adjustment else []
+            )
         context_text = _budgeted_context_json(
             context,
             self.max_context_chars,
@@ -421,6 +733,9 @@ class OpenAICompatibleVLMJudge:
                 "max_views",
                 "allow_adjustment",
                 "allowed_actions",
+                "selection_phase",
+                "evidence_deficiency",
+                "corrective_proposals",
             ),
         )
         content: list[dict[str, Any]] = [
@@ -442,7 +757,11 @@ class OpenAICompatibleVLMJudge:
                 {"role": "user", "content": content},
             ],
             response_format_json=self.response_format_json,
-            call_type="vlm_camera_pose.query_cov",
+            call_type=(
+                "vlm_camera_pose.active_fallback"
+                if selection_phase == "active_fallback"
+                else "vlm_camera_pose.query_cov"
+            ),
         )
         parsed = parse_json_object(raw)
         ids = parsed.get("selected_view_ids")
@@ -461,14 +780,29 @@ class OpenAICompatibleVLMJudge:
         if action is not None:
             if not allow_adjustment or not isinstance(action, dict):
                 raise ValueError("camera selector returned an action outside the adjustment contract")
-            if str(action.get("view_id") or "") not in available:
-                raise ValueError("camera selector action references an unknown candidate")
-            if str(action.get("type") or "") not in set(allowed_actions):
-                raise ValueError("camera selector requested an unsupported action")
-            resolved_action = {
-                "view_id": alias_to_internal[str(action["view_id"])],
-                "type": str(action["type"]),
-            }
+            if selection_phase == "active_fallback":
+                proposal_alias = str(action.get("proposal_id") or "")
+                proposal = proposal_lookup.get(proposal_alias)
+                if proposal is None:
+                    raise ValueError(
+                        "active camera selector action references an unknown "
+                        "corrective proposal"
+                    )
+                resolved_action = {
+                    "proposal_id": str(proposal.get("proposal_id") or ""),
+                    "view_id": str(proposal.get("parent_view_id") or ""),
+                    "type": str(proposal.get("action_primitive") or ""),
+                    "family": str(proposal.get("family") or ""),
+                }
+            else:
+                if str(action.get("view_id") or "") not in available:
+                    raise ValueError("camera selector action references an unknown candidate")
+                if str(action.get("type") or "") not in set(allowed_actions):
+                    raise ValueError("camera selector requested an unsupported action")
+                resolved_action = {
+                    "view_id": alias_to_internal[str(action["view_id"])],
+                    "type": str(action["type"]),
+                }
         reason = parsed.get("reason")
         request_metadata = dict(self.model.last_request_metadata)
         request_metadata.update(
@@ -487,6 +821,101 @@ class OpenAICompatibleVLMJudge:
             "images_used": aliases,
             "request_metadata": request_metadata,
         }
+
+
+def _generic_view_names(paths: list[Path]) -> list[str]:
+    """Return request-local aliases instead of exposing local filenames."""
+
+    return [f"image_{index:02d}" for index, _ in enumerate(paths)]
+
+
+def _sanitize_outbound_view_evidence(value: Any) -> Any:
+    """Remove filesystem, content-hash, provenance, and dataset linkage fields.
+
+    Rich evidence metadata is retained in local artifacts, while the remote
+    judge receives only the role, pose, target, and diagnostic legend needed
+    to interpret the images.
+    """
+
+    if isinstance(value, list):
+        sanitized_items = [
+            _sanitize_outbound_view_evidence(item)
+            for item in value
+        ]
+        # Judge-visible image identity is request-local and fixed-shape.  It
+        # must not reveal whether a slot came from deterministic or active
+        # camera search through an action-suffixed internal view ID.
+        for index, item in enumerate(sanitized_items):
+            if not isinstance(item, dict):
+                continue
+            if "view_id" in item:
+                item["view_id"] = f"slot_{index:02d}"
+            if "pair_id" in item:
+                item["pair_id"] = f"slot_{index:02d}"
+        return sanitized_items
+    if not isinstance(value, dict):
+        return value
+    sanitized: dict[str, Any] = {}
+    for raw_key, item in value.items():
+        key = str(raw_key)
+        normalized = key.lower()
+        if (
+            "path" in normalized
+            or "sha256" in normalized
+            or "degradation" in normalized
+            or "exception" in normalized
+            or normalized in {
+                "hash",
+                "content_hash",
+                "case_id",
+                "dataset_id",
+                "asset_jid",
+                "jid",
+                "provenance",
+                "geometry_provenance",
+                "active_camera_fallback",
+                "camera_action",
+                "camera_action_protocol",
+                "camera_action_parameters",
+                "parent_view_id",
+                "policy_source",
+                "proposal_id",
+                "proposal_fingerprint",
+                "trajectory",
+                "selection_phase",
+                "active_repair",
+                "active_corrective_proposal_version",
+                "trigger_recommended",
+                "camera_repairable",
+                "repairability",
+            }
+        ):
+            continue
+        if normalized == "pose":
+            sanitized[key] = _minimal_judge_pose(item)
+            continue
+        sanitized[key] = _sanitize_outbound_view_evidence(item)
+    return sanitized
+
+
+def _minimal_judge_pose(value: Any) -> dict[str, Any]:
+    """Keep framing semantics while stripping camera-policy lineage."""
+
+    pose = value if isinstance(value, dict) else {}
+    result: dict[str, Any] = {}
+    for key in ("location", "target"):
+        vector = pose.get(key)
+        if isinstance(vector, (list, tuple)) and len(vector) == 3:
+            result[key] = [
+                round(float(component), 5)
+                for component in vector
+            ]
+    if isinstance(pose.get("lens_mm"), (int, float)):
+        result["lens_mm"] = round(float(pose["lens_mm"]), 3)
+    camera_type = str(pose.get("camera_type") or "").strip().upper()
+    if camera_type in {"PERSP", "ORTHO"}:
+        result["camera_type"] = camera_type
+    return result
 
 
 def build_openai_compatible_vlm_judge(config: dict[str, Any]) -> OpenAICompatibleVLMJudge:
@@ -529,18 +958,24 @@ def build_openai_compatible_vlm_judge(config: dict[str, Any]) -> OpenAICompatibl
 
 
 def _image_data_url(path: Path) -> str:
-    mime_type = mimetypes.guess_type(path.name)[0] or "image/png"
-    encoded = base64.b64encode(path.read_bytes()).decode("ascii")
-    return f"data:{mime_type};base64,{encoded}"
+    return _normalized_rgb_png_data_url(path, label="judge_evidence")
 
 
 def _selector_image_data_url(path: Path, *, alias: str) -> str:
     """Return a metadata-free RGB PNG for the external camera selector."""
 
+    return _normalized_rgb_png_data_url(path, label=alias)
+
+
+def _normalized_rgb_png_data_url(path: Path, *, label: str) -> str:
+    """Decode and re-encode one outbound image without file metadata or alpha."""
+
     try:
         from PIL import Image, ImageOps, UnidentifiedImageError
-    except ImportError:  # pragma: no cover - exercised only in minimal installs
-        return _image_data_url(path)
+    except ImportError as exc:  # pragma: no cover - dependency contract guard
+        raise RuntimeError(
+            "Pillow is required to sanitize outbound VLM images"
+        ) from exc
 
     try:
         with Image.open(path) as source:
@@ -552,7 +987,7 @@ def _selector_image_data_url(path: Path, *, alias: str) -> str:
             flattened.save(output, format="PNG")
     except (UnidentifiedImageError, OSError, ValueError) as exc:
         raise ValueError(
-            f"camera selector preview {alias} is not a valid decodable image"
+            f"outbound image {label} is not a valid decodable image"
         ) from exc
     encoded = base64.b64encode(output.getvalue()).decode("ascii")
     return f"data:image/png;base64,{encoded}"
@@ -615,6 +1050,67 @@ def _selector_allowed_actions(value: Any) -> list[str]:
     if not isinstance(value, list):
         return []
     return list(dict.fromkeys(str(item) for item in value if str(item) in allowed))
+
+
+def _sanitize_selector_deficiency(value: Any) -> dict[str, Any]:
+    """Allow only non-identifying, routing-level evidence deficits outbound."""
+
+    source = value if isinstance(value, dict) else {}
+    reason_allowlist = {
+        "measured_local_visibility_insufficient",
+        "required_local_view_count_missing",
+        "required_entities_not_jointly_visible",
+        "focus_region_out_of_frame",
+        "target_occluded_or_too_small",
+        "focus_region_too_small",
+        "architecture_plane_not_visible",
+        "redundant_local_views",
+    }
+    deficiencies = source.get("deficiencies")
+    structured_reasons = (
+        [
+            str(item.get("code"))
+            for item in deficiencies
+            if isinstance(item, dict)
+            and item.get("repairability") == "camera"
+            and str(item.get("code") or "") in reason_allowlist
+        ]
+        if isinstance(deficiencies, list)
+        else []
+    )
+    reasons = source.get("reason_codes")
+    sanitized_reasons = (
+        [
+            str(reason)
+            for reason in reasons
+            if str(reason) in reason_allowlist
+        ]
+        if isinstance(reasons, list)
+        else []
+    )
+    sanitized_reasons = list(
+        dict.fromkeys(structured_reasons + sanitized_reasons)
+    )
+    result: dict[str, Any] = {
+        "status": "insufficient",
+        "reason_codes": sanitized_reasons,
+    }
+    for key in (
+        "required_local_view_count",
+        "measured_local_view_count",
+        "usable_local_view_count",
+    ):
+        raw = source.get(key)
+        if isinstance(raw, int) and not isinstance(raw, bool) and 0 <= raw <= 8:
+            result[key] = raw
+    utility = source.get("evidence_utility")
+    if (
+        isinstance(utility, (int, float))
+        and not isinstance(utility, bool)
+        and 0.0 <= float(utility) <= 1.0
+    ):
+        result["evidence_utility"] = round(float(utility), 6)
+    return result
 
 
 def _minimal_selector_pose(value: Any) -> dict[str, Any]:

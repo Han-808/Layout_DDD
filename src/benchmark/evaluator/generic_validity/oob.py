@@ -16,20 +16,37 @@ from benchmark.scene_io.object_normalization import (
 from benchmark.visual_judge.p0b import LocalViewProvider, adjudicate_p0b_event
 
 
-OOB_EVALUATOR_VERSION = "oob_p0b_v1"
+OOB_EVALUATOR_VERSION = "oob_p0b_v2"
+# ``numerical_eps`` is computation robustness only; it governs the wall and
+# ceiling planes. ``floor_contact_tolerance_m`` is a separate semantic contact
+# tolerance for the floor plane: ordinary floor-standing geometry may sink below
+# the nominal floor by this much because of asset bounds, placement, or contact
+# modelling, so a floor crossing within this band is clearly safe and bypasses
+# VLM adjudication rather than being routed as a candidate violation.
+DEFAULT_FLOOR_CONTACT_TOLERANCE_M = 0.005
 DEFAULT_OOB_CONFIG = {
     "enabled": True,
     "official_mode": False,
     "detector_only": False,
     "numerical_eps": 1.0e-6,
+    "floor_contact_tolerance_m": DEFAULT_FLOOR_CONTACT_TOLERANCE_M,
     "score_mode": "invalid_object_count_over_objects",
 }
+
+# Canonical order of the six room planes for the raw penetration measurement.
+OOB_PLANES = ("west_oob", "east_oob", "south_oob", "north_oob", "floor_oob", "ceiling_oob")
 
 OOB_NOTES = [
     "OOB is object-versus-room-plane only; object-architecture penetration is a separate P0b family.",
     "Exact OBB intervals over the six room planes supply evidence; a detector flag alone never reduces the score.",
     "Only objects whose final VLM verdict is invalid count as OOB.",
     "Objects inside all six planes pass directly; a positive flag never auto-fails and routes to semantic adjudication.",
+    "numerical_eps is computation robustness for the wall and ceiling planes; the floor plane uses the separate "
+    "floor_contact_tolerance_m semantic contact tolerance so ordinary sub-centimetre floor sink stays clearly valid.",
+    "plane_penetration_m records the raw non-negative crossing depth for all six planes independently of the "
+    "semantic plane_flags, so an accepted shallow floor sink is never erased from the diagnostics.",
+    "A positive floor sink that stays within floor_contact_tolerance_m routes direct_valid_floor_contact_tolerance; "
+    "an OBB with no meaningful crossing routes direct_valid_inside.",
 ]
 
 
@@ -59,6 +76,7 @@ def check_oob(
         return _empty_oob_report(object_errors, room)
 
     eps = float(cfg.get("numerical_eps", 1.0e-6))
+    floor_tol = float(cfg.get("floor_contact_tolerance_m", DEFAULT_FLOOR_CONTACT_TOLERANCE_M))
     official_mode = bool(cfg.get("official_mode"))
     detector_only = bool(cfg.get("detector_only"))
 
@@ -72,6 +90,7 @@ def check_oob(
             obj=obj,
             room=room,
             eps=eps,
+            floor_tol=floor_tol,
             cfg=cfg,
             prompt=prompt,
             relationships=relationships,
@@ -149,6 +168,7 @@ def _evaluate_object(
     obj,
     room: dict[str, Any],
     eps: float,
+    floor_tol: float,
     cfg: dict[str, Any],
     prompt: str | None,
     relationships: list[dict] | dict | None,
@@ -167,20 +187,45 @@ def _evaluate_object(
         "z": [float(min_axis[2]), float(max_axis[2])],
     }
     ceiling_z = room["ceiling_z"]
+    # Raw, non-negative penetration past each nominal plane, computed independently
+    # of the semantic plane_flags so an accepted shallow floor sink is preserved.
+    plane_penetration = _plane_penetration(min_axis, max_axis, room, ceiling_z)
+    floor_penetration = plane_penetration["floor_oob"]
+    # Wall and ceiling planes use ``numerical_eps`` for floating-point robustness.
+    # The floor plane uses the separate semantic ``floor_contact_tolerance_m`` so
+    # ordinary shallow floor sink is treated as valid contact rather than a
+    # candidate violation routed to the VLM. Numerical robustness stays additive
+    # so exactly ``floor_contact_tolerance_m`` (with float noise) is still accepted.
     plane_flags = {
-        "west_oob": bool(min_axis[0] < room["min_x"] - eps),
-        "east_oob": bool(max_axis[0] > room["max_x"] + eps),
-        "south_oob": bool(min_axis[1] < room["min_y"] - eps),
-        "north_oob": bool(max_axis[1] > room["max_y"] + eps),
-        "floor_oob": bool(min_axis[2] < room["floor_z"] - eps),
-        "ceiling_oob": bool(ceiling_z is not None and max_axis[2] > ceiling_z + eps),
+        "west_oob": bool(plane_penetration["west_oob"] > eps),
+        "east_oob": bool(plane_penetration["east_oob"] > eps),
+        "south_oob": bool(plane_penetration["south_oob"] > eps),
+        "north_oob": bool(plane_penetration["north_oob"] > eps),
+        "floor_oob": bool(floor_penetration > floor_tol + eps),
+        "ceiling_oob": bool(ceiling_z is not None and plane_penetration["ceiling_oob"] > eps),
     }
     candidate_oob = any(plane_flags.values())
+    # A positive floor sink beyond numerical noise that does not meaningfully
+    # exceed the semantic tolerance. An OBB flush on the floor is not "within
+    # tolerance" because it has no actual penetration.
+    within_floor_contact_tolerance = bool(
+        floor_penetration > eps and not plane_flags["floor_oob"]
+    )
+    # Flagged-only view retained as a backward-compatible alias of the raw field.
+    crossing_depths = {
+        plane: plane_penetration[plane] for plane in OOB_PLANES if plane_flags[plane]
+    }
 
     record: dict[str, Any] = {
         "object_id": obj.id,
         "obb_intervals": intervals,
         "plane_flags": plane_flags,
+        "plane_penetration_m": plane_penetration,
+        "within_floor_contact_tolerance": within_floor_contact_tolerance,
+        "floor_contact_tolerance_m": floor_tol,
+        "numerical_eps": eps,
+        "crossing_depths_m": crossing_depths,
+        "floor_penetration_m": floor_penetration,
         "candidate_oob": candidate_oob,
         "requires_vlm": False,
         "route": None,
@@ -191,9 +236,16 @@ def _evaluate_object(
     }
 
     if not candidate_oob:
+        # Both routes are direct-valid; the tolerance route makes explicit that the
+        # raw OBB is not strictly inside but sinks only within floor-contact tolerance.
+        route = (
+            "direct_valid_floor_contact_tolerance"
+            if within_floor_contact_tolerance
+            else "direct_valid_inside"
+        )
         record.update(
             {
-                "route": "direct_valid_inside",
+                "route": route,
                 "final_verdict": "valid",
                 "affects_oob_score": True,
             }
@@ -218,6 +270,10 @@ def _evaluate_object(
         "obb_intervals": intervals,
         "room": room["report"],
         "numerical_eps": eps,
+        "floor_contact_tolerance_m": floor_tol,
+        "plane_penetration_m": plane_penetration,
+        "within_floor_contact_tolerance": within_floor_contact_tolerance,
+        "crossing_depths_m": crossing_depths,
         "object": {
             "id": obj.id,
             "category": obj.category,
@@ -259,6 +315,34 @@ def _evaluate_object(
         }
     )
     return record
+
+
+def _plane_penetration(
+    min_axis: np.ndarray,
+    max_axis: np.ndarray,
+    room: dict[str, Any],
+    ceiling_z: float | None,
+) -> dict[str, float]:
+    """Raw, non-negative penetration depth (metres) past each of the six planes.
+
+    Depths are measured against the nominal room boundary and clamped at zero, so
+    they are reported for every plane regardless of the semantic plane_flags. This
+    preserves the true measured crossing as a fact for the VLM and the diagnostics,
+    and never erases an accepted shallow floor sink. When the room has no ceiling
+    the ceiling penetration is reported as ``0.0`` rather than an error sentinel.
+    """
+
+    ceiling_penetration = (
+        max(float(max_axis[2]) - float(ceiling_z), 0.0) if ceiling_z is not None else 0.0
+    )
+    return {
+        "west_oob": max(room["min_x"] - float(min_axis[0]), 0.0),
+        "east_oob": max(float(max_axis[0]) - room["max_x"], 0.0),
+        "south_oob": max(room["min_y"] - float(min_axis[1]), 0.0),
+        "north_oob": max(float(max_axis[1]) - room["max_y"], 0.0),
+        "floor_oob": max(room["floor_z"] - float(min_axis[2]), 0.0),
+        "ceiling_oob": ceiling_penetration,
+    }
 
 
 def _resolve_room(scene: dict) -> dict[str, Any] | None:
@@ -350,6 +434,11 @@ def _validate_oob_config(config: dict[str, Any]) -> None:
     eps = float(config.get("numerical_eps", 1.0e-6))
     if not math.isfinite(eps) or eps < 0.0:
         raise ValueError("oob.numerical_eps must be a finite non-negative number")
+    floor_tol = float(config.get("floor_contact_tolerance_m", DEFAULT_FLOOR_CONTACT_TOLERANCE_M))
+    if not math.isfinite(floor_tol) or floor_tol < 0.0:
+        raise ValueError("oob.floor_contact_tolerance_m must be a finite non-negative number")
+    if floor_tol < eps:
+        raise ValueError("oob.floor_contact_tolerance_m must be >= oob.numerical_eps")
     if config.get("score_mode") != "invalid_object_count_over_objects":
         raise ValueError("oob.score_mode must be 'invalid_object_count_over_objects'")
 

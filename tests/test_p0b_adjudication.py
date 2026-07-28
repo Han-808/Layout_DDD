@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import pytest
+from PIL import Image
 
 from benchmark.visual_judge import OpenAICompatibleVLMJudge, adjudicate_p0b_event
 
@@ -103,7 +104,7 @@ def test_p0b_request_contains_rich_context_and_injected_local_view(tmp_path: Pat
 
 def test_openai_p0b_judge_requires_binary_verdict(tmp_path: Path) -> None:
     image = tmp_path / "local.png"
-    image.write_bytes(b"png")
+    Image.new("RGB", (4, 4), (64, 64, 64)).save(image)
     model = _FakeModel({"verdict": "valid", "confidence": 0.8, "reason": "intended contact"})
 
     result = OpenAICompatibleVLMJudge(model).adjudicate_p0b(
@@ -155,15 +156,22 @@ def test_support_rubric_requires_grounded_ancestry_for_local_contact() -> None:
     assert "local contact with a floating or ungrounded support is not" in rubric
 
 
-def test_oob_rubric_requires_positive_structural_exception_evidence() -> None:
+def test_oob_rubric_carries_no_invalid_prior_and_separates_floor_tolerance() -> None:
     from benchmark.visual_judge.p0b import P0B_METRIC_RUBRICS
 
     rubric = P0B_METRIC_RUBRICS["oob"]
     assert "authoritative facts" in rubric
-    assert "Return invalid by default" in rubric
+    # The asymmetric contract: routing is a request for adjudication, not an
+    # automatic invalid prior, and a measured crossing alone is insufficient.
+    assert "carries no " in rubric
+    assert "not by itself sufficient to return invalid" in rubric
+    assert "Return invalid only when" in rubric
+    assert "Return invalid by default" not in rubric
+    # numerical robustness stays separate from the semantic floor-contact tolerance.
+    assert "numerical_eps" in rubric
+    assert "floor_contact_tolerance_m" in rubric
     assert "against_wall" in rubric
     assert "never exempt ordinary furniture" in rubric
-    assert "If qualifying structural evidence is absent, return invalid" in rubric
 
 
 def test_oob_uses_fixed_global_before_deterministic_local(tmp_path: Path) -> None:

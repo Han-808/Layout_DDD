@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import math
 from copy import deepcopy
 from pathlib import Path
@@ -233,10 +234,93 @@ def test_four_concrete_modes_and_auto_metric_resolution() -> None:
     assert resolve_camera_pose_mode("auto", "collision") == "visibility_ranked"
     assert resolve_camera_pose_mode("auto", "oob") == "visibility_ranked"
     assert resolve_camera_pose_mode("auto", "support") == "support_contact_plane"
+    assert (
+        resolve_camera_pose_mode("auto", "functional_semantic_fidelity")
+        == "visibility_ranked"
+    )
+    assert resolve_camera_pose_mode("auto", "scale_consistency") == "visibility_ranked"
+    assert (
+        resolve_camera_pose_mode("auto", "object_pairing_consistency")
+        == "visibility_ranked"
+    )
+    assert resolve_camera_pose_mode("auto", "style_consistency") == "global_only"
     assert DEFAULT_CAMERA_MODE_BY_METRIC["object_architecture_penetration"] == "visibility_ranked"
-    overrides = parse_metric_camera_modes(["collision=global_only", "support=query_cov"])
+    overrides = parse_metric_camera_modes(
+        [
+            "collision=global_only",
+            "support=query_cov",
+            "scale_consistency=bbox_track",
+        ]
+    )
     assert resolve_camera_pose_mode("auto", "collision", metric_modes=overrides) == "global_only"
     assert resolve_camera_pose_mode("auto", "support", metric_modes=overrides) == "query_cov"
+    assert (
+        resolve_camera_pose_mode(
+            "auto",
+            "scale_consistency",
+            metric_modes=overrides,
+        )
+        == "bbox_track"
+    )
+
+
+def test_auto_provider_renders_functional_semantic_claim_local_evidence(
+    tmp_path: Path,
+) -> None:
+    blend = tmp_path / "scene.blend"
+    blend.write_bytes(b"blend")
+    renderer = _FocusRenderer()
+    provider = CameraEvidenceProvider(
+        renderer=renderer,
+        blend_file=blend,
+        out_dir=tmp_path / "functional_evidence",
+        mode="auto",
+        max_views=2,
+    )
+    request = _request("functional_semantic_fidelity")
+    request["object_ids"] = ["bed", "cabinet"]
+    request["event"] = {
+        "type": "local_functionality",
+        "claim_id": "local_001",
+        "object_ids": ["bed", "cabinet"],
+    }
+
+    evidence = provider(request)
+
+    assert evidence
+    assert any(call["pass"] == "focus" for call in renderer.calls)
+    manifest_paths = list(
+        (tmp_path / "functional_evidence").glob(
+            "*/camera_evidence_manifest.json"
+        )
+    )
+    assert len(manifest_paths) == 1
+    manifest = json.loads(manifest_paths[0].read_text())
+    assert manifest["resolved_mode"] == "visibility_ranked"
+    assert manifest["metric"] == "functional_semantic_fidelity"
+
+
+def test_auto_provider_renders_canonical_l3_local_evidence(
+    tmp_path: Path,
+) -> None:
+    blend = tmp_path / "scene.blend"
+    blend.write_bytes(b"blend")
+    provider = CameraEvidenceProvider(
+        renderer=_FocusRenderer(),
+        blend_file=blend,
+        out_dir=tmp_path / "l3_camera",
+        mode="auto",
+        max_views=1,
+    )
+
+    evidence = provider(_request("scale_consistency"))
+
+    roles = {str(item.get("role")) for item in evidence if isinstance(item, dict)}
+    assert "metric_local_rgb" in roles
+    assert "metric_highlighted_global" in roles
+    assert provider.policy_config["resolved_metric_modes"][
+        "scale_consistency"
+    ] == "visibility_ranked"
 
 
 def test_support_contact_plane_mode_is_support_only() -> None:

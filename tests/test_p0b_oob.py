@@ -306,9 +306,10 @@ def test_non_official_failed_judge_stays_unresolved() -> None:
 # 11. The evaluation profile no longer advertises OOB as a never-VLM module.
 def test_profile_does_not_mark_oob_as_never_vlm() -> None:
     profile = resolve_evaluation_profile()
-    never_vlm = profile["structural_validity"]["never_vlm_modules"]
+    physical = profile["l1_physical_plausibility"]
+    never_vlm = physical["never_vlm_metrics"]
 
-    assert "oob" in profile["structural_validity"]["modules"]
+    assert physical["metrics"]["oob"]["enabled"] is True
     assert "oob" not in never_vlm
     assert "collision" not in never_vlm
 
@@ -353,9 +354,273 @@ def test_direct_evaluator_enforces_resolved_input_room_contract(tmp_path) -> Non
     [
         ({"numerical_eps": -1.0e-6}, "numerical_eps"),
         ({"numerical_eps": float("nan")}, "numerical_eps"),
+        ({"floor_contact_tolerance_m": -1.0e-3}, "floor_contact_tolerance_m"),
+        ({"floor_contact_tolerance_m": float("nan")}, "floor_contact_tolerance_m"),
+        ({"floor_contact_tolerance_m": 1.0e-9}, "must be >= oob.numerical_eps"),
         ({"official_mode": True, "detector_only": True}, "mutually exclusive"),
     ],
 )
 def test_oob_rejects_invalid_configuration(config: dict, match: str) -> None:
     with pytest.raises(ValueError, match=match):
         check_oob(_scene([_obj("inside", [1.0, 1.0, 0.5])]), config)
+
+
+def _floor_sink_scene(depth_m: float) -> dict:
+    # Object of unit height whose bottom face sinks ``depth_m`` below the floor.
+    return _scene([_obj("obj", [5.0, 5.0, 0.5 - depth_m], [1.0, 1.0, 1.0])])
+
+
+# 12. The evaluator advertises the v2 contract after the floor-contact fix.
+def test_oob_evaluator_version_is_v2() -> None:
+    assert OOB_EVALUATOR_VERSION == "oob_p0b_v2"
+    report = check_oob(_scene([_obj("inside", [5.0, 5.0, 0.5])]))
+    assert report["evaluator_version"] == "oob_p0b_v2"
+
+
+# 13. Exact floor contact (no penetration) is direct_valid_inside and is not
+#     labelled as being within floor-contact tolerance.
+def test_exact_floor_contact_is_direct_valid_inside() -> None:
+    scene = _floor_sink_scene(0.0)
+    judge = _Judge("invalid")
+    report = check_oob(scene, vlm_judge=judge)
+    record = report["objects"][0]
+
+    assert record["plane_penetration_m"]["floor_oob"] == pytest.approx(0.0, abs=1.0e-12)
+    assert record["within_floor_contact_tolerance"] is False
+    assert record["plane_flags"]["floor_oob"] is False
+    assert record["candidate_oob"] is False
+    assert record["route"] == "direct_valid_inside"
+    assert record["final_verdict"] == "valid"
+    assert judge.calls == 0
+
+
+# 14. Shallow floor sink (0.2, 1.0, 4.9 mm) within tolerance: raw penetration is
+#     preserved, floor_oob is false, the tolerance flag is true, the new
+#     direct_valid route is used, and no VLM call is made.
+@pytest.mark.parametrize("depth_m", [0.0002, 0.001, 0.0049])
+def test_shallow_floor_sink_within_tolerance_bypasses_vlm(depth_m: float) -> None:
+    scene = _floor_sink_scene(depth_m)
+    judge = _Judge("invalid")
+    report = check_oob(scene, vlm_judge=judge)
+    record = report["objects"][0]
+
+    assert record["plane_penetration_m"]["floor_oob"] == pytest.approx(depth_m, abs=1.0e-9)
+    assert record["floor_penetration_m"] == pytest.approx(depth_m, abs=1.0e-9)
+    assert record["plane_flags"]["floor_oob"] is False
+    assert record["within_floor_contact_tolerance"] is True
+    assert record["candidate_oob"] is False
+    assert record["requires_vlm"] is False
+    assert record["route"] == "direct_valid_floor_contact_tolerance"
+    assert record["final_verdict"] == "valid"
+    assert record["affects_oob_score"] is True
+    assert judge.calls == 0
+    assert report["score"] == 1.0
+    assert report["status"] == "checked"
+    assert report["coverage"]["direct_valid_objects"] == 1
+
+
+# 15. Exactly 5.0 mm with floating-point noise is accepted as floor contact and
+#     makes no VLM call.
+def test_exact_five_millimetre_floor_contact_is_accepted() -> None:
+    scene = _floor_sink_scene(0.005)
+    judge = _Judge("invalid")
+    report = check_oob(scene, vlm_judge=judge)
+    record = report["objects"][0]
+
+    # The nominal object bottom is -0.005 with representable float noise.
+    assert record["plane_penetration_m"]["floor_oob"] == pytest.approx(0.005, abs=1.0e-9)
+    assert record["plane_flags"]["floor_oob"] is False
+    assert record["within_floor_contact_tolerance"] is True
+    assert record["route"] == "direct_valid_floor_contact_tolerance"
+    assert judge.calls == 0
+
+
+# 16. 5.1 mm and 6.0 mm floor penetration exceed the tolerance and route to VLM.
+@pytest.mark.parametrize("depth_m", [0.0051, 0.006])
+def test_floor_penetration_just_beyond_tolerance_routes_to_vlm(depth_m: float) -> None:
+    scene = _floor_sink_scene(depth_m)
+    detector = check_oob(scene, {"detector_only": True})["objects"][0]
+
+    assert detector["plane_penetration_m"]["floor_oob"] == pytest.approx(depth_m, abs=1.0e-9)
+    assert detector["plane_flags"]["floor_oob"] is True
+    assert detector["within_floor_contact_tolerance"] is False
+    assert detector["candidate_oob"] is True
+    assert detector["requires_vlm"] is True
+
+    judge = _Judge("invalid")
+    routed = check_oob(scene, vlm_judge=judge)["objects"][0]
+    assert judge.calls == 1
+    assert routed["route"] == "vlm_adjudicated"
+    assert routed["final_verdict"] == "invalid"
+
+
+# 17. 20 mm floor penetration remains a candidate and routes to the VLM.
+def test_deep_floor_penetration_beyond_tolerance_routes_to_vlm() -> None:
+    scene = _floor_sink_scene(0.020)
+    detector = check_oob(scene, {"detector_only": True})["objects"][0]
+
+    assert detector["plane_flags"]["floor_oob"] is True
+    assert detector["candidate_oob"] is True
+    assert detector["requires_vlm"] is True
+    assert detector["plane_penetration_m"]["floor_oob"] == pytest.approx(0.020, abs=1.0e-9)
+    assert detector["crossing_depths_m"]["floor_oob"] == pytest.approx(0.020, abs=1.0e-9)
+    assert detector["floor_penetration_m"] == pytest.approx(0.020, abs=1.0e-9)
+
+    judge = _Judge("invalid")
+    report = check_oob(scene, vlm_judge=judge)
+    routed = report["objects"][0]
+    assert judge.calls == 1
+    assert routed["route"] == "vlm_adjudicated"
+    assert routed["final_verdict"] == "invalid"
+
+
+# 18. The floor-contact tolerance is configurable; a tightened band re-flags a
+#     shallow sink that the default would accept.
+def test_floor_contact_tolerance_is_configurable() -> None:
+    scene = _floor_sink_scene(0.003)
+
+    accepted = check_oob(scene, {"detector_only": True})["objects"][0]
+    assert accepted["plane_flags"]["floor_oob"] is False
+    assert accepted["within_floor_contact_tolerance"] is True
+
+    tightened = check_oob(
+        scene, {"detector_only": True, "floor_contact_tolerance_m": 0.001}
+    )["objects"][0]
+    assert tightened["plane_flags"]["floor_oob"] is True
+    assert tightened["within_floor_contact_tolerance"] is False
+    assert tightened["candidate_oob"] is True
+
+
+# 19. numerical_eps still governs the wall planes independently of the floor
+#     contact tolerance: a 1 mm wall protrusion is flagged even though 1 mm floor
+#     sink is not.
+def test_numerical_eps_still_governs_walls_independent_of_floor_tolerance() -> None:
+    # 1 mm past the east wall and 1 mm below the floor in the same object.
+    scene = _scene([_obj("box", [9.5 + 0.001, 5.0, 0.5 - 0.001], [1.0, 1.0, 1.0])])
+    record = check_oob(scene, {"detector_only": True})["objects"][0]
+
+    assert record["plane_flags"]["east_oob"] is True
+    assert record["plane_flags"]["floor_oob"] is False
+    assert record["candidate_oob"] is True
+
+
+# 20. Multi-plane routing: a shallow floor sink plus a real wall crossing must
+#     still route because of the wall; the shallow floor tolerance does not make
+#     the whole object direct-valid, and the raw floor penetration is preserved.
+def test_shallow_floor_plus_wall_oob_routes_to_vlm() -> None:
+    # 2 mm floor sink and 10 mm past the east wall.
+    scene = _scene([_obj("box", [9.5 + 0.010, 5.0, 0.5 - 0.002], [1.0, 1.0, 1.0])])
+    record = check_oob(scene, {"detector_only": True})["objects"][0]
+
+    assert record["plane_penetration_m"]["floor_oob"] == pytest.approx(0.002, abs=1.0e-9)
+    assert record["plane_penetration_m"]["east_oob"] == pytest.approx(0.010, abs=1.0e-9)
+    assert record["within_floor_contact_tolerance"] is True
+    assert record["plane_flags"]["floor_oob"] is False
+    assert record["plane_flags"]["east_oob"] is True
+    assert record["candidate_oob"] is True
+    assert record["requires_vlm"] is True
+
+
+# 21. All six plane_penetration_m values are computed and non-negative, including
+#     the planes that are not crossed.
+def test_all_six_plane_penetrations_are_reported() -> None:
+    # Poke west (min_x) and ceiling simultaneously.
+    scene = _scene(
+        [_obj("box", [0.5 - 0.02, 5.0, 4.0 - 0.5 + 0.03], [1.0, 1.0, 1.0])],
+        height=4.0,
+    )
+    record = check_oob(scene, {"detector_only": True})["objects"][0]
+    penetration = record["plane_penetration_m"]
+
+    assert set(penetration) == {
+        "west_oob",
+        "east_oob",
+        "south_oob",
+        "north_oob",
+        "floor_oob",
+        "ceiling_oob",
+    }
+    assert all(value >= 0.0 for value in penetration.values())
+    assert penetration["west_oob"] == pytest.approx(0.02, abs=1.0e-9)
+    assert penetration["ceiling_oob"] == pytest.approx(0.03, abs=1.0e-9)
+    assert penetration["east_oob"] == 0.0
+    assert penetration["south_oob"] == 0.0
+    assert penetration["north_oob"] == 0.0
+    assert penetration["floor_oob"] == 0.0
+
+
+# 22. Ceiling penetration uses numerical_eps, not the floor tolerance.
+def test_ceiling_uses_numerical_eps_not_floor_tolerance() -> None:
+    # 1 mm above the ceiling: below the 5 mm floor tolerance but well above eps.
+    scene = _scene([_obj("panel", [5.0, 5.0, 4.0 - 0.5 + 0.001], [1.0, 1.0, 1.0])], height=4.0)
+    record = check_oob(scene, {"detector_only": True})["objects"][0]
+
+    assert record["plane_penetration_m"]["ceiling_oob"] == pytest.approx(0.001, abs=1.0e-9)
+    assert record["plane_flags"]["ceiling_oob"] is True
+    assert record["candidate_oob"] is True
+
+
+# 23. The new direct_valid_floor_contact_tolerance route is counted in the
+#     direct-valid coverage total.
+def test_floor_contact_route_is_direct_valid_coverage() -> None:
+    scene = _scene(
+        [
+            _obj("inside", [5.0, 5.0, 0.5], [1.0, 1.0, 1.0]),
+            _obj("contact", [3.0, 3.0, 0.5 - 0.003], [1.0, 1.0, 1.0]),
+        ]
+    )
+    report = check_oob(scene)
+    routes = {record["object_id"]: record["route"] for record in report["objects"]}
+
+    assert routes["inside"] == "direct_valid_inside"
+    assert routes["contact"] == "direct_valid_floor_contact_tolerance"
+    assert report["coverage"]["direct_valid_objects"] == 2
+    assert report["score"] == 1.0
+
+
+# 24. Official mode does not require a judge for tolerance-only floor contact,
+#     because such objects never become candidates.
+def test_official_mode_allows_floor_contact_without_judge() -> None:
+    scene = _floor_sink_scene(0.003)
+    report = check_oob(scene, {"official_mode": True}, vlm_judge=None)
+    record = report["objects"][0]
+
+    assert record["route"] == "direct_valid_floor_contact_tolerance"
+    assert record["candidate_oob"] is False
+    assert report["status"] == "checked"
+    assert report["score"] == 1.0
+
+
+# 25. Official mode still fails closed for a substantive floor candidate with no
+#     judge configured.
+def test_official_mode_deep_floor_candidate_without_judge_raises() -> None:
+    scene = _floor_sink_scene(0.020)
+    with pytest.raises(OOBEvaluationError, match="no judge"):
+        check_oob(scene, {"official_mode": True}, vlm_judge=None)
+
+
+# 26. VLM detector evidence carries all v2 fields and keeps the two tolerances
+#     distinct while reporting raw penetration as a fact.
+def test_detector_evidence_includes_all_v2_fields() -> None:
+    scene = _floor_sink_scene(0.020)
+    judge = _Judge("valid")
+    check_oob(scene, {"floor_contact_tolerance_m": 0.005}, vlm_judge=judge)
+
+    evidence = judge.requests[0]["detector_evidence"]
+    for key in (
+        "detector",
+        "numerical_eps",
+        "floor_contact_tolerance_m",
+        "plane_penetration_m",
+        "within_floor_contact_tolerance",
+        "plane_flags",
+        "obb_intervals",
+        "room",
+        "object",
+    ):
+        assert key in evidence
+    assert evidence["detector"] == "oob_p0b_v2"
+    assert evidence["numerical_eps"] == pytest.approx(1.0e-6)
+    assert evidence["floor_contact_tolerance_m"] == pytest.approx(0.005)
+    assert evidence["plane_penetration_m"]["floor_oob"] == pytest.approx(0.020, abs=1.0e-9)
+    assert evidence["crossing_depths_m"]["floor_oob"] == pytest.approx(0.020, abs=1.0e-9)

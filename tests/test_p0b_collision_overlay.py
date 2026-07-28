@@ -23,6 +23,10 @@ from benchmark.rendering.collision_overlay import (
     resolve_canonical_object_id,
 )
 from benchmark.visual_judge import CameraEvidenceProvider, OpenAICompatibleVLMJudge
+from benchmark.visual_judge.evidence_sufficiency import (
+    SUFFICIENT,
+    assess_visual_evidence_sufficiency,
+)
 from benchmark.visual_judge.p0b import (
     COLLISION_CANDIDATE_SELECTION_POLICY,
     P0B_METRIC_RUBRICS,
@@ -133,6 +137,55 @@ class _FakeRenderer:
             path = destination / f"overlay_{index:02d}.png"
             _write_overlay_png(path, both=self.overlay_both)
             views.append({"id": pose["id"], "path": str(path), "role": "collision_pair_overlay", "pose": pose})
+        return {"views": views}
+
+
+class _FakeContourRenderer(_FakeRenderer):
+    def render_focus_overlay_views(
+        self,
+        *,
+        blend_file,
+        out_dir,
+        camera_views,
+        overlay_spec,
+        preview=False,
+        allow_blank_views=False,
+    ):
+        return self.render_collision_overlay_views(
+            blend_file=blend_file,
+            out_dir=out_dir,
+            camera_views=camera_views,
+            overlay_spec=overlay_spec,
+            preview=preview,
+        )
+
+    def render_target_id_masks(
+        self,
+        *,
+        blend_file,
+        out_dir,
+        camera_views,
+        overlay_spec,
+        preview=True,
+        respect_occlusion=False,
+    ):
+        destination = Path(out_dir)
+        destination.mkdir(parents=True, exist_ok=True)
+        target_ids = [
+            str(target["id"])
+            for target in overlay_spec.get("targets", [])
+            if isinstance(target, dict) and target.get("id") is not None
+        ]
+        views = []
+        for view_index, pose in enumerate(camera_views):
+            targets = {}
+            for target_index, target_id in enumerate(target_ids):
+                path = destination / f"mask_{view_index}_{target_index}.png"
+                image = Image.new("L", (8, 8), 0)
+                image.putpixel((1 + target_index * 3, 2), 255)
+                image.save(path)
+                targets[target_id] = {"mask_path": str(path)}
+            views.append({"id": pose["id"], "status": "ok", "targets": targets})
         return {"views": views}
 
 
@@ -431,6 +484,97 @@ def test_collision_overlay_pairs_rgb_and_overlay_in_manifest(tmp_path: Path) -> 
     passes = [call["pass"] for call in renderer.calls]
     assert passes.count("overlay") == 1
     assert passes.count("rgb") == 1  # final RGB only
+
+
+def test_collision_contour_pairs_same_pose_raw_and_contour(tmp_path: Path) -> None:
+    blend = tmp_path / "scene.blend"
+    blend.write_bytes(b"blend")
+    renderer = _FakeContourRenderer(overlay_both=True)
+    provider = CameraEvidenceProvider(
+        renderer=renderer,
+        blend_file=blend,
+        out_dir=tmp_path / "evidence",
+        mode="bbox_track",
+        max_views=1,
+        collision_overlay=True,
+        collision_contour=True,
+    )
+
+    items = provider(_camera_request())
+
+    assert [item["role"] for item in items] == [
+        "collision_rgb",
+        "metric_local_contour",
+    ]
+    assert items[0]["view_id"] == items[1]["view_id"]
+    assert Path(items[1]["path"]).is_file()
+    event_dir = next(iter((tmp_path / "evidence").iterdir()))
+    manifest = json.loads(
+        (event_dir / "camera_evidence_manifest.json").read_text(encoding="utf-8")
+    )
+    assert manifest["pairs"][0]["contour_available"] is True
+    assert manifest["contour_manifest"].endswith("segmentation_contour_manifest.json")
+
+
+def test_collision_contour_measures_visible_contact_focus_in_final_image(
+    tmp_path: Path,
+) -> None:
+    blend = tmp_path / "scene.blend"
+    blend.write_bytes(b"blend")
+
+    class _VisibleFocusContourRenderer(_FakeContourRenderer):
+        def render_focus_overlay_views(
+            self,
+            *,
+            blend_file,
+            out_dir,
+            camera_views,
+            overlay_spec,
+            preview=False,
+            allow_blank_views=False,
+        ):
+            manifest = super().render_focus_overlay_views(
+                blend_file=blend_file,
+                out_dir=out_dir,
+                camera_views=camera_views,
+                overlay_spec=overlay_spec,
+                preview=preview,
+                allow_blank_views=allow_blank_views,
+            )
+            marker = _color_bytes(COLLISION_OVERLAY_COLORS["marker"])
+            context = _color_bytes(COLLISION_OVERLAY_COLORS["context"])
+            for view in manifest["views"]:
+                image = Image.new("RGB", (64, 64), context)
+                for y in range(58, 61):
+                    for x in range(58, 61):
+                        image.putpixel((x, y), marker)
+                image.save(view["path"])
+            return manifest
+
+    renderer = _VisibleFocusContourRenderer(overlay_both=True)
+    provider = CameraEvidenceProvider(
+        renderer=renderer,
+        blend_file=blend,
+        out_dir=tmp_path / "evidence",
+        mode="bbox_track",
+        max_views=1,
+        collision_overlay=True,
+        collision_contour=True,
+    )
+
+    items = provider(_camera_request())
+
+    raw = next(item for item in items if item["role"] == "collision_rgb")
+    visibility = raw["visibility"]
+    assert visibility["focus_measurement_status"] == "measured"
+    assert visibility["focus_in_frame"] is True
+    assert visibility["focus_pixel_fraction"] > 0.0
+    assessment = assess_visual_evidence_sufficiency(
+        "collision",
+        items,
+        request=_camera_request(),
+    )
+    assert assessment["status"] == SUFFICIENT
 
 
 def test_collision_overlay_forwards_paired_paths_to_judge(tmp_path: Path) -> None:
@@ -971,6 +1115,64 @@ def test_provider_backfills_failed_final_rgb_from_next_candidate(tmp_path: Path)
     manifest = json.loads((event_dir / "camera_evidence_manifest.json").read_text())
     assert manifest["backfill"]["backfilled"] is True
     assert manifest["backfill"]["skipped_candidates"]
+
+
+def test_final_rgb_backfill_preserves_active_modified_pose(tmp_path: Path) -> None:
+    blend = tmp_path / "scene.blend"
+    blend.write_bytes(b"blend")
+
+    class _BatchFailsRenderer(_FakeRenderer):
+        def render_camera_views(
+            self,
+            *,
+            blend_file,
+            out_dir,
+            camera_views,
+            preview=False,
+        ):
+            if Path(out_dir).name == "final_rgb" and not preview:
+                raise BlenderRenderError("force per-pose final backfill")
+            return super().render_camera_views(
+                blend_file=blend_file,
+                out_dir=out_dir,
+                camera_views=camera_views,
+                preview=preview,
+            )
+
+    provider = CameraEvidenceProvider(
+        renderer=_BatchFailsRenderer(),
+        blend_file=blend,
+        out_dir=tmp_path / "evidence",
+        mode="bbox_track",
+        max_views=1,
+    )
+    active_pose = {
+        "id": "active_repair_00",
+        "location": [3.0, 2.0, 1.4],
+        "target": [1.4, 1.0, 0.5],
+        "lens_mm": 58.0,
+    }
+    original_pose = {
+        "id": "original_00",
+        "location": [2.0, 2.0, 1.4],
+        "target": [1.0, 1.0, 0.5],
+        "lens_mm": 52.0,
+    }
+
+    manifest, rendered_selected, backfill = (
+        provider._render_final_rgb_with_backfill(
+            event_dir=tmp_path / "event",
+            selected=[active_pose],
+            candidates=[original_pose],
+            ranking_log={"ranked": [{"id": "original_00"}]},
+        )
+    )
+
+    assert backfill["backfilled"] is True
+    assert backfill["rendered_view_ids"] == ["active_repair_00"]
+    assert rendered_selected == [active_pose]
+    assert manifest["views"][0]["id"] == "active_repair_00"
+    assert manifest["views"][0]["pose"]["location"] == active_pose["location"]
 
 
 def test_provider_all_candidate_rgb_failure_is_infrastructure_error(tmp_path: Path) -> None:

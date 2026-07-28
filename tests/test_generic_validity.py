@@ -139,6 +139,40 @@ def test_navigability_empty_room_splitter_and_non_blocking_objects() -> None:
     assert elevated["blocking_object_count"] == 0
 
 
+def test_game_navigability_uses_non_flat_structure_not_oversized_ground() -> None:
+    scene = _scene(
+        [
+            _obj(
+                "decorative_ground",
+                [50.0, 50.0, 0.005],
+                [100.0, 100.0, 0.01],
+            ),
+            _obj("west_wall", [10.1, 15.0, 1.0], [0.2, 10.0, 2.0]),
+            _obj("east_wall", [19.9, 15.0, 1.0], [0.2, 10.0, 2.0]),
+            _obj("south_wall", [15.0, 10.1, 1.0], [10.0, 0.2, 2.0]),
+            _obj("north_wall", [15.0, 19.9, 1.0], [10.0, 0.2, 2.0]),
+        ],
+        boundary=[[0, 0], [100, 0], [100, 100], [0, 100]],
+        height=2.0,
+    )
+    report = check_navigability(
+        scene,
+        {
+            "boundary_source": "non_flat_structure_envelope",
+            "grid_resolution": 0.2,
+            "agent_radius": 0.0,
+            "max_grid_cells": 250000,
+        },
+    )
+
+    assert report["boundary_source"] == "non_flat_structure_envelope"
+    assert report["score_definition"] == (
+        "largest_connected_free_area / total_free_area"
+    )
+    assert report["projection"] == "single_floor_2d"
+    assert report["total_free_area"] < 150.0
+
+
 def test_accessibility_not_applicable_passes_and_surrounded_object_fails() -> None:
     no_interactive = check_accessibility(_scene([_obj("box", [1.0, 1.0, 0.5])]))
     reachable = check_accessibility(_scene([_obj("desk", [1.0, 1.0, 0.5], interactive=True)]))
@@ -220,7 +254,14 @@ def test_evaluate_cli_writes_generic_validity_report_by_default(tmp_path: Path) 
     )
 
     report = read_json(out_path)
-    assert report["evaluator_version"] == "scene_harness_evaluator_v1"
+    assert report["evaluator_version"] == "scene_harness_evaluator_v2"
+    assert set(report["category_reports"]) == {
+        "l0_structural_validity",
+        "l1_physical_plausibility",
+        "l2_specification_fidelity",
+        "l3_scene_quality",
+        "l4_downstream_task_functionality",
+    }
     assert "generic_validity" in report["reports"]
     assert "benchmark_score:" in completed.stdout
 
@@ -405,5 +446,5 @@ def test_evaluate_cli_can_enrich_assets_from_metadata_json(tmp_path: Path) -> No
     )
 
     report = read_json(out_path)
-    assert report["evaluator_version"] == "scene_harness_evaluator_v1"
+    assert report["evaluator_version"] == "scene_harness_evaluator_v2"
     assert report["reports"]["generic_validity"]["status"] == "ok"

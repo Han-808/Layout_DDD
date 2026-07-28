@@ -1,11 +1,11 @@
 """Blender-side worker for read-only per-target identity masks.
 
-For each candidate pose this renders one binary mask per canonical target: the
-target's visible surface is white on a black background, with every other object
-hidden from the render. The mask is therefore an object-identity image that is
-independent of materials, lighting, exposure, Blender color management, overlay
-wireframes, markers, and legends - so it is a trustworthy visibility signal for
-deterministic camera-candidate ranking.
+For each candidate pose this renders one binary mask per canonical target.
+The historical selector mode hides every other object and therefore measures
+the target's unoccluded screen projection.  The opt-in ``--respect-occlusion``
+mode instead keeps scene meshes as black depth-writing occluders and renders
+the target white, producing a true visible 2D segmentation suitable for
+presentation overlays.
 
 The worker is per-candidate lenient: it records a status per view and never
 raises for a blank candidate. It only mutates in-memory render visibility and
@@ -22,6 +22,7 @@ import json
 import re
 import sys
 import time
+from array import array
 from pathlib import Path
 
 import bpy
@@ -57,7 +58,7 @@ def main() -> None:
         cycles_samples=1,
         cycles_denoising=False,
     )
-    _configure_flat_mask_world()
+    _configure_flat_mask_world(respect_occlusion=args.respect_occlusion)
     targets = _overlay_targets(overlay_spec)
     target_ids = [str(target.get("id")) for target in targets if target.get("id") is not None]
     resolver = _CanonicalResolver()
@@ -65,7 +66,15 @@ def main() -> None:
     focus = overlay_spec.get("focus") if isinstance(overlay_spec.get("focus"), dict) else {}
 
     views = [
-        _render_mask_view(pose, index, out_dir, targets, mesh_by_target, focus)
+        _render_mask_view(
+            pose,
+            index,
+            out_dir,
+            targets,
+            mesh_by_target,
+            focus,
+            respect_occlusion=args.respect_occlusion,
+        )
         for index, pose in enumerate(poses)
     ]
     manifest = {
@@ -75,6 +84,11 @@ def main() -> None:
         "scene_mutation_scope": "ephemeral_camera_and_render_visibility_only",
         "render_config": render_config,
         "role": "target_id_masks",
+        "occlusion_policy": (
+            "respect_scene_occlusion"
+            if args.respect_occlusion
+            else "ignore_scene_occlusion_projection_proxy"
+        ),
         "target_ids": target_ids,
         "views": views,
     }
@@ -89,10 +103,11 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--out-dir", required=True)
     parser.add_argument("--width", type=int, default=256)
     parser.add_argument("--height", type=int, default=256)
+    parser.add_argument("--respect-occlusion", action="store_true")
     return parser.parse_args(values)
 
 
-def _configure_flat_mask_world() -> None:
+def _configure_flat_mask_world(*, respect_occlusion: bool) -> None:
     scene = bpy.context.scene
     try:
         scene.render.film_transparent = False
@@ -100,7 +115,7 @@ def _configure_flat_mask_world() -> None:
             scene.world.color = (0.0, 0.0, 0.0)
         shading = scene.display.shading
         shading.light = "FLAT"
-        shading.color_type = "SINGLE"
+        shading.color_type = "OBJECT" if respect_occlusion else "SINGLE"
         shading.single_color = (1.0, 1.0, 1.0)
         shading.show_shadows = False
         shading.show_cavity = False
@@ -121,7 +136,16 @@ def _group_mesh_objects(resolver: "_CanonicalResolver", target_ids: list[str]) -
     return grouped
 
 
-def _render_mask_view(pose, index, out_dir, targets, mesh_by_target, focus) -> dict:
+def _render_mask_view(
+    pose,
+    index,
+    out_dir,
+    targets,
+    mesh_by_target,
+    focus,
+    *,
+    respect_occlusion: bool,
+) -> dict:
     if not isinstance(pose, dict):
         raise TypeError("each camera pose must be a JSON object")
     pose_id = str(pose.get("id") or f"view_{index:02d}")
@@ -130,6 +154,7 @@ def _render_mask_view(pose, index, out_dir, targets, mesh_by_target, focus) -> d
     bpy.context.scene.camera = camera
     all_meshes = [obj for obj in bpy.data.objects if obj.type == "MESH"]
     saved_hide = {obj.name: obj.hide_render for obj in all_meshes}
+    saved_colors = {obj.name: tuple(obj.color) for obj in all_meshes}
     per_target: dict[str, dict] = {}
     status = "ok"
     started = time.monotonic()
@@ -137,8 +162,17 @@ def _render_mask_view(pose, index, out_dir, targets, mesh_by_target, focus) -> d
         for target in targets:
             target_id = str(target.get("id"))
             members = mesh_by_target.get(target_id, [])
+            member_names = {obj.name for obj in members}
             for obj in all_meshes:
-                obj.hide_render = obj not in members
+                if respect_occlusion:
+                    obj.hide_render = saved_hide.get(obj.name, False)
+                    obj.color = (
+                        (1.0, 1.0, 1.0, 1.0)
+                        if obj.name in member_names
+                        else (0.0, 0.0, 0.0, 1.0)
+                    )
+                else:
+                    obj.hide_render = obj not in members
             mask_path = out_dir / f"mask_{index:02d}_{safe_id}__{re.sub(r'[^A-Za-z0-9_.-]+', '_', target_id)}.png"
             visible_pixels, image_pixels = _render_binary_mask(mask_path)
             per_target[target_id] = {
@@ -155,6 +189,7 @@ def _render_mask_view(pose, index, out_dir, targets, mesh_by_target, focus) -> d
     finally:
         for obj in all_meshes:
             obj.hide_render = saved_hide.get(obj.name, False)
+            obj.color = saved_colors.get(obj.name, (0.8, 0.8, 0.8, 1.0))
     focus_info = _focus_projection(camera, focus)
     return {
         "id": pose_id,
@@ -204,13 +239,19 @@ def _render_binary_mask(mask_path: Path) -> tuple[int, int]:
         if pixel_count == 0:
             return 0, 0
         pixels = image.pixels
-        if len(pixels) < pixel_count * channels:
+        required_values = pixel_count * channels
+        if len(pixels) < required_values:
             return 0, 0
-        visible = 0
-        for pixel_index in range(pixel_count):
-            offset = pixel_index * channels
-            if float(pixels[offset]) >= _FOREGROUND:
-                visible += 1
+        # Reading one RNA element at a time is extremely slow on macOS
+        # (roughly 20 seconds for a 512x512 RGBA mask), leaving the background
+        # Blender process looking unresponsive in the Dock.  Bulk-copy once,
+        # then count from ordinary Python memory.
+        pixel_buffer = array("f", [0.0]) * required_values
+        pixels.foreach_get(pixel_buffer)
+        visible = sum(
+            float(pixel_buffer[pixel_index * channels]) >= _FOREGROUND
+            for pixel_index in range(pixel_count)
+        )
         return visible, pixel_count
     finally:
         bpy.data.images.remove(image)

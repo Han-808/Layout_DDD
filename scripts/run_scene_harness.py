@@ -10,8 +10,7 @@ Input:
       (``--adapter`` + ``--method-output`` or a generator structure).
     - Optional assets (``--asset-csv`` / ``--asset-root``), rendered evidence
       (``--blender-bin`` + camera-pose mode), and a frozen
-      ``--reference-annotation`` or coarse-mode
-      ``--spatial-fidelity-ontology``.
+      ``--specification-contract`` / ``--reference-annotation``.
     - ``--out-dir`` for all artifacts.
 
 Output:
@@ -21,11 +20,13 @@ Output:
 
 Function:
     Runs ``run_generate`` then ``run_evaluate`` per attempt, threads P0b options
-    (support enable/disable, official mode, collision camera/overlay evidence),
+    (official mode and collision camera/overlay evidence; the support switch is
+    retained only for the legacy Game profile),
     enforces the scene/architecture contract, and records auditable artifacts.
     Camera-pose selection stays an injected, bounded evidence provider.
-    ``scene_request.prompt_granularity`` gates Prompt Fidelity versus Spatial
-    Fidelity before mode-specific evaluators run.
+    Every non-game case follows one canonical L0--L4 evaluator. Prompt
+    granularity is descriptive metadata; frozen specification claims activate
+    L2 metrics.
 """
 
 from __future__ import annotations
@@ -44,8 +45,9 @@ from benchmark.api.generation import run_generate
 
 from benchmark.adapters import get_adapter
 from benchmark.evaluator.profile import (
-    FIDELITY_CATEGORY_BY_GRANULARITY,
-    evaluation_mode_for_prompt_granularity,
+    build_evaluation_plan,
+    is_legacy_game_profile,
+    resolve_evaluation_profile,
 )
 from benchmark.io_contracts import O1_OBJECT_STATE, O3_SCENE_PACKAGE
 from benchmark.assets.generation import load_asset_generation_tool
@@ -73,7 +75,11 @@ from benchmark.task_contract import (
     resolve_room_contract,
 )
 from benchmark.utils.io import load_yaml, read_json, write_json
-from benchmark.visual_judge import CameraEvidenceProvider, build_openai_compatible_vlm_judge
+from benchmark.visual_judge import (
+    CameraEvidenceProvider,
+    build_conditional_active_camera_evidence_provider,
+    build_openai_compatible_vlm_judge,
+)
 from benchmark.vlm_assistance import budget_for_output
 
 def run_scene_harness(
@@ -105,8 +111,17 @@ def run_scene_harness(
     # input, never evaluator ground truth.
     object_plan: dict | None = None,
     reference_annotation: dict | None = None,
+    specification_contract: dict | None = None,
+    functional_semantic_config: dict | None = None,
+    scene_quality_config: dict | None = None,
+    object_grouping_report: dict | list | None = None,
+    asset_policy: dict | None = None,
+    authorized_deviations: list | None = None,
+    visual_style_spec: dict | None = None,
     asset_selection: dict | None = None,
     evaluator_output_type: str = O1_OBJECT_STATE,
+    # Deprecated compatibility inputs. Canonical L0--L4 routing is owned by the
+    # frozen profile and specification contract, not runtime booleans.
     eval_generic_validity: bool = False,
     eval_oor: bool = False,
     eval_oar: bool = False,
@@ -130,6 +145,10 @@ def run_scene_harness(
     camera_pose_metric_modes: dict[str, str] | None = None,
     camera_pose_max_views: int = 2,
     camera_pose_max_steps: int = 1,
+    camera_active_fallback: bool = False,
+    camera_active_shadow_mode: bool = True,
+    camera_active_candidate_count: int = 5,
+    camera_active_selector: Any | None = None,
     collision_pair_overlay: bool = True,
 ) -> dict:
     _reject_literal_api_key(asset_selector_model_config, "asset selector config")
@@ -158,8 +177,22 @@ def run_scene_harness(
             f"got {requested_granularity!r}"
         )
     resolved_granularity = requested_granularity
-    resolved_evaluation_mode = evaluation_mode_for_prompt_granularity(resolved_granularity)
-    resolved_fidelity_category = FIDELITY_CATEGORY_BY_GRANULARITY[resolved_granularity]
+    resolved_profile = resolve_evaluation_profile(evaluation_profile)
+    legacy_game_profile = is_legacy_game_profile(resolved_profile)
+    legacy_game_plan = (
+        build_evaluation_plan(
+            prompt_granularity=resolved_granularity,
+            render_evidence_count=0,
+            profile=resolved_profile,
+        )
+        if legacy_game_profile
+        else None
+    )
+    if spatial_fidelity_ontology is not None and not legacy_game_profile:
+        raise ValueError(
+            "spatial_fidelity_ontology belongs to the retired non-game workflow; "
+            "canonical L2 accepts only specification_contract claims"
+        )
     resolved_structure = public_structure_provided if structure is None else bool(structure)
     if resolved_structure and not public_structure_provided:
         raise ValueError(
@@ -256,11 +289,13 @@ def run_scene_harness(
         "enrich_assets": resolved_enrich_assets,
     }
     resolved_adapter_config.update({key: value for key, value in asset_adapter_config.items() if value is not None})
-    if not eval_generic_validity and not eval_oor and not eval_oar:
+    if legacy_game_profile and not eval_generic_validity and not eval_oor and not eval_oar:
         eval_generic_validity = True
     resolved_camera_metric_modes = validate_metric_camera_modes(camera_pose_metric_modes)
     resolved_camera_pose_mode = validate_camera_pose_mode(camera_pose_mode)
-    if resolved_camera_metric_modes and resolved_camera_pose_mode is None:
+    if (
+        resolved_camera_metric_modes or camera_active_fallback
+    ) and resolved_camera_pose_mode is None:
         resolved_camera_pose_mode = "auto"
     if resolved_camera_pose_mode is not None and p0b_local_view_provider is not None:
         raise ValueError("camera_pose_mode cannot be combined with a custom p0b_local_view_provider")
@@ -271,10 +306,41 @@ def run_scene_harness(
             "camera_pose_mode requires an evaluator VLM judge; deterministic camera modes avoid only "
             "the pose-selection VLM call, not final P0b adjudication"
         )
+    query_cov_requested = resolved_camera_pose_mode == "query_cov" or (
+        "query_cov" in resolved_camera_metric_modes.values()
+    )
+    if camera_active_fallback and query_cov_requested:
+        raise ValueError(
+            "camera_active_fallback requires a deterministic base camera policy; "
+            "do not configure query_cov as the base"
+        )
+    if (camera_active_fallback or query_cov_requested) and not callable(
+        getattr(camera_active_selector, "select_camera_views", None)
+    ):
+        raise ValueError(
+            "VLM-active camera selection requires a separate camera_active_selector; "
+            "the final evaluator judge is not reused"
+        )
+    if (
+        camera_active_fallback or query_cov_requested
+    ) and camera_active_selector is evaluator_vlm_judge:
+        raise ValueError(
+            "camera_active_selector and evaluator_vlm_judge must be separate "
+            "runtime objects, even when they share one model config"
+        )
     if not 1 <= int(camera_pose_max_views) <= 4:
         raise ValueError("camera_pose_max_views must be between 1 and 4")
     if not 0 <= int(camera_pose_max_steps) <= 3:
         raise ValueError("camera_pose_max_steps must be between 0 and 3")
+    if camera_active_fallback and not (
+        int(camera_pose_max_views)
+        <= int(camera_active_candidate_count)
+        <= 8
+    ):
+        raise ValueError(
+            "camera_active_candidate_count must be between "
+            "camera_pose_max_views and 8"
+        )
     scene_renderer = (
         BlenderRenderer(
             blender_bin=blender_bin,
@@ -300,27 +366,38 @@ def run_scene_harness(
             adapter_config=resolved_adapter_config,
             run_generation=run_generation,
             iteration_limit=int(iteration_limit),
-            eval_generic_validity=eval_generic_validity,
-            eval_oor=eval_oor,
-            eval_oar=eval_oar,
+            eval_generic_validity=(eval_generic_validity if legacy_game_profile else False),
+            eval_oor=(eval_oor if legacy_game_profile else False),
+            eval_oar=(eval_oar if legacy_game_profile else False),
             asset_csv=asset_csv,
             asset_root=asset_root,
             enrich_assets=resolved_enrich_assets,
             scene_request=scene_request,
             object_plan=public_object_plan,
             reference_annotation=reference_annotation,
+            specification_contract=specification_contract,
+            functional_semantic_config=functional_semantic_config,
+            scene_quality_config=scene_quality_config,
+            object_grouping_report=object_grouping_report,
+            asset_policy=asset_policy,
+            authorized_deviations=authorized_deviations,
+            visual_style_spec=visual_style_spec,
             render_evidence=render_evidence,
             vlm_judge=evaluator_vlm_judge,
             scene_renderer=scene_renderer,
-            evaluation_profile=evaluation_profile,
+            evaluation_profile=resolved_profile,
             spatial_fidelity_ontology=spatial_fidelity_ontology,
-            support_enabled=support_enabled,
+            support_enabled=(support_enabled if legacy_game_profile else None),
             p0b_official_mode=p0b_official_mode,
             p0b_local_view_provider=p0b_local_view_provider,
             camera_pose_mode=resolved_camera_pose_mode,
             camera_pose_metric_modes=resolved_camera_metric_modes,
             camera_pose_max_views=int(camera_pose_max_views),
             camera_pose_max_steps=int(camera_pose_max_steps),
+            camera_active_fallback=bool(camera_active_fallback),
+            camera_active_shadow_mode=bool(camera_active_shadow_mode),
+            camera_active_candidate_count=int(camera_active_candidate_count),
+            camera_active_selector=camera_active_selector,
             collision_pair_overlay=bool(collision_pair_overlay),
         )
     finally:
@@ -336,6 +413,27 @@ def run_scene_harness(
             if reference_annotation is not None
             else None
         )
+        artifacts["specification_contract"] = (
+            write_json(
+                output_dir / "specification_contract.json",
+                specification_contract,
+            ).as_posix()
+            if specification_contract is not None
+            else None
+        )
+        for artifact_name, payload in (
+            ("functional_semantic_config", functional_semantic_config),
+            ("scene_quality_config", scene_quality_config),
+            ("object_grouping_report", object_grouping_report),
+            ("asset_policy", asset_policy),
+            ("authorized_deviations", authorized_deviations),
+            ("visual_style_spec", visual_style_spec),
+        ):
+            artifacts[artifact_name] = (
+                write_json(output_dir / f"{artifact_name}.json", payload).as_posix()
+                if payload is not None
+                else None
+            )
         artifacts["asset_selection"] = (
             write_json(output_dir / "asset_selection.json", asset_selection).as_posix()
             if asset_selection is not None
@@ -389,20 +487,50 @@ def run_scene_harness(
             "require_asset_mesh": asset_decision.retrieval_enabled,
         },
         "evaluation": {
-            "profile": evaluation_profile,
-            "gate": {
-                "source": "scene_request.prompt_granularity",
-                "prompt_granularity": resolved_granularity,
-                "evaluation_mode": resolved_evaluation_mode,
-                "category_2": resolved_fidelity_category,
-                "active_categories": [
-                    resolved_fidelity_category,
-                    "structural_validity",
-                    "visual_quality",
-                ],
-            },
-            "spatial_fidelity_ontology_configured": spatial_fidelity_ontology is not None,
-            "support_enabled": bool(support_enabled),
+            "profile": resolved_profile,
+            "gate": (
+                {
+                    **legacy_game_plan["gate"],
+                    "active_categories": list(legacy_game_plan["categories"]),
+                }
+                if legacy_game_plan is not None
+                else {
+                    "workflow": "canonical_l0_l4",
+                    "prompt_granularity": resolved_granularity,
+                    "prompt_granularity_role": "metadata_only",
+                    "activation_source": "canonical_profile_plus_specification_contract",
+                    "active_layers": [
+                        "l0_structural_validity",
+                        "l1_physical_plausibility",
+                        "l2_specification_fidelity",
+                        "l3_scene_quality",
+                        "l4_downstream_task_functionality",
+                    ],
+                }
+            ),
+            **(
+                {
+                    "spatial_fidelity_ontology_configured": (
+                        spatial_fidelity_ontology is not None
+                    ),
+                    "support_enabled": bool(support_enabled),
+                }
+                if legacy_game_profile
+                else {
+                    "specification_contract_configured": (
+                        specification_contract is not None
+                    ),
+                    "canonical_configs": {
+                        "functional_semantic": functional_semantic_config is not None,
+                        "scene_quality": scene_quality_config is not None,
+                        "object_grouping_report": object_grouping_report is not None,
+                        "asset_policy": asset_policy is not None,
+                        "authorized_deviations": authorized_deviations is not None,
+                        "visual_style_spec": visual_style_spec is not None,
+                    },
+                    "l1_applicability_source": "frozen_canonical_profile",
+                }
+            ),
             "p0b_official_mode": bool(p0b_official_mode),
             "p0b_local_view_provider_configured": (
                 p0b_local_view_provider is not None or resolved_camera_pose_mode is not None
@@ -410,8 +538,27 @@ def run_scene_harness(
             "camera_pose": {
                 "mode": resolved_camera_pose_mode,
                 "max_views": int(camera_pose_max_views),
-                "max_steps": int(camera_pose_max_steps) if resolved_camera_pose_mode == "query_cov" else 0,
+                "max_steps": (
+                    int(camera_pose_max_steps)
+                    if query_cov_requested or camera_active_fallback
+                    else 0
+                ),
                 "active": resolved_camera_pose_mode is not None,
+                "active_fallback": {
+                    "enabled": bool(camera_active_fallback),
+                    "trigger": "deterministic_evidence_sufficiency_eq_insufficient",
+                    "selector_decoupled_from_judge": True,
+                    "max_views": int(camera_pose_max_views),
+                    "max_camera_actions": (
+                        int(camera_pose_max_steps) if camera_active_fallback else 0
+                    ),
+                    "candidate_count": (
+                        int(camera_active_candidate_count)
+                        if camera_active_fallback
+                        else 0
+                    ),
+                    "shadow_mode": bool(camera_active_shadow_mode),
+                },
             },
         },
         "task_contract": {
@@ -427,7 +574,11 @@ def run_scene_harness(
         "prompt_granularity": {
             "requested": requested_granularity,
             "resolved": resolved_granularity,
-            "evaluation_mode": resolved_evaluation_mode,
+            **(
+                {"evaluation_mode": legacy_game_plan["evaluation_mode"]}
+                if legacy_game_plan is not None
+                else {"role": "metadata_only"}
+            ),
             "classifier_called": False,
             "classification": None,
         },
@@ -572,15 +723,56 @@ def main() -> None:
         default=None,
         help="Frozen benchmark-owned reference annotation; never exposed to the generator.",
     )
+    parser.add_argument(
+        "--specification-contract",
+        default=None,
+        help=(
+            "Frozen benchmark-owned L2 claim contract. Prompt granularity does "
+            "not activate or suppress its metric families."
+        ),
+    )
+    parser.add_argument(
+        "--functional-semantic-config",
+        default=None,
+        help="Optional canonical Functional Semantic Fidelity config (JSON or YAML).",
+    )
+    parser.add_argument(
+        "--scene-quality-config",
+        default=None,
+        help="Optional canonical L3 Scene Quality config (JSON or YAML).",
+    )
+    parser.add_argument(
+        "--object-grouping-report",
+        default=None,
+        help=(
+            "Optional frozen grouping report; otherwise the canonical "
+            "deterministic grouping algorithm runs."
+        ),
+    )
+    parser.add_argument(
+        "--asset-policy",
+        default=None,
+        help="Optional asset-policy JSON; orthogonal to prompt granularity.",
+    )
+    parser.add_argument(
+        "--authorized-deviations",
+        default=None,
+        help="Optional JSON list of prompt-authorized deviations.",
+    )
+    parser.add_argument(
+        "--visual-style-spec",
+        default=None,
+        help="Optional benchmark-owned visual_style_spec_v1 for L3 Style Consistency.",
+    )
     parser.add_argument("--asset-selection", default=None)
-    parser.add_argument("--eval-generic-validity", action="store_true")
-    parser.add_argument("--eval-oor", action="store_true")
-    parser.add_argument("--eval-oar", action="store_true")
+    parser.add_argument("--eval-generic-validity", action="store_true", help="Legacy Game-profile compatibility only.")
+    parser.add_argument("--eval-oor", action="store_true", help="Legacy Game-profile compatibility only.")
+    parser.add_argument("--eval-oar", action="store_true", help="Legacy Game-profile compatibility only.")
     parser.add_argument(
         "--support-enabled",
         action=argparse.BooleanOptionalAction,
         default=True,
-        help="Enable the support-gap metric (default). Use --no-support-enabled when floating objects are allowed.",
+        help="Legacy Game-profile compatibility only. Canonical L1 is profile-owned.",
     )
     parser.add_argument(
         "--p0b-official-mode",
@@ -597,7 +789,7 @@ def main() -> None:
         default=None,
         help=(
             "P0b camera policy: global_only, frozen bbox_track, deterministic visibility_ranked, "
-            "Support-specific support_contact_plane, bounded same-judge query_cov, or auto for "
+            "Support-specific support_contact_plane, bounded selector-only query_cov, or auto for "
             "frozen per-metric defaults."
         ),
     )
@@ -617,6 +809,41 @@ def main() -> None:
         type=int,
         default=1,
         help="Maximum bounded discrete camera adjustments in query_cov mode (0 disables refinement).",
+    )
+    parser.add_argument(
+        "--camera-active-fallback",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "After deterministic evidence generation, invoke bounded query_cov only "
+            "when the deterministic sufficiency gate returns insufficient."
+        ),
+    )
+    parser.add_argument(
+        "--camera-active-candidate-count",
+        type=int,
+        default=5,
+        help=(
+            "Frozen candidate-bank size for bounded active-camera fallback "
+            "(default: 5, matching the checked-in selector max_images)."
+        ),
+    )
+    parser.add_argument(
+        "--camera-active-shadow-mode",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Record conditional active-camera evidence counterfactually without "
+            "changing the official deterministic judge packet."
+        ),
+    )
+    parser.add_argument(
+        "--camera-selector-config",
+        default=None,
+        help=(
+            "Independent OpenAI-compatible camera-selector JSON config. Required "
+            "for query_cov or --camera-active-fallback."
+        ),
     )
     parser.add_argument(
         "--collision-pair-overlay",
@@ -672,12 +899,17 @@ def main() -> None:
     parser.add_argument("--vlm-judge-max-images", type=int, default=None)
     parser.add_argument(
         "--evaluation-profile",
-        default=str(PROJECT_ROOT / "configs" / "evaluation" / "metric_profile_draft_v1.yaml"),
+        default=str(
+            PROJECT_ROOT
+            / "configs"
+            / "evaluation"
+            / "metric_profile_canonical_v1.yaml"
+        ),
     )
     parser.add_argument(
         "--spatial-fidelity-ontology",
         default=None,
-        help="SceneOnto-compatible JSON for coarse-grained Spatial Fidelity.",
+        help="Legacy Game-profile compatibility only; rejected by canonical runs.",
     )
     parser.add_argument("--out-dir", required=True)
     args = parser.parse_args()
@@ -756,6 +988,22 @@ def main() -> None:
     if bool(judge_config.get("endpoint") or judge_config.get("base_url")) != bool(judge_config.get("model") or judge_config.get("model_id")):
         parser.error("VLM judge endpoint and model must be configured together")
     evaluator_vlm_judge = build_openai_compatible_vlm_judge(judge_config) if judge_config else None
+    camera_selector_config = (
+        read_json(_path_arg(args.camera_selector_config))
+        if args.camera_selector_config
+        else {}
+    )
+    if not isinstance(camera_selector_config, dict):
+        parser.error("--camera-selector-config must point to a JSON object")
+    try:
+        _reject_literal_api_key(camera_selector_config, "camera selector config")
+    except ValueError as exc:
+        parser.error(str(exc))
+    camera_active_selector = (
+        build_openai_compatible_vlm_judge(camera_selector_config)
+        if camera_selector_config
+        else None
+    )
 
     manifest = run_scene_harness(
         instruction=args.instruction,
@@ -787,6 +1035,39 @@ def main() -> None:
             if args.reference_annotation
             else None
         ),
+        specification_contract=(
+            read_json(_path_arg(args.specification_contract))
+            if args.specification_contract
+            else None
+        ),
+        functional_semantic_config=(
+            load_yaml(_path_arg(args.functional_semantic_config), default={})
+            if args.functional_semantic_config
+            else None
+        ),
+        scene_quality_config=(
+            load_yaml(_path_arg(args.scene_quality_config), default={})
+            if args.scene_quality_config
+            else None
+        ),
+        object_grouping_report=(
+            read_json(_path_arg(args.object_grouping_report))
+            if args.object_grouping_report
+            else None
+        ),
+        asset_policy=(
+            read_json(_path_arg(args.asset_policy)) if args.asset_policy else None
+        ),
+        authorized_deviations=(
+            read_json(_path_arg(args.authorized_deviations))
+            if args.authorized_deviations
+            else None
+        ),
+        visual_style_spec=(
+            read_json(_path_arg(args.visual_style_spec))
+            if args.visual_style_spec
+            else None
+        ),
         asset_selection=read_json(_path_arg(args.asset_selection)) if args.asset_selection else None,
         evaluator_output_type=args.evaluator_output_type,
         eval_generic_validity=args.eval_generic_validity,
@@ -815,6 +1096,10 @@ def main() -> None:
         camera_pose_metric_modes=camera_pose_metric_modes,
         camera_pose_max_views=args.camera_pose_max_views,
         camera_pose_max_steps=args.camera_pose_max_steps,
+        camera_active_fallback=args.camera_active_fallback,
+        camera_active_shadow_mode=args.camera_active_shadow_mode,
+        camera_active_candidate_count=args.camera_active_candidate_count,
+        camera_active_selector=camera_active_selector,
         collision_pair_overlay=args.collision_pair_overlay,
         out_dir=_path_arg(args.out_dir),
     )
@@ -840,18 +1125,29 @@ def _run_generation_evaluation_loop(
     scene_request: dict,
     object_plan: dict | None,
     reference_annotation: dict | None,
+    specification_contract: dict | None,
+    functional_semantic_config: dict | None,
+    scene_quality_config: dict | None,
+    object_grouping_report: dict | list | None,
+    asset_policy: dict | None,
+    authorized_deviations: list | None,
+    visual_style_spec: dict | None,
     render_evidence: list[str] | None,
     vlm_judge: Any | None,
     scene_renderer: Any | None,
     evaluation_profile: dict | None,
     spatial_fidelity_ontology: dict | str | Path | None,
-    support_enabled: bool = True,
+    support_enabled: bool | None = None,
     p0b_official_mode: bool = False,
     p0b_local_view_provider: object | None = None,
     camera_pose_mode: str | None = None,
     camera_pose_metric_modes: dict[str, str] | None = None,
     camera_pose_max_views: int = 2,
     camera_pose_max_steps: int = 1,
+    camera_active_fallback: bool = False,
+    camera_active_shadow_mode: bool = True,
+    camera_active_candidate_count: int = 5,
+    camera_active_selector: Any | None = None,
     collision_pair_overlay: bool = True,
 ) -> dict:
     attempts: list[dict[str, Any]] = []
@@ -914,18 +1210,41 @@ def _run_generation_evaluation_loop(
             blend_file = render_manifest.get("blend_file") if scene_renderer is not None else None
             if not isinstance(blend_file, str) or not Path(blend_file).is_file():
                 raise RuntimeError("camera pose mode requires the Blender render manifest to contain scene.blend")
-            attempt_local_view_provider = CameraEvidenceProvider(
-                renderer=scene_renderer,
-                blend_file=blend_file,
-                out_dir=attempt_dir / "camera_evidence",
-                mode=camera_pose_mode,
-                metric_modes=camera_pose_metric_modes,
-                selector=vlm_judge,
-                max_views=camera_pose_max_views,
-                max_steps=camera_pose_max_steps,
-                collision_overlay=collision_pair_overlay,
-                collision_geometry=collision_geometry if isinstance(collision_geometry, dict) else None,
-            )
+            if camera_active_fallback:
+                attempt_local_view_provider = build_conditional_active_camera_evidence_provider(
+                    renderer=scene_renderer,
+                    blend_file=blend_file,
+                    out_dir=attempt_dir / "camera_evidence",
+                    deterministic_mode=camera_pose_mode,
+                    metric_modes=camera_pose_metric_modes,
+                    selector=camera_active_selector,
+                    max_views=camera_pose_max_views,
+                    max_steps=camera_pose_max_steps,
+                    candidate_count=camera_active_candidate_count,
+                    collision_overlay=collision_pair_overlay,
+                    collision_contour=collision_pair_overlay,
+                    collision_geometry=(
+                        collision_geometry
+                        if isinstance(collision_geometry, dict)
+                        else None
+                    ),
+                    fail_on_exhausted=True,
+                    shadow_mode=camera_active_shadow_mode,
+                )
+            else:
+                attempt_local_view_provider = CameraEvidenceProvider(
+                    renderer=scene_renderer,
+                    blend_file=blend_file,
+                    out_dir=attempt_dir / "camera_evidence",
+                    mode=camera_pose_mode,
+                    metric_modes=camera_pose_metric_modes,
+                    selector=camera_active_selector,
+                    max_views=camera_pose_max_views,
+                    max_steps=camera_pose_max_steps,
+                    collision_overlay=collision_pair_overlay,
+                    collision_contour=collision_pair_overlay,
+                    collision_geometry=collision_geometry if isinstance(collision_geometry, dict) else None,
+                )
             attempt_record["camera_evidence_policy"] = attempt_local_view_provider.policy_config
         report = run_evaluate(
             scene=previous_scene,
@@ -939,6 +1258,13 @@ def _run_generation_evaluation_loop(
             scene_request=scene_request,
             object_plan=object_plan,
             reference_annotation=reference_annotation,
+            specification_contract=specification_contract,
+            functional_semantic_config=functional_semantic_config,
+            scene_quality_config=scene_quality_config,
+            object_grouping_report=object_grouping_report,
+            asset_policy=asset_policy,
+            authorized_deviations=authorized_deviations,
+            visual_style_spec=visual_style_spec,
             collision_geometry=collision_geometry if isinstance(collision_geometry, dict) else None,
             render_evidence=attempt_render_evidence,
             vlm_judge=vlm_judge,
@@ -1033,8 +1359,8 @@ def _evaluation_summary(report: dict) -> dict:
         "benchmark_score": report.get("benchmark_score"),
         "benchmark_score_status": report.get("benchmark_score_status"),
         "prompt_granularity": report.get("prompt_granularity"),
-        "evaluation_mode": report.get("evaluation_mode"),
-        "active_categories": sorted((report.get("category_reports") or {}).keys()),
+        "workflow": report.get("workflow"),
+        "active_layers": sorted((report.get("layer_reports") or {}).keys()),
         "coverage": report.get("coverage"),
         "valid": _evaluation_is_valid(report),
         "reports": sorted((report.get("reports") or {}).keys()),

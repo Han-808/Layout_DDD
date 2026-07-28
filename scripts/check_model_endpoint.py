@@ -20,7 +20,9 @@ Function:
 from __future__ import annotations
 
 import argparse
+import base64
 import json
+import mimetypes
 import sys
 from pathlib import Path
 
@@ -55,7 +57,16 @@ def main() -> None:
     response_group.add_argument("--response-format-json", dest="response_format_json", action="store_true", default=None)
     response_group.add_argument("--no-response-format-json", dest="response_format_json", action="store_false")
     parser.add_argument("--multimodal", action="store_true", help="Also send a tiny PNG data URL through chat completions.")
+    parser.add_argument(
+        "--image-path",
+        type=Path,
+        default=None,
+        help="Use this local PNG/JPEG/WebP for the multimodal check instead of the synthetic 1x1 PNG.",
+    )
     args = parser.parse_args()
+    if args.image_path is not None and not args.multimodal:
+        parser.error("--image-path requires --multimodal")
+    image_data_url = _image_data_url(args.image_path) if args.image_path is not None else None
 
     model = OpenAICompatibleModel(
         name="endpoint_health_check",
@@ -69,7 +80,10 @@ def main() -> None:
         response_format_json=bool(args.response_format_json),
     )
     try:
-        result = model.health_check(multimodal=args.multimodal)
+        result = model.health_check(
+            multimodal=args.multimodal,
+            image_data_url=image_data_url,
+        )
     except Exception as exc:
         print(
             json.dumps(
@@ -87,5 +101,18 @@ def main() -> None:
     result["ok"] = True
     result["last_request_metadata"] = getattr(model, "last_request_metadata", {})
     print(json.dumps(result, indent=2))
+
+
+def _image_data_url(path: Path) -> str:
+    resolved = path.expanduser().resolve()
+    if not resolved.is_file():
+        raise SystemExit(f"Image does not exist or is not a file: {path}")
+    mime_type, _ = mimetypes.guess_type(resolved.name)
+    if mime_type not in {"image/png", "image/jpeg", "image/webp"}:
+        raise SystemExit(f"Unsupported smoke-test image type: {mime_type or 'unknown'}")
+    encoded = base64.b64encode(resolved.read_bytes()).decode("ascii")
+    return f"data:{mime_type};base64,{encoded}"
+
+
 if __name__ == "__main__":
     main()

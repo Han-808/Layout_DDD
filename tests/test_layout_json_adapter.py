@@ -613,7 +613,6 @@ def test_layout_json_runs_through_scene_harness(monkeypatch: pytest.MonkeyPatch,
         adapter="layout_json",
         adapter_config={"endpoint": "http://127.0.0.1:8298/v1", "model": "Qwen3-VL-32B-Instruct-64K"},
         run_generation=True,
-        spatial_fidelity_ontology=_spatial_ontology(),
         out_dir=out_dir,
     )
 
@@ -621,16 +620,17 @@ def test_layout_json_runs_through_scene_harness(monkeypatch: pytest.MonkeyPatch,
     assert manifest["adapter"]["generator_output_schema"] == "layout_json_v1"
     assert manifest["asset_resolution"]["mode"] == "off"
     assert manifest["prompt_granularity"]["resolved"] == "coarse_grained"
-    assert manifest["prompt_granularity"]["evaluation_mode"] == "coarse_grained_mode"
     assert manifest["evaluation"]["gate"] == {
-        "source": "scene_request.prompt_granularity",
+        "workflow": "canonical_l0_l4",
         "prompt_granularity": "coarse_grained",
-        "evaluation_mode": "coarse_grained_mode",
-        "category_2": "spatial_fidelity",
-        "active_categories": [
-            "spatial_fidelity",
-            "structural_validity",
-            "visual_quality",
+        "prompt_granularity_role": "metadata_only",
+        "activation_source": "canonical_profile_plus_specification_contract",
+        "active_layers": [
+            "l0_structural_validity",
+            "l1_physical_plausibility",
+            "l2_specification_fidelity",
+            "l3_scene_quality",
+            "l4_downstream_task_functionality",
         ],
     }
     assert manifest["prompt_granularity"]["classifier_called"] is False
@@ -643,11 +643,56 @@ def test_layout_json_runs_through_scene_harness(monkeypatch: pytest.MonkeyPatch,
     assert read_json(out_dir / "generated_scene.json")["metadata"]["output_adapter"] == "layout_json"
     report = read_json(out_dir / "evaluation_report.json")
     assert set(report["category_reports"]) == {
-        "spatial_fidelity",
-        "structural_validity",
-        "visual_quality",
+        "l0_structural_validity",
+        "l1_physical_plausibility",
+        "l2_specification_fidelity",
+        "l3_scene_quality",
+        "l4_downstream_task_functionality",
     }
-    assert "prompt_fidelity" not in report["category_reports"]
+    assert report["evaluator_version"] == "scene_harness_evaluator_v2"
+
+
+def test_scene_harness_rejects_retired_non_game_spatial_ontology(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    def fake_urlopen(request: urllib.request.Request, timeout: int):
+        return _FakeResponse(
+            {
+                "choices": [
+                    {
+                        "message": {"content": json.dumps(_layout_json())},
+                        "finish_reason": "stop",
+                    }
+                ]
+            }
+        )
+
+    monkeypatch.setattr(
+        openai_compatible_model_module,
+        "_urlopen_no_redirect",
+        fake_urlopen,
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="spatial_fidelity_ontology belongs to the retired non-game workflow",
+    ):
+        run_scene_harness(
+            instruction="Create a cozy bedroom.",
+            scene_type="bedroom",
+            structure=False,
+            prompt_granularity="coarse_grained",
+            asset_mode="off",
+            adapter="layout_json",
+            adapter_config={
+                "endpoint": "http://127.0.0.1:8298/v1",
+                "model": "Qwen3-VL-32B-Instruct-64K",
+            },
+            run_generation=True,
+            spatial_fidelity_ontology=_spatial_ontology(),
+            out_dir=tmp_path / "retired_ontology",
+        )
 
 
 def test_fine_grained_scene_harness_does_not_run_runtime_converter_or_classifier(
@@ -692,7 +737,7 @@ def test_fine_grained_scene_harness_does_not_run_runtime_converter_or_classifier
     assert (out_dir / "evaluation_report.json").exists()
 
 
-def test_harness_renders_current_scene_and_routes_views_to_vlm(
+def test_harness_renders_current_scene_for_canonical_evidence(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -737,7 +782,6 @@ def test_harness_renders_current_scene_and_routes_views_to_vlm(
         adapter_config={"endpoint": "http://127.0.0.1:8298/v1", "model": "Qwen3-VL-32B-Instruct-64K"},
         run_generation=True,
         evaluator_vlm_judge=judge,
-        spatial_fidelity_ontology=_spatial_ontology(),
         blender_bin="/mnt/group/cmh/tools/blender/blender",
         out_dir=out_dir,
     )
@@ -747,6 +791,9 @@ def test_harness_renders_current_scene_and_routes_views_to_vlm(
     assert manifest["rendering"]["enabled"] is True
     assert manifest["artifacts"]["render_manifest"].endswith("renders/render_manifest.json")
     assert len(manifest["artifacts"]["render_evidence"]) == 2
-    assert [call["category"] for call in judge_calls] == ["visual_quality"]
-    assert all(call["render_evidence"][0].endswith("standardized_top.png") for call in judge_calls)
-    assert read_json(out_dir / "evaluation_report.json")["benchmark_score_status"] == "complete"
+    # No canonical L2 contract or L3 asset-policy applicability was supplied,
+    # so rendering is available evidence but cannot silently activate a judge.
+    assert judge_calls == []
+    report = read_json(out_dir / "evaluation_report.json")
+    assert report["evaluator_version"] == "scene_harness_evaluator_v2"
+    assert report["benchmark_score_status"] == "insufficient_metric_coverage"
