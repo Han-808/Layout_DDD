@@ -1,4 +1,23 @@
+"""Standalone CLI for the Object-Architecture Relationship (OAR) evaluator.
+
+Summary:
+    Checks object-to-architecture relations (e.g. against floor/walls/ceiling).
+    The primary evaluator entry point is root ``evaluate.py``.
+
+Input:
+    - ``--scene``: canonical scene JSON (objects + optional OAR relations).
+    - Optional ``--relations`` spec file and ``--config`` override.
+
+Output:
+    - ``--out``: OAR report JSON; prints score and check/pass/fail counts.
+
+Function:
+    Thin CLI wrapper over ``evaluate_oar(...)`` for deterministic OAR checks.
+"""
+
 from __future__ import annotations
+
+PRIMARY_EVALUATOR_ENTRYPOINT = "evaluate.py"
 
 import argparse
 import sys
@@ -13,7 +32,7 @@ from benchmark.utils.io import read_json, write_json
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Evaluate lightweight Object-Architecture Relationship constraints.")
-    parser.add_argument("--scene", required=True, help="Scene JSON containing objects/assets and optional OAR relations.")
+    parser.add_argument("--scene", required=True, help="Canonical generated_scene JSON containing objects and optional OAR relations.")
     parser.add_argument("--relations", default=None, help="Optional JSON relation spec file. Can be a list or an object with oar_relations/relations.")
     parser.add_argument("--config", default=None, help="Optional JSON config override.")
     parser.add_argument("--out", required=True, help="Output report JSON path.")
@@ -26,7 +45,7 @@ def main() -> None:
         parser.error("--config must point to a JSON object.")
     report = evaluate_oar(scene, relation_specs=relation_specs, config=config)
     out_path = write_json(_path_arg(args.out), report)
-    print(f"overall_score: {report['overall_score']}")
+    print(f"score: {report['score']}")
     print(f"num_checks_called: {report['num_checks_called']}")
     print(f"num_passed: {report['num_passed']}")
     print(f"num_failed: {report['num_failed']}")

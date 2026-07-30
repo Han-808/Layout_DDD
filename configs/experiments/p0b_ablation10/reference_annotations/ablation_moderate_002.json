@@ -1,0 +1,31 @@
+{
+  "annotation_version": "reference_annotation_v1",
+  "validation_status": "confirmed",
+  "source": "manual",
+  "request_id": "ablation_moderate_002",
+  "scene_type": "shared_office",
+  "inventory_policy": "closed_world",
+  "objects": [
+    {"id": "obj_000", "category": "desk", "description": "light wood school desk", "count": 1, "claim_state": "confirmed"},
+    {"id": "obj_001", "category": "desk", "description": "light wood school desk", "count": 1, "claim_state": "confirmed"},
+    {"id": "obj_002", "category": "desk", "description": "light wood school desk", "count": 1, "claim_state": "confirmed"},
+    {"id": "obj_003", "category": "chair", "description": "brown leather office chair", "count": 1, "claim_state": "confirmed"},
+    {"id": "obj_004", "category": "chair", "description": "brown leather office chair", "count": 1, "claim_state": "confirmed"},
+    {"id": "obj_005", "category": "chair", "description": "brown leather office chair", "count": 1, "claim_state": "confirmed"},
+    {"id": "obj_006", "category": "monitor", "description": "dark metallic monitor", "count": 1, "claim_state": "confirmed"},
+    {"id": "obj_007", "category": "plant", "description": "concrete pebble fan palm", "count": 1, "claim_state": "confirmed"}
+  ],
+  "oor_relations": [
+    {"type": "ordered", "object_ids": ["obj_000", "obj_001", "obj_002"], "axis": "x", "direction": "west_to_east", "raw_relation": "three desks in one straight row from west to east", "claim_state": "confirmed"},
+    {"type": "aligned", "subject_id": "obj_000", "object_id": "obj_001", "axis": "x", "claim_state": "confirmed"},
+    {"type": "aligned", "subject_id": "obj_001", "object_id": "obj_002", "axis": "x", "claim_state": "confirmed"},
+    {"type": "behind", "subject_id": "obj_003", "object_id": "obj_000", "claim_state": "confirmed"},
+    {"type": "behind", "subject_id": "obj_004", "object_id": "obj_001", "claim_state": "confirmed"},
+    {"type": "behind", "subject_id": "obj_005", "object_id": "obj_002", "claim_state": "confirmed"},
+    {"type": "on_top_of", "subject_id": "obj_006", "object_id": "obj_001", "claim_state": "confirmed"},
+    {"type": "right", "subject_id": "obj_007", "object_id": "obj_002", "claim_state": "confirmed"}
+  ],
+  "oar_relations": [],
+  "room_constraints": {"claim_state": "not_mentioned"},
+  "provenance": {"origin": "manual_p0b_ablation_conversion", "generator_visible": false, "leaderboard_ground_truth": false, "room_source": "benchmark_fallback", "multi_object_relation": "ordered"}
+}

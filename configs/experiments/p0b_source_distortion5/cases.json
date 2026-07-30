@@ -1,0 +1,518 @@
+{
+  "experiment_id": "p0b_source_scene_distortion5_v1",
+  "generator_mode": "skipped_frozen_canonical_scene",
+  "input_mode": "fine_grained_natural_language_with_private_reference_annotation",
+  "source_case_count": 5,
+  "variant_families": [
+    "clean",
+    "collision",
+    "oob",
+    "support",
+    "oar"
+  ],
+  "total_case_count": 25,
+  "cases": [
+    {
+      "case_id": "source_clean_001__clean",
+      "base_case_id": "source_clean_001",
+      "source_scene_id": "scene_007379_03",
+      "difficulty": "simple",
+      "family": "clean",
+      "fixture_dir": "fixtures/source_clean_001__clean",
+      "object_count": 6,
+      "instruction": "Create a compact 2.81 m by 4.20 m master bedroom with a 2.799 m ceiling. Place a white wood wardrobe against the north wall and a light wood bunk bed near the room center. Put two gray suede nightstands near the bed, both near the east wall. Rest one light gray desktop projector on each nightstand.",
+      "severity": {
+        "family": "clean",
+        "target_object_count": 0,
+        "object_denominator": 6,
+        "target_object_fraction": 0.0,
+        "target_relation_count": 0,
+        "relation_denominator": 4,
+        "target_relation_fraction": 0.0,
+        "collision_pair_count": 0
+      }
+    },
+    {
+      "case_id": "source_clean_001__collision",
+      "base_case_id": "source_clean_001",
+      "source_scene_id": "scene_007379_03",
+      "difficulty": "simple",
+      "family": "collision",
+      "fixture_dir": "fixtures/source_clean_001__collision",
+      "object_count": 6,
+      "instruction": "Create a compact 2.81 m by 4.20 m master bedroom with a 2.799 m ceiling. Place a white wood wardrobe against the north wall and a light wood bunk bed near the room center. Put two gray suede nightstands near the bed, both near the east wall. Rest one light gray desktop projector on each nightstand.",
+      "severity": {
+        "family": "collision",
+        "target_object_count": 2,
+        "object_denominator": 6,
+        "target_object_fraction": 0.3333333333333333,
+        "target_relation_count": 0,
+        "relation_denominator": 4,
+        "target_relation_fraction": 0.0,
+        "collision_pair_count": 2
+      }
+    },
+    {
+      "case_id": "source_clean_001__oob",
+      "base_case_id": "source_clean_001",
+      "source_scene_id": "scene_007379_03",
+      "difficulty": "simple",
+      "family": "oob",
+      "fixture_dir": "fixtures/source_clean_001__oob",
+      "object_count": 6,
+      "instruction": "Create a compact 2.81 m by 4.20 m master bedroom with a 2.799 m ceiling. Place a white wood wardrobe against the north wall and a light wood bunk bed near the room center. Put two gray suede nightstands near the bed, both near the east wall. Rest one light gray desktop projector on each nightstand.",
+      "severity": {
+        "family": "oob",
+        "target_object_count": 1,
+        "object_denominator": 6,
+        "target_object_fraction": 0.16666666666666666,
+        "target_relation_count": 0,
+        "relation_denominator": 4,
+        "target_relation_fraction": 0.0,
+        "collision_pair_count": 0
+      }
+    },
+    {
+      "case_id": "source_clean_001__support",
+      "base_case_id": "source_clean_001",
+      "source_scene_id": "scene_007379_03",
+      "difficulty": "simple",
+      "family": "support",
+      "fixture_dir": "fixtures/source_clean_001__support",
+      "object_count": 6,
+      "instruction": "Create a compact 2.81 m by 4.20 m master bedroom with a 2.799 m ceiling. Place a white wood wardrobe against the north wall and a light wood bunk bed near the room center. Put two gray suede nightstands near the bed, both near the east wall. Rest one light gray desktop projector on each nightstand.",
+      "severity": {
+        "family": "support",
+        "target_object_count": 1,
+        "object_denominator": 6,
+        "target_object_fraction": 0.16666666666666666,
+        "target_relation_count": 0,
+        "relation_denominator": 4,
+        "target_relation_fraction": 0.0,
+        "collision_pair_count": 0
+      }
+    },
+    {
+      "case_id": "source_clean_001__oar",
+      "base_case_id": "source_clean_001",
+      "source_scene_id": "scene_007379_03",
+      "difficulty": "simple",
+      "family": "oar",
+      "fixture_dir": "fixtures/source_clean_001__oar",
+      "object_count": 6,
+      "instruction": "Create a compact 2.81 m by 4.20 m master bedroom with a 2.799 m ceiling. Place a white wood wardrobe against the north wall and a light wood bunk bed near the room center. Put two gray suede nightstands near the bed, both near the east wall. Rest one light gray desktop projector on each nightstand.",
+      "severity": {
+        "family": "oar",
+        "target_object_count": 1,
+        "object_denominator": 6,
+        "target_object_fraction": 0.16666666666666666,
+        "target_relation_count": 1,
+        "relation_denominator": 4,
+        "target_relation_fraction": 0.25,
+        "collision_pair_count": 0
+      }
+    },
+    {
+      "case_id": "source_clean_002__clean",
+      "base_case_id": "source_clean_002",
+      "source_scene_id": "scene_003309_01",
+      "difficulty": "simple",
+      "family": "clean",
+      "fixture_dir": "fixtures/source_clean_002__clean",
+      "object_count": 5,
+      "instruction": "Create a compact 2.46 m by 3.51 m bedroom with a 2.45 m ceiling. Place two dark gray minimalist cabinets against the west wall. Include two dark wooden storage boxes, and place a gray wooden single bed near the center of the room.",
+      "severity": {
+        "family": "clean",
+        "target_object_count": 0,
+        "object_denominator": 5,
+        "target_object_fraction": 0.0,
+        "target_relation_count": 0,
+        "relation_denominator": 3,
+        "target_relation_fraction": 0.0,
+        "collision_pair_count": 0
+      }
+    },
+    {
+      "case_id": "source_clean_002__collision",
+      "base_case_id": "source_clean_002",
+      "source_scene_id": "scene_003309_01",
+      "difficulty": "simple",
+      "family": "collision",
+      "fixture_dir": "fixtures/source_clean_002__collision",
+      "object_count": 5,
+      "instruction": "Create a compact 2.46 m by 3.51 m bedroom with a 2.45 m ceiling. Place two dark gray minimalist cabinets against the west wall. Include two dark wooden storage boxes, and place a gray wooden single bed near the center of the room.",
+      "severity": {
+        "family": "collision",
+        "target_object_count": 1,
+        "object_denominator": 5,
+        "target_object_fraction": 0.2,
+        "target_relation_count": 0,
+        "relation_denominator": 3,
+        "target_relation_fraction": 0.0,
+        "collision_pair_count": 1,
+        "collision_candidate_pair_count": 1
+      }
+    },
+    {
+      "case_id": "source_clean_002__oob",
+      "base_case_id": "source_clean_002",
+      "source_scene_id": "scene_003309_01",
+      "difficulty": "simple",
+      "family": "oob",
+      "fixture_dir": "fixtures/source_clean_002__oob",
+      "object_count": 5,
+      "instruction": "Create a compact 2.46 m by 3.51 m bedroom with a 2.45 m ceiling. Place two dark gray minimalist cabinets against the west wall. Include two dark wooden storage boxes, and place a gray wooden single bed near the center of the room.",
+      "severity": {
+        "family": "oob",
+        "target_object_count": 2,
+        "object_denominator": 5,
+        "target_object_fraction": 0.4,
+        "target_relation_count": 0,
+        "relation_denominator": 3,
+        "target_relation_fraction": 0.0,
+        "collision_pair_count": 0
+      }
+    },
+    {
+      "case_id": "source_clean_002__support",
+      "base_case_id": "source_clean_002",
+      "source_scene_id": "scene_003309_01",
+      "difficulty": "simple",
+      "family": "support",
+      "fixture_dir": "fixtures/source_clean_002__support",
+      "object_count": 5,
+      "instruction": "Create a compact 2.46 m by 3.51 m bedroom with a 2.45 m ceiling. Place two dark gray minimalist cabinets against the west wall. Include two dark wooden storage boxes, and place a gray wooden single bed near the center of the room.",
+      "severity": {
+        "family": "support",
+        "target_object_count": 1,
+        "object_denominator": 5,
+        "target_object_fraction": 0.2,
+        "target_relation_count": 0,
+        "relation_denominator": 3,
+        "target_relation_fraction": 0.0,
+        "collision_pair_count": 0
+      }
+    },
+    {
+      "case_id": "source_clean_002__oar",
+      "base_case_id": "source_clean_002",
+      "source_scene_id": "scene_003309_01",
+      "difficulty": "simple",
+      "family": "oar",
+      "fixture_dir": "fixtures/source_clean_002__oar",
+      "object_count": 5,
+      "instruction": "Create a compact 2.46 m by 3.51 m bedroom with a 2.45 m ceiling. Place two dark gray minimalist cabinets against the west wall. Include two dark wooden storage boxes, and place a gray wooden single bed near the center of the room.",
+      "severity": {
+        "family": "oar",
+        "target_object_count": 1,
+        "object_denominator": 5,
+        "target_object_fraction": 0.2,
+        "target_relation_count": 1,
+        "relation_denominator": 3,
+        "target_relation_fraction": 0.3333333333333333,
+        "collision_pair_count": 0
+      }
+    },
+    {
+      "case_id": "source_clean_003__clean",
+      "base_case_id": "source_clean_003",
+      "source_scene_id": "scene_000657_03",
+      "difficulty": "simple",
+      "family": "clean",
+      "fixture_dir": "fixtures/source_clean_003__clean",
+      "object_count": 5,
+      "instruction": "Create a 5.25 m by 3.27 m bedroom-study with a 2.881 m ceiling. Put a gray silver wardrobe against the east wall, a gray baroque bedside table against the north wall, and a dark green metal cabinet against the south wall. Place a gray wooden single bed to the right of the bedside table. Put a brown wooden coffee table near the bed, with the metal cabinet in front of the bed.",
+      "severity": {
+        "family": "clean",
+        "target_object_count": 0,
+        "object_denominator": 5,
+        "target_object_fraction": 0.0,
+        "target_relation_count": 0,
+        "relation_denominator": 4,
+        "target_relation_fraction": 0.0,
+        "collision_pair_count": 0
+      }
+    },
+    {
+      "case_id": "source_clean_003__collision",
+      "base_case_id": "source_clean_003",
+      "source_scene_id": "scene_000657_03",
+      "difficulty": "simple",
+      "family": "collision",
+      "fixture_dir": "fixtures/source_clean_003__collision",
+      "object_count": 5,
+      "instruction": "Create a 5.25 m by 3.27 m bedroom-study with a 2.881 m ceiling. Put a gray silver wardrobe against the east wall, a gray baroque bedside table against the north wall, and a dark green metal cabinet against the south wall. Place a gray wooden single bed to the right of the bedside table. Put a brown wooden coffee table near the bed, with the metal cabinet in front of the bed.",
+      "severity": {
+        "family": "collision",
+        "target_object_count": 1,
+        "object_denominator": 5,
+        "target_object_fraction": 0.2,
+        "target_relation_count": 0,
+        "relation_denominator": 4,
+        "target_relation_fraction": 0.0,
+        "collision_pair_count": 0,
+        "collision_candidate_pair_count": 1
+      }
+    },
+    {
+      "case_id": "source_clean_003__oob",
+      "base_case_id": "source_clean_003",
+      "source_scene_id": "scene_000657_03",
+      "difficulty": "simple",
+      "family": "oob",
+      "fixture_dir": "fixtures/source_clean_003__oob",
+      "object_count": 5,
+      "instruction": "Create a 5.25 m by 3.27 m bedroom-study with a 2.881 m ceiling. Put a gray silver wardrobe against the east wall, a gray baroque bedside table against the north wall, and a dark green metal cabinet against the south wall. Place a gray wooden single bed to the right of the bedside table. Put a brown wooden coffee table near the bed, with the metal cabinet in front of the bed.",
+      "severity": {
+        "family": "oob",
+        "target_object_count": 2,
+        "object_denominator": 5,
+        "target_object_fraction": 0.4,
+        "target_relation_count": 0,
+        "relation_denominator": 4,
+        "target_relation_fraction": 0.0,
+        "collision_pair_count": 0
+      }
+    },
+    {
+      "case_id": "source_clean_003__support",
+      "base_case_id": "source_clean_003",
+      "source_scene_id": "scene_000657_03",
+      "difficulty": "simple",
+      "family": "support",
+      "fixture_dir": "fixtures/source_clean_003__support",
+      "object_count": 5,
+      "instruction": "Create a 5.25 m by 3.27 m bedroom-study with a 2.881 m ceiling. Put a gray silver wardrobe against the east wall, a gray baroque bedside table against the north wall, and a dark green metal cabinet against the south wall. Place a gray wooden single bed to the right of the bedside table. Put a brown wooden coffee table near the bed, with the metal cabinet in front of the bed.",
+      "severity": {
+        "family": "support",
+        "target_object_count": 2,
+        "object_denominator": 5,
+        "target_object_fraction": 0.4,
+        "target_relation_count": 0,
+        "relation_denominator": 4,
+        "target_relation_fraction": 0.0,
+        "collision_pair_count": 0
+      }
+    },
+    {
+      "case_id": "source_clean_003__oar",
+      "base_case_id": "source_clean_003",
+      "source_scene_id": "scene_000657_03",
+      "difficulty": "simple",
+      "family": "oar",
+      "fixture_dir": "fixtures/source_clean_003__oar",
+      "object_count": 5,
+      "instruction": "Create a 5.25 m by 3.27 m bedroom-study with a 2.881 m ceiling. Put a gray silver wardrobe against the east wall, a gray baroque bedside table against the north wall, and a dark green metal cabinet against the south wall. Place a gray wooden single bed to the right of the bedside table. Put a brown wooden coffee table near the bed, with the metal cabinet in front of the bed.",
+      "severity": {
+        "family": "oar",
+        "target_object_count": 2,
+        "object_denominator": 5,
+        "target_object_fraction": 0.4,
+        "target_relation_count": 2,
+        "relation_denominator": 4,
+        "target_relation_fraction": 0.5,
+        "collision_pair_count": 0
+      }
+    },
+    {
+      "case_id": "source_clean_004__clean",
+      "base_case_id": "source_clean_004",
+      "source_scene_id": "scene_003609_02",
+      "difficulty": "simple",
+      "family": "clean",
+      "fixture_dir": "fixtures/source_clean_004__clean",
+      "object_count": 6,
+      "instruction": "Create a compact 2.64 m by 3.29 m kitchen with a 2.400 m ceiling. Put a white rounded refrigerator at the southwest corner. Place two light wood kitchen cabinets side by side in the north part of the room. Place one dark wooden kitchen cabinet against the south wall, another against the east wall, and a third dark cabinet near the south-wall cabinet.",
+      "severity": {
+        "family": "clean",
+        "target_object_count": 0,
+        "object_denominator": 6,
+        "target_object_fraction": 0.0,
+        "target_relation_count": 0,
+        "relation_denominator": 5,
+        "target_relation_fraction": 0.0,
+        "collision_pair_count": 0
+      }
+    },
+    {
+      "case_id": "source_clean_004__collision",
+      "base_case_id": "source_clean_004",
+      "source_scene_id": "scene_003609_02",
+      "difficulty": "simple",
+      "family": "collision",
+      "fixture_dir": "fixtures/source_clean_004__collision",
+      "object_count": 6,
+      "instruction": "Create a compact 2.64 m by 3.29 m kitchen with a 2.400 m ceiling. Put a white rounded refrigerator at the southwest corner. Place two light wood kitchen cabinets side by side in the north part of the room. Place one dark wooden kitchen cabinet against the south wall, another against the east wall, and a third dark cabinet near the south-wall cabinet.",
+      "severity": {
+        "family": "collision",
+        "target_object_count": 2,
+        "object_denominator": 6,
+        "target_object_fraction": 0.3333333333333333,
+        "target_relation_count": 0,
+        "relation_denominator": 5,
+        "target_relation_fraction": 0.0,
+        "collision_pair_count": 2
+      }
+    },
+    {
+      "case_id": "source_clean_004__oob",
+      "base_case_id": "source_clean_004",
+      "source_scene_id": "scene_003609_02",
+      "difficulty": "simple",
+      "family": "oob",
+      "fixture_dir": "fixtures/source_clean_004__oob",
+      "object_count": 6,
+      "instruction": "Create a compact 2.64 m by 3.29 m kitchen with a 2.400 m ceiling. Put a white rounded refrigerator at the southwest corner. Place two light wood kitchen cabinets side by side in the north part of the room. Place one dark wooden kitchen cabinet against the south wall, another against the east wall, and a third dark cabinet near the south-wall cabinet.",
+      "severity": {
+        "family": "oob",
+        "target_object_count": 3,
+        "object_denominator": 6,
+        "target_object_fraction": 0.5,
+        "target_relation_count": 0,
+        "relation_denominator": 5,
+        "target_relation_fraction": 0.0,
+        "collision_pair_count": 0
+      }
+    },
+    {
+      "case_id": "source_clean_004__support",
+      "base_case_id": "source_clean_004",
+      "source_scene_id": "scene_003609_02",
+      "difficulty": "simple",
+      "family": "support",
+      "fixture_dir": "fixtures/source_clean_004__support",
+      "object_count": 6,
+      "instruction": "Create a compact 2.64 m by 3.29 m kitchen with a 2.400 m ceiling. Put a white rounded refrigerator at the southwest corner. Place two light wood kitchen cabinets side by side in the north part of the room. Place one dark wooden kitchen cabinet against the south wall, another against the east wall, and a third dark cabinet near the south-wall cabinet.",
+      "severity": {
+        "family": "support",
+        "target_object_count": 3,
+        "object_denominator": 6,
+        "target_object_fraction": 0.5,
+        "target_relation_count": 0,
+        "relation_denominator": 5,
+        "target_relation_fraction": 0.0,
+        "collision_pair_count": 0
+      }
+    },
+    {
+      "case_id": "source_clean_004__oar",
+      "base_case_id": "source_clean_004",
+      "source_scene_id": "scene_003609_02",
+      "difficulty": "simple",
+      "family": "oar",
+      "fixture_dir": "fixtures/source_clean_004__oar",
+      "object_count": 6,
+      "instruction": "Create a compact 2.64 m by 3.29 m kitchen with a 2.400 m ceiling. Put a white rounded refrigerator at the southwest corner. Place two light wood kitchen cabinets side by side in the north part of the room. Place one dark wooden kitchen cabinet against the south wall, another against the east wall, and a third dark cabinet near the south-wall cabinet.",
+      "severity": {
+        "family": "oar",
+        "target_object_count": 3,
+        "object_denominator": 6,
+        "target_object_fraction": 0.5,
+        "target_relation_count": 3,
+        "relation_denominator": 5,
+        "target_relation_fraction": 0.6,
+        "collision_pair_count": 0
+      }
+    },
+    {
+      "case_id": "source_clean_005__clean",
+      "base_case_id": "source_clean_005",
+      "source_scene_id": "scene_011841_04",
+      "difficulty": "simple",
+      "family": "clean",
+      "fixture_dir": "fixtures/source_clean_005__clean",
+      "object_count": 6,
+      "instruction": "Create a simple 4.50 m by 12.87 m living room with a 2.797 m ceiling. Put a gray wooden storage locker near the north wall and a dark gray round coffee table near it. Place a black leather sofa in the south part of the room. Put one gray textured potted plant at the southwest corner and a second potted plant near the east wall and near the sofa. Place a gray open shelving wardrobe in the east part of the room.",
+      "severity": {
+        "family": "clean",
+        "target_object_count": 0,
+        "object_denominator": 6,
+        "target_object_fraction": 0.0,
+        "target_relation_count": 0,
+        "relation_denominator": 6,
+        "target_relation_fraction": 0.0,
+        "collision_pair_count": 0
+      }
+    },
+    {
+      "case_id": "source_clean_005__collision",
+      "base_case_id": "source_clean_005",
+      "source_scene_id": "scene_011841_04",
+      "difficulty": "simple",
+      "family": "collision",
+      "fixture_dir": "fixtures/source_clean_005__collision",
+      "object_count": 6,
+      "instruction": "Create a simple 4.50 m by 12.87 m living room with a 2.797 m ceiling. Put a gray wooden storage locker near the north wall and a dark gray round coffee table near it. Place a black leather sofa in the south part of the room. Put one gray textured potted plant at the southwest corner and a second potted plant near the east wall and near the sofa. Place a gray open shelving wardrobe in the east part of the room.",
+      "severity": {
+        "family": "collision",
+        "target_object_count": 2,
+        "object_denominator": 6,
+        "target_object_fraction": 0.3333333333333333,
+        "target_relation_count": 0,
+        "relation_denominator": 6,
+        "target_relation_fraction": 0.0,
+        "collision_pair_count": 2
+      }
+    },
+    {
+      "case_id": "source_clean_005__oob",
+      "base_case_id": "source_clean_005",
+      "source_scene_id": "scene_011841_04",
+      "difficulty": "simple",
+      "family": "oob",
+      "fixture_dir": "fixtures/source_clean_005__oob",
+      "object_count": 6,
+      "instruction": "Create a simple 4.50 m by 12.87 m living room with a 2.797 m ceiling. Put a gray wooden storage locker near the north wall and a dark gray round coffee table near it. Place a black leather sofa in the south part of the room. Put one gray textured potted plant at the southwest corner and a second potted plant near the east wall and near the sofa. Place a gray open shelving wardrobe in the east part of the room.",
+      "severity": {
+        "family": "oob",
+        "target_object_count": 4,
+        "object_denominator": 6,
+        "target_object_fraction": 0.6666666666666666,
+        "target_relation_count": 0,
+        "relation_denominator": 6,
+        "target_relation_fraction": 0.0,
+        "collision_pair_count": 0
+      }
+    },
+    {
+      "case_id": "source_clean_005__support",
+      "base_case_id": "source_clean_005",
+      "source_scene_id": "scene_011841_04",
+      "difficulty": "simple",
+      "family": "support",
+      "fixture_dir": "fixtures/source_clean_005__support",
+      "object_count": 6,
+      "instruction": "Create a simple 4.50 m by 12.87 m living room with a 2.797 m ceiling. Put a gray wooden storage locker near the north wall and a dark gray round coffee table near it. Place a black leather sofa in the south part of the room. Put one gray textured potted plant at the southwest corner and a second potted plant near the east wall and near the sofa. Place a gray open shelving wardrobe in the east part of the room.",
+      "severity": {
+        "family": "support",
+        "target_object_count": 4,
+        "object_denominator": 6,
+        "target_object_fraction": 0.6666666666666666,
+        "target_relation_count": 0,
+        "relation_denominator": 6,
+        "target_relation_fraction": 0.0,
+        "collision_pair_count": 0
+      }
+    },
+    {
+      "case_id": "source_clean_005__oar",
+      "base_case_id": "source_clean_005",
+      "source_scene_id": "scene_011841_04",
+      "difficulty": "simple",
+      "family": "oar",
+      "fixture_dir": "fixtures/source_clean_005__oar",
+      "object_count": 6,
+      "instruction": "Create a simple 4.50 m by 12.87 m living room with a 2.797 m ceiling. Put a gray wooden storage locker near the north wall and a dark gray round coffee table near it. Place a black leather sofa in the south part of the room. Put one gray textured potted plant at the southwest corner and a second potted plant near the east wall and near the sofa. Place a gray open shelving wardrobe in the east part of the room.",
+      "severity": {
+        "family": "oar",
+        "target_object_count": 4,
+        "object_denominator": 6,
+        "target_object_fraction": 0.6666666666666666,
+        "target_relation_count": 4,
+        "relation_denominator": 6,
+        "target_relation_fraction": 0.6666666666666666,
+        "collision_pair_count": 0
+      }
+    }
+  ]
+}

@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from benchmark.models.base_model import build_generation_prompt
-from benchmark.object_aliasing import build_object_alias_map
-from benchmark.workflow.payloads import build_input_payloads
+from benchmark.legend.models.base_model import build_generation_prompt
+from benchmark.legend.object_aliasing import build_object_alias_map
+from benchmark.legend.workflow.payloads import build_input_payloads
 
 
 def _case(mode: str) -> dict:

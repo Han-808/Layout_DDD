@@ -1,4 +1,25 @@
+"""Compatibility shortcut for the generic structural-validity evaluator.
+
+Summary:
+    Runs only generic validity (collision, OOB, support, navigability,
+    accessibility). The primary evaluator entry point is root ``evaluate.py``.
+
+Input:
+    - ``--scene``: generated scene JSON (required).
+    - Optional ``--config`` override, ``--asset-csv`` / ``--asset-root`` /
+      ``--enrich-assets`` for asset metadata, and the support enable toggle.
+
+Output:
+    - ``--out``: generic-validity report JSON; prints the aggregate and
+      per-metric scores.
+
+Function:
+    Thin CLI wrapper over ``evaluate_generic_validity(...)``.
+"""
+
 from __future__ import annotations
+
+PRIMARY_EVALUATOR_ENTRYPOINT = "evaluate.py"
 
 import argparse
 import sys
@@ -13,13 +34,19 @@ from benchmark.utils.io import read_json, write_json
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Evaluate deterministic generic scene validity.")
+    parser = argparse.ArgumentParser(description="Compatibility shortcut. Primary evaluator entry point is root evaluate.py.")
     parser.add_argument("--scene", required=True, help="Generated scene JSON.")
     parser.add_argument("--config", default=None, help="Optional JSON config override.")
     parser.add_argument("--asset-csv", default=None, help="Optional asset_info.csv used for asset metadata enrichment.")
     parser.add_argument("--asset-root", default=None, help="Optional asset database root used for metadata/URI resolution.")
     parser.add_argument("--enrich-assets", action="store_true", help="Resolve scene objects against asset CSV/root before evaluation.")
     parser.add_argument("--write-enriched-scene", default=None, help="Optional path to write the enriched scene JSON.")
+    parser.add_argument(
+        "--support-enabled",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Enable the support-gap metric (default). Use --no-support-enabled when floating objects are allowed.",
+    )
     parser.add_argument("--out", required=True, help="Output report JSON path.")
     args = parser.parse_args()
 
@@ -36,11 +63,11 @@ def main() -> None:
     config = read_json(_path_arg(args.config)) if args.config else None
     if config is not None and not isinstance(config, dict):
         parser.error("--config must point to a JSON object.")
-    report = evaluate_generic_validity(scene, config=config)
+    report = evaluate_generic_validity(scene, config=config, support_enabled=args.support_enabled)
     if enrichment_report is not None:
         report["asset_enrichment"] = enrichment_report
     out_path = write_json(_path_arg(args.out), report)
-    print(f"overall_score: {report['overall_score']}")
+    print(f"score: {report['score']}")
     for metric in ["collision", "oob", "navigability", "accessibility", "support"]:
         result = report.get("metrics", {}).get(metric)
         if isinstance(result, dict):

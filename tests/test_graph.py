@@ -2,13 +2,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from benchmark.models.mock_model import MockModel
+from benchmark.legend.models.mock_model import MockModel
 from benchmark.utils.io import read_json
-from benchmark.workflow import BenchmarkAgent, WorkflowEvent, build_graph, run_workflow
+from benchmark.legend.workflow import BenchmarkAgent, WorkflowEvent, build_graph, run_workflow
 
 
 ROOT = Path(__file__).resolve().parents[1]
-HSSD_CASE = ROOT / "data" / "benchmark_cases" / "hssd_small" / "102343992_structured_relation.json"
+HSSD_CASE = ROOT / "Support" / "data" / "benchmark_cases" / "hssd_small" / "102343992_structured_relation.json"
 
 
 def _base_state(tmp_path: Path, model: MockModel, max_repair_iterations: int) -> dict:
@@ -17,7 +17,14 @@ def _base_state(tmp_path: Path, model: MockModel, max_repair_iterations: int) ->
         "out_dir": str(tmp_path),
         "model": model,
         "model_name": model.name,
-        "layout_schema": read_json(ROOT / "schemas" / "layout.schema.json"),
+        "layout_schema": read_json(
+            ROOT
+            / "Support"
+            / "legacy"
+            / "legend"
+            / "schemas"
+            / "legend_layout.schema.json"
+        ),
         "benchmark_config": {"benchmark": {"save_viewer_scene": True}, "evaluation": {"vlm_judge_input_mode": "json_plus_render"}},
         "max_repair_iterations": max_repair_iterations,
     }

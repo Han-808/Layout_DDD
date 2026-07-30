@@ -1,0 +1,186 @@
+{
+  "annotation_version": "reference_annotation_v1",
+  "validation_status": "confirmed",
+  "source": "programmatic",
+  "request_id": "prompt_018",
+  "scene_type": "coworking_office",
+  "objects": [
+    {
+      "id": "obj_000",
+      "category": "desk",
+      "description": "white desk",
+      "count": 4,
+      "claim_state": "confirmed",
+      "provenance": {
+        "origin": "converter_draft",
+        "object_plan_index": 0
+      }
+    },
+    {
+      "id": "obj_001",
+      "category": "chair",
+      "description": "black chair",
+      "count": 4,
+      "claim_state": "confirmed",
+      "provenance": {
+        "origin": "converter_draft",
+        "object_plan_index": 1
+      }
+    },
+    {
+      "id": "obj_002",
+      "category": "monitor",
+      "description": "computer monitor",
+      "count": 4,
+      "claim_state": "confirmed",
+      "provenance": {
+        "origin": "converter_draft",
+        "object_plan_index": 2
+      }
+    },
+    {
+      "id": "obj_003",
+      "category": "cabinet",
+      "description": "low cabinet",
+      "count": 1,
+      "claim_state": "confirmed",
+      "provenance": {
+        "origin": "converter_draft",
+        "object_plan_index": 3
+      }
+    },
+    {
+      "id": "obj_004",
+      "category": "printer",
+      "description": "shared printer",
+      "count": 1,
+      "claim_state": "confirmed",
+      "provenance": {
+        "origin": "converter_draft",
+        "object_plan_index": 4
+      }
+    },
+    {
+      "id": "obj_005",
+      "category": "whiteboard",
+      "description": "long whiteboard",
+      "count": 1,
+      "claim_state": "confirmed",
+      "provenance": {
+        "origin": "converter_draft",
+        "object_plan_index": 5
+      }
+    },
+    {
+      "id": "obj_006",
+      "category": "lounge_chair",
+      "description": "blue lounge chair",
+      "count": 2,
+      "claim_state": "confirmed",
+      "provenance": {
+        "origin": "converter_draft",
+        "object_plan_index": 6
+      }
+    },
+    {
+      "id": "obj_007",
+      "category": "side_table",
+      "description": "round side table",
+      "count": 1,
+      "claim_state": "confirmed",
+      "provenance": {
+        "origin": "converter_draft",
+        "object_plan_index": 7
+      }
+    },
+    {
+      "id": "obj_008",
+      "category": "plant",
+      "description": "tall plant",
+      "count": 2,
+      "claim_state": "confirmed",
+      "provenance": {
+        "origin": "converter_draft",
+        "object_plan_index": 8
+      }
+    }
+  ],
+  "oor_relations": [
+    {
+      "type": "behind",
+      "claim_state": "confirmed",
+      "subject_id": "obj_001",
+      "object_id": "obj_000"
+    },
+    {
+      "type": "on_top_of",
+      "claim_state": "confirmed",
+      "subject_id": "obj_002",
+      "object_id": "obj_000"
+    },
+    {
+      "type": "on_top_of",
+      "claim_state": "confirmed",
+      "subject_id": "obj_004",
+      "object_id": "obj_003"
+    }
+  ],
+  "oar_relations": [
+    {
+      "subject_id": "obj_003",
+      "type": "against_wall",
+      "architectural_element": "east_wall",
+      "claim_state": "confirmed"
+    },
+    {
+      "subject_id": "obj_005",
+      "type": "mounted_on",
+      "architectural_element": "north_wall",
+      "claim_state": "confirmed"
+    },
+    {
+      "subject_id": "obj_006",
+      "type": "along_wall",
+      "architectural_element": "south_wall",
+      "claim_state": "confirmed"
+    },
+    {
+      "subject_id": "obj_008",
+      "type": "in_corner",
+      "architectural_element": "northeast_corner",
+      "claim_state": "confirmed"
+    },
+    {
+      "subject_id": "obj_008",
+      "type": "in_corner",
+      "architectural_element": "northwest_corner",
+      "claim_state": "confirmed"
+    }
+  ],
+  "room_constraints": {
+    "claim_state": "confirmed",
+    "dimensions": {
+      "width": 12.0,
+      "depth": 10.0,
+      "height": 3.2
+    },
+    "shape": "rectangular_enclosed_room"
+  },
+  "provenance": {
+    "origin": "camera_pose14_calibration_fixture",
+    "generator_visible": false,
+    "leaderboard_ground_truth": false,
+    "dropped_legacy_relations": [
+      {
+        "reason": "legacy_between_missing_two_anchor_ids",
+        "relation": {
+          "family": "oor",
+          "subject_id": "obj_007",
+          "type": "between",
+          "object_id": "obj_006"
+        }
+      }
+    ]
+  },
+  "inventory_policy": "closed_world"
+}

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from benchmark.metrics.metrics import compute_case_metrics
+from benchmark.legend.metrics.metrics import compute_case_metrics
 
 
 def _entry(iteration: int, flags: list[dict], *, feedback: dict | None = None) -> dict:

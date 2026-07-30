@@ -1,0 +1,30 @@
+{
+  "contract_version": "counter_strike_case_contract_v1",
+  "case_id": "cs_fps_kimi_k3",
+  "corpus_id": "Kimi-K3",
+  "source_frame": {
+    "up_axis": "y",
+    "unit_scale": 1.0
+  },
+  "source_assertions": [
+    {
+      "path": "map.js",
+      "sha256": "7af43ddd0c8c532bcc19a3ca914cdd34b7bb492c06be55e7c1f5e6928ae9356e",
+      "evidence": "Map.SPAWNS declaration"
+    }
+  ],
+  "team_spawns": {
+    "team_a": {
+      "points": [[-6.0, 0.0, -20.0], [-3.0, 0.0, -20.0], [0.0, 0.0, -20.0], [3.0, 0.0, -20.0], [6.0, 0.0, -20.0]],
+      "jitter_radius_m": 0.0
+    },
+    "team_b": {
+      "points": [[-6.0, 0.0, 20.0], [-3.0, 0.0, 20.0], [0.0, 0.0, 20.0], [3.0, 0.0, 20.0], [6.0, 0.0, 20.0]],
+      "jitter_radius_m": 0.0
+    }
+  },
+  "annotation": {
+    "source": "benchmark_audited_source_declaration",
+    "score_authority": false
+  }
+}

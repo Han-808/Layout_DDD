@@ -1,0 +1,424 @@
+{
+  "experiment_id": "qwen32b_camera_pose14_twomode",
+  "input_mode": "natural_language_plus_public_generator_structure",
+  "prompt_granularity": "fine_grained",
+  "asset_mode": "retrieve",
+  "camera_pose_modes": [
+    "bbox_track",
+    "query_cov"
+  ],
+  "notes": [
+    "Seven moderate cases are frozen from the audited P0b first-seven set.",
+    "Seven easy cases contain four to six objects and use exact Imaginarium short_desc phrases.",
+    "Invalid legacy one-anchor between relations are omitted from the public fixture; prompts remain unchanged.",
+    "References are calibration fixtures and must not be reported as leaderboard ground truth."
+  ],
+  "cases": [
+    {
+      "case_id": "prompt_001",
+      "scene_type": "bedroom",
+      "room": {
+        "boundary": [
+          [
+            0,
+            0
+          ],
+          [
+            8,
+            0
+          ],
+          [
+            8,
+            8
+          ],
+          [
+            0,
+            8
+          ]
+        ],
+        "height": 2.8,
+        "unit": "meter"
+      },
+      "instruction": "An 8 m x 8 m bedroom with a height of 2.8 m is enclosed by four walls. Place one tall red bed beside the right wall and one dark wooden cabinet immediately to its left. Arrange one silver can, one yellow lemon, and one white spray bottle from left to right on top of the cabinet. Put one brown leather sofa opposite the bed and parallel to it. A floor lamp stands between the sofa and the left wall. Place one light-grey pillow at the head of the bed, and put one magazine beside one art book on the floor near the foot of the sofa.",
+      "difficulty": "moderate",
+      "fixture_source": "p0b_first7_instances"
+    },
+    {
+      "case_id": "prompt_005",
+      "scene_type": "children_bedroom",
+      "room": {
+        "boundary": [
+          [
+            0,
+            0
+          ],
+          [
+            7,
+            0
+          ],
+          [
+            7,
+            7
+          ],
+          [
+            0,
+            7
+          ]
+        ],
+        "height": 2.8,
+        "unit": "meter"
+      },
+      "instruction": "A 7 m x 7 m children's bedroom has four walls and a 2.8 m ceiling. Place one white bunk bed against the west wall. Put one blue desk opposite the bunk bed against the east wall, with one yellow chair centered in front of the desk. One laptop and two closed books sit on the desk, with the laptop between the books. Mount one shelf on the wall above the desk and place three toy boxes side by side below the shelf. Put one red floor lamp beside the head of the bunk bed and one round green rug between the bed and desk.",
+      "difficulty": "moderate",
+      "fixture_source": "p0b_first7_instances"
+    },
+    {
+      "case_id": "prompt_010",
+      "scene_type": "living_room",
+      "room": {
+        "boundary": [
+          [
+            0,
+            0
+          ],
+          [
+            8,
+            0
+          ],
+          [
+            8,
+            9
+          ],
+          [
+            0,
+            9
+          ]
+        ],
+        "height": 3.0,
+        "unit": "meter"
+      },
+      "instruction": "Create an 8 m x 9 m living room with a 3 m ceiling. Fit one light-grey L-shaped sectional into the southwest corner, with its two sections following the south and west walls. Put one square black coffee table inside the open side of the sectional. On the table, place one red bowl and one closed magazine side by side. A round side table stands near the short end of the sectional with one table lamp on it. Mount one large television on the north wall opposite the long sofa section, and place two green plants symmetrically below the television.",
+      "difficulty": "moderate",
+      "fixture_source": "p0b_first7_instances"
+    },
+    {
+      "case_id": "prompt_015",
+      "scene_type": "fireplace_lounge",
+      "room": {
+        "boundary": [
+          [
+            0,
+            0
+          ],
+          [
+            8,
+            0
+          ],
+          [
+            8,
+            9
+          ],
+          [
+            0,
+            9
+          ]
+        ],
+        "height": 3.2,
+        "unit": "meter"
+      },
+      "instruction": "An 8 m x 9 m fireplace lounge has a 3.2 m ceiling. Center one stone fireplace on the north wall. Place two red armchairs side by side facing the fireplace, with one round table between them. Put one mug on the table near the left chair and one book near the right chair. A small log basket sits to the right of the fireplace and one floor lamp stands to its left. Position one brown sofa behind the armchairs, parallel to them and also facing the fireplace. Keep one rug centered between the armchairs and fireplace.",
+      "difficulty": "moderate",
+      "fixture_source": "p0b_first7_instances"
+    },
+    {
+      "case_id": "prompt_018",
+      "scene_type": "coworking_office",
+      "room": {
+        "boundary": [
+          [
+            0,
+            0
+          ],
+          [
+            12,
+            0
+          ],
+          [
+            12,
+            10
+          ],
+          [
+            0,
+            10
+          ]
+        ],
+        "height": 3.2,
+        "unit": "meter"
+      },
+      "instruction": "A 12 m x 10 m coworking office has a ceiling height of 3.2 m. Arrange four identical white desks as a two-by-two grid in the center, with clear aisles between them. Place one black chair behind each desk and one monitor in the center of each desktop. Put one shared printer on top of a low cabinet against the east wall. A long whiteboard is mounted on the north wall, opposite two blue lounge chairs along the south wall. Place one round side table between the lounge chairs and one tall plant in each northern corner.",
+      "difficulty": "moderate",
+      "fixture_source": "p0b_first7_instances"
+    },
+    {
+      "case_id": "prompt_022",
+      "scene_type": "library",
+      "room": {
+        "boundary": [
+          [
+            0,
+            0
+          ],
+          [
+            12,
+            0
+          ],
+          [
+            12,
+            9
+          ],
+          [
+            0,
+            9
+          ]
+        ],
+        "height": 3.5,
+        "unit": "meter"
+      },
+      "instruction": "A 12 m x 9 m library reading room has a 3.5 m ceiling. Line the west and east walls with two long bookcases facing each other. Place three rectangular study tables in one row through the center, parallel to the bookcases. Put two chairs on each long side of every table and one green reading lamp at the center of each table. Arrange four books upright on the middle shelf of the west bookcase. Place one librarian desk near the south wall with one chair behind it, and keep one return cart beside the desk.",
+      "difficulty": "moderate",
+      "fixture_source": "p0b_first7_instances"
+    },
+    {
+      "case_id": "prompt_027",
+      "scene_type": "kitchen",
+      "room": {
+        "boundary": [
+          [
+            0,
+            0
+          ],
+          [
+            9,
+            0
+          ],
+          [
+            9,
+            8
+          ],
+          [
+            0,
+            8
+          ]
+        ],
+        "height": 3.0,
+        "unit": "meter"
+      },
+      "instruction": "A 9 m x 8 m kitchen has a 3 m ceiling. Center one long grey island in the room and arrange three black stools along its south side. Place one sink at the left end of the island and one cooktop at the right end. Put one cutting board between the sink and cooktop with one red kettle behind it. A refrigerator stands against the north wall beside a tall pantry cabinet. Run one counter along the east wall and place one toaster on the counter beneath two wall cabinets. Keep one waste bin between the island and the west wall.",
+      "difficulty": "moderate",
+      "fixture_source": "p0b_first7_instances"
+    },
+    {
+      "case_id": "easy_001",
+      "scene_type": "bedroom",
+      "room": {
+        "boundary": [
+          [
+            0.0,
+            0.0
+          ],
+          [
+            7.0,
+            0.0
+          ],
+          [
+            7.0,
+            5.0
+          ],
+          [
+            0.0,
+            5.0
+          ]
+        ],
+        "height": 3.0,
+        "unit": "meter"
+      },
+      "instruction": "Create a bedroom with a grey upholstered bed against the north wall. Place a dark brown wooden nightstand to the right of the bed and put a mint green vintage alarm clock on the nightstand. Put a dark gray angular floor lamp to the left of the bed and a beige geometric carpet in front of the bed.",
+      "difficulty": "easy",
+      "fixture_source": "imaginarium_short_desc_manual_fixture"
+    },
+    {
+      "case_id": "easy_002",
+      "scene_type": "living_room",
+      "room": {
+        "boundary": [
+          [
+            0.0,
+            0.0
+          ],
+          [
+            7.0,
+            0.0
+          ],
+          [
+            7.0,
+            5.0
+          ],
+          [
+            0.0,
+            5.0
+          ]
+        ],
+        "height": 3.0,
+        "unit": "meter"
+      },
+      "instruction": "Create a living room with a brown leather chesterfield sofa against the west wall. Place a dark wood coffee table in front of the sofa and a white ceramic vase on the table. Put a black leather lounge chair to the right of the table and a deep red floral carpet near the table.",
+      "difficulty": "easy",
+      "fixture_source": "imaginarium_short_desc_manual_fixture"
+    },
+    {
+      "case_id": "easy_003",
+      "scene_type": "home_office",
+      "room": {
+        "boundary": [
+          [
+            0.0,
+            0.0
+          ],
+          [
+            7.0,
+            0.0
+          ],
+          [
+            7.0,
+            5.0
+          ],
+          [
+            0.0,
+            5.0
+          ]
+        ],
+        "height": 3.0,
+        "unit": "meter"
+      },
+      "instruction": "Create a home office with a dark angular wooden desk against the north wall. Put a dark gray flat screen monitor on the desk and a dark brown wooden chair in front of the desk. Place a light wood five tier shelf to the left of the desk and a white ceramic cup to the right of the monitor on the desk.",
+      "difficulty": "easy",
+      "fixture_source": "imaginarium_short_desc_manual_fixture"
+    },
+    {
+      "case_id": "easy_004",
+      "scene_type": "reading_lounge",
+      "room": {
+        "boundary": [
+          [
+            0.0,
+            0.0
+          ],
+          [
+            7.0,
+            0.0
+          ],
+          [
+            7.0,
+            5.0
+          ],
+          [
+            0.0,
+            5.0
+          ]
+        ],
+        "height": 3.0,
+        "unit": "meter"
+      },
+      "instruction": "Create a reading lounge with a beige fabric sofa against the south wall. Place an oval walnut coffee table in front of the sofa. Put a teal blue paperback book and a beige linen table lamp on the table. Place a lush green philodendron to the left of the sofa.",
+      "difficulty": "easy",
+      "fixture_source": "imaginarium_short_desc_manual_fixture"
+    },
+    {
+      "case_id": "easy_005",
+      "scene_type": "small_lounge",
+      "room": {
+        "boundary": [
+          [
+            0.0,
+            0.0
+          ],
+          [
+            7.0,
+            0.0
+          ],
+          [
+            7.0,
+            5.0
+          ],
+          [
+            0.0,
+            5.0
+          ]
+        ],
+        "height": 3.0,
+        "unit": "meter"
+      },
+      "instruction": "Create a small lounge with a white marble coffee table in the center of the room. Place one dark brown wooden chair to the left of the table and another dark brown wooden chair to its right. Put a white ceramic vase on the table and a burgundy geometric rug near the table.",
+      "difficulty": "easy",
+      "fixture_source": "imaginarium_short_desc_manual_fixture"
+    },
+    {
+      "case_id": "easy_006",
+      "scene_type": "bedroom",
+      "room": {
+        "boundary": [
+          [
+            0.0,
+            0.0
+          ],
+          [
+            7.0,
+            0.0
+          ],
+          [
+            7.0,
+            5.0
+          ],
+          [
+            0.0,
+            5.0
+          ]
+        ],
+        "height": 3.0,
+        "unit": "meter"
+      },
+      "instruction": "Create a bedroom with a grey upholstered bed against the west wall. Place a light wood nightstand to the right of the bed and a gray cylindrical alarm clock on the nightstand. Put a white cylindrical floor lamp near the bed. Place a light wood shelf against the east wall and a white magazine on the shelf.",
+      "difficulty": "easy",
+      "fixture_source": "imaginarium_short_desc_manual_fixture"
+    },
+    {
+      "case_id": "easy_007",
+      "scene_type": "living_room",
+      "room": {
+        "boundary": [
+          [
+            0.0,
+            0.0
+          ],
+          [
+            7.0,
+            0.0
+          ],
+          [
+            7.0,
+            5.0
+          ],
+          [
+            0.0,
+            5.0
+          ]
+        ],
+        "height": 3.0,
+        "unit": "meter"
+      },
+      "instruction": "Create a living room with a dark gray tufted sofa against the north wall. Place a teal storage coffee table in front of the sofa and a dark gray ceramic cup on the table. Put a white veined zebra plant to the right of the sofa and a beige geometric carpet near the table.",
+      "difficulty": "easy",
+      "fixture_source": "imaginarium_short_desc_manual_fixture"
+    }
+  ]
+}

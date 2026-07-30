@@ -1,0 +1,51 @@
+{
+  "request_id": "source_clean_003__clean",
+  "instruction": "Create a 5.25 m by 3.27 m bedroom-study with a 2.881 m ceiling. Put a gray silver wardrobe against the east wall, a gray baroque bedside table against the north wall, and a dark green metal cabinet against the south wall. Place a gray wooden single bed to the right of the bedside table. Put a brown wooden coffee table near the bed, with the metal cabinet in front of the bed.",
+  "scene_type": "bedroom with study room",
+  "structure": false,
+  "prompt_granularity": "fine_grained",
+  "metadata": {
+    "generator_skipped": true,
+    "reference_annotation_visibility": "benchmark_private"
+  },
+  "room": {
+    "boundary": [
+      [
+        0.0,
+        0.0
+      ],
+      [
+        5.25,
+        0.0
+      ],
+      [
+        5.25,
+        3.27
+      ],
+      [
+        0.0,
+        3.27
+      ]
+    ],
+    "height": 2.8805,
+    "unit": "meter",
+    "dimensions": {
+      "width": 5.25,
+      "depth": 3.27,
+      "height": 2.8805
+    },
+    "explicit_dimensions": {
+      "width": 5.25,
+      "depth": 3.27,
+      "height": 2.8805
+    },
+    "dimension_provenance": {
+      "width": "explicit_benchmark_fixture",
+      "depth": "explicit_benchmark_fixture",
+      "height": "explicit_benchmark_fixture"
+    },
+    "resolution_policy": "room_dimension_policy_v1",
+    "topology": "rectangular_enclosed_room",
+    "floor_z": 0.0
+  }
+}

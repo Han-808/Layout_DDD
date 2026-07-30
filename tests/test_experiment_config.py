@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from benchmark.experiments import experiment_model_overrides, pick_value, resolve_experiment
+from benchmark.legend.experiments import experiment_model_overrides, pick_value, resolve_experiment
 
 
 def test_resolve_experiment_and_overrides_are_independent() -> None:

@@ -1,0 +1,95 @@
+{
+  "schema_version": "controlled_scene_distortion_v1",
+  "case_id": "source_clean_004__oob",
+  "base_case_id": "source_clean_004",
+  "source_scene_id": "scene_003609_02",
+  "generator_skipped": true,
+  "family": "oob",
+  "severity": {
+    "family": "oob",
+    "target_object_count": 3,
+    "object_denominator": 6,
+    "target_object_fraction": 0.5,
+    "target_relation_count": 0,
+    "relation_denominator": 5,
+    "target_relation_fraction": 0.0,
+    "collision_pair_count": 0
+  },
+  "transforms": [
+    {
+      "object_id": "obj_001",
+      "before_center": [
+        0.32,
+        0.34,
+        0.92
+      ],
+      "after_center": [
+        0.09000000000000002,
+        0.34,
+        0.9181
+      ],
+      "reason": "35_percent_extent_outside:west"
+    },
+    {
+      "object_id": "obj_003",
+      "before_center": [
+        1.72,
+        0.42,
+        0.46
+      ],
+      "after_center": [
+        1.72,
+        0.12075000000000002,
+        0.455
+      ],
+      "reason": "35_percent_extent_outside:south"
+    },
+    {
+      "object_id": "obj_004",
+      "before_center": [
+        2.37,
+        2.03,
+        0.46
+      ],
+      "after_center": [
+        2.565,
+        2.03,
+        0.455
+      ],
+      "reason": "35_percent_extent_outside:east"
+    }
+  ],
+  "expected": {
+    "collision_invalid_pairs": [],
+    "oob_invalid_object_ids": [
+      "obj_001",
+      "obj_003",
+      "obj_004"
+    ],
+    "support_invalid_object_ids": [],
+    "oar_invalid_relation_indices": []
+  },
+  "gt_policy": "programmatic_from_frozen_transform_not_from_evaluator_prediction",
+  "deterministic_audit": {
+    "collision_routed_pairs": [],
+    "oob_routed_object_ids": [
+      "obj_001",
+      "obj_003",
+      "obj_004"
+    ],
+    "support_routed_object_ids": [],
+    "oor_pass_vector": [
+      true,
+      true,
+      true
+    ],
+    "oar_pass_vector": [
+      true,
+      true,
+      true,
+      true,
+      true
+    ],
+    "cross_metric_isolation_verified": true
+  }
+}

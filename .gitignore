@@ -3,12 +3,18 @@ __pycache__/
 .pytest_cache/
 *.egg-info/
 .venv/
+.DS_Store
+/build/
+*.blend1
 
 outputs/*
 !outputs/.gitkeep
 
 data/
 notes/
+docs/
+reports/
+/datasets/
 URLs.md
 takeaway.md
 todo.md
@@ -18,4 +24,34 @@ downloads/
 # Local bulky data / notes
 /Assets/
 /Scenes/
+/assets/
+/scenes/
+/IntelliScene3/
+/IntelliScene3-main.tar.gz
 /benchmark_notes.txt
+
+# Non-core repository material lives physically under Support/.
+# Keep accidental root-level reintroductions out of version control.
+/Assets
+/Scenes
+/cal_dataset0
+/cal_dataset1
+/data
+/outputs
+/reports
+/result
+/Support/Assets/
+/Support/Scenes/
+/Support/artifacts/
+/Support/experiment_analysis/
+/Support/data/
+/Support/datasets/
+/Support/notes/
+/Support/third_party/
+
+# Local documentation and operational notes
+*.md
+!/Support/README.md
+!/docs/
+!/docs/game/
+!/docs/game/counter_strike_benchmark.md

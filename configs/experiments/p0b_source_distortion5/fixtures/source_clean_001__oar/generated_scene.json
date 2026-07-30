@@ -1,0 +1,340 @@
+{
+  "schema_version": "canonical_scene_v1",
+  "scene_id": "source_clean_001__oar",
+  "request_id": "source_clean_001__oar",
+  "scene_type": "master bedroom",
+  "boundary": [
+    [
+      0.0,
+      0.0
+    ],
+    [
+      0.0,
+      4.2
+    ],
+    [
+      2.81,
+      4.2
+    ],
+    [
+      2.81,
+      0.0
+    ]
+  ],
+  "scene_height": 2.799,
+  "objects": [
+    {
+      "id": "obj_000",
+      "category": "wardrobe",
+      "description": "white wood wardrobe",
+      "desc": "Two-tone wardrobe with white sliding doors and light wood frame with center drawers",
+      "short_desc": "white wood wardrobe",
+      "jid": "b_67",
+      "size": [
+        1.761,
+        0.555,
+        2.5
+      ],
+      "center": [
+        0.9,
+        0.45,
+        1.25
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "geometry_provenance": "asset_mesh",
+      "asset_ref": {
+        "source_db": "imaginarium",
+        "asset_key": "b_67",
+        "mesh_uri": null,
+        "pointcloud_uri": null,
+        "metadata_uri": null
+      },
+      "asset_proxy": {
+        "type": "obb_from_source_scene",
+        "bbox_center_local": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "bbox_size": [
+          1.761,
+          0.555,
+          2.5
+        ]
+      },
+      "metadata": {
+        "source_scene_id": "scene_007379_03",
+        "source_object_index": 0,
+        "fixture_role": "frozen_source_object",
+        "interactive": false
+      }
+    },
+    {
+      "id": "obj_001",
+      "category": "nightstand",
+      "description": "gray suede nightstand",
+      "desc": "Gray suede bedside table with dark metal sled base and drawer",
+      "short_desc": "gray suede nightstand",
+      "jid": "b_113",
+      "size": [
+        0.55,
+        0.4425,
+        0.52
+      ],
+      "center": [
+        2.47,
+        0.7,
+        0.26
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        -90.0
+      ],
+      "geometry_provenance": "asset_mesh",
+      "asset_ref": {
+        "source_db": "imaginarium",
+        "asset_key": "b_113",
+        "mesh_uri": null,
+        "pointcloud_uri": null,
+        "metadata_uri": null
+      },
+      "asset_proxy": {
+        "type": "obb_from_source_scene",
+        "bbox_center_local": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "bbox_size": [
+          0.55,
+          0.4425,
+          0.52
+        ]
+      },
+      "metadata": {
+        "source_scene_id": "scene_007379_03",
+        "source_object_index": 1,
+        "fixture_role": "frozen_source_object",
+        "interactive": false
+      }
+    },
+    {
+      "id": "obj_002",
+      "category": "nightstand",
+      "description": "gray suede nightstand",
+      "desc": "Gray suede bedside table with dark metal sled base and drawer",
+      "short_desc": "gray suede nightstand",
+      "jid": "b_113",
+      "size": [
+        0.55,
+        0.4425,
+        0.52
+      ],
+      "center": [
+        2.48,
+        3.02,
+        0.26
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        -90.0
+      ],
+      "geometry_provenance": "asset_mesh",
+      "asset_ref": {
+        "source_db": "imaginarium",
+        "asset_key": "b_113",
+        "mesh_uri": null,
+        "pointcloud_uri": null,
+        "metadata_uri": null
+      },
+      "asset_proxy": {
+        "type": "obb_from_source_scene",
+        "bbox_center_local": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "bbox_size": [
+          0.55,
+          0.4425,
+          0.52
+        ]
+      },
+      "metadata": {
+        "source_scene_id": "scene_007379_03",
+        "source_object_index": 2,
+        "fixture_role": "frozen_source_object",
+        "interactive": false
+      }
+    },
+    {
+      "id": "obj_003",
+      "category": "bed",
+      "description": "light wood bunk bed",
+      "desc": "Light wood bunk bed with gray and teal bedding, vertical slat railings",
+      "short_desc": "light wood bunk bed",
+      "jid": "44_sk46_BunkBed03",
+      "size": [
+        1.7103,
+        2.1118,
+        1.2503
+      ],
+      "center": [
+        1.65,
+        1.88,
+        0.63
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        -90.0
+      ],
+      "geometry_provenance": "asset_mesh",
+      "asset_ref": {
+        "source_db": "imaginarium",
+        "asset_key": "44_sk46_BunkBed03",
+        "mesh_uri": null,
+        "pointcloud_uri": null,
+        "metadata_uri": null
+      },
+      "asset_proxy": {
+        "type": "obb_from_source_scene",
+        "bbox_center_local": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "bbox_size": [
+          1.7103,
+          2.1118,
+          1.2503
+        ]
+      },
+      "metadata": {
+        "source_scene_id": "scene_007379_03",
+        "source_object_index": 3,
+        "fixture_role": "frozen_source_object",
+        "interactive": false
+      }
+    },
+    {
+      "id": "obj_004",
+      "category": "projector",
+      "description": "light gray desktop projector",
+      "desc": "A light gray desktop projector with ribbed texture and circular lens",
+      "short_desc": "light gray desktop projector",
+      "jid": "44_sk8_Projector01",
+      "size": [
+        0.3581,
+        0.3581,
+        0.2911
+      ],
+      "center": [
+        2.5,
+        3.02,
+        0.67
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "geometry_provenance": "asset_mesh",
+      "asset_ref": {
+        "source_db": "imaginarium",
+        "asset_key": "44_sk8_Projector01",
+        "mesh_uri": null,
+        "pointcloud_uri": null,
+        "metadata_uri": null
+      },
+      "asset_proxy": {
+        "type": "obb_from_source_scene",
+        "bbox_center_local": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "bbox_size": [
+          0.3581,
+          0.3581,
+          0.2911
+        ]
+      },
+      "metadata": {
+        "source_scene_id": "scene_007379_03",
+        "source_object_index": 4,
+        "fixture_role": "frozen_source_object",
+        "interactive": false
+      }
+    },
+    {
+      "id": "obj_005",
+      "category": "projector",
+      "description": "light gray desktop projector",
+      "desc": "A light gray desktop projector with ribbed texture and circular lens",
+      "short_desc": "light gray desktop projector",
+      "jid": "44_sk8_Projector01",
+      "size": [
+        0.3581,
+        0.3581,
+        0.2911
+      ],
+      "center": [
+        2.49,
+        0.69,
+        0.67
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        -90.0
+      ],
+      "geometry_provenance": "asset_mesh",
+      "asset_ref": {
+        "source_db": "imaginarium",
+        "asset_key": "44_sk8_Projector01",
+        "mesh_uri": null,
+        "pointcloud_uri": null,
+        "metadata_uri": null
+      },
+      "asset_proxy": {
+        "type": "obb_from_source_scene",
+        "bbox_center_local": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "bbox_size": [
+          0.3581,
+          0.3581,
+          0.2911
+        ]
+      },
+      "metadata": {
+        "source_scene_id": "scene_007379_03",
+        "source_object_index": 5,
+        "fixture_role": "frozen_source_object",
+        "interactive": false
+      }
+    }
+  ],
+  "metadata": {
+    "coordinate_frame": {
+      "origin": "room_min_corner_floor",
+      "axes": "x_width_y_depth_z_up",
+      "unit": "meter",
+      "rotation_unit": "degree"
+    },
+    "source_scene_id": "scene_007379_03",
+    "source_selection": "strict_zero_candidate_collision_oob_support_screen",
+    "generator_skipped": true,
+    "base_case_id": "source_clean_001",
+    "variant_family": "oar"
+  }
+}

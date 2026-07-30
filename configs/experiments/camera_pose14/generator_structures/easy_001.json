@@ -1,0 +1,116 @@
+{
+  "request_id": "easy_001",
+  "scene_type": "bedroom",
+  "scene_description": "Create a bedroom with a grey upholstered bed against the north wall. Place a dark brown wooden nightstand to the right of the bed and put a mint green vintage alarm clock on the nightstand. Put a dark gray angular floor lamp to the left of the bed and a beige geometric carpet in front of the bed.",
+  "prompt_granularity": "fine_grained",
+  "explicit_claims": [],
+  "objects": [
+    {
+      "id": "obj_000",
+      "role": "",
+      "category": "bed",
+      "description": "grey upholstered bed",
+      "count": 1,
+      "placement_intent": {
+        "absolute_relations": [],
+        "relative_relations": []
+      },
+      "metadata": {
+        "description_source": "imaginarium_asset_info.short_desc"
+      }
+    },
+    {
+      "id": "obj_001",
+      "role": "",
+      "category": "nightstand",
+      "description": "dark brown wooden nightstand",
+      "count": 1,
+      "placement_intent": {
+        "absolute_relations": [],
+        "relative_relations": []
+      },
+      "metadata": {
+        "description_source": "imaginarium_asset_info.short_desc"
+      }
+    },
+    {
+      "id": "obj_002",
+      "role": "",
+      "category": "clock",
+      "description": "mint green vintage alarm clock",
+      "count": 1,
+      "placement_intent": {
+        "absolute_relations": [],
+        "relative_relations": []
+      },
+      "metadata": {
+        "description_source": "imaginarium_asset_info.short_desc"
+      }
+    },
+    {
+      "id": "obj_003",
+      "role": "",
+      "category": "lamp",
+      "description": "dark gray angular floor lamp",
+      "count": 1,
+      "placement_intent": {
+        "absolute_relations": [],
+        "relative_relations": []
+      },
+      "metadata": {
+        "description_source": "imaginarium_asset_info.short_desc"
+      }
+    },
+    {
+      "id": "obj_004",
+      "role": "",
+      "category": "rug",
+      "description": "beige geometric carpet",
+      "count": 1,
+      "placement_intent": {
+        "absolute_relations": [],
+        "relative_relations": []
+      },
+      "metadata": {
+        "description_source": "imaginarium_asset_info.short_desc"
+      }
+    }
+  ],
+  "global_constraints": [],
+  "relations": [
+    {
+      "family": "oar",
+      "subject_id": "obj_000",
+      "type": "against_wall",
+      "target": "north_wall"
+    },
+    {
+      "family": "oor",
+      "subject_id": "obj_001",
+      "type": "right_of",
+      "object_id": "obj_000"
+    },
+    {
+      "family": "oor",
+      "subject_id": "obj_002",
+      "type": "on_top_of",
+      "object_id": "obj_001"
+    },
+    {
+      "family": "oor",
+      "subject_id": "obj_003",
+      "type": "left_of",
+      "object_id": "obj_000"
+    },
+    {
+      "family": "oor",
+      "subject_id": "obj_004",
+      "type": "in_front_of",
+      "object_id": "obj_000"
+    }
+  ],
+  "metadata": {
+    "fixture_policy": "manual_low_ambiguity_public_structure",
+    "room_dimensions_are_benchmark_fallback": true
+  }
+}

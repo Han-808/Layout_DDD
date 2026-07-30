@@ -1,0 +1,26 @@
+{
+  "annotation_version": "reference_annotation_v1",
+  "validation_status": "confirmed",
+  "source": "manual",
+  "request_id": "ablation_easy_001",
+  "scene_type": "bedroom",
+  "inventory_policy": "closed_world",
+  "objects": [
+    {"id": "obj_000", "category": "bed", "description": "grey upholstered bed", "count": 1, "claim_state": "confirmed"},
+    {"id": "obj_001", "category": "nightstand", "description": "dark brown wooden nightstand", "count": 1, "claim_state": "confirmed"},
+    {"id": "obj_002", "category": "clock", "description": "mint green vintage alarm clock", "count": 1, "claim_state": "confirmed"},
+    {"id": "obj_003", "category": "lamp", "description": "dark gray angular floor lamp", "count": 1, "claim_state": "confirmed"},
+    {"id": "obj_004", "category": "pillow", "description": "light gray pillow", "count": 1, "claim_state": "confirmed"}
+  ],
+  "oor_relations": [
+    {"type": "right", "subject_id": "obj_001", "object_id": "obj_000", "claim_state": "confirmed"},
+    {"type": "on_top_of", "subject_id": "obj_002", "object_id": "obj_001", "claim_state": "confirmed"},
+    {"type": "left", "subject_id": "obj_003", "object_id": "obj_000", "claim_state": "confirmed"},
+    {"type": "on_top_of", "subject_id": "obj_004", "object_id": "obj_000", "claim_state": "confirmed"}
+  ],
+  "oar_relations": [
+    {"type": "against_wall", "subject_id": "obj_000", "architectural_element": "north_wall", "claim_state": "confirmed"}
+  ],
+  "room_constraints": {"claim_state": "not_mentioned"},
+  "provenance": {"origin": "manual_p0b_ablation_conversion", "generator_visible": false, "leaderboard_ground_truth": false, "room_source": "benchmark_fallback"}
+}

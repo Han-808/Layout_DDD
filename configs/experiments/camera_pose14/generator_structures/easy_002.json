@@ -1,0 +1,116 @@
+{
+  "request_id": "easy_002",
+  "scene_type": "living_room",
+  "scene_description": "Create a living room with a brown leather chesterfield sofa against the west wall. Place a dark wood coffee table in front of the sofa and a white ceramic vase on the table. Put a black leather lounge chair to the right of the table and a deep red floral carpet near the table.",
+  "prompt_granularity": "fine_grained",
+  "explicit_claims": [],
+  "objects": [
+    {
+      "id": "obj_000",
+      "role": "",
+      "category": "sofa",
+      "description": "brown leather chesterfield sofa",
+      "count": 1,
+      "placement_intent": {
+        "absolute_relations": [],
+        "relative_relations": []
+      },
+      "metadata": {
+        "description_source": "imaginarium_asset_info.short_desc"
+      }
+    },
+    {
+      "id": "obj_001",
+      "role": "",
+      "category": "table",
+      "description": "dark wood coffee table",
+      "count": 1,
+      "placement_intent": {
+        "absolute_relations": [],
+        "relative_relations": []
+      },
+      "metadata": {
+        "description_source": "imaginarium_asset_info.short_desc"
+      }
+    },
+    {
+      "id": "obj_002",
+      "role": "",
+      "category": "vase",
+      "description": "white ceramic vase",
+      "count": 1,
+      "placement_intent": {
+        "absolute_relations": [],
+        "relative_relations": []
+      },
+      "metadata": {
+        "description_source": "imaginarium_asset_info.short_desc"
+      }
+    },
+    {
+      "id": "obj_003",
+      "role": "",
+      "category": "chair",
+      "description": "black leather lounge chair",
+      "count": 1,
+      "placement_intent": {
+        "absolute_relations": [],
+        "relative_relations": []
+      },
+      "metadata": {
+        "description_source": "imaginarium_asset_info.short_desc"
+      }
+    },
+    {
+      "id": "obj_004",
+      "role": "",
+      "category": "rug",
+      "description": "deep red floral carpet",
+      "count": 1,
+      "placement_intent": {
+        "absolute_relations": [],
+        "relative_relations": []
+      },
+      "metadata": {
+        "description_source": "imaginarium_asset_info.short_desc"
+      }
+    }
+  ],
+  "global_constraints": [],
+  "relations": [
+    {
+      "family": "oar",
+      "subject_id": "obj_000",
+      "type": "against_wall",
+      "target": "west_wall"
+    },
+    {
+      "family": "oor",
+      "subject_id": "obj_001",
+      "type": "in_front_of",
+      "object_id": "obj_000"
+    },
+    {
+      "family": "oor",
+      "subject_id": "obj_002",
+      "type": "on_top_of",
+      "object_id": "obj_001"
+    },
+    {
+      "family": "oor",
+      "subject_id": "obj_003",
+      "type": "right_of",
+      "object_id": "obj_001"
+    },
+    {
+      "family": "oor",
+      "subject_id": "obj_004",
+      "type": "near",
+      "object_id": "obj_001"
+    }
+  ],
+  "metadata": {
+    "fixture_policy": "manual_low_ambiguity_public_structure",
+    "room_dimensions_are_benchmark_fallback": true
+  }
+}

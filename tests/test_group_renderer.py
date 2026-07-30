@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from benchmark.visualization.view_renderer import SimpleBBoxRenderer
+from benchmark.legend.visualization.view_renderer import SimpleBBoxRenderer
 
 
 CASE = {"room": {"boundary": [[0, 0], [4, 0], [4, 4], [0, 4]], "floor_z": 0.0, "wall_height": 3.0}}

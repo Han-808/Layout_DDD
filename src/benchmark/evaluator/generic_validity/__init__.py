@@ -1,4 +1,4 @@
-"""Deterministic generic scene validity evaluator."""
+"""Generic validity from deterministic evidence and conditional P0b adjudication."""
 
 from benchmark.evaluator.generic_validity.asset_resolver import enrich_scene_assets, resolve_asset_metadata
 from benchmark.evaluator.generic_validity.evaluator import (

@@ -1,0 +1,14 @@
+{
+  "name": "qwen3vl-235b-a22b-fp8-mnet-judge",
+  "provider": "openai_compatible",
+  "endpoint": "http://127.0.0.1:8298/v1",
+  "model": "Qwen3-VL-235B-A22B-Instruct-FP8",
+  "temperature": 0.0,
+  "max_tokens": 2048,
+  "context_length": 65536,
+  "timeout_seconds": 900,
+  "response_format_json": true,
+  "max_retries": 1,
+  "max_images": 6,
+  "max_context_chars": 30000
+}

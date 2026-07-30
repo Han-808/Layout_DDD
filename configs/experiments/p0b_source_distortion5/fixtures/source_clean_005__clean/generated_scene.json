@@ -1,0 +1,340 @@
+{
+  "schema_version": "canonical_scene_v1",
+  "scene_id": "source_clean_005__clean",
+  "request_id": "source_clean_005__clean",
+  "scene_type": "living room",
+  "boundary": [
+    [
+      0.0,
+      0.0
+    ],
+    [
+      4.5,
+      0.0
+    ],
+    [
+      4.5,
+      12.87
+    ],
+    [
+      0.0,
+      12.87
+    ]
+  ],
+  "scene_height": 2.7969,
+  "objects": [
+    {
+      "id": "obj_000",
+      "category": "locker",
+      "description": "gray wooden storage locker",
+      "desc": "Tall gray storage locker with white door, open hanging space, and wooden drawers",
+      "short_desc": "gray wooden storage locker",
+      "jid": "20_SM_Wardrobe",
+      "size": [
+        2.0871,
+        0.5604044633368757,
+        2.5
+      ],
+      "center": [
+        3.01,
+        11.73,
+        1.25
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        -90.0
+      ],
+      "geometry_provenance": "asset_mesh",
+      "asset_ref": {
+        "source_db": "imaginarium",
+        "asset_key": "20_SM_Wardrobe",
+        "mesh_uri": null,
+        "pointcloud_uri": null,
+        "metadata_uri": null
+      },
+      "asset_proxy": {
+        "type": "obb_from_source_scene",
+        "bbox_center_local": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "bbox_size": [
+          2.0871,
+          0.5604044633368757,
+          2.5
+        ]
+      },
+      "metadata": {
+        "source_scene_id": "scene_011841_04",
+        "source_object_index": 0,
+        "fixture_role": "frozen_source_object",
+        "interactive": false
+      }
+    },
+    {
+      "id": "obj_001",
+      "category": "table",
+      "description": "dark gray round coffee table",
+      "desc": "A dark gray round coffee table with intersecting vertical panel base",
+      "short_desc": "dark gray round coffee table",
+      "jid": "0_SM_Kitchen_table",
+      "size": [
+        1.9656,
+        2.013,
+        1.0732352459016392
+      ],
+      "center": [
+        1.08,
+        11.02,
+        0.54
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        180.0
+      ],
+      "geometry_provenance": "asset_mesh",
+      "asset_ref": {
+        "source_db": "imaginarium",
+        "asset_key": "0_SM_Kitchen_table",
+        "mesh_uri": null,
+        "pointcloud_uri": null,
+        "metadata_uri": null
+      },
+      "asset_proxy": {
+        "type": "obb_from_source_scene",
+        "bbox_center_local": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "bbox_size": [
+          1.9656,
+          2.013,
+          1.0732352459016392
+        ]
+      },
+      "metadata": {
+        "source_scene_id": "scene_011841_04",
+        "source_object_index": 1,
+        "fixture_role": "frozen_source_object",
+        "interactive": false
+      }
+    },
+    {
+      "id": "obj_002",
+      "category": "sofa",
+      "description": "black leather sofa",
+      "desc": "Black leather multi-person sofa with cylindrical armrests and cushions",
+      "short_desc": "black leather sofa",
+      "jid": "b_74",
+      "size": [
+        4.143,
+        1.5630000000000002,
+        1.1700144465345048
+      ],
+      "center": [
+        2.72,
+        2.9,
+        0.59
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        -90.0
+      ],
+      "geometry_provenance": "asset_mesh",
+      "asset_ref": {
+        "source_db": "imaginarium",
+        "asset_key": "b_74",
+        "mesh_uri": null,
+        "pointcloud_uri": null,
+        "metadata_uri": null
+      },
+      "asset_proxy": {
+        "type": "obb_from_source_scene",
+        "bbox_center_local": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "bbox_size": [
+          4.143,
+          1.5630000000000002,
+          1.1700144465345048
+        ]
+      },
+      "metadata": {
+        "source_scene_id": "scene_011841_04",
+        "source_object_index": 2,
+        "fixture_role": "frozen_source_object",
+        "interactive": false
+      }
+    },
+    {
+      "id": "obj_003",
+      "category": "pot",
+      "description": "gray textured pot",
+      "desc": "Tall green bushy plant with dense elongated leaves in gray textured pot",
+      "short_desc": "gray textured pot",
+      "jid": "0_SM_Plant_14",
+      "size": [
+        0.6217,
+        0.6865,
+        1.55
+      ],
+      "center": [
+        0.52,
+        0.41,
+        0.78
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        90.0
+      ],
+      "geometry_provenance": "asset_mesh",
+      "asset_ref": {
+        "source_db": "imaginarium",
+        "asset_key": "0_SM_Plant_14",
+        "mesh_uri": null,
+        "pointcloud_uri": null,
+        "metadata_uri": null
+      },
+      "asset_proxy": {
+        "type": "obb_from_source_scene",
+        "bbox_center_local": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "bbox_size": [
+          0.6217,
+          0.6865,
+          1.55
+        ]
+      },
+      "metadata": {
+        "source_scene_id": "scene_011841_04",
+        "source_object_index": 3,
+        "fixture_role": "frozen_source_object",
+        "interactive": false
+      }
+    },
+    {
+      "id": "obj_004",
+      "category": "pot",
+      "description": "gray textured pot",
+      "desc": "Tall green bushy plant with dense elongated leaves in gray textured pot",
+      "short_desc": "gray textured pot",
+      "jid": "0_SM_Plant_14",
+      "size": [
+        0.6217,
+        0.6865,
+        1.55
+      ],
+      "center": [
+        4.06,
+        6.37,
+        0.78
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        -90.0
+      ],
+      "geometry_provenance": "asset_mesh",
+      "asset_ref": {
+        "source_db": "imaginarium",
+        "asset_key": "0_SM_Plant_14",
+        "mesh_uri": null,
+        "pointcloud_uri": null,
+        "metadata_uri": null
+      },
+      "asset_proxy": {
+        "type": "obb_from_source_scene",
+        "bbox_center_local": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "bbox_size": [
+          0.6217,
+          0.6865,
+          1.55
+        ]
+      },
+      "metadata": {
+        "source_scene_id": "scene_011841_04",
+        "source_object_index": 4,
+        "fixture_role": "frozen_source_object",
+        "interactive": false
+      }
+    },
+    {
+      "id": "obj_005",
+      "category": "wardrobe",
+      "description": "gray open shelving wardrobe",
+      "desc": "A large gray wardrobe with four doors and open center shelving compartment",
+      "short_desc": "gray open shelving wardrobe",
+      "jid": "d_1000003309212",
+      "size": [
+        1.999,
+        0.48384505862646565,
+        2.5
+      ],
+      "center": [
+        3.19,
+        7.92,
+        1.25
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        -90.0
+      ],
+      "geometry_provenance": "asset_mesh",
+      "asset_ref": {
+        "source_db": "imaginarium",
+        "asset_key": "d_1000003309212",
+        "mesh_uri": null,
+        "pointcloud_uri": null,
+        "metadata_uri": null
+      },
+      "asset_proxy": {
+        "type": "obb_from_source_scene",
+        "bbox_center_local": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "bbox_size": [
+          1.999,
+          0.48384505862646565,
+          2.5
+        ]
+      },
+      "metadata": {
+        "source_scene_id": "scene_011841_04",
+        "source_object_index": 5,
+        "fixture_role": "frozen_source_object",
+        "interactive": false
+      }
+    }
+  ],
+  "metadata": {
+    "coordinate_frame": {
+      "origin": "room_min_corner_floor",
+      "axes": "x_width_y_depth_z_up",
+      "unit": "meter",
+      "rotation_unit": "degree"
+    },
+    "source_scene_id": "scene_011841_04",
+    "source_selection": "strict_zero_candidate_collision_oob_support_screen",
+    "generator_skipped": true,
+    "base_case_id": "source_clean_005",
+    "variant_family": "clean"
+  }
+}

@@ -1,0 +1,463 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://layout-ddd.local/schemas/vlm_evaluation_control.schema.json",
+  "title": "VLM Evaluation Control",
+  "description": "Additive control-plane configuration for Judge, CameraSelector, and deterministic EvidenceGate orchestration.",
+  "type": "object",
+  "additionalProperties": false,
+  "default": {
+    "schema_version": "vlm_evaluation_control_v1",
+    "camera_selector": {
+      "backend": "existing",
+      "allow_freeform_pose": false,
+      "allow_scene_mutation": false
+    },
+    "camera_acquisition": {
+      "policy": "deterministic_then_vlm",
+      "deterministic": {
+        "max_rounds": 1,
+        "candidate_budget": 8,
+        "max_selected_views": 2,
+        "ranking": {
+          "geometry_feasible_bonus": 2.0,
+          "geometry_unverified_penalty": -100.0,
+          "target_visibility_bonus": 2.0,
+          "joint_visibility_bonus": 2.0,
+          "projected_coverage_weight": 2.0,
+          "contact_cue_weight": 1.0,
+          "pose_diversity_cap": 5.0,
+          "pose_diversity_weight": 0.1,
+          "view_family_match_bonus": 1.0,
+          "unoccluded_bonus": 1.0
+        }
+      },
+      "vlm": {
+        "max_rounds": 1,
+        "selection_mode": "repair_plan",
+        "max_selected_views": 2,
+        "max_repair_plans": 3
+      },
+      "total": {
+        "max_evidence_rounds": 2,
+        "max_total_images": 6,
+        "max_selector_calls": 3,
+        "max_camera_actions": 2
+      },
+      "escalation": {
+        "on_no_feasible_candidate": true,
+        "on_post_render_gate_insufficient": true,
+        "on_selector_exception": false,
+        "on_render_failure": false
+      }
+    },
+    "evidence_gate": {
+      "enabled": true,
+      "backend": "deterministic",
+      "allow_path_only_compatibility": false
+    },
+    "judge": {
+      "allow_need_more_evidence": true
+    },
+    "budgets": {
+      "max_evidence_rounds": 2,
+      "max_views_per_round": 2,
+      "max_total_images": 6,
+      "max_camera_actions": 2,
+      "max_selector_calls": 3
+    },
+    "require_evidence_gate_after_render": true,
+    "on_non_camera_repairable_evidence": "unresolved",
+    "on_budget_exhausted": "unresolved",
+    "on_selector_failure": "keep_previous_evidence",
+    "on_render_failure": "unresolved"
+  },
+  "properties": {
+    "schema_version": {
+      "const": "vlm_evaluation_control_v1",
+      "default": "vlm_evaluation_control_v1"
+    },
+    "camera_selector": {
+      "type": "object",
+      "additionalProperties": false,
+      "default": {
+        "backend": "existing",
+        "allow_freeform_pose": false,
+        "allow_scene_mutation": false
+      },
+      "properties": {
+        "backend": {
+          "type": "string",
+          "enum": [
+            "existing",
+            "deterministic",
+            "vlm",
+            "hybrid"
+          ],
+          "default": "existing"
+        },
+        "allow_freeform_pose": {
+          "type": "boolean",
+          "default": false
+        },
+        "allow_scene_mutation": {
+          "const": false,
+          "default": false
+        }
+      }
+    },
+    "camera_acquisition": {
+      "type": "object",
+      "additionalProperties": false,
+      "default": {
+        "policy": "deterministic_then_vlm",
+        "deterministic": {
+          "max_rounds": 1,
+          "candidate_budget": 8,
+          "max_selected_views": 2,
+          "ranking": {
+            "geometry_feasible_bonus": 2.0,
+            "geometry_unverified_penalty": -100.0,
+            "target_visibility_bonus": 2.0,
+            "joint_visibility_bonus": 2.0,
+            "projected_coverage_weight": 2.0,
+            "contact_cue_weight": 1.0,
+            "pose_diversity_cap": 5.0,
+            "pose_diversity_weight": 0.1,
+            "view_family_match_bonus": 1.0,
+            "unoccluded_bonus": 1.0
+          }
+        },
+        "vlm": {
+          "max_rounds": 1,
+          "selection_mode": "repair_plan",
+          "max_selected_views": 2,
+          "max_repair_plans": 3
+        },
+        "total": {
+          "max_evidence_rounds": 2,
+          "max_total_images": 6,
+          "max_selector_calls": 3,
+          "max_camera_actions": 2
+        },
+        "escalation": {
+          "on_no_feasible_candidate": true,
+          "on_post_render_gate_insufficient": true,
+          "on_selector_exception": false,
+          "on_render_failure": false
+        }
+      },
+      "properties": {
+        "policy": {
+          "type": "string",
+          "enum": [
+            "fixed",
+            "deterministic_only",
+            "vlm_only",
+            "deterministic_then_vlm"
+          ],
+          "default": "deterministic_then_vlm"
+        },
+        "deterministic": {
+          "type": "object",
+          "additionalProperties": false,
+          "default": {
+            "max_rounds": 1,
+            "candidate_budget": 8,
+            "max_selected_views": 2,
+            "ranking": {
+              "geometry_feasible_bonus": 2.0,
+              "geometry_unverified_penalty": -100.0,
+              "target_visibility_bonus": 2.0,
+              "joint_visibility_bonus": 2.0,
+              "projected_coverage_weight": 2.0,
+              "contact_cue_weight": 1.0,
+              "pose_diversity_cap": 5.0,
+              "pose_diversity_weight": 0.1,
+              "view_family_match_bonus": 1.0,
+              "unoccluded_bonus": 1.0
+            }
+          },
+          "properties": {
+            "max_rounds": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 1
+            },
+            "candidate_budget": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 8
+            },
+            "max_selected_views": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 2
+            },
+            "ranking": {
+              "type": "object",
+              "additionalProperties": false,
+              "default": {
+                "geometry_feasible_bonus": 2.0,
+                "geometry_unverified_penalty": -100.0,
+                "target_visibility_bonus": 2.0,
+                "joint_visibility_bonus": 2.0,
+                "projected_coverage_weight": 2.0,
+                "contact_cue_weight": 1.0,
+                "pose_diversity_cap": 5.0,
+                "pose_diversity_weight": 0.1,
+                "view_family_match_bonus": 1.0,
+                "unoccluded_bonus": 1.0
+              },
+              "properties": {
+                "geometry_feasible_bonus": {
+                  "type": "number",
+                  "minimum": 0,
+                  "default": 2.0
+                },
+                "geometry_unverified_penalty": {
+                  "type": "number",
+                  "maximum": 0,
+                  "default": -100.0
+                },
+                "target_visibility_bonus": {
+                  "type": "number",
+                  "minimum": 0,
+                  "default": 2.0
+                },
+                "joint_visibility_bonus": {
+                  "type": "number",
+                  "minimum": 0,
+                  "default": 2.0
+                },
+                "projected_coverage_weight": {
+                  "type": "number",
+                  "minimum": 0,
+                  "default": 2.0
+                },
+                "contact_cue_weight": {
+                  "type": "number",
+                  "minimum": 0,
+                  "default": 1.0
+                },
+                "pose_diversity_cap": {
+                  "type": "number",
+                  "exclusiveMinimum": 0,
+                  "default": 5.0
+                },
+                "pose_diversity_weight": {
+                  "type": "number",
+                  "minimum": 0,
+                  "default": 0.1
+                },
+                "view_family_match_bonus": {
+                  "type": "number",
+                  "minimum": 0,
+                  "default": 1.0
+                },
+                "unoccluded_bonus": {
+                  "type": "number",
+                  "minimum": 0,
+                  "default": 1.0
+                }
+              }
+            }
+          }
+        },
+        "vlm": {
+          "type": "object",
+          "additionalProperties": false,
+          "default": {
+            "max_rounds": 1,
+            "selection_mode": "repair_plan",
+            "max_selected_views": 2,
+            "max_repair_plans": 3
+          },
+          "properties": {
+            "max_rounds": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 1
+            },
+            "selection_mode": {
+              "type": "string",
+              "enum": [
+                "candidate_only",
+                "repair_plan",
+                "freeform_pose"
+              ],
+              "default": "repair_plan"
+            },
+            "max_selected_views": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 2
+            },
+            "max_repair_plans": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 3
+            }
+          }
+        },
+        "total": {
+          "type": "object",
+          "additionalProperties": false,
+          "default": {
+            "max_evidence_rounds": 2,
+            "max_total_images": 6,
+            "max_selector_calls": 3,
+            "max_camera_actions": 2
+          },
+          "properties": {
+            "max_evidence_rounds": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 2
+            },
+            "max_total_images": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 6
+            },
+            "max_selector_calls": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 3
+            },
+            "max_camera_actions": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 2
+            }
+          }
+        },
+        "escalation": {
+          "type": "object",
+          "additionalProperties": false,
+          "default": {
+            "on_no_feasible_candidate": true,
+            "on_post_render_gate_insufficient": true,
+            "on_selector_exception": false,
+            "on_render_failure": false
+          },
+          "properties": {
+            "on_no_feasible_candidate": {
+              "type": "boolean",
+              "default": true
+            },
+            "on_post_render_gate_insufficient": {
+              "type": "boolean",
+              "default": true
+            },
+            "on_selector_exception": {
+              "const": false,
+              "default": false
+            },
+            "on_render_failure": {
+              "const": false,
+              "default": false
+            }
+          }
+        }
+      }
+    },
+    "evidence_gate": {
+      "type": "object",
+      "additionalProperties": false,
+      "default": {
+        "enabled": true,
+        "backend": "deterministic",
+        "allow_path_only_compatibility": false
+      },
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": true
+        },
+        "backend": {
+          "const": "deterministic",
+          "default": "deterministic"
+        },
+        "allow_path_only_compatibility": {
+          "type": "boolean",
+          "default": false
+        }
+      }
+    },
+    "judge": {
+      "type": "object",
+      "additionalProperties": false,
+      "default": {
+        "allow_need_more_evidence": true
+      },
+      "properties": {
+        "allow_need_more_evidence": {
+          "type": "boolean",
+          "default": true
+        }
+      }
+    },
+    "budgets": {
+      "type": "object",
+      "additionalProperties": false,
+      "default": {
+        "max_evidence_rounds": 2,
+        "max_views_per_round": 2,
+        "max_total_images": 6,
+        "max_camera_actions": 2,
+        "max_selector_calls": 3
+      },
+      "properties": {
+        "max_evidence_rounds": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 2
+        },
+        "max_views_per_round": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 2
+        },
+        "max_total_images": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 6
+        },
+        "max_camera_actions": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 2
+        },
+        "max_selector_calls": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 3
+        }
+      }
+    },
+    "require_evidence_gate_after_render": {
+      "type": "boolean",
+      "default": true
+    },
+    "on_non_camera_repairable_evidence": {
+      "const": "unresolved",
+      "default": "unresolved"
+    },
+    "on_budget_exhausted": {
+      "const": "unresolved",
+      "default": "unresolved"
+    },
+    "on_selector_failure": {
+      "type": "string",
+      "enum": [
+        "keep_previous_evidence",
+        "unresolved"
+      ],
+      "default": "keep_previous_evidence"
+    },
+    "on_render_failure": {
+      "const": "unresolved",
+      "default": "unresolved"
+    }
+  }
+}

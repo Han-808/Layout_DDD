@@ -1,0 +1,21 @@
+{
+  "camera_acquisition": {
+    "policy": "vlm_only",
+    "deterministic": {
+      "max_rounds": 1,
+      "candidate_budget": 8,
+      "max_selected_views": 2
+    },
+    "vlm": {
+      "max_rounds": 1,
+      "selection_mode": "repair_plan",
+      "max_selected_views": 2
+    },
+    "total": {
+      "max_evidence_rounds": 2,
+      "max_total_images": 6,
+      "max_selector_calls": 3,
+      "max_camera_actions": 2
+    }
+  }
+}

@@ -11,7 +11,16 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def _validator() -> Draft202012Validator:
-    return Draft202012Validator(read_json(ROOT / "schemas" / "bm_instance.schema.json"))
+    return Draft202012Validator(
+        read_json(
+            ROOT
+            / "Support"
+            / "legacy"
+            / "legend"
+            / "schemas"
+            / "legend_bm_instance.schema.json"
+        )
+    )
 
 
 def _assert_valid(case: dict) -> None:
@@ -97,5 +106,7 @@ def test_structured_relation_with_spatial_cues_validates() -> None:
 
 
 def test_legacy_cases_still_validate() -> None:
-    for path in sorted((ROOT / "data" / "benchmark_cases").glob("*.json")):
+    for path in sorted(
+        (ROOT / "Support" / "data" / "benchmark_cases").glob("*.json")
+    ):
         _assert_valid(read_json(path))

@@ -1,0 +1,228 @@
+{
+  "request_id": "prompt_018",
+  "scene_type": "coworking_office",
+  "scene_description": "A 12 m x 10 m coworking office has a ceiling height of 3.2 m. Arrange four identical white desks as a two-by-two grid in the center, with clear aisles between them. Place one black chair behind each desk and one monitor in the center of each desktop. Put one shared printer on top of a low cabinet against the east wall. A long whiteboard is mounted on the north wall, opposite two blue lounge chairs along the south wall. Place one round side table between the lounge chairs and one tall plant in each northern corner.",
+  "prompt_granularity": "fine_grained",
+  "explicit_claims": [
+    "four identical white desks",
+    "clear aisles between desks",
+    "one black chair behind each desk",
+    "one monitor in the center of each desktop",
+    "one shared printer on top of a low cabinet",
+    "low cabinet against the east wall",
+    "long whiteboard mounted on the north wall",
+    "two blue lounge chairs along the south wall",
+    "one round side table between the lounge chairs",
+    "one tall plant in each northern corner"
+  ],
+  "objects": [
+    {
+      "id": "obj_000",
+      "role": "workstation",
+      "category": "desk",
+      "description": "white desk",
+      "count": 4,
+      "placement_intent": {
+        "absolute_relations": [],
+        "relative_relations": []
+      },
+      "metadata": {},
+      "estimated_size": [
+        1.2,
+        0.6,
+        0.75
+      ]
+    },
+    {
+      "id": "obj_001",
+      "role": "seating",
+      "category": "chair",
+      "description": "black chair",
+      "count": 4,
+      "placement_intent": {
+        "absolute_relations": [],
+        "relative_relations": []
+      },
+      "metadata": {},
+      "estimated_size": [
+        0.5,
+        0.5,
+        0.9
+      ]
+    },
+    {
+      "id": "obj_002",
+      "role": "display",
+      "category": "monitor",
+      "description": "computer monitor",
+      "count": 4,
+      "placement_intent": {
+        "absolute_relations": [],
+        "relative_relations": []
+      },
+      "metadata": {},
+      "estimated_size": [
+        0.5,
+        0.4,
+        0.3
+      ]
+    },
+    {
+      "id": "obj_003",
+      "role": "storage",
+      "category": "cabinet",
+      "description": "low cabinet",
+      "count": 1,
+      "placement_intent": {
+        "absolute_relations": [],
+        "relative_relations": []
+      },
+      "metadata": {},
+      "estimated_size": [
+        1.0,
+        0.5,
+        0.7
+      ]
+    },
+    {
+      "id": "obj_004",
+      "role": "office_equipment",
+      "category": "printer",
+      "description": "shared printer",
+      "count": 1,
+      "placement_intent": {
+        "absolute_relations": [],
+        "relative_relations": []
+      },
+      "metadata": {},
+      "estimated_size": [
+        0.6,
+        0.4,
+        0.5
+      ]
+    },
+    {
+      "id": "obj_005",
+      "role": "wall_mounted",
+      "category": "whiteboard",
+      "description": "long whiteboard",
+      "count": 1,
+      "placement_intent": {
+        "absolute_relations": [],
+        "relative_relations": []
+      },
+      "metadata": {},
+      "estimated_size": [
+        3.0,
+        0.1,
+        1.5
+      ]
+    },
+    {
+      "id": "obj_006",
+      "role": "seating",
+      "category": "lounge_chair",
+      "description": "blue lounge chair",
+      "count": 2,
+      "placement_intent": {
+        "absolute_relations": [],
+        "relative_relations": []
+      },
+      "metadata": {},
+      "estimated_size": [
+        0.8,
+        0.8,
+        0.9
+      ]
+    },
+    {
+      "id": "obj_007",
+      "role": "furniture",
+      "category": "side_table",
+      "description": "round side table",
+      "count": 1,
+      "placement_intent": {
+        "absolute_relations": [],
+        "relative_relations": []
+      },
+      "metadata": {},
+      "estimated_size": [
+        0.6,
+        0.6,
+        0.5
+      ]
+    },
+    {
+      "id": "obj_008",
+      "role": "decor",
+      "category": "plant",
+      "description": "tall plant",
+      "count": 2,
+      "placement_intent": {
+        "absolute_relations": [],
+        "relative_relations": []
+      },
+      "metadata": {},
+      "estimated_size": [
+        0.5,
+        0.5,
+        1.8
+      ]
+    }
+  ],
+  "global_constraints": [],
+  "relations": [
+    {
+      "family": "oor",
+      "subject_id": "obj_001",
+      "type": "behind",
+      "object_id": "obj_000"
+    },
+    {
+      "family": "oor",
+      "subject_id": "obj_002",
+      "type": "on_top_of",
+      "object_id": "obj_000"
+    },
+    {
+      "family": "oor",
+      "subject_id": "obj_004",
+      "type": "on_top_of",
+      "object_id": "obj_003"
+    },
+    {
+      "family": "oar",
+      "subject_id": "obj_003",
+      "type": "against_wall",
+      "target": "east_wall"
+    },
+    {
+      "family": "oar",
+      "subject_id": "obj_005",
+      "type": "mounted_on",
+      "target": "north_wall"
+    },
+    {
+      "family": "oar",
+      "subject_id": "obj_006",
+      "type": "along_wall",
+      "target": "south_wall"
+    },
+    {
+      "family": "oar",
+      "subject_id": "obj_008",
+      "type": "in_corner",
+      "target": "northeast_corner"
+    },
+    {
+      "family": "oar",
+      "subject_id": "obj_008",
+      "type": "in_corner",
+      "target": "northwest_corner"
+    }
+  ],
+  "metadata": {
+    "fixture_policy": "legacy_plan_schema_sanitization_only",
+    "dropped_relation_count": 1
+  }
+}

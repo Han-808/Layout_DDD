@@ -1,0 +1,30 @@
+{
+  "contract_version": "counter_strike_case_contract_v1",
+  "case_id": "cs_fps_hy3",
+  "corpus_id": "Hy3",
+  "source_frame": {
+    "up_axis": "y",
+    "unit_scale": 1.0
+  },
+  "source_assertions": [
+    {
+      "path": "src/map.js",
+      "sha256": "e4d13ba21b62d3b399df8a27a36edf03c5de86108d435d150c98fb5877afa96e",
+      "evidence": "buildMap spawnPlayer/spawnEnemy declarations"
+    }
+  ],
+  "team_spawns": {
+    "team_a": {
+      "points": [[-8.0, 0.0, -26.0], [0.0, 0.0, -24.5], [8.0, 0.0, -26.0]],
+      "jitter_radius_m": 0.0
+    },
+    "team_b": {
+      "points": [[-8.0, 0.0, 26.0], [0.0, 0.0, 24.5], [8.0, 0.0, 26.0]],
+      "jitter_radius_m": 0.0
+    }
+  },
+  "annotation": {
+    "source": "benchmark_audited_source_declaration",
+    "score_authority": false
+  }
+}

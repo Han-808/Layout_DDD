@@ -1,0 +1,136 @@
+{
+  "annotation_version": "reference_annotation_v1",
+  "validation_status": "confirmed",
+  "source": "manual",
+  "request_id": "source_clean_005__clean",
+  "scene_type": "living room",
+  "inventory_policy": "closed_world",
+  "objects": [
+    {
+      "id": "obj_000",
+      "category": "locker",
+      "description": "gray wooden storage locker",
+      "count": 1,
+      "claim_state": "confirmed"
+    },
+    {
+      "id": "obj_001",
+      "category": "table",
+      "description": "dark gray round coffee table",
+      "count": 1,
+      "claim_state": "confirmed"
+    },
+    {
+      "id": "obj_002",
+      "category": "sofa",
+      "description": "black leather sofa",
+      "count": 1,
+      "claim_state": "confirmed"
+    },
+    {
+      "id": "obj_003",
+      "category": "pot",
+      "description": "gray textured pot",
+      "count": 1,
+      "claim_state": "confirmed"
+    },
+    {
+      "id": "obj_004",
+      "category": "pot",
+      "description": "gray textured pot",
+      "count": 1,
+      "claim_state": "confirmed"
+    },
+    {
+      "id": "obj_005",
+      "category": "wardrobe",
+      "description": "gray open shelving wardrobe",
+      "count": 1,
+      "claim_state": "confirmed"
+    }
+  ],
+  "oor_relations": [
+    {
+      "type": "near",
+      "subject_id": "obj_001",
+      "object_id": "obj_000",
+      "claim_state": "confirmed",
+      "relation_id": "oor_000"
+    },
+    {
+      "type": "near",
+      "subject_id": "obj_004",
+      "object_id": "obj_002",
+      "claim_state": "confirmed",
+      "relation_id": "oor_001"
+    }
+  ],
+  "oar_relations": [
+    {
+      "type": "at_corner",
+      "subject_id": "obj_003",
+      "architectural_element": "southwest_corner",
+      "claim_state": "confirmed",
+      "relation_id": "oar_000"
+    },
+    {
+      "type": "near_wall",
+      "subject_id": "obj_004",
+      "architectural_element": "east_wall",
+      "claim_state": "confirmed",
+      "relation_id": "oar_001"
+    },
+    {
+      "type": "near_wall",
+      "subject_id": "obj_000",
+      "architectural_element": "north_wall",
+      "claim_state": "confirmed",
+      "relation_id": "oar_002"
+    },
+    {
+      "type": "room_region",
+      "subject_id": "obj_001",
+      "architectural_element": "north_region",
+      "region": "north",
+      "claim_state": "confirmed",
+      "relation_id": "oar_003"
+    },
+    {
+      "type": "room_region",
+      "subject_id": "obj_002",
+      "architectural_element": "south_region",
+      "region": "south",
+      "claim_state": "confirmed",
+      "relation_id": "oar_004"
+    },
+    {
+      "type": "room_region",
+      "subject_id": "obj_005",
+      "architectural_element": "east_region",
+      "region": "east",
+      "claim_state": "confirmed",
+      "relation_id": "oar_005"
+    }
+  ],
+  "room_constraints": {
+    "claim_state": "confirmed",
+    "shape": "rectangular_enclosed_room",
+    "dimensions": {
+      "width": 4.5,
+      "depth": 12.87,
+      "height": 2.7969
+    }
+  },
+  "review": {
+    "status": "approved",
+    "reviewer": "benchmark_author"
+  },
+  "provenance": {
+    "origin": "manual_source_scene_fixture_conversion",
+    "generator_visible": false,
+    "leaderboard_ground_truth": false,
+    "source_scene_id": "scene_011841_04",
+    "base_case_id": "source_clean_005",
+    "variant_family": "clean"
+  }
+}

@@ -1,4 +1,4 @@
-"""Benchmark framework for explicit bbox-based 3D layout generation."""
+"""Adapter-based 3D scene generation and deterministic evaluation benchmark."""
 
 __all__ = ["__version__"]
 

@@ -1,0 +1,293 @@
+{
+  "request_id": "prompt_027",
+  "scene_type": "kitchen",
+  "scene_description": "A 9 m x 8 m kitchen has a 3 m ceiling. Center one long grey island in the room and arrange three black stools along its south side. Place one sink at the left end of the island and one cooktop at the right end. Put one cutting board between the sink and cooktop with one red kettle behind it. A refrigerator stands against the north wall beside a tall pantry cabinet. Run one counter along the east wall and place one toaster on the counter beneath two wall cabinets. Keep one waste bin between the island and the west wall.",
+  "prompt_granularity": "fine_grained",
+  "explicit_claims": [
+    "one long grey island",
+    "three black stools",
+    "one sink",
+    "one cooktop",
+    "one cutting board",
+    "one red kettle",
+    "one refrigerator",
+    "one tall pantry cabinet",
+    "one counter",
+    "one toaster",
+    "two wall cabinets",
+    "one waste bin"
+  ],
+  "objects": [
+    {
+      "id": "obj_000",
+      "role": "central island",
+      "category": "island",
+      "description": "long grey island",
+      "count": 1,
+      "placement_intent": {
+        "absolute_relations": [],
+        "relative_relations": []
+      },
+      "metadata": {},
+      "estimated_size": [
+        3.0,
+        1.2,
+        0.9
+      ]
+    },
+    {
+      "id": "obj_001",
+      "role": "seating",
+      "category": "stool",
+      "description": "black stool",
+      "count": 3,
+      "placement_intent": {
+        "absolute_relations": [],
+        "relative_relations": []
+      },
+      "metadata": {},
+      "estimated_size": [
+        0.4,
+        0.4,
+        0.7
+      ]
+    },
+    {
+      "id": "obj_002",
+      "role": "sink",
+      "category": "sink",
+      "description": "sink",
+      "count": 1,
+      "placement_intent": {
+        "absolute_relations": [],
+        "relative_relations": []
+      },
+      "metadata": {},
+      "estimated_size": [
+        0.5,
+        0.5,
+        0.2
+      ]
+    },
+    {
+      "id": "obj_003",
+      "role": "cooktop",
+      "category": "cooktop",
+      "description": "cooktop",
+      "count": 1,
+      "placement_intent": {
+        "absolute_relations": [],
+        "relative_relations": []
+      },
+      "metadata": {},
+      "estimated_size": [
+        0.6,
+        0.6,
+        0.05
+      ]
+    },
+    {
+      "id": "obj_004",
+      "role": "cutting board",
+      "category": "cutting_board",
+      "description": "cutting board",
+      "count": 1,
+      "placement_intent": {
+        "absolute_relations": [],
+        "relative_relations": []
+      },
+      "metadata": {},
+      "estimated_size": [
+        0.4,
+        0.3,
+        0.02
+      ]
+    },
+    {
+      "id": "obj_005",
+      "role": "kettle",
+      "category": "kettle",
+      "description": "red kettle",
+      "count": 1,
+      "placement_intent": {
+        "absolute_relations": [],
+        "relative_relations": []
+      },
+      "metadata": {},
+      "estimated_size": [
+        0.2,
+        0.2,
+        0.2
+      ]
+    },
+    {
+      "id": "obj_006",
+      "role": "refrigerator",
+      "category": "refrigerator",
+      "description": "refrigerator",
+      "count": 1,
+      "placement_intent": {
+        "absolute_relations": [],
+        "relative_relations": []
+      },
+      "metadata": {},
+      "estimated_size": [
+        1.8,
+        0.7,
+        1.8
+      ]
+    },
+    {
+      "id": "obj_007",
+      "role": "pantry cabinet",
+      "category": "cabinet",
+      "description": "tall pantry cabinet",
+      "count": 1,
+      "placement_intent": {
+        "absolute_relations": [],
+        "relative_relations": []
+      },
+      "metadata": {},
+      "estimated_size": [
+        0.6,
+        0.5,
+        2.0
+      ]
+    },
+    {
+      "id": "obj_008",
+      "role": "counter",
+      "category": "counter",
+      "description": "counter",
+      "count": 1,
+      "placement_intent": {
+        "absolute_relations": [],
+        "relative_relations": []
+      },
+      "metadata": {},
+      "estimated_size": [
+        8.0,
+        0.5,
+        0.9
+      ]
+    },
+    {
+      "id": "obj_009",
+      "role": "toaster",
+      "category": "toaster",
+      "description": "toaster",
+      "count": 1,
+      "placement_intent": {
+        "absolute_relations": [],
+        "relative_relations": []
+      },
+      "metadata": {},
+      "estimated_size": [
+        0.3,
+        0.2,
+        0.2
+      ]
+    },
+    {
+      "id": "obj_010",
+      "role": "wall cabinet",
+      "category": "cabinet",
+      "description": "wall cabinet",
+      "count": 2,
+      "placement_intent": {
+        "absolute_relations": [],
+        "relative_relations": []
+      },
+      "metadata": {},
+      "estimated_size": [
+        0.6,
+        0.4,
+        0.8
+      ]
+    },
+    {
+      "id": "obj_011",
+      "role": "waste bin",
+      "category": "waste_bin",
+      "description": "waste bin",
+      "count": 1,
+      "placement_intent": {
+        "absolute_relations": [],
+        "relative_relations": []
+      },
+      "metadata": {},
+      "estimated_size": [
+        0.4,
+        0.4,
+        0.5
+      ]
+    }
+  ],
+  "global_constraints": [],
+  "relations": [
+    {
+      "family": "oar",
+      "subject_id": "obj_000",
+      "type": "centered_in_room",
+      "target": "floor"
+    },
+    {
+      "family": "oor",
+      "subject_id": "obj_001",
+      "type": "arranged_along_side",
+      "object_id": "obj_000"
+    },
+    {
+      "family": "oor",
+      "subject_id": "obj_002",
+      "type": "at_left_end",
+      "object_id": "obj_000"
+    },
+    {
+      "family": "oor",
+      "subject_id": "obj_003",
+      "type": "at_right_end",
+      "object_id": "obj_000"
+    },
+    {
+      "family": "oor",
+      "subject_id": "obj_005",
+      "type": "behind",
+      "object_id": "obj_004"
+    },
+    {
+      "family": "oar",
+      "subject_id": "obj_006",
+      "type": "against_wall",
+      "target": "north_wall"
+    },
+    {
+      "family": "oor",
+      "subject_id": "obj_007",
+      "type": "beside",
+      "object_id": "obj_006"
+    },
+    {
+      "family": "oar",
+      "subject_id": "obj_008",
+      "type": "along_wall",
+      "target": "east_wall"
+    },
+    {
+      "family": "oor",
+      "subject_id": "obj_009",
+      "type": "on",
+      "object_id": "obj_008"
+    },
+    {
+      "family": "oor",
+      "subject_id": "obj_010",
+      "type": "above",
+      "object_id": "obj_008"
+    }
+  ],
+  "metadata": {
+    "fixture_policy": "legacy_plan_schema_sanitization_only",
+    "dropped_relation_count": 4
+  }
+}

@@ -1,0 +1,136 @@
+{
+  "request_id": "easy_006",
+  "scene_type": "bedroom",
+  "scene_description": "Create a bedroom with a grey upholstered bed against the west wall. Place a light wood nightstand to the right of the bed and a gray cylindrical alarm clock on the nightstand. Put a white cylindrical floor lamp near the bed. Place a light wood shelf against the east wall and a white magazine on the shelf.",
+  "prompt_granularity": "fine_grained",
+  "explicit_claims": [],
+  "objects": [
+    {
+      "id": "obj_000",
+      "role": "",
+      "category": "bed",
+      "description": "grey upholstered bed",
+      "count": 1,
+      "placement_intent": {
+        "absolute_relations": [],
+        "relative_relations": []
+      },
+      "metadata": {
+        "description_source": "imaginarium_asset_info.short_desc"
+      }
+    },
+    {
+      "id": "obj_001",
+      "role": "",
+      "category": "nightstand",
+      "description": "light wood nightstand",
+      "count": 1,
+      "placement_intent": {
+        "absolute_relations": [],
+        "relative_relations": []
+      },
+      "metadata": {
+        "description_source": "imaginarium_asset_info.short_desc"
+      }
+    },
+    {
+      "id": "obj_002",
+      "role": "",
+      "category": "clock",
+      "description": "gray cylindrical alarm clock",
+      "count": 1,
+      "placement_intent": {
+        "absolute_relations": [],
+        "relative_relations": []
+      },
+      "metadata": {
+        "description_source": "imaginarium_asset_info.short_desc"
+      }
+    },
+    {
+      "id": "obj_003",
+      "role": "",
+      "category": "lamp",
+      "description": "white cylindrical floor lamp",
+      "count": 1,
+      "placement_intent": {
+        "absolute_relations": [],
+        "relative_relations": []
+      },
+      "metadata": {
+        "description_source": "imaginarium_asset_info.short_desc"
+      }
+    },
+    {
+      "id": "obj_004",
+      "role": "",
+      "category": "shelf",
+      "description": "light wood shelf",
+      "count": 1,
+      "placement_intent": {
+        "absolute_relations": [],
+        "relative_relations": []
+      },
+      "metadata": {
+        "description_source": "imaginarium_asset_info.short_desc"
+      }
+    },
+    {
+      "id": "obj_005",
+      "role": "",
+      "category": "magazine",
+      "description": "white magazine",
+      "count": 1,
+      "placement_intent": {
+        "absolute_relations": [],
+        "relative_relations": []
+      },
+      "metadata": {
+        "description_source": "imaginarium_asset_info.short_desc"
+      }
+    }
+  ],
+  "global_constraints": [],
+  "relations": [
+    {
+      "family": "oar",
+      "subject_id": "obj_000",
+      "type": "against_wall",
+      "target": "west_wall"
+    },
+    {
+      "family": "oor",
+      "subject_id": "obj_001",
+      "type": "right_of",
+      "object_id": "obj_000"
+    },
+    {
+      "family": "oor",
+      "subject_id": "obj_002",
+      "type": "on_top_of",
+      "object_id": "obj_001"
+    },
+    {
+      "family": "oor",
+      "subject_id": "obj_003",
+      "type": "near",
+      "object_id": "obj_000"
+    },
+    {
+      "family": "oar",
+      "subject_id": "obj_004",
+      "type": "against_wall",
+      "target": "east_wall"
+    },
+    {
+      "family": "oor",
+      "subject_id": "obj_005",
+      "type": "on_top_of",
+      "object_id": "obj_004"
+    }
+  ],
+  "metadata": {
+    "fixture_policy": "manual_low_ambiguity_public_structure",
+    "room_dimensions_are_benchmark_fallback": true
+  }
+}

@@ -1,0 +1,44 @@
+{
+  "schema_version": "controlled_scene_distortion_v1",
+  "case_id": "source_clean_004__clean",
+  "base_case_id": "source_clean_004",
+  "source_scene_id": "scene_003609_02",
+  "generator_skipped": true,
+  "family": "clean",
+  "severity": {
+    "family": "clean",
+    "target_object_count": 0,
+    "object_denominator": 6,
+    "target_object_fraction": 0.0,
+    "target_relation_count": 0,
+    "relation_denominator": 5,
+    "target_relation_fraction": 0.0,
+    "collision_pair_count": 0
+  },
+  "transforms": [],
+  "expected": {
+    "collision_invalid_pairs": [],
+    "oob_invalid_object_ids": [],
+    "support_invalid_object_ids": [],
+    "oar_invalid_relation_indices": []
+  },
+  "gt_policy": "programmatic_from_frozen_transform_not_from_evaluator_prediction",
+  "deterministic_audit": {
+    "collision_routed_pairs": [],
+    "oob_routed_object_ids": [],
+    "support_routed_object_ids": [],
+    "oor_pass_vector": [
+      true,
+      true,
+      true
+    ],
+    "oar_pass_vector": [
+      true,
+      true,
+      true,
+      true,
+      true
+    ],
+    "cross_metric_isolation_verified": true
+  }
+}

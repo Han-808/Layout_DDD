@@ -1,0 +1,290 @@
+{
+  "schema_version": "canonical_scene_v1",
+  "scene_id": "source_clean_003__collision",
+  "request_id": "source_clean_003__collision",
+  "scene_type": "bedroom with study room",
+  "boundary": [
+    [
+      0.0,
+      0.0
+    ],
+    [
+      5.25,
+      0.0
+    ],
+    [
+      5.25,
+      3.27
+    ],
+    [
+      0.0,
+      3.27
+    ]
+  ],
+  "scene_height": 2.8805,
+  "objects": [
+    {
+      "id": "obj_000",
+      "category": "wardrobe",
+      "description": "gray silver wardrobe",
+      "desc": "A tall gray wardrobe with three doors and two bottom drawers with silver handles",
+      "short_desc": "gray silver wardrobe",
+      "jid": "d_1000003829088",
+      "size": [
+        1.75,
+        0.6,
+        2.4
+      ],
+      "center": [
+        4.93,
+        2.32,
+        1.2
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        -90.0
+      ],
+      "geometry_provenance": "asset_mesh",
+      "asset_ref": {
+        "source_db": "imaginarium",
+        "asset_key": "d_1000003829088",
+        "mesh_uri": null,
+        "pointcloud_uri": null,
+        "metadata_uri": null
+      },
+      "asset_proxy": {
+        "type": "obb_from_source_scene",
+        "bbox_center_local": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "bbox_size": [
+          1.75,
+          0.6,
+          2.4
+        ]
+      },
+      "metadata": {
+        "source_scene_id": "scene_000657_03",
+        "source_object_index": 0,
+        "fixture_role": "frozen_source_object",
+        "interactive": false
+      }
+    },
+    {
+      "id": "obj_001",
+      "category": "table",
+      "description": "gray baroque bedside table",
+      "desc": "Gray baroque-style bedside table with curved legs and two drawers",
+      "short_desc": "gray baroque bedside table",
+      "jid": "b_32",
+      "size": [
+        0.5,
+        0.4299,
+        0.7119
+      ],
+      "center": [
+        1.97,
+        3.03,
+        0.36
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "geometry_provenance": "asset_mesh",
+      "asset_ref": {
+        "source_db": "imaginarium",
+        "asset_key": "b_32",
+        "mesh_uri": null,
+        "pointcloud_uri": null,
+        "metadata_uri": null
+      },
+      "asset_proxy": {
+        "type": "obb_from_source_scene",
+        "bbox_center_local": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "bbox_size": [
+          0.5,
+          0.4299,
+          0.7119
+        ]
+      },
+      "metadata": {
+        "source_scene_id": "scene_000657_03",
+        "source_object_index": 1,
+        "fixture_role": "frozen_source_object",
+        "interactive": false
+      }
+    },
+    {
+      "id": "obj_002",
+      "category": "bed",
+      "description": "gray wooden single bed",
+      "desc": "Single bed with gray bedding and dark brown wooden headboard",
+      "short_desc": "gray wooden single bed",
+      "jid": "b_60",
+      "size": [
+        1.9531,
+        2.1964,
+        1.0585
+      ],
+      "center": [
+        3.8,
+        2.0,
+        0.52925
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "geometry_provenance": "asset_mesh",
+      "asset_ref": {
+        "source_db": "imaginarium",
+        "asset_key": "b_60",
+        "mesh_uri": null,
+        "pointcloud_uri": null,
+        "metadata_uri": null
+      },
+      "asset_proxy": {
+        "type": "obb_from_source_scene",
+        "bbox_center_local": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "bbox_size": [
+          1.9531,
+          2.1964,
+          1.0585
+        ]
+      },
+      "metadata": {
+        "source_scene_id": "scene_000657_03",
+        "source_object_index": 2,
+        "fixture_role": "frozen_source_object",
+        "interactive": false
+      }
+    },
+    {
+      "id": "obj_003",
+      "category": "table",
+      "description": "brown wooden coffee table",
+      "desc": "A round brown wooden pedestal coffee table with turned center column and curved feet",
+      "short_desc": "brown wooden coffee table",
+      "jid": "d_1000002515821",
+      "size": [
+        1.5284999999999997,
+        1.5284999999999997,
+        1.119
+      ],
+      "center": [
+        0.78,
+        1.08,
+        0.56
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        90.0
+      ],
+      "geometry_provenance": "asset_mesh",
+      "asset_ref": {
+        "source_db": "imaginarium",
+        "asset_key": "d_1000002515821",
+        "mesh_uri": null,
+        "pointcloud_uri": null,
+        "metadata_uri": null
+      },
+      "asset_proxy": {
+        "type": "obb_from_source_scene",
+        "bbox_center_local": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "bbox_size": [
+          1.5284999999999997,
+          1.5284999999999997,
+          1.119
+        ]
+      },
+      "metadata": {
+        "source_scene_id": "scene_000657_03",
+        "source_object_index": 3,
+        "fixture_role": "frozen_source_object",
+        "interactive": false
+      }
+    },
+    {
+      "id": "obj_004",
+      "category": "cabinet",
+      "description": "dark green metal cabinet",
+      "desc": "A weathered dark green metal tool cabinet with multiple drawers and wheels",
+      "short_desc": "dark green metal cabinet",
+      "jid": "a_SM_auto_repair_table_drawer",
+      "size": [
+        1.629,
+        0.765,
+        1.0125000000000002
+      ],
+      "center": [
+        3.18,
+        0.4,
+        0.51
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        -180.0
+      ],
+      "geometry_provenance": "asset_mesh",
+      "asset_ref": {
+        "source_db": "imaginarium",
+        "asset_key": "a_SM_auto_repair_table_drawer",
+        "mesh_uri": null,
+        "pointcloud_uri": null,
+        "metadata_uri": null
+      },
+      "asset_proxy": {
+        "type": "obb_from_source_scene",
+        "bbox_center_local": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "bbox_size": [
+          1.629,
+          0.765,
+          1.0125000000000002
+        ]
+      },
+      "metadata": {
+        "source_scene_id": "scene_000657_03",
+        "source_object_index": 4,
+        "fixture_role": "frozen_source_object",
+        "interactive": false
+      }
+    }
+  ],
+  "metadata": {
+    "coordinate_frame": {
+      "origin": "room_min_corner_floor",
+      "axes": "x_width_y_depth_z_up",
+      "unit": "meter",
+      "rotation_unit": "degree"
+    },
+    "source_scene_id": "scene_000657_03",
+    "source_selection": "strict_zero_candidate_collision_oob_support_screen",
+    "generator_skipped": true,
+    "base_case_id": "source_clean_003",
+    "variant_family": "collision"
+  }
+}

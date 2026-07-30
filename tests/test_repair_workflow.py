@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from benchmark.workflow.nodes import _apply_deterministic_repair_actions, _layout_change_summary
+from benchmark.legend.workflow.nodes import _apply_deterministic_repair_actions, _layout_change_summary
 
 
 def test_layout_change_summary_ignores_rounding_noise() -> None:

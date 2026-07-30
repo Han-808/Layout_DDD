@@ -1,0 +1,263 @@
+{
+  "request_id": "prompt_015",
+  "scene_type": "fireplace_lounge",
+  "scene_description": "An 8 m x 9 m fireplace lounge has a 3.2 m ceiling. Center one stone fireplace on the north wall. Place two red armchairs side by side facing the fireplace, with one round table between them. Put one mug on the table near the left chair and one book near the right chair. A small log basket sits to the right of the fireplace and one floor lamp stands to its left. Position one brown sofa behind the armchairs, parallel to them and also facing the fireplace. Keep one rug centered between the armchairs and fireplace.",
+  "prompt_granularity": "fine_grained",
+  "explicit_claims": [
+    "one stone fireplace",
+    "two red armchairs",
+    "one round table",
+    "one mug",
+    "one book",
+    "one small log basket",
+    "one floor lamp",
+    "one brown sofa",
+    "one rug"
+  ],
+  "objects": [
+    {
+      "id": "obj_000",
+      "role": "main fireplace",
+      "category": "fireplace",
+      "description": "stone fireplace",
+      "count": 1,
+      "placement_intent": {
+        "absolute_relations": [],
+        "relative_relations": []
+      },
+      "metadata": {},
+      "estimated_size": [
+        1.2,
+        0.8,
+        1.5
+      ]
+    },
+    {
+      "id": "obj_001",
+      "role": "seating",
+      "category": "armchair",
+      "description": "red armchair",
+      "count": 2,
+      "placement_intent": {
+        "absolute_relations": [],
+        "relative_relations": []
+      },
+      "metadata": {},
+      "estimated_size": [
+        0.8,
+        0.8,
+        0.9
+      ]
+    },
+    {
+      "id": "obj_002",
+      "role": "furniture",
+      "category": "table",
+      "description": "round table",
+      "count": 1,
+      "placement_intent": {
+        "absolute_relations": [],
+        "relative_relations": []
+      },
+      "metadata": {},
+      "estimated_size": [
+        0.8,
+        0.5,
+        0.5
+      ]
+    },
+    {
+      "id": "obj_003",
+      "role": "decorative_item",
+      "category": "mug",
+      "description": "mug",
+      "count": 1,
+      "placement_intent": {
+        "absolute_relations": [],
+        "relative_relations": []
+      },
+      "metadata": {},
+      "estimated_size": [
+        0.1,
+        0.1,
+        0.1
+      ]
+    },
+    {
+      "id": "obj_004",
+      "role": "decorative_item",
+      "category": "book",
+      "description": "book",
+      "count": 1,
+      "placement_intent": {
+        "absolute_relations": [],
+        "relative_relations": []
+      },
+      "metadata": {},
+      "estimated_size": [
+        0.2,
+        0.05,
+        0.03
+      ]
+    },
+    {
+      "id": "obj_005",
+      "role": "accessory",
+      "category": "log_basket",
+      "description": "small log basket",
+      "count": 1,
+      "placement_intent": {
+        "absolute_relations": [],
+        "relative_relations": []
+      },
+      "metadata": {},
+      "estimated_size": [
+        0.5,
+        0.5,
+        0.4
+      ]
+    },
+    {
+      "id": "obj_006",
+      "role": "lighting",
+      "category": "floor_lamp",
+      "description": "floor lamp",
+      "count": 1,
+      "placement_intent": {
+        "absolute_relations": [],
+        "relative_relations": []
+      },
+      "metadata": {},
+      "estimated_size": [
+        0.3,
+        0.3,
+        1.5
+      ]
+    },
+    {
+      "id": "obj_007",
+      "role": "main seating",
+      "category": "sofa",
+      "description": "brown sofa",
+      "count": 1,
+      "placement_intent": {
+        "absolute_relations": [],
+        "relative_relations": []
+      },
+      "metadata": {},
+      "estimated_size": [
+        2.4,
+        0.9,
+        0.8
+      ]
+    },
+    {
+      "id": "obj_008",
+      "role": "floor_covering",
+      "category": "rug",
+      "description": "rug",
+      "count": 1,
+      "placement_intent": {
+        "absolute_relations": [],
+        "relative_relations": []
+      },
+      "metadata": {},
+      "estimated_size": [
+        2.0,
+        1.5,
+        0.01
+      ]
+    }
+  ],
+  "global_constraints": [],
+  "relations": [
+    {
+      "family": "oar",
+      "subject_id": "obj_000",
+      "type": "centered_on",
+      "target": "north_wall"
+    },
+    {
+      "family": "oor",
+      "subject_id": "obj_001",
+      "type": "side_by_side",
+      "object_id": "obj_001"
+    },
+    {
+      "family": "oor",
+      "subject_id": "obj_001",
+      "type": "facing",
+      "object_id": "obj_000"
+    },
+    {
+      "family": "oor",
+      "subject_id": "obj_003",
+      "type": "on",
+      "object_id": "obj_002"
+    },
+    {
+      "family": "oor",
+      "subject_id": "obj_003",
+      "type": "near",
+      "object_id": "obj_001"
+    },
+    {
+      "family": "oor",
+      "subject_id": "obj_004",
+      "type": "on",
+      "object_id": "obj_002"
+    },
+    {
+      "family": "oor",
+      "subject_id": "obj_004",
+      "type": "near",
+      "object_id": "obj_001"
+    },
+    {
+      "family": "oor",
+      "subject_id": "obj_005",
+      "type": "to_the_right_of",
+      "object_id": "obj_000"
+    },
+    {
+      "family": "oor",
+      "subject_id": "obj_006",
+      "type": "to_the_left_of",
+      "object_id": "obj_000"
+    },
+    {
+      "family": "oor",
+      "subject_id": "obj_007",
+      "type": "behind",
+      "object_id": "obj_001"
+    },
+    {
+      "family": "oor",
+      "subject_id": "obj_007",
+      "type": "parallel_to",
+      "object_id": "obj_001"
+    },
+    {
+      "family": "oor",
+      "subject_id": "obj_007",
+      "type": "facing",
+      "object_id": "obj_000"
+    },
+    {
+      "family": "oor",
+      "subject_id": "obj_008",
+      "type": "centered_between",
+      "object_id": "obj_001"
+    },
+    {
+      "family": "oor",
+      "subject_id": "obj_008",
+      "type": "centered_between",
+      "object_id": "obj_000"
+    }
+  ],
+  "metadata": {
+    "fixture_policy": "legacy_plan_schema_sanitization_only",
+    "dropped_relation_count": 1
+  }
+}

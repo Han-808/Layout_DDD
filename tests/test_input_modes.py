@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from benchmark.input_modes import (
+from benchmark.legend.input_modes import (
     COMPACT_OBJECTS_WITH_ESTIMATED_RELATIONS,
     FULL_METADATA_BUDGETED,
     canonicalize_input_mode,

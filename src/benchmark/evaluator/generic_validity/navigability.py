@@ -6,6 +6,7 @@ import numpy as np
 
 from benchmark.evaluator.generic_validity.geometry import (
     get_footprint_corners_xy,
+    get_obb_corners,
     get_room_boundary,
     normalize_objects,
     point_in_polygon_2d,
@@ -32,10 +33,19 @@ def check_navigability(scene: dict, config: dict | None = None, navigability_cac
         "metric": "navigability",
         "status": "checked",
         "score": float(score),
+        "score_definition": (
+            "largest_connected_free_area / total_free_area"
+        ),
         "largest_connected_free_area": float(largest_area),
         "total_free_area": float(total_free_area),
         "num_components": int(cache["num_components"]),
         "grid_resolution": resolution,
+        "requested_grid_resolution": float(
+            cache.get("requested_grid_resolution", resolution)
+        ),
+        "boundary_source": cache.get("boundary_source", "scene_boundary"),
+        "projection": "single_floor_2d",
+        "connectivity": int(cache.get("connectivity", 4)),
         "blocking_object_count": int(cache["blocking_object_count"]),
         "non_blocking_object_count": int(cache["non_blocking_object_count"]),
     }
@@ -43,15 +53,23 @@ def check_navigability(scene: dict, config: dict | None = None, navigability_cac
 
 def compute_navigability_grid(scene: dict, config: dict | None = None) -> dict:
     cfg = config or {}
-    boundary = np.asarray(get_room_boundary(scene), dtype=float)
+    objects, object_errors = normalize_objects(scene)
+    boundary, boundary_source = _resolve_boundary(scene, objects, cfg)
     if boundary.ndim != 2 or len(boundary) < 3:
         return {"status": "invalid_input", "score": 0.0, "reason": "scene boundary is missing or invalid"}
-    resolution = max(float(cfg.get("grid_resolution", 0.08)), 0.01)
+    requested_resolution = max(float(cfg.get("grid_resolution", 0.08)), 0.01)
     agent_radius = max(float(cfg.get("agent_radius", 0.25)), 0.0)
     connectivity = int(cfg.get("connectivity", 4))
-    objects, object_errors = normalize_objects(scene)
     min_x, max_x = float(np.min(boundary[:, 0])), float(np.max(boundary[:, 0]))
     min_y, max_y = float(np.min(boundary[:, 1])), float(np.max(boundary[:, 1]))
+    max_grid_cells = max(int(cfg.get("max_grid_cells", 1_000_000)), 1)
+    envelope_area = max(max_x - min_x, 0.0) * max(max_y - min_y, 0.0)
+    adaptive_resolution = (
+        float(np.sqrt(envelope_area / max_grid_cells))
+        if envelope_area > 0.0
+        else requested_resolution
+    )
+    resolution = max(requested_resolution, adaptive_resolution)
     xs = np.arange(min_x + resolution / 2.0, max_x, resolution)
     ys = np.arange(min_y + resolution / 2.0, max_y, resolution)
     if len(xs) == 0 or len(ys) == 0:
@@ -71,16 +89,30 @@ def compute_navigability_grid(scene: dict, config: dict | None = None) -> dict:
         else:
             non_blocking_objects.append(obj)
 
-    blocking_footprints = [(obj, get_footprint_corners_xy(obj)) for obj in blocking_objects]
-    for row, y in enumerate(ys):
-        for col, x in enumerate(xs):
-            if not inside_room[row, col]:
-                continue
-            point = np.array([x, y], dtype=float)
-            for _, footprint in blocking_footprints:
-                if point_in_polygon_2d(point, footprint) or point_polygon_distance_2d(point, footprint) <= agent_radius:
+    blocking_footprints = [
+        (obj, get_footprint_corners_xy(obj))
+        for obj in blocking_objects
+    ]
+    # Visit only the grid window touched by each inflated footprint. A naive
+    # cell-by-object loop becomes prohibitively expensive for browser games,
+    # where a static arena may contain hundreds of visible meshes.
+    for _, footprint in blocking_footprints:
+        footprint_min = np.min(footprint, axis=0) - agent_radius
+        footprint_max = np.max(footprint, axis=0) + agent_radius
+        col_start = max(int(np.searchsorted(xs, footprint_min[0], side="left")), 0)
+        col_stop = min(int(np.searchsorted(xs, footprint_max[0], side="right")), len(xs))
+        row_start = max(int(np.searchsorted(ys, footprint_min[1], side="left")), 0)
+        row_stop = min(int(np.searchsorted(ys, footprint_max[1], side="right")), len(ys))
+        for row in range(row_start, row_stop):
+            for col in range(col_start, col_stop):
+                if occupied[row, col] or not inside_room[row, col]:
+                    continue
+                point = np.array([xs[col], ys[row]], dtype=float)
+                if (
+                    point_in_polygon_2d(point, footprint)
+                    or point_polygon_distance_2d(point, footprint) <= agent_radius
+                ):
                     occupied[row, col] = True
-                    break
 
     free = inside_room & ~occupied
     component_labels, component_sizes = _label_components(free, connectivity=connectivity)
@@ -105,11 +137,55 @@ def compute_navigability_grid(scene: dict, config: dict | None = None) -> dict:
         "total_free_cells": total_free_cells,
         "num_components": len(component_sizes),
         "grid_resolution": resolution,
+        "requested_grid_resolution": requested_resolution,
+        "max_grid_cells": max_grid_cells,
+        "boundary_source": boundary_source,
+        "boundary": boundary.tolist(),
+        "connectivity": connectivity,
         "blocking_object_count": len(blocking_objects),
         "non_blocking_object_count": len(non_blocking_objects),
         "blocking_object_ids": [obj.id for obj in blocking_objects],
         "object_errors": object_errors,
     }
+
+
+def _resolve_boundary(
+    scene: dict,
+    objects: list[object],
+    config: dict,
+) -> tuple[np.ndarray, str]:
+    requested = str(config.get("boundary_source") or "scene_boundary")
+    scene_boundary = np.asarray(get_room_boundary(scene), dtype=float)
+    if requested != "non_flat_structure_envelope":
+        return scene_boundary, "scene_boundary"
+
+    structural_bounds: list[np.ndarray] = []
+    for obj in objects:
+        corners = get_obb_corners(obj)
+        extent = np.max(corners, axis=0) - np.min(corners, axis=0)
+        horizontal_span = max(float(extent[0]), float(extent[1]))
+        if float(extent[2]) <= max(0.02, 0.01 * horizontal_span):
+            continue
+        structural_bounds.append(corners[:, :2])
+    if not structural_bounds:
+        return scene_boundary, "scene_boundary_fallback_no_non_flat_structure"
+    points = np.concatenate(structural_bounds, axis=0)
+    minimum = np.min(points, axis=0)
+    maximum = np.max(points, axis=0)
+    if np.any(maximum <= minimum):
+        return scene_boundary, "scene_boundary_fallback_degenerate_structure"
+    return (
+        np.asarray(
+            [
+                [minimum[0], minimum[1]],
+                [maximum[0], minimum[1]],
+                [maximum[0], maximum[1]],
+                [minimum[0], maximum[1]],
+            ],
+            dtype=float,
+        ),
+        "non_flat_structure_envelope",
+    )
 
 
 def _is_blocking_object(obj: object, config: dict) -> bool:

@@ -1,0 +1,39 @@
+{
+  "experiment_id": "qwen32b_nl5_smoke",
+  "input_mode": "natural_language_only",
+  "prompt_granularity": "fine_grained",
+  "asset_mode": "off",
+  "notes": [
+    "Prompt granularity is frozen as fine_grained; no runtime classifier is called.",
+    "Prompts are preserved as supplied; no implicit objects or relations were added.",
+    "Prompt 1 uses 'lamp' as confirmed by the prompt author.",
+    "Prompt 2 literally says the coffee bottles and box are inside the coffee table rather than on top of it."
+  ],
+  "cases": [
+    {
+      "case_id": "prompt_01",
+      "scene_type": "bedroom",
+      "instruction": "A room surrounded by walls, of size 8m by 8m by 2.8 m height. A high red bed beside the right wall, at the left of the bed one dark wood cabinet. On top of cabinet lie one can, one yellow lemon and one spray can, from left to right. the bed is surrounded by one brown leather sofa, which aligns with the bed horizontally. One lamp at the opposite side of the bed. One light grey pillow at the top of the bed. one magazine at the floor, besides one art book."
+    },
+    {
+      "case_id": "prompt_02",
+      "scene_type": "cafe",
+      "instruction": "Inside a cafe. One huge teapot above the coffee table at the center of the room, surrounded by 6 chairs. One huge monitor hung at the wall. Inside the big coffee table are 4 coffee bottles surrounding the box at the center of the table, which is grey. One cable connected to the table."
+    },
+    {
+      "case_id": "prompt_03",
+      "scene_type": "bedroom",
+      "instruction": "A room enclosed by four walls measures 8 m x 8 m with a height of 2.8 m. A tall red bed stands beside the right wall. To the left of the bed is one dark wooden cabinet. On top of the cabinet are three objects arranged from left to right: one beverage can, one yellow lemon, and one spray can. A brown leather sofa is positioned horizontally beside the bed. One floor lamp stands on the opposite side of the bed. A light-grey pillow rests at the head of the bed, while one magazine and one art book lie next to each other on the floor."
+    },
+    {
+      "case_id": "prompt_04",
+      "scene_type": "bedroom",
+      "instruction": "A 7 m x 9 m bedroom with a ceiling height of 3 m contains one large blue bed against the back wall. Two white bedside tables are placed on either side of the bed. The left table holds one glass bottle and two green apples, while the right table supports one alarm clock. A dark-grey fabric sofa faces the bed and is aligned parallel to it. Two lamps stand near the front corners of the room. Three pillows are arranged at the top of the bed, and two magazines are stacked beside one open art book on the floor."
+    },
+    {
+      "case_id": "prompt_05",
+      "scene_type": "bedroom",
+      "instruction": "A square room measuring 10 m x 10 m and 3.2 m high contains two low wooden beds along the left wall. Between the beds stands one black metal cabinet. Four objects are arranged on the cabinet from left to right: two soda cans, one orange, and one cleaning spray bottle. A pair of brown leather sofas surrounds the beds, with one sofa parallel to them and the other perpendicular. One tall lamp is located opposite the cabinet. Each bed has two light-grey pillows, and three magazines lie near two art books in the center of the floor."
+    }
+  ]
+}

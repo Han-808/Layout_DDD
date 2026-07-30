@@ -1,0 +1,152 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.org/layout-ddd/reference_annotation.schema.json",
+  "title": "FrozenReferenceAnnotation",
+  "description": "Frozen, benchmark-owned reference annotation of confirmed prompt claims. Scoring consumes this artifact, never the live converter draft.",
+  "version": "1.0.0",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "annotation_version",
+    "validation_status",
+    "source",
+    "request_id",
+    "scene_type",
+    "objects",
+    "room_constraints"
+  ],
+  "properties": {
+    "annotation_version": {"const": "reference_annotation_v1"},
+    "validation_status": {"enum": ["draft", "confirmed", "reference_annotation_incomplete"]},
+    "source": {"enum": ["programmatic", "manual", "model_assisted"]},
+    "request_id": {"type": "string", "minLength": 1},
+    "scene_type": {"type": "string", "minLength": 1},
+    "inventory_policy": {"enum": ["closed_world", "open_world"]},
+    "known_incomplete": {"type": "boolean"},
+    "objects": {"type": "array", "items": {"$ref": "#/$defs/referenceObject"}},
+    "oor_relations": {"type": "array", "items": {"$ref": "#/$defs/oorClaim"}},
+    "oar_relations": {"type": "array", "items": {"$ref": "#/$defs/oarClaim"}},
+    "room_constraints": {"$ref": "#/$defs/roomConstraints"},
+    "review": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status"],
+      "properties": {
+        "status": {"enum": ["pending", "approved"]},
+        "reviewer": {"type": ["string", "null"]},
+        "reviewed_at": {"type": ["string", "null"]}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"status": {"const": "approved"}}},
+          "then": {
+            "required": ["reviewer"],
+            "properties": {"reviewer": {"type": "string", "minLength": 1}}
+          }
+        }
+      ]
+    },
+    "provenance": {"type": "object", "additionalProperties": true}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"validation_status": {"const": "confirmed"}}},
+      "then": {"required": ["inventory_policy"]}
+    },
+    {
+      "if": {
+        "required": ["validation_status", "inventory_policy"],
+        "properties": {
+          "validation_status": {"const": "confirmed"},
+          "inventory_policy": {"const": "closed_world"}
+        }
+      },
+      "then": {
+        "properties": {
+          "objects": {
+            "items": {
+              "properties": {"claim_state": {"const": "confirmed"}}
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "claimState": {"enum": ["confirmed", "unresolved_annotation", "not_mentioned"]},
+    "referenceObject": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["id", "category", "count", "claim_state"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "category": {"type": "string", "minLength": 1},
+        "description": {"type": "string"},
+        "count": {"type": "integer", "minimum": 1},
+        "claim_state": {"$ref": "#/$defs/claimState"},
+        "attributes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true,
+            "required": ["name", "value", "claim_state"],
+            "properties": {
+              "name": {"type": "string", "minLength": 1},
+              "value": {},
+              "claim_state": {"$ref": "#/$defs/claimState"}
+            }
+          }
+        },
+        "provenance": {"type": "object", "additionalProperties": true}
+      }
+    },
+    "oorClaim": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["type", "claim_state"],
+      "properties": {
+        "relation_id": {"type": "string", "minLength": 1},
+        "subject_id": {"type": "string", "minLength": 1},
+        "subject_ids": {"type": "array", "items": {"type": "string", "minLength": 1}, "minItems": 1},
+        "type": {"type": "string", "minLength": 1},
+        "object_id": {"type": "string", "minLength": 1},
+        "object_ids": {"type": "array", "items": {"type": "string", "minLength": 1}, "minItems": 1},
+        "axis": {"type": "string"},
+        "direction": {"type": "string"},
+        "raw_relation": {"type": "string"},
+        "claim_state": {"$ref": "#/$defs/claimState"}
+      }
+    },
+    "oarClaim": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["subject_id", "type", "architectural_element", "claim_state"],
+      "properties": {
+        "relation_id": {"type": "string", "minLength": 1},
+        "subject_id": {"type": "string", "minLength": 1},
+        "type": {"type": "string", "minLength": 1},
+        "architectural_element": {"type": "string", "minLength": 1},
+        "claim_state": {"$ref": "#/$defs/claimState"}
+      }
+    },
+    "roomConstraints": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["claim_state"],
+      "properties": {
+        "claim_state": {"$ref": "#/$defs/claimState"},
+        "dimensions": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "width": {"type": "number", "exclusiveMinimum": 0},
+            "depth": {"type": "number", "exclusiveMinimum": 0},
+            "height": {"type": "number", "exclusiveMinimum": 0}
+          }
+        },
+        "shape": {"type": "string"},
+        "provenance": {"type": "object", "additionalProperties": true}
+      }
+    }
+  }
+}

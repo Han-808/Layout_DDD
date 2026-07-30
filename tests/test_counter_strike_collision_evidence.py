@@ -1,0 +1,213 @@
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+from PIL import Image
+import pytest
+
+from benchmark.game_scene.counter_strike.collision_evidence import (
+    CounterStrikeCollisionEvidenceError,
+    CounterStrikeFrozenCaptureRenderer,
+)
+from benchmark.game_scene.counter_strike.loader import (
+    load_counter_strike_benchmark_config,
+)
+from benchmark.rendering.browser import (
+    BROWSER_RENDER_BACKEND,
+    CONTROLLED_CAMERA_APPEARANCE_FIDELITY,
+)
+
+
+ROOT = Path(__file__).resolve().parents[1]
+BENCHMARK_CONFIG = (
+    ROOT / "configs" / "game" / "counter_strike" / "benchmark_v1.yaml"
+)
+
+
+def _sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _view(
+    *,
+    view_id: str,
+    path: Path,
+    scope: str,
+    role: str | None,
+    target_object_ids: list[str],
+) -> dict:
+    return {
+        "id": view_id,
+        "name": view_id,
+        "path": path.as_posix(),
+        "scope": scope,
+        "role": role,
+        "presentation": "raw",
+        "backend": "threejs_original_runtime",
+        "appearance_fidelity": CONTROLLED_CAMERA_APPEARANCE_FIDELITY,
+        "camera_pose_canonical": {
+            "camera_type": "PERSP",
+            "location": [5.0, -10.0, 8.0],
+            "target": [5.0, 5.0, 1.0],
+            "vertical_fov_degrees": 48.0,
+            "near_m": 0.02,
+            "far_m": 100.0,
+        },
+        "target_object_ids": target_object_ids,
+    }
+
+
+def _write_capture(tmp_path: Path) -> Path:
+    capture = tmp_path / "capture"
+    capture.mkdir()
+    scene_path = capture / "probe_exported_scene.json"
+    scene_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "canonical_scene_v1",
+                "scene_id": "cs_collision_evidence",
+                "request_id": "cs_collision_evidence",
+                "scene_type": "counter_strike_static_arena",
+                "boundary": [[0, 0], [10, 0], [10, 10], [0, 10]],
+                "scene_height": 5.0,
+                "objects": [
+                    {
+                        "id": "crate_a",
+                        "category": "crate",
+                        "center": [3.0, 4.0, 0.75],
+                        "size": [1.5, 1.5, 1.5],
+                        "rotation": [0.0, 0.0, 0.0],
+                    },
+                    {
+                        "id": "crate_b",
+                        "category": "crate",
+                        "center": [4.1, 4.0, 0.75],
+                        "size": [1.5, 1.5, 1.5],
+                        "rotation": [0.0, 0.0, 12.0],
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    globals_: list[dict] = []
+    regionals: list[dict] = []
+    artifacts = [scene_path]
+    for index in range(2):
+        path = capture / f"global_global_oblique_{index:02d}.png"
+        Image.new("RGB", (256, 256), (210, 215, 220)).save(path)
+        artifacts.append(path)
+        globals_.append(
+            _view(
+                view_id=f"global_oblique_{index:02d}",
+                path=path,
+                scope="global",
+                role=None,
+                target_object_ids=[],
+            )
+        )
+    for index in range(4):
+        path = capture / f"local_style_region_{index:02d}.png"
+        Image.new(
+            "RGB",
+            (256, 256),
+            (180 + 5 * index, 186, 192),
+        ).save(path)
+        artifacts.append(path)
+        regionals.append(
+            _view(
+                view_id=f"style_region_{index:02d}",
+                path=path,
+                scope="object_local",
+                role="style_local_fallback",
+                target_object_ids=(
+                    ["crate_a", "crate_b"] if index == 2 else ["crate_a"]
+                ),
+            )
+        )
+    manifest = {
+        "backend": BROWSER_RENDER_BACKEND,
+        "exported_scene": scene_path.as_posix(),
+        "views": globals_,
+        "controlled_camera": {
+            "enabled": True,
+            "status": "ready",
+            "view_family": "canonical_high_oblique_pair_v1",
+            "image_budget": 2,
+            "appearance_fidelity": CONTROLLED_CAMERA_APPEARANCE_FIDELITY,
+            "style_local_fallback": {
+                "enabled": True,
+                "status": "ready",
+                "view_family": "canonical_style_region_quadrants_v1",
+                "image_budget": 4,
+                "views": regionals,
+            },
+        },
+        "capture_artifacts": {
+            path.relative_to(capture).as_posix(): _sha256(path)
+            for path in artifacts
+        },
+    }
+    (capture / "render_manifest.json").write_text(
+        json.dumps(manifest),
+        encoding="utf-8",
+    )
+    return capture
+
+
+def _renderer(tmp_path: Path) -> CounterStrikeFrozenCaptureRenderer:
+    return CounterStrikeFrozenCaptureRenderer(
+        capture_dir=_write_capture(tmp_path),
+        evidence_out_dir=tmp_path / "derived",
+        benchmark_config=load_counter_strike_benchmark_config(
+            BENCHMARK_CONFIG
+        ),
+    )
+
+
+def test_collision_provider_returns_same_pose_raw_and_honest_obb_overlay(
+    tmp_path: Path,
+) -> None:
+    renderer = _renderer(tmp_path)
+
+    evidence = renderer(
+        {
+            "metric": "collision",
+            "object_ids": ["crate_a", "crate_b"],
+        }
+    )
+
+    assert [item["role"] for item in evidence] == [
+        "collision_rgb",
+        "collision_pair_overlay",
+    ]
+    assert {item["view_id"] for item in evidence} == {"style_region_02"}
+    assert evidence[0]["pair_id"] == evidence[1]["pair_id"]
+    assert evidence[1]["representation"] == (
+        "same_pose_projected_canonical_obb_wireframe"
+    )
+    assert "segmentation" not in evidence[1]["representation"]
+    raw = Path(evidence[0]["path"])
+    overlay = Path(evidence[1]["path"])
+    assert raw.is_file() and overlay.is_file()
+    assert _sha256(raw) != _sha256(overlay)
+    assert renderer.policy_config["segmentation_contour_claimed"] is False
+
+
+def test_collision_provider_is_metric_scoped_and_fails_on_unknown_target(
+    tmp_path: Path,
+) -> None:
+    renderer = _renderer(tmp_path)
+
+    assert renderer({"metric": "support", "object_ids": ["crate_a"]}) == []
+    with pytest.raises(CounterStrikeCollisionEvidenceError) as caught:
+        renderer(
+            {
+                "metric": "collision",
+                "object_ids": ["crate_a", "unknown"],
+            }
+        )
+
+    assert caught.value.code == "target_object_missing"

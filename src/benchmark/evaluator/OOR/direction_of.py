@@ -38,43 +38,64 @@ def check_direction(
 
 
 def _check_side_relation(subject: NormalizedObject, anchor: NormalizedObject, relation: str, cfg: dict) -> dict:
-    points = sample_points_in_obb(subject, grid=(3, 3, 3))
-    q = (points - anchor.center) @ anchor.R
-    hx, hy, hz = [float(value) for value in anchor.half]
-    anchor_diag = math.hypot(float(anchor.size[0]), float(anchor.size[1]))
-    margin_xy = float(cfg.get("margin_xy_ratio", 0.25)) * max(float(anchor.size[0]), float(anchor.size[1]))
-    max_side_distance = _clamp(
-        float(cfg.get("side_alpha", 1.5)) * anchor_diag,
-        float(cfg.get("side_min_distance", 0.5)),
-        float(cfg.get("side_max_distance", 1.5)),
-    )
-    vertical_margin = float(cfg.get("vertical_margin_ratio", 0.5)) * max(float(subject.size[2]), float(anchor.size[2]))
-    if relation == "left":
-        mask = (q[:, 0] < -hx) & (np.abs(q[:, 1]) <= hy + margin_xy) & (np.abs(q[:, 2]) <= hz + vertical_margin) & (np.abs(q[:, 0] + hx) <= max_side_distance)
-    elif relation == "right":
-        mask = (q[:, 0] > hx) & (np.abs(q[:, 1]) <= hy + margin_xy) & (np.abs(q[:, 2]) <= hz + vertical_margin) & (np.abs(q[:, 0] - hx) <= max_side_distance)
-    elif relation == "in_front":
-        mask = (q[:, 1] < -hy) & (np.abs(q[:, 0]) <= hx + margin_xy) & (np.abs(q[:, 2]) <= hz + vertical_margin) & (np.abs(q[:, 1] + hy) <= max_side_distance)
+    grid = _pairwise_grid(cfg.get("pairwise_grid", (5, 5, 3)))
+    epsilon = float(cfg.get("pairwise_epsilon", 0.02))
+    valid_threshold = float(cfg.get("pairwise_valid_threshold", 0.60))
+    invalid_threshold = float(cfg.get("pairwise_invalid_threshold", 0.40))
+    if epsilon < 0.0:
+        raise ValueError("pairwise_epsilon must be non-negative")
+    if not 0.0 <= invalid_threshold < valid_threshold <= 1.0:
+        raise ValueError("pairwise thresholds must satisfy 0 <= invalid < valid <= 1")
+
+    axis, sign, axis_name, positive_direction = {
+        "left": (0, -1.0, "x", "-x"),
+        "right": (0, 1.0, "x", "+x"),
+        "in_front": (1, -1.0, "y", "-y"),
+        "behind": (1, 1.0, "y", "+y"),
+    }[relation]
+    subject_points = sample_points_in_obb(subject, grid=grid)
+    anchor_points = sample_points_in_obb(anchor, grid=grid)
+    subject_projection = sign * subject_points[:, axis]
+    anchor_projection = sign * anchor_points[:, axis]
+    pairwise_delta = subject_projection[:, None] - anchor_projection[None, :]
+    ordered = pairwise_delta > epsilon
+    tied = np.abs(pairwise_delta) <= epsilon
+    num_pairs = int(pairwise_delta.size)
+    num_ordered = int(np.count_nonzero(ordered))
+    num_tied = int(np.count_nonzero(tied))
+    score = (float(num_ordered) + 0.5 * float(num_tied)) / float(num_pairs) if num_pairs else 0.5
+    if score >= valid_threshold:
+        ordering_state = "valid"
+    elif score <= invalid_threshold:
+        ordering_state = "invalid"
     else:
-        mask = (q[:, 1] > hy) & (np.abs(q[:, 0]) <= hx + margin_xy) & (np.abs(q[:, 2]) <= hz + vertical_margin) & (np.abs(q[:, 1] - hy) <= max_side_distance)
-    score = float(np.count_nonzero(mask)) / float(len(points)) if len(points) else 0.0
-    threshold = float(cfg.get("side_score_threshold", 0.5))
+        ordering_state = "boundary"
     return {
         "relation": relation,
         "category": "direction_of",
         "subject_id": subject.id,
         "object_id": anchor.id,
-        "passed": score >= threshold,
+        "passed": ordering_state == "valid",
         "score": float(score),
         "evidence": {
             "relation_type": relation,
-            "score": float(score),
-            "side_score_threshold": threshold,
-            "num_sample_points": int(len(points)),
-            "num_satisfying_points": int(np.count_nonzero(mask)),
-            "margin_xy": float(margin_xy),
-            "max_side_distance": float(max_side_distance),
-            "vertical_margin": float(vertical_margin),
+            "reference_frame": "room",
+            "axis": axis_name,
+            "positive_direction": positive_direction,
+            "ordering_state": ordering_state,
+            "ordering_score": float(score),
+            "signed_center_delta": float(sign * (subject.center[axis] - anchor.center[axis])),
+            "pairwise_epsilon": epsilon,
+            "pairwise_valid_threshold": valid_threshold,
+            "pairwise_invalid_threshold": invalid_threshold,
+            "pairwise_grid": list(grid),
+            "subject_projection_range": [float(np.min(subject_projection)), float(np.max(subject_projection))],
+            "anchor_projection_range": [float(np.min(anchor_projection)), float(np.max(anchor_projection))],
+            "num_subject_sample_points": int(len(subject_points)),
+            "num_anchor_sample_points": int(len(anchor_points)),
+            "num_pairwise_comparisons": num_pairs,
+            "num_ordered_pairs": num_ordered,
+            "num_tied_pairs": num_tied,
         },
         "status": "checked",
     }
@@ -147,5 +168,10 @@ def _invalid_result(relation: str, subject: object, anchor: object, reason: str)
     }
 
 
-def _clamp(value: float, low: float, high: float) -> float:
-    return max(low, min(high, value))
+def _pairwise_grid(value: object) -> tuple[int, int, int]:
+    if not isinstance(value, (list, tuple)) or len(value) != 3:
+        raise ValueError("pairwise_grid must contain exactly three integers")
+    grid = tuple(int(item) for item in value)
+    if any(item < 1 for item in grid):
+        raise ValueError("pairwise_grid values must be positive")
+    return grid

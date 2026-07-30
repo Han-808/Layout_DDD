@@ -1,0 +1,314 @@
+{
+  "experiment_id": "qwen32b_nl50_cycles_vlm",
+  "input_mode": "natural_language_only",
+  "prompt_granularity": "fine_grained",
+  "asset_mode": "off",
+  "notes": [
+    "Granularity is frozen as fine_grained case metadata; no runtime classifier is called.",
+    "Each prompt includes explicit object descriptions plus object-object and object-architecture relationships.",
+    "Room annotations mirror dimensions stated in the natural-language prompt and remain evaluation-only.",
+    "Asset retrieval is disabled, so renders use canonical bbox proxies in this experiment."
+  ],
+  "cases": [
+    {
+      "case_id": "prompt_001",
+      "scene_type": "bedroom",
+      "room": {"boundary": [[0, 0], [8, 0], [8, 8], [0, 8]], "height": 2.8, "unit": "meter"},
+      "instruction": "An 8 m x 8 m bedroom with a height of 2.8 m is enclosed by four walls. Place one tall red bed beside the right wall and one dark wooden cabinet immediately to its left. Arrange one silver can, one yellow lemon, and one white spray bottle from left to right on top of the cabinet. Put one brown leather sofa opposite the bed and parallel to it. A floor lamp stands between the sofa and the left wall. Place one light-grey pillow at the head of the bed, and put one magazine beside one art book on the floor near the foot of the sofa."
+    },
+    {
+      "case_id": "prompt_002",
+      "scene_type": "bedroom",
+      "room": {"boundary": [[0, 0], [7, 0], [7, 9], [0, 9]], "height": 3.0, "unit": "meter"},
+      "instruction": "A 7 m x 9 m bedroom has a 3 m ceiling. Set one large blue bed against the back wall. Place two white bedside tables symmetrically on the left and right of the bed. The left table holds one glass bottle and two green apples, while the right table supports one mint alarm clock. Put a dark-grey fabric sofa in front of the bed, facing it and aligned parallel to it. Two floor lamps stand in the front-left and front-right corners. Arrange three pillows across the head of the bed, and stack two magazines beside one open art book on the floor."
+    },
+    {
+      "case_id": "prompt_003",
+      "scene_type": "bedroom",
+      "room": {"boundary": [[0, 0], [10, 0], [10, 10], [0, 10]], "height": 3.2, "unit": "meter"},
+      "instruction": "A square bedroom measuring 10 m x 10 m and 3.2 m high contains two low wooden beds arranged along the left wall, parallel to each other. One black metal cabinet stands between the beds. On the cabinet, arrange two red soda cans, one orange, and one cleaning spray bottle from left to right. Place one brown leather sofa parallel to the beds and a second matching sofa perpendicular to the first. One tall lamp stands opposite the cabinet. Each bed has two light-grey pillows, and three magazines lie beside two art books in the center of the room."
+    },
+    {
+      "case_id": "prompt_004",
+      "scene_type": "bedroom",
+      "room": {"boundary": [[0, 0], [8, 0], [8, 7], [0, 7]], "height": 2.9, "unit": "meter"},
+      "instruction": "Create an 8 m x 7 m bedroom with a height of 2.9 m. Center one green upholstered bed with its headboard touching the north wall. Put one narrow wooden bench at the foot of the bed, parallel to the headboard. A white chest of drawers stands to the right of the bed, with one round mirror mounted on the wall above it. Place one ceramic vase and one folded towel on the chest. A rectangular cream rug lies under the lower half of the bed and bench. Put one reading chair in the southwest corner with one small lamp directly beside it."
+    },
+    {
+      "case_id": "prompt_005",
+      "scene_type": "children_bedroom",
+      "room": {"boundary": [[0, 0], [7, 0], [7, 7], [0, 7]], "height": 2.8, "unit": "meter"},
+      "instruction": "A 7 m x 7 m children's bedroom has four walls and a 2.8 m ceiling. Place one white bunk bed against the west wall. Put one blue desk opposite the bunk bed against the east wall, with one yellow chair centered in front of the desk. One laptop and two closed books sit on the desk, with the laptop between the books. Mount one shelf on the wall above the desk and place three toy boxes side by side below the shelf. Put one red floor lamp beside the head of the bunk bed and one round green rug between the bed and desk."
+    },
+    {
+      "case_id": "prompt_006",
+      "scene_type": "hotel_bedroom",
+      "room": {"boundary": [[0, 0], [9, 0], [9, 8], [0, 8]], "height": 3.0, "unit": "meter"},
+      "instruction": "Design a 9 m x 8 m hotel bedroom with a 3 m ceiling. Place one king-size beige bed against the back wall. Put one walnut bedside table on each side of the bed and one brass lamp on top of each table. A teal bench stands at the foot of the bed, parallel to it. Position one black television on a low console against the wall opposite the bed. Place one armchair to the left of the console and one round side table to the right of the armchair. A small cup rests on the side table, and two pillows are aligned at the head of the bed."
+    },
+    {
+      "case_id": "prompt_007",
+      "scene_type": "bedroom",
+      "room": {"boundary": [[0, 0], [5, 0], [5, 8], [0, 8]], "height": 2.7, "unit": "meter"},
+      "instruction": "A narrow bedroom measures 5 m x 8 m with a height of 2.7 m. Place one single oak bed lengthwise against the left wall. Put one compact white desk against the right wall, directly opposite the bed, and one black chair in front of the desk. A laptop sits in the center of the desk with one notebook to its left and one pencil cup to its right. Mount one bookshelf above the desk. Place one slim wardrobe against the back wall, beyond the head of the bed, and put one blue laundry basket between the wardrobe and the desk."
+    },
+    {
+      "case_id": "prompt_008",
+      "scene_type": "bedroom",
+      "room": {"boundary": [[0, 0], [9, 0], [9, 7], [0, 7]], "height": 2.9, "unit": "meter"},
+      "instruction": "A 9 m x 7 m twin bedroom has a height of 2.9 m. Arrange two grey single beds parallel to each other with their headboards against the north wall. Put one shared bedside table exactly between the beds and one orange lamp on that table. Place one pillow at the head of each bed. A long dresser stands against the south wall opposite the beds, and a rectangular mirror is mounted above the dresser. Put one green plant on the left end of the dresser and one stack of three books on its right end. Keep one blue rug centered in the aisle between the beds."
+    },
+    {
+      "case_id": "prompt_009",
+      "scene_type": "living_room",
+      "room": {"boundary": [[0, 0], [9, 0], [9, 9], [0, 9]], "height": 3.0, "unit": "meter"},
+      "instruction": "A 9 m x 9 m living room has four walls and a 3 m ceiling. Place one long navy sofa against the south wall. Center one rectangular oak coffee table in front of the sofa, with one white mug between two art books on the tabletop. Put two cream armchairs opposite the sofa with a small gap between them. A low television console stands against the east wall, and one television is centered on top of it facing the sofa. Place one tall plant in the northeast corner and one floor lamp beside the left arm of the sofa."
+    },
+    {
+      "case_id": "prompt_010",
+      "scene_type": "living_room",
+      "room": {"boundary": [[0, 0], [8, 0], [8, 9], [0, 9]], "height": 3.0, "unit": "meter"},
+      "instruction": "Create an 8 m x 9 m living room with a 3 m ceiling. Fit one light-grey L-shaped sectional into the southwest corner, with its two sections following the south and west walls. Put one square black coffee table inside the open side of the sectional. On the table, place one red bowl and one closed magazine side by side. A round side table stands near the short end of the sectional with one table lamp on it. Mount one large television on the north wall opposite the long sofa section, and place two green plants symmetrically below the television."
+    },
+    {
+      "case_id": "prompt_011",
+      "scene_type": "living_room",
+      "room": {"boundary": [[0, 0], [10, 0], [10, 8], [0, 8]], "height": 3.1, "unit": "meter"},
+      "instruction": "A 10 m x 8 m living room is 3.1 m high. Place one brown sofa against the west side and one beige sofa opposite it, with both sofas parallel. Lay one large patterned rug between the sofas and center one glass coffee table on the rug. Put one vase in the middle of the table and one book on each side of the vase. A floor lamp stands behind the north end of the brown sofa. Against the north wall, place one narrow bookcase with three storage boxes arranged on its lower shelf."
+    },
+    {
+      "case_id": "prompt_012",
+      "scene_type": "reading_lounge",
+      "room": {"boundary": [[0, 0], [8, 0], [8, 8], [0, 8]], "height": 3.0, "unit": "meter"},
+      "instruction": "An 8 m x 8 m reading lounge has a 3 m ceiling. Put one green velvet sofa along the west wall. Place two tan armchairs to the east of the sofa, angled toward a round table centered between all three seats. One reading lamp stands behind each armchair. Cover the north wall with one long bookcase and put four books upright on its middle shelf. Place one tall plant in the southeast corner and one shorter plant beside the left end of the sofa. A blue rug lies beneath the central table without extending under the bookcase."
+    },
+    {
+      "case_id": "prompt_013",
+      "scene_type": "living_room",
+      "room": {"boundary": [[0, 0], [7, 0], [7, 8], [0, 8]], "height": 2.9, "unit": "meter"},
+      "instruction": "A minimalist living room measures 7 m x 8 m and 2.9 m high. Place one low white daybed against the right wall. Put one oval wooden table directly in front of the daybed and one grey cushion at each end of the daybed. A slim media console stands against the left wall opposite the daybed, with one black speaker on each end and one small television between them. Center one neutral rug between the daybed and console. Put one floor lamp near the head of the daybed and one potted plant near its foot."
+    },
+    {
+      "case_id": "prompt_014",
+      "scene_type": "family_room",
+      "room": {"boundary": [[0, 0], [9, 0], [9, 8], [0, 8]], "height": 2.9, "unit": "meter"},
+      "instruction": "A 9 m x 8 m family room has a height of 2.9 m. Put one three-seat blue sofa against the back wall. Place two round yellow poufs side by side in front of the sofa and one low coffee table beyond the poufs. One remote control and one picture book rest on the table. Put one woven toy basket beside the right arm of the sofa and one floor lamp beside its left arm. A television stands on a cabinet against the opposite wall, facing the sofa. Place one rectangular rug under the two poufs and coffee table."
+    },
+    {
+      "case_id": "prompt_015",
+      "scene_type": "fireplace_lounge",
+      "room": {"boundary": [[0, 0], [8, 0], [8, 9], [0, 9]], "height": 3.2, "unit": "meter"},
+      "instruction": "An 8 m x 9 m fireplace lounge has a 3.2 m ceiling. Center one stone fireplace on the north wall. Place two red armchairs side by side facing the fireplace, with one round table between them. Put one mug on the table near the left chair and one book near the right chair. A small log basket sits to the right of the fireplace and one floor lamp stands to its left. Position one brown sofa behind the armchairs, parallel to them and also facing the fireplace. Keep one rug centered between the armchairs and fireplace."
+    },
+    {
+      "case_id": "prompt_016",
+      "scene_type": "studio_living_room",
+      "room": {"boundary": [[0, 0], [6, 0], [6, 8], [0, 8]], "height": 2.8, "unit": "meter"},
+      "instruction": "A compact studio living room measures 6 m x 8 m with a 2.8 m ceiling. Place one grey sofa bed against the west wall. Put one narrow desk perpendicular to the sofa bed, with its short side near the north wall, and place one chair in front of the desk. One laptop and one desk lamp sit on the desk. Stand one open shelving divider behind the desk to separate it from the sofa area. Put one small coffee table in front of the sofa bed and one red rug beneath the table. A floor lamp occupies the southwest corner beside the sofa."
+    },
+    {
+      "case_id": "prompt_017",
+      "scene_type": "office",
+      "room": {"boundary": [[0, 0], [9, 0], [9, 8], [0, 8]], "height": 3.0, "unit": "meter"},
+      "instruction": "A 9 m x 8 m executive office has a 3 m ceiling. Place one large dark desk near the center, facing the entrance on the south wall. Put one black office chair behind the desk and two matching visitor chairs in front of it. Arrange two monitors side by side on the desk, with one keyboard centered in front of them and one desk phone to the right. A tall bookcase stands against the west wall and one filing cabinet stands against the east wall. Put one floor lamp between the bookcase and the north wall."
+    },
+    {
+      "case_id": "prompt_018",
+      "scene_type": "coworking_office",
+      "room": {"boundary": [[0, 0], [12, 0], [12, 10], [0, 10]], "height": 3.2, "unit": "meter"},
+      "instruction": "A 12 m x 10 m coworking office has a ceiling height of 3.2 m. Arrange four identical white desks as a two-by-two grid in the center, with clear aisles between them. Place one black chair behind each desk and one monitor in the center of each desktop. Put one shared printer on top of a low cabinet against the east wall. A long whiteboard is mounted on the north wall, opposite two blue lounge chairs along the south wall. Place one round side table between the lounge chairs and one tall plant in each northern corner."
+    },
+    {
+      "case_id": "prompt_019",
+      "scene_type": "home_office",
+      "room": {"boundary": [[0, 0], [6, 0], [6, 7], [0, 7]], "height": 2.8, "unit": "meter"},
+      "instruction": "A 6 m x 7 m home office is 2.8 m high. Put one oak desk against the north wall and one green office chair directly in front of it. Center one laptop on the desk, place two books to its left, and put one ceramic pencil cup to its right. One low storage cabinet stands against the west wall, perpendicular to the desk. Mount two floating shelves above the cabinet and arrange three boxes on the lower shelf. Put one reading chair in the southeast corner with one floor lamp beside it and one small round rug underneath it."
+    },
+    {
+      "case_id": "prompt_020",
+      "scene_type": "meeting_room",
+      "room": {"boundary": [[0, 0], [11, 0], [11, 8], [0, 8]], "height": 3.0, "unit": "meter"},
+      "instruction": "An 11 m x 8 m meeting room has a 3 m ceiling. Center one long rectangular conference table in the room. Arrange eight black chairs around it, with three chairs along each long side and one at each short end. Put one speakerphone in the exact center of the table and two closed notebooks beside it. Mount one projection screen on the north wall facing the chair at the south end. A low cabinet stands below the screen with one projector on top. Place one whiteboard on the east wall and one tall plant in the northwest corner."
+    },
+    {
+      "case_id": "prompt_021",
+      "scene_type": "design_studio",
+      "room": {"boundary": [[0, 0], [10, 0], [10, 9], [0, 9]], "height": 3.4, "unit": "meter"},
+      "instruction": "A 10 m x 9 m design studio has a 3.4 m ceiling. Place two large drafting tables parallel to each other in the center, with one adjustable stool in front of each table. Put one desk lamp and one roll of paper on every drafting table. A long materials shelf stands against the west wall, holding four storage bins in a row. Position one dress mannequin near the north wall and one full-length mirror immediately to its right. Put one small sofa against the south wall facing the drafting tables, with one square side table beside the sofa."
+    },
+    {
+      "case_id": "prompt_022",
+      "scene_type": "library",
+      "room": {"boundary": [[0, 0], [12, 0], [12, 9], [0, 9]], "height": 3.5, "unit": "meter"},
+      "instruction": "A 12 m x 9 m library reading room has a 3.5 m ceiling. Line the west and east walls with two long bookcases facing each other. Place three rectangular study tables in one row through the center, parallel to the bookcases. Put two chairs on each long side of every table and one green reading lamp at the center of each table. Arrange four books upright on the middle shelf of the west bookcase. Place one librarian desk near the south wall with one chair behind it, and keep one return cart beside the desk."
+    },
+    {
+      "case_id": "prompt_023",
+      "scene_type": "computer_lab",
+      "room": {"boundary": [[0, 0], [11, 0], [11, 9], [0, 9]], "height": 3.0, "unit": "meter"},
+      "instruction": "An 11 m x 9 m computer lab is 3 m high. Arrange six desks in two rows of three, all facing the north wall. Put one monitor and one keyboard on every desk, with one chair centered behind each desk. Mount one wide whiteboard on the north wall in front of the desk rows. Place one instructor desk in the front-right corner, perpendicular to the student desks, with one laptop on it. A printer sits on a cabinet against the west wall, and one waste bin stands between the cabinet and the rear desk row."
+    },
+    {
+      "case_id": "prompt_024",
+      "scene_type": "reception_office",
+      "room": {"boundary": [[0, 0], [8, 0], [8, 8], [0, 8]], "height": 3.0, "unit": "meter"},
+      "instruction": "An 8 m x 8 m reception office has a 3 m ceiling. Place one curved reception desk near the south entrance, facing into the room. Put one office chair behind the desk and one monitor plus one telephone on top, with the telephone to the right of the monitor. A two-seat blue sofa stands opposite the desk against the north wall. Put one low coffee table in front of the sofa with two magazines on it. Arrange two visitor chairs along the east wall with one plant between them, and mount one clock on the wall above the sofa."
+    },
+    {
+      "case_id": "prompt_025",
+      "scene_type": "dining_room",
+      "room": {"boundary": [[0, 0], [9, 0], [9, 8], [0, 8]], "height": 3.0, "unit": "meter"},
+      "instruction": "A 9 m x 8 m dining room has a 3 m ceiling. Center one rectangular walnut dining table in the room and arrange six cream chairs around it, with two along each long side and one at each end. Put one glass vase in the middle of the table, with two candle holders placed symmetrically on either side. A long sideboard stands against the north wall. Place one bowl on the left end of the sideboard and one table lamp on its right end. Keep one large rug under the complete table-and-chair group."
+    },
+    {
+      "case_id": "prompt_026",
+      "scene_type": "breakfast_room",
+      "room": {"boundary": [[0, 0], [7, 0], [7, 7], [0, 7]], "height": 2.8, "unit": "meter"},
+      "instruction": "A 7 m x 7 m breakfast room has a height of 2.8 m. Place one round white table near the east wall and arrange three wooden chairs around its open sides. Put one built-in bench against the east wall, facing the table. Center one fruit bowl on the tabletop with two cups beside it. A narrow serving cart stands to the left of the bench, holding one coffee pot on its upper shelf. Place one pendant light directly above the table and one small plant in the northwest corner."
+    },
+    {
+      "case_id": "prompt_027",
+      "scene_type": "kitchen",
+      "room": {"boundary": [[0, 0], [9, 0], [9, 8], [0, 8]], "height": 3.0, "unit": "meter"},
+      "instruction": "A 9 m x 8 m kitchen has a 3 m ceiling. Center one long grey island in the room and arrange three black stools along its south side. Place one sink at the left end of the island and one cooktop at the right end. Put one cutting board between the sink and cooktop with one red kettle behind it. A refrigerator stands against the north wall beside a tall pantry cabinet. Run one counter along the east wall and place one toaster on the counter beneath two wall cabinets. Keep one waste bin between the island and the west wall."
+    },
+    {
+      "case_id": "prompt_028",
+      "scene_type": "kitchen",
+      "room": {"boundary": [[0, 0], [6, 0], [6, 10], [0, 10]], "height": 2.9, "unit": "meter"},
+      "instruction": "A galley kitchen measures 6 m x 10 m with a height of 2.9 m. Place one long counter along the west wall and a second counter directly opposite it along the east wall. Put one sink in the middle of the west counter and one stove in the middle of the east counter. A refrigerator stands at the north end of the west counter, opposite one tall storage cabinet. At the south end of the room, place one small rectangular table perpendicular to the counters with two chairs facing each other. Put one bowl and one mug side by side on the table."
+    },
+    {
+      "case_id": "prompt_029",
+      "scene_type": "formal_dining_room",
+      "room": {"boundary": [[0, 0], [11, 0], [11, 9], [0, 9]], "height": 3.4, "unit": "meter"},
+      "instruction": "An 11 m x 9 m formal dining room has a 3.4 m ceiling. Place one long dark dining table in the center and arrange eight upholstered chairs around it, with three on each long side and one at each end. Put three candle holders in a straight line along the center of the table. A glass-front cabinet stands against the west wall, while a matching sideboard stands against the east wall directly opposite it. Place one vase on the sideboard and one bowl inside the center shelf of the cabinet. A patterned rug lies beneath all chairs and the table."
+    },
+    {
+      "case_id": "prompt_030",
+      "scene_type": "dining_room",
+      "room": {"boundary": [[0, 0], [6, 0], [6, 6], [0, 6]], "height": 2.7, "unit": "meter"},
+      "instruction": "A small dining room measures 6 m x 6 m and 2.7 m high. Center one square oak table and place four blue chairs around it, one on each side. Put one ceramic bowl in the center of the table and one napkin beside each chair position. Hang one pendant lamp directly above the bowl. A slim serving cart stands against the east wall, with one glass bottle on its top shelf and two plates on its lower shelf. Place one framed picture on the north wall opposite the entrance and one plant in the southwest corner."
+    },
+    {
+      "case_id": "prompt_031",
+      "scene_type": "open_kitchen_dining",
+      "room": {"boundary": [[0, 0], [12, 0], [12, 9], [0, 9]], "height": 3.1, "unit": "meter"},
+      "instruction": "An open kitchen and dining room measures 12 m x 9 m with a 3.1 m ceiling. Use one long island to separate the kitchen area on the west from the dining area on the east. Place three stools along the dining side of the island and one fruit bowl on its center. Against the west wall, arrange one refrigerator, one sink cabinet, and one stove from north to south. Center one round dining table east of the island with four chairs around it. Put one vase on the table and one sideboard against the east wall directly behind the table."
+    },
+    {
+      "case_id": "prompt_032",
+      "scene_type": "bakery_prep_room",
+      "room": {"boundary": [[0, 0], [10, 0], [10, 8], [0, 8]], "height": 3.2, "unit": "meter"},
+      "instruction": "A 10 m x 8 m bakery preparation room has a 3.2 m ceiling. Place one stainless worktable in the center and arrange three baking trays in a row on top. Put one large mixer against the west wall with one ingredient bin on each side. Two tall cooling racks stand parallel against the east wall. Place one rolling cart between the worktable and the north wall, holding two mixing bowls on its upper shelf. A sink cabinet stands against the north wall, opposite one waste bin near the south wall. Keep clear aisles around every side of the central worktable."
+    },
+    {
+      "case_id": "prompt_033",
+      "scene_type": "cafe",
+      "room": {"boundary": [[0, 0], [10, 0], [10, 9], [0, 9]], "height": 3.2, "unit": "meter"},
+      "instruction": "A 10 m x 9 m cafe has a 3.2 m ceiling. Arrange four round coffee tables as a two-by-two grid, with three wooden chairs around each table. Put one small vase at the center of every table. A long service counter runs along the north wall, with one espresso machine between one grinder and one stack of cups. Place two stools in front of the counter. A refrigerated display case stands to the right of the counter, and one menu board is mounted above it. Put one tall plant in each southern corner."
+    },
+    {
+      "case_id": "prompt_034",
+      "scene_type": "cafe",
+      "room": {"boundary": [[0, 0], [8, 0], [8, 10], [0, 10]], "height": 3.0, "unit": "meter"},
+      "instruction": "An 8 m x 10 m cafe has a 3 m ceiling. Place one long wooden counter against the west wall and arrange four stools in a line facing it. Put one espresso machine on the northern end of the counter, one cash register in the middle, and one pastry tray on the southern end. Along the east wall, arrange three square tables in a row with two chairs opposite each other at every table. Put one cup on each table. One menu board hangs above the counter, and one waste station stands near the southeast corner."
+    },
+    {
+      "case_id": "prompt_035",
+      "scene_type": "tea_room",
+      "room": {"boundary": [[0, 0], [8, 0], [8, 8], [0, 8]], "height": 2.8, "unit": "meter"},
+      "instruction": "An 8 m x 8 m tea room has a 2.8 m ceiling. Place two low square tables side by side in the center, aligned east to west. Arrange four floor cushions around each table, one on every side. Put one blue teapot at the center of the left table and one red teapot at the center of the right table, with four cups surrounding each teapot. A low display cabinet stands against the north wall and holds three ceramic jars in a row. Place one floor lamp in each southern corner and one narrow rug between the two tables."
+    },
+    {
+      "case_id": "prompt_036",
+      "scene_type": "bakery_cafe",
+      "room": {"boundary": [[0, 0], [11, 0], [11, 8], [0, 8]], "height": 3.1, "unit": "meter"},
+      "instruction": "An 11 m x 8 m bakery cafe has a 3.1 m ceiling. Place one glass display counter along the north wall and one checkout counter immediately to its right. Put one cash register on the checkout counter and arrange four pastry trays inside the display. In the center, place three small round tables in a row, each surrounded by two chairs. Put one cup and one plate on every table. A long bench runs along the south wall behind the chairs. Place one umbrella stand beside the entrance and one tall plant at each end of the bench."
+    },
+    {
+      "case_id": "prompt_037",
+      "scene_type": "garden_cafe",
+      "room": {"boundary": [[0, 0], [12, 0], [12, 10], [0, 10]], "height": 3.5, "unit": "meter"},
+      "instruction": "A 12 m x 10 m indoor garden cafe has a 3.5 m ceiling. Arrange six small round tables in two rows of three, with two green chairs at each table. Put one lantern in the center of every table. Use four large planter boxes to divide the two rows, keeping the planters aligned through the room center. A service counter stands against the north wall with one coffee machine and one stack of cups on top. Place one long bench against the west wall and two waste bins near the southeast corner, side by side."
+    },
+    {
+      "case_id": "prompt_038",
+      "scene_type": "art_studio",
+      "room": {"boundary": [[0, 0], [10, 0], [10, 9], [0, 9]], "height": 3.5, "unit": "meter"},
+      "instruction": "A 10 m x 9 m art studio has a 3.5 m ceiling. Place three wooden easels in a row facing the north wall, with one stool behind each easel. Put one canvas on every easel. A long supply table stands against the west wall, holding three paint boxes and two brush jars arranged alternately. Place one sink cabinet against the east wall opposite the supply table. One drying rack stands near the northeast corner, and two completed canvases lean against the south wall with a small gap between them. Keep the room center clear behind the easels."
+    },
+    {
+      "case_id": "prompt_039",
+      "scene_type": "workshop",
+      "room": {"boundary": [[0, 0], [11, 0], [11, 9], [0, 9]], "height": 3.4, "unit": "meter"},
+      "instruction": "An 11 m x 9 m workshop has a 3.4 m ceiling. Run one heavy workbench along the west wall and mount one tool board directly above it. Put one red toolbox and one power drill on the workbench. Place one table saw in the center of the room with its long axis parallel to the north wall. A metal stool stands beside the south end of the workbench. One tall storage cabinet occupies the northwest corner, while two material racks stand side by side against the east wall. Put one waste bin near the southeast corner, away from the table saw."
+    },
+    {
+      "case_id": "prompt_040",
+      "scene_type": "music_room",
+      "room": {"boundary": [[0, 0], [9, 0], [9, 9], [0, 9]], "height": 3.2, "unit": "meter"},
+      "instruction": "A 9 m x 9 m music room has a 3.2 m ceiling. Place one upright black piano against the north wall and one piano bench directly in front of it. Put one drum kit near the south wall facing the piano. Arrange three music stands in a shallow arc between the piano and drums, all facing north. One guitar rests on a stand beside the west wall, and one amplifier sits immediately to its right. Place two acoustic panels on the east wall and one rectangular rug beneath the drum kit."
+    },
+    {
+      "case_id": "prompt_041",
+      "scene_type": "game_room",
+      "room": {"boundary": [[0, 0], [10, 0], [10, 9], [0, 9]], "height": 3.0, "unit": "meter"},
+      "instruction": "A 10 m x 9 m game room has a 3 m ceiling. Center one green pool table in the room and place one cue ball near its middle with one triangular rack of balls at the north end. Mount one cue rack on the east wall. Put one dark sofa against the west wall facing the pool table, with one round side table at each end of the sofa. Place one lamp on each side table. A low cabinet stands against the south wall with one game console between two speakers. Keep a clear walking route around all four sides of the pool table."
+    },
+    {
+      "case_id": "prompt_042",
+      "scene_type": "nursery",
+      "room": {"boundary": [[0, 0], [7, 0], [7, 7], [0, 7]], "height": 2.8, "unit": "meter"},
+      "instruction": "A 7 m x 7 m nursery has a 2.8 m ceiling. Place one white crib against the north wall and one changing table against the east wall, perpendicular to the crib. Put one folded blanket and two storage baskets on the changing table. A wooden rocking chair stands in the southwest corner with one small round side table beside it. Place one lamp on the side table. Mount one shelf above the changing table and arrange three toy animals on it. Keep one soft circular rug centered between the crib and rocking chair."
+    },
+    {
+      "case_id": "prompt_043",
+      "scene_type": "classroom",
+      "room": {"boundary": [[0, 0], [12, 0], [12, 10], [0, 10]], "height": 3.2, "unit": "meter"},
+      "instruction": "A 12 m x 10 m classroom has a 3.2 m ceiling. Arrange twelve student desks in three rows of four, all facing the north wall, and place one chair behind every desk. Put one closed notebook on each desk. Mount one wide whiteboard on the north wall. Place one teacher desk in the front-left corner, perpendicular to the student rows, with one laptop and one stack of books on top. A storage cabinet stands against the east wall, and two waste bins sit side by side near the south entrance. Keep a central aisle between the second and third desk columns."
+    },
+    {
+      "case_id": "prompt_044",
+      "scene_type": "clinic_waiting_room",
+      "room": {"boundary": [[0, 0], [10, 0], [10, 8], [0, 8]], "height": 3.0, "unit": "meter"},
+      "instruction": "A 10 m x 8 m clinic waiting room has a 3 m ceiling. Arrange four blue waiting chairs in a row against the west wall and four matching chairs in a row against the east wall, so the rows face each other. Put one long coffee table between the rows with three magazines spread across it. A reception desk stands against the north wall with one monitor and one telephone on top. Place one office chair behind the desk. One water dispenser stands near the southwest corner, opposite one tall plant in the southeast corner."
+    },
+    {
+      "case_id": "prompt_045",
+      "scene_type": "gallery",
+      "room": {"boundary": [[0, 0], [14, 0], [14, 10], [0, 10]], "height": 4.0, "unit": "meter"},
+      "instruction": "A 14 m x 10 m gallery has a 4 m ceiling. Arrange five white display plinths in one straight row through the center, with one small sculpture centered on each plinth. Place two long benches parallel to the plinth row, one on each side. Mount three framed paintings evenly across the north wall and three more directly opposite them on the south wall. Put one information desk near the east entrance with one chair behind it and one brochure stand beside it. Keep clear paths between the benches, plinths, and walls."
+    },
+    {
+      "case_id": "prompt_046",
+      "scene_type": "hotel_lobby",
+      "room": {"boundary": [[0, 0], [14, 0], [14, 12], [0, 12]], "height": 4.0, "unit": "meter"},
+      "instruction": "A 14 m x 12 m hotel lobby has a 4 m ceiling. Place one long reception counter against the north wall with two monitors on top and two office chairs behind it. Arrange two beige sofas facing each other in the center with one large coffee table between them. Put one vase and two magazines on the coffee table. Place one armchair at each short end of the sofa group, angled toward the table. Two tall plants stand at the left and right ends of the reception counter, and one luggage cart waits near the east wall."
+    },
+    {
+      "case_id": "prompt_047",
+      "scene_type": "retail_showroom",
+      "room": {"boundary": [[0, 0], [12, 0], [12, 10], [0, 10]], "height": 3.5, "unit": "meter"},
+      "instruction": "A 12 m x 10 m retail showroom has a 3.5 m ceiling. Place three rectangular display tables in a row through the center, each holding four folded shirts arranged in a two-by-two grid. Run two shelving units along the west and east walls facing the display tables. Put one mannequin near each northern corner. A checkout counter stands near the southeast corner with one cash register on top and one stool behind it. Place one full-length mirror against the south wall opposite the central display table, and keep a clear route from the entrance to the checkout."
+    },
+    {
+      "case_id": "prompt_048",
+      "scene_type": "home_gym",
+      "room": {"boundary": [[0, 0], [9, 0], [9, 8], [0, 8]], "height": 3.0, "unit": "meter"},
+      "instruction": "A 9 m x 8 m home gym has a 3 m ceiling. Place one treadmill against the north wall facing south and one exercise bike immediately to its right. Center one blue exercise mat in the room, aligned parallel to the treadmill. A dumbbell rack stands against the west wall with one weight bench directly in front of it. Mount one large mirror on the east wall opposite the rack. Put one small towel stand beside the exercise bike and one water bottle on top of the stand. Keep a clear aisle between the mat and both cardio machines."
+    },
+    {
+      "case_id": "prompt_049",
+      "scene_type": "maker_space",
+      "room": {"boundary": [[0, 0], [11, 0], [11, 9], [0, 9]], "height": 3.2, "unit": "meter"},
+      "instruction": "An 11 m x 9 m maker space has a 3.2 m ceiling. Run one long counter along the north wall and place three 3D printers on it with equal gaps. Center two worktables in the room, parallel to the counter, and put two stools on opposite sides of each table. One tool box and one measuring mat sit on every worktable. Arrange four lockers against the west wall. Put one electronics cabinet against the east wall with one soldering station on top. Keep one waste bin beside the lockers and clear walking space around both worktables."
+    },
+    {
+      "case_id": "prompt_050",
+      "scene_type": "studio_apartment",
+      "room": {"boundary": [[0, 0], [10, 0], [10, 8], [0, 8]], "height": 2.9, "unit": "meter"},
+      "instruction": "A 10 m x 8 m studio apartment has a 2.9 m ceiling. Place one double bed against the north wall with one bedside table and one lamp to its right. Use one open bookcase perpendicular to the north wall to separate the bed from the living area. Put one grey sofa south of the bookcase, facing one low television console against the south wall, with one coffee table between them. East of the sofa, place one round dining table with three chairs and one fruit bowl on top. A compact desk stands against the east wall with one laptop and one chair in front of it."
+    }
+  ]
+}

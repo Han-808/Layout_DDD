@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from benchmark.evidence_config import resolve_runtime_evidence_config
+from benchmark.legend.evidence_config import resolve_runtime_evidence_config
 
 
 def test_runtime_evidence_config_resolves_scene_and_group_scale() -> None:

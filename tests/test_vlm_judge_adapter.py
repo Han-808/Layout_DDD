@@ -3,8 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from benchmark.workflow.evaluate import evaluate_layout_v0
-from benchmark.workflow.vlm_judge import OpenAICompatibleVLMJudge
+from benchmark.legend.workflow.evaluate import evaluate_layout_v0
+from benchmark.legend.workflow.vlm_judge import OpenAICompatibleVLMJudge
 
 
 class _FakeVLM:

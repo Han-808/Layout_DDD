@@ -1,0 +1,51 @@
+{
+  "request_id": "source_clean_001__collision",
+  "instruction": "Create a compact 2.81 m by 4.20 m master bedroom with a 2.799 m ceiling. Place a white wood wardrobe against the north wall and a light wood bunk bed near the room center. Put two gray suede nightstands near the bed, both near the east wall. Rest one light gray desktop projector on each nightstand.",
+  "scene_type": "master bedroom",
+  "structure": false,
+  "prompt_granularity": "fine_grained",
+  "metadata": {
+    "generator_skipped": true,
+    "reference_annotation_visibility": "benchmark_private"
+  },
+  "room": {
+    "boundary": [
+      [
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        4.2
+      ],
+      [
+        2.81,
+        4.2
+      ],
+      [
+        2.81,
+        0.0
+      ]
+    ],
+    "height": 2.799,
+    "unit": "meter",
+    "dimensions": {
+      "width": 2.81,
+      "depth": 4.2,
+      "height": 2.799
+    },
+    "explicit_dimensions": {
+      "width": 2.81,
+      "depth": 4.2,
+      "height": 2.799
+    },
+    "dimension_provenance": {
+      "width": "explicit_benchmark_fixture",
+      "depth": "explicit_benchmark_fixture",
+      "height": "explicit_benchmark_fixture"
+    },
+    "resolution_policy": "room_dimension_policy_v1",
+    "topology": "rectangular_enclosed_room",
+    "floor_z": 0.0
+  }
+}

@@ -3,12 +3,12 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from benchmark.models.factory import create_model
-from benchmark.visualization import export_viewer_scene
-from benchmark.workflow.evaluate import evaluate_layout_vlm_as_judge_v1
-from benchmark.workflow.judge_evidence_selector import evidence_budgeting_config, select_judge_evidence
-from benchmark.workflow.layout_normalization import sanitize_layout_optional_nulls
-from benchmark.workflow.trace import build_workflow_trace
+from benchmark.legend.models.factory import create_model
+from benchmark.legend.visualization import export_viewer_scene
+from benchmark.legend.workflow.evaluate import evaluate_layout_vlm_as_judge_v1
+from benchmark.legend.workflow.judge_evidence_selector import evidence_budgeting_config, select_judge_evidence
+from benchmark.legend.workflow.layout_normalization import sanitize_layout_optional_nulls
+from benchmark.legend.workflow.trace import build_workflow_trace
 
 
 class _FakeBudgetedVLM:

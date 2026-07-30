@@ -9,14 +9,21 @@ import pytest
 
 from benchmark.adapters import get_adapter
 from benchmark.scene_io.validate import (
+    ArtifactValidationError,
     validate_asset_selection,
     validate_generated_scene,
+    validate_generation_input,
     validate_object_plan,
     validate_scene_request,
 )
-from benchmark.utils.io import read_json, write_json
+from benchmark.utils.io import load_yaml, read_json, write_json
 from evaluate import run_evaluate
-from generate import run_generate
+from generate import run_generate, run_generate_from_natural_language
+from scripts.run_scene_harness import run_scene_harness
+from benchmark.nl_scene.generation_input import (
+    build_direct_natural_language_generation_input,
+    build_generation_input,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -50,6 +57,7 @@ def _object_plan() -> dict:
             }
         ],
         "global_constraints": ["walkable"],
+        "relations": [],
     }
 
 
@@ -93,16 +101,18 @@ def _generation_input(request_id: str = "demo_001") -> dict:
 
 def _generated_scene(request_id: str = "demo_001") -> dict:
     return {
+        "schema_version": "canonical_scene_v1",
         "scene_id": f"generated_{request_id}",
         "request_id": request_id,
         "scene_type": "living room",
-        "boundary": [[0, 0], [4, 0], [4, 3], [0, 3]],
-        "scene_height": 2.8,
+        "boundary": [[0, 0], [7, 0], [7, 5], [0, 5]],
+        "scene_height": 3.0,
         "objects": [
             {
                 "id": "obj_000",
                 "jid": "sofa_asset",
                 "category": "sofa",
+                "description": "A comfortable sofa",
                 "retrieval_category": "sofa",
                 "desc": "A comfortable sofa",
                 "short_desc": "comfortable sofa",
@@ -114,7 +124,16 @@ def _generated_scene(request_id: str = "demo_001") -> dict:
                 "metadata": {"interactive": False},
             }
         ],
-        "metadata": {"generator": "test", "adapter": "passthrough"},
+        "metadata": {
+            "generator": "test",
+            "adapter": "object_state",
+            "coordinate_frame": {
+                "origin": "room_min_corner_floor",
+                "axes": "x_width_y_depth_z_up",
+                "unit": "meter",
+                "rotation_unit": "degree",
+            },
+        },
     }
 
 
@@ -125,30 +144,104 @@ def test_canonical_artifact_validation_accepts_valid_examples() -> None:
     assert validate_generated_scene(_generated_scene())
 
 
-def test_passthrough_adapter_copies_and_validates_generated_scene(tmp_path: Path) -> None:
+def test_direct_natural_language_generation_input_skips_asset_selection() -> None:
+    request_id = "direct_nl"
+    generation_input = build_direct_natural_language_generation_input(
+        request_id=request_id,
+        instruction="Create a cozy living room.",
+        scene_type="living room",
+        room=_scene_request()["room"],
+    )
+
+    assert validate_generation_input(generation_input)
+    assert generation_input["scene_request"]["structure"] is False
+    assert generation_input["generation_contract"]["input_mode"] == "natural_language_direct"
+    assert generation_input["generator_input"]["instruction"] == "Create a cozy living room."
+    assert "object_plan" not in generation_input
+    assert "evaluation_context" not in generation_input
+    assert "asset_selection" not in generation_input
+
+
+def test_structured_generation_input_can_skip_asset_retrieval() -> None:
+    generation_input = build_generation_input(
+        scene_request={**_scene_request(), "structure": True},
+        object_plan=_object_plan(),
+        asset_selection=None,
+    )
+
+    assert validate_generation_input(generation_input)
+    assert generation_input["generation_contract"]["input_mode"] == "natural_language_structured"
+    assert generation_input["generation_contract"]["requires_asset_selection"] is False
+    assert generation_input["generator_input"]["object_plan"]["objects"][0]["id"] == "obj_000"
+    assert "evaluation_context" not in generation_input
+    assert "asset_selection" not in generation_input
+
+
+def test_object_state_adapter_copies_and_validates_generated_scene(tmp_path: Path) -> None:
     generated_scene_path = write_json(tmp_path / "input_scene.json", _generated_scene())
-    adapter = get_adapter("passthrough")
+    adapter = get_adapter("object_state")
     method_input = adapter.prepare_input(_generation_input(), tmp_path)
     generated_path = adapter.parse_output(generated_scene_path, _generation_input(), tmp_path)
 
-    assert method_input.name == "generation_input.json"
+    assert method_input.name == "method_input.json"
+    assert "evaluation_context" not in read_json(method_input)["generator_input"]
     assert generated_path.name == "generated_scene.json"
     assert read_json(generated_path)["scene_id"] == "generated_demo_001"
 
 
 def test_generate_dispatcher_stops_cleanly_when_generation_skipped(tmp_path: Path) -> None:
-    result = run_generate(generation_input=_generation_input("skip_run"), adapter_name="passthrough", out_dir=tmp_path)
+    result = run_generate(generation_input=_generation_input("skip_run"), adapter_name="object_state", out_dir=tmp_path)
 
     status = read_json(result["workflow_status"])
     assert status == {
         "status": "generation_skipped",
-        "reason": "No generated scene provided and --run-generation was not set.",
-        "next_expected_input": "generated_scene.json",
+        "reason": "No method output provided and --run-generation was not set.",
+        "next_expected_input": "method_output",
     }
     assert result["generated_scene"] is None
 
 
-def test_manual_output_adapter_enriches_method_output_from_asset_csv(tmp_path: Path) -> None:
+def test_generate_from_natural_language_api_prepares_direct_method_input(tmp_path: Path) -> None:
+    result = run_generate_from_natural_language(
+        instruction="Place a red bed in front of the window.",
+        scene_type="bedroom",
+        room=_scene_request()["room"],
+        request_id="nl_to_generator",
+        adapter_name="object_state",
+        out_dir=tmp_path,
+    )
+
+    method_input = read_json(result["method_input"])
+    assert method_input["io_contract"]["input_type"] == "i1_natural_language"
+    assert method_input["generator_input"]["natural_language"] == "Place a red bed in front of the window."
+    assert "structure" not in method_input["generator_input"]
+    assert "evaluation_context" not in method_input["generator_input"]
+
+
+def test_generate_dispatcher_attaches_self_reflection_feedback(tmp_path: Path) -> None:
+    generated_scene_path = write_json(tmp_path / "input_scene.json", _generated_scene("reflective"))
+    evaluation_report = {"benchmark_score": 0.25, "reports": {"generic_validity": {"score": 0.25}}}
+
+    result = run_generate(
+        generation_input=_generation_input("reflective"),
+        adapter_name="object_state",
+        out_dir=tmp_path / "reflective",
+        method_output=generated_scene_path,
+        evaluation_report=evaluation_report,
+        previous_generated_scene=_generated_scene(),
+        iteration=1,
+    )
+
+    method_input = read_json(result["method_input"])
+    reflection = method_input["generator_input"]["self_reflection"]
+    assert reflection["source"] == "evaluate.py"
+    assert reflection["target"] == "generate.py"
+    assert reflection["iteration"] == 1
+    assert reflection["previous_evaluation"] == evaluation_report
+    assert method_input["io_contract"]["feedback_assistance"] is True
+
+
+def test_object_state_adapter_does_not_use_asset_csv_to_repair_missing_canonical_fields(tmp_path: Path) -> None:
     csv_path = tmp_path / "asset_info.csv"
     csv_path.write_text(
         "id,name_en,bbx,caption_en,short_desc,class_en,retrieval_class_en\n"
@@ -165,13 +258,14 @@ def test_manual_output_adapter_enriches_method_output_from_asset_csv(tmp_path: P
     }
     raw_path = write_json(tmp_path / "raw_scene.json", raw_scene)
 
-    adapter = get_adapter("manual")
-    generated_path = adapter.parse_output(raw_path, _generation_input(), tmp_path / "out", config={"asset_csv": str(csv_path), "enrich_assets": True})
-    generated = read_json(generated_path)
-
-    assert generated["objects"][0]["size"] == [0.5, 0.6, 0.9]
-    assert generated["objects"][0]["category"] == "chair"
-    assert generated["objects"][0]["desc"] == "A wooden chair"
+    adapter = get_adapter("object_state")
+    with pytest.raises(ArtifactValidationError, match="category"):
+        adapter.parse_output(
+            raw_path,
+            _generation_input(),
+            tmp_path / "out",
+            config={"asset_csv": str(csv_path), "enrich_assets": True},
+        )
 
 
 def test_evaluate_consumes_generated_scene_without_generation_artifacts(tmp_path: Path) -> None:
@@ -198,6 +292,8 @@ def test_scene_harness_partial_run_with_supplied_plan_and_selection(tmp_path: Pa
             str(plan_path),
             "--asset-selection",
             str(selection_path),
+            "--asset-mode",
+            "retrieve",
             "--out-dir",
             str(out_dir),
         ],
@@ -211,6 +307,272 @@ def test_scene_harness_partial_run_with_supplied_plan_and_selection(tmp_path: Pa
     assert manifest["status"] == "generation_skipped"
     assert (out_dir / "generation_input.json").exists()
     assert manifest["artifacts"]["generated_scene"] is None
+    assert manifest["asset_resolution"]["mode"] == "retrieve"
+    assert manifest["asset_resolution"]["retrieval_enabled"] is True
+    assert manifest["asset_resolution"]["generation_enabled"] is False
+    assert manifest["asset_resolution"]["selector"] == "top1"
+
+
+def test_scene_harness_retrieve_generate_mode_is_recorded(tmp_path: Path) -> None:
+    plan_path = write_json(tmp_path / "plan.json", _object_plan())
+    selection_path = write_json(tmp_path / "selection.json", _asset_selection())
+    plugin_path = tmp_path / "asset_plugin.py"
+    plugin_path.write_text(
+        "def generate_asset(request):\n"
+        "    return {'jid': 'generated_asset', 'size': [1, 1, 1], 'mesh_uri': 'generated.glb'}\n",
+        encoding="utf-8",
+    )
+    out_dir = tmp_path / "generation_enabled"
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "scripts" / "run_scene_harness.py"),
+            "--instruction",
+            "Create a room.",
+            "--scene-type",
+            "living room",
+            "--object-plan",
+            str(plan_path),
+            "--asset-selection",
+            str(selection_path),
+            "--asset-mode",
+            "retrieve-generate",
+            "--asset-generator-plugin",
+            f"{plugin_path}:generate_asset",
+            "--out-dir",
+            str(out_dir),
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    manifest = read_json(out_dir / "run_manifest.json")
+    assert manifest["asset_resolution"]["mode"] == "retrieve-generate"
+    assert manifest["asset_resolution"]["retrieval_enabled"] is True
+    assert manifest["asset_resolution"]["generation_enabled"] is True
+    assert manifest["asset_resolution"]["generation_tool_configured"] is True
+
+
+def test_scene_harness_no_structure_skips_retrieval_and_omits_public_structure(tmp_path: Path) -> None:
+    out_dir = tmp_path / "direct_nl"
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "scripts" / "run_scene_harness.py"),
+            "--instruction",
+            "Create a room with a red bed in front of the window.",
+            "--scene-type",
+            "bedroom",
+            "--no-structure",
+            "--out-dir",
+            str(out_dir),
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    manifest = read_json(out_dir / "run_manifest.json")
+    generation_input = read_json(out_dir / "generation_input.json")
+    assert manifest["status"] == "generation_skipped"
+    assert manifest["artifacts"]["asset_selection"] is None
+    assert not (out_dir / "asset_selection.json").exists()
+    assert generation_input["generation_contract"]["input_mode"] == "natural_language_direct"
+    assert generation_input["scene_request"]["structure"] is False
+    assert generation_input["scene_request"]["room"]["dimensions"] == {
+        "width": 7.0,
+        "depth": 5.0,
+        "height": 3.0,
+    }
+    assert generation_input["scene_request"]["room"]["resolution_policy"] == "room_dimension_policy_v1"
+    assert "object_plan" not in generation_input
+    assert manifest["artifacts"]["generator_structure"] is None
+    assert not (out_dir / "generator_structure.json").exists()
+    assert generation_input["generator_input"]["instruction"].startswith("Create a room")
+    assert manifest["asset_resolution"]["mode"] == "off"
+    assert manifest["asset_resolution"]["retrieval_enabled"] is False
+
+
+def test_scene_harness_rejects_public_structure_in_i1_mode(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="cannot be supplied with structure=false"):
+        run_scene_harness(
+            instruction="Create a room with a red bed.",
+            scene_type="bedroom",
+            out_dir=tmp_path / "invalid_i1",
+            structure=False,
+            generator_structure=_object_plan(),
+        )
+
+
+@pytest.mark.parametrize(
+    "config_argument",
+    ("asset_selector_model_config", "adapter_config"),
+)
+def test_scene_harness_rejects_literal_api_key_in_programmatic_configs(
+    tmp_path: Path,
+    config_argument: str,
+) -> None:
+    secret = "must-not-appear"
+    kwargs = {
+        "instruction": "A plain room.",
+        "scene_type": "room",
+        "out_dir": tmp_path / config_argument,
+        config_argument: {"api_key": secret},
+    }
+
+    with pytest.raises(ValueError, match="use api_key_env") as captured:
+        run_scene_harness(**kwargs)
+
+    assert secret not in str(captured.value)
+
+
+@pytest.mark.parametrize("granularity", ["fine_grained", "coarse_grained"])
+def test_scene_harness_uses_one_canonical_workflow_for_both_granularities(
+    tmp_path: Path,
+    granularity: str,
+) -> None:
+    manifest = run_scene_harness(
+        instruction="Create a bedroom.",
+        scene_type="bedroom",
+        prompt_granularity=granularity,
+        out_dir=tmp_path / granularity,
+    )
+
+    assert manifest["evaluation"]["gate"]["workflow"] == "canonical_l0_l4"
+    assert manifest["evaluation"]["gate"]["prompt_granularity_role"] == "metadata_only"
+    assert "evaluation_mode" not in manifest["evaluation"]["gate"]
+    assert manifest["prompt_granularity"] == {
+        "requested": granularity,
+        "resolved": granularity,
+        "role": "metadata_only",
+        "classifier_called": False,
+        "classification": None,
+    }
+
+
+def test_scene_harness_rejects_retired_non_game_spatial_ontology(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(ValueError, match="retired non-game workflow"):
+        run_scene_harness(
+            instruction="Create a bedroom.",
+            scene_type="bedroom",
+            spatial_fidelity_ontology={"categories": {}},
+            out_dir=tmp_path / "retired",
+        )
+
+
+def test_scene_harness_preserves_the_frozen_legacy_game_gate(tmp_path: Path) -> None:
+    profile = load_yaml(
+        ROOT / "configs" / "evaluation" / "metric_profile_game_v1.yaml"
+    )
+    manifest = run_scene_harness(
+        instruction="Run the frozen Game profile.",
+        scene_type="game",
+        prompt_granularity="fine_grained",
+        evaluation_profile=profile,
+        support_enabled=False,
+        out_dir=tmp_path / "legacy_game",
+    )
+
+    assert manifest["evaluation"]["gate"] == {
+        "source": "scene_request.prompt_granularity",
+        "prompt_granularity": "fine_grained",
+        "evaluation_mode": "fine_grained_mode",
+        "category_2": "prompt_fidelity",
+        "active_categories": [
+            "prompt_fidelity",
+            "structural_validity",
+            "visual_quality",
+        ],
+    }
+    assert manifest["evaluation"]["support_enabled"] is False
+    assert "canonical_configs" not in manifest["evaluation"]
+    assert manifest["prompt_granularity"] == {
+        "requested": "fine_grained",
+        "resolved": "fine_grained",
+        "evaluation_mode": "fine_grained_mode",
+        "classifier_called": False,
+        "classification": None,
+    }
+
+
+def test_scene_harness_resolves_prompt_room_once_for_generator_and_manifest(tmp_path: Path) -> None:
+    plan_path = write_json(tmp_path / "plan.json", _object_plan())
+    out_dir = tmp_path / "prompt_room"
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "scripts" / "run_scene_harness.py"),
+            "--instruction",
+            "Create a room measuring 8 m by 6 m with a ceiling height of 2.8 m.",
+            "--scene-type",
+            "living room",
+            "--object-plan",
+            str(plan_path),
+            "--out-dir",
+            str(out_dir),
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    generation_input = read_json(out_dir / "generation_input.json")
+    manifest = read_json(out_dir / "run_manifest.json")
+    resolved = generation_input["scene_request"]["room"]
+
+    assert resolved["dimensions"] == {"width": 8.0, "depth": 6.0, "height": 2.8}
+    assert generation_input["generation_contract"]["architecture"]["room"] == resolved
+    assert manifest["task_contract"]["architecture"]["room"] == resolved
+    assert manifest["task_contract"]["prompt_room_dimensions"] == {
+        "width": 8.0,
+        "depth": 6.0,
+        "height": 2.8,
+    }
+
+
+def test_scene_harness_off_can_use_structure_without_assets(tmp_path: Path) -> None:
+    plan_path = write_json(tmp_path / "plan.json", _object_plan())
+    out_dir = tmp_path / "structured_without_assets"
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "scripts" / "run_scene_harness.py"),
+            "--instruction",
+            "Create a room with a sofa against the wall.",
+            "--scene-type",
+            "living room",
+            "--object-plan",
+            str(plan_path),
+            "--structure",
+            "--asset-mode",
+            "off",
+            "--out-dir",
+            str(out_dir),
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    manifest = read_json(out_dir / "run_manifest.json")
+    generation_input = read_json(out_dir / "generation_input.json")
+    assert manifest["asset_resolution"]["mode"] == "off"
+    assert manifest["asset_resolution"]["retrieval_enabled"] is False
+    assert manifest["asset_resolution"]["adapter_support"] == "optional"
+    assert generation_input["generation_contract"]["input_mode"] == "natural_language_structured"
+    assert generation_input["generator_input"]["object_plan"]["objects"][0]["id"] == "obj_000"
+    assert not (out_dir / "asset_selection.json").exists()
 
 
 def test_scene_harness_full_run_with_external_generated_scene(tmp_path: Path) -> None:
@@ -231,7 +593,11 @@ def test_scene_harness_full_run_with_external_generated_scene(tmp_path: Path) ->
             str(plan_path),
             "--asset-selection",
             str(selection_path),
-            "--generated-scene",
+            "--asset-mode",
+            "retrieve",
+            "--adapter",
+            "object_state",
+            "--method-output",
             str(generated_path),
             "--out-dir",
             str(out_dir),
@@ -247,3 +613,53 @@ def test_scene_harness_full_run_with_external_generated_scene(tmp_path: Path) ->
     assert (out_dir / "generated_scene.json").exists()
     assert (out_dir / "evaluation_report.json").exists()
     assert read_json(out_dir / "evaluation_report.json")["request_id"] == "full"
+
+
+def test_scene_harness_iteration_limit_writes_reflexive_generation_input(tmp_path: Path) -> None:
+    plan_path = write_json(tmp_path / "plan.json", _object_plan())
+    selection_path = write_json(tmp_path / "selection.json", _asset_selection())
+    invalid_scene = _generated_scene("reflective_loop")
+    invalid_scene["objects"][0]["center"] = [20.0, 20.0, 0.4]
+    generated_path = write_json(tmp_path / "invalid_generated.json", invalid_scene)
+    out_dir = tmp_path / "reflective_loop"
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "scripts" / "run_scene_harness.py"),
+            "--instruction",
+            "Create a room.",
+            "--scene-type",
+            "living room",
+            "--object-plan",
+            str(plan_path),
+            "--asset-selection",
+            str(selection_path),
+            "--asset-mode",
+            "retrieve",
+            "--adapter",
+            "object_state",
+            "--method-output",
+            str(generated_path),
+            "--iteration-limit",
+            "1",
+            "--out-dir",
+            str(out_dir),
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    manifest = read_json(out_dir / "run_manifest.json")
+    history = read_json(out_dir / "self_reflexive_history.json")
+    reflected_input = read_json(out_dir / "iterations" / "iter_001" / "generator" / "method_input.json")
+
+    assert manifest["status"] == "reflection_generation_pending"
+    assert history["attempts"][0]["valid"] is False
+    assert history["attempts"][1]["status"] == "generation_skipped"
+    reflection = reflected_input["generator_input"]["self_reflection"]
+    assert reflection["iteration"] == 1
+    assert reflection["previous_evaluation"]["benchmark_score"] is None
+    assert reflected_input["io_contract"]["feedback_assistance"] is True

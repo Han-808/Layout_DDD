@@ -1,0 +1,30 @@
+{
+  "contract_version": "counter_strike_case_contract_v1",
+  "case_id": "cs_fps_minimax_m3",
+  "corpus_id": "MiniMax-M3",
+  "source_frame": {
+    "up_axis": "y",
+    "unit_scale": 1.0
+  },
+  "source_assertions": [
+    {
+      "path": "index.html",
+      "sha256": "ee87f357f437fff7532427fe55805cbb7d030f4c9465a9419df49a24a9fdd37e",
+      "evidence": "playerSpawn/aiSpawn declarations"
+    }
+  ],
+  "team_spawns": {
+    "team_a": {
+      "points": [[0.0, 0.0, -37.0]],
+      "jitter_radius_m": 0.0
+    },
+    "team_b": {
+      "points": [[0.0, 0.0, 37.0]],
+      "jitter_radius_m": 3.0
+    }
+  },
+  "annotation": {
+    "source": "benchmark_audited_source_declaration",
+    "score_authority": false
+  }
+}

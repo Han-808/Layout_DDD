@@ -1,0 +1,78 @@
+{
+  "schema_version": "controlled_scene_distortion_v1",
+  "case_id": "source_clean_003__oob",
+  "base_case_id": "source_clean_003",
+  "source_scene_id": "scene_000657_03",
+  "generator_skipped": true,
+  "family": "oob",
+  "severity": {
+    "family": "oob",
+    "target_object_count": 2,
+    "object_denominator": 5,
+    "target_object_fraction": 0.4,
+    "target_relation_count": 0,
+    "relation_denominator": 4,
+    "target_relation_fraction": 0.0,
+    "collision_pair_count": 0
+  },
+  "transforms": [
+    {
+      "object_id": "obj_000",
+      "before_center": [
+        4.93,
+        2.32,
+        1.2
+      ],
+      "after_center": [
+        5.16,
+        2.32,
+        1.2
+      ],
+      "reason": "35_percent_extent_outside:east"
+    },
+    {
+      "object_id": "obj_004",
+      "before_center": [
+        3.18,
+        0.4,
+        0.51
+      ],
+      "after_center": [
+        3.18,
+        0.11475000000000005,
+        0.5062500000000001
+      ],
+      "reason": "35_percent_extent_outside:south"
+    }
+  ],
+  "expected": {
+    "collision_invalid_pairs": [],
+    "oob_invalid_object_ids": [
+      "obj_000",
+      "obj_004"
+    ],
+    "support_invalid_object_ids": [],
+    "oar_invalid_relation_indices": []
+  },
+  "gt_policy": "programmatic_from_frozen_transform_not_from_evaluator_prediction",
+  "deterministic_audit": {
+    "collision_routed_pairs": [],
+    "oob_routed_object_ids": [
+      "obj_000",
+      "obj_004"
+    ],
+    "support_routed_object_ids": [],
+    "oor_pass_vector": [
+      true,
+      true,
+      true
+    ],
+    "oar_pass_vector": [
+      true,
+      true,
+      true,
+      true
+    ],
+    "cross_metric_isolation_verified": true
+  }
+}
