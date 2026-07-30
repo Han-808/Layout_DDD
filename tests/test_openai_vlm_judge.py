@@ -46,10 +46,9 @@ def _write_test_png(path: Path, *, private_text: str | None = None) -> None:
     if private_text is not None:
         metadata = PngImagePlugin.PngInfo()
         metadata.add_text("private_source", private_text)
-    Image.new("RGBA", (4, 3), (12, 34, 56, 128)).save(
-        path,
-        pnginfo=metadata,
-    )
+    image = Image.new("RGBA", (4, 3), (12, 34, 56, 128))
+    image.putpixel((0, 0), (80, 90, 100, 255))
+    image.save(path, pnginfo=metadata)
 
 
 def test_openai_compatible_vlm_judge_sends_images_and_structured_prior(tmp_path: Path) -> None:
@@ -747,8 +746,12 @@ def test_query_cov_camera_selector_chooses_views_without_metric_verdict(tmp_path
     second = tmp_path / "candidate_b.png"
     private_metadata = PngImagePlugin.PngInfo()
     private_metadata.add_text("private_source", "must-not-leave-process")
-    Image.new("RGBA", (3, 2), (255, 0, 0, 64)).save(first, pnginfo=private_metadata)
-    Image.new("RGBA", (3, 2), (0, 0, 255, 128)).save(second)
+    first_image = Image.new("RGBA", (3, 2), (255, 0, 0, 64))
+    first_image.putpixel((0, 0), (0, 255, 0, 255))
+    first_image.save(first, pnginfo=private_metadata)
+    second_image = Image.new("RGBA", (3, 2), (0, 0, 255, 128))
+    second_image.putpixel((0, 0), (255, 255, 0, 255))
+    second_image.save(second)
     candidates = [
         {
             "id": "generator_first_private_id",
@@ -876,7 +879,9 @@ def test_active_camera_selector_receives_only_sanitized_deficiency(
     tmp_path: Path,
 ) -> None:
     image = tmp_path / "candidate.png"
-    Image.new("RGB", (3, 2), (128, 128, 128)).save(image)
+    rendered = Image.new("RGB", (3, 2), (128, 128, 128))
+    rendered.putpixel((0, 0), (32, 64, 96))
+    rendered.save(image)
     model = FakeMultimodalModel(
         {
             "selected_view_ids": ["candidate_00"],
@@ -933,7 +938,9 @@ def test_query_cov_camera_selector_excludes_blank_candidate_previews(tmp_path: P
     blank = tmp_path / "blank.png"
     usable = tmp_path / "usable.png"
     blank.write_bytes(b"blank")
-    Image.new("RGB", (2, 2), (12, 34, 56)).save(usable)
+    rendered = Image.new("RGB", (2, 2), (12, 34, 56))
+    rendered.putpixel((0, 0), (78, 90, 12))
+    rendered.save(usable)
     model = FakeMultimodalModel(
         {
             "selected_view_ids": ["candidate_00"],

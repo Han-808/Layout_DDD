@@ -5,7 +5,6 @@ from dataclasses import dataclass, field
 import math
 from typing import Any, Iterable, Literal, Mapping, get_args
 
-from benchmark.visual_judge.interfaces.evidence import EvidenceGateResult
 from benchmark.visual_judge.interfaces.judge import EvidenceRequest
 
 
@@ -303,76 +302,6 @@ _METRIC_OBSERVATION_ALIASES = {
         "boundary_region": ("architecture_plane_visible",),
     },
 }
-
-_DEFICIENCY_OBSERVATIONS: dict[
-    str, tuple[CameraObservation, ...]
-] = {
-    # A missing packet requires the metric's existing baseline observations;
-    # it does not introduce a new camera-domain requirement.
-    "visual_evidence_missing": (),
-    "target_not_visible": ("target_visible", "occluder_avoided"),
-    "target_visibility_metadata_missing": ("target_visible",),
-    "target_visibility_not_established": (
-        "target_visible",
-        "occluder_avoided",
-    ),
-    "projected_coverage_metadata_missing": ("target_visible",),
-    "projected_coverage_insufficient": ("target_visible",),
-    "required_entities_not_jointly_visible": ("joint_visibility",),
-    "required_targets_not_jointly_visible": ("joint_visibility",),
-    "joint_visibility_metadata_missing": ("joint_visibility",),
-    "focus_region_out_of_frame": (),
-    "focus_region_too_small": (),
-    "contact_region_out_of_frame": ("contact_surface_visible",),
-    "support_region_out_of_frame": ("support_chain_visible",),
-    "boundary_region_out_of_frame": ("architecture_plane_visible",),
-    "target_occluded_or_too_small": (
-        "target_visible",
-        "occluder_avoided",
-    ),
-    "architecture_plane_not_visible": ("architecture_plane_visible",),
-    "required_global_evidence_missing": ("global_context_preserved",),
-    "required_global_evidence_metadata_missing": (
-        "global_context_preserved",
-    ),
-    "required_local_evidence_missing": (),
-    "required_local_evidence_metadata_missing": (),
-    "required_local_view_count_missing": (),
-    "measured_local_visibility_insufficient": (),
-    "redundant_view": (),
-    "redundant_local_views": (),
-    "view_redundancy_metadata_missing": (),
-}
-
-_METRIC_FOCUS_OBSERVATIONS = {
-    "collision": ("contact_surface_visible", "joint_visibility"),
-    "support": ("contact_surface_visible", "support_chain_visible"),
-    "oob": ("architecture_plane_visible", "target_visible"),
-    "facing": ("front_back_disambiguated", "joint_visibility"),
-    "depth_relation": ("depth_baseline_available", "joint_visibility"),
-    "directional_relation": ("joint_visibility",),
-    "proximity_relation": ("joint_visibility", "group_context_visible"),
-    "contact_relation": ("contact_surface_visible", "joint_visibility"),
-    "containment_relation": ("target_visible", "joint_visibility"),
-    "architecture_relation": (
-        "target_visible",
-        "architecture_plane_visible",
-    ),
-    "functional_semantic_fidelity": (
-        "group_context_visible",
-        "target_visible",
-    ),
-    "scale_consistency": ("target_visible", "joint_visibility"),
-    "object_pairing_consistency": (
-        "joint_visibility",
-        "group_context_visible",
-    ),
-    "style_consistency": (
-        "group_context_visible",
-        "global_context_preserved",
-    ),
-}
-
 
 @dataclass(frozen=True)
 class CameraConstraintSet:
@@ -676,14 +605,10 @@ def camera_constraints_from_judge_request(
     requested = _mapped_observations(
         evidence_request.missing_observations, metric_name
     )
-    required = _ordered_observations(
-        (
-            *METRIC_CAMERA_REQUIREMENTS[
-                metric_name
-            ].baseline_observations,
-            *requested,
-        )
-    )
+    # The Judge owns evidence sufficiency. The planner may validate and
+    # normalize the structured request, but it must not silently add a
+    # metric-wide baseline that the Judge did not ask to observe.
+    required = _ordered_observations(requested)
     preserved: tuple[CameraObservation, ...] = ()
     require_joint = "joint_visibility" in required
     require_global = "global_context_preserved" in required
@@ -708,94 +633,6 @@ def camera_constraints_from_judge_request(
         },
     )
     return result.validate_targets(known_target_ids)
-
-
-def camera_constraints_from_gate_result(
-    result: EvidenceGateResult | Mapping[str, Any],
-    *,
-    metric: str,
-    target_ids: Iterable[str],
-    known_target_ids: Iterable[str],
-    view_goal: str,
-    evidence_goal: Mapping[str, Any] | None = None,
-    relation_type: str | None = None,
-) -> CameraConstraintSet:
-    gate_result = EvidenceGateResult.from_value(result)
-    if gate_result.ready:
-        raise ValueError("ready evidence does not require camera constraints")
-    if not gate_result.camera_repairable:
-        raise ValueError(
-            "non-camera-repairable evidence cannot become a camera request"
-        )
-    goal = deepcopy(dict(evidence_goal or {}))
-    metric_name = canonical_camera_metric(
-        metric,
-        relation_type=relation_type or _relation_type(goal),
-    )
-    mapped: list[CameraObservation] = []
-    for deficiency in gate_result.deficiencies:
-        code = str(deficiency.get("code") or "").strip()
-        mapped.extend(_observations_for_deficiency(code, metric_name))
-    required = _ordered_observations(
-        (
-            *METRIC_CAMERA_REQUIREMENTS[
-                metric_name
-            ].baseline_observations,
-            *mapped,
-        )
-    )
-    required_roles = goal.get("required_roles")
-    global_required = _positive_role_count(
-        goal.get("required_global_view_count")
-    ) or (
-        isinstance(required_roles, list)
-        and any("global" in str(role).lower() for role in required_roles)
-    )
-    if global_required:
-        required = _ordered_observations(
-            (*required, "global_context_preserved")
-        )
-    technical = goal.get("technical_requirements")
-    if technical is None:
-        technical = {}
-    if not isinstance(technical, Mapping):
-        raise ValueError("technical_requirements must be a mapping")
-    min_coverage = goal.get(
-        "min_projected_coverage",
-        technical.get("min_projected_coverage"),
-    )
-    require_joint = _strict_bool(
-        technical.get(
-            "require_joint_visibility",
-            "joint_visibility" in required,
-        ),
-        "require_joint_visibility",
-    )
-    if require_joint and "joint_visibility" not in required:
-        required = _ordered_observations(
-            (*required, "joint_visibility")
-        )
-    require_global = bool(
-        global_required
-        or "global_context_preserved" in required
-    )
-    constraints = CameraConstraintSet(
-        target_ids=_text_tuple(tuple(target_ids)),
-        required_observations=required,
-        min_projected_coverage=min_coverage,
-        require_joint_visibility=require_joint,
-        require_global_anchor=require_global,
-        metric=metric_name,
-        view_goal=str(view_goal or "").strip(),
-        metadata={
-            "source": "evidence_gate",
-            "gate_reason_codes": list(gate_result.reason_codes),
-            "gate_deficiencies": list(deepcopy(gate_result.deficiencies)),
-            "gate_backend": gate_result.backend,
-            "evidence_goal": goal,
-        },
-    )
-    return constraints.validate_targets(known_target_ids)
 
 
 def selector_request_from_constraints(
@@ -865,41 +702,6 @@ def _mapped_observations(
             raise ValueError(f"unknown camera observation {token!r}")
         observations.extend(mapped)
     return _validate_metric_observations(observations, metric)
-
-
-def _observations_for_deficiency(
-    code: str, metric: str
-) -> tuple[CameraObservation, ...]:
-    if code.startswith("required_role_missing:"):
-        role = code.split(":", 1)[1].strip().lower()
-        if not role:
-            raise ValueError("empty required evidence role")
-        if "global" in role:
-            values: tuple[CameraObservation, ...] = (
-                "global_context_preserved",
-            )
-        elif any(
-            token in role
-            for token in ("local", "focus", "pair", "group")
-        ):
-            values = _METRIC_FOCUS_OBSERVATIONS.get(metric, ())
-        else:
-            raise ValueError(
-                f"unmapped required evidence role {role!r}"
-            )
-    elif code in {"focus_region_out_of_frame", "focus_region_too_small"}:
-        values = _METRIC_FOCUS_OBSERVATIONS.get(metric, ())
-        if not values:
-            raise ValueError(
-                f"deficiency {code!r} has no mapping for metric {metric!r}"
-            )
-    else:
-        values = _DEFICIENCY_OBSERVATIONS.get(code)
-        if values is None:
-            raise ValueError(
-                f"unknown camera-repairable deficiency {code!r}"
-            )
-    return _validate_metric_observations(values, metric)
 
 
 def _validate_metric_observations(
@@ -1005,16 +807,6 @@ def _relation_type(value: Mapping[str, Any]) -> str | None:
             if candidate:
                 return str(candidate)
     return None
-
-
-def _positive_role_count(value: Any) -> bool:
-    if value is None:
-        return False
-    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-        raise ValueError(
-            "required evidence role counts must be non-negative integers"
-        )
-    return value > 0
 
 
 def _reject_unknown_keys(

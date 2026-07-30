@@ -702,13 +702,6 @@ class ControlledVLMJudge:
                 camera_repairable=(
                     provider_available or independent_renderer_available
                 ),
-                path_only_compatibility_source=(
-                    "legacy_composite_provider_adapter"
-                    if provider_available
-                    else "legacy_screen_compatibility_wrapper"
-                    if compatibility_screen
-                    else None
-                ),
             ),
             candidate_views=candidates,
             allowed_actions=tuple(_request_allowed_actions(request)),
@@ -932,13 +925,6 @@ class ControlledVLMJudge:
                 camera_repairable=(
                     provider_available or independent_renderer_available
                 ),
-                path_only_compatibility_source=(
-                    "legacy_composite_provider_adapter"
-                    if provider_available
-                    else "legacy_screen_compatibility_wrapper"
-                    if compatibility_screen
-                    else None
-                ),
             ),
             candidate_views=candidates,
             allowed_actions=tuple(_request_allowed_actions(request)),
@@ -1159,7 +1145,6 @@ def _evidence_goal(
     request: dict[str, Any],
     *,
     camera_repairable: bool,
-    path_only_compatibility_source: str | None = None,
 ) -> dict[str, Any]:
     policy = request.get("visual_evidence_policy")
     result = deepcopy(policy) if isinstance(policy, dict) else {}
@@ -1170,11 +1155,6 @@ def _evidence_goal(
     result["missing_evidence_camera_repairable"] = bool(
         camera_repairable
     )
-    if path_only_compatibility_source:
-        result["allow_path_only_compatibility"] = True
-        result["path_only_compatibility_source"] = (
-            str(path_only_compatibility_source)
-        )
     return result
 
 

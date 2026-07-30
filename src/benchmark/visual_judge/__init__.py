@@ -8,6 +8,11 @@ from benchmark.visual_judge.active_fallback import (
 from benchmark.visual_judge.active_policy import (
     generate_corrective_camera_proposals,
 )
+from benchmark.visual_judge.acquisition_planner import (
+    EvidenceAcquisitionPlanner,
+    MetricAcquisitionPlanningRequest,
+    MetricSpecificAcquisitionPlanner,
+)
 from benchmark.visual_judge.acquisition_state import (
     CameraAcquisitionPolicy,
     CameraAcquisitionState,
@@ -111,6 +116,7 @@ __all__ = [
     "EvidenceGateRequest",
     "EvidenceGateResult",
     "EvidenceControlUnresolvedError",
+    "EvidenceAcquisitionPlanner",
     "EvidenceRenderRequest",
     "EvidenceRenderResult",
     "EvidenceRenderer",
@@ -124,6 +130,8 @@ __all__ = [
     "JudgeRequest",
     "JudgeResult",
     "LocalViewProvider",
+    "MetricAcquisitionPlanningRequest",
+    "MetricSpecificAcquisitionPlanner",
     "OpenAICompatibleVLMJudge",
     "VLMCameraSelector",
     "ActiveVLMCameraSelector",

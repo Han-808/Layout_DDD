@@ -24,11 +24,8 @@ from benchmark.visual_judge.camera_ranking import (
     DeterministicCameraRankingConfig,
 )
 from benchmark.visual_judge.camera_dsl import (
-    METRIC_CAMERA_REQUIREMENTS,
     CameraConstraintSet,
     active_constraint_references,
-    canonical_camera_metric,
-    camera_constraints_from_judge_request,
 )
 from benchmark.visual_judge.camera_repair import (
     CameraRepairPlan,
@@ -48,9 +45,6 @@ from benchmark.visual_judge.interfaces.camera import (
     CameraSelectionRequest,
     CameraSelectionResult,
     CameraSelector,
-)
-from benchmark.visual_judge.interfaces.evidence import (
-    EvidenceGateResult,
 )
 from benchmark.visual_judge.interfaces.judge import (
     EvidenceRequest,
@@ -484,7 +478,6 @@ def escalation_allowed(
     vlm_selector_available: bool,
     remaining: dict[str, int],
     deterministic_outcome: str | None = None,
-    gate_result: EvidenceGateResult | None = None,
     reason: str,
 ) -> bool:
     if not vlm_selector_available:
@@ -492,15 +485,11 @@ def escalation_allowed(
     return should_escalate_to_vlm(
         policy=state.policy,
         deterministic_outcome=deterministic_outcome,
-        post_render_gate_result=gate_result,
         acquisition_state=state,
         budget=remaining,
         escalation={
             "on_no_feasible_candidate": (
                 control.escalate_on_no_feasible_candidate
-            ),
-            "on_post_render_gate_insufficient": (
-                control.escalate_on_post_render_gate_insufficient
             ),
             "on_selector_exception": (
                 control.escalate_on_selector_exception
@@ -687,7 +676,6 @@ def escalation_event(
     state: CameraAcquisitionState,
     remaining: dict[str, int],
     deterministic_selection: CameraSelectionResult | dict[str, Any] | None,
-    gate_result: EvidenceGateResult | None,
 ) -> dict[str, Any]:
     if isinstance(deterministic_selection, CameraSelectionResult):
         selection_value = deterministic_selection.to_dict()
@@ -723,11 +711,6 @@ def escalation_event(
         "attempted_view_ids": list(state.attempted_view_ids),
         "attempted_plan_ids": list(state.attempted_plan_ids),
         "deterministic_selection": selection_value,
-        "evidence_gate_deficiencies": (
-            list(deepcopy(gate_result.deficiencies))
-            if gate_result is not None
-            else []
-        ),
         "remaining_budget": deepcopy(remaining),
         "evidence_round": state.total_rounds_used,
     }
@@ -769,44 +752,6 @@ def camera_contract_failure_trace(
         "source": source,
         "error": f"{type(error).__name__}: {error}",
     }
-
-
-def legacy_baseline_constraints(
-    request: EvidenceRequest,
-    *,
-    metric: str,
-    known_target_ids: tuple[str, ...],
-    relation_type: str | None,
-    error: Exception,
-) -> CameraConstraintSet:
-    metric_name = canonical_camera_metric(
-        metric,
-        relation_type=relation_type,
-    )
-    baseline = METRIC_CAMERA_REQUIREMENTS[
-        metric_name
-    ].baseline_observations
-    normalized = EvidenceRequest(
-        target_ids=request.target_ids,
-        missing_observations=tuple(baseline),
-        view_goal=request.view_goal,
-        metadata={
-            **deepcopy(request.metadata),
-            "legacy_camera_dsl_normalization": {
-                "original_missing_observations": list(
-                    request.missing_observations
-                ),
-                "reason": f"{type(error).__name__}: {error}",
-                "normalization": "metric_baseline_only",
-            },
-        },
-    )
-    return camera_constraints_from_judge_request(
-        normalized,
-        metric=metric,
-        known_target_ids=known_target_ids,
-        relation_type=relation_type,
-    )
 
 
 def known_target_ids(

@@ -42,19 +42,19 @@ def _request() -> JudgeRequest:
 def _gate(*, ready: bool) -> EvidenceGateResult:
     return EvidenceGateResult(
         ready=ready,
-        camera_repairable=not ready,
+        camera_repairable=False,
         reason_codes=(
             ("evidence_ready",)
             if ready
-            else ("target_not_visible",)
+            else ("blank_render",)
         ),
         deficiencies=(
             ()
             if ready
             else (
                 {
-                    "code": "target_not_visible",
-                    "repairability": "camera",
+                    "code": "blank_render",
+                    "repairability": "rerender",
                 },
             )
         ),
@@ -84,6 +84,22 @@ def _need_more() -> dict:
     }
 
 
+def _need_more_for_metric(metric: str) -> dict:
+    observations = {
+        "object_pairing_consistency": ["joint_visibility"],
+        "style_consistency": ["global_context_preserved"],
+        "scale_consistency": ["target_visible"],
+        "functional_semantic_fidelity": ["group_context_visible"],
+        "oob": ["architecture_plane_visible"],
+        "support": ["support_contact_region"],
+    }.get(metric, ["contact_surface_visible"])
+    result = _need_more()
+    result["evidence_request"]["missing_observations"] = observations
+    if metric == "style_consistency":
+        result["evidence_request"]["target_ids"] = ["scene"]
+    return result
+
+
 class _Gate:
     def __init__(self, results, calls):
         self.results = list(results)
@@ -92,8 +108,10 @@ class _Gate:
     def check(self, request):
         self.calls.append("gate")
         if len(self.results) > 1:
-            return self.results.pop(0)
-        return self.results[0]
+            result = self.results.pop(0)
+        else:
+            result = self.results[0]
+        return result
 
 
 class _Judge:
@@ -203,6 +221,9 @@ def _run(
     total_overrides=None,
 ):
     calls = []
+    # Cascade tests start from an integrity-valid packet whose Judge requests
+    # a metric-scoped repair unless a test supplies an explicit Judge script.
+    judge_results = tuple(judge_results) or (_need_more(),)
     deterministic = _Selector(
         "deterministic",
         deterministic_results,
@@ -231,11 +252,11 @@ def _run(
 def test_fixed_policy_insufficient_never_calls_selector() -> None:
     result, calls, deterministic, vlm, _ = _run(
         policy="fixed",
-        gates=[_gate(ready=False)],
+        gates=[_gate(ready=True)],
     )
 
     assert result.stop_reason == "fixed_views_insufficient"
-    assert calls == ["gate"]
+    assert calls == ["gate", "judge"]
     assert not deterministic.requests
     assert not vlm.requests
 
@@ -243,37 +264,41 @@ def test_fixed_policy_insufficient_never_calls_selector() -> None:
 def test_deterministic_only_never_calls_vlm() -> None:
     result, calls, _, vlm, _ = _run(
         policy="deterministic_only",
-        gates=[_gate(ready=False), _gate(ready=True)],
-        judge_results=[_valid()],
+        gates=[_gate(ready=True), _gate(ready=True)],
+        judge_results=[_need_more(), _valid()],
         deterministic_results=[_selected("det-view")],
         render_results=[_rendered("det")],
     )
 
     assert result.status == "valid"
-    assert calls == ["gate", "deterministic", "render", "gate", "judge"]
+    assert calls == [
+        "gate", "judge", "deterministic", "render", "gate", "judge"
+    ]
     assert not vlm.requests
 
 
 def test_vlm_only_never_calls_deterministic() -> None:
     result, calls, deterministic, _, _ = _run(
         policy="vlm_only",
-        gates=[_gate(ready=False), _gate(ready=True)],
-        judge_results=[_valid()],
+        gates=[_gate(ready=True), _gate(ready=True)],
+        judge_results=[_need_more(), _valid()],
         vlm_results=[_selected("vlm-view")],
         render_results=[_rendered("vlm")],
     )
 
     assert result.status == "valid"
-    assert calls == ["gate", "vlm", "render", "gate", "judge"]
+    assert calls == [
+        "gate", "judge", "vlm", "render", "gate", "judge"
+    ]
     assert not deterministic.requests
 
 
 def test_vlm_only_without_explicit_vlm_selector_fails_closed() -> None:
     calls = []
     controller = VLMEvaluationController(
-        judge=_Judge([], calls),
+        judge=_Judge([_need_more()], calls),
         renderer=_Renderer([], calls),
-        evidence_gate=_Gate([_gate(ready=False)], calls),
+        evidence_gate=_Gate([_gate(ready=True)], calls),
         control=_control("vlm_only"),
     )
 
@@ -281,7 +306,7 @@ def test_vlm_only_without_explicit_vlm_selector_fails_closed() -> None:
 
     assert controller.vlm_camera_selector is None
     assert result.stop_reason == "camera_selector_unavailable"
-    assert calls == ["gate"]
+    assert calls == ["gate", "judge"]
 
 
 def test_vlm_selector_dispatch_without_model_inference_is_counted_separately():
@@ -305,10 +330,10 @@ def test_vlm_selector_dispatch_without_model_inference_is_counted_separately():
         }
     )
     controller = VLMEvaluationController(
-        judge=_Judge([], calls),
+        judge=_Judge([_need_more()], calls),
         renderer=_Renderer([], calls),
         vlm_camera_selector=raw,
-        evidence_gate=_Gate([_gate(ready=False)], calls),
+        evidence_gate=_Gate([_gate(ready=True)], calls),
         control=control,
     )
 
@@ -352,11 +377,11 @@ def test_raw_vlm_selector_is_wrapped_with_configured_candidate_mode() -> None:
         }
     )
     controller = VLMEvaluationController(
-        judge=_Judge([_valid()], calls),
+        judge=_Judge([_need_more(), _valid()], calls),
         renderer=_Renderer([_rendered("vlm")], calls),
         vlm_camera_selector=raw,
         evidence_gate=_Gate(
-            [_gate(ready=False), _gate(ready=True)],
+            [_gate(ready=True), _gate(ready=True)],
             calls,
         ),
         control=control,
@@ -368,7 +393,9 @@ def test_raw_vlm_selector_is_wrapped_with_configured_candidate_mode() -> None:
     )
 
     assert result.status == "valid"
-    assert calls == ["gate", "vlm_model", "render", "gate", "judge"]
+    assert calls == [
+        "gate", "judge", "vlm_model", "render", "gate", "judge"
+    ]
     assert raw.payloads[0]["selection_mode"] == "candidate_only"
     assert raw.payloads[0]["vlm_role"] == "vlm_camera_selector"
 
@@ -446,11 +473,11 @@ def test_validated_freeform_pose_runs_through_controller_and_gate() -> None:
         }
     )
     controller = VLMEvaluationController(
-        judge=_Judge([_valid()], calls),
+        judge=_Judge([_need_more(), _valid()], calls),
         renderer=_Renderer([_rendered("freeform")], calls),
         vlm_camera_selector=selector,
         evidence_gate=_Gate(
-            [_gate(ready=False), _gate(ready=True)],
+            [_gate(ready=True), _gate(ready=True)],
             calls,
         ),
         control=control,
@@ -461,6 +488,7 @@ def test_validated_freeform_pose_runs_through_controller_and_gate() -> None:
     assert result.status == "valid"
     assert calls == [
         "gate",
+        "judge",
         "vlm_model",
         "pose_validator",
         "render",
@@ -472,8 +500,8 @@ def test_validated_freeform_pose_runs_through_controller_and_gate() -> None:
 def test_deterministic_render_ready_does_not_call_vlm() -> None:
     result, calls, _, vlm, _ = _run(
         policy="deterministic_then_vlm",
-        gates=[_gate(ready=False), _gate(ready=True)],
-        judge_results=[_valid()],
+        gates=[_gate(ready=True), _gate(ready=True)],
+        judge_results=[_need_more(), _valid()],
         deterministic_results=[_selected("det-view")],
         render_results=[_rendered("det")],
     )
@@ -486,8 +514,8 @@ def test_deterministic_render_ready_does_not_call_vlm() -> None:
 def test_no_feasible_candidate_escalates_without_extra_gate() -> None:
     result, calls, deterministic, vlm, _ = _run(
         policy="deterministic_then_vlm",
-        gates=[_gate(ready=False), _gate(ready=True)],
-        judge_results=[_valid()],
+        gates=[_gate(ready=True), _gate(ready=True)],
+        judge_results=[_need_more(), _valid()],
         deterministic_results=[_no_feasible()],
         vlm_results=[_selected("vlm-view")],
         render_results=[_rendered("vlm")],
@@ -496,6 +524,7 @@ def test_no_feasible_candidate_escalates_without_extra_gate() -> None:
     assert result.status == "valid"
     assert calls == [
         "gate",
+        "judge",
         "deterministic",
         "vlm",
         "render",
@@ -518,10 +547,15 @@ def test_deterministic_constraint_conflict_has_explicit_escalation_reason():
         "contact_surface_visible",
         "joint_visibility",
     ]
+    request = _need_more()
+    request["evidence_request"]["missing_observations"] = [
+        "contact_surface_visible",
+        "joint_visibility",
+    ]
     result, _, _, _, _ = _run(
         policy="deterministic_then_vlm",
-        gates=[_gate(ready=False), _gate(ready=True)],
-        judge_results=[_valid()],
+        gates=[_gate(ready=True), _gate(ready=True)],
+        judge_results=[request, _valid()],
         deterministic_results=[conflict],
         vlm_results=[_selected("vlm-view")],
         render_results=[_rendered("vlm")],
@@ -535,26 +569,33 @@ def test_deterministic_constraint_conflict_has_explicit_escalation_reason():
     assert escalation["reason"] == "camera_constraint_conflict"
 
 
-def test_post_render_gate_insufficient_escalates_to_vlm() -> None:
+def test_repeated_judge_request_escalates_only_after_deterministic_failure() -> None:
     result, calls, _, _, renderer = _run(
         policy="deterministic_then_vlm",
         gates=[
-            _gate(ready=False),
-            _gate(ready=False),
+            _gate(ready=True),
+            _gate(ready=True),
             _gate(ready=True),
         ],
-        judge_results=[_valid()],
-        deterministic_results=[_selected("det-view")],
+        judge_results=[_need_more(), _need_more(), _valid()],
+        deterministic_results=[
+            _selected("det-view"),
+            _no_feasible(),
+        ],
         vlm_results=[_selected("vlm-view")],
         render_results=[_rendered("det"), _rendered("vlm")],
+        total_overrides={"max_selector_calls": 3},
     )
 
     assert result.status == "valid"
     assert calls == [
         "gate",
+        "judge",
         "deterministic",
         "render",
         "gate",
+        "judge",
+        "deterministic",
         "vlm",
         "render",
         "gate",
@@ -566,8 +607,8 @@ def test_post_render_gate_insufficient_escalates_to_vlm() -> None:
         for event in result.audit["trace"]
         if event["stage"] == "camera_escalation"
     )
-    assert escalation["reason"] == "post_render_gate_insufficient"
-    assert escalation["evidence_gate_deficiencies"]
+    assert escalation["reason"] == "no_feasible_candidate"
+    assert "evidence_gate_deficiencies" not in escalation
     assert result.audit["evaluation"] == {
         "case_id": None,
         "task": "collision",
@@ -588,60 +629,52 @@ def test_post_render_gate_insufficient_escalates_to_vlm() -> None:
     assert selector_events[0]["evidence_round"] == 1
     assert selector_events[0]["episode_index"] == 1
     assert selector_events[0]["selector_backend"] == "deterministic"
-    assert selector_events[1]["selection_mode"] == "repair_plan"
+    assert selector_events[2]["selection_mode"] == "repair_plan"
     gate_events = [
         event
         for event in telemetry["events"]
         if event["kind"] == "evidence_gate"
     ]
-    assert gate_events[0]["deficiencies"]
+    assert gate_events[0]["deficiencies"] == []
 
 
-def test_unchanged_deterministic_render_can_escalate_to_vlm() -> None:
-    result, calls, _, _, _ = _run(
+def test_unchanged_deterministic_render_does_not_escalate_to_vlm() -> None:
+    result, calls, _, vlm, _ = _run(
         policy="deterministic_then_vlm",
         gates=[
-            _gate(ready=False),
-            _gate(ready=False),
-            _gate(ready=False),
+            _gate(ready=True),
             _gate(ready=True),
         ],
-        judge_results=[_valid()],
+        judge_results=[],
         deterministic_results=[_selected("det-view")],
-        vlm_results=[_selected("vlm-view")],
         render_results=[
             {
                 "visual_evidence": ["initial.png"],
                 "merge_policy": "replace",
             },
-            _rendered("vlm"),
         ],
     )
 
-    assert result.status == "valid"
+    assert result.status == "unresolved"
+    assert result.stop_reason == "evidence_packet_unchanged"
     assert calls == [
         "gate",
+        "judge",
         "deterministic",
         "render",
         "gate",
-        "gate",
-        "vlm",
-        "render",
-        "gate",
-        "judge",
     ]
-    escalation = next(
-        event
+    assert not vlm.requests
+    assert not any(
+        event["stage"] == "camera_escalation"
         for event in result.audit["trace"]
-        if event["stage"] == "camera_escalation"
     )
-    assert escalation["reason"] == "post_render_gate_insufficient"
 
 
 def test_unchanged_vlm_render_stops_without_returning_to_deterministic():
     result, calls, deterministic, vlm, _ = _run(
         policy="deterministic_then_vlm",
-        gates=[_gate(ready=False), _gate(ready=False)],
+        gates=[_gate(ready=True), _gate(ready=True)],
         deterministic_results=[_no_feasible()],
         vlm_results=[_selected("vlm-view")],
         render_results=[
@@ -655,6 +688,7 @@ def test_unchanged_vlm_render_stops_without_returning_to_deterministic():
     assert result.stop_reason == "evidence_packet_unchanged"
     assert calls == [
         "gate",
+        "judge",
         "deterministic",
         "vlm",
         "render",
@@ -680,8 +714,13 @@ def test_replacement_candidate_bank_keeps_attempt_history_and_escalates():
             }
 
     raw_vlm = _RawVLM()
+    replacement_failure = _no_feasible()
+    replacement_failure["attempted_candidate_ids"] = ["vlm-view"]
+    replacement_failure["rejected_candidates"][0][
+        "candidate_id"
+    ] = "vlm-view"
     controller = VLMEvaluationController(
-        judge=_Judge([_valid()], calls),
+        judge=_Judge([_need_more(), _need_more(), _valid()], calls),
         renderer=_Renderer(
             [
                 {
@@ -695,14 +734,14 @@ def test_replacement_candidate_bank_keeps_attempt_history_and_escalates():
         ),
         deterministic_camera_selector=_Selector(
             "deterministic",
-            [_selected("det-view")],
+            [_selected("det-view"), replacement_failure],
             calls,
         ),
         vlm_camera_selector=raw_vlm,
         evidence_gate=_Gate(
             [
-                _gate(ready=False),
-                _gate(ready=False),
+                _gate(ready=True),
+                _gate(ready=True),
                 _gate(ready=True),
             ],
             calls,
@@ -715,7 +754,7 @@ def test_replacement_candidate_bank_keeps_attempt_history_and_escalates():
                     "total": {
                         "max_evidence_rounds": 2,
                         "max_total_images": 6,
-                        "max_selector_calls": 2,
+                        "max_selector_calls": 3,
                         "max_camera_actions": 2,
                     },
                 }
@@ -741,12 +780,12 @@ def test_replacement_candidate_bank_keeps_attempt_history_and_escalates():
 def test_selector_exception_is_not_normal_escalation() -> None:
     result, calls, _, vlm, _ = _run(
         policy="deterministic_then_vlm",
-        gates=[_gate(ready=False)],
+        gates=[_gate(ready=True)],
         deterministic_results=[RuntimeError("selector broke")],
     )
 
     assert result.stop_reason == "camera_selector_failed"
-    assert calls == ["gate", "deterministic"]
+    assert calls == ["gate", "judge", "deterministic"]
     assert not vlm.requests
     assert not any(
         event["stage"] == "camera_escalation"
@@ -766,12 +805,12 @@ def test_selector_exception_is_not_normal_escalation() -> None:
 def test_invalid_selector_response_is_counted_without_vlm_escalation() -> None:
     result, calls, _, vlm, _ = _run(
         policy="deterministic_then_vlm",
-        gates=[_gate(ready=False)],
+        gates=[_gate(ready=True)],
         deterministic_results=[_selected("unknown-view")],
     )
 
     assert result.stop_reason == "camera_selector_failed"
-    assert calls == ["gate", "deterministic"]
+    assert calls == ["gate", "judge", "deterministic"]
     assert not vlm.requests
     telemetry = result.audit["experiment_telemetry"]
     assert telemetry["deterministic_selector_calls"] == 1
@@ -790,12 +829,12 @@ def test_inactive_failed_constraint_is_invalid_response_not_escalation():
     ]
     result, calls, _, vlm, _ = _run(
         policy="deterministic_then_vlm",
-        gates=[_gate(ready=False)],
+        gates=[_gate(ready=True)],
         deterministic_results=[invalid],
     )
 
     assert result.stop_reason == "camera_selector_failed"
-    assert calls == ["gate", "deterministic"]
+    assert calls == ["gate", "judge", "deterministic"]
     assert not vlm.requests
     assert not any(
         event["stage"] == "camera_escalation"
@@ -818,12 +857,12 @@ def test_nested_selector_metric_decision_is_rejected(decision_key) -> None:
     }
     result, calls, _, vlm, _ = _run(
         policy="deterministic_then_vlm",
-        gates=[_gate(ready=False)],
+        gates=[_gate(ready=True)],
         deterministic_results=[selected],
     )
 
     assert result.stop_reason == "camera_selector_failed"
-    assert calls == ["gate", "deterministic"]
+    assert calls == ["gate", "judge", "deterministic"]
     assert not vlm.requests
     assert not any(
         event["stage"] == "camera_escalation"
@@ -844,12 +883,12 @@ def test_invalid_selector_telemetry_provenance_is_contract_failure(
     }
     result, calls, _, vlm, _ = _run(
         policy="deterministic_then_vlm",
-        gates=[_gate(ready=False)],
+        gates=[_gate(ready=True)],
         deterministic_results=[selected],
     )
 
     assert result.stop_reason == "camera_selector_failed"
-    assert calls == ["gate", "deterministic"]
+    assert calls == ["gate", "judge", "deterministic"]
     assert not vlm.requests
     event = next(
         item
@@ -865,12 +904,12 @@ def test_nested_nonfinite_selector_provenance_is_safe_contract_failure():
 
     result, calls, _, vlm, _ = _run(
         policy="deterministic_then_vlm",
-        gates=[_gate(ready=False)],
+        gates=[_gate(ready=True)],
         deterministic_results=[selected],
     )
 
     assert result.stop_reason == "camera_selector_failed"
-    assert calls == ["gate", "deterministic"]
+    assert calls == ["gate", "judge", "deterministic"]
     assert not vlm.requests
     event = next(
         item
@@ -883,13 +922,13 @@ def test_nested_nonfinite_selector_provenance_is_safe_contract_failure():
 def test_render_failure_is_not_normal_escalation() -> None:
     result, calls, _, vlm, _ = _run(
         policy="deterministic_then_vlm",
-        gates=[_gate(ready=False)],
+        gates=[_gate(ready=True)],
         deterministic_results=[_selected("det-view")],
         render_results=[RuntimeError("render broke")],
     )
 
     assert result.stop_reason == "render_failed"
-    assert calls == ["gate", "deterministic", "render"]
+    assert calls == ["gate", "judge", "deterministic", "render"]
     assert not vlm.requests
 
 
@@ -905,14 +944,14 @@ def test_failed_render_cost_and_rejected_gate_are_recorded() -> None:
     )
     result, calls, _, vlm, _ = _run(
         policy="deterministic_then_vlm",
-        gates=[_gate(ready=False), _gate(ready=False)],
+        gates=[_gate(ready=True), _gate(ready=True)],
         deterministic_results=[_selected("det-view")],
         render_results=[failure],
     )
 
     telemetry = result.audit["experiment_telemetry"]
     assert result.stop_reason == "render_failed"
-    assert calls == ["gate", "deterministic", "render", "gate"]
+    assert calls == ["gate", "judge", "deterministic", "render", "gate"]
     assert not vlm.requests
     assert telemetry["preview_render_count"] == 2
     assert telemetry["full_render_count"] == 1
@@ -927,7 +966,7 @@ def test_failed_render_cost_and_rejected_gate_are_recorded() -> None:
 def test_nonfinite_render_cost_is_structured_render_failure() -> None:
     result, calls, _, vlm, _ = _run(
         policy="deterministic_then_vlm",
-        gates=[_gate(ready=False), _gate(ready=False)],
+        gates=[_gate(ready=True), _gate(ready=True)],
         deterministic_results=[_selected("det-view")],
         render_results=[
             {
@@ -941,7 +980,7 @@ def test_nonfinite_render_cost_is_structured_render_failure() -> None:
     )
 
     assert result.stop_reason == "render_failed"
-    assert calls == ["gate", "deterministic", "render", "gate"]
+    assert calls == ["gate", "judge", "deterministic", "render", "gate"]
     assert not vlm.requests
     assert (
         result.audit["experiment_telemetry"][
@@ -951,17 +990,20 @@ def test_nonfinite_render_cost_is_structured_render_failure() -> None:
     )
 
 
-def test_post_render_insufficient_reports_budget_exhaustion() -> None:
+def test_repeated_judge_request_reports_budget_exhaustion() -> None:
     result, calls, _, vlm, _ = _run(
         policy="deterministic_then_vlm",
-        gates=[_gate(ready=False), _gate(ready=False)],
+        gates=[_gate(ready=True), _gate(ready=True)],
+        judge_results=[_need_more(), _need_more()],
         deterministic_results=[_selected("det-view")],
         render_results=[_rendered("det")],
         total_overrides={"max_evidence_rounds": 1},
     )
 
     assert result.stop_reason == "max_evidence_rounds_exhausted"
-    assert calls == ["gate", "deterministic", "render", "gate"]
+    assert calls == [
+        "gate", "judge", "deterministic", "render", "gate", "judge"
+    ]
     assert not vlm.requests
 
 
@@ -970,7 +1012,7 @@ def test_unsubstantiated_conflict_reason_does_not_forge_conflict_escalation():
     deterministic["reason_codes"] = ["camera_constraint_conflict"]
     result, _, _, _, _ = _run(
         policy="deterministic_then_vlm",
-        gates=[_gate(ready=False)],
+        gates=[_gate(ready=True)],
         deterministic_results=[deterministic],
         vlm_results=[_no_feasible()],
     )
@@ -1003,7 +1045,7 @@ def test_invalid_post_render_manifest_does_not_escalate_to_vlm(
             calls.append("gate")
             self.calls += 1
             if self.calls == 1:
-                return _gate(ready=False)
+                return _gate(ready=True)
             return self.delegate.check(request)
 
     request = JudgeRequest(
@@ -1023,7 +1065,10 @@ def test_invalid_post_render_manifest_does_not_escalate_to_vlm(
     )
     vlm = _Selector("vlm", [], calls)
     controller = VLMEvaluationController(
-        judge=_Judge([], calls),
+        judge=_Judge(
+            [_need_more_for_metric("style_consistency")],
+            calls,
+        ),
         renderer=_Renderer(
             [
                 {
@@ -1056,7 +1101,7 @@ def test_invalid_post_render_manifest_does_not_escalate_to_vlm(
     )
 
     assert result.stop_reason == "manifest_failure"
-    assert calls == ["gate", "deterministic", "render", "gate"]
+    assert calls == ["gate", "judge", "deterministic", "render", "gate"]
     assert not vlm.requests
     assert not any(
         event["stage"] == "camera_escalation"
@@ -1082,7 +1127,7 @@ def test_corrupt_post_render_evidence_does_not_escalate_to_vlm(
             calls.append("gate")
             self.calls += 1
             if self.calls == 1:
-                return _gate(ready=False)
+                return _gate(ready=True)
             return self.delegate.check(request)
 
     request = JudgeRequest(
@@ -1103,7 +1148,10 @@ def test_corrupt_post_render_evidence_does_not_escalate_to_vlm(
     )
     vlm = _Selector("vlm", [], calls)
     controller = VLMEvaluationController(
-        judge=_Judge([], calls),
+        judge=_Judge(
+            [_need_more_for_metric("style_consistency")],
+            calls,
+        ),
         renderer=_Renderer(
             [
                 {
@@ -1137,20 +1185,23 @@ def test_corrupt_post_render_evidence_does_not_escalate_to_vlm(
     )
 
     assert result.stop_reason == "corrupt_evidence"
-    assert calls == ["gate", "deterministic", "render", "gate"]
+    assert calls == ["gate", "judge", "deterministic", "render", "gate"]
     assert not vlm.requests
 
 
 def test_vlm_render_always_runs_gate_again() -> None:
     result, calls, _, _, _ = _run(
         policy="vlm_only",
-        gates=[_gate(ready=False), _gate(ready=False)],
+        gates=[_gate(ready=True), _gate(ready=True)],
+        judge_results=[_need_more(), _valid()],
         vlm_results=[_selected("vlm-view")],
         render_results=[_rendered("vlm")],
     )
 
-    assert result.stop_reason == "vlm_post_render_gate_insufficient"
-    assert calls == ["gate", "vlm", "render", "gate"]
+    assert result.status == "valid"
+    assert calls == [
+        "gate", "judge", "vlm", "render", "gate", "judge"
+    ]
 
 
 def test_judge_need_more_starts_new_episode_from_deterministic() -> None:
@@ -1278,7 +1329,10 @@ def test_local_replace_render_preserves_required_global_anchor(tmp_path) -> None
         calls,
     )
     controller = VLMEvaluationController(
-        judge=_Judge([_valid()], calls),
+        judge=_Judge(
+            [_need_more_for_metric("style_consistency"), _valid()],
+            calls,
+        ),
         renderer=renderer,
         deterministic_camera_selector=_Selector(
             "deterministic",
@@ -1286,7 +1340,7 @@ def test_local_replace_render_preserves_required_global_anchor(tmp_path) -> None
             calls,
         ),
         evidence_gate=_Gate(
-            [_gate(ready=False), _gate(ready=True)],
+            [_gate(ready=True), _gate(ready=True)],
             calls,
         ),
         control=_control("deterministic_only"),
@@ -1347,7 +1401,7 @@ def test_same_path_overwrite_is_compared_against_pre_render_bytes(
         rubric={"scope": "collision"},
     )
     controller = VLMEvaluationController(
-        judge=_Judge([_valid()], calls),
+        judge=_Judge([_need_more(), _valid()], calls),
         renderer=_OverwriteRenderer(),
         deterministic_camera_selector=_Selector(
             "deterministic",
@@ -1355,7 +1409,7 @@ def test_same_path_overwrite_is_compared_against_pre_render_bytes(
             calls,
         ),
         evidence_gate=_Gate(
-            [_gate(ready=False), _gate(ready=True)],
+            [_gate(ready=True), _gate(ready=True)],
             calls,
         ),
         control=_control("deterministic_only"),
@@ -1369,6 +1423,7 @@ def test_same_path_overwrite_is_compared_against_pre_render_bytes(
     assert result.status == "valid"
     assert calls == [
         "gate",
+        "judge",
         "deterministic",
         "render",
         "gate",
@@ -1376,7 +1431,7 @@ def test_same_path_overwrite_is_compared_against_pre_render_bytes(
     ]
 
 
-def test_metadata_only_repair_can_make_unjudged_packet_ready(
+def test_metadata_only_repair_does_not_change_evidence_integrity(
     tmp_path,
 ) -> None:
     evidence_path = tmp_path / "repair.png"
@@ -1398,7 +1453,7 @@ def test_metadata_only_repair_can_make_unjudged_packet_ready(
         rubric={"scope": "collision"},
     )
     controller = VLMEvaluationController(
-        judge=_Judge([_valid()], calls),
+        judge=_Judge([_need_more(), _valid()], calls),
         renderer=_Renderer(
             [
                 {
@@ -1424,7 +1479,7 @@ def test_metadata_only_repair_can_make_unjudged_packet_ready(
             calls,
         ),
         evidence_gate=_Gate(
-            [_gate(ready=False), _gate(ready=True)],
+            [_gate(ready=True), _gate(ready=True)],
             calls,
         ),
         control=_control("deterministic_only"),
@@ -1435,21 +1490,21 @@ def test_metadata_only_repair_can_make_unjudged_packet_ready(
         candidate_views=({"id": "det-view"},),
     )
 
-    assert result.status == "valid"
+    assert result.status == "unresolved"
+    assert result.stop_reason == "evidence_packet_unchanged"
     assert calls == [
         "gate",
+        "judge",
         "deterministic",
         "render",
         "gate",
-        "gate",
-        "judge",
     ]
 
 
 def test_vlm_stage_failure_does_not_return_to_deterministic() -> None:
     result, calls, deterministic, vlm, _ = _run(
         policy="deterministic_then_vlm",
-        gates=[_gate(ready=False)],
+        gates=[_gate(ready=True)],
         deterministic_results=[_no_feasible()],
         vlm_results=[
             {
@@ -1468,7 +1523,7 @@ def test_vlm_stage_failure_does_not_return_to_deterministic() -> None:
     )
 
     assert result.stop_reason == "vlm_no_feasible_candidate"
-    assert calls == ["gate", "deterministic", "vlm"]
+    assert calls == ["gate", "judge", "deterministic", "vlm"]
     assert len(deterministic.requests) == len(vlm.requests) == 1
 
 
@@ -1514,12 +1569,12 @@ def test_controller_runs_real_repair_plan_vlm_adapter_then_renderer():
         repair_solver=DeterministicCameraRepairSolver(),
     )
     controller = VLMEvaluationController(
-        judge=_Judge([_valid()], calls),
+        judge=_Judge([_need_more(), _valid()], calls),
         renderer=_Renderer([_rendered("repair-plan")], calls),
         deterministic_camera_selector=deterministic,
         vlm_camera_selector=vlm,
         evidence_gate=_Gate(
-            [_gate(ready=False), _gate(ready=True)],
+            [_gate(ready=True), _gate(ready=True)],
             calls,
         ),
         control=_control("deterministic_then_vlm"),
@@ -1560,6 +1615,7 @@ def test_controller_runs_real_repair_plan_vlm_adapter_then_renderer():
     assert result.status == "valid"
     assert calls == [
         "gate",
+        "judge",
         "deterministic",
         "vlm_model",
         "render",
@@ -1615,8 +1671,15 @@ def test_conflict_repair_plan_is_reachable_from_controller(tmp_path) -> None:
             "reason": "retain the packet anchor and relax only local framing",
         }
 
+    evidence_request = _need_more_for_metric(
+        "object_pairing_consistency"
+    )
+    evidence_request["evidence_request"]["missing_observations"] = [
+        "joint_visibility",
+        "global_context_preserved",
+    ]
     controller = VLMEvaluationController(
-        judge=_Judge([_valid()], calls),
+        judge=_Judge([evidence_request, _valid()], calls),
         renderer=_Renderer(
             [
                 {
@@ -1643,7 +1706,7 @@ def test_conflict_repair_plan_is_reachable_from_controller(tmp_path) -> None:
             repair_solver=DeterministicCameraRepairSolver(),
         ),
         evidence_gate=_Gate(
-            [_gate(ready=False), _gate(ready=True)],
+            [_gate(ready=True), _gate(ready=True)],
             calls,
         ),
         control=_control("deterministic_then_vlm"),
@@ -1687,6 +1750,7 @@ def test_conflict_repair_plan_is_reachable_from_controller(tmp_path) -> None:
     assert result.status == "valid"
     assert calls == [
         "gate",
+        "judge",
         "deterministic",
         "vlm_model",
         "render",

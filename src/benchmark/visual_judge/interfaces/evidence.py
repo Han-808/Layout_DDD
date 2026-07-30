@@ -9,6 +9,24 @@ from benchmark.visual_judge.interfaces.judge import JudgeRequest
 
 
 EVIDENCE_MERGE_POLICIES = {"append", "replace"}
+EVIDENCE_GATE_READY_CODES = {
+    "evidence_ready",
+}
+EVIDENCE_GATE_INTEGRITY_FAILURE_CODES = {
+    "visual_evidence_missing",
+    "evidence_path_missing",
+    "evidence_file_missing",
+    "empty_render_file",
+    "evidence_file_unreadable",
+    "undecodable_render",
+    "blank_render",
+    "corrupt_render_evidence",
+    "evidence_manifest_missing",
+    "evidence_manifest_unreadable",
+    "evidence_manifest_invalid",
+    "evidence_manifest_evidence_items_missing",
+    "evidence_manifest_evidence_mismatch",
+}
 
 
 @dataclass(frozen=True)
@@ -60,12 +78,13 @@ class EvidenceGateResult:
             raise ValueError(
                 "ready EvidenceGate result cannot request camera repair"
             )
+        if camera_repairable:
+            raise ValueError(
+                "EvidenceGate cannot request camera repair; metric evidence "
+                "sufficiency belongs to Judge"
+            )
         if ready and any(
-            code
-            not in {
-                "evidence_ready",
-                "evidence_gate_explicitly_disabled",
-            }
+            code not in EVIDENCE_GATE_READY_CODES
             for code in reason_codes
         ):
             raise ValueError(
@@ -75,16 +94,25 @@ class EvidenceGateResult:
             raise ValueError(
                 "not-ready EvidenceGate result must explain its deficiencies"
             )
-        if camera_repairable and (
-            not deficiencies
-            or any(
-                str(item.get("repairability") or "") != "camera"
-                for item in deficiencies
+        reported_failure_codes = set(reason_codes) | {
+            str(item.get("code") or "") for item in deficiencies
+        }
+        unknown_failure_codes = (
+            reported_failure_codes - EVIDENCE_GATE_INTEGRITY_FAILURE_CODES
+            if not ready
+            else set()
+        )
+        if unknown_failure_codes:
+            raise ValueError(
+                "EvidenceGate reported non-integrity reason codes: "
+                f"{sorted(unknown_failure_codes)}"
             )
+        if not ready and any(
+            str(item.get("repairability") or "") == "camera"
+            for item in deficiencies
         ):
             raise ValueError(
-                "camera-repairable EvidenceGate result requires only "
-                "camera-repairable deficiencies"
+                "EvidenceGate deficiencies cannot request camera repair"
             )
         provenance = value.get("provenance")
         if provenance is None:

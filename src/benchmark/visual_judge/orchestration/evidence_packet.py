@@ -84,48 +84,6 @@ def goal_from_judge_request(
     return result
 
 
-def goal_from_gate(
-    existing: dict[str, Any],
-    result: EvidenceGateResult,
-) -> dict[str, Any]:
-    goal = deepcopy(existing)
-    goal.update(
-        {
-            "missing_observations": list(result.reason_codes),
-            "view_goal": str(
-                goal.get("view_goal")
-                or "repair_technical_visual_evidence"
-            ),
-            "gate_deficiencies": list(deepcopy(result.deficiencies)),
-        }
-    )
-    return goal
-
-
-def request_from_gate(
-    *,
-    targets: tuple[str, ...],
-    gate_result: EvidenceGateResult,
-    evidence_goal: dict[str, Any],
-) -> EvidenceRequest:
-    return EvidenceRequest(
-        target_ids=targets or ("scene",),
-        missing_observations=(
-            tuple(gate_result.reason_codes)
-            or ("technical_evidence_not_ready",)
-        ),
-        view_goal=str(
-            evidence_goal.get("view_goal")
-            or "repair_technical_visual_evidence"
-        ),
-        metadata={
-            "source": "evidence_gate",
-            "camera_repairable": gate_result.camera_repairable,
-            "deficiencies": list(deepcopy(gate_result.deficiencies)),
-        },
-    )
-
-
 def request_target_ids(request: JudgeRequest) -> tuple[str, ...]:
     values: list[Any] = []
     for source in (request.claim_or_event, request.context):
@@ -168,7 +126,19 @@ def gate_stop_reason(result: EvidenceGateResult) -> str:
         return "manifest_failure"
     if "corrupt_render_evidence" in codes:
         return "corrupt_evidence"
-    return "evidence_not_camera_repairable"
+    if "blank_render" in codes:
+        return "blank_evidence"
+    if "undecodable_render" in codes:
+        return "undecodable_evidence"
+    if codes & {
+        "visual_evidence_missing",
+        "evidence_path_missing",
+        "evidence_file_missing",
+        "empty_render_file",
+        "evidence_file_unreadable",
+    }:
+        return "evidence_missing"
+    return "evidence_integrity_failure"
 
 
 def validate_candidates(

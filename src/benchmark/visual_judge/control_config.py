@@ -43,7 +43,9 @@ DEFAULT_VLM_EVALUATION_CONTROL: dict[str, Any] = {
         },
         "escalation": {
             "on_no_feasible_candidate": True,
-            "on_post_render_gate_insufficient": True,
+            # Retained in the additive config shape, but frozen off: evidence
+            # sufficiency is now a Judge decision rather than a Gate signal.
+            "on_post_render_gate_insufficient": False,
             "on_selector_exception": False,
             "on_render_failure": False,
         },
@@ -556,14 +558,33 @@ def _validate_resolved(value: dict[str, Any]) -> None:
                 f"camera_acquisition.escalation.{key} cannot be enabled; "
                 "engineering failures are not normal VLM escalation signals"
             )
+    if (
+        acquisition["escalation"]["on_post_render_gate_insufficient"]
+        is not False
+    ):
+        raise ValueError(
+            "camera_acquisition.escalation."
+            "on_post_render_gate_insufficient cannot be enabled; "
+            "metric evidence sufficiency belongs to Judge"
+        )
     gate = value["evidence_gate"]
     _boolean(gate["enabled"], "evidence_gate.enabled")
+    if gate["enabled"] is not True:
+        raise ValueError(
+            "evidence_gate.enabled cannot be disabled; every evidence packet "
+            "must pass input-integrity validation before Judge"
+        )
     if str(gate["backend"]) != "deterministic":
         raise ValueError("evidence_gate.backend must be deterministic")
     _boolean(
         gate["allow_path_only_compatibility"],
         "evidence_gate.allow_path_only_compatibility",
     )
+    if gate["allow_path_only_compatibility"] is not False:
+        raise ValueError(
+            "evidence_gate.allow_path_only_compatibility cannot be enabled; "
+            "EvidenceGate input-integrity checks cannot be bypassed"
+        )
     _boolean(
         value["judge"]["allow_need_more_evidence"],
         "judge.allow_need_more_evidence",
@@ -581,6 +602,10 @@ def _validate_resolved(value: dict[str, Any]) -> None:
         value["require_evidence_gate_after_render"],
         "require_evidence_gate_after_render",
     )
+    if value["require_evidence_gate_after_render"] is not True:
+        raise ValueError(
+            "require_evidence_gate_after_render cannot be disabled"
+        )
     for key, allowed in _POLICY_VALUES.items():
         if value[key] not in allowed:
             raise ValueError(f"{key} must be one of {sorted(allowed)}")

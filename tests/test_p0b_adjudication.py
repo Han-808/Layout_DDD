@@ -114,7 +114,9 @@ def test_p0b_request_contains_rich_context_and_injected_local_view(tmp_path: Pat
 
 def test_openai_p0b_judge_requires_binary_verdict(tmp_path: Path) -> None:
     image = tmp_path / "local.png"
-    Image.new("RGB", (4, 4), (64, 64, 64)).save(image)
+    rendered = Image.new("RGB", (4, 4), (64, 64, 64))
+    rendered.putpixel((0, 0), (128, 64, 32))
+    rendered.save(image)
     model = _FakeModel({"verdict": "valid", "confidence": 0.8, "reason": "intended contact"})
 
     result = OpenAICompatibleVLMJudge(model).adjudicate_p0b(
@@ -205,7 +207,7 @@ def test_p0b_event_gates_unmarked_judge_without_provider():
     assert judge.calls == 0
 
 
-def test_p0b_event_raw_openai_path_reuses_provider_for_camera_repair(
+def test_p0b_event_raw_openai_path_does_not_repair_from_gate_metadata(
     tmp_path: Path,
 ):
     global_view = tmp_path / "global.png"
@@ -216,7 +218,9 @@ def test_p0b_event_raw_openai_path_reuses_provider_for_camera_repair(
         (local_bad, (40, 40, 40)),
         (local_ready, (80, 80, 80)),
     ):
-        Image.new("RGB", (8, 8), color).save(path)
+        rendered = Image.new("RGB", (8, 8), color)
+        rendered.putpixel((0, 0), (200, 100, 50))
+        rendered.save(path)
 
     provider_calls: list[dict] = []
 
@@ -277,10 +281,9 @@ def test_p0b_event_raw_openai_path_reuses_provider_for_camera_repair(
     )
 
     assert result["verdict"] == "valid"
-    assert len(provider_calls) == 2
-    assert provider_calls[1]["_camera_selection_phase"] == (
-        "active_fallback"
-    )
+    # Visibility metadata is not a Gate-owned sufficiency signal. The Judge
+    # concluded on the initial packet, so no second acquisition is justified.
+    assert len(provider_calls) == 1
     assert len(model.calls) == 1
 
 
