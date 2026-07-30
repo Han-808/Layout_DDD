@@ -51,6 +51,11 @@ from benchmark.evaluator.evidence_contract import (
     validate_evidence_plan,
 )
 from benchmark.rendering.camera_pose import CAMERA_POSE_MODES
+from benchmark.visual_judge.roles import (
+    DecisionContract,
+    VLMRole,
+    vlm_audit_metadata,
+)
 
 
 SCENE_QUALITY_INTERFACE_VERSION = "scene_quality_v1"
@@ -1446,6 +1451,11 @@ def _judge_request(
                 ),
             },
         },
+        **vlm_audit_metadata(
+            VLMRole.JUDGE,
+            decision_contract=DecisionContract.CANONICAL_METRIC,
+            judge_method="adjudicate_scene_quality",
+        ),
     }
 
 

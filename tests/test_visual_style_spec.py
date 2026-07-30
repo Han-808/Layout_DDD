@@ -80,6 +80,7 @@ class _RecordingJudge:
         return {
             "evidence_status": "sufficient",
             "verdict": "valid",
+            "confidence": 0.9,
             "reason": "No significant metric-scoped defect is visible.",
             "missing_evidence": [],
             "defects": [],
@@ -179,6 +180,50 @@ def test_run_evaluate_sends_style_spec_to_scene_quality_judge(tmp_path: Path) ->
     assert style_report["status"] == "evaluated"
     assert style_report["score"] == 1.0
     assert style_report["judgement"]["verdict"] == "valid"
+
+
+def test_run_evaluate_routes_model_backed_public_method_through_controller(
+    tmp_path: Path,
+) -> None:
+    render = tmp_path / "render.png"
+    render.write_bytes(b"evidence")
+
+    class _ModelBackedRecordingJudge(_RecordingJudge):
+        vlm_control_enabled = True
+
+        def adjudicate_scene_quality(self, request: dict) -> dict:
+            result = super().adjudicate_scene_quality(request)
+            result["confidence"] = 0.9
+            return result
+
+    judge = _ModelBackedRecordingJudge()
+    report = run_evaluate(
+        scene=_scene(),
+        out=tmp_path / "out",
+        eval_generic_validity=True,
+        render_evidence=[str(render)],
+        vlm_judge=judge,
+        visual_style_spec=_spec(),
+        asset_policy=_generator_asset_policy(),
+        scene_quality_config=_style_only_config(),
+    )
+
+    integration = report["evaluation_config"]["vlm_evaluation_control"][
+        "integration"
+    ]
+    runtime = integration["runtime"]
+    assert runtime["strict_controller_enabled"] is True
+    assert runtime["controlled_call_count"] == 1
+    assert [
+        item["stage"]
+        for item in runtime["controlled_calls"][0]["audit"]["trace"]
+    ] == ["evidence_gate", "judge"]
+    assert (
+        report["reports"]["scene_quality"]["metrics"][
+            "style_consistency"
+        ]["score"]
+        == 1.0
+    )
 
 
 def test_scene_quality_style_spec_stays_none_without_a_spec(tmp_path: Path) -> None:

@@ -54,6 +54,8 @@ def _obj(
 
 
 class _Judge:
+    vlm_control_enabled = False
+
     def __init__(self, verdict: str) -> None:
         self.verdict = verdict
         self.calls = 0
@@ -152,6 +154,8 @@ def test_official_mode_without_judge_raises() -> None:
 
 def test_official_mode_with_bad_verdict_raises() -> None:
     class _BadJudge:
+        vlm_control_enabled = False
+
         def adjudicate_p0b(self, request: dict) -> dict:
             return {"verdict": "insufficient_evidence", "confidence": 0.3, "reason": "occluded"}
 
@@ -280,6 +284,8 @@ def test_wall_attachment_category_and_relation_claim_still_requires_vlm() -> Non
 # 10. A failed/third-verdict judge in non-official mode never silently passes.
 def test_non_official_failed_judge_stays_unresolved() -> None:
     class _BadJudge:
+        vlm_control_enabled = False
+
         def __init__(self) -> None:
             self.calls = 0
 

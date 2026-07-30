@@ -34,6 +34,7 @@ from benchmark.evaluator.generic_validity.mesh_geometry import (
     load_triangle_mesh,
 )
 from benchmark.visual_judge.p0b import LocalViewProvider, adjudicate_p0b_event
+from benchmark.visual_judge.runtime import EvidenceControlUnresolvedError
 
 
 SUPPORT_EVALUATOR_VERSION = "support_p0b_v7"
@@ -829,6 +830,10 @@ def _evaluate_object(
             overview_render_evidence=list(render_evidence or []),
             local_view_provider=local_view_provider,
         )
+    except EvidenceControlUnresolvedError as exc:
+        record["route"] = "unresolved"
+        record["evidence_control"] = exc.result.to_dict()
+        return record
     except Exception as exc:
         record["adjudication_error"] = f"{type(exc).__name__}: {exc}"
         record["route"] = "vlm_adjudication_failed"

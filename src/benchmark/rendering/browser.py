@@ -671,6 +671,10 @@ class FrozenBrowserCaptureRenderer:
     only when the evaluator asks for the same output directory and geometry.
     """
 
+    # The local bank is selected by stable input order from an immutable trusted
+    # capture. It executes neither a VLM selector nor a corrective camera action.
+    camera_selector_backend = "deterministic"
+
     def __init__(self, *, capture_dir: str | Path) -> None:
         self.capture_dir = Path(capture_dir).expanduser().resolve()
         self.manifest_path = self.capture_dir / "render_manifest.json"

@@ -268,6 +268,9 @@ def test_scale_outlier_is_scored_only_after_binary_vlm_adjudication() -> None:
     assert request["metric"] == "scale"
     assert request["detector_evidence"]["statistical_classification"] == "extreme"
     assert request["required_response"] == {"verdict": "valid|invalid"}
+    assert request["vlm_role"] == "judge"
+    assert request["decision_contract"] == "spatial_fidelity_binary_v1"
+    assert request["judge_method"] == "adjudicate_spatial_fidelity"
 
 
 def test_unknown_and_zero_check_scale_cases_never_receive_full_credit() -> None:

@@ -815,9 +815,11 @@ def _implementation_sha256() -> dict[str, str]:
         "src/benchmark/rendering/blender_focus_bundle_worker.py",
         "src/benchmark/rendering/camera_pose.py",
         "src/benchmark/rendering/collision_overlay.py",
+        "src/benchmark/visual_judge/contracts.py",
         "src/benchmark/visual_judge/openai_compatible.py",
         "src/benchmark/visual_judge/p0b.py",
         "src/benchmark/visual_judge/render_views.py",
+        "src/benchmark/visual_judge/roles.py",
         "src/benchmark/visual_judge/visual_config.py",
     )
     return {

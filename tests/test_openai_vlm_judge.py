@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+from copy import deepcopy
 from io import BytesIO
 import json
 from pathlib import Path
@@ -10,6 +11,7 @@ from PIL import Image, PngImagePlugin
 
 from benchmark.visual_judge import OpenAICompatibleVLMJudge, build_openai_compatible_vlm_judge, evaluate_vlm_category
 from benchmark.visual_judge.openai_compatible import _selector_candidate_order_key
+from benchmark.visual_judge.runtime import EvidenceControlUnresolvedError
 
 
 class FakeMultimodalModel:
@@ -57,12 +59,18 @@ def test_openai_compatible_vlm_judge_sends_images_and_structured_prior(tmp_path:
         {"applicable": True, "score": 0.75, "confidence": 0.8, "summary": "plausible", "issues": [], "evidence": ["top view"]}
     )
     judge = OpenAICompatibleVLMJudge(model)
+    request = _request(image_path)
+    original_request = deepcopy(request)
 
-    result = judge.evaluate(_request(image_path))
+    result = judge.evaluate(request)
 
     content = model.calls[0]["messages"][1]["content"]
     assert content[0]["type"] == "text"
     assert "generic_validity" in content[0]["text"]
+    context = json.loads(content[0]["text"].split("\n", 1)[1])
+    assert context["vlm_role"] == "judge"
+    assert context["decision_contract"] == "generic_visual_score_v1"
+    assert context["judge_method"] == "evaluate"
     assert content[1]["type"] == "image_url"
     assert content[1]["image_url"]["url"].startswith("data:image/png;base64,")
     encoded = content[1]["image_url"]["url"].split(",", 1)[1]
@@ -72,6 +80,124 @@ def test_openai_compatible_vlm_judge_sends_images_and_structured_prior(tmp_path:
     assert model.calls[0]["kwargs"]["response_format_json"] is True
     assert result["score"] == 0.75
     assert result["model"] == "Qwen3-VL-32B-Instruct-64K"
+    assert result["vlm_role"] == "judge"
+    assert result["decision_contract"] == "generic_visual_score_v1"
+    assert result["judge_method"] == "evaluate"
+    assert request == original_request
+
+
+def test_generic_visual_evaluator_rejects_out_of_range_score(
+    tmp_path: Path,
+) -> None:
+    image_path = tmp_path / "generic.png"
+    _write_test_png(image_path)
+    judge = OpenAICompatibleVLMJudge(
+        FakeMultimodalModel(
+            {
+                "applicable": True,
+                "score": 1.1,
+                "confidence": 0.8,
+                "summary": "invalid range",
+                "issues": [],
+                "evidence": [],
+            }
+        )
+    )
+
+    with pytest.raises(ValueError, match="score must be between 0 and 1"):
+        judge.evaluate(_request(image_path))
+
+
+def test_direct_generic_public_method_does_not_call_model_without_evidence():
+    model = FakeMultimodalModel(
+        {
+            "applicable": True,
+            "score": 1.0,
+            "confidence": 1.0,
+            "summary": "must not run",
+            "issues": [],
+            "evidence": [],
+        }
+    )
+
+    result = OpenAICompatibleVLMJudge(model).evaluate(
+        {
+            "category": "visual_quality",
+            "render_evidence": [],
+        }
+    )
+
+    assert result["applicable"] is False
+    assert result["score"] is None
+    assert model.calls == []
+
+
+def test_direct_canonical_public_method_returns_compatible_unresolved_without_model():
+    model = FakeMultimodalModel(
+        {
+            "evidence_status": "sufficient",
+            "verdict": "valid",
+            "confidence": 1.0,
+            "reason": "must not run",
+            "missing_evidence": [],
+            "defects": [],
+        }
+    )
+
+    result = OpenAICompatibleVLMJudge(model).adjudicate_scene_quality(
+        {
+            "metric": "style_consistency",
+            "render_evidence": [],
+        }
+    )
+
+    assert result["evidence_status"] == "insufficient"
+    assert result["verdict"] == "ambiguous"
+    assert result["missing_evidence"]
+    assert model.calls == []
+
+
+@pytest.mark.parametrize(
+    ("method_name", "request_payload"),
+    [
+        (
+            "adjudicate_relation",
+            {
+                "family": "oor",
+                "relation": {
+                    "subject_id": "a",
+                    "target_id": "b",
+                },
+                "render_evidence": [],
+            },
+        ),
+        (
+            "adjudicate_spatial_fidelity",
+            {
+                "metric": "scale",
+                "event": {"object_id": "a"},
+                "render_evidence": [],
+            },
+        ),
+    ],
+)
+def test_direct_binary_public_methods_fail_closed_without_evidence(
+    method_name: str,
+    request_payload: dict,
+):
+    model = FakeMultimodalModel(
+        {
+            "verdict": "valid",
+            "confidence": 1.0,
+            "reason": "must not run",
+        }
+    )
+    judge = OpenAICompatibleVLMJudge(model)
+
+    with pytest.raises(EvidenceControlUnresolvedError):
+        getattr(judge, method_name)(request_payload)
+
+    assert model.calls == []
 
 
 def test_canonical_scene_quality_adapter_preserves_style_contract(
@@ -121,6 +247,12 @@ def test_canonical_scene_quality_adapter_preserves_style_contract(
         model.calls[0]["messages"][1]["content"][0]["text"].split("\n", 1)[1]
     )
     assert context["visual_style_spec"] == style_spec
+    assert context["vlm_role"] == "judge"
+    assert context["decision_contract"] == "canonical_metric_v1"
+    assert context["judge_method"] == "adjudicate_scene_quality"
+    assert result["vlm_role"] == "judge"
+    assert result["decision_contract"] == "canonical_metric_v1"
+    assert result["judge_method"] == "adjudicate_scene_quality"
     assert model.calls[0]["kwargs"]["call_type"] == (
         "vlm_judge.canonical.style_consistency"
     )
@@ -160,6 +292,14 @@ def test_canonical_scene_quality_adapter_preserves_style_contract(
             "missing_evidence": [],
             "defects": [],
         },
+        {
+            "evidence_status": "insufficient",
+            "verdict": "valid",
+            "confidence": 0.2,
+            "reason": "occluded",
+            "missing_evidence": ["closer_view"],
+            "defects": [],
+        },
     ],
 )
 def test_canonical_scene_quality_adapter_rejects_malformed_contract(
@@ -179,6 +319,52 @@ def test_canonical_scene_quality_adapter_rejects_malformed_contract(
                 "render_evidence": [str(image_path)],
             }
         )
+
+
+def test_functional_semantic_preserves_insufficient_evidence_compatibility(
+    tmp_path: Path,
+) -> None:
+    image_path = tmp_path / "functional.png"
+    _write_test_png(image_path)
+    model = FakeMultimodalModel(
+        {
+            "evidence_status": "insufficient",
+            "verdict": "ambiguous",
+            "confidence": 0.2,
+            "reason": "The requested work area is occluded.",
+            "missing_evidence": ["claim_scoped_local_view"],
+            "defects": [],
+        }
+    )
+
+    result = OpenAICompatibleVLMJudge(model).adjudicate_functional_semantic(
+        {
+            "metric": "functional_semantic_fidelity",
+            "judgment_scope": {
+                "included": ["this_benchmark_owned_prompt_claim_only"]
+            },
+            "render_evidence": [str(image_path)],
+        }
+    )
+
+    context = json.loads(
+        model.calls[0]["messages"][1]["content"][0]["text"].split("\n", 1)[1]
+    )
+    assert context["vlm_role"] == "judge"
+    assert context["decision_contract"] == "canonical_metric_v1"
+    assert context["judge_method"] == "adjudicate_functional_semantic"
+    # The model-facing contract remains ambiguous; the public adapter keeps its
+    # historical vocabulary for existing Functional Semantic callers.
+    assert result["verdict"] == "insufficient_evidence"
+    assert result["canonical_verdict"] == "ambiguous"
+    assert result["response_adapter"] == (
+        "functional_semantic_insufficient_evidence_compat_v1"
+    )
+    assert result["router_state"] == "insufficient_evidence"
+    assert result["missing_evidence"] == ["claim_scoped_local_view"]
+    assert result["vlm_role"] == "judge"
+    assert result["decision_contract"] == "canonical_metric_v1"
+    assert result["judge_method"] == "adjudicate_functional_semantic"
 
 
 def test_vlm_category_supports_not_applicable_response(tmp_path: Path) -> None:
@@ -277,6 +463,32 @@ def test_relation_judge_is_binary_and_receives_prompt_claim_and_image(tmp_path: 
     assert model.calls[0]["kwargs"]["call_type"] == "vlm_judge.relationship.oor"
     assert result["verdict"] == "valid"
     assert result["confidence"] == 0.85
+    assert result["vlm_role"] == "judge"
+    assert result["decision_contract"] == "relation_binary_v1"
+    assert result["judge_method"] == "adjudicate_relation"
+
+
+@pytest.mark.parametrize("verdict", ["ambiguous", "insufficient_evidence"])
+def test_relation_judge_rejects_third_verdict(
+    tmp_path: Path,
+    verdict: str,
+) -> None:
+    image_path = tmp_path / "relation.png"
+    _write_test_png(image_path)
+    judge = OpenAICompatibleVLMJudge(
+        FakeMultimodalModel(
+            {"verdict": verdict, "confidence": 0.2, "reason": "occluded"}
+        )
+    )
+
+    with pytest.raises(ValueError, match="exactly 'valid' or 'invalid'"):
+        judge.adjudicate_relation(
+            {
+                "family": "oor",
+                "relation": {"type": "mirrors"},
+                "render_evidence": [str(image_path)],
+            }
+        )
 
 
 def test_spatial_fidelity_judge_is_binary_and_treats_rarity_as_routing_only(
@@ -321,6 +533,9 @@ def test_spatial_fidelity_judge_is_binary_and_treats_rarity_as_routing_only(
     )
     assert result["verdict"] == "valid"
     assert result["confidence"] == 0.9
+    assert result["vlm_role"] == "judge"
+    assert result["decision_contract"] == "spatial_fidelity_binary_v1"
+    assert result["judge_method"] == "adjudicate_spatial_fidelity"
 
 
 def test_relation_context_budget_preserves_detector_packet_ahead_of_large_scene(
@@ -356,6 +571,9 @@ def test_relation_context_budget_preserves_detector_packet_ahead_of_large_scene(
     context_text = text.split("\n", 1)[1]
     context = json.loads(context_text)
     assert len(context_text) <= 1000
+    assert context["vlm_role"] == "judge"
+    assert context["decision_contract"] == "relation_binary_v1"
+    assert context["judge_method"] == "adjudicate_relation"
     assert context["explicit_relation_claim"]["type"] == "mounted_on_wall"
     assert context["detector_evidence"]["signed_wall_clearance_m"] == 0.42
     assert context["_benchmark_context_budget"]["truncated"] is True
@@ -370,7 +588,7 @@ def test_p0b_context_budget_reserves_every_priority_field(tmp_path: Path) -> Non
     judge = OpenAICompatibleVLMJudge(model, max_context_chars=1000)
     huge = "x" * 5000
 
-    judge.adjudicate_p0b(
+    result = judge.adjudicate_p0b(
         {
             "metric": "collision",
             "event": {"event_detail": huge},
@@ -391,6 +609,9 @@ def test_p0b_context_budget_reserves_every_priority_field(tmp_path: Path) -> Non
     context = json.loads(context_text)
     assert len(context_text) <= 1000
     for key in (
+        "vlm_role",
+        "decision_contract",
+        "judge_method",
         "metric",
         "event",
         "detector_evidence",
@@ -403,6 +624,12 @@ def test_p0b_context_budget_reserves_every_priority_field(tmp_path: Path) -> Non
     ):
         assert key in context
     assert "detector_sentinel" in context["detector_evidence"]["json_prefix"]
+    assert context["vlm_role"] == "judge"
+    assert context["decision_contract"] == "p0b_binary_v1"
+    assert context["judge_method"] == "adjudicate_p0b"
+    assert result["vlm_role"] == "judge"
+    assert result["decision_contract"] == "p0b_binary_v1"
+    assert result["judge_method"] == "adjudicate_p0b"
 
 
 def test_p0b_outbound_context_hides_local_paths_hashes_and_dataset_linkage(
@@ -530,6 +757,9 @@ def test_query_cov_camera_selector_chooses_views_without_metric_verdict(tmp_path
     assert result["images_used"] == ["candidate_00", "candidate_01"]
     assert result["request_metadata"]["selector_candidate_order_policy"] == "stable_pose_image_digest_v1"
     assert result["request_metadata"]["selector_candidate_alias_policy"] == "per_request_sequential_alias_v1"
+    assert result["vlm_role"] == "vlm_camera_selector"
+    assert result["decision_contract"] == "camera_selection_v1"
+    assert result["judge_method"] == "select_camera_views"
 
     outbound = model.calls[0]["messages"][1]["content"]
     context = json.loads(outbound[0]["text"].split("\n", 1)[1])
@@ -542,7 +772,13 @@ def test_query_cov_camera_selector_chooses_views_without_metric_verdict(tmp_path
         "preview_role",
         "preview_warning_class",
         "color_legend",
+        "vlm_role",
+        "decision_contract",
+        "judge_method",
     }
+    assert context["vlm_role"] == "vlm_camera_selector"
+    assert context["decision_contract"] == "camera_selection_v1"
+    assert context["judge_method"] == "select_camera_views"
     assert [item["id"] for item in context["candidates"]] == ["candidate_00", "candidate_01"]
     assert context["metric_family"] == "collision"
     assert context["preview_warning_class"] == "incomplete_target_visibility"
@@ -684,6 +920,45 @@ def test_query_cov_camera_selector_rejects_invalid_preview_image(tmp_path: Path)
                 "metric": "support",
                 "candidates": [
                     {"id": "private_internal_id", "pose": {}, "image_path": str(invalid)}
+                ],
+                "max_views": 1,
+                "allow_adjustment": False,
+            }
+        )
+
+
+@pytest.mark.parametrize(
+    ("forbidden_key", "forbidden_value"),
+    [("verdict", None), ("score", 0.5)],
+)
+def test_camera_selector_rejects_metric_decision_fields(
+    tmp_path: Path,
+    forbidden_key: str,
+    forbidden_value: object,
+) -> None:
+    image = tmp_path / "candidate.png"
+    _write_test_png(image)
+    response = {
+        "selected_view_ids": ["candidate_00"],
+        "action": None,
+        "reason": "best view",
+        forbidden_key: forbidden_value,
+    }
+    judge = OpenAICompatibleVLMJudge(FakeMultimodalModel(response))
+
+    with pytest.raises(
+        ValueError,
+        match="must not contain verdict or score",
+    ):
+        judge.select_camera_views(
+            {
+                "metric": "support",
+                "candidates": [
+                    {
+                        "id": "candidate",
+                        "pose": {},
+                        "image_path": str(image),
+                    }
                 ],
                 "max_views": 1,
                 "allow_adjustment": False,

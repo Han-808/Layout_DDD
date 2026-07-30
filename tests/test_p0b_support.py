@@ -93,6 +93,7 @@ def _by_id(report: dict, object_id: str) -> dict:
 class _Judge:
     """Minimal binary P0b judge mock recording the requests it receives."""
 
+    vlm_control_enabled = False
     model_id = "judge"
     endpoint = "http://127.0.0.1:8298/v1"
 
@@ -491,6 +492,8 @@ def test_missing_judge_official_mode_raises() -> None:
 # --------------------------------------------------------------------------- #
 def test_non_binary_vlm_output_raises() -> None:
     class _Bad:
+        vlm_control_enabled = False
+
         def adjudicate_p0b(self, request: dict) -> dict:
             return {"verdict": "maybe", "confidence": 0.5}
 
@@ -501,6 +504,8 @@ def test_non_binary_vlm_output_raises() -> None:
 
 def test_non_official_support_judge_failure_is_not_counted_as_adjudicated() -> None:
     class _Bad:
+        vlm_control_enabled = False
+
         def adjudicate_p0b(self, request: dict) -> dict:
             return {"verdict": "insufficient_evidence", "confidence": 0.5}
 

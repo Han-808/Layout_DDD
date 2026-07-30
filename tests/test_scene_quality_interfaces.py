@@ -341,6 +341,15 @@ def test_all_three_metrics_evaluate_and_aggregate_when_complete(tmp_path) -> Non
     assert {request["metric"] for request in calls} == set(
         SCENE_QUALITY_INTERFACE_METRICS
     )
+    assert all(request["vlm_role"] == "judge" for request in calls)
+    assert all(
+        request["decision_contract"] == "canonical_metric_v1"
+        for request in calls
+    )
+    assert all(
+        request["judge_method"] == "adjudicate_scene_quality"
+        for request in calls
+    )
     pairing_request = next(
         request
         for request in calls

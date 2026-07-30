@@ -228,6 +228,14 @@ def test_bbox_track_provider_renders_frozen_views_without_selector(tmp_path: Pat
     assert renderer.calls[0]["preview"] is False
     assert provider.policy_config["mode"] == "bbox_track"
     assert provider.policy_config["max_steps"] == 0
+    assert provider.last_call_usage is not None
+    assert provider.last_call_usage["metric"] == "collision"
+    assert provider.last_call_usage["cache_hit"] is False
+    assert provider.last_call_usage["evidence_refs"] == [
+        str(path) for path in paths
+    ]
+    assert provider.last_call_usage["selector_calls"] == 0
+    assert provider.last_call_usage["camera_actions"] == 0
 
 
 def test_four_concrete_modes_and_auto_metric_resolution() -> None:
@@ -832,6 +840,42 @@ def test_query_cov_provider_uses_preview_selection_and_one_bounded_step(tmp_path
     assert selector.calls[1]["allow_adjustment"] is False
     assert renderer.calls[-1]["views"][0]["camera_action"] == "orbit_left"
     assert provider.policy_config["allowed_camera_actions"] == list(CAMERA_ACTIONS)
+
+    first_usage = deepcopy(provider.last_call_usage)
+    assert isinstance(first_usage["call_id"], str)
+    assert first_usage["metric"] == "collision"
+    assert first_usage["cache_hit"] is False
+    assert first_usage["evidence_refs"] == [
+        str(paths[0]["view_id"]),
+    ]
+    manifest_path = Path(first_usage["manifest_path"])
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["call_usage"] == first_usage
+    assert first_usage["selector_calls"] == len(
+        manifest["selection"]["steps"]
+    ) == 2
+    assert first_usage["camera_actions"] == sum(
+        isinstance(step["decision"].get("action"), dict)
+        for step in manifest["selection"]["steps"]
+    ) == 1
+
+    cached_paths = provider(_request())
+
+    assert cached_paths == paths
+    assert len(renderer.calls) == 3
+    assert provider.last_call_usage["call_id"] != first_usage["call_id"]
+    assert provider.last_call_usage["cache_hit"] is True
+    assert provider.last_call_usage["evidence_refs"] == [
+        str(paths[0]["view_id"]),
+    ]
+    assert provider.last_call_usage["selector_calls"] == 0
+    assert provider.last_call_usage["camera_actions"] == 0
+    cached_manifest = json.loads(
+        manifest_path.read_text(encoding="utf-8")
+    )
+    assert cached_manifest["call_usage"] == provider.last_call_usage
+    assert cached_manifest["selection"] == manifest["selection"]
+    assert cached_manifest["render_evidence"] == manifest["render_evidence"]
 
 
 def test_query_cov_can_render_frozen_vlm_selection_without_runtime_selector(

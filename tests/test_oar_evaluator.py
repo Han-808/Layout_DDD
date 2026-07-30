@@ -143,6 +143,9 @@ def test_attachment_proxy_outcome_never_replaces_binary_vlm_verdict() -> None:
     assert all(item["backend"] == "vlm" for item in report["checks"])
     assert all(item["route"] == "vlm_adjudicated" for item in report["checks"])
     assert [call["detector_evidence"]["proxy_checks_passed"] for call in calls] == [True, False, True, False]
+    assert all(call["vlm_role"] == "judge" for call in calls)
+    assert all(call["decision_contract"] == "relation_binary_v1" for call in calls)
+    assert all(call["judge_method"] == "adjudicate_relation" for call in calls)
 
 
 def test_attachment_with_judge_but_no_render_is_pending() -> None:

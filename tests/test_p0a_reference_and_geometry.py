@@ -187,6 +187,8 @@ def test_unconfirmed_reference_relations_do_not_leak_into_p0b_context(tmp_path: 
     calls: list[dict] = []
 
     class Judge:
+        vlm_control_enabled = False
+
         def adjudicate_p0b(self, request: dict) -> dict:
             calls.append(request)
             return {"verdict": "valid", "confidence": 0.9, "reason": "test"}

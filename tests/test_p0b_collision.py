@@ -124,6 +124,8 @@ def _geometry_manifest(tmp_path: Path, specs: dict[str, dict]) -> dict:
 
 
 class _Judge:
+    vlm_control_enabled = False
+
     def __init__(self, verdict: str) -> None:
         self.verdict = verdict
         self.calls = 0
@@ -399,6 +401,8 @@ def test_missing_judge_in_official_mode_fails() -> None:
 # 14. Invalid VLM verdict fails parsing
 def test_invalid_vlm_verdict_fails_parsing() -> None:
     class BadJudge:
+        vlm_control_enabled = False
+
         def adjudicate_p0b(self, request: dict) -> dict:
             return {"verdict": "insufficient_evidence", "confidence": 0.5, "reason": "bad"}
 

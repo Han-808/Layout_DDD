@@ -20,6 +20,7 @@ from benchmark.evaluator.OOR.relations import (
 from benchmark.evaluator.relationship_vlm import adjudicate_unsupported_relation, pending_relation_result
 from benchmark.evaluator.generic_validity.support import check_support
 from benchmark.relation_identity import copy_relation_identity, normalize_relation_id, provisional_relation_id
+from benchmark.visual_judge.runtime import EvidenceControlUnresolvedError
 
 
 # Kept as a compatibility export. OOR now has deterministic handlers plus a
@@ -356,6 +357,13 @@ def _adjudicate_unknown(
             render_evidence=render_evidence,
             judge=vlm_judge,
         )
+    except EvidenceControlUnresolvedError as exc:
+        return pending_relation_result(
+            family="oor",
+            relation=spec,
+            reason="evidence_unresolved",
+            error=f"{exc}; stop_reason={exc.result.stop_reason}",
+        )
     except Exception as exc:  # The report must preserve a failed mandatory judge call.
         return pending_relation_result(family="oor", relation=spec, reason="vlm_adjudication_failed", error=str(exc))
 
@@ -409,6 +417,15 @@ def _adjudicate_ambiguous_known_relation(
         result["category"] = str(preliminary.get("category") or "target_support")
         result["route"] = "vlm_adjudicated"
         return result
+    except EvidenceControlUnresolvedError as exc:
+        return _pending_known_relation(
+            family="oor",
+            relation=spec,
+            reason="evidence_unresolved",
+            error=f"{exc}; stop_reason={exc.result.stop_reason}",
+            detector_evidence=detector_evidence,
+            preliminary=preliminary,
+        )
     except Exception as exc:
         return _pending_known_relation(
             family="oor",

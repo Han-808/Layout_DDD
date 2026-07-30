@@ -91,9 +91,12 @@ from benchmark.task_contract import require_scene_matches_architecture
 from benchmark.utils.io import load_yaml, read_json, write_json
 from benchmark.visual_judge import (
     CameraEvidenceProvider,
+    VLMEvaluationControl,
     build_conditional_active_camera_evidence_provider,
+    build_controlled_vlm_judge,
     build_openai_compatible_vlm_judge,
     evaluate_vlm_category,
+    resolve_vlm_evaluation_control,
 )
 
 
@@ -134,6 +137,7 @@ def _run_canonical_evaluate(
     support_enabled: bool | None = None,
     p0b_official_mode: bool = False,
     p0b_local_view_provider: object | None = None,
+    camera_selector: object | None = None,
     metric_applicability: dict[str, bool] | None = None,
     spatial_fidelity_ontology: dict | str | Path | None = None,
     visual_style_spec: dict | str | Path | None = None,
@@ -143,6 +147,9 @@ def _run_canonical_evaluate(
     authorized_deviations: list | None = None,
     asset_policy: dict | None = None,
     specification_contract: dict | None = None,
+    vlm_evaluation_control: dict[str, Any]
+    | VLMEvaluationControl
+    | None = None,
 ) -> dict:
     """Run the canonical L0--L4 evaluator.
 
@@ -218,6 +225,18 @@ def _run_canonical_evaluate(
     evaluation_plan["prompt_granularity_resolution_source"] = granularity_source
 
     renders = overview_render_evidence
+    resolved_vlm_control = _resolve_runtime_vlm_control(
+        vlm_evaluation_control,
+        vlm_judge=vlm_judge,
+        camera_provider=p0b_local_view_provider,
+    )
+    runtime_vlm_judge = build_controlled_vlm_judge(
+        vlm_judge,
+        control=resolved_vlm_control,
+        camera_provider=p0b_local_view_provider,
+        camera_selector=camera_selector,
+        strict=_explicit_non_vlm_strict_override(vlm_judge),
+    )
     resolved_asset_policy = resolve_asset_policy(
         asset_policy if asset_policy is not None else request.get("asset_policy")
     )
@@ -280,7 +299,7 @@ def _run_canonical_evaluate(
         prompt=prompt,
         relationships=[],
         render_evidence=renders,
-        vlm_judge=vlm_judge,
+        vlm_judge=runtime_vlm_judge,
         local_view_provider=p0b_local_view_provider,
         collision_geometry=collision_geometry,
         support_enabled=None,
@@ -296,7 +315,7 @@ def _run_canonical_evaluate(
             relation_specs=relationship_intents["oor_relations"],
             prompt=prompt,
             render_evidence=renders,
-            vlm_judge=vlm_judge,
+            vlm_judge=runtime_vlm_judge,
             collision_geometry=collision_geometry,
             support_report=generic_metrics.get("support"),
         )
@@ -306,7 +325,7 @@ def _run_canonical_evaluate(
             relation_specs=relationship_intents["oar_relations"],
             prompt=prompt,
             render_evidence=renders,
-            vlm_judge=vlm_judge,
+            vlm_judge=runtime_vlm_judge,
         )
 
     grouping_report = _resolve_object_grouping_report(
@@ -324,7 +343,7 @@ def _run_canonical_evaluate(
         specification_contract=resolved_contract,
         render_evidence=renders,
         camera_evidence_provider=p0b_local_view_provider,
-        vlm_judge=vlm_judge,
+        vlm_judge=runtime_vlm_judge,
         object_grouping_report=grouping_report,
         authorized_deviations=resolved_authorized_deviations,
         asset_policy=resolved_asset_policy,
@@ -346,7 +365,7 @@ def _run_canonical_evaluate(
         config=scene_quality_config,
         profile=resolved_profile,
         prompt=prompt,
-        vlm_judge=vlm_judge,
+        vlm_judge=runtime_vlm_judge,
         object_grouping_report=grouping_report,
         render_evidence=l3_render_evidence,
         camera_evidence_provider=p0b_local_view_provider,
@@ -438,6 +457,10 @@ def _run_canonical_evaluate(
                 "affects_score_directly": False,
             },
             "visual_config_unchanged": True,
+            "vlm_evaluation_control": _runtime_vlm_control_manifest(
+                resolved_vlm_control,
+                runtime_judge=runtime_vlm_judge,
+            ),
             "deprecated_runtime_inputs": {
                 "eval_oor": "ignored; contract claims activate OOR",
                 "eval_oar": "ignored; contract claims activate OAR",
@@ -482,6 +505,7 @@ def _run_legacy_game_evaluate(
     support_enabled: bool | None = None,
     p0b_official_mode: bool = False,
     p0b_local_view_provider: object | None = None,
+    camera_selector: object | None = None,
     metric_applicability: dict[str, bool] | None = None,
     spatial_fidelity_ontology: dict | str | Path | None = None,
     visual_style_spec: dict | str | Path | None = None,
@@ -492,6 +516,9 @@ def _run_legacy_game_evaluate(
     authorized_deviations: list | None = None,
     asset_policy: dict | None = None,
     specification_contract: dict | None = None,
+    vlm_evaluation_control: dict[str, Any]
+    | VLMEvaluationControl
+    | None = None,
 ) -> dict:
     if not eval_oor and not eval_oar and not eval_generic_validity:
         eval_generic_validity = True
@@ -520,6 +547,18 @@ def _run_legacy_game_evaluate(
         else None
     )
     renders = [str(path) for path in (render_evidence or []) if str(path).strip()]
+    resolved_vlm_control = _resolve_runtime_vlm_control(
+        vlm_evaluation_control,
+        vlm_judge=vlm_judge,
+        camera_provider=p0b_local_view_provider,
+    )
+    runtime_vlm_judge = build_controlled_vlm_judge(
+        vlm_judge,
+        control=resolved_vlm_control,
+        camera_provider=p0b_local_view_provider,
+        camera_selector=camera_selector,
+        strict=_explicit_non_vlm_strict_override(vlm_judge),
+    )
     resolved_visual_style_spec = _resolve_visual_style_spec(visual_style_spec)
     resolved_visual_style_prompt = (
         compile_visual_style_prompt(resolved_visual_style_spec)
@@ -577,7 +616,7 @@ def _run_legacy_game_evaluate(
             prompt=str(request.get("instruction") or ""),
             relationships=[],
             render_evidence=renders,
-            vlm_judge=vlm_judge,
+            vlm_judge=runtime_vlm_judge,
             local_view_provider=p0b_local_view_provider,
             collision_geometry=collision_geometry,
             support_enabled=support_enabled,
@@ -594,7 +633,7 @@ def _run_legacy_game_evaluate(
             prompt=resolved_visual_style_prompt,
             scene=normalized_scene,
             render_evidence=renders,
-            judge=vlm_judge,
+            judge=runtime_vlm_judge,
             deterministic_evidence=_shared_visual_evidence(reports),
         )
         if float(weights["visual_quality"]) > 0.0
@@ -612,7 +651,7 @@ def _run_legacy_game_evaluate(
             relation_specs=relation_specs,
             prompt=str(request.get("instruction") or ""),
             render_evidence=renders,
-            vlm_judge=vlm_judge,
+            vlm_judge=runtime_vlm_judge,
             collision_geometry=collision_geometry,
             support_report=(
                 generic_metrics.get("support")
@@ -627,7 +666,7 @@ def _run_legacy_game_evaluate(
             relation_specs=relation_specs,
             prompt=str(request.get("instruction") or ""),
             render_evidence=renders,
-            vlm_judge=vlm_judge,
+            vlm_judge=runtime_vlm_judge,
         )
     category_2 = evaluation_plan["gate"]["category_2"]
     if category_2 == "prompt_fidelity":
@@ -637,7 +676,7 @@ def _run_legacy_game_evaluate(
             object_plan=plan,
             scene=normalized_scene,
             render_evidence=renders,
-            vlm_judge=vlm_judge,
+            vlm_judge=runtime_vlm_judge,
             reports=reports,
             relationship_intents=relationship_intents,
             confirmed_reference=confirmed_reference,
@@ -658,7 +697,7 @@ def _run_legacy_game_evaluate(
                 config=evaluation_plan["categories"]["spatial_fidelity"],
                 prompt=str(request.get("instruction") or ""),
                 render_evidence=renders,
-                vlm_judge=vlm_judge,
+                vlm_judge=runtime_vlm_judge,
             )
             reports["spatial_fidelity"] = category_2_report
         else:
@@ -692,6 +731,7 @@ def _run_legacy_game_evaluate(
             object_grouping_report=object_grouping_report,
             render_evidence=renders,
             camera_evidence_provider=p0b_local_view_provider,
+            vlm_judge=runtime_vlm_judge,
             authorized_deviations=resolved_authorized_deviations,
             metric_applicability=scene_quality_applicability(resolved_asset_policy),
             profile=None,
@@ -783,6 +823,10 @@ def _run_legacy_game_evaluate(
                 dict(p0b_local_view_provider.policy_config)
                 if isinstance(getattr(p0b_local_view_provider, "policy_config", None), dict)
                 else None
+            ),
+            "vlm_evaluation_control": _runtime_vlm_control_manifest(
+                resolved_vlm_control,
+                runtime_judge=runtime_vlm_judge,
             ),
             "metric_applicability": frozen_metric_applicability,
             "structural_metric_config": frozen_metric_config,
@@ -1032,6 +1076,14 @@ def main() -> None:
         ),
     )
     parser.add_argument("--render-evidence", action="append", default=[])
+    parser.add_argument(
+        "--vlm-evaluation-control",
+        default=None,
+        help=(
+            "Optional JSON patch for bounded Judge, CameraSelector, and "
+            "EvidenceGate control defaults."
+        ),
+    )
     parser.add_argument("--vlm-judge-config", default=None, help="JSON config for an OpenAI-compatible local or remote VLM judge.")
     parser.add_argument("--vlm-judge-endpoint", default=None)
     parser.add_argument("--vlm-judge-model", default=None)
@@ -1061,6 +1113,16 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    vlm_control_config = (
+        read_json(_path_arg(args.vlm_evaluation_control))
+        if args.vlm_evaluation_control
+        else None
+    )
+    if vlm_control_config is not None and not isinstance(
+        vlm_control_config,
+        dict,
+    ):
+        parser.error("--vlm-evaluation-control must point to a JSON object")
     try:
         camera_pose_metric_modes = parse_metric_camera_modes(args.camera_pose_metric_mode)
     except (TypeError, ValueError) as exc:
@@ -1212,6 +1274,7 @@ def main() -> None:
         support_enabled=args.support_enabled,
         p0b_official_mode=args.p0b_official_mode,
         p0b_local_view_provider=local_view_provider,
+        camera_selector=camera_selector,
         spatial_fidelity_ontology=(
             _path_arg(args.spatial_fidelity_ontology)
             if args.spatial_fidelity_ontology
@@ -1243,6 +1306,7 @@ def main() -> None:
             if args.authorized_deviations
             else None
         ),
+        vlm_evaluation_control=vlm_control_config,
     )
     print(f"benchmark_score: {report['benchmark_score']}")
     print(f"evaluators: {', '.join(report['reports'].keys())}")
@@ -1282,6 +1346,83 @@ def _normalize_canonical_render_evidence(
             )
         )
     return normalized
+
+
+def _resolve_runtime_vlm_control(
+    value: dict[str, Any] | VLMEvaluationControl | None,
+    *,
+    vlm_judge: object | None,
+    camera_provider: object | None,
+) -> VLMEvaluationControl:
+    if isinstance(value, VLMEvaluationControl):
+        return value
+    if value is not None and not isinstance(value, dict):
+        raise TypeError(
+            "vlm_evaluation_control must be a JSON object or "
+            "VLMEvaluationControl"
+        )
+    existing_max_views = getattr(camera_provider, "max_views", None)
+    existing_max_steps = getattr(camera_provider, "max_steps", None)
+    judge_max_images = getattr(vlm_judge, "max_images", None)
+    return resolve_vlm_evaluation_control(
+        value,
+        existing_max_views=(
+            existing_max_views
+            if isinstance(existing_max_views, int)
+            and not isinstance(existing_max_views, bool)
+            else None
+        ),
+        existing_max_steps=(
+            existing_max_steps
+            if isinstance(existing_max_steps, int)
+            and not isinstance(existing_max_steps, bool)
+            else None
+        ),
+        existing_selector_available=camera_provider is not None,
+        judge_max_images=(
+            judge_max_images
+            if isinstance(judge_max_images, int)
+            and not isinstance(judge_max_images, bool)
+            else None
+        ),
+    )
+
+
+def _explicit_non_vlm_strict_override(
+    judge: object | None,
+) -> bool | None:
+    """Honor only an explicit non-VLM compatibility declaration."""
+
+    if getattr(judge, "vlm_control_enabled", None) is False:
+        return False
+    return None
+
+
+def _runtime_vlm_control_manifest(
+    control: VLMEvaluationControl,
+    *,
+    runtime_judge: object | None = None,
+) -> dict[str, Any]:
+    result = control.manifest()
+    runtime_manifest = getattr(runtime_judge, "manifest", None)
+    result["integration"] = {
+        "core_boundaries": [
+            "Judge",
+            "CameraSelector",
+            "EvidenceGate",
+        ],
+        "existing_public_methods": "compatibility_wrappers",
+        "existing_camera_algorithms": "adapter_preserved",
+        "runtime": (
+            runtime_manifest()
+            if callable(runtime_manifest)
+            else {
+                "strict_controller_enabled": False,
+                "controlled_call_count": 0,
+            }
+        ),
+    }
+    return result
 
 
 def _overview_render_evidence(

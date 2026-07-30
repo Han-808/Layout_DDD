@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+from copy import deepcopy
 from io import BytesIO
 import json
 import math
@@ -10,6 +11,17 @@ from typing import Any
 
 from benchmark.models import OpenAICompatibleModel, parse_json_object
 from benchmark.visual_judge.active_policy import selector_safe_proposals
+from benchmark.visual_judge.contracts import (
+    validate_binary_judge_response,
+    validate_camera_selection_response,
+    validate_canonical_metric_response,
+    validate_generic_visual_response,
+)
+from benchmark.visual_judge.roles import (
+    DecisionContract,
+    VLMRole,
+    vlm_audit_metadata,
+)
 
 
 SYSTEM_PROMPT = """You are the visual judge for a 3D scene-generation benchmark.
@@ -152,7 +164,58 @@ class OpenAICompatibleVLMJudge:
             else bool(response_format_json)
         )
 
+    def _audit_result(
+        self,
+        result: dict[str, Any],
+        *,
+        role: VLMRole,
+        decision_contract: DecisionContract,
+        judge_method: str,
+        images_used: list[str],
+        request_metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        result.update(
+            vlm_audit_metadata(
+                role,
+                decision_contract=decision_contract,
+                judge_method=judge_method,
+            )
+        )
+        result["model"] = self.model.model_id
+        result["endpoint"] = self.model.endpoint
+        result["images_used"] = list(images_used)
+        result["request_metadata"] = (
+            dict(self.model.last_request_metadata)
+            if request_metadata is None
+            else dict(request_metadata)
+        )
+        return result
+
     def evaluate(self, request: dict) -> dict:
+        """Compatibility score wrapper with a deterministic evidence preflight."""
+
+        if not isinstance(request, dict):
+            raise TypeError("VLM judge request must be a JSON object")
+        gate = _check_standalone_visual_evidence(request)
+        if gate is not None:
+            return self._audit_result(
+                {
+                    "applicable": False,
+                    "score": None,
+                    "confidence": 0.0,
+                    "summary": gate,
+                    "issues": [],
+                    "evidence": [],
+                },
+                role=VLMRole.JUDGE,
+                decision_contract=DecisionContract.GENERIC_VISUAL_SCORE,
+                judge_method="evaluate",
+                images_used=[],
+                request_metadata={},
+            )
+        return self._evaluate_raw(request)
+
+    def _evaluate_raw(self, request: dict) -> dict:
         if not isinstance(request, dict):
             raise TypeError("VLM judge request must be a JSON object")
         category = str(request.get("category") or "visual_quality")
@@ -162,7 +225,13 @@ class OpenAICompatibleVLMJudge:
         if missing:
             raise FileNotFoundError(f"VLM render evidence does not exist: {missing}")
 
+        audit = vlm_audit_metadata(
+            VLMRole.JUDGE,
+            decision_contract=DecisionContract.GENERIC_VISUAL_SCORE,
+            judge_method="evaluate",
+        )
         context = {
+            **audit,
             "category": category,
             "rubric": CATEGORY_RUBRICS.get(category, "Judge this category from the supplied evidence."),
             "natural_language_request": request.get("prompt"),
@@ -174,6 +243,9 @@ class OpenAICompatibleVLMJudge:
             context,
             self.max_context_chars,
             priority_keys=(
+                "vlm_role",
+                "decision_contract",
+                "judge_method",
                 "category",
                 "deterministic_evidence",
                 "rubric",
@@ -200,35 +272,52 @@ class OpenAICompatibleVLMJudge:
             call_type=f"vlm_judge.{category}",
         )
         result = parse_json_object(raw)
-        applicable = result.get("applicable", True)
-        if not isinstance(applicable, bool):
-            raise ValueError("VLM judge applicable must be boolean")
-        if applicable:
-            _score(result.get("score"), "score")
-        elif result.get("score") is not None:
-            raise ValueError("VLM judge score must be null when applicable is false")
-        if result.get("confidence") is not None:
-            _score(result.get("confidence"), "confidence")
-        result["applicable"] = applicable
-        result["model"] = self.model.model_id
-        result["endpoint"] = self.model.endpoint
-        result["images_used"] = [str(path.resolve()) for path in selected]
-        result["request_metadata"] = dict(self.model.last_request_metadata)
-        return result
+        validate_generic_visual_response(result)
+        return self._audit_result(
+            result,
+            role=VLMRole.JUDGE,
+            decision_contract=DecisionContract.GENERIC_VISUAL_SCORE,
+            judge_method="evaluate",
+            images_used=[str(path.resolve()) for path in selected],
+        )
 
     def adjudicate_scene_quality(self, request: dict) -> dict:
         """Return the strict canonical L3 verdict contract."""
 
-        return self._adjudicate_canonical_metric(request, family="scene_quality")
+        return self._controlled_adjudicate(
+            "adjudicate_scene_quality",
+            request,
+        )
+
+    def _adjudicate_scene_quality_raw(self, request: dict) -> dict:
+        return self._adjudicate_canonical_metric(
+            request,
+            family="scene_quality",
+            judge_method="adjudicate_scene_quality",
+        )
 
     def adjudicate_functional_semantic(self, request: dict) -> dict:
         """Return the strict canonical L2 functional-semantic verdict contract."""
 
+        return self._controlled_adjudicate(
+            "adjudicate_functional_semantic",
+            request,
+        )
+
+    def _adjudicate_functional_semantic_raw(
+        self,
+        request: dict,
+    ) -> dict:
         result = self._adjudicate_canonical_metric(
             request,
             family="specification_fidelity",
+            judge_method="adjudicate_functional_semantic",
         )
         if result.get("verdict") == "ambiguous":
+            result["canonical_verdict"] = "ambiguous"
+            result["response_adapter"] = (
+                "functional_semantic_insufficient_evidence_compat_v1"
+            )
             result["verdict"] = "insufficient_evidence"
         result.setdefault(
             "router_state",
@@ -245,6 +334,7 @@ class OpenAICompatibleVLMJudge:
         request: dict,
         *,
         family: str,
+        judge_method: str,
     ) -> dict:
         if not isinstance(request, dict):
             raise TypeError("canonical metric judge request must be a JSON object")
@@ -267,19 +357,28 @@ class OpenAICompatibleVLMJudge:
                 f"canonical metric render evidence does not exist: {missing_paths}"
             )
         if not selected:
-            return {
-                "evidence_status": "insufficient",
-                "verdict": "ambiguous",
-                "confidence": 0.0,
-                "reason": "no rendered evidence was supplied",
-                "missing_evidence": ["metric_scoped_render_evidence"],
-                "defects": [],
-                "model": self.model.model_id,
-                "endpoint": self.model.endpoint,
-                "images_used": [],
-                "request_metadata": {},
-            }
+            return self._audit_result(
+                {
+                    "evidence_status": "insufficient",
+                    "verdict": "ambiguous",
+                    "confidence": 0.0,
+                    "reason": "no rendered evidence was supplied",
+                    "missing_evidence": ["metric_scoped_render_evidence"],
+                    "defects": [],
+                },
+                role=VLMRole.JUDGE,
+                decision_contract=DecisionContract.CANONICAL_METRIC,
+                judge_method=judge_method,
+                images_used=[],
+                request_metadata={},
+            )
+        audit = vlm_audit_metadata(
+            VLMRole.JUDGE,
+            decision_contract=DecisionContract.CANONICAL_METRIC,
+            judge_method=judge_method,
+        )
         context = {
+            **audit,
             "family": family,
             "metric": metric,
             "rubric": CATEGORY_RUBRICS[metric],
@@ -317,6 +416,9 @@ class OpenAICompatibleVLMJudge:
             context,
             self.max_context_chars,
             priority_keys=(
+                "vlm_role",
+                "decision_contract",
+                "judge_method",
                 "metric",
                 "rubric",
                 "metric_rubric",
@@ -353,33 +455,7 @@ class OpenAICompatibleVLMJudge:
             call_type=f"vlm_judge.canonical.{metric}",
         )
         result = parse_json_object(raw)
-        evidence_status = result.get("evidence_status")
-        verdict = result.get("verdict")
-        if evidence_status not in {"sufficient", "insufficient"}:
-            raise ValueError(
-                "canonical metric evidence_status must be sufficient or insufficient"
-            )
-        if verdict not in {"valid", "invalid", "ambiguous"}:
-            raise ValueError(
-                "canonical metric verdict must be valid, invalid, or ambiguous"
-            )
-        if evidence_status == "insufficient" and verdict != "ambiguous":
-            raise ValueError(
-                "insufficient canonical metric evidence requires verdict=ambiguous"
-            )
-        _score(result.get("confidence"), "confidence")
-        defects = result.get("defects")
-        if not isinstance(defects, list):
-            raise ValueError("canonical metric defects must be a JSON list")
-        if verdict == "invalid" and not defects:
-            raise ValueError(
-                "canonical metric invalid verdict requires an explicit significant defect"
-            )
-        if verdict == "valid" and defects:
-            raise ValueError(
-                "canonical metric valid verdict cannot retain defect records"
-            )
-        allowed_scopes = set(
+        allowed_scopes = (
             (
                 request.get("judgment_scope")
                 if isinstance(request.get("judgment_scope"), dict)
@@ -387,67 +463,22 @@ class OpenAICompatibleVLMJudge:
             ).get("included")
             or []
         )
-        for defect in defects:
-            if not isinstance(defect, dict):
-                raise ValueError(
-                    "canonical metric defects must contain JSON objects"
-                )
-            if not str(defect.get("scope") or "").strip():
-                raise ValueError(
-                    "canonical metric defects must identify their metric scope"
-                )
-            if allowed_scopes and defect.get("scope") not in allowed_scopes:
-                raise ValueError(
-                    "canonical metric defect scope is outside the requested metric"
-                )
-            if not str(defect.get("reason") or "").strip():
-                raise ValueError(
-                    "canonical metric defects must explain the significant defect"
-                )
-            target_ids = defect.get("target_ids")
-            if (
-                not isinstance(target_ids, list)
-                or not target_ids
-                or any(
-                    not isinstance(item, str) or not item.strip()
-                    for item in target_ids
-                )
-            ):
-                raise ValueError(
-                    "canonical metric defects must identify non-empty target_ids"
-                )
-            if not str(defect.get("relation") or "").strip():
-                raise ValueError(
-                    "canonical metric defects must identify the defective relation"
-                )
-        missing_evidence = result.get("missing_evidence")
-        if not isinstance(missing_evidence, list):
-            raise ValueError("canonical metric missing_evidence must be a JSON list")
-        if evidence_status == "insufficient" and (
-            not missing_evidence
-            or any(
-                not isinstance(item, str) or not item.strip()
-                for item in missing_evidence
-            )
-        ):
-            raise ValueError(
-                "insufficient canonical metric evidence must name missing evidence"
-            )
-        if evidence_status == "insufficient" and defects:
-            raise ValueError(
-                "insufficient canonical metric evidence cannot assert defects"
-            )
-        if evidence_status == "sufficient" and missing_evidence:
-            raise ValueError(
-                "sufficient canonical metric evidence cannot retain missing_evidence"
-            )
-        result["model"] = self.model.model_id
-        result["endpoint"] = self.model.endpoint
-        result["images_used"] = [str(path.resolve()) for path in selected]
-        result["request_metadata"] = dict(self.model.last_request_metadata)
-        return result
+        validate_canonical_metric_response(
+            result,
+            allowed_scopes=allowed_scopes,
+        )
+        return self._audit_result(
+            result,
+            role=VLMRole.JUDGE,
+            decision_contract=DecisionContract.CANONICAL_METRIC,
+            judge_method=judge_method,
+            images_used=[str(path.resolve()) for path in selected],
+        )
 
     def adjudicate_p0b(self, request: dict) -> dict:
+        return self._controlled_adjudicate("adjudicate_p0b", request)
+
+    def _adjudicate_p0b_raw(self, request: dict) -> dict:
         if not isinstance(request, dict):
             raise TypeError("P0b judge request must be a JSON object")
         paths = [Path(str(value)).expanduser() for value in request.get("render_evidence", [])]
@@ -455,7 +486,13 @@ class OpenAICompatibleVLMJudge:
         missing = [str(path) for path in selected if not path.is_file()]
         if missing:
             raise FileNotFoundError(f"P0b render evidence does not exist: {missing}")
+        audit = vlm_audit_metadata(
+            VLMRole.JUDGE,
+            decision_contract=DecisionContract.P0B_BINARY,
+            judge_method="adjudicate_p0b",
+        )
         context = {
+            **audit,
             "metric": request.get("metric"),
             "metric_rubric": request.get("metric_rubric"),
             "candidate_selection_policy": request.get("candidate_selection_policy"),
@@ -476,6 +513,9 @@ class OpenAICompatibleVLMJudge:
             context,
             self.max_context_chars,
             priority_keys=(
+                "vlm_role",
+                "decision_contract",
+                "judge_method",
                 "metric",
                 "detector_evidence",
                 "event",
@@ -507,16 +547,26 @@ class OpenAICompatibleVLMJudge:
             call_type=f"vlm_judge.p0b.{request.get('metric') or 'event'}",
         )
         result = parse_json_object(raw)
-        if result.get("verdict") not in {"valid", "invalid"}:
-            raise ValueError("P0b judge verdict must be exactly 'valid' or 'invalid'")
-        _score(result.get("confidence"), "confidence")
-        result["model"] = self.model.model_id
-        result["endpoint"] = self.model.endpoint
-        result["images_used"] = [str(path.resolve()) for path in selected]
-        result["request_metadata"] = dict(self.model.last_request_metadata)
-        return result
+        validate_binary_judge_response(
+            result,
+            judge_label="P0b judge",
+            confidence_label="VLM judge",
+        )
+        return self._audit_result(
+            result,
+            role=VLMRole.JUDGE,
+            decision_contract=DecisionContract.P0B_BINARY,
+            judge_method="adjudicate_p0b",
+            images_used=[str(path.resolve()) for path in selected],
+        )
 
     def adjudicate_relation(self, request: dict) -> dict:
+        return self._controlled_adjudicate(
+            "adjudicate_relation",
+            request,
+        )
+
+    def _adjudicate_relation_raw(self, request: dict) -> dict:
         if not isinstance(request, dict):
             raise TypeError("relationship judge request must be a JSON object")
         paths = [Path(str(value)).expanduser() for value in request.get("render_evidence", [])]
@@ -526,7 +576,13 @@ class OpenAICompatibleVLMJudge:
             raise FileNotFoundError(f"relationship render evidence does not exist: {missing}")
         if not selected:
             raise ValueError("relationship adjudication requires at least one rendered view")
+        audit = vlm_audit_metadata(
+            VLMRole.JUDGE,
+            decision_contract=DecisionContract.RELATION_BINARY,
+            judge_method="adjudicate_relation",
+        )
         context = {
+            **audit,
             "family": request.get("family"),
             "explicit_relation_claim": request.get("relation"),
             "natural_language_prompt": request.get("natural_language_prompt"),
@@ -539,6 +595,9 @@ class OpenAICompatibleVLMJudge:
             context,
             self.max_context_chars,
             priority_keys=(
+                "vlm_role",
+                "decision_contract",
+                "judge_method",
                 "family",
                 "detector_evidence",
                 "explicit_relation_claim",
@@ -566,16 +625,29 @@ class OpenAICompatibleVLMJudge:
             call_type=f"vlm_judge.relationship.{request.get('family') or 'unknown'}",
         )
         result = parse_json_object(raw)
-        if result.get("verdict") not in {"valid", "invalid"}:
-            raise ValueError("relationship judge verdict must be exactly 'valid' or 'invalid'")
-        _score(result.get("confidence"), "confidence")
-        result["model"] = self.model.model_id
-        result["endpoint"] = self.model.endpoint
-        result["images_used"] = [str(path.resolve()) for path in selected]
-        result["request_metadata"] = dict(self.model.last_request_metadata)
-        return result
+        validate_binary_judge_response(
+            result,
+            judge_label="relationship judge",
+            confidence_label="VLM judge",
+        )
+        return self._audit_result(
+            result,
+            role=VLMRole.JUDGE,
+            decision_contract=DecisionContract.RELATION_BINARY,
+            judge_method="adjudicate_relation",
+            images_used=[str(path.resolve()) for path in selected],
+        )
 
     def adjudicate_spatial_fidelity(self, request: dict) -> dict:
+        return self._controlled_adjudicate(
+            "adjudicate_spatial_fidelity",
+            request,
+        )
+
+    def _adjudicate_spatial_fidelity_raw(
+        self,
+        request: dict,
+    ) -> dict:
         if not isinstance(request, dict):
             raise TypeError("Spatial Fidelity judge request must be a JSON object")
         paths = [Path(str(value)).expanduser() for value in request.get("render_evidence", [])]
@@ -585,7 +657,13 @@ class OpenAICompatibleVLMJudge:
             raise FileNotFoundError(f"Spatial Fidelity render evidence does not exist: {missing}")
         if not selected:
             raise ValueError("Spatial Fidelity adjudication requires at least one rendered view")
+        audit = vlm_audit_metadata(
+            VLMRole.JUDGE,
+            decision_contract=DecisionContract.SPATIAL_FIDELITY_BINARY,
+            judge_method="adjudicate_spatial_fidelity",
+        )
         context = {
+            **audit,
             "metric": request.get("metric"),
             "event": request.get("event"),
             "detector_evidence": request.get("detector_evidence"),
@@ -598,6 +676,9 @@ class OpenAICompatibleVLMJudge:
             context,
             self.max_context_chars,
             priority_keys=(
+                "vlm_role",
+                "decision_contract",
+                "judge_method",
                 "metric",
                 "event",
                 "detector_evidence",
@@ -625,14 +706,45 @@ class OpenAICompatibleVLMJudge:
             call_type=f"vlm_judge.spatial_fidelity.{request.get('metric') or 'event'}",
         )
         result = parse_json_object(raw)
-        if result.get("verdict") not in {"valid", "invalid"}:
-            raise ValueError("Spatial Fidelity judge verdict must be exactly 'valid' or 'invalid'")
-        _score(result.get("confidence"), "confidence")
-        result["model"] = self.model.model_id
-        result["endpoint"] = self.model.endpoint
-        result["images_used"] = [str(path.resolve()) for path in selected]
-        result["request_metadata"] = dict(self.model.last_request_metadata)
-        return result
+        validate_binary_judge_response(
+            result,
+            judge_label="Spatial Fidelity judge",
+            confidence_label="VLM judge",
+        )
+        return self._audit_result(
+            result,
+            role=VLMRole.JUDGE,
+            decision_contract=DecisionContract.SPATIAL_FIDELITY_BINARY,
+            judge_method="adjudicate_spatial_fidelity",
+            images_used=[str(path.resolve()) for path in selected],
+        )
+
+    def _controlled_adjudicate(
+        self,
+        method_name: str,
+        request: dict,
+    ) -> dict:
+        """Route direct public calls through the same strict compatibility loop."""
+
+        # Lazy imports keep the low-level OpenAI transport independent from the
+        # orchestration module at import time.  ``ControlledVLMJudge`` resolves
+        # the private raw method, so this wrapper cannot recurse.
+        from benchmark.visual_judge.control_config import (
+            resolve_vlm_evaluation_control,
+        )
+        from benchmark.visual_judge.runtime import ControlledVLMJudge
+
+        control = resolve_vlm_evaluation_control(
+            existing_selector_available=False,
+            judge_max_images=self.max_images,
+        )
+        wrapper = ControlledVLMJudge(
+            self,
+            control=control,
+            strict=True,
+        )
+        call = getattr(wrapper, method_name)
+        return call(request)
 
     def select_camera_views(self, request: dict) -> dict:
         if not isinstance(request, dict):
@@ -693,7 +805,13 @@ class OpenAICompatibleVLMJudge:
             if selection_phase == "active_fallback"
             else allowed_actions
         )
+        audit = vlm_audit_metadata(
+            VLMRole.VLM_CAMERA_SELECTOR,
+            decision_contract=DecisionContract.CAMERA_SELECTION,
+            judge_method="select_camera_views",
+        )
         context = {
+            **audit,
             "candidates": [
                 {
                     "id": alias,
@@ -725,6 +843,9 @@ class OpenAICompatibleVLMJudge:
             context,
             self.max_context_chars,
             priority_keys=(
+                "vlm_role",
+                "decision_contract",
+                "judge_method",
                 "metric_family",
                 "preview_role",
                 "preview_warning_class",
@@ -764,17 +885,12 @@ class OpenAICompatibleVLMJudge:
             ),
         )
         parsed = parse_json_object(raw)
-        ids = parsed.get("selected_view_ids")
         available = set(alias_to_internal)
-        if not isinstance(ids, list):
-            raise ValueError("camera selector selected_view_ids must be a list")
-        resolved_aliases = list(dict.fromkeys(str(value) for value in ids if str(value)))
-        if (
-            not resolved_aliases
-            or len(resolved_aliases) > max_views
-            or any(value not in available for value in resolved_aliases)
-        ):
-            raise ValueError("camera selector returned invalid selected_view_ids")
+        resolved_aliases = validate_camera_selection_response(
+            parsed,
+            available_view_ids=available,
+            max_views=max_views,
+        )
         action = parsed.get("action")
         resolved_action = None
         if action is not None:
@@ -811,16 +927,21 @@ class OpenAICompatibleVLMJudge:
                 "selector_candidate_alias_policy": "per_request_sequential_alias_v1",
             }
         )
-        return {
-            "selected_view_ids": [alias_to_internal[value] for value in resolved_aliases],
-            "action": resolved_action,
-            "reason": str(reason)[:1000] if reason is not None else "",
-            "model": self.model.model_id,
-            "endpoint": self.model.endpoint,
+        return self._audit_result(
+            {
+                "selected_view_ids": [
+                    alias_to_internal[value] for value in resolved_aliases
+                ],
+                "action": resolved_action,
+                "reason": str(reason)[:1000] if reason is not None else "",
+            },
+            role=VLMRole.VLM_CAMERA_SELECTOR,
+            decision_contract=DecisionContract.CAMERA_SELECTION,
+            judge_method="select_camera_views",
             # Preserve an auditable image count without exposing local names or paths.
-            "images_used": aliases,
-            "request_metadata": request_metadata,
-        }
+            images_used=aliases,
+            request_metadata=request_metadata,
+        )
 
 
 def _generic_view_names(paths: list[Path]) -> list[str]:
@@ -954,6 +1075,39 @@ def build_openai_compatible_vlm_judge(config: dict[str, Any]) -> OpenAICompatibl
         max_images=int(config.get("max_images", 6)),
         max_context_chars=int(config.get("max_context_chars", 30000)),
         response_format_json=bool(config.get("response_format_json", True)),
+    )
+
+
+def _check_standalone_visual_evidence(
+    request: dict[str, Any],
+) -> str | None:
+    """Return a compatibility summary when deterministic evidence is not ready."""
+
+    from benchmark.visual_judge.evidence_gate import (
+        DeterministicEvidenceGate,
+    )
+    from benchmark.visual_judge.interfaces import EvidenceGateRequest
+    from benchmark.visual_judge.runtime import _judge_request
+
+    core = _judge_request(request)
+    gate = DeterministicEvidenceGate().check(
+        EvidenceGateRequest(
+            task=core.task,
+            metric=core.metric,
+            target_ids=("scene",),
+            scene=deepcopy(core.scene_context),
+            visual_evidence=tuple(deepcopy(core.visual_evidence)),
+            evidence_goal={},
+            context=deepcopy(request),
+        )
+    )
+    if gate.ready:
+        return None
+    reasons = list(gate.reason_codes) or [
+        "technical_visual_evidence_not_ready"
+    ]
+    return "visual evidence is not technically ready: " + ", ".join(
+        reasons
     )
 
 
@@ -1284,12 +1438,3 @@ def _priority_seed_value(value: Any, max_chars: int) -> Any:
 
 def _compact_json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=True, separators=(",", ":"))
-
-
-def _score(value: Any, name: str) -> float:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise ValueError(f"VLM judge {name} must be numeric")
-    result = float(value)
-    if not 0.0 <= result <= 1.0:
-        raise ValueError(f"VLM judge {name} must be between 0 and 1")
-    return result

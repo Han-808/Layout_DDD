@@ -34,6 +34,11 @@ from benchmark.visual_judge.p0b import (
 )
 
 
+def _non_vlm_stub(call):
+    call.vlm_control_enabled = False
+    return call
+
+
 # --------------------------------------------------------------------------- #
 # Fixtures / helpers
 # --------------------------------------------------------------------------- #
@@ -206,6 +211,7 @@ def test_collision_rubric_conveys_no_label_prior_and_obb_insufficient() -> None:
 def test_collision_request_carries_candidate_selection_policy() -> None:
     captured: list[dict] = []
 
+    @_non_vlm_stub
     def judge(request: dict) -> dict:
         captured.append(request)
         return {"verdict": "valid", "confidence": 0.5, "reason": "no penetration shown"}
@@ -240,6 +246,8 @@ def test_collision_evaluator_forwards_no_prior_policy_to_judge() -> None:
     captured: list[dict] = []
 
     class _Judge:
+        vlm_control_enabled = False
+
         def adjudicate_p0b(self, request: dict) -> dict:
             captured.append(request)
             return {"verdict": "valid", "confidence": 0.6, "reason": "contact only"}
@@ -316,6 +324,8 @@ def test_reliable_mesh_separation_stays_direct_valid(tmp_path: Path) -> None:
     }
 
     class _Judge:
+        vlm_control_enabled = False
+
         calls = 0
 
         def adjudicate_p0b(self, request: dict) -> dict:
@@ -347,6 +357,8 @@ def test_mixed_mesh_proxy_pair_still_routes_to_vlm(tmp_path: Path) -> None:
     calls: list[int] = []
 
     class _Judge:
+        vlm_control_enabled = False
+
         def adjudicate_p0b(self, request: dict) -> dict:
             calls.append(1)
             return {"verdict": "valid", "confidence": 0.5, "reason": "x"}
@@ -366,6 +378,7 @@ def test_path_only_local_view_provider_remains_compatible(tmp_path: Path) -> Non
     view.write_bytes(b"png")
     captured: list[dict] = []
 
+    @_non_vlm_stub
     def judge(request: dict) -> dict:
         captured.append(request)
         return {"verdict": "valid", "confidence": 0.5, "reason": "ok"}
@@ -396,6 +409,7 @@ def test_rich_local_view_metadata_forwarded_beside_path_list(tmp_path: Path) -> 
     overlay.write_bytes(b"png")
     captured: list[dict] = []
 
+    @_non_vlm_stub
     def judge(request: dict) -> dict:
         captured.append(request)
         return {"verdict": "invalid", "confidence": 0.8, "reason": "penetration visible"}
@@ -591,6 +605,7 @@ def test_collision_overlay_forwards_paired_paths_to_judge(tmp_path: Path) -> Non
     )
     captured: list[dict] = []
 
+    @_non_vlm_stub
     def judge(request: dict) -> dict:
         captured.append(request)
         return {"verdict": "valid", "confidence": 0.5, "reason": "no penetration"}

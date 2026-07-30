@@ -4,6 +4,12 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
+from benchmark.visual_judge.roles import (
+    DecisionContract,
+    VLMRole,
+    vlm_audit_metadata,
+)
+
 
 VERDICTS = {"valid", "invalid"}
 
@@ -55,6 +61,11 @@ def adjudicate_candidate(
             for path in render_evidence or []
             if str(path).strip()
         ],
+        **vlm_audit_metadata(
+            VLMRole.JUDGE,
+            decision_contract=DecisionContract.SPATIAL_FIDELITY_BINARY,
+            judge_method="adjudicate_spatial_fidelity",
+        ),
     }
     call = getattr(judge, "adjudicate_spatial_fidelity", None)
     if not callable(call):

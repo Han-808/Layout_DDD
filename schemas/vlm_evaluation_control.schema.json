@@ -1,0 +1,163 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://layout-ddd.local/schemas/vlm_evaluation_control.schema.json",
+  "title": "VLM Evaluation Control",
+  "description": "Additive control-plane configuration for Judge, CameraSelector, and deterministic EvidenceGate orchestration.",
+  "type": "object",
+  "additionalProperties": false,
+  "default": {
+    "schema_version": "vlm_evaluation_control_v1",
+    "camera_selector": {
+      "backend": "existing",
+      "allow_freeform_pose": false,
+      "allow_scene_mutation": false
+    },
+    "evidence_gate": {
+      "enabled": true,
+      "backend": "deterministic"
+    },
+    "judge": {
+      "allow_need_more_evidence": true
+    },
+    "budgets": {
+      "max_evidence_rounds": 2,
+      "max_views_per_round": 2,
+      "max_total_images": 6,
+      "max_camera_actions": 2,
+      "max_selector_calls": 3
+    },
+    "require_evidence_gate_after_render": true,
+    "on_non_camera_repairable_evidence": "unresolved",
+    "on_budget_exhausted": "unresolved",
+    "on_selector_failure": "keep_previous_evidence",
+    "on_render_failure": "unresolved"
+  },
+  "properties": {
+    "schema_version": {
+      "const": "vlm_evaluation_control_v1",
+      "default": "vlm_evaluation_control_v1"
+    },
+    "camera_selector": {
+      "type": "object",
+      "additionalProperties": false,
+      "default": {
+        "backend": "existing",
+        "allow_freeform_pose": false,
+        "allow_scene_mutation": false
+      },
+      "properties": {
+        "backend": {
+          "type": "string",
+          "enum": [
+            "existing",
+            "deterministic",
+            "vlm",
+            "hybrid"
+          ],
+          "default": "existing"
+        },
+        "allow_freeform_pose": {
+          "type": "boolean",
+          "default": false
+        },
+        "allow_scene_mutation": {
+          "type": "boolean",
+          "default": false
+        }
+      }
+    },
+    "evidence_gate": {
+      "type": "object",
+      "additionalProperties": false,
+      "default": {
+        "enabled": true,
+        "backend": "deterministic"
+      },
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": true
+        },
+        "backend": {
+          "const": "deterministic",
+          "default": "deterministic"
+        }
+      }
+    },
+    "judge": {
+      "type": "object",
+      "additionalProperties": false,
+      "default": {
+        "allow_need_more_evidence": true
+      },
+      "properties": {
+        "allow_need_more_evidence": {
+          "type": "boolean",
+          "default": true
+        }
+      }
+    },
+    "budgets": {
+      "type": "object",
+      "additionalProperties": false,
+      "default": {
+        "max_evidence_rounds": 2,
+        "max_views_per_round": 2,
+        "max_total_images": 6,
+        "max_camera_actions": 2,
+        "max_selector_calls": 3
+      },
+      "properties": {
+        "max_evidence_rounds": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 2
+        },
+        "max_views_per_round": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 2
+        },
+        "max_total_images": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 6
+        },
+        "max_camera_actions": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 2
+        },
+        "max_selector_calls": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 3
+        }
+      }
+    },
+    "require_evidence_gate_after_render": {
+      "type": "boolean",
+      "default": true
+    },
+    "on_non_camera_repairable_evidence": {
+      "const": "unresolved",
+      "default": "unresolved"
+    },
+    "on_budget_exhausted": {
+      "const": "unresolved",
+      "default": "unresolved"
+    },
+    "on_selector_failure": {
+      "type": "string",
+      "enum": [
+        "keep_previous_evidence",
+        "unresolved"
+      ],
+      "default": "keep_previous_evidence"
+    },
+    "on_render_failure": {
+      "const": "unresolved",
+      "default": "unresolved"
+    }
+  }
+}

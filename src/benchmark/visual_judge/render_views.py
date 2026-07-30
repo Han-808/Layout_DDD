@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import uuid
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
@@ -42,9 +43,15 @@ from benchmark.visual_judge.active_policy import (
     generate_corrective_camera_proposals,
     pose_fingerprint,
 )
+from benchmark.visual_judge.contracts import validate_camera_selection_response
 from benchmark.visual_judge.evidence_sufficiency import (
     SUFFICIENT,
     assess_preview_selection_sufficiency,
+)
+from benchmark.visual_judge.roles import (
+    DecisionContract,
+    VLMRole,
+    vlm_audit_metadata,
 )
 from benchmark.visual_judge.visual_config import DEFAULT_P0B_VISUAL_CONFIGS
 
@@ -64,8 +71,10 @@ _CAMERA_EVIDENCE_IMPLEMENTATION_FILES = (
     "src/benchmark/visual_judge/active_fallback.py",
     "src/benchmark/visual_judge/active_policy.py",
     "src/benchmark/visual_judge/evidence_sufficiency.py",
+    "src/benchmark/visual_judge/contracts.py",
     "src/benchmark/visual_judge/openai_compatible.py",
     "src/benchmark/visual_judge/render_views.py",
+    "src/benchmark/visual_judge/roles.py",
 )
 _BLEND_HASH_CACHE: dict[tuple[str, int, int], str] = {}
 
@@ -161,6 +170,7 @@ class CameraEvidenceProvider:
             and not callable(getattr(selector, "select_camera_views", None))
         ):
             raise TypeError("query_cov camera mode requires a selector exposing select_camera_views(request)")
+        self.last_call_usage: dict[str, Any] | None = None
 
     @property
     def policy_config(self) -> dict[str, Any]:
@@ -257,17 +267,18 @@ class CameraEvidenceProvider:
         collision_overlay = self.collision_overlay and metric == "collision"
         rich_focus_evidence = collision_overlay or resolved_mode in FOCUS_CAMERA_MODES
         manifest_path = event_dir / "camera_evidence_manifest.json"
+        self._begin_call_usage(metric=metric, manifest_path=manifest_path)
         if rich_focus_evidence:
             cached_items = _cached_items(
                 manifest_path,
                 expected_highlighted_global_pose_policy=self.highlighted_global_pose_policy,
             )
             if cached_items is not None:
-                return cached_items
+                return self._finish_call_usage(cached_items, cache_hit=True)
         else:
             cached = _cached_paths(manifest_path)
             if cached is not None:
-                return cached
+                return self._finish_call_usage(cached, cache_hit=True)
         event_dir.mkdir(parents=True, exist_ok=True)
         _write_json(event_dir / "evidence_request.json", request)
         if resolved_mode == "global_only":
@@ -286,7 +297,7 @@ class CameraEvidenceProvider:
                     "render_evidence_items": [],
                 },
             )
-            return []
+            return self._finish_call_usage([], cache_hit=False)
         candidates = generate_camera_pose_candidates(
             keyed_request,
             max_candidates=self.candidate_count,
@@ -295,19 +306,25 @@ class CameraEvidenceProvider:
         _write_json(event_dir / "pose_candidates.json", candidates)
 
         if collision_overlay:
-            return self._collision_overlay_evidence(
-                request,
-                candidates,
-                event_dir,
-                resolved_mode=resolved_mode,
+            return self._finish_call_usage(
+                self._collision_overlay_evidence(
+                    request,
+                    candidates,
+                    event_dir,
+                    resolved_mode=resolved_mode,
+                ),
+                cache_hit=False,
             )
 
         if resolved_mode in FOCUS_CAMERA_MODES:
-            return self._focus_overlay_evidence(
-                request,
-                candidates,
-                event_dir,
-                resolved_mode=resolved_mode,
+            return self._finish_call_usage(
+                self._focus_overlay_evidence(
+                    request,
+                    candidates,
+                    event_dir,
+                    resolved_mode=resolved_mode,
+                ),
+                cache_hit=False,
             )
 
         if resolved_mode == "bbox_track":
@@ -345,7 +362,79 @@ class CameraEvidenceProvider:
             "render_evidence_artifacts": _freeze_evidence_paths(paths),
         }
         _write_json(event_dir / "camera_evidence_manifest.json", manifest)
-        return paths
+        return self._finish_call_usage(paths, cache_hit=False)
+
+    def _begin_call_usage(
+        self,
+        *,
+        metric: str,
+        manifest_path: Path,
+    ) -> None:
+        self.last_call_usage = {
+            "call_id": uuid.uuid4().hex,
+            "metric": metric,
+            "cache_hit": False,
+            "evidence_refs": [],
+            "manifest_path": str(manifest_path),
+            "selector_calls": 0,
+            "camera_actions": 0,
+            "source": type(self).__name__,
+            "observability": "actual_per_call_v1",
+        }
+
+    def _mark_selector_call(self) -> None:
+        if self.last_call_usage is not None:
+            self.last_call_usage["selector_calls"] += 1
+
+    def _mark_camera_action(self) -> None:
+        if self.last_call_usage is not None:
+            self.last_call_usage["camera_actions"] += 1
+
+    def _record_selection_usage(self, selection_log: dict[str, Any]) -> None:
+        if self.last_call_usage is None:
+            return
+        selector_calls, camera_actions = _actual_selection_usage(selection_log)
+        self.last_call_usage["selector_calls"] = selector_calls
+        self.last_call_usage["camera_actions"] = camera_actions
+
+    def _finish_call_usage(
+        self,
+        evidence: list[Any],
+        *,
+        cache_hit: bool,
+    ) -> list[Any]:
+        if self.last_call_usage is not None:
+            self.last_call_usage["cache_hit"] = bool(cache_hit)
+            self.last_call_usage["evidence_refs"] = _usage_evidence_refs(evidence)
+            if cache_hit:
+                # The manifest describes the generation call. A cached read does
+                # not re-execute its historical selector calls or camera actions.
+                self.last_call_usage["selector_calls"] = 0
+                self.last_call_usage["camera_actions"] = 0
+            self._persist_call_usage_manifest()
+        return evidence
+
+    def _persist_call_usage_manifest(self) -> None:
+        if self.last_call_usage is None:
+            return
+        raw_path = self.last_call_usage.get("manifest_path")
+        if not isinstance(raw_path, str) or not raw_path:
+            return
+        manifest_path = Path(raw_path)
+        if not manifest_path.is_file():
+            return
+        try:
+            manifest = json.loads(
+                manifest_path.read_text(encoding="utf-8")
+            )
+            if not isinstance(manifest, dict):
+                return
+            manifest["call_usage"] = deepcopy(self.last_call_usage)
+            _write_json(manifest_path, manifest)
+        except (OSError, json.JSONDecodeError, TypeError, ValueError):
+            # Usage remains available in memory even if an existing cache is
+            # read-only or its audit field cannot be refreshed.
+            return
 
     def _query_cov_selection(
         self,
@@ -360,12 +449,14 @@ class CameraEvidenceProvider:
             self.active_repair
             and request.get("_camera_selection_phase") == "active_fallback"
         ):
-            return self._active_repair_selection(
+            selected, selection_log = self._active_repair_selection(
                 request,
                 current,
                 event_dir,
                 overlay_spec=overlay_spec,
             )
+            self._record_selection_usage(selection_log)
+            return selected, selection_log
         if self.frozen_view_ids is not None:
             by_id = {str(item["id"]): item for item in current}
             unknown = [item_id for item_id in self.frozen_view_ids if item_id not in by_id]
@@ -470,7 +561,13 @@ class CameraEvidenceProvider:
                 "preview_degradation": preview_degradation,
                 "preview_visibility_warning": preview_visibility_warning,
                 "color_legend": overlay_spec.get("legend") if overlay_spec is not None else None,
+                **vlm_audit_metadata(
+                    VLMRole.VLM_CAMERA_SELECTOR,
+                    decision_contract=DecisionContract.CAMERA_SELECTION,
+                    judge_method="select_camera_views",
+                ),
             }
+            self._mark_selector_call()
             decision = self.selector.select_camera_views(selector_request)
             selected_ids, action = _validate_selector_decision(
                 decision,
@@ -494,13 +591,14 @@ class CameraEvidenceProvider:
             source = next(item for item in current if item["id"] == action["view_id"])
             adjusted = apply_camera_action(source, action["type"])
             current = [adjusted if item["id"] == source["id"] else item for item in current]
+            self._mark_camera_action()
 
         by_id = {str(item["id"]): item for item in current}
         selected = [deepcopy(by_id[item_id]) for item_id in final_ids if item_id in by_id]
         if not selected:
             selected = select_bbox_track_views(current, max_views=self.max_views)
             final_ids = [item["id"] for item in selected]
-        return selected, {
+        selection_log = {
             "mode": "query_cov",
             "selector": type(self.selector).__name__,
             "selected_view_ids": final_ids,
@@ -512,6 +610,8 @@ class CameraEvidenceProvider:
                 if item_id in latest_visibility_by_id
             },
         }
+        self._record_selection_usage(selection_log)
+        return selected, selection_log
 
     def _active_repair_selection(
         self,
@@ -684,7 +784,13 @@ class CameraEvidenceProvider:
                     if overlay_spec is not None
                     else None
                 ),
+                **vlm_audit_metadata(
+                    VLMRole.VLM_CAMERA_SELECTOR,
+                    decision_contract=DecisionContract.CAMERA_SELECTION,
+                    judge_method="select_camera_views",
+                ),
             }
+            self._mark_selector_call()
             decision = self.selector.select_camera_views(selector_request)
             selector_calls += 1
             selected_ids, action = _validate_selector_decision(
@@ -799,6 +905,7 @@ class CameraEvidenceProvider:
             seen_proposals.add(proposal_fingerprint)
             seen_poses.add(result_fingerprint)
             actions_executed += 1
+            self._mark_camera_action()
             action_record = {
                 "proposal_id": proposal.get("proposal_id"),
                 "proposal_fingerprint": proposal_fingerprint,
@@ -1889,15 +1996,12 @@ def _validate_selector_decision(
     max_views: int,
     allow_adjustment: bool,
 ) -> tuple[list[str], dict[str, Any] | None]:
-    if not isinstance(decision, dict):
-        raise ValueError("camera selector response must be a JSON object")
     available = {str(item.get("id")) for item in candidates}
-    raw_ids = decision.get("selected_view_ids")
-    if not isinstance(raw_ids, list):
-        raise ValueError("camera selector selected_view_ids must be a list")
-    selected = list(dict.fromkeys(str(value) for value in raw_ids if str(value)))
-    if not selected or len(selected) > max_views or any(value not in available for value in selected):
-        raise ValueError("camera selector returned invalid selected_view_ids")
+    selected = validate_camera_selection_response(
+        decision,
+        available_view_ids=available,
+        max_views=max_views,
+    )
     raw_action = decision.get("action")
     if raw_action is None:
         return selected, None
@@ -1916,6 +2020,70 @@ def _validate_selector_decision(
     if raw_action.get("proposal_id") is not None:
         resolved["proposal_id"] = str(raw_action.get("proposal_id"))
     return selected, resolved
+
+
+def _actual_selection_usage(
+    selection_log: dict[str, Any],
+) -> tuple[int, int]:
+    """Derive executed selector/action counts from the recorded trajectory."""
+
+    raw_selector_calls = selection_log.get("selector_call_count")
+    if (
+        isinstance(raw_selector_calls, int)
+        and not isinstance(raw_selector_calls, bool)
+        and raw_selector_calls >= 0
+    ):
+        selector_calls = raw_selector_calls
+    else:
+        steps = selection_log.get("steps")
+        selector_calls = len(steps) if isinstance(steps, list) else 0
+
+    raw_camera_actions = selection_log.get("camera_action_count")
+    if (
+        isinstance(raw_camera_actions, int)
+        and not isinstance(raw_camera_actions, bool)
+        and raw_camera_actions >= 0
+    ):
+        camera_actions = raw_camera_actions
+    else:
+        camera_actions = 0
+        steps = selection_log.get("steps")
+        for step in steps if isinstance(steps, list) else []:
+            if not isinstance(step, dict):
+                continue
+            execution = step.get("action_execution")
+            if isinstance(execution, dict):
+                camera_actions += int(execution.get("executed") is True)
+                continue
+            decision = step.get("decision")
+            if (
+                isinstance(decision, dict)
+                and isinstance(decision.get("action"), dict)
+            ):
+                camera_actions += 1
+    return selector_calls, camera_actions
+
+
+def _usage_evidence_refs(evidence: list[Any]) -> list[str]:
+    """Match the control-loop evidence reference convention without mutation."""
+
+    refs: list[str] = []
+    for index, item in enumerate(evidence):
+        if isinstance(item, dict):
+            value = (
+                item.get("view_id")
+                or item.get("id")
+                or item.get("path")
+                or item.get("image_path")
+            )
+        else:
+            value = item
+        refs.append(
+            str(value)
+            if value is not None
+            else f"evidence_{index:02d}"
+        )
+    return refs
 
 
 def _resolve_corrective_proposal(

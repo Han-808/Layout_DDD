@@ -306,6 +306,40 @@ def test_same_contract_executes_oor_and_oar_independently_of_granularity(
     ]
 
 
+def test_vlm_control_override_is_additive_and_records_effective_defaults(
+    tmp_path: Path,
+) -> None:
+    baseline = _run_relation_case(tmp_path, "fine_grained")
+    configured = run_evaluate(
+        scene=_scene(include_lamp=True),
+        out=tmp_path / "vlm_control_override.json",
+        scene_request=_request("fine_grained"),
+        specification_contract=_relation_contract(),
+        asset_policy=BENCHMARK_PROVIDED_ASSETS,
+        vlm_evaluation_control={
+            "budgets": {
+                "max_evidence_rounds": 1,
+                "max_total_images": 4,
+            }
+        },
+    )
+
+    control = configured["evaluation_config"]["vlm_evaluation_control"]
+    assert control["requested"]["budgets"]["max_evidence_rounds"] == 1
+    assert control["effective"]["budgets"]["max_total_images"] == 4
+    assert (
+        control["effective"]["camera_selector"]["backend"]
+        == "deterministic"
+    )
+    assert (
+        control["sources"]["camera_selector.backend"]
+        == "fallback_no_existing_selector"
+    )
+    assert configured["benchmark_score"] == baseline["benchmark_score"]
+    assert configured["layer_reports"] == baseline["layer_reports"]
+    assert configured["reports"] == baseline["reports"]
+
+
 def test_canonical_runtime_rejects_retired_presence_count_and_attribute_claims(
     tmp_path: Path,
 ) -> None:

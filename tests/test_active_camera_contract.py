@@ -24,7 +24,10 @@ from benchmark.visual_judge.evidence_sufficiency import (
 from benchmark.visual_judge.openai_compatible import (
     OpenAICompatibleVLMJudge,
 )
-from benchmark.visual_judge.render_views import CameraEvidenceProvider
+from benchmark.visual_judge.render_views import (
+    CameraEvidenceProvider,
+    _validate_selector_decision,
+)
 
 
 def _evidence_file(directory: Path, name: str) -> str:
@@ -736,6 +739,9 @@ def test_active_loop_stops_before_action_when_current_packet_is_sufficient(
 
     assert [item["id"] for item in selected] == ["view_00"]
     assert len(selector.calls) == 1
+    assert selector.calls[0]["vlm_role"] == "vlm_camera_selector"
+    assert selector.calls[0]["decision_contract"] == "camera_selection_v1"
+    assert selector.calls[0]["judge_method"] == "select_camera_views"
     assert log["stop_reason"] == "sufficient_evidence"
     assert log["camera_action_count"] == 0
     assert log["steps"][0]["sufficiency"]["status"] == "sufficient"
@@ -779,6 +785,28 @@ def test_active_loop_stops_on_no_measured_gain_and_retains_best_packet(
         "usable_view_delta": 0,
     }
     assert [item["id"] for item in selected] == ["view_00"]
+
+
+@pytest.mark.parametrize("forbidden_key", ["verdict", "score"])
+def test_custom_camera_selector_rejects_metric_decision_fields(
+    forbidden_key: str,
+) -> None:
+    decision = {
+        "selected_view_ids": ["view_00"],
+        "action": None,
+        forbidden_key: None,
+    }
+
+    with pytest.raises(
+        ValueError,
+        match="must not contain verdict or score",
+    ):
+        _validate_selector_decision(
+            decision,
+            [{"id": "view_00"}],
+            max_views=1,
+            allow_adjustment=False,
+        )
 
 
 def test_active_selector_uses_request_local_proposal_aliases_only(

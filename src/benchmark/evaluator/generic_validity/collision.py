@@ -29,6 +29,7 @@ from benchmark.visual_judge.p0b import (
     LocalViewProvider,
     adjudicate_p0b_event,
 )
+from benchmark.visual_judge.runtime import EvidenceControlUnresolvedError
 
 
 COLLISION_EVALUATOR_VERSION = "collision_p0b_v2"
@@ -311,6 +312,10 @@ def _evaluate_pair(
             overview_render_evidence=list(render_evidence or []),
             local_view_provider=local_view_provider,
         )
+    except EvidenceControlUnresolvedError as exc:
+        pair["route"] = "unresolved"
+        pair["evidence_control"] = exc.result.to_dict()
+        return pair
     except Exception as exc:
         pair["adjudication_error"] = f"{type(exc).__name__}: {exc}"
         pair["route"] = "vlm_adjudication_failed"

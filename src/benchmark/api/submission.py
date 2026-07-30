@@ -50,8 +50,10 @@ from benchmark.scene_io.validate import (
 from benchmark.utils.io import load_yaml, read_json, write_json
 from benchmark.visual_judge import (
     CameraEvidenceProvider,
+    VLMEvaluationControl,
     build_conditional_active_camera_evidence_provider,
     build_openai_compatible_vlm_judge,
+    resolve_vlm_evaluation_control,
 )
 
 
@@ -382,6 +384,9 @@ def evaluate_submission(
     asset_root: str | Path | None = None,
     asset_csv: str | Path | None = None,
     official_mode: bool = True,
+    vlm_evaluation_control: dict[str, Any]
+    | VLMEvaluationControl
+    | None = None,
 ) -> dict[str, Any]:
     """Evaluate canonical output without running or importing a generator.
 
@@ -568,6 +573,12 @@ def evaluate_submission(
             # those pixels as evidence, but it never supplies a metric verdict.
             local_view_provider = renderer
 
+    resolved_vlm_control = _resolve_submission_vlm_control(
+        vlm_evaluation_control,
+        bundle=bundle,
+        vlm_judge=vlm_judge,
+        camera_provider=local_view_provider,
+    )
     report_path = destination / "evaluation_report.json"
     legacy_flags = bundle.enabled_evaluators if legacy_game_profile else {}
     report = run_evaluate(
@@ -588,6 +599,7 @@ def evaluate_submission(
         support_enabled=None,
         p0b_official_mode=bool(official_mode and bundle.p0b_official_mode),
         p0b_local_view_provider=local_view_provider,
+        camera_selector=camera_selector,
         metric_applicability=bundle.metric_applicability,
         spatial_fidelity_ontology=(
             bundle.spatial_fidelity_ontology_path if legacy_game_profile else None
@@ -599,6 +611,7 @@ def evaluate_submission(
         object_grouping_report=bundle.object_grouping_report,
         asset_policy=bundle.asset_policy,
         authorized_deviations=bundle.authorized_deviations,
+        vlm_evaluation_control=resolved_vlm_control,
     )
     complete = report.get("benchmark_score_status") == "complete"
     case_bundle_record = {
@@ -703,6 +716,11 @@ def evaluate_submission(
         "evaluation_report": report_path.as_posix(),
         "benchmark_score": report.get("benchmark_score"),
         "benchmark_score_status": report.get("benchmark_score_status"),
+        "vlm_evaluation_control": deepcopy(
+            report.get("evaluation_config", {}).get(
+                "vlm_evaluation_control"
+            )
+        ),
     }
     if legacy_game_profile:
         manifest["case_bundle"]["spatial_fidelity_ontology_sha256"] = (
@@ -737,6 +755,14 @@ def main() -> None:
     parser.add_argument("--cycles-denoising", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--vlm-judge-config", default=None)
     parser.add_argument(
+        "--vlm-evaluation-control",
+        default=None,
+        help=(
+            "Optional JSON patch for bounded Judge, CameraSelector, and "
+            "EvidenceGate control defaults."
+        ),
+    )
+    parser.add_argument(
         "--camera-selector-config",
         default=None,
         help=(
@@ -747,6 +773,16 @@ def main() -> None:
     parser.add_argument("--diagnostic", action="store_true")
     args = parser.parse_args()
 
+    vlm_control_config = (
+        read_json(args.vlm_evaluation_control)
+        if args.vlm_evaluation_control
+        else None
+    )
+    if vlm_control_config is not None and not isinstance(
+        vlm_control_config,
+        dict,
+    ):
+        parser.error("--vlm-evaluation-control must point to a JSON object")
     bundle = load_case_bundle(args.case_bundle)
     judge_config = read_json(args.vlm_judge_config) if args.vlm_judge_config else None
     selector_config = (
@@ -788,10 +824,57 @@ def main() -> None:
         asset_root=args.asset_root,
         asset_csv=args.asset_csv,
         official_mode=not args.diagnostic,
+        vlm_evaluation_control=vlm_control_config,
     )
     report = result["evaluation_report"]
     print(f"benchmark_score: {report.get('benchmark_score')}")
     print(f"official_submission: {report.get('official_submission')}")
+
+
+def _resolve_submission_vlm_control(
+    value: dict[str, Any] | VLMEvaluationControl | None,
+    *,
+    bundle: TrustedCaseBundle,
+    vlm_judge: Any | None,
+    camera_provider: Any | None,
+) -> VLMEvaluationControl:
+    if isinstance(value, VLMEvaluationControl):
+        return value
+    if value is not None and not isinstance(value, dict):
+        raise TypeError(
+            "vlm_evaluation_control must be a JSON object or "
+            "VLMEvaluationControl"
+        )
+    camera_configured = (
+        bundle.camera_evidence.get("mode") is not None
+        and camera_provider is not None
+    )
+    active = bundle.camera_evidence.get("active_fallback") or {}
+    existing_steps = (
+        active.get("max_steps")
+        if active.get("enabled") is True
+        else bundle.camera_evidence.get("max_steps")
+    )
+    return resolve_vlm_evaluation_control(
+        value,
+        existing_max_views=(
+            int(bundle.camera_evidence["max_views"])
+            if camera_configured
+            else None
+        ),
+        existing_max_steps=(
+            int(existing_steps)
+            if camera_configured and existing_steps is not None
+            else None
+        ),
+        existing_selector_available=camera_configured,
+        judge_max_images=(
+            int(vlm_judge.max_images)
+            if isinstance(getattr(vlm_judge, "max_images", None), int)
+            and not isinstance(vlm_judge.max_images, bool)
+            else None
+        ),
+    )
 
 
 def _verify_artifact(root: Path, name: str, record: Any) -> tuple[Path, str]:

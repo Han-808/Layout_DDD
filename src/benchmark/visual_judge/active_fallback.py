@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import uuid
 from copy import deepcopy
 from pathlib import Path
 from typing import Any, Callable
@@ -50,6 +51,7 @@ class ConditionalActiveCameraEvidenceProvider:
             raise ValueError("active fallback max_views must be between 1 and 4")
         if not 0 <= self.max_steps <= 3:
             raise ValueError("active fallback max_steps must be between 0 and 3")
+        self.last_call_usage: dict[str, Any] | None = None
 
     @property
     def policy_config(self) -> dict[str, Any]:
@@ -86,8 +88,13 @@ class ConditionalActiveCameraEvidenceProvider:
             policy_config=self.policy_config,
         )
         event_dir.mkdir(parents=True, exist_ok=True)
+        manifest_path = event_dir / "active_camera_fallback_manifest.json"
+        self._begin_call_usage(metric=metric, manifest_path=manifest_path)
 
         deterministic_error: str | None = None
+        deterministic_prior_call_id = _provider_call_id(
+            self.deterministic_provider
+        )
         try:
             base_items = self.deterministic_provider(request)
             base_assessment = assess_visual_evidence_sufficiency(
@@ -113,6 +120,15 @@ class ConditionalActiveCameraEvidenceProvider:
                     }
                 ],
             }
+        finally:
+            self._record_internal_provider_usage(
+                "deterministic",
+                _provider_usage_after_call(
+                    self.deterministic_provider,
+                    prior_call_id=deterministic_prior_call_id,
+                    expected_metric=metric,
+                ),
+            )
 
         should_trigger = bool(
             base_assessment.get("status") == INSUFFICIENT
@@ -120,6 +136,8 @@ class ConditionalActiveCameraEvidenceProvider:
             and base_assessment.get("camera_repairable") is True
         )
         if not should_trigger:
+            returned_items = deepcopy(base_items)
+            self._finish_call_usage(returned_items)
             self._write_manifest(
                 event_dir,
                 request=request,
@@ -135,7 +153,7 @@ class ConditionalActiveCameraEvidenceProvider:
                     "deterministic visual evidence failed with a non-camera-"
                     f"repairable error: {deterministic_error}"
                 )
-            return deepcopy(base_items)
+            return returned_items
 
         active_request = deepcopy(request)
         active_request["_camera_selection_phase"] = "active_fallback"
@@ -144,6 +162,7 @@ class ConditionalActiveCameraEvidenceProvider:
         )
         active_error: str | None = None
         active_items: list[Any] = []
+        active_prior_call_id = _provider_call_id(self.active_provider)
         try:
             active_items = self.active_provider(active_request)
             final_assessment = assess_visual_evidence_sufficiency(
@@ -167,26 +186,40 @@ class ConditionalActiveCameraEvidenceProvider:
                     }
                 ],
             }
+        finally:
+            self._record_internal_provider_usage(
+                "active",
+                _provider_usage_after_call(
+                    self.active_provider,
+                    prior_call_id=active_prior_call_id,
+                    expected_metric=metric,
+                ),
+            )
+        active_sufficient = bool(
+            active_error is None
+            and final_assessment.get("status") == SUFFICIENT
+        )
+        active_used = bool(
+            not self.shadow_mode and active_sufficient
+        )
+        returned_items = deepcopy(
+            base_items
+            if self.shadow_mode or not active_sufficient
+            else active_items
+        )
+        self._finish_call_usage(returned_items)
         self._write_manifest(
             event_dir,
             request=request,
             base_assessment=base_assessment,
             final_assessment=final_assessment,
-            active_used=bool(
-                not self.shadow_mode
-                and active_error is None
-                and final_assessment.get("status") == SUFFICIENT
-            ),
+            active_used=active_used,
             active_attempted=True,
             deterministic_error=deterministic_error,
             active_error=active_error,
         )
-        active_sufficient = bool(
-            active_error is None
-            and final_assessment.get("status") == SUFFICIENT
-        )
         if self.shadow_mode:
-            return deepcopy(base_items)
+            return returned_items
         if self.fail_on_exhausted and not active_sufficient:
             reasons = ", ".join(final_assessment.get("reason_codes") or ["unknown"])
             raise InsufficientVisualEvidenceError(
@@ -197,7 +230,62 @@ class ConditionalActiveCameraEvidenceProvider:
         # "keep the deterministic packet on failed repair", not "promote an
         # insufficient or empty active packet".  This keeps the returned packet
         # aligned with ``official_packet_source`` in the manifest.
-        return deepcopy(active_items if active_sufficient else base_items)
+        return returned_items
+
+    def _begin_call_usage(
+        self,
+        *,
+        metric: str,
+        manifest_path: Path,
+    ) -> None:
+        self.last_call_usage = {
+            "call_id": uuid.uuid4().hex,
+            "metric": metric,
+            "cache_hit": False,
+            "evidence_refs": [],
+            "manifest_path": str(manifest_path),
+            "selector_calls": 0,
+            "camera_actions": 0,
+            "source": type(self).__name__,
+            "observability": {
+                "schema_version": "conditional_provider_usage_v1",
+                "internal_calls": {},
+            },
+        }
+
+    def _record_internal_provider_usage(
+        self,
+        label: str,
+        usage: dict[str, Any] | None,
+    ) -> None:
+        if self.last_call_usage is None:
+            return
+        observability = self.last_call_usage["observability"]
+        internal_calls = observability["internal_calls"]
+        if usage is None:
+            internal_calls[label] = {"observed": False}
+        else:
+            internal_calls[label] = {
+                "observed": True,
+                **deepcopy(usage),
+            }
+            self.last_call_usage["selector_calls"] += usage[
+                "selector_calls"
+            ]
+            self.last_call_usage["camera_actions"] += usage[
+                "camera_actions"
+            ]
+        self.last_call_usage["cache_hit"] = bool(internal_calls) and all(
+            call.get("observed") is True
+            and call.get("cache_hit") is True
+            for call in internal_calls.values()
+        )
+
+    def _finish_call_usage(self, evidence: list[Any]) -> None:
+        if self.last_call_usage is not None:
+            self.last_call_usage["evidence_refs"] = _usage_evidence_refs(
+                evidence
+            )
 
     def _write_manifest(
         self,
@@ -248,6 +336,7 @@ class ConditionalActiveCameraEvidenceProvider:
                     "max_camera_actions": self.max_steps,
                     "max_selector_calls": self.max_steps + 1,
                 },
+                "call_usage": deepcopy(self.last_call_usage),
             },
         )
 
@@ -382,3 +471,78 @@ def _canonical_sha256(value: Any) -> str:
         default=str,
     ).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+def _provider_call_id(provider: Any) -> Any:
+    usage = getattr(provider, "last_call_usage", None)
+    return usage.get("call_id") if isinstance(usage, dict) else None
+
+
+def _provider_usage_after_call(
+    provider: Any,
+    *,
+    prior_call_id: Any,
+    expected_metric: str,
+) -> dict[str, Any] | None:
+    usage = getattr(provider, "last_call_usage", None)
+    if not isinstance(usage, dict):
+        return None
+    call_id = usage.get("call_id")
+    if (
+        not isinstance(call_id, (str, int))
+        or isinstance(call_id, bool)
+        or call_id == prior_call_id
+        or usage.get("metric") != expected_metric
+        or not isinstance(usage.get("cache_hit"), bool)
+        or not isinstance(usage.get("evidence_refs"), list)
+        or any(
+            not isinstance(value, str)
+            for value in usage["evidence_refs"]
+        )
+    ):
+        return None
+    selector_calls = usage.get("selector_calls")
+    camera_actions = usage.get("camera_actions")
+    if (
+        isinstance(selector_calls, bool)
+        or not isinstance(selector_calls, int)
+        or selector_calls < 0
+        or isinstance(camera_actions, bool)
+        or not isinstance(camera_actions, int)
+        or camera_actions < 0
+    ):
+        return None
+    return {
+        "call_id": call_id,
+        "metric": expected_metric,
+        "cache_hit": usage["cache_hit"],
+        "evidence_refs": list(usage["evidence_refs"]),
+        "manifest_path": (
+            str(usage["manifest_path"])
+            if usage.get("manifest_path") is not None
+            else None
+        ),
+        "selector_calls": selector_calls,
+        "camera_actions": camera_actions,
+        "source": usage.get("source"),
+    }
+
+
+def _usage_evidence_refs(evidence: list[Any]) -> list[str]:
+    refs: list[str] = []
+    for index, item in enumerate(evidence):
+        if isinstance(item, dict):
+            value = (
+                item.get("view_id")
+                or item.get("id")
+                or item.get("path")
+                or item.get("image_path")
+            )
+        else:
+            value = item
+        refs.append(
+            str(value)
+            if value is not None
+            else f"evidence_{index:02d}"
+        )
+    return refs

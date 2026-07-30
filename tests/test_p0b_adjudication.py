@@ -7,6 +7,7 @@ import pytest
 from PIL import Image
 
 from benchmark.visual_judge import OpenAICompatibleVLMJudge, adjudicate_p0b_event
+from benchmark.visual_judge.runtime import EvidenceControlUnresolvedError
 
 
 class _FakeModel:
@@ -21,6 +22,11 @@ class _FakeModel:
     def chat_messages(self, messages, **kwargs) -> str:
         self.calls.append({"messages": messages, "kwargs": kwargs})
         return json.dumps(self.response)
+
+
+def _non_vlm_stub(call):
+    call.vlm_control_enabled = False
+    return call
 
 
 def _scene() -> dict:
@@ -65,6 +71,7 @@ def test_p0b_request_contains_rich_context_and_injected_local_view(tmp_path: Pat
 
     judge_calls: list[dict] = []
 
+    @_non_vlm_stub
     def judge(request: dict) -> dict:
         judge_calls.append(request)
         return {"verdict": "invalid", "confidence": 0.9, "reason": "rigid penetration"}
@@ -100,6 +107,9 @@ def test_p0b_request_contains_rich_context_and_injected_local_view(tmp_path: Pat
     assert request["candidate_selection_policy"] == "high_recall_candidate_no_label_prior"
     assert request["local_render_evidence"] == [str(local_view)]
     assert request["render_evidence"] == [str(local_view), str(overview)]
+    assert request["vlm_role"] == "judge"
+    assert request["decision_contract"] == "p0b_binary_v1"
+    assert request["judge_method"] == "adjudicate_p0b"
 
 
 def test_openai_p0b_judge_requires_binary_verdict(tmp_path: Path) -> None:
@@ -125,18 +135,157 @@ def test_openai_p0b_judge_requires_binary_verdict(tmp_path: Path) -> None:
     assert "insufficient-evidence" in model.calls[0]["messages"][0]["content"]
 
     invalid_model = _FakeModel({"verdict": "insufficient_evidence", "confidence": 0.2, "reason": "occluded"})
-    with pytest.raises(ValueError, match="exactly 'valid' or 'invalid'"):
+    with pytest.raises(EvidenceControlUnresolvedError):
         OpenAICompatibleVLMJudge(invalid_model).adjudicate_p0b(
             {
                 "metric": "support",
                 "render_evidence": [],
             }
         )
+    assert invalid_model.calls == []
+
+
+def test_p0b_event_raw_openai_public_path_gates_empty_evidence_before_model():
+    model = _FakeModel(
+        {
+            "verdict": "valid",
+            "confidence": 1.0,
+            "reason": "must not run",
+        }
+    )
+
+    with pytest.raises(EvidenceControlUnresolvedError):
+        adjudicate_p0b_event(
+            metric="collision",
+            event={"object_a": "bed", "object_b": "cabinet"},
+            prompt="Put the cabinet beside the bed.",
+            relationships=[],
+            scene=_scene(),
+            detector_evidence={"overlap": 0.01},
+            judge=OpenAICompatibleVLMJudge(model),
+            object_ids=["bed", "cabinet"],
+            overview_render_evidence=[],
+            local_view_provider=None,
+        )
+
+    assert model.calls == []
+
+
+def test_p0b_event_gates_unmarked_judge_without_provider():
+    class _UnmarkedJudge:
+        def __init__(self):
+            self.calls = 0
+
+        def adjudicate_p0b(self, request):
+            del request
+            self.calls += 1
+            return {
+                "verdict": "valid",
+                "confidence": 1.0,
+                "reason": "must not run",
+            }
+
+    judge = _UnmarkedJudge()
+    with pytest.raises(EvidenceControlUnresolvedError):
+        adjudicate_p0b_event(
+            metric="collision",
+            event={"object_a": "bed", "object_b": "cabinet"},
+            prompt="Put the cabinet beside the bed.",
+            relationships=[],
+            scene=_scene(),
+            detector_evidence={"overlap": 0.01},
+            judge=judge,
+            object_ids=["bed", "cabinet"],
+            overview_render_evidence=[],
+            local_view_provider=None,
+        )
+
+    assert judge.calls == 0
+
+
+def test_p0b_event_raw_openai_path_reuses_provider_for_camera_repair(
+    tmp_path: Path,
+):
+    global_view = tmp_path / "global.png"
+    local_bad = tmp_path / "local-bad.png"
+    local_ready = tmp_path / "local-ready.png"
+    for path, color in (
+        (global_view, (20, 20, 20)),
+        (local_bad, (40, 40, 40)),
+        (local_ready, (80, 80, 80)),
+    ):
+        Image.new("RGB", (8, 8), color).save(path)
+
+    provider_calls: list[dict] = []
+
+    def provider(request: dict) -> list[dict]:
+        provider_calls.append(request)
+        if len(provider_calls) == 1:
+            return [
+                {
+                    "path": str(local_bad),
+                    "role": "metric_local_highlight",
+                    "view_id": "local-oob",
+                    "target_ids": ["chair-1"],
+                    "target_visible": False,
+                    "visibility": {
+                        "target_visible": False,
+                        "target_pixel_fractions": {"chair-1": 0.0},
+                        "region_pixel_fractions": {
+                            "architecture_plane": 0.2,
+                        },
+                    },
+                }
+            ]
+        return [
+            {
+                "path": str(local_ready),
+                "role": "metric_local_highlight",
+                "view_id": "local-oob",
+                "target_ids": ["chair-1"],
+                "visibility": {
+                    "target_pixel_fractions": {"chair-1": 0.02},
+                    "region_pixel_fractions": {
+                        "architecture_plane": 0.2,
+                    },
+                },
+            }
+        ]
+
+    model = _FakeModel(
+        {
+            "verdict": "valid",
+            "confidence": 0.9,
+            "reason": "boundary condition is visible",
+        }
+    )
+
+    result = adjudicate_p0b_event(
+        metric="oob",
+        event={"object_id": "chair-1"},
+        prompt="Place a chair near the wall.",
+        relationships=[],
+        scene=_scene(),
+        detector_evidence={"flagged_planes": ["x_max"]},
+        judge=OpenAICompatibleVLMJudge(model),
+        object_ids=["chair-1"],
+        overview_render_evidence=[str(global_view)],
+        local_view_provider=provider,
+        visual_config_policy="passthrough",
+    )
+
+    assert result["verdict"] == "valid"
+    assert len(provider_calls) == 2
+    assert provider_calls[1]["_camera_selection_phase"] == (
+        "active_fallback"
+    )
+    assert len(model.calls) == 1
 
 
 def test_support_rubric_requires_grounded_ancestry_for_local_contact() -> None:
     calls: list[dict] = []
 
+    @_non_vlm_stub
     def judge(request: dict) -> dict:
         calls.append(request)
         return {"verdict": "invalid", "confidence": 1.0, "reason": "floating stack"}
@@ -183,6 +332,7 @@ def test_oob_uses_fixed_global_before_deterministic_local(tmp_path: Path) -> Non
 
     calls: list[dict] = []
 
+    @_non_vlm_stub
     def judge(request: dict) -> dict:
         calls.append(request)
         return {"verdict": "invalid", "confidence": 1.0, "reason": "measured crossing"}

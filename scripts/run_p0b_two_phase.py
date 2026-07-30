@@ -709,8 +709,10 @@ def _judge_resume_contract(config: dict[str, Any]) -> dict[str, Any]:
             "src/benchmark/models/__init__.py",
             "src/benchmark/models/json_response.py",
             "src/benchmark/models/openai_compatible_model.py",
+            "src/benchmark/visual_judge/contracts.py",
             "src/benchmark/visual_judge/openai_compatible.py",
             "src/benchmark/visual_judge/p0b.py",
+            "src/benchmark/visual_judge/roles.py",
         )
     )
     return {

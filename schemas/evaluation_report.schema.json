@@ -716,6 +716,10 @@
           }
         },
         "visual_config_unchanged": {"const": true},
+        "vlm_evaluation_control": {
+          "type": "object",
+          "description": "Resolved additive Judge/CameraSelector/EvidenceGate control manifest."
+        },
         "deprecated_runtime_inputs": {
           "type": "object",
           "additionalProperties": false,

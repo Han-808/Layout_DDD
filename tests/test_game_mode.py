@@ -267,6 +267,9 @@ def test_game_mode_captures_once_then_runs_the_canonical_evaluator(
     assert submission["rendering"]["manifest_path"] == (
         out_dir / "renders" / "render_manifest.json"
     ).as_posix()
+    assert submission["vlm_evaluation_control"]["effective"][
+        "camera_selector"
+    ]["backend"] == "deterministic"
     assert read_json(out_dir / "render_input_scene.json") == read_json(
         out_dir / "renders" / "probe_exported_scene.json"
     )

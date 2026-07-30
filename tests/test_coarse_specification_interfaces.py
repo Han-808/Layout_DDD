@@ -220,6 +220,9 @@ def test_global_room_claim_uses_prompt_and_global_evidence_only() -> None:
     assert request["claims"][0]["claim_id"] == "room"
     assert request["components"] == ["room_scene_type"]
     assert request["evidence_phase"] == "global"
+    assert request["vlm_role"] == "judge"
+    assert request["decision_contract"] == "canonical_metric_v1"
+    assert request["judge_method"] == "adjudicate_functional_semantic"
     assert request["judgment_scope"]["excluded"] == [
         "generic_object_pairing",
         "generic_scale_coherence",

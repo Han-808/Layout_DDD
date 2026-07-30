@@ -85,6 +85,8 @@ testpaths = [
   "tests/test_specification_contract.py",
   "tests/test_submission_api.py",
   "tests/test_visual_style_spec.py",
+  "tests/test_vlm_control_loop.py",
+  "tests/test_vlm_evaluation_control_config.py",
 ]
 pythonpath = ["src", "."]
 addopts = "-q"

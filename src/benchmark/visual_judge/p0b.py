@@ -9,6 +9,11 @@ from benchmark.visual_judge.visual_config import (
     compose_default_p0b_visual_evidence,
     is_metric_focus_evidence,
 )
+from benchmark.visual_judge.roles import (
+    DecisionContract,
+    VLMRole,
+    vlm_audit_metadata,
+)
 
 
 P0B_METRICS = {"collision", "object_architecture_penetration", "oob", "support"}
@@ -187,6 +192,15 @@ def adjudicate_p0b_event(
         "detector_evidence": deepcopy(detector_evidence),
         "local_render_evidence": local_paths,
         "render_evidence": render_evidence,
+        # Additive compatibility input for a later bounded evidence round.
+        # The provider receives the same frozen read-only request as the
+        # initial acquisition; the metric Judge never consumes this field.
+        "camera_evidence_request": deepcopy(local_request),
+        **vlm_audit_metadata(
+            VLMRole.JUDGE,
+            decision_contract=DecisionContract.P0B_BINARY,
+            judge_method="adjudicate_p0b",
+        ),
     }
     if applied_visual_config is not None:
         request["visual_evidence_policy"] = applied_visual_config
@@ -210,7 +224,11 @@ def adjudicate_p0b_event(
         request["collision_evidence_style_guide"] = COLLISION_EVIDENCE_STYLE_GUIDE
     if local_metadata:
         request["local_render_evidence_metadata"] = local_metadata
-    call = getattr(judge, "adjudicate_p0b", judge)
+    runtime_judge = _with_p0b_evidence_control(
+        judge,
+        local_view_provider=local_view_provider,
+    )
+    call = getattr(runtime_judge, "adjudicate_p0b", runtime_judge)
     if not callable(call):
         raise TypeError("P0b judge must be callable or expose adjudicate_p0b(request)")
     raw = call(request)
@@ -231,6 +249,54 @@ def adjudicate_p0b_event(
         "request": request,
         "judgement": raw,
     }
+
+
+def _with_p0b_evidence_control(
+    judge: Any,
+    *,
+    local_view_provider: LocalViewProvider | None,
+) -> Any:
+    """Keep raw experiment calls on the same provider-aware control boundary."""
+
+    # A compatibility stub may opt out only by declaring that it is not a VLM.
+    # Missing attributes, missing evidence, or a bare callable are never used to
+    # infer an evidence-gate bypass.
+    if getattr(judge, "vlm_control_enabled", None) is False:
+        return judge
+    from benchmark.visual_judge.control_config import (
+        resolve_vlm_evaluation_control,
+    )
+    from benchmark.visual_judge.runtime import build_controlled_vlm_judge
+
+    max_views = getattr(local_view_provider, "max_views", None)
+    max_steps = getattr(local_view_provider, "max_steps", None)
+    max_images = getattr(judge, "max_images", None)
+    control = resolve_vlm_evaluation_control(
+        existing_max_views=(
+            max_views
+            if isinstance(max_views, int)
+            and not isinstance(max_views, bool)
+            else None
+        ),
+        existing_max_steps=(
+            max_steps
+            if isinstance(max_steps, int)
+            and not isinstance(max_steps, bool)
+            else None
+        ),
+        existing_selector_available=local_view_provider is not None,
+        judge_max_images=(
+            max_images
+            if isinstance(max_images, int)
+            and not isinstance(max_images, bool)
+            else None
+        ),
+    )
+    return build_controlled_vlm_judge(
+        judge,
+        control=control,
+        camera_provider=local_view_provider,
+    )
 
 
 def build_p0b_local_evidence_request(

@@ -14,6 +14,7 @@ from benchmark.scene_io.object_normalization import (
     normalize_objects,
 )
 from benchmark.visual_judge.p0b import LocalViewProvider, adjudicate_p0b_event
+from benchmark.visual_judge.runtime import EvidenceControlUnresolvedError
 
 
 OOB_EVALUATOR_VERSION = "oob_p0b_v2"
@@ -298,6 +299,10 @@ def _evaluate_object(
             overview_render_evidence=list(render_evidence or []),
             local_view_provider=local_view_provider,
         )
+    except EvidenceControlUnresolvedError as exc:
+        record["route"] = "unresolved"
+        record["evidence_control"] = exc.result.to_dict()
+        return record
     except Exception as exc:
         record["adjudication_error"] = f"{type(exc).__name__}: {exc}"
         record["route"] = "vlm_adjudication_failed"

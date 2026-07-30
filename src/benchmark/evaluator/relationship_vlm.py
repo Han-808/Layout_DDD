@@ -5,6 +5,11 @@ from pathlib import Path
 from typing import Any
 
 from benchmark.relation_identity import copy_relation_identity
+from benchmark.visual_judge.roles import (
+    DecisionContract,
+    VLMRole,
+    vlm_audit_metadata,
+)
 
 
 RELATION_FAMILIES = {"oor", "oar"}
@@ -58,6 +63,11 @@ def adjudicate_unsupported_relation(
             ],
         },
         "render_evidence": paths,
+        **vlm_audit_metadata(
+            VLMRole.JUDGE,
+            decision_contract=DecisionContract.RELATION_BINARY,
+            judge_method="adjudicate_relation",
+        ),
     }
     if isinstance(detector_evidence, dict):
         request["detector_evidence"] = deepcopy(detector_evidence)

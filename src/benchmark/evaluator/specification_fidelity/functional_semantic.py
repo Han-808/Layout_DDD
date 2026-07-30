@@ -43,6 +43,11 @@ from benchmark.evaluator.evidence_contract import (
 from benchmark.evaluator.specification_fidelity.contract import (
     canonical_specification_claims,
 )
+from benchmark.visual_judge.roles import (
+    DecisionContract,
+    VLMRole,
+    vlm_audit_metadata,
+)
 
 
 FUNCTIONAL_SEMANTIC_INTERFACE_VERSION = "functional_semantic_fidelity_runtime_v1"
@@ -754,6 +759,11 @@ def _judge_request(
         ),
         "generic_pairing_scan": False,
         "object_grouping_report_consumed": False,
+        **vlm_audit_metadata(
+            VLMRole.JUDGE,
+            decision_contract=DecisionContract.CANONICAL_METRIC,
+            judge_method="adjudicate_functional_semantic",
+        ),
     }
 
 

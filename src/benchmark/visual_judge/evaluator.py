@@ -2,6 +2,12 @@ from __future__ import annotations
 
 from typing import Any
 
+from benchmark.visual_judge.roles import (
+    DecisionContract,
+    VLMRole,
+    vlm_audit_metadata,
+)
+
 
 def evaluate_vlm_category(
     *,
@@ -31,6 +37,11 @@ def evaluate_vlm_category(
         },
         "render_evidence": list(render_evidence),
         "deterministic_evidence": deterministic_evidence,
+        **vlm_audit_metadata(
+            VLMRole.JUDGE,
+            decision_contract=DecisionContract.GENERIC_VISUAL_SCORE,
+            judge_method="evaluate",
+        ),
     }
     call = getattr(judge, "evaluate", judge)
     if not callable(call):
