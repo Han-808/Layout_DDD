@@ -138,6 +138,9 @@ def _run_canonical_evaluate(
     p0b_official_mode: bool = False,
     p0b_local_view_provider: object | None = None,
     camera_selector: object | None = None,
+    deterministic_camera_selector: object | None = None,
+    vlm_camera_selector: object | None = None,
+    evidence_renderer: object | None = None,
     metric_applicability: dict[str, bool] | None = None,
     spatial_fidelity_ontology: dict | str | Path | None = None,
     visual_style_spec: dict | str | Path | None = None,
@@ -235,6 +238,9 @@ def _run_canonical_evaluate(
         control=resolved_vlm_control,
         camera_provider=p0b_local_view_provider,
         camera_selector=camera_selector,
+        deterministic_camera_selector=deterministic_camera_selector,
+        vlm_camera_selector=vlm_camera_selector,
+        evidence_renderer=evidence_renderer,
         strict=_explicit_non_vlm_strict_override(vlm_judge),
     )
     resolved_asset_policy = resolve_asset_policy(
@@ -506,6 +512,9 @@ def _run_legacy_game_evaluate(
     p0b_official_mode: bool = False,
     p0b_local_view_provider: object | None = None,
     camera_selector: object | None = None,
+    deterministic_camera_selector: object | None = None,
+    vlm_camera_selector: object | None = None,
+    evidence_renderer: object | None = None,
     metric_applicability: dict[str, bool] | None = None,
     spatial_fidelity_ontology: dict | str | Path | None = None,
     visual_style_spec: dict | str | Path | None = None,
@@ -557,6 +566,9 @@ def _run_legacy_game_evaluate(
         control=resolved_vlm_control,
         camera_provider=p0b_local_view_provider,
         camera_selector=camera_selector,
+        deterministic_camera_selector=deterministic_camera_selector,
+        vlm_camera_selector=vlm_camera_selector,
+        evidence_renderer=evidence_renderer,
         strict=_explicit_non_vlm_strict_override(vlm_judge),
     )
     resolved_visual_style_spec = _resolve_visual_style_spec(visual_style_spec)

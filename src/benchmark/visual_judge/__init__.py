@@ -8,6 +8,31 @@ from benchmark.visual_judge.active_fallback import (
 from benchmark.visual_judge.active_policy import (
     generate_corrective_camera_proposals,
 )
+from benchmark.visual_judge.acquisition_state import (
+    CameraAcquisitionPolicy,
+    CameraAcquisitionState,
+)
+from benchmark.visual_judge.adapters.active_camera import (
+    ActiveVLMCameraSelector,
+    CameraPoseValidator,
+    CameraRepairSolver,
+)
+from benchmark.visual_judge.adapters.deterministic_camera import (
+    DeterministicCameraRepairSolver,
+    DeterministicLocalCameraSelector,
+)
+from benchmark.visual_judge.camera_dsl import (
+    CameraConstraintSet,
+    CameraObservation,
+)
+from benchmark.visual_judge.camera_repair import (
+    CameraRepairPlan,
+    VLMSelectionMode,
+)
+from benchmark.visual_judge.camera_ranking import (
+    DEFAULT_DETERMINISTIC_CAMERA_RANKING,
+    DeterministicCameraRankingConfig,
+)
 from benchmark.visual_judge.control_config import (
     DEFAULT_VLM_EVALUATION_CONTROL,
     VLMEvaluationControl,
@@ -16,6 +41,7 @@ from benchmark.visual_judge.control_config import (
 from benchmark.visual_judge.control_loop import (
     EvidenceRenderRequest,
     EvidenceRenderResult,
+    EvidenceRenderer,
     ExistingEvidenceRendererAdapter,
     VLMEvaluationController,
     VLMEvaluationResult,
@@ -60,15 +86,26 @@ from benchmark.visual_judge.visual_config import DEFAULT_P0B_VISUAL_CONFIGS
 
 __all__ = [
     "CameraEvidenceProvider",
+    "CameraAcquisitionPolicy",
+    "CameraAcquisitionState",
+    "CameraConstraintSet",
+    "CameraObservation",
+    "CameraPoseValidator",
+    "CameraRepairPlan",
+    "CameraRepairSolver",
     "CameraSelectionRequest",
     "CameraSelectionResult",
     "CameraSelector",
     "ConditionalActiveCameraEvidenceProvider",
     "ControlledVLMJudge",
     "DEFAULT_P0B_VISUAL_CONFIGS",
+    "DEFAULT_DETERMINISTIC_CAMERA_RANKING",
     "DEFAULT_VLM_EVALUATION_CONTROL",
     "DecisionContract",
     "DeterministicCameraSelector",
+    "DeterministicCameraRepairSolver",
+    "DeterministicCameraRankingConfig",
+    "DeterministicLocalCameraSelector",
     "DeterministicEvidenceGate",
     "EvidenceGate",
     "EvidenceGateRequest",
@@ -76,6 +113,7 @@ __all__ = [
     "EvidenceControlUnresolvedError",
     "EvidenceRenderRequest",
     "EvidenceRenderResult",
+    "EvidenceRenderer",
     "EvidenceRequest",
     "ExistingCameraSelectorAdapter",
     "ExistingEvidenceRendererAdapter",
@@ -88,6 +126,8 @@ __all__ = [
     "LocalViewProvider",
     "OpenAICompatibleVLMJudge",
     "VLMCameraSelector",
+    "ActiveVLMCameraSelector",
+    "VLMSelectionMode",
     "VLMEvaluationControl",
     "VLMEvaluationController",
     "VLMEvaluationResult",

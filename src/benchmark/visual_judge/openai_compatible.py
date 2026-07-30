@@ -22,6 +22,12 @@ from benchmark.visual_judge.roles import (
     VLMRole,
     vlm_audit_metadata,
 )
+from benchmark.visual_judge.interfaces import JudgeResult
+from benchmark.visual_judge.camera_dsl import (
+    CAMERA_OBSERVATIONS,
+    METRIC_CAMERA_REQUIREMENTS,
+    canonical_camera_metric,
+)
 
 
 SYSTEM_PROMPT = """You are the visual judge for a 3D scene-generation benchmark.
@@ -63,6 +69,30 @@ is supporting context, not permission to invent hidden evidence. Return exactly 
 {"verdict":"valid","confidence":0.0,"reason":"..."}.
 verdict must be exactly valid or invalid. No abstention, not-applicable, insufficient-evidence,
 continuous score, or third verdict is allowed. confidence must be between 0 and 1."""
+
+_EVIDENCE_AWARE_BINARY_OUTPUT_CONTRACT = """Return exactly one JSON object:
+{"status":"valid","confidence":0.0,"reason":"...","defects":[],
+"evidence_request":null}.
+status must be valid, invalid, or need_more_evidence. valid and invalid must use
+evidence_request=null. If the supplied views cannot support a safe binary conclusion, do not guess:
+return need_more_evidence with defects=[] and a structured evidence_request:
+{"target_ids":["object_id"],"missing_observations":["..."],"view_goal":"...","metadata":{}}.
+The request must identify the targets, missing technical observation, and a concrete evidence view
+goal. missing_observations must contain only exact Camera DSL tokens from the
+allowed_missing_observations supplied in the user context. The finite vocabulary is:
+target_visible, joint_visibility, contact_surface_visible, support_chain_visible,
+architecture_plane_visible, front_back_disambiguated, depth_baseline_available,
+group_context_visible, global_context_preserved, occluder_avoided.
+Do not put prose in missing_observations. confidence must be between 0 and 1."""
+
+P0B_CONTROL_SYSTEM_PROMPT = (
+    P0B_SYSTEM_PROMPT.split("Return exactly one JSON object:", 1)[0]
+    + _EVIDENCE_AWARE_BINARY_OUTPUT_CONTRACT
+)
+RELATION_CONTROL_SYSTEM_PROMPT = (
+    RELATION_SYSTEM_PROMPT.split("Return exactly one JSON object:", 1)[0]
+    + _EVIDENCE_AWARE_BINARY_OUTPUT_CONTRACT
+)
 
 SPATIAL_FIDELITY_SYSTEM_PROMPT = """You adjudicate one candidate Spatial Fidelity issue in a
 coarse-grained 3D scene benchmark. A statistical detector routed this event; routing is evidence to
@@ -478,7 +508,18 @@ class OpenAICompatibleVLMJudge:
     def adjudicate_p0b(self, request: dict) -> dict:
         return self._controlled_adjudicate("adjudicate_p0b", request)
 
-    def _adjudicate_p0b_raw(self, request: dict) -> dict:
+    def _adjudicate_p0b_control(self, request: dict) -> dict:
+        return self._adjudicate_p0b_raw(
+            request,
+            _allow_need_more_evidence=True,
+        )
+
+    def _adjudicate_p0b_raw(
+        self,
+        request: dict,
+        *,
+        _allow_need_more_evidence: bool = False,
+    ) -> dict:
         if not isinstance(request, dict):
             raise TypeError("P0b judge request must be a JSON object")
         paths = [Path(str(value)).expanduser() for value in request.get("render_evidence", [])]
@@ -508,6 +549,11 @@ class OpenAICompatibleVLMJudge:
             "view_evidence": _sanitize_outbound_view_evidence(
                 request.get("local_render_evidence_metadata")
             ),
+            "allowed_missing_observations": (
+                _allowed_binary_camera_observations(
+                    request.get("metric")
+                )
+            ),
         }
         context_text = _budgeted_context_json(
             context,
@@ -526,6 +572,7 @@ class OpenAICompatibleVLMJudge:
                 "visual_evidence_policy",
                 "view_names",
                 "view_evidence",
+                "allowed_missing_observations",
             ),
         )
         content: list[dict[str, Any]] = [
@@ -540,18 +587,31 @@ class OpenAICompatibleVLMJudge:
         )
         raw = self.model.chat_messages(
             [
-                {"role": "system", "content": P0B_SYSTEM_PROMPT},
+                {
+                    "role": "system",
+                    "content": (
+                        P0B_CONTROL_SYSTEM_PROMPT
+                        if _allow_need_more_evidence
+                        else P0B_SYSTEM_PROMPT
+                    ),
+                },
                 {"role": "user", "content": content},
             ],
             response_format_json=self.response_format_json,
             call_type=f"vlm_judge.p0b.{request.get('metric') or 'event'}",
         )
         result = parse_json_object(raw)
-        validate_binary_judge_response(
-            result,
-            judge_label="P0b judge",
-            confidence_label="VLM judge",
-        )
+        if _allow_need_more_evidence:
+            result = _normalize_evidence_aware_binary_response(
+                result,
+                judge_label="P0b judge",
+            )
+        else:
+            validate_binary_judge_response(
+                result,
+                judge_label="P0b judge",
+                confidence_label="VLM judge",
+            )
         return self._audit_result(
             result,
             role=VLMRole.JUDGE,
@@ -566,7 +626,18 @@ class OpenAICompatibleVLMJudge:
             request,
         )
 
-    def _adjudicate_relation_raw(self, request: dict) -> dict:
+    def _adjudicate_relation_control(self, request: dict) -> dict:
+        return self._adjudicate_relation_raw(
+            request,
+            _allow_need_more_evidence=True,
+        )
+
+    def _adjudicate_relation_raw(
+        self,
+        request: dict,
+        *,
+        _allow_need_more_evidence: bool = False,
+    ) -> dict:
         if not isinstance(request, dict):
             raise TypeError("relationship judge request must be a JSON object")
         paths = [Path(str(value)).expanduser() for value in request.get("render_evidence", [])]
@@ -590,6 +661,12 @@ class OpenAICompatibleVLMJudge:
             "involved_objects": request.get("involved_objects"),
             "canonical_scene": request.get("scene_summary"),
             "view_names": _generic_view_names(selected),
+            "allowed_missing_observations": (
+                _allowed_binary_camera_observations(
+                    "relation",
+                    relation_type=_relation_type_from_request(request),
+                )
+            ),
         }
         context_text = _budgeted_context_json(
             context,
@@ -604,6 +681,7 @@ class OpenAICompatibleVLMJudge:
                 "natural_language_prompt",
                 "involved_objects",
                 "view_names",
+                "allowed_missing_observations",
             ),
         )
         content: list[dict[str, Any]] = [
@@ -618,18 +696,31 @@ class OpenAICompatibleVLMJudge:
         )
         raw = self.model.chat_messages(
             [
-                {"role": "system", "content": RELATION_SYSTEM_PROMPT},
+                {
+                    "role": "system",
+                    "content": (
+                        RELATION_CONTROL_SYSTEM_PROMPT
+                        if _allow_need_more_evidence
+                        else RELATION_SYSTEM_PROMPT
+                    ),
+                },
                 {"role": "user", "content": content},
             ],
             response_format_json=self.response_format_json,
             call_type=f"vlm_judge.relationship.{request.get('family') or 'unknown'}",
         )
         result = parse_json_object(raw)
-        validate_binary_judge_response(
-            result,
-            judge_label="relationship judge",
-            confidence_label="VLM judge",
-        )
+        if _allow_need_more_evidence:
+            result = _normalize_evidence_aware_binary_response(
+                result,
+                judge_label="relationship judge",
+            )
+        else:
+            validate_binary_judge_response(
+                result,
+                judge_label="relationship judge",
+                confidence_label="VLM judge",
+            )
         return self._audit_result(
             result,
             role=VLMRole.JUDGE,
@@ -942,6 +1033,28 @@ class OpenAICompatibleVLMJudge:
             images_used=aliases,
             request_metadata=request_metadata,
         )
+
+
+def _normalize_evidence_aware_binary_response(
+    value: dict[str, Any],
+    *,
+    judge_label: str,
+) -> dict[str, Any]:
+    if value.get("status") is not None:
+        return JudgeResult.from_value(value).to_dict()
+    validate_binary_judge_response(
+        value,
+        judge_label=judge_label,
+        confidence_label="VLM judge",
+    )
+    return JudgeResult.from_value(
+        {
+            "status": value["verdict"],
+            "confidence": value["confidence"],
+            "reason": value["reason"],
+            "defects": [],
+        }
+    ).to_dict()
 
 
 def _generic_view_names(paths: list[Path]) -> list[str]:
@@ -1265,6 +1378,49 @@ def _sanitize_selector_deficiency(value: Any) -> dict[str, Any]:
     ):
         result["evidence_utility"] = round(float(utility), 6)
     return result
+
+
+def _allowed_binary_camera_observations(
+    metric: Any,
+    *,
+    relation_type: str | None = None,
+) -> list[str]:
+    """Expose only controller-validated DSL tokens to the internal Judge."""
+
+    try:
+        metric_name = canonical_camera_metric(
+            metric,
+            relation_type=relation_type,
+        )
+    except ValueError:
+        # target_visible belongs to every metric registry entry and remains a
+        # safe technical fallback when a legacy request omits its subtype.
+        return ["target_visible"]
+    allowed = METRIC_CAMERA_REQUIREMENTS[
+        metric_name
+    ].allowed_observations
+    return sorted(set(allowed) & CAMERA_OBSERVATIONS)
+
+
+def _relation_type_from_request(request: dict[str, Any]) -> str | None:
+    for source in (
+        request.get("relation"),
+        request.get("event"),
+        request.get("detector_evidence"),
+        request,
+    ):
+        if isinstance(source, str) and source.strip():
+            return source.strip()
+        if not isinstance(source, dict):
+            continue
+        for key in ("relation_type", "event_type", "predicate", "type"):
+            value = source.get(key)
+            if value is not None and str(value).strip():
+                return str(value).strip()
+        nested = source.get("relation")
+        if isinstance(nested, str) and nested.strip():
+            return nested.strip()
+    return None
 
 
 def _minimal_selector_pose(value: Any) -> dict[str, Any]:

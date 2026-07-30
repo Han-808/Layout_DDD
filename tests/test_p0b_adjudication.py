@@ -132,7 +132,9 @@ def test_openai_p0b_judge_requires_binary_verdict(tmp_path: Path) -> None:
 
     assert result["verdict"] == "valid"
     assert model.calls[0]["kwargs"]["call_type"] == "vlm_judge.p0b.collision"
-    assert "insufficient-evidence" in model.calls[0]["messages"][0]["content"]
+    assert "need_more_evidence" in model.calls[0]["messages"][0]["content"]
+    assert "status" not in result
+    assert "evidence_request" not in result
 
     invalid_model = _FakeModel({"verdict": "insufficient_evidence", "confidence": 0.2, "reason": "occluded"})
     with pytest.raises(EvidenceControlUnresolvedError):

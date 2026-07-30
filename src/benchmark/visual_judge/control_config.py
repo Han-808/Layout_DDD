@@ -4,6 +4,11 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any
 
+from benchmark.visual_judge.camera_ranking import (
+    DEFAULT_DETERMINISTIC_CAMERA_RANKING,
+    DeterministicCameraRankingConfig,
+)
+
 
 VLM_EVALUATION_CONTROL_VERSION = "vlm_evaluation_control_v1"
 
@@ -14,9 +19,39 @@ DEFAULT_VLM_EVALUATION_CONTROL: dict[str, Any] = {
         "allow_freeform_pose": False,
         "allow_scene_mutation": False,
     },
+    "camera_acquisition": {
+        "policy": "deterministic_then_vlm",
+        "deterministic": {
+            "max_rounds": 1,
+            "candidate_budget": 8,
+            "max_selected_views": 2,
+            "ranking": deepcopy(DEFAULT_DETERMINISTIC_CAMERA_RANKING),
+        },
+        "vlm": {
+            "max_rounds": 1,
+            "selection_mode": "repair_plan",
+            "max_selected_views": 2,
+            "max_repair_plans": 3,
+        },
+        # These mirror the existing budgets. The resolver keeps both paths
+        # synchronized so old configuration patches remain authoritative.
+        "total": {
+            "max_evidence_rounds": 2,
+            "max_total_images": 6,
+            "max_selector_calls": 3,
+            "max_camera_actions": 2,
+        },
+        "escalation": {
+            "on_no_feasible_candidate": True,
+            "on_post_render_gate_insufficient": True,
+            "on_selector_exception": False,
+            "on_render_failure": False,
+        },
+    },
     "evidence_gate": {
         "enabled": True,
         "backend": "deterministic",
+        "allow_path_only_compatibility": False,
     },
     "judge": {
         "allow_need_more_evidence": True,
@@ -49,8 +84,22 @@ class VLMEvaluationControl:
     camera_selector_backend: str
     allow_freeform_pose: bool
     allow_scene_mutation: bool
+    camera_acquisition_policy: str
+    deterministic_max_rounds: int
+    deterministic_candidate_budget: int
+    deterministic_max_selected_views: int
+    deterministic_ranking: dict[str, float]
+    vlm_max_rounds: int
+    vlm_selection_mode: str
+    vlm_max_selected_views: int
+    vlm_max_repair_plans: int
+    escalate_on_no_feasible_candidate: bool
+    escalate_on_post_render_gate_insufficient: bool
+    escalate_on_selector_exception: bool
+    escalate_on_render_failure: bool
     evidence_gate_enabled: bool
     evidence_gate_backend: str
+    evidence_gate_allow_path_only_compatibility: bool
     judge_allow_need_more_evidence: bool
     max_evidence_rounds: int
     max_views_per_round: int
@@ -73,9 +122,49 @@ class VLMEvaluationControl:
                 "allow_freeform_pose": self.allow_freeform_pose,
                 "allow_scene_mutation": self.allow_scene_mutation,
             },
+            "camera_acquisition": {
+                "policy": self.camera_acquisition_policy,
+                "deterministic": {
+                    "max_rounds": self.deterministic_max_rounds,
+                    "candidate_budget": (
+                        self.deterministic_candidate_budget
+                    ),
+                    "max_selected_views": (
+                        self.deterministic_max_selected_views
+                    ),
+                    "ranking": deepcopy(self.deterministic_ranking),
+                },
+                "vlm": {
+                    "max_rounds": self.vlm_max_rounds,
+                    "selection_mode": self.vlm_selection_mode,
+                    "max_selected_views": self.vlm_max_selected_views,
+                    "max_repair_plans": self.vlm_max_repair_plans,
+                },
+                "total": {
+                    "max_evidence_rounds": self.max_evidence_rounds,
+                    "max_total_images": self.max_total_images,
+                    "max_selector_calls": self.max_selector_calls,
+                    "max_camera_actions": self.max_camera_actions,
+                },
+                "escalation": {
+                    "on_no_feasible_candidate": (
+                        self.escalate_on_no_feasible_candidate
+                    ),
+                    "on_post_render_gate_insufficient": (
+                        self.escalate_on_post_render_gate_insufficient
+                    ),
+                    "on_selector_exception": (
+                        self.escalate_on_selector_exception
+                    ),
+                    "on_render_failure": self.escalate_on_render_failure,
+                },
+            },
             "evidence_gate": {
                 "enabled": self.evidence_gate_enabled,
                 "backend": self.evidence_gate_backend,
+                "allow_path_only_compatibility": (
+                    self.evidence_gate_allow_path_only_compatibility
+                ),
             },
             "judge": {
                 "allow_need_more_evidence": (
@@ -127,8 +216,32 @@ def resolve_vlm_evaluation_control(
             "camera_selector.backend",
             "camera_selector.allow_freeform_pose",
             "camera_selector.allow_scene_mutation",
+            "camera_acquisition.policy",
+            "camera_acquisition.deterministic.max_rounds",
+            "camera_acquisition.deterministic.candidate_budget",
+            "camera_acquisition.deterministic.max_selected_views",
+            *(
+                "camera_acquisition.deterministic.ranking." + key
+                for key in DEFAULT_DETERMINISTIC_CAMERA_RANKING
+            ),
+            "camera_acquisition.vlm.max_rounds",
+            "camera_acquisition.vlm.selection_mode",
+            "camera_acquisition.vlm.max_selected_views",
+            "camera_acquisition.vlm.max_repair_plans",
+            "camera_acquisition.total.max_evidence_rounds",
+            "camera_acquisition.total.max_total_images",
+            "camera_acquisition.total.max_selector_calls",
+            "camera_acquisition.total.max_camera_actions",
+            "camera_acquisition.escalation.on_no_feasible_candidate",
+            (
+                "camera_acquisition.escalation."
+                "on_post_render_gate_insufficient"
+            ),
+            "camera_acquisition.escalation.on_selector_exception",
+            "camera_acquisition.escalation.on_render_failure",
             "evidence_gate.enabled",
             "evidence_gate.backend",
+            "evidence_gate.allow_path_only_compatibility",
             "judge.allow_need_more_evidence",
             "budgets.max_evidence_rounds",
             "budgets.max_views_per_round",
@@ -155,6 +268,7 @@ def resolve_vlm_evaluation_control(
         )
 
     effective = deepcopy(requested)
+    _synchronize_total_budgets(effective, sources)
     backend = str(effective["camera_selector"]["backend"]).strip().lower()
     if existing_selector_available is not None:
         _boolean(
@@ -209,6 +323,7 @@ def resolve_vlm_evaluation_control(
         )
         if capacity < requested_total:
             sources["budgets.max_total_images"] = "judge_capacity"
+    _mirror_effective_budgets_to_acquisition(effective, sources)
 
     _validate_resolved(effective)
     return _from_mapping(
@@ -225,6 +340,10 @@ def _from_mapping(
     sources: dict[str, str],
 ) -> VLMEvaluationControl:
     selector = value["camera_selector"]
+    acquisition = value["camera_acquisition"]
+    deterministic = acquisition["deterministic"]
+    vlm = acquisition["vlm"]
+    escalation = acquisition["escalation"]
     gate = value["evidence_gate"]
     judge = value["judge"]
     budgets = value["budgets"]
@@ -233,8 +352,40 @@ def _from_mapping(
         camera_selector_backend=str(selector["backend"]),
         allow_freeform_pose=bool(selector["allow_freeform_pose"]),
         allow_scene_mutation=bool(selector["allow_scene_mutation"]),
+        camera_acquisition_policy=str(acquisition["policy"]),
+        deterministic_max_rounds=int(deterministic["max_rounds"]),
+        deterministic_candidate_budget=int(
+            deterministic["candidate_budget"]
+        ),
+        deterministic_max_selected_views=int(
+            deterministic["max_selected_views"]
+        ),
+        deterministic_ranking=(
+            DeterministicCameraRankingConfig.from_value(
+                deterministic["ranking"]
+            ).to_dict()
+        ),
+        vlm_max_rounds=int(vlm["max_rounds"]),
+        vlm_selection_mode=str(vlm["selection_mode"]),
+        vlm_max_selected_views=int(vlm["max_selected_views"]),
+        vlm_max_repair_plans=int(vlm["max_repair_plans"]),
+        escalate_on_no_feasible_candidate=bool(
+            escalation["on_no_feasible_candidate"]
+        ),
+        escalate_on_post_render_gate_insufficient=bool(
+            escalation["on_post_render_gate_insufficient"]
+        ),
+        escalate_on_selector_exception=bool(
+            escalation["on_selector_exception"]
+        ),
+        escalate_on_render_failure=bool(
+            escalation["on_render_failure"]
+        ),
         evidence_gate_enabled=bool(gate["enabled"]),
         evidence_gate_backend=str(gate["backend"]),
+        evidence_gate_allow_path_only_compatibility=bool(
+            gate["allow_path_only_compatibility"]
+        ),
         judge_allow_need_more_evidence=bool(
             judge["allow_need_more_evidence"]
         ),
@@ -270,6 +421,9 @@ def _validate_patch(value: dict[str, Any]) -> None:
         "camera_selector": set(
             DEFAULT_VLM_EVALUATION_CONTROL["camera_selector"]
         ),
+        "camera_acquisition": set(
+            DEFAULT_VLM_EVALUATION_CONTROL["camera_acquisition"]
+        ),
         "evidence_gate": set(DEFAULT_VLM_EVALUATION_CONTROL["evidence_gate"]),
         "judge": set(DEFAULT_VLM_EVALUATION_CONTROL["judge"]),
         "budgets": set(DEFAULT_VLM_EVALUATION_CONTROL["budgets"]),
@@ -285,6 +439,41 @@ def _validate_patch(value: dict[str, Any]) -> None:
             raise ValueError(
                 f"unknown {key} control fields: {sorted(nested_unknown)}"
             )
+    acquisition = value.get("camera_acquisition")
+    if isinstance(acquisition, dict):
+        _validate_nested_patch(
+            acquisition,
+            "deterministic",
+            DEFAULT_VLM_EVALUATION_CONTROL["camera_acquisition"][
+                "deterministic"
+            ],
+        )
+        deterministic = acquisition.get("deterministic")
+        if isinstance(deterministic, dict):
+            _validate_nested_patch(
+                deterministic,
+                "ranking",
+                DEFAULT_VLM_EVALUATION_CONTROL[
+                    "camera_acquisition"
+                ]["deterministic"]["ranking"],
+            )
+        _validate_nested_patch(
+            acquisition,
+            "vlm",
+            DEFAULT_VLM_EVALUATION_CONTROL["camera_acquisition"]["vlm"],
+        )
+        _validate_nested_patch(
+            acquisition,
+            "total",
+            DEFAULT_VLM_EVALUATION_CONTROL["camera_acquisition"]["total"],
+        )
+        _validate_nested_patch(
+            acquisition,
+            "escalation",
+            DEFAULT_VLM_EVALUATION_CONTROL["camera_acquisition"][
+                "escalation"
+            ],
+        )
 
 
 def _validate_resolved(value: dict[str, Any]) -> None:
@@ -305,10 +494,76 @@ def _validate_resolved(value: dict[str, Any]) -> None:
         )
     _boolean(selector["allow_freeform_pose"], "allow_freeform_pose")
     _boolean(selector["allow_scene_mutation"], "allow_scene_mutation")
+    if selector["allow_scene_mutation"] is not False:
+        raise ValueError(
+            "camera_selector.allow_scene_mutation cannot be enabled; "
+            "CameraSelector and evidence renderer scene access is read-only"
+        )
+    acquisition = value["camera_acquisition"]
+    if str(acquisition["policy"]) not in {
+        "fixed",
+        "deterministic_only",
+        "vlm_only",
+        "deterministic_then_vlm",
+    }:
+        raise ValueError(
+            "camera_acquisition.policy must be fixed, deterministic_only, "
+            "vlm_only, or deterministic_then_vlm"
+        )
+    deterministic = acquisition["deterministic"]
+    _nonnegative_int(
+        deterministic["max_rounds"],
+        "camera_acquisition.deterministic.max_rounds",
+    )
+    _positive_int(
+        deterministic["candidate_budget"],
+        "camera_acquisition.deterministic.candidate_budget",
+    )
+    _positive_int(
+        deterministic["max_selected_views"],
+        "camera_acquisition.deterministic.max_selected_views",
+    )
+    DeterministicCameraRankingConfig.from_value(
+        deterministic["ranking"]
+    )
+    vlm = acquisition["vlm"]
+    _nonnegative_int(
+        vlm["max_rounds"],
+        "camera_acquisition.vlm.max_rounds",
+    )
+    if str(vlm["selection_mode"]) not in {
+        "candidate_only",
+        "repair_plan",
+        "freeform_pose",
+    }:
+        raise ValueError(
+            "camera_acquisition.vlm.selection_mode must be candidate_only, "
+            "repair_plan, or freeform_pose"
+        )
+    _positive_int(
+        vlm["max_selected_views"],
+        "camera_acquisition.vlm.max_selected_views",
+    )
+    _positive_int(
+        vlm["max_repair_plans"],
+        "camera_acquisition.vlm.max_repair_plans",
+    )
+    for key, enabled in acquisition["escalation"].items():
+        _boolean(enabled, f"camera_acquisition.escalation.{key}")
+    for key in ("on_selector_exception", "on_render_failure"):
+        if acquisition["escalation"][key] is not False:
+            raise ValueError(
+                f"camera_acquisition.escalation.{key} cannot be enabled; "
+                "engineering failures are not normal VLM escalation signals"
+            )
     gate = value["evidence_gate"]
     _boolean(gate["enabled"], "evidence_gate.enabled")
     if str(gate["backend"]) != "deterministic":
         raise ValueError("evidence_gate.backend must be deterministic")
+    _boolean(
+        gate["allow_path_only_compatibility"],
+        "evidence_gate.allow_path_only_compatibility",
+    )
     _boolean(
         value["judge"]["allow_need_more_evidence"],
         "judge.allow_need_more_evidence",
@@ -353,6 +608,68 @@ def _deep_update(
             target[key] = deepcopy(value)
             if path != "schema_version":
                 sources[path] = source
+
+
+def _validate_nested_patch(
+    parent: dict[str, Any],
+    key: str,
+    defaults: dict[str, Any],
+) -> None:
+    if key not in parent:
+        return
+    value = parent[key]
+    if not isinstance(value, dict):
+        raise TypeError(f"camera_acquisition.{key} must be a JSON object")
+    unknown = set(value) - set(defaults)
+    if unknown:
+        raise ValueError(
+            "unknown camera_acquisition."
+            f"{key} fields: {sorted(unknown)}"
+        )
+
+
+def _synchronize_total_budgets(
+    value: dict[str, Any],
+    sources: dict[str, str],
+) -> None:
+    total = value["camera_acquisition"]["total"]
+    budgets = value["budgets"]
+    mapping = {
+        "max_evidence_rounds": "max_evidence_rounds",
+        "max_total_images": "max_total_images",
+        "max_selector_calls": "max_selector_calls",
+        "max_camera_actions": "max_camera_actions",
+    }
+    for total_key, budget_key in mapping.items():
+        total_path = f"camera_acquisition.total.{total_key}"
+        budget_path = f"budgets.{budget_key}"
+        total_source = sources[total_path]
+        budget_source = sources[budget_path]
+        if total_source != "default":
+            budgets[budget_key] = deepcopy(total[total_key])
+            sources[budget_path] = total_source
+        elif budget_source != "default":
+            total[total_key] = deepcopy(budgets[budget_key])
+            sources[total_path] = f"legacy_{budget_source}"
+
+
+def _mirror_effective_budgets_to_acquisition(
+    value: dict[str, Any],
+    sources: dict[str, str],
+) -> None:
+    total = value["camera_acquisition"]["total"]
+    budgets = value["budgets"]
+    for key in (
+        "max_evidence_rounds",
+        "max_total_images",
+        "max_selector_calls",
+        "max_camera_actions",
+    ):
+        total[key] = deepcopy(budgets[key])
+        if sources[f"budgets.{key}"] != "default":
+            sources[f"camera_acquisition.total.{key}"] = (
+                sources[f"budgets.{key}"]
+            )
 
 
 def _positive_int(value: Any, label: str) -> int:

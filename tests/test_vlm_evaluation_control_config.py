@@ -39,9 +39,112 @@ def test_resolver_without_config_uses_documented_defaults() -> None:
     resolved = resolve_vlm_evaluation_control()
 
     assert resolved.to_dict() == DEFAULT_VLM_EVALUATION_CONTROL
+    assert resolved.camera_acquisition_policy == (
+        "deterministic_then_vlm"
+    )
+    assert resolved.deterministic_max_rounds == 1
+    assert resolved.deterministic_candidate_budget == 8
+    assert resolved.vlm_max_rounds == 1
+    assert resolved.vlm_selection_mode == "repair_plan"
     assert set(resolved.sources.values()) == {"default"}
     assert resolved.requested == DEFAULT_VLM_EVALUATION_CONTROL
     _validate(resolved.to_dict())
+
+
+def test_camera_acquisition_total_override_is_shared_with_legacy_budgets():
+    resolved = resolve_vlm_evaluation_control(
+        {
+            "camera_acquisition": {
+                "policy": "vlm_only",
+                "vlm": {
+                    "selection_mode": "candidate_only",
+                    "max_selected_views": 1,
+                },
+                "total": {
+                    "max_evidence_rounds": 1,
+                    "max_total_images": 4,
+                    "max_selector_calls": 2,
+                    "max_camera_actions": 1,
+                },
+            }
+        }
+    )
+
+    assert resolved.camera_acquisition_policy == "vlm_only"
+    assert resolved.vlm_selection_mode == "candidate_only"
+    assert resolved.vlm_max_selected_views == 1
+    assert resolved.max_evidence_rounds == 1
+    assert resolved.max_total_images == 4
+    assert resolved.max_selector_calls == 2
+    assert resolved.max_camera_actions == 1
+    manifest = resolved.manifest()
+    assert manifest["effective"]["budgets"]["max_total_images"] == 4
+    assert manifest["sources"][
+        "camera_acquisition.total.max_total_images"
+    ] == "config"
+    assert manifest["sources"]["budgets.max_total_images"] == "config"
+
+
+def test_ranking_and_repair_plan_limits_are_partial_overrides_with_sources():
+    patch = {
+        "camera_acquisition": {
+            "deterministic": {
+                "ranking": {"target_visibility_bonus": 3.5},
+            },
+            "vlm": {"max_repair_plans": 1},
+        }
+    }
+
+    _validate(patch)
+    resolved = resolve_vlm_evaluation_control(patch)
+    manifest = resolved.manifest()
+
+    assert resolved.deterministic_ranking[
+        "target_visibility_bonus"
+    ] == 3.5
+    assert resolved.deterministic_ranking[
+        "projected_coverage_weight"
+    ] == 2.0
+    assert resolved.vlm_max_repair_plans == 1
+    assert manifest["sources"][
+        "camera_acquisition.deterministic.ranking.target_visibility_bonus"
+    ] == "config"
+    assert manifest["sources"][
+        "camera_acquisition.deterministic.ranking.projected_coverage_weight"
+    ] == "default"
+    assert manifest["sources"][
+        "camera_acquisition.vlm.max_repair_plans"
+    ] == "config"
+    _validate(manifest["effective"])
+
+
+def test_four_camera_ablation_configs_share_the_same_total_budget():
+    names = {
+        "fixed": "vlm_camera_fixed_views_v1.json",
+        "deterministic_only": (
+            "vlm_camera_deterministic_only_v1.json"
+        ),
+        "vlm_only": "vlm_camera_vlm_only_v1.json",
+        "deterministic_then_vlm": (
+            "vlm_camera_deterministic_then_vlm_v1.json"
+        ),
+    }
+    totals = []
+
+    for policy, name in names.items():
+        patch = json.loads(
+            (ROOT / "configs" / "evaluation" / name).read_text(
+                encoding="utf-8"
+            )
+        )
+        resolved = resolve_vlm_evaluation_control(patch)
+        assert resolved.camera_acquisition_policy == policy
+        assert resolved.vlm_selection_mode == "repair_plan"
+        totals.append(
+            resolved.to_dict()["camera_acquisition"]["total"]
+        )
+
+    assert totals == [totals[0]] * len(totals)
 
 
 def test_additive_partial_config_overrides_only_explicit_fields() -> None:
@@ -67,6 +170,7 @@ def test_additive_partial_config_overrides_only_explicit_fields() -> None:
     assert resolved.allow_scene_mutation is False
     assert resolved.evidence_gate_enabled is False
     assert resolved.evidence_gate_backend == "deterministic"
+    assert resolved.evidence_gate_allow_path_only_compatibility is False
     assert resolved.judge_allow_need_more_evidence is False
     assert resolved.max_evidence_rounds == 1
     assert resolved.max_total_images == 4
@@ -85,6 +189,61 @@ def test_old_or_empty_config_missing_new_fields_remains_valid() -> None:
         assert resolved.max_evidence_rounds == 2
         assert resolved.max_views_per_round == 2
         assert resolved.max_total_images == 6
+        assert resolved.evidence_gate_allow_path_only_compatibility is False
+
+
+def test_path_only_compatibility_is_explicit_and_manifested() -> None:
+    resolved = resolve_vlm_evaluation_control(
+        {
+            "evidence_gate": {
+                "allow_path_only_compatibility": True,
+            }
+        }
+    )
+
+    assert resolved.evidence_gate_allow_path_only_compatibility is True
+    assert resolved.manifest()["effective"]["evidence_gate"][
+        "allow_path_only_compatibility"
+    ] is True
+    assert resolved.sources[
+        "evidence_gate.allow_path_only_compatibility"
+    ] == "config"
+
+
+def test_scene_mutation_configuration_is_frozen_false() -> None:
+    value = {"camera_selector": {"allow_scene_mutation": True}}
+
+    with pytest.raises(Exception):
+        _validate(value)
+    with pytest.raises(ValueError, match="cannot be enabled"):
+        resolve_vlm_evaluation_control(value)
+
+    schema = _schema()
+    assert schema["properties"]["camera_selector"]["properties"][
+        "allow_scene_mutation"
+    ]["const"] is False
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["on_selector_exception", "on_render_failure"],
+)
+def test_engineering_failures_cannot_be_enabled_as_vlm_escalation(
+    field,
+) -> None:
+    value = {
+        "camera_acquisition": {
+            "escalation": {field: True},
+        }
+    }
+
+    with pytest.raises(Exception):
+        _validate(value)
+    with pytest.raises(
+        ValueError,
+        match="engineering failures are not normal VLM escalation",
+    ):
+        resolve_vlm_evaluation_control(value)
 
 
 def test_existing_backend_inherits_provider_view_and_action_limits() -> None:

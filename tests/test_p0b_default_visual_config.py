@@ -118,6 +118,7 @@ def test_p0b_request_and_result_record_applied_metric_default(tmp_path: Path) ->
         captured.append(request)
         return {"verdict": "invalid", "confidence": 0.8, "reason": "visible gap"}
 
+    judge.vlm_control_enabled = False
     report = adjudicate_p0b_event(
         metric="support",
         event={"object_id": "object"},
@@ -165,6 +166,7 @@ def test_passthrough_preserves_frozen_experiment_bundle(tmp_path: Path) -> None:
         captured.append(request)
         return {"verdict": "valid", "confidence": 0.8, "reason": "experiment"}
 
+    judge.vlm_control_enabled = False
     items = _bundle(tmp_path)
     adjudicate_p0b_event(
         metric="collision",

@@ -491,6 +491,70 @@ def test_relation_judge_rejects_third_verdict(
         )
 
 
+@pytest.mark.parametrize(
+    ("control_method", "payload", "expected_observation"),
+    [
+        (
+            "_adjudicate_p0b_control",
+            {
+                "metric": "collision",
+                "event": {"object_ids": ["a", "b"]},
+            },
+            "contact_surface_visible",
+        ),
+        (
+            "_adjudicate_relation_control",
+            {
+                "family": "oor",
+                "relation": {
+                    "type": "mirrors",
+                    "subject_id": "a",
+                    "object_id": "b",
+                },
+            },
+            "target_visible",
+        ),
+    ],
+)
+def test_binary_judges_have_internal_structured_need_more_path(
+    tmp_path,
+    control_method,
+    payload,
+    expected_observation,
+):
+    image_path = tmp_path / "binary-control.png"
+    _write_test_png(image_path)
+    model = FakeMultimodalModel(
+        {
+            "status": "need_more_evidence",
+            "confidence": 0.2,
+            "reason": "both targets are not jointly visible",
+            "defects": [],
+            "evidence_request": {
+                "target_ids": ["a", "b"],
+                "missing_observations": ["joint_visibility"],
+                "view_goal": "show both targets in one view",
+                "metadata": {"source": "binary_control"},
+            },
+        }
+    )
+    judge = OpenAICompatibleVLMJudge(model)
+
+    result = getattr(judge, control_method)(
+        {**payload, "render_evidence": [str(image_path)]}
+    )
+
+    assert result["status"] == "need_more_evidence"
+    assert result["evidence_request"]["target_ids"] == ["a", "b"]
+    system_prompt = model.calls[0]["messages"][0]["content"]
+    user_text = model.calls[0]["messages"][1]["content"][0]["text"]
+    assert "do not guess" in system_prompt
+    assert "need_more_evidence" in system_prompt
+    assert "allowed_missing_observations" in user_text
+    assert expected_observation in user_text
+    assert "Do not put prose in missing_observations" in system_prompt
+
+
 def test_spatial_fidelity_judge_is_binary_and_treats_rarity_as_routing_only(
     tmp_path: Path,
 ) -> None:
