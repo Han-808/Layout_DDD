@@ -1,6 +1,11 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import hashlib
+import json
+from pathlib import Path
+import re
+from time import perf_counter
 from typing import Any, Callable
 
 from benchmark.visual_judge.interfaces.evidence import (
@@ -73,6 +78,172 @@ class ExistingEvidenceRendererAdapter:
             backend=result.backend,
             provenance=provenance,
         )
+
+
+class CameraViewEvidenceRenderer:
+    """Render Controller-selected poses through an existing scene renderer."""
+
+    backend = "existing_camera_view_renderer"
+
+    def __init__(
+        self,
+        *,
+        renderer: Any,
+        blend_file: str | Path,
+        out_dir: str | Path,
+    ) -> None:
+        if not callable(getattr(renderer, "render_camera_views", None)):
+            raise TypeError(
+                "CameraViewEvidenceRenderer requires "
+                "renderer.render_camera_views(...)"
+            )
+        source = Path(blend_file).expanduser().resolve()
+        if not source.is_file():
+            raise FileNotFoundError(
+                f"camera evidence source blend does not exist: {source}"
+            )
+        self.renderer = renderer
+        self.blend_file = source
+        self.out_dir = Path(out_dir).expanduser().resolve()
+
+    def render(
+        self,
+        request: EvidenceRenderRequest,
+    ) -> EvidenceRenderResult:
+        poses = list(deepcopy(request.selection.selected_views))
+        if not poses and request.selection.camera_proposal is not None:
+            proposal = deepcopy(request.selection.camera_proposal)
+            proposal.setdefault(
+                "id",
+                "freeform_pose_"
+                + _selection_fingerprint(request)[:10],
+            )
+            poses = [proposal]
+        if not poses or any(not isinstance(pose, dict) for pose in poses):
+            raise ValueError(
+                "selected camera evidence must include verifiable pose objects"
+            )
+        group_scope = request.context.get("group_scope")
+        group_id = (
+            str(group_scope.get("group_id") or "scene")
+            if isinstance(group_scope, dict)
+            else "scene"
+        )
+        destination = (
+            self.out_dir
+            / _slug(request.judge_request.metric)
+            / _slug(group_id)
+            / (
+                f"round_{request.evidence_round:02d}_"
+                + _selection_fingerprint(request)[:12]
+            )
+        )
+        started = perf_counter()
+        manifest = self.renderer.render_camera_views(
+            blend_file=self.blend_file,
+            out_dir=destination,
+            camera_views=poses,
+            preview=False,
+        )
+        duration = max(0.0, perf_counter() - started)
+        views = manifest.get("views")
+        if not isinstance(views, list) or not views:
+            raise RuntimeError(
+                "camera evidence renderer returned no final views"
+            )
+        pose_by_id = {
+            str(pose.get("id") or ""): pose for pose in poses
+        }
+        focus_targets = list(
+            request.evidence_goal.get("target_ids")
+            or request.judge_request.context.get(
+                "target_object_ids", []
+            )
+        )
+        evidence: list[dict[str, Any]] = []
+        for index, item in enumerate(views):
+            if not isinstance(item, dict):
+                continue
+            path = item.get("path") or item.get("image_path")
+            if path is None or not str(path).strip():
+                continue
+            view_id = str(
+                item.get("id")
+                or item.get("name")
+                or f"view_{index:02d}"
+            )
+            evidence.append(
+                {
+                    "path": str(path),
+                    "role": (
+                        "group_local"
+                        if isinstance(group_scope, dict)
+                        else "metric_local"
+                    ),
+                    "view_id": view_id,
+                    "representation": "rgb",
+                    "camera_scope": (
+                        "group_local"
+                        if isinstance(group_scope, dict)
+                        else "metric_local"
+                    ),
+                    "pose": deepcopy(pose_by_id.get(view_id)),
+                    "group_id": (
+                        group_id
+                        if isinstance(group_scope, dict)
+                        else None
+                    ),
+                    "member_ids": (
+                        deepcopy(group_scope.get("member_ids"))
+                        if isinstance(group_scope, dict)
+                        else None
+                    ),
+                    "focus_target_ids": focus_targets,
+                }
+            )
+        if not evidence:
+            raise RuntimeError(
+                "camera evidence renderer returned no usable image paths"
+            )
+        manifest_path = destination / "camera_render_manifest.json"
+        return EvidenceRenderResult(
+            visual_evidence=tuple(evidence),
+            merge_policy="append",
+            camera_actions_executed=0,
+            manifest_path=(
+                str(manifest_path)
+                if manifest_path.is_file()
+                else None
+            ),
+            backend=self.backend,
+            provenance={
+                "adapter": (
+                    f"{type(self).__module__}.{type(self).__qualname__}"
+                ),
+                "renderer": (
+                    f"{type(self.renderer).__module__}."
+                    f"{type(self.renderer).__qualname__}"
+                ),
+                "source_blend": str(self.blend_file),
+                "selected_view_ids": list(
+                    request.selection.selected_view_ids
+                ),
+                "full_render_count": len(evidence),
+                "preview_render_count": 0,
+                "render_gpu_time_seconds": manifest.get(
+                    "render_gpu_time_seconds"
+                ),
+                "wall_clock_render_seconds": duration,
+                "evidence_round": request.evidence_round,
+                "group_id": (
+                    group_id
+                    if isinstance(group_scope, dict)
+                    else None
+                ),
+                "scene_access": "read_only",
+            },
+        )
+
 
 class _UnavailableEvidenceRenderer:
     def render(self, request: EvidenceRenderRequest) -> EvidenceRenderResult:
@@ -218,6 +389,21 @@ def _provider_request(request: EvidenceRenderRequest) -> dict[str, Any]:
             ),
             "evidence_scope": "metric_scoped",
         }
+    for key in (
+        "group_scope",
+        "grouping_role",
+        "member_ids",
+        "target_bounds",
+        "focus_center",
+        "target_extent",
+    ):
+        if key in request.context:
+            result.setdefault(
+                key,
+                deepcopy(request.context[key]),
+            )
+    if isinstance(result.get("group_scope"), dict):
+        result["evidence_scope"] = "group_local"
     result["_camera_selection_phase"] = "active_fallback"
     result["_camera_evidence_deficiency"] = deepcopy(
         request.evidence_goal
@@ -237,6 +423,7 @@ def _call_provider(
         "scale_consistency",
         "object_pairing_consistency",
         "style_consistency",
+        "functional_consistency",
     }:
         call = getattr(provider, "provide_scene_quality_evidence", None)
         if callable(call):
@@ -294,3 +481,25 @@ def _coerce_evidence_renderer(value: Any) -> Any:
 UnavailableEvidenceRenderer = _UnavailableEvidenceRenderer
 ExistingProviderEvidenceRenderer = _ExistingProviderEvidenceRenderer
 coerce_evidence_renderer = _coerce_evidence_renderer
+
+
+def _selection_fingerprint(request: EvidenceRenderRequest) -> str:
+    payload = json.dumps(
+        {
+            "metric": request.judge_request.metric,
+            "evidence_round": request.evidence_round,
+            "selection": request.selection.to_dict(),
+            "group_scope": request.context.get("group_scope"),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _slug(value: str) -> str:
+    return (
+        re.sub(r"[^A-Za-z0-9_.-]+", "_", value).strip("._")
+        or "item"
+    )

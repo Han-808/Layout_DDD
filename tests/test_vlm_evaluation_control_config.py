@@ -153,7 +153,6 @@ def test_additive_partial_config_overrides_only_explicit_fields() -> None:
             "backend": "hybrid",
             "allow_freeform_pose": True,
         },
-        "evidence_gate": {"enabled": False},
         "judge": {"allow_need_more_evidence": False},
         "budgets": {
             "max_evidence_rounds": 1,
@@ -168,7 +167,7 @@ def test_additive_partial_config_overrides_only_explicit_fields() -> None:
     assert resolved.camera_selector_backend == "hybrid"
     assert resolved.allow_freeform_pose is True
     assert resolved.allow_scene_mutation is False
-    assert resolved.evidence_gate_enabled is False
+    assert resolved.evidence_gate_enabled is True
     assert resolved.evidence_gate_backend == "deterministic"
     assert resolved.evidence_gate_allow_path_only_compatibility is False
     assert resolved.judge_allow_need_more_evidence is False
@@ -192,22 +191,64 @@ def test_old_or_empty_config_missing_new_fields_remains_valid() -> None:
         assert resolved.evidence_gate_allow_path_only_compatibility is False
 
 
-def test_path_only_compatibility_is_explicit_and_manifested() -> None:
-    resolved = resolve_vlm_evaluation_control(
-        {
-            "evidence_gate": {
-                "allow_path_only_compatibility": True,
+def test_path_only_compatibility_is_frozen_false() -> None:
+    value = {
+        "evidence_gate": {
+            "allow_path_only_compatibility": True,
+        }
+    }
+
+    with pytest.raises(Exception):
+        _validate(value)
+    with pytest.raises(ValueError, match="cannot be enabled"):
+        resolve_vlm_evaluation_control(value)
+
+    schema = _schema()
+    assert schema["properties"]["evidence_gate"]["properties"][
+        "allow_path_only_compatibility"
+    ]["const"] is False
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        {"evidence_gate": {"enabled": False}},
+        {"require_evidence_gate_after_render": False},
+    ],
+)
+def test_evidence_gate_execution_is_mandatory(value) -> None:
+    with pytest.raises(Exception):
+        _validate(value)
+    with pytest.raises(ValueError, match="cannot be disabled"):
+        resolve_vlm_evaluation_control(value)
+
+    schema = _schema()
+    assert schema["properties"]["evidence_gate"]["properties"][
+        "enabled"
+    ]["const"] is True
+    assert schema["properties"][
+        "require_evidence_gate_after_render"
+    ]["const"] is True
+
+
+def test_post_render_gate_sufficiency_escalation_is_frozen_false() -> None:
+    value = {
+        "camera_acquisition": {
+            "escalation": {
+                "on_post_render_gate_insufficient": True,
             }
         }
-    )
+    }
 
-    assert resolved.evidence_gate_allow_path_only_compatibility is True
-    assert resolved.manifest()["effective"]["evidence_gate"][
-        "allow_path_only_compatibility"
-    ] is True
-    assert resolved.sources[
-        "evidence_gate.allow_path_only_compatibility"
-    ] == "config"
+    with pytest.raises(Exception):
+        _validate(value)
+    with pytest.raises(ValueError, match="cannot be enabled"):
+        resolve_vlm_evaluation_control(value)
+
+    schema = _schema()
+    assert schema["properties"]["camera_acquisition"]["properties"][
+        "escalation"
+    ]["properties"]["on_post_render_gate_insufficient"]["const"] is False
 
 
 def test_scene_mutation_configuration_is_frozen_false() -> None:

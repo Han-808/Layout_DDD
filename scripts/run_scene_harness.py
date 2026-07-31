@@ -75,8 +75,11 @@ from benchmark.task_contract import (
     resolve_room_contract,
 )
 from benchmark.utils.io import load_yaml, read_json, write_json
+from benchmark.grouping import grouping_evidence_from_render_manifest
 from benchmark.visual_judge import (
+    CameraViewEvidenceRenderer,
     CameraEvidenceProvider,
+    DeterministicLocalCameraSelector,
     build_conditional_active_camera_evidence_provider,
     build_openai_compatible_vlm_judge,
 )
@@ -546,7 +549,10 @@ def run_scene_harness(
                 "active": resolved_camera_pose_mode is not None,
                 "active_fallback": {
                     "enabled": bool(camera_active_fallback),
-                    "trigger": "deterministic_evidence_sufficiency_eq_insufficient",
+                    "scope": "legacy_p0b_compatibility",
+                    "trigger": (
+                        "legacy_p0b_deterministic_preview_sufficiency"
+                    ),
                     "selector_decoupled_from_judge": True,
                     "max_views": int(camera_pose_max_views),
                     "max_camera_actions": (
@@ -746,7 +752,8 @@ def main() -> None:
         default=None,
         help=(
             "Optional frozen grouping report; otherwise the canonical "
-            "deterministic grouping algorithm runs."
+            "VLM visual-evidence-scope grouping backend runs. Topology and "
+            "anchor are deprecated replay-only backends."
         ),
     )
     parser.add_argument(
@@ -815,8 +822,9 @@ def main() -> None:
         action=argparse.BooleanOptionalAction,
         default=False,
         help=(
-            "After deterministic evidence generation, invoke bounded query_cov only "
-            "when the deterministic sufficiency gate returns insufficient."
+            "Legacy P0b compatibility: after its deterministic preview packet, "
+            "invoke bounded query_cov when the legacy P0b sufficiency check is "
+            "insufficient. Canonical L3 semantic repair is Judge-driven."
         ),
     )
     parser.add_argument(
@@ -1188,6 +1196,7 @@ def _run_generation_evaluation_loop(
         previous_scene = read_json(generate_result["generated_scene"])
         require_scene_matches_architecture(previous_scene, scene_request["room"])
         attempt_render_evidence = list(render_evidence or [])
+        attempt_grouping_visual_evidence: list[dict[str, Any]] | None = None
         if scene_renderer is not None:
             render_dir = attempt_dir / "renders"
             render_manifest = scene_renderer.render_scene(
@@ -1200,12 +1209,21 @@ def _run_generation_evaluation_loop(
                 for item in render_manifest.get("views", [])
                 if isinstance(item, dict) and item.get("path")
             ]
+            attempt_grouping_visual_evidence = (
+                grouping_evidence_from_render_manifest(
+                    render_manifest
+                )
+            )
             attempt_record["render_manifest"] = (render_dir / "render_manifest.json").as_posix()
             attempt_record["render_evidence"] = attempt_render_evidence
             collision_geometry = render_manifest.get("collision_geometry")
         else:
             collision_geometry = None
         attempt_local_view_provider = p0b_local_view_provider
+        attempt_l3_initial_evidence_provider = None
+        attempt_deterministic_camera_selector = None
+        attempt_vlm_camera_selector = None
+        attempt_evidence_renderer = None
         if camera_pose_mode is not None:
             blend_file = render_manifest.get("blend_file") if scene_renderer is not None else None
             if not isinstance(blend_file, str) or not Path(blend_file).is_file():
@@ -1246,6 +1264,72 @@ def _run_generation_evaluation_loop(
                     collision_geometry=collision_geometry if isinstance(collision_geometry, dict) else None,
                 )
             attempt_record["camera_evidence_policy"] = attempt_local_view_provider.policy_config
+            if not is_legacy_game_profile(evaluation_profile):
+                # Canonical L3 receives deterministic initial local evidence,
+                # then semantic repair is owned by the separated Controller.
+                # The P0b provider above remains its historical compatibility
+                # path and is not reused as the L3 repair controller.
+                attempt_l3_initial_evidence_provider = (
+                    CameraEvidenceProvider(
+                        renderer=scene_renderer,
+                        blend_file=blend_file,
+                        out_dir=(
+                            attempt_dir
+                            / "camera_evidence"
+                            / "l3_initial"
+                        ),
+                        mode=camera_pose_mode,
+                        metric_modes=camera_pose_metric_modes,
+                        selector=camera_active_selector,
+                        max_views=camera_pose_max_views,
+                        max_steps=camera_pose_max_steps,
+                        candidate_count=(
+                            camera_active_candidate_count
+                            if camera_active_fallback
+                            else max(camera_pose_max_views, 6)
+                        ),
+                        collision_overlay=False,
+                        collision_contour=False,
+                        collision_geometry=(
+                            collision_geometry
+                            if isinstance(collision_geometry, dict)
+                            else None
+                        ),
+                        active_repair=False,
+                    )
+                )
+                attempt_deterministic_camera_selector = (
+                    DeterministicLocalCameraSelector(
+                        candidate_policy=(
+                            attempt_l3_initial_evidence_provider.candidate_policy
+                        )
+                    )
+                )
+                attempt_vlm_camera_selector = camera_active_selector
+                attempt_evidence_renderer = CameraViewEvidenceRenderer(
+                    renderer=scene_renderer,
+                    blend_file=blend_file,
+                    out_dir=(
+                        attempt_dir
+                        / "camera_evidence"
+                        / "l3_controller"
+                    ),
+                )
+                attempt_record["l3_camera_control"] = {
+                    "mode": "judge_driven_independent_components",
+                    "deterministic_selector": (
+                        type(
+                            attempt_deterministic_camera_selector
+                        ).__name__
+                    ),
+                    "vlm_selector_configured": (
+                        attempt_vlm_camera_selector is not None
+                    ),
+                    "renderer": type(
+                        attempt_evidence_renderer
+                    ).__name__,
+                    "scene_access": "read_only",
+                }
         report = run_evaluate(
             scene=previous_scene,
             out=attempt_dir / "evaluation_report.json",
@@ -1267,6 +1351,27 @@ def _run_generation_evaluation_loop(
             visual_style_spec=visual_style_spec,
             collision_geometry=collision_geometry if isinstance(collision_geometry, dict) else None,
             render_evidence=attempt_render_evidence,
+            **(
+                {
+                    "grouping_visual_evidence": (
+                        attempt_grouping_visual_evidence
+                    ),
+                    "l3_initial_evidence_provider": (
+                        attempt_l3_initial_evidence_provider
+                    ),
+                    "deterministic_camera_selector": (
+                        attempt_deterministic_camera_selector
+                    ),
+                    "vlm_camera_selector": (
+                        attempt_vlm_camera_selector
+                    ),
+                    "evidence_renderer": (
+                        attempt_evidence_renderer
+                    ),
+                }
+                if not is_legacy_game_profile(evaluation_profile)
+                else {}
+            ),
             vlm_judge=vlm_judge,
             evaluation_profile=evaluation_profile,
             support_enabled=support_enabled,

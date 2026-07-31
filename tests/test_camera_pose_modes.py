@@ -11,6 +11,9 @@ from PIL import Image
 
 from benchmark.rendering.camera_pose import (
     CAMERA_ACTIONS,
+    CAMERA_CANDIDATE_POLICIES,
+    CAMERA_CANDIDATE_POLICY_ALIASES,
+    DEFAULT_CAMERA_CANDIDATE_POLICY,
     DEFAULT_CAMERA_MODE_BY_METRIC,
     apply_camera_action,
     generate_camera_pose_candidates,
@@ -25,6 +28,39 @@ from benchmark.rendering.collision_overlay import (
     rank_focus_candidates,
     rank_support_contact_candidates,
 )
+
+
+def test_camera_candidate_policy_names_are_local_and_legacy() -> None:
+    assert CAMERA_CANDIDATE_POLICIES == ("local", "legacy")
+    assert CAMERA_CANDIDATE_POLICY_ALIASES == {
+        "feasible_v2": "local",
+        "legacy_v1": "legacy",
+    }
+    assert DEFAULT_CAMERA_CANDIDATE_POLICY == "local"
+    assert generate_camera_pose_candidates(
+        _request(), policy="feasible_v2"
+    ) == generate_camera_pose_candidates(_request(), policy="local")
+    assert generate_camera_pose_candidates(
+        _request(), policy="legacy_v1"
+    ) == generate_camera_pose_candidates(_request(), policy="legacy")
+
+
+def test_camera_action_accepts_persisted_alias_and_rejects_unknown_policy() -> None:
+    pose = generate_camera_pose_candidates(
+        _request(),
+        max_candidates=1,
+        policy="local",
+    )[0]
+    pose["candidate_policy"] = "feasible_v2"
+    adjusted = apply_camera_action(pose, "orbit_left")
+    assert adjusted["camera_action"] == "orbit_left"
+
+    pose["candidate_policy"] = "invented"
+    with pytest.raises(ValueError, match="camera candidate policy"):
+        apply_camera_action(pose, "orbit_left")
+    pose["candidate_policy"] = "  "
+    with pytest.raises(ValueError, match="camera candidate policy"):
+        apply_camera_action(pose, "orbit_left")
 
 
 def _request(metric: str = "collision") -> dict:
@@ -191,7 +227,7 @@ def test_metric_aware_bbox_candidates_and_bounded_actions() -> None:
 
     assert len(candidates) == 6
     assert candidates[0]["policy_source"] == "metric_aware_feasible_candidate_bank_v2"
-    assert candidates[0]["candidate_policy"] == "feasible_v2"
+    assert candidates[0]["candidate_policy"] == "local"
     assert candidates[0]["sensor_width_mm"] == 36.0
     assert "proxy_bounds_fit" in candidates[0]["proxy_framing"]
     assert candidates[0]["target_object_ids"] == ["bed", "cabinet"]
@@ -588,8 +624,8 @@ def test_legacy_policy_retains_frozen_direction_and_clamp_semantics() -> None:
     request["event"] = {"object_id": "bed", "plane_flags": {"ceiling_oob": True}}
     request["detector_evidence"] = {"plane_flags": {"ceiling_oob": True}}
 
-    legacy = generate_camera_pose_candidates(request, max_candidates=6, policy="legacy_v1")
-    feasible = generate_camera_pose_candidates(request, max_candidates=6, policy="feasible_v2")
+    legacy = generate_camera_pose_candidates(request, max_candidates=6, policy="legacy")
+    feasible = generate_camera_pose_candidates(request, max_candidates=6, policy="local")
 
     assert legacy[0]["policy_source"] == "metric_aware_obb_candidate_bank_v1"
     assert legacy[0]["elevation_degrees"] == 65.0

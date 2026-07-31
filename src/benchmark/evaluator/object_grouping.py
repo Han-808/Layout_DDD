@@ -1,3 +1,10 @@
+"""Deprecated deterministic grouping retained for historical replay.
+
+The active evaluator uses :mod:`benchmark.grouping.vlm` through the shared
+``GroupingAlgorithm`` / ``GroupingResult`` contract. New evaluation and camera
+acquisition code must not route through this module.
+"""
+
 from __future__ import annotations
 
 import math

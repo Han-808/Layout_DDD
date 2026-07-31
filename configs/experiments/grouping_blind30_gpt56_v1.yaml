@@ -1,0 +1,72 @@
+schema_version: grouping_blind30_experiment_v1
+experiment_id: grouping_blind30_gpt56_20260730_r1
+lifecycle: deprecated_explicit_three_backend_replay_only
+output_root: Support/artifacts/outputs/grouping_blind30_gpt56_20260730_r1
+seed: 20260730
+
+sample:
+  source_dir: Support/Scenes/converted_scenes
+  frozen_manifest: configs/experiments/grouping_blind30_sample_v1.yaml
+  size: 30
+  strata:
+    - name: 05-10_objects
+      min_objects: 5
+      max_objects: 10
+      sample_count: 6
+    - name: 11-20_objects
+      min_objects: 11
+      max_objects: 20
+      sample_count: 6
+    - name: 21-30_objects
+      min_objects: 21
+      max_objects: 30
+      sample_count: 6
+    - name: 31-45_objects
+      min_objects: 31
+      max_objects: 45
+      sample_count: 6
+    - name: 46plus_objects
+      min_objects: 46
+      max_objects: null
+      sample_count: 6
+
+backends:
+  - topology
+  - anchor
+  - vlm
+
+backend_config_files:
+  topology: configs/grouping/topology_metadata_geometry_v2.yaml
+  anchor: configs/grouping/anchor_object_v1.yaml
+  vlm: configs/grouping/vlm_semantic_partition_gpt56_v1.yaml
+
+render:
+  blender_bin: /Applications/Blender.app/Contents/MacOS/Blender
+  asset_root: Support/Assets/imaginarium_assets
+  engine: BLENDER_WORKBENCH
+  width: 512
+  height: 512
+  timeout_seconds: 1800
+  cycles_device: CPU
+  cycles_samples: 1
+  cycles_denoising: false
+  require_asset_mesh: false
+
+model:
+  name: gpt-5.6-sol-grouping-via-local-litellm
+  endpoint: http://127.0.0.1:4010/v1
+  model: gpt-5.6-sol
+  api_key_env: LITELLM_MASTER_KEY
+  max_tokens: 12000
+  context_length: 128000
+  timeout_seconds: 3000
+  response_format_json: false
+  max_retries: 1
+  retry_backoff_seconds: 2.0
+  max_tokens_field: max_tokens
+  send_temperature: false
+
+review:
+  bind_host: 127.0.0.1
+  port: 8765
+  persist_file: human_reviews/blind_reviews.json

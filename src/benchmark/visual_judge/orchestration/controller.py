@@ -11,13 +11,16 @@ from benchmark.visual_judge.control_config import (
     VLMEvaluationControl,
     resolve_vlm_evaluation_control,
 )
+from benchmark.visual_judge.acquisition_planner import (
+    EvidenceAcquisitionPlanner,
+    MetricAcquisitionPlanningRequest,
+    MetricSpecificAcquisitionPlanner,
+)
 from benchmark.visual_judge.acquisition_state import (
     CameraAcquisitionState,
 )
 from benchmark.visual_judge.camera_dsl import (
     CameraConstraintSet,
-    camera_constraints_from_gate_result,
-    camera_constraints_from_judge_request,
 )
 from benchmark.visual_judge.evidence_gate import DeterministicEvidenceGate
 from benchmark.visual_judge.experiment_telemetry import (
@@ -64,8 +67,6 @@ from benchmark.visual_judge.orchestration.camera_acquisition import (
     escalation_allowed as _escalation_allowed,
     escalation_event as _escalation_event,
     known_target_ids as _known_target_ids,
-    latest_selection as _latest_selection,
-    legacy_baseline_constraints as _legacy_baseline_constraints,
     remaining_budget as _remaining_budget,
     render_count as _render_count,
     render_duration as _render_duration,
@@ -78,10 +79,8 @@ from benchmark.visual_judge.orchestration.camera_acquisition import (
 from benchmark.visual_judge.orchestration.evidence_packet import (
     gate_reason as _gate_reason,
     gate_stop_reason as _gate_stop_reason,
-    goal_from_gate as _goal_from_gate,
     goal_from_judge_request as _goal_from_judge_request,
     merge_evidence as _merge_evidence,
-    request_from_gate as _request_from_gate,
     request_target_ids as _request_target_ids,
     validate_candidates as _validate_candidates,
 )
@@ -147,6 +146,7 @@ class VLMEvaluationController:
         camera_selector: CameraSelector | Any | None = None,
         deterministic_camera_selector: CameraSelector | Any | None = None,
         vlm_camera_selector: CameraSelector | Any | None = None,
+        acquisition_planner: EvidenceAcquisitionPlanner | Any | None = None,
         evidence_gate: EvidenceGate | None = None,
         control: VLMEvaluationControl | None = None,
     ) -> None:
@@ -163,11 +163,15 @@ class VLMEvaluationController:
         )
         self.judge = judge
         self.renderer = renderer
-        self.evidence_gate = evidence_gate or DeterministicEvidenceGate(
-            allow_path_only_compatibility=(
-                self.control.evidence_gate_allow_path_only_compatibility
-            )
+        self.acquisition_planner = (
+            acquisition_planner or MetricSpecificAcquisitionPlanner()
         )
+        if not callable(getattr(self.acquisition_planner, "plan", None)):
+            raise TypeError(
+                "VLMEvaluationController requires "
+                "EvidenceAcquisitionPlanner.plan(request)"
+            )
+        self.evidence_gate = evidence_gate or DeterministicEvidenceGate()
         ranking_sources = {
             key: self.control.sources.get(
                 f"camera_acquisition.deterministic.ranking.{key}",
@@ -298,7 +302,6 @@ class VLMEvaluationController:
                 target_ids=targets,
                 evidence_goal=goal,
                 manifest_path=manifest_path,
-                after_render=rounds_used > 0,
             )
             gate_trace = {
                 "stage": "evidence_gate",
@@ -399,6 +402,61 @@ class VLMEvaluationController:
                     raise ValueError(
                         "Judge need_more_evidence requires evidence_request"
                     )
+                protected_group_targets = _protected_group_targets(
+                    judge_request
+                )
+                if protected_group_targets:
+                    outside_scope = sorted(
+                        set(pending_request.target_ids)
+                        - set(protected_group_targets)
+                    )
+                    if outside_scope:
+                        trace.append(
+                            {
+                                "stage": "judge_evidence_request",
+                                "evidence_round": rounds_used,
+                                "status": "invalid",
+                                "reason": (
+                                    "Judge requested targets outside the "
+                                    "immutable group scope"
+                                ),
+                                "outside_group_scope_target_ids": (
+                                    outside_scope
+                                ),
+                                "group_scope_target_ids": list(
+                                    protected_group_targets
+                                ),
+                            }
+                        )
+                        return unresolved(
+                            reason=(
+                                "Judge evidence request attempted to change "
+                                "the grouping scope"
+                            ),
+                            stop_reason=(
+                                "judge_evidence_request_outside_group_scope"
+                            ),
+                        )
+                    pending_request = EvidenceRequest(
+                        # Group membership remains immutable context, while a
+                        # Judge may focus one repair view on a strict non-empty
+                        # subset of that group.
+                        target_ids=pending_request.target_ids,
+                        missing_observations=(
+                            pending_request.missing_observations
+                        ),
+                        view_goal=pending_request.view_goal,
+                        metadata={
+                            **deepcopy(pending_request.metadata),
+                            "group_scope_preserved": True,
+                            "authoritative_group_member_ids": list(
+                                protected_group_targets
+                            ),
+                            "camera_focus_target_ids": list(
+                                pending_request.target_ids
+                            ),
+                        },
+                    )
                 goal = _goal_from_judge_request(goal, pending_request)
                 if pending_request.target_ids:
                     targets = pending_request.target_ids
@@ -408,140 +466,55 @@ class VLMEvaluationController:
                     )
                 acquisition_state.start_episode()
                 try:
-                    camera_constraints = (
-                        camera_constraints_from_judge_request(
-                            pending_request,
+                    camera_constraints = self.acquisition_planner.plan(
+                        MetricAcquisitionPlanningRequest(
                             metric=judge_request.metric,
-                            known_target_ids=known_target_ids,
+                            evidence_request=pending_request,
+                            known_target_ids=tuple(known_target_ids),
                             relation_type=relation_type,
                         )
-                    )
-                except (TypeError, ValueError) as exc:
-                    if (
-                        self.camera_acquisition_policy_source
-                        == "legacy_single_selector"
-                    ):
-                        try:
-                            camera_constraints = (
-                                _legacy_baseline_constraints(
-                                    pending_request,
-                                    metric=judge_request.metric,
-                                    known_target_ids=known_target_ids,
-                                    relation_type=relation_type,
-                                    error=exc,
-                                )
-                            )
-                        except (TypeError, ValueError):
-                            camera_constraints = None
-                        if camera_constraints is not None:
-                            trace.append(
-                                {
-                                    "stage": "camera_dsl",
-                                    "evidence_round": rounds_used,
-                                    "status": "legacy_normalized",
-                                    "source": "judge_evidence_request",
-                                    "original_error": (
-                                        f"{type(exc).__name__}: {exc}"
-                                    ),
-                                    "camera_constraints": (
-                                        camera_constraints.to_dict()
-                                    ),
-                                }
-                            )
-                    if camera_constraints is not None:
-                        pass
-                    else:
-                        trace.append(
-                            _camera_contract_failure_trace(
-                                exc,
-                                evidence_round=rounds_used,
-                                source="judge_evidence_request",
-                            )
-                        )
-                        return unresolved(
-                            reason=(
-                                "Judge evidence request could not be represented "
-                                "by the metric-scoped Camera DSL"
-                            ),
-                            stop_reason="camera_constraint_contract_invalid",
-                        )
-            else:
-                pending_request = _request_from_gate(
-                    targets=targets,
-                    gate_result=gate_result,
-                    evidence_goal=goal,
-                )
-                if not gate_result.camera_repairable:
-                    return unresolved(
-                        reason=_gate_reason(gate_result),
-                        stop_reason=_gate_stop_reason(gate_result),
-                    )
-                goal = _goal_from_gate(goal, gate_result)
-                try:
-                    camera_constraints = camera_constraints_from_gate_result(
-                        gate_result,
-                        metric=judge_request.metric,
-                        target_ids=targets,
-                        known_target_ids=known_target_ids,
-                        view_goal=pending_request.view_goal,
-                        evidence_goal=goal,
-                        relation_type=relation_type,
                     )
                 except (TypeError, ValueError) as exc:
                     trace.append(
                         _camera_contract_failure_trace(
                             exc,
                             evidence_round=rounds_used,
-                            source="evidence_gate",
+                            source="judge_evidence_request",
                         )
                     )
                     return unresolved(
                         reason=(
-                            "EvidenceGate deficiencies could not be "
-                            "represented by the metric-scoped Camera DSL"
+                            "Judge evidence request could not be represented "
+                            "by the metric-scoped Camera DSL"
                         ),
                         stop_reason="camera_constraint_contract_invalid",
                     )
-                if acquisition_state.last_render_stage == "vlm":
-                    acquisition_state.mark_vlm_failed(
-                        "selected_but_post_render_insufficient"
-                    )
-                    return unresolved(
-                        reason=_gate_reason(gate_result),
-                        stop_reason="vlm_post_render_gate_insufficient",
-                    )
-                if acquisition_state.last_render_stage == "deterministic":
-                    if self._escalate_after_gate(
-                        state=acquisition_state,
-                        gate_result=gate_result,
-                        pending_request=pending_request,
-                        constraints=camera_constraints,
-                        trace=trace,
-                        telemetry=telemetry,
-                        selector_calls=selector_calls,
-                        actions_used=actions_used,
-                        rounds_used=rounds_used,
-                        total_images_acquired=total_images_acquired,
-                    ):
-                        pass
-                    else:
-                        denied_by_budget = _budget_stop_reason(
-                            control=self.control,
-                            rounds_used=rounds_used,
-                            selector_calls=selector_calls,
-                            total_images_acquired=(
-                                total_images_acquired
-                            ),
-                        )
-                        return unresolved(
-                            reason=_gate_reason(gate_result),
-                            stop_reason=(
-                                denied_by_budget
-                                or "post_render_gate_insufficient"
-                            ),
-                        )
-                elif acquisition_state.episode_index == 0:
-                    acquisition_state.start_episode()
+                trace.append(
+                    {
+                        "stage": "acquisition_planner",
+                        "evidence_round": rounds_used,
+                        "episode_index": acquisition_state.episode_index,
+                        "backend": str(
+                            getattr(
+                                self.acquisition_planner,
+                                "backend",
+                                type(self.acquisition_planner).__name__,
+                            )
+                        ),
+                        "evidence_request": pending_request.to_dict(),
+                        "camera_constraints": camera_constraints.to_dict(),
+                    }
+                )
+            else:
+                # EvidenceGate owns input integrity only. A missing, corrupt,
+                # blank, or undecodable packet is an engineering/render
+                # failure and cannot be translated into a camera request.
+                # Metric sufficiency and all normal camera repair start from
+                # Judge.need_more_evidence above.
+                return unresolved(
+                    reason=_gate_reason(gate_result),
+                    stop_reason=_gate_stop_reason(gate_result),
+                )
 
             if self.effective_camera_acquisition_policy == "fixed":
                 return unresolved(
@@ -819,7 +792,6 @@ class VLMEvaluationController:
                         target_ids=targets,
                         evidence_goal=goal,
                         manifest_path=None,
-                        after_render=True,
                     )
                     trace.append(
                         {
@@ -927,8 +899,8 @@ class VLMEvaluationController:
                 evidence_round=rounds_used,
                 episode_index=acquisition_state.episode_index,
             )
-            # Looping is intentional: the next operation is always EvidenceGate
-            # (unless an explicit legacy-compatible override disables it).
+            # Looping is intentional: the next operation is always
+            # EvidenceGate.
             if previous_fingerprint == current_fingerprint:
                 gate_after_no_change = self._check_gate(
                     request=judge_request,
@@ -936,7 +908,6 @@ class VLMEvaluationController:
                     target_ids=targets,
                     evidence_goal=goal,
                     manifest_path=manifest_path,
-                    after_render=True,
                 )
                 trace.append(
                     {
@@ -956,20 +927,6 @@ class VLMEvaluationController:
                     gate_after_no_change.ready
                     and current_fingerprint not in judged_fingerprints
                 ):
-                    # Pixels may be unchanged while trusted renderer metadata
-                    # (role, visibility, manifest linkage) makes a previously
-                    # unjudged packet technically ready.
-                    continue
-                if (
-                    acquisition_state.last_render_stage
-                    == "deterministic"
-                    and self.effective_camera_acquisition_policy
-                    == "deterministic_then_vlm"
-                ):
-                    # Let the normal top-of-loop Gate handling classify this
-                    # as post-render insufficiency (or an engineering
-                    # failure) and apply the Controller-owned escalation
-                    # policy exactly once.
                     continue
                 return unresolved(
                     reason="camera repair did not change the evidence packet",
@@ -1025,57 +982,8 @@ class VLMEvaluationController:
             state=state,
             remaining=remaining,
             deterministic_selection=selection,
-            gate_result=None,
         )
         state.escalate(reason)
-        trace.append(event)
-        telemetry.record_escalation(event)
-        return True
-
-    def _escalate_after_gate(
-        self,
-        *,
-        state: CameraAcquisitionState,
-        gate_result: EvidenceGateResult,
-        pending_request: EvidenceRequest | None,
-        constraints: CameraConstraintSet,
-        trace: list[dict[str, Any]],
-        telemetry: CameraExperimentTelemetry,
-        selector_calls: int,
-        actions_used: int,
-        rounds_used: int,
-        total_images_acquired: int,
-    ) -> bool:
-        remaining = _remaining_budget(
-            control=self.control,
-            selector_calls=selector_calls,
-            actions_used=actions_used,
-            rounds_used=rounds_used,
-            total_images_acquired=total_images_acquired,
-        )
-        allowed = _escalation_allowed(
-            control=self.control,
-            state=state,
-            vlm_selector_available=(
-                self.vlm_camera_selector is not None
-            ),
-            remaining=remaining,
-            deterministic_outcome=state.last_selection_outcome,
-            gate_result=gate_result,
-            reason="post_render_gate_insufficient",
-        )
-        if not allowed:
-            return False
-        event = _escalation_event(
-            reason="post_render_gate_insufficient",
-            request=pending_request,
-            constraints=constraints,
-            state=state,
-            remaining=remaining,
-            deterministic_selection=_latest_selection(trace),
-            gate_result=gate_result,
-        )
-        state.escalate("post_render_gate_insufficient")
         trace.append(event)
         telemetry.record_escalation(event)
         return True
@@ -1088,24 +996,7 @@ class VLMEvaluationController:
         target_ids: tuple[str, ...],
         evidence_goal: dict[str, Any],
         manifest_path: str | None,
-        after_render: bool,
     ) -> EvidenceGateResult:
-        should_check = self.control.evidence_gate_enabled and (
-            not after_render
-            or self.control.require_evidence_gate_after_render
-        )
-        if not should_check:
-            return EvidenceGateResult(
-                ready=True,
-                camera_repairable=False,
-                reason_codes=("evidence_gate_explicitly_disabled",),
-                deficiencies=(),
-                backend="disabled",
-                provenance={
-                    "schema_version": VLM_CONTROL_LOOP_VERSION,
-                    "after_render": after_render,
-                },
-            )
         raw = self.evidence_gate.check(
             EvidenceGateRequest(
                 task=request.task,
@@ -1184,3 +1075,23 @@ class VLMEvaluationController:
             audit=audit,
             manifest_path=written_path,
         )
+
+
+def _protected_group_targets(
+    request: JudgeRequest,
+) -> tuple[str, ...]:
+    scope = request.context.get("group_scope")
+    if not isinstance(scope, dict):
+        return ()
+    values = scope.get("member_ids")
+    if not isinstance(values, list):
+        values = request.context.get("member_ids")
+    if not isinstance(values, list):
+        return ()
+    return tuple(
+        dict.fromkeys(
+            str(value)
+            for value in values
+            if isinstance(value, (str, int)) and str(value).strip()
+        )
+    )

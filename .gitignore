@@ -53,5 +53,7 @@ downloads/
 *.md
 !/Support/README.md
 !/docs/
+!/docs/grouping.md
+!/docs/grouping_blind30_experiment.md
 !/docs/game/
 !/docs/game/counter_strike_benchmark.md

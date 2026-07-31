@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import pytest
 
+from benchmark.visual_judge.acquisition_planner import (
+    MetricAcquisitionPlanningRequest,
+    MetricSpecificAcquisitionPlanner,
+)
 from benchmark.visual_judge.camera_dsl import (
     CAMERA_OBSERVATIONS,
     METRIC_CAMERA_REQUIREMENTS,
     CameraConstraintSet,
-    camera_constraints_from_gate_result,
     camera_constraints_from_judge_request,
     canonical_camera_metric,
     selector_request_from_constraints,
@@ -20,7 +23,6 @@ from benchmark.visual_judge.camera_repair import (
     validate_trusted_repair_plan_selection,
     validate_vlm_selection_mode,
 )
-from benchmark.visual_judge.interfaces.evidence import EvidenceGateResult
 from benchmark.visual_judge.interfaces.judge import EvidenceRequest
 
 
@@ -33,6 +35,8 @@ _OBSERVATION_METRIC = {
     "front_back_disambiguated": "facing",
     "depth_baseline_available": "depth_relation",
     "group_context_visible": "functional_semantic_fidelity",
+    "interaction_side_visible": "functional_semantic_fidelity",
+    "limited_local_context": "object_pairing_consistency",
     "global_context_preserved": "style_consistency",
     "occluder_avoided": "collision",
 }
@@ -108,6 +112,84 @@ def test_camera_constraint_set_rejects_unknown_target() -> None:
             },
             known_target_ids=("a",),
         )
+
+
+def test_metric_acquisition_planner_translates_judge_request() -> None:
+    result = MetricSpecificAcquisitionPlanner().plan(
+        MetricAcquisitionPlanningRequest(
+            metric="support",
+            evidence_request=EvidenceRequest(
+                target_ids=("top", "base"),
+                missing_observations=("support_contact_region",),
+                view_goal="show the support contact",
+            ),
+            known_target_ids=("top", "base"),
+        )
+    )
+
+    assert result.metric == "support"
+    assert result.target_ids == ("top", "base")
+    assert "contact_surface_visible" in result.required_observations
+    assert "support_chain_visible" in result.required_observations
+    assert result.metadata["planner_backend"] == (
+        "metric_specific_camera_dsl"
+    )
+
+
+def test_functional_consistency_maps_to_local_usability_observations() -> None:
+    result = MetricSpecificAcquisitionPlanner().plan(
+        MetricAcquisitionPlanningRequest(
+            metric="functional_consistency",
+            evidence_request=EvidenceRequest(
+                target_ids=("chair", "desk"),
+                missing_observations=(
+                    "interaction_side_visible",
+                ),
+                view_goal="show whether the workstation can be used",
+            ),
+            known_target_ids=("chair", "desk"),
+        )
+    )
+
+    assert result.target_ids == ("chair", "desk")
+    assert result.required_observations == (
+        "interaction_side_visible",
+    )
+    assert result.metric == "functional_consistency"
+
+
+def test_metric_acquisition_planner_rejects_unknown_target() -> None:
+    with pytest.raises(ValueError, match="unknown target IDs"):
+        MetricSpecificAcquisitionPlanner().plan(
+            MetricAcquisitionPlanningRequest(
+                metric="collision",
+                evidence_request=EvidenceRequest(
+                    target_ids=("invented",),
+                    missing_observations=("contact_surface_visible",),
+                    view_goal="show the collision contact",
+                ),
+                known_target_ids=("a", "b"),
+            )
+        )
+
+
+def test_metric_acquisition_planner_accepts_scene_scope_without_object_ids():
+    result = MetricSpecificAcquisitionPlanner().plan(
+        MetricAcquisitionPlanningRequest(
+            metric="style_consistency",
+            evidence_request=EvidenceRequest(
+                target_ids=("scene",),
+                missing_observations=("global_context_preserved",),
+                view_goal="show the global scene context",
+            ),
+            known_target_ids=(),
+        )
+    )
+
+    assert result.target_ids == ("scene",)
+    assert result.required_observations == (
+        "global_context_preserved",
+    )
 
 
 def test_scene_is_a_valid_global_target_without_scene_object_id() -> None:
@@ -225,7 +307,6 @@ def test_judge_evidence_request_maps_stably_to_metric_scoped_dsl() -> None:
     assert constraints.required_observations == (
         "contact_surface_visible",
         "support_chain_visible",
-        "joint_visibility",
     )
     assert constraints.preserved_observations == ()
     assert constraints.require_global_anchor is False
@@ -289,47 +370,6 @@ def test_relation_camera_metric_requires_known_relation_subtype() -> None:
     )
 
 
-def test_gate_deficiencies_map_stably_to_metric_scoped_dsl() -> None:
-    gate = EvidenceGateResult(
-        ready=False,
-        camera_repairable=True,
-        reason_codes=(
-            "target_occluded_or_too_small",
-            "focus_region_too_small",
-        ),
-        deficiencies=(
-            {
-                "code": "target_occluded_or_too_small",
-                "repairability": "camera",
-            },
-            {
-                "code": "focus_region_too_small",
-                "repairability": "camera",
-            },
-        ),
-    )
-
-    constraints = camera_constraints_from_gate_result(
-        gate,
-        metric="support",
-        target_ids=("object", "support"),
-        known_target_ids=("object", "support"),
-        view_goal="repair the support observation",
-        evidence_goal={"required_global_view_count": 1},
-    )
-
-    assert constraints.required_observations == (
-        "contact_surface_visible",
-        "support_chain_visible",
-        "joint_visibility",
-        "target_visible",
-        "occluder_avoided",
-        "global_context_preserved",
-    )
-    assert constraints.require_global_anchor is True
-    assert constraints.metadata["source"] == "evidence_gate"
-
-
 def test_global_context_observation_always_preserves_packet_anchor() -> None:
     constraints = CameraConstraintSet.from_value(
         {
@@ -346,49 +386,6 @@ def test_global_context_observation_always_preserves_packet_anchor() -> None:
     )
 
     assert constraints.require_global_anchor is True
-
-
-def test_gate_conversion_rejects_unknown_camera_deficiency() -> None:
-    gate = EvidenceGateResult(
-        ready=False,
-        camera_repairable=True,
-        reason_codes=("invented_failure",),
-        deficiencies=(
-            {
-                "code": "invented_failure",
-                "repairability": "camera",
-            },
-        ),
-    )
-
-    with pytest.raises(ValueError, match="unknown camera-repairable"):
-        camera_constraints_from_gate_result(
-            gate,
-            metric="collision",
-            target_ids=("a", "b"),
-            known_target_ids=("a", "b"),
-            view_goal="repair collision evidence",
-        )
-
-
-def test_gate_conversion_rejects_non_camera_repairable_result() -> None:
-    gate = EvidenceGateResult(
-        ready=False,
-        camera_repairable=False,
-        reason_codes=("render_failure",),
-        deficiencies=(
-            {"code": "render_failure", "repairability": "rerender"},
-        ),
-    )
-
-    with pytest.raises(ValueError, match="non-camera-repairable"):
-        camera_constraints_from_gate_result(
-            gate,
-            metric="collision",
-            target_ids=("a", "b"),
-            known_target_ids=("a", "b"),
-            view_goal="repair collision evidence",
-        )
 
 
 def test_dsl_conversion_never_expands_beyond_metric_registry() -> None:

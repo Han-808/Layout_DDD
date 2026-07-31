@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
+from PIL import Image
 
 from benchmark.evaluator.scene_quality import (
     PERCEPTUAL_VISUAL_QUALITY_METRICS,
@@ -12,6 +14,7 @@ from benchmark.evaluator.scene_quality import (
     resolve_scene_quality_config,
     validate_authorized_deviations,
 )
+from benchmark.visual_judge import CameraEvidenceProvider
 from benchmark.evaluator.scene_quality.authorized_deviations import (
     AuthorizedDeviationError,
     deviation_matches,
@@ -122,7 +125,7 @@ def _style_global_then_local_config() -> dict:
                 },
                 "local_policy": {
                     "camera_scope": "object_local",
-                    "grouping_policy_id": "deterministic_metadata_geometry",
+                    "grouping_policy_id": "vlm_visual_evidence_scope_v2",
                     "image_budget": 4,
                     "trigger_states": [
                         "suspicious",
@@ -163,11 +166,23 @@ def test_default_is_canonical_l3_and_policy_remains_overridable() -> None:
         "object_pairing_consistency",
     }
     assert set(PERCEPTUAL_VISUAL_QUALITY_METRICS) == {"style_consistency"}
+    assert (
+        resolved["metrics"]["functional_consistency"]["enabled"]
+        is False
+    )
+    functional = resolved["metrics"]["functional_consistency"]
+    assert functional["metric_status"] == "experimental_non_scoring"
+    assert functional["activation_policy"] == "explicit_config_only"
+    assert functional["included_in_canonical_aggregate"] is False
     serialized = json.dumps(resolved, sort_keys=True)
     assert "object_coexistence_consistency" not in serialized
     assert "sceneonto_scale_candidate_router" not in serialized
     assert "benchmark.evaluator.spatial_fidelity.scale" not in serialized
-    assert "canonical_l3_scale_candidate_router" in serialized
+    scale = resolved["metrics"]["scale_consistency"]
+    assert scale["evidence_policy"]["camera_scope"] == "group_local"
+    assert scale["evidence_plan"]["local_policy"][
+        "grouping_policy_id"
+    ] == "vlm_visual_evidence_scope_v2"
 
     overridden = resolve_scene_quality_config(
         {
@@ -188,6 +203,26 @@ def test_default_is_canonical_l3_and_policy_remains_overridable() -> None:
     assert policy["camera_mode"] == "metric_local"
     assert policy["image_budget"] == 3
     assert policy["presentation"] == "highlight"
+
+    attempted_promotion = resolve_scene_quality_config(
+        {
+            "metrics": {
+                "functional_consistency": {
+                    "enabled": True,
+                    "metric_status": "canonical_scoring",
+                    "activation_policy": "profile_and_applicability",
+                    "included_in_canonical_aggregate": True,
+                }
+            }
+        }
+    )["metrics"]["functional_consistency"]
+    assert attempted_promotion["enabled"] is True
+    assert (
+        attempted_promotion["metric_status"]
+        == "experimental_non_scoring"
+    )
+    assert attempted_promotion["activation_policy"] == "explicit_config_only"
+    assert attempted_promotion["included_in_canonical_aggregate"] is False
 
 
 def test_style_global_screen_does_not_request_local_when_clear(tmp_path) -> None:
@@ -285,6 +320,138 @@ def test_style_suspicion_requests_local_then_rejudges(tmp_path) -> None:
         images["global_a"],
         images["global_b"],
     ]
+
+
+class _StyleLocalRenderer:
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    def render_camera_views(
+        self,
+        *,
+        blend_file,
+        out_dir,
+        camera_views,
+        preview=False,
+    ):
+        destination = Path(out_dir)
+        destination.mkdir(parents=True, exist_ok=True)
+        self.calls.append(
+            {
+                "pass": "rgb",
+                "preview": preview,
+                "camera_views": camera_views,
+            }
+        )
+        views = []
+        for index, pose in enumerate(camera_views):
+            path = destination / f"rgb_{index:02d}.png"
+            image = Image.new("RGB", (32, 32), (80, 110, 140))
+            image.putpixel((0, 0), (160, 70, 40))
+            image.save(path)
+            views.append(
+                {"id": pose["id"], "path": str(path), "pose": pose}
+            )
+        return {"views": views}
+
+    def render_focus_overlay_views(
+        self,
+        *,
+        blend_file,
+        out_dir,
+        camera_views,
+        overlay_spec,
+        preview=False,
+    ):
+        destination = Path(out_dir)
+        destination.mkdir(parents=True, exist_ok=True)
+        self.calls.append(
+            {
+                "pass": "focus",
+                "preview": preview,
+                "camera_views": camera_views,
+            }
+        )
+        color = tuple(
+            round(channel * 255)
+            for channel in overlay_spec["targets"][0]["color"]
+        )
+        views = []
+        for index, pose in enumerate(camera_views):
+            path = destination / f"focus_{index:02d}.png"
+            image = Image.new("RGB", (32, 32), (40, 40, 40))
+            for x in range(7, 25):
+                for y in range(7, 25):
+                    image.putpixel((x, y), color)
+            image.save(path)
+            views.append(
+                {"id": pose["id"], "path": str(path), "pose": pose}
+            )
+        return {"views": views}
+
+
+def test_style_suspicion_uses_real_provider_group_local_override(
+    tmp_path,
+) -> None:
+    images = _images(tmp_path, "global_a", "global_b")
+    blend = tmp_path / "scene.blend"
+    blend.write_bytes(b"blend")
+    renderer = _StyleLocalRenderer()
+    provider = CameraEvidenceProvider(
+        renderer=renderer,
+        blend_file=blend,
+        out_dir=tmp_path / "style_camera",
+        mode="auto",
+        max_views=1,
+    )
+    judge_calls: list[dict] = []
+    suspicious = {
+        "evidence_status": "sufficient",
+        "verdict": "invalid",
+        "confidence": 0.8,
+        "reason": "The chair appears to use a conflicting style.",
+        "missing_evidence": [],
+        "defects": [
+            {
+                "scope": "significant_visible_style_incompatibility",
+                "target_ids": ["chair_01"],
+                "relation": "rendering_style_outlier",
+                "reason": "The chair appears to use a conflicting style.",
+            }
+        ],
+    }
+
+    def judge(request: dict) -> dict:
+        judge_calls.append(request)
+        return suspicious if len(judge_calls) == 1 else _valid()
+
+    metric = evaluate_scene_quality_interfaces(
+        _scene(),
+        config=_style_global_then_local_config(),
+        object_grouping_report=_grouping_report(),
+        render_evidence=[images["global_a"], images["global_b"]],
+        camera_evidence_provider=provider,
+        vlm_judge=judge,
+        metric_applicability=_relevant("style_consistency"),
+    )["metrics"]["style_consistency"]
+
+    assert metric["route"] == "global_screen_then_group_local"
+    assert metric["judgement"]["verdict"] == "valid"
+    assert [call["evidence_phase"] for call in judge_calls] == [
+        "global_screen",
+        "local_confirmation",
+    ]
+    assert any(call["pass"] == "focus" for call in renderer.calls)
+    manifests = list(
+        (tmp_path / "style_camera").glob(
+            "*/camera_evidence_manifest.json"
+        )
+    )
+    assert len(manifests) == 1
+    manifest = json.loads(manifests[0].read_text(encoding="utf-8"))
+    assert manifest["resolved_mode"] == "visibility_ranked"
+    assert manifest["metric"] == "style_consistency"
+    assert metric["local_evidence_paths"]
 
 
 def test_canonical_profile_l3_section_is_the_profile_override() -> None:
@@ -545,6 +712,597 @@ def test_pairing_mechanically_drops_structured_out_of_scope_defects(tmp_path) ->
     assert metric["judgement"]["out_of_scope_defects"][0]["scope"] == "orientation"
 
 
+def test_pairing_emits_one_camera_and_judge_request_per_group(
+    tmp_path,
+) -> None:
+    scene = _scene()
+    scene["objects"].extend(
+        [
+            {
+                "id": "sofa_01",
+                "category": "sofa",
+                "description": "small sofa",
+                "size": [2.0, 0.8, 0.9],
+                "center": [3.5, 3.5, 0.45],
+                "rotation": [0, 0, 0],
+            },
+            {
+                "id": "table_01",
+                "category": "coffee_table",
+                "description": "coffee table",
+                "size": [1.0, 0.6, 0.4],
+                "center": [3.5, 2.7, 0.2],
+                "rotation": [0, 0, 0],
+            },
+        ]
+    )
+    grouping = {
+        "grouping_backend": "vlm",
+        "grouping_policy_id": "vlm_visual_evidence_scope_v2",
+        "object_groups": [
+            {
+                "group_id": "work",
+                "object_ids": ["chair_01", "desk_01"],
+            },
+            {
+                "group_id": "lounge",
+                "object_ids": ["sofa_01", "table_01"],
+            },
+        ],
+    }
+    images = _images(
+        tmp_path,
+        "global",
+        "work_local",
+        "lounge_local",
+    )
+    provider_calls: list[dict] = []
+    judge_calls: list[dict] = []
+
+    def provider(request: dict) -> list[dict]:
+        provider_calls.append(request)
+        group_id = request["group_scope"]["group_id"]
+        return [
+            {
+                "path": images["global"],
+                "role": "global_context",
+            },
+            {
+                "path": images[f"{group_id}_local"],
+                "role": "group_local",
+            },
+        ]
+
+    def judge(request: dict) -> dict:
+        judge_calls.append(request)
+        return _valid()
+
+    metric = evaluate_scene_quality_interfaces(
+        scene,
+        config=_only("object_pairing_consistency"),
+        object_grouping_report=grouping,
+        render_evidence={"global": [images["global"]]},
+        camera_evidence_provider=provider,
+        vlm_judge=judge,
+        metric_applicability=_relevant(
+            "object_pairing_consistency"
+        ),
+    )["metrics"]["object_pairing_consistency"]
+
+    assert metric["status"] == "evaluated"
+    assert metric["score"] == 1.0
+    assert len(provider_calls) == len(judge_calls) == 2
+    assert [
+        call["group_scope"]["group_id"] for call in provider_calls
+    ] == ["work", "lounge"]
+    assert [
+        call["object_ids"] for call in provider_calls
+    ] == [
+        ["chair_01", "desk_01"],
+        ["sofa_01", "table_01"],
+    ]
+    assert all(len(call["group_ids"]) == 1 for call in provider_calls)
+    assert [
+        call["target_object_ids"] for call in judge_calls
+    ] == [
+        ["chair_01", "desk_01"],
+        ["sofa_01", "table_01"],
+    ]
+    work_scope = provider_calls[0]["group_scope"]
+    assert work_scope["member_ids"] == ["chair_01", "desk_01"]
+    assert work_scope["target_bounds"] == {
+        "min": [0.75, 0.7, 0.0],
+        "max": [2.4, 1.3, 0.9],
+    }
+    assert work_scope["focus_center"] == pytest.approx(
+        [1.575, 1.0, 0.45]
+    )
+    assert work_scope["extent"] == pytest.approx(
+        [1.65, 0.6, 0.9]
+    )
+    assert all(
+        call["grouping_role"]
+        == "primary_visual_evidence_decomposition"
+        for call in provider_calls
+    )
+
+
+def test_group_local_judge_cannot_report_a_defect_from_another_group(
+    tmp_path,
+) -> None:
+    scene = _scene()
+    scene["objects"].extend(
+        [
+            {
+                "id": "sofa_01",
+                "category": "sofa",
+                "size": [2.0, 0.8, 0.9],
+                "center": [3.5, 3.5, 0.45],
+                "rotation": [0, 0, 0],
+            },
+            {
+                "id": "table_01",
+                "category": "coffee_table",
+                "size": [1.0, 0.6, 0.4],
+                "center": [3.5, 2.7, 0.2],
+                "rotation": [0, 0, 0],
+            },
+        ]
+    )
+    grouping = {
+        "object_groups": [
+            {
+                "group_id": "work",
+                "object_ids": ["chair_01", "desk_01"],
+            },
+            {
+                "group_id": "lounge",
+                "object_ids": ["sofa_01", "table_01"],
+            },
+        ],
+    }
+    images = _images(tmp_path, "work", "lounge")
+
+    def judge(request: dict) -> dict:
+        if request["target_group_ids"] == ["work"]:
+            return {
+                "evidence_status": "sufficient",
+                "verdict": "invalid",
+                "confidence": 0.9,
+                "reason": "Out-of-group target must be rejected.",
+                "missing_evidence": [],
+                "defects": [
+                    {
+                        "scope": "category_and_role_compatibility",
+                        "target_ids": ["sofa_01"],
+                        "relation": "out_of_group_claim",
+                        "reason": "wrong evidence scope",
+                    }
+                ],
+            }
+        return _valid()
+
+    metric = evaluate_scene_quality_interfaces(
+        scene,
+        config=_only("object_pairing_consistency"),
+        object_grouping_report=grouping,
+        render_evidence={
+            "object_pairing_consistency": {
+                "work": [images["work"]],
+                "lounge": [images["lounge"]],
+            }
+        },
+        vlm_judge=judge,
+        metric_applicability=_relevant(
+            "object_pairing_consistency"
+        ),
+    )["metrics"]["object_pairing_consistency"]
+
+    assert metric["status"] == "unresolved"
+    assert metric["score"] is None
+    assert metric["group_results"][0]["reason"] == "vlm_judge_failed"
+    assert metric["group_results"][1]["status"] == "evaluated"
+
+
+def test_group_scope_bounds_include_object_rotation(tmp_path) -> None:
+    scene = _scene()
+    scene["objects"][0].update(
+        center=[2.0, 2.0, 0.5],
+        size=[2.0, 1.0, 1.0],
+        rotation=[0.0, 0.0, 90.0],
+    )
+    scene["objects"] = [scene["objects"][0]]
+    image = _images(tmp_path, "local")["local"]
+    provider_calls: list[dict] = []
+
+    def provider(request: dict) -> list[dict]:
+        provider_calls.append(request)
+        return [{"path": image, "role": "group_local"}]
+
+    metric = evaluate_scene_quality_interfaces(
+        scene,
+        config=_only("scale_consistency"),
+        object_grouping_report={
+            "object_groups": [
+                {
+                    "group_id": "rotated",
+                    "object_ids": ["chair_01"],
+                }
+            ]
+        },
+        camera_evidence_provider=provider,
+        vlm_judge=lambda request: _valid(),
+        metric_applicability=_relevant("scale_consistency"),
+    )["metrics"]["scale_consistency"]
+
+    assert metric["status"] == "evaluated"
+    assert provider_calls[0]["target_bounds"]["min"] == pytest.approx(
+        [1.5, 1.0, 0.0]
+    )
+    assert provider_calls[0]["target_bounds"]["max"] == pytest.approx(
+        [2.5, 3.0, 1.0]
+    )
+    assert provider_calls[0]["target_extent"] == pytest.approx(
+        [1.0, 2.0, 1.0]
+    )
+
+
+@pytest.mark.parametrize(
+    "metric_name",
+    ["scale_consistency", "functional_consistency"],
+)
+def test_other_group_metrics_keep_camera_requests_per_group(
+    tmp_path,
+    metric_name: str,
+) -> None:
+    scene = _scene()
+    scene["objects"].extend(
+        [
+            {
+                "id": "sofa_01",
+                "category": "sofa",
+                "size": [2.0, 0.8, 0.9],
+                "center": [3.5, 3.5, 0.45],
+                "rotation": [0, 0, 0],
+            },
+            {
+                "id": "table_01",
+                "category": "coffee_table",
+                "size": [1.0, 0.6, 0.4],
+                "center": [3.5, 2.7, 0.2],
+                "rotation": [0, 0, 0],
+            },
+        ]
+    )
+    grouping = {
+        "grouping_backend": "vlm",
+        "grouping_policy_id": "vlm_visual_evidence_scope_v2",
+        "object_groups": [
+            {
+                "group_id": "work",
+                "object_ids": ["chair_01", "desk_01"],
+            },
+            {
+                "group_id": "lounge",
+                "object_ids": ["sofa_01", "table_01"],
+            },
+        ],
+    }
+    images = _images(
+        tmp_path,
+        "global",
+        "work_local",
+        "lounge_local",
+    )
+    provider_calls: list[dict] = []
+    judge_calls: list[dict] = []
+
+    def provider(request: dict) -> list[dict]:
+        provider_calls.append(request)
+        group_id = request["group_scope"]["group_id"]
+        return [
+            {
+                "path": images[f"{group_id}_local"],
+                "role": "group_local",
+            }
+        ]
+
+    def judge(request: dict) -> dict:
+        judge_calls.append(request)
+        return _valid()
+
+    config = _only(metric_name)
+    if metric_name == "functional_consistency":
+        config["metrics"]["functional_consistency"] = {
+            "enabled": True,
+            "weight": 1.0,
+        }
+    metric = evaluate_scene_quality_interfaces(
+        scene,
+        config=config,
+        object_grouping_report=grouping,
+        render_evidence={"global": [images["global"]]},
+        camera_evidence_provider=provider,
+        vlm_judge=judge,
+        metric_applicability=_relevant(metric_name),
+    )["metrics"][metric_name]
+
+    assert metric["status"] == "evaluated"
+    assert metric["affects_score"] is (
+        metric_name == "scale_consistency"
+    )
+    assert [request["object_ids"] for request in provider_calls] == [
+        ["chair_01", "desk_01"],
+        ["sofa_01", "table_01"],
+    ]
+    assert [request["target_object_ids"] for request in judge_calls] == [
+        ["chair_01", "desk_01"],
+        ["sofa_01", "table_01"],
+    ]
+    assert all(
+        request["group_scope"]["member_ids"] == request["object_ids"]
+        for request in provider_calls
+    )
+    assert all(
+        request["existing_global_evidence"] == [images["global"]]
+        and request["global_context_mode"] == "reuse_existing"
+        for request in provider_calls
+    )
+    assert all(
+        images["global"] in request["render_evidence"]
+        for request in judge_calls
+    )
+
+
+def test_style_suspicion_drills_into_the_implicated_group_only(
+    tmp_path,
+) -> None:
+    images = _images(tmp_path, "global", "work_local")
+    provider_calls: list[dict] = []
+    judge_calls: list[dict] = []
+    suspicious = {
+        "evidence_status": "sufficient",
+        "verdict": "invalid",
+        "confidence": 0.8,
+        "reason": "The chair may use an inconsistent style.",
+        "missing_evidence": [],
+        "defects": [
+            {
+                "scope": "significant_visible_style_incompatibility",
+                "target_ids": ["chair_01"],
+                "relation": "rendering_style_outlier",
+                "reason": "The chair is the suspected outlier.",
+            }
+        ],
+    }
+
+    def provider(request: dict) -> list[dict]:
+        provider_calls.append(request)
+        return [
+            {
+                "path": images["work_local"],
+                "role": "group_local",
+            }
+        ]
+
+    def judge(request: dict) -> dict:
+        judge_calls.append(request)
+        return suspicious if len(judge_calls) == 1 else _valid()
+
+    metric = evaluate_scene_quality_interfaces(
+        _scene(),
+        config=_style_global_then_local_config(),
+        object_grouping_report=_grouping_report(),
+        render_evidence={"global": [images["global"]]},
+        camera_evidence_provider=provider,
+        vlm_judge=judge,
+        metric_applicability=_relevant("style_consistency"),
+    )["metrics"]["style_consistency"]
+
+    assert metric["status"] == "evaluated"
+    assert metric["route"] == "global_screen_then_group_local"
+    assert len(provider_calls) == 1
+    assert provider_calls[0]["group_scope"]["group_id"] == "group_001"
+    assert provider_calls[0]["object_ids"] == ["chair_01", "desk_01"]
+    assert judge_calls[1]["target_object_ids"] == [
+        "chair_01",
+        "desk_01",
+    ]
+
+
+def test_style_drilldown_reuses_presupplied_group_evidence(
+    tmp_path,
+) -> None:
+    images = _images(tmp_path, "global", "local")
+    judge_calls: list[dict] = []
+    suspicious = {
+        "evidence_status": "sufficient",
+        "verdict": "invalid",
+        "confidence": 0.8,
+        "reason": "The chair may be a style outlier.",
+        "missing_evidence": [],
+        "defects": [
+            {
+                "scope": "significant_visible_style_incompatibility",
+                "target_ids": ["chair_01"],
+                "relation": "rendering_style_outlier",
+                "reason": "suspected outlier",
+            }
+        ],
+    }
+
+    def judge(request: dict) -> dict:
+        judge_calls.append(request)
+        return suspicious if len(judge_calls) == 1 else _valid()
+
+    metric = evaluate_scene_quality_interfaces(
+        _scene(),
+        config=_style_global_then_local_config(),
+        object_grouping_report=_grouping_report(),
+        render_evidence={
+            "global": [images["global"]],
+            "style_consistency": {
+                "group_001": [images["local"]],
+            },
+        },
+        vlm_judge=judge,
+        metric_applicability=_relevant("style_consistency"),
+    )["metrics"]["style_consistency"]
+
+    assert metric["status"] == "evaluated"
+    assert len(judge_calls) == 2
+    assert judge_calls[1]["render_evidence"] == [
+        images["local"],
+        images["global"],
+    ]
+    assert metric["evidence_request"]["provider_invoked"] is False
+
+
+def test_style_local_quota_does_not_truncate_global_anchor(
+    tmp_path,
+) -> None:
+    images = _images(
+        tmp_path,
+        "global",
+        "local_a",
+        "local_b",
+        "local_over_budget",
+    )
+    config = _style_global_then_local_config()
+    config["metrics"]["style_consistency"]["evidence_plan"][
+        "local_policy"
+    ]["image_budget"] = 2
+    judge_calls: list[dict] = []
+    suspicious = {
+        "evidence_status": "insufficient",
+        "verdict": "ambiguous",
+        "confidence": 0.4,
+        "reason": "Local confirmation is needed.",
+        "missing_evidence": ["local group style"],
+        "defects": [],
+        "evidence_request": {
+            "target_ids": ["chair_01"],
+            "missing_observations": ["group_context_visible"],
+            "view_goal": "inspect the suspected group style",
+        },
+    }
+
+    def provider(request: dict) -> list[dict]:
+        return [
+            {"path": images["local_a"], "role": "group_local"},
+            {"path": images["local_b"], "role": "group_local"},
+            {
+                "path": images["local_over_budget"],
+                "role": "group_local",
+            },
+        ]
+
+    def judge(request: dict) -> dict:
+        judge_calls.append(request)
+        return suspicious if len(judge_calls) == 1 else _valid()
+
+    metric = evaluate_scene_quality_interfaces(
+        _scene(),
+        config=config,
+        object_grouping_report=_grouping_report(),
+        render_evidence={"global": [images["global"]]},
+        camera_evidence_provider=provider,
+        vlm_judge=judge,
+        metric_applicability=_relevant("style_consistency"),
+    )["metrics"]["style_consistency"]
+
+    assert metric["status"] == "evaluated"
+    assert judge_calls[1]["render_evidence"] == [
+        images["local_a"],
+        images["local_b"],
+        images["global"],
+    ]
+
+
+def test_global_context_cannot_replace_group_scoped_evidence(
+    tmp_path,
+) -> None:
+    global_image = _images(tmp_path, "global")["global"]
+    judge_calls: list[dict] = []
+    provider_calls: list[dict] = []
+
+    def provider(request: dict) -> list[dict]:
+        provider_calls.append(request)
+        return [
+            {
+                "path": global_image,
+                "role": "global_context",
+            }
+        ]
+
+    metric = evaluate_scene_quality_interfaces(
+        _scene(),
+        config=_only("object_pairing_consistency"),
+        object_grouping_report=_grouping_report(),
+        render_evidence={"global": [global_image]},
+        camera_evidence_provider=provider,
+        vlm_judge=lambda request: judge_calls.append(request),
+        metric_applicability=_relevant(
+            "object_pairing_consistency"
+        ),
+    )["metrics"]["object_pairing_consistency"]
+
+    assert len(provider_calls) == 1
+    assert judge_calls == []
+    assert metric["status"] == "unresolved"
+    assert metric["score"] is None
+    assert metric["group_results"][0]["evidence_resolution"][
+        "scope_satisfied"
+    ] is False
+    assert metric["group_results"][0]["evidence_paths"] == [
+        global_image
+    ]
+    assert metric["evidence_request"]["group_requests"][0][
+        "group_scope"
+    ]["require_global_anchor"] is True
+
+
+def test_group_scoped_evidence_can_omit_optional_global_context(
+    tmp_path,
+) -> None:
+    local_image = _images(tmp_path, "group_local")["group_local"]
+    provider_calls: list[dict] = []
+    judge_calls: list[dict] = []
+    config = _only("object_pairing_consistency")
+    config["metrics"]["object_pairing_consistency"][
+        "evidence_policy"
+    ] = {"include_global_context": False}
+
+    def provider(request: dict) -> list[dict]:
+        provider_calls.append(request)
+        return [{"path": local_image, "role": "group_local"}]
+
+    def judge(request: dict) -> dict:
+        judge_calls.append(request)
+        return _valid()
+
+    metric = evaluate_scene_quality_interfaces(
+        _scene(),
+        config=config,
+        object_grouping_report=_grouping_report(),
+        render_evidence=None,
+        camera_evidence_provider=provider,
+        vlm_judge=judge,
+        metric_applicability=_relevant(
+            "object_pairing_consistency"
+        ),
+    )["metrics"]["object_pairing_consistency"]
+
+    assert metric["status"] == "evaluated"
+    assert metric["score"] == 1.0
+    assert len(provider_calls) == len(judge_calls) == 1
+    assert (
+        provider_calls[0]["group_scope"]["require_global_anchor"]
+        is False
+    )
+    assert judge_calls[0]["render_evidence"] == [local_image]
+
+
 def test_exact_prompt_exemption_removes_only_the_matching_defect(tmp_path) -> None:
     scale_image = _images(tmp_path, "scale")["scale"]
     deviation = {
@@ -728,7 +1486,7 @@ def test_flat_overview_satisfies_only_global_style_scope(tmp_path) -> None:
     assert calls == ["style_consistency"]
     assert report["metrics"]["style_consistency"]["status"] == "evaluated"
     assert report["metrics"]["scale_consistency"]["reason"] == (
-        "object_local_render_evidence_unavailable"
+        "group_local_render_evidence_unavailable"
     )
     assert report["metrics"]["object_pairing_consistency"]["reason"] == (
         "group_local_render_evidence_unavailable"

@@ -1,4 +1,5 @@
 grouping:
+  lifecycle: deprecated_legacy_replay_only
   enabled: true
   proximity:
     min_gap_m: 0.25

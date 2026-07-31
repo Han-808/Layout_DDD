@@ -15,6 +15,12 @@ from benchmark.visual_judge.interfaces.judge import (
     JudgeRequest,
     JudgeResult,
 )
+from benchmark.visual_judge.camera_dsl import (
+    CAMERA_OBSERVATIONS,
+    METRIC_CAMERA_REQUIREMENTS,
+    camera_constraints_from_judge_request,
+    canonical_camera_metric,
+)
 from benchmark.visual_judge.roles import DecisionContract
 from benchmark.visual_judge.control_config import VLMEvaluationControl
 from benchmark.visual_judge.orchestration.controller import (
@@ -251,9 +257,17 @@ def _validate_legacy_judge_contract(
         ).strip()
         if compatibility_verdict:
             normalized["verdict"] = compatibility_verdict
+        _normalize_legacy_canonical_missing_observations(
+            normalized,
+            request=request,
+        )
         validate_canonical_metric_response(
             normalized,
             allowed_scopes=_canonical_allowed_scopes(request),
+            allowed_missing_observations=(
+                _canonical_allowed_missing_observations(request)
+            ),
+            allowed_target_ids=_canonical_allowed_target_ids(request),
         )
         return normalized
     binary_labels = {
@@ -278,6 +292,36 @@ def _validate_legacy_judge_contract(
     raise ValueError(
         f"{method_name} uses an unsupported Judge decision_contract "
         f"{decision_contract!r}"
+    )
+
+
+def _normalize_legacy_canonical_missing_observations(
+    value: dict[str, Any],
+    *,
+    request: JudgeRequest,
+) -> None:
+    """Translate documented legacy aliases at the compatibility boundary."""
+
+    if value.get("evidence_status") != "insufficient":
+        return
+    if isinstance(value.get("evidence_request"), dict):
+        return
+    missing = value.get("missing_evidence")
+    if not isinstance(missing, list) or not missing:
+        return
+    target_ids = tuple(_request_target_ids(request)) or ("scene",)
+    constraints = camera_constraints_from_judge_request(
+        {
+            "target_ids": list(target_ids),
+            "missing_observations": deepcopy(missing),
+            "view_goal": "legacy_metric_scoped_visual_confirmation",
+            "metadata": {},
+        },
+        metric=request.metric,
+        known_target_ids=_canonical_allowed_target_ids(request),
+    )
+    value["missing_evidence"] = list(
+        constraints.required_observations
     )
 
 
@@ -352,10 +396,19 @@ def _validate_native_judge_contract(
                 else []
             ),
             "defects": deepcopy(normalized.get("defects") or []),
+            "evidence_request": (
+                evidence_request.to_dict()
+                if evidence_request is not None
+                else None
+            ),
         }
         validate_canonical_metric_response(
             canonical,
             allowed_scopes=_canonical_allowed_scopes(request),
+            allowed_missing_observations=(
+                _canonical_allowed_missing_observations(request)
+            ),
+            allowed_target_ids=_canonical_allowed_target_ids(request),
         )
         return normalized
     if decision_contract in {
@@ -388,6 +441,52 @@ def _canonical_allowed_scopes(request: JudgeRequest) -> tuple[str, ...]:
                 if isinstance(value, str) and value.strip()
             )
     return ()
+
+
+def _canonical_allowed_missing_observations(
+    request: JudgeRequest,
+) -> tuple[str, ...]:
+    try:
+        metric = canonical_camera_metric(request.metric)
+    except ValueError:
+        return ("target_visible",)
+    return tuple(
+        sorted(
+            set(
+                METRIC_CAMERA_REQUIREMENTS[
+                    metric
+                ].allowed_observations
+            )
+            & CAMERA_OBSERVATIONS
+        )
+    )
+
+
+def _canonical_allowed_target_ids(
+    request: JudgeRequest,
+) -> tuple[str, ...]:
+    scope = request.context.get("group_scope")
+    if isinstance(scope, dict):
+        members = scope.get("member_ids")
+        if isinstance(members, list):
+            values = tuple(
+                dict.fromkeys(
+                    str(value)
+                    for value in members
+                    if isinstance(value, (str, int))
+                    and str(value).strip()
+                )
+            )
+            if values:
+                return values
+    values = _request_target_ids(request)
+    for item in request.scene_context.get("objects") or []:
+        if not isinstance(item, dict):
+            continue
+        object_id = item.get("id") or item.get("object_id")
+        if object_id is not None and str(object_id).strip():
+            values.append(str(object_id))
+    return tuple(dict.fromkeys((*values, "scene")))
 
 
 def _set_authoritative_provenance(
@@ -702,13 +801,6 @@ class ControlledVLMJudge:
                 camera_repairable=(
                     provider_available or independent_renderer_available
                 ),
-                path_only_compatibility_source=(
-                    "legacy_composite_provider_adapter"
-                    if provider_available
-                    else "legacy_screen_compatibility_wrapper"
-                    if compatibility_screen
-                    else None
-                ),
             ),
             candidate_views=candidates,
             allowed_actions=tuple(_request_allowed_actions(request)),
@@ -851,13 +943,21 @@ class ControlledVLMJudge:
             decision_contract=decision_contract,
         )
         compatibility_screen = _compatibility_screen_request(request)
-        provider_available = (
-            self.camera_provider is not None
-            and self.evidence_renderer is None
-            and not compatibility_screen
-        )
+        independent_method = method_name in {
+            "adjudicate_scene_quality",
+            "adjudicate_functional_semantic",
+        }
         independent_renderer_available = (
             self.evidence_renderer is not None
+            and not compatibility_screen
+            and (
+                independent_method
+                or self.camera_provider is None
+            )
+        )
+        provider_available = (
+            self.camera_provider is not None
+            and not independent_renderer_available
             and not compatibility_screen
         )
         initial_camera_usage = (
@@ -931,13 +1031,6 @@ class ControlledVLMJudge:
                 request,
                 camera_repairable=(
                     provider_available or independent_renderer_available
-                ),
-                path_only_compatibility_source=(
-                    "legacy_composite_provider_adapter"
-                    if provider_available
-                    else "legacy_screen_compatibility_wrapper"
-                    if compatibility_screen
-                    else None
                 ),
             ),
             candidate_views=candidates,
@@ -1103,7 +1196,9 @@ def _judge_request(request: dict[str, Any]) -> JudgeRequest:
         if isinstance(request.get("relation"), dict)
         else {}
     )
-    scene_context = request.get("scene_summary")
+    scene_context = request.get("camera_scene_context")
+    if not isinstance(scene_context, dict):
+        scene_context = request.get("scene_summary")
     if not isinstance(scene_context, dict):
         scene_context = request.get("scene")
     if not isinstance(scene_context, dict):
@@ -1159,10 +1254,16 @@ def _evidence_goal(
     request: dict[str, Any],
     *,
     camera_repairable: bool,
-    path_only_compatibility_source: str | None = None,
 ) -> dict[str, Any]:
+    explicit_goal = request.get("evidence_goal")
     policy = request.get("visual_evidence_policy")
-    result = deepcopy(policy) if isinstance(policy, dict) else {}
+    result = (
+        deepcopy(explicit_goal)
+        if isinstance(explicit_goal, dict)
+        else deepcopy(policy)
+        if isinstance(policy, dict)
+        else {}
+    )
     result.setdefault(
         "view_goal",
         f"show_metric_scoped_{request.get('metric') or 'visual'}_evidence",
@@ -1170,11 +1271,6 @@ def _evidence_goal(
     result["missing_evidence_camera_repairable"] = bool(
         camera_repairable
     )
-    if path_only_compatibility_source:
-        result["allow_path_only_compatibility"] = True
-        result["path_only_compatibility_source"] = (
-            str(path_only_compatibility_source)
-        )
     return result
 
 
@@ -1245,6 +1341,10 @@ def _canonical_unresolved_response(
         "images_used": list(result.audit.get("images_used") or []),
         "evidence_control_stop_reason": result.stop_reason,
     }
+    if result.evidence_request is not None:
+        value["evidence_request"] = (
+            result.evidence_request.to_dict()
+        )
     if method_name == "adjudicate_functional_semantic":
         value["canonical_verdict"] = "ambiguous"
         value["verdict"] = "insufficient_evidence"
@@ -1284,11 +1384,20 @@ def _selector_context(request: dict[str, Any]) -> dict[str, Any]:
         "allow_adjustment",
         "color_legend",
         "corrective_proposals",
+        "event",
+        "detector_evidence",
+        "camera_render",
         "evidence_deficiency",
         "preview_degradation",
         "preview_role",
         "preview_visibility_warning",
         "selection_phase",
+        "group_scope",
+        "grouping_role",
+        "member_ids",
+        "target_bounds",
+        "focus_center",
+        "target_extent",
     ):
         if key in request:
             result[key] = deepcopy(request[key])

@@ -8,6 +8,11 @@ from benchmark.visual_judge.active_fallback import (
 from benchmark.visual_judge.active_policy import (
     generate_corrective_camera_proposals,
 )
+from benchmark.visual_judge.acquisition_planner import (
+    EvidenceAcquisitionPlanner,
+    MetricAcquisitionPlanningRequest,
+    MetricSpecificAcquisitionPlanner,
+)
 from benchmark.visual_judge.acquisition_state import (
     CameraAcquisitionPolicy,
     CameraAcquisitionState,
@@ -18,8 +23,12 @@ from benchmark.visual_judge.adapters.active_camera import (
     CameraRepairSolver,
 )
 from benchmark.visual_judge.adapters.deterministic_camera import (
+    DETERMINISTIC_SUPPORTED_OBSERVATIONS,
     DeterministicCameraRepairSolver,
     DeterministicLocalCameraSelector,
+)
+from benchmark.visual_judge.adapters.legacy_renderer import (
+    CameraViewEvidenceRenderer,
 )
 from benchmark.visual_judge.camera_dsl import (
     CameraConstraintSet,
@@ -96,10 +105,12 @@ __all__ = [
     "CameraSelectionRequest",
     "CameraSelectionResult",
     "CameraSelector",
+    "CameraViewEvidenceRenderer",
     "ConditionalActiveCameraEvidenceProvider",
     "ControlledVLMJudge",
     "DEFAULT_P0B_VISUAL_CONFIGS",
     "DEFAULT_DETERMINISTIC_CAMERA_RANKING",
+    "DETERMINISTIC_SUPPORTED_OBSERVATIONS",
     "DEFAULT_VLM_EVALUATION_CONTROL",
     "DecisionContract",
     "DeterministicCameraSelector",
@@ -111,6 +122,7 @@ __all__ = [
     "EvidenceGateRequest",
     "EvidenceGateResult",
     "EvidenceControlUnresolvedError",
+    "EvidenceAcquisitionPlanner",
     "EvidenceRenderRequest",
     "EvidenceRenderResult",
     "EvidenceRenderer",
@@ -124,6 +136,8 @@ __all__ = [
     "JudgeRequest",
     "JudgeResult",
     "LocalViewProvider",
+    "MetricAcquisitionPlanningRequest",
+    "MetricSpecificAcquisitionPlanner",
     "OpenAICompatibleVLMJudge",
     "VLMCameraSelector",
     "ActiveVLMCameraSelector",

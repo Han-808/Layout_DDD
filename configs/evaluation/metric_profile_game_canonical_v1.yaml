@@ -157,7 +157,7 @@ l3_scene_quality:
           preserve_boundary_cues: true
         local_policy:
           camera_scope: object_local
-          grouping_policy_id: deterministic_metadata_geometry
+          grouping_policy_id: vlm_visual_evidence_scope_v2
           image_budget: 4
           trigger_states:
             - suspicious

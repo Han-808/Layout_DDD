@@ -174,6 +174,54 @@ def test_candidate_only_selects_one_trusted_candidate_once() -> None:
     assert vlm.calls[0]["scene_access"] == "read_only"
 
 
+def test_vlm_payload_preserves_authoritative_group_scope_geometry() -> None:
+    group_scope = {
+        "scope_version": "group_camera_scope_v1",
+        "group_id": "group_001",
+        "member_ids": ["a", "b"],
+        "target_bounds": {
+            "min": [0.0, 1.0, 0.0],
+            "max": [2.0, 3.0, 1.0],
+        },
+        "focus_center": [1.0, 2.0, 0.5],
+        "extent": [2.0, 2.0, 1.0],
+    }
+    context = {
+        "group_scope": group_scope,
+        "member_ids": ["a", "b"],
+        "target_bounds": deepcopy(group_scope["target_bounds"]),
+        "focus_center": [1.0, 2.0, 0.5],
+        "target_extent": [2.0, 2.0, 1.0],
+        "grouping_role": "primary_visual_evidence_decomposition",
+    }
+    vlm = _VLM(
+        {
+            "selected_view_ids": ["candidate-a"],
+            "reason": "best trusted group view",
+        }
+    )
+    selector = ActiveVLMCameraSelector(
+        vlm,
+        selection_mode="candidate_only",
+    )
+
+    selector.select(_request(context=context))
+
+    payload = vlm.calls[0]
+    assert payload["evidence_goal"] == {
+        "view_goal": "show collision contact"
+    }
+    assert payload["group_scope"] == group_scope
+    assert payload["member_ids"] == ["a", "b"]
+    assert payload["target_bounds"] == group_scope["target_bounds"]
+    assert payload["focus_center"] == [1.0, 2.0, 0.5]
+    assert payload["target_extent"] == [2.0, 2.0, 1.0]
+    assert (
+        payload["grouping_role"]
+        == "primary_visual_evidence_decomposition"
+    )
+
+
 def test_candidate_only_omits_attempted_candidates() -> None:
     vlm = _VLM(
         {

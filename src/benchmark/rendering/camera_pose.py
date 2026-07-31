@@ -27,6 +27,7 @@ L3_CAMERA_METRICS = (
     "scale_consistency",
     "object_pairing_consistency",
     "style_consistency",
+    "functional_consistency",
 )
 CAMERA_EVIDENCE_METRICS = (*P0B_CAMERA_METRICS, *L3_CAMERA_METRICS)
 DEFAULT_CAMERA_MODE_BY_METRIC = {
@@ -41,6 +42,7 @@ DEFAULT_CAMERA_MODE_BY_METRIC = {
     # generation. These mappings do not alter any frozen L1 VisualConfig.
     "scale_consistency": "visibility_ranked",
     "object_pairing_consistency": "visibility_ranked",
+    "functional_consistency": "visibility_ranked",
     # Style consumes the trusted overview packet by default.
     "style_consistency": "global_only",
 }
@@ -65,8 +67,12 @@ CAMERA_ACTION_PARAMETERS: dict[str, dict[str, float | str]] = {
     "dolly_in": {"radius_scale": 0.75, "minimum_distance_m": 0.5},
     "dolly_out": {"radius_scale": 1.25},
 }
-CAMERA_CANDIDATE_POLICIES = ("feasible_v2", "legacy_v1")
-DEFAULT_CAMERA_CANDIDATE_POLICY = "feasible_v2"
+CAMERA_CANDIDATE_POLICIES = ("local", "legacy")
+CAMERA_CANDIDATE_POLICY_ALIASES = {
+    "feasible_v2": "local",
+    "legacy_v1": "legacy",
+}
+DEFAULT_CAMERA_CANDIDATE_POLICY = "local"
 CAMERA_SENSOR_WIDTH_MM = 36.0
 CAMERA_SENSOR_FIT = "HORIZONTAL"
 CAMERA_MIN_LENS_MM = 24.0
@@ -89,6 +95,24 @@ def validate_camera_pose_mode(value: str | None) -> str | None:
     resolved = str(value).strip().lower()
     if resolved not in CAMERA_POSE_MODES:
         raise ValueError(f"camera_pose_mode must be one of {list(CAMERA_POSE_MODES)}, got {value!r}")
+    return resolved
+
+
+def normalize_camera_candidate_policy(value: str | None) -> str:
+    """Resolve persisted policy aliases to the current public names."""
+
+    resolved = str(
+        DEFAULT_CAMERA_CANDIDATE_POLICY if value is None else value
+    ).strip().lower()
+    resolved = CAMERA_CANDIDATE_POLICY_ALIASES.get(resolved, resolved)
+    if resolved not in CAMERA_CANDIDATE_POLICIES:
+        accepted = [
+            *CAMERA_CANDIDATE_POLICIES,
+            *CAMERA_CANDIDATE_POLICY_ALIASES,
+        ]
+        raise ValueError(
+            f"camera candidate policy must be one of {accepted}"
+        )
     return resolved
 
 
@@ -166,18 +190,14 @@ def generate_camera_pose_candidates(
 ) -> list[dict[str, Any]]:
     """Create a frozen metric-aware pose bank from canonical scene geometry.
 
-    ``feasible_v2`` is the production policy. It preserves intended camera
+    ``local`` is the production policy. It preserves intended camera
     rays, uses detector-localized event focus when available, and validates
-    proxy framing in screen space. ``legacy_v1`` is retained only so frozen
+    proxy framing in screen space. ``legacy`` is retained only so frozen
     camera-policy experiments can be reproduced without changing arm meaning.
     """
 
-    policy_name = str(policy).strip().lower()
-    if policy_name not in CAMERA_CANDIDATE_POLICIES:
-        raise ValueError(
-            f"camera candidate policy must be one of {list(CAMERA_CANDIDATE_POLICIES)}"
-        )
-    if policy_name == "legacy_v1":
+    policy_name = normalize_camera_candidate_policy(policy)
+    if policy_name == "legacy":
         return _generate_legacy_camera_pose_candidates(
             request,
             max_candidates=max_candidates,
@@ -292,7 +312,7 @@ def _generate_feasible_camera_pose_candidates(
     """Generate an exact-size bank of feasible, truthfully described poses.
 
     This policy deliberately keeps proposal generation deterministic and
-    renderer-independent.  In contrast to ``legacy_v1``, room feasibility is
+    renderer-independent.  In contrast to ``legacy``, room feasibility is
     solved along the intended camera ray rather than by independently clamping
     XYZ, so azimuth/elevation labels continue to describe the returned pose.
     """
@@ -487,7 +507,7 @@ def _generate_feasible_camera_pose_candidates(
             ],
             "room_bounds": [float(value) for value in room],
             "policy_source": policy_source,
-            "candidate_policy": "feasible_v2",
+            "candidate_policy": "local",
             "event_focus_source": event_focus_source,
             "focus_kind": str(specification.get("focus_kind") or "event"),
             **(
@@ -1100,7 +1120,7 @@ def apply_camera_action(
 ) -> dict[str, Any]:
     """Apply one bounded CoV-style action and revalidate its proxy geometry.
 
-    ``feasible_v2`` actions preserve the original look-at target, stay on a
+    ``local`` actions preserve the original look-at target, stay on a
     feasible room-interior ray, and, when the canonical scene is available,
     reject camera locations inside any object OBB.  Proxy framing is recomputed
     after motion so an action cannot silently turn a fitted proposal into a
@@ -1117,7 +1137,16 @@ def apply_camera_action(
     radius = max(0.25, float(np.linalg.norm(delta)))
     azimuth = math.atan2(float(delta[1]), float(delta[0]))
     elevation = math.asin(float(np.clip(delta[2] / radius, -1.0, 1.0)))
-    feasible_policy = str(result.get("candidate_policy") or "") == "feasible_v2"
+    raw_policy = result.get("candidate_policy")
+    # Frozen legacy candidates did not record this field.  Keep that exact
+    # behavior, while rejecting rather than silently treating unknown values
+    # as legacy.
+    effective_policy = (
+        "legacy"
+        if raw_policy is None
+        else normalize_camera_candidate_policy(str(raw_policy))
+    )
+    feasible_policy = effective_policy == "local"
     if action_name == "orbit_left":
         azimuth += math.radians(
             float(CAMERA_ACTION_PARAMETERS[action_name]["delta_degrees"])

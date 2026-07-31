@@ -24,6 +24,8 @@ def validate_canonical_metric_response(
     result: dict[str, Any],
     *,
     allowed_scopes: Iterable[str] = (),
+    allowed_missing_observations: Iterable[str] = (),
+    allowed_target_ids: Iterable[str] = (),
 ) -> dict[str, Any]:
     """Validate the strict canonical metric verdict contract."""
 
@@ -90,15 +92,52 @@ def validate_canonical_metric_response(
     missing_evidence = result.get("missing_evidence")
     if not isinstance(missing_evidence, list):
         raise ValueError("canonical metric missing_evidence must be a JSON list")
-    if evidence_status == "insufficient" and (
-        not missing_evidence
-        or any(
-            not isinstance(item, str) or not item.strip()
-            for item in missing_evidence
-        )
+    if any(
+        not isinstance(item, str) or not item.strip()
+        for item in missing_evidence
     ):
         raise ValueError(
-            "insufficient canonical metric evidence must name missing evidence"
+            "canonical metric missing_evidence must contain non-empty strings"
+        )
+    allowed_observations = set(allowed_missing_observations)
+    if allowed_observations:
+        unknown_missing = sorted(
+            set(missing_evidence) - allowed_observations
+        )
+        if unknown_missing:
+            raise ValueError(
+                "canonical metric missing_evidence must use exact allowed "
+                f"Camera DSL tokens; unknown {unknown_missing}"
+            )
+    evidence_request = result.get("evidence_request")
+    if evidence_status == "insufficient":
+        if evidence_request is None and not missing_evidence:
+            raise ValueError(
+                "insufficient canonical metric evidence must name missing "
+                "evidence or include a structured evidence_request"
+            )
+        if evidence_request is not None:
+            _validate_canonical_evidence_request(
+                evidence_request,
+                allowed_missing_observations=allowed_observations,
+                allowed_target_ids=set(allowed_target_ids),
+            )
+            requested_missing = evidence_request[
+                "missing_observations"
+            ]
+            if (
+                missing_evidence
+                and list(dict.fromkeys(missing_evidence))
+                != list(dict.fromkeys(requested_missing))
+            ):
+                raise ValueError(
+                    "canonical metric missing_evidence conflicts with "
+                    "evidence_request.missing_observations"
+                )
+    elif evidence_request is not None:
+        raise ValueError(
+            "sufficient canonical metric evidence cannot retain an "
+            "evidence_request"
         )
     if evidence_status == "insufficient" and defects:
         raise ValueError(
@@ -109,6 +148,105 @@ def validate_canonical_metric_response(
             "sufficient canonical metric evidence cannot retain missing_evidence"
         )
     return result
+
+
+def _validate_canonical_evidence_request(
+    value: Any,
+    *,
+    allowed_missing_observations: set[str],
+    allowed_target_ids: set[str],
+) -> None:
+    if not isinstance(value, dict):
+        raise ValueError(
+            "canonical metric evidence_request must be a JSON object"
+        )
+    unknown_keys = set(value) - {
+        "target_ids",
+        "missing_observations",
+        "view_goal",
+        "metadata",
+    }
+    if unknown_keys:
+        raise ValueError(
+            "canonical metric evidence_request contains unsupported fields: "
+            f"{sorted(unknown_keys)}"
+        )
+    target_ids = value.get("target_ids")
+    if (
+        not isinstance(target_ids, list)
+        or not target_ids
+        or any(
+            not isinstance(item, str) or not item.strip()
+            for item in target_ids
+        )
+        or len(target_ids) != len(set(target_ids))
+    ):
+        raise ValueError(
+            "canonical metric evidence_request.target_ids must contain "
+            "unique non-empty strings"
+        )
+    if allowed_target_ids:
+        outside = sorted(set(target_ids) - allowed_target_ids)
+        if outside:
+            raise ValueError(
+                "canonical metric evidence_request target IDs are outside "
+                f"the authoritative scope: {outside}"
+            )
+    observations = value.get("missing_observations")
+    if (
+        not isinstance(observations, list)
+        or not observations
+        or any(
+            not isinstance(item, str) or not item.strip()
+            for item in observations
+        )
+        or len(observations) != len(set(observations))
+    ):
+        raise ValueError(
+            "canonical metric evidence_request.missing_observations must "
+            "contain unique non-empty strings"
+        )
+    if allowed_missing_observations:
+        unknown = sorted(
+            set(observations) - allowed_missing_observations
+        )
+        if unknown:
+            raise ValueError(
+                "canonical metric evidence_request must use exact allowed "
+                f"Camera DSL tokens; unknown {unknown}"
+            )
+    if not str(value.get("view_goal") or "").strip():
+        raise ValueError(
+            "canonical metric evidence_request.view_goal must be non-empty"
+        )
+    metadata = value.get("metadata", {})
+    if not isinstance(metadata, dict):
+        raise ValueError(
+            "canonical metric evidence_request.metadata must be a JSON object"
+        )
+    forbidden_authority = {
+        "metric",
+        "task",
+        "rubric",
+        "metric_scope",
+        "judgment_scope",
+        "camera_constraints",
+        "constraints",
+        "camera_repair_plans",
+        "repair_plan",
+        "selected_plan_id",
+        "relaxable_constraints",
+        "preferred_view_families",
+        "forbidden_view_families",
+        "camera_proposal",
+        "pose",
+    } & set(metadata)
+    if forbidden_authority:
+        raise ValueError(
+            "canonical metric evidence_request metadata cannot redefine "
+            "metric scope or camera policy: "
+            f"{sorted(forbidden_authority)}"
+        )
 
 
 def validate_binary_judge_response(

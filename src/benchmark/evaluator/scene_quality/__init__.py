@@ -3,7 +3,8 @@
 Scene Quality reframes the former narrow "Visual Quality" layer into two
 subfamilies: Semantic Coherence (``scale_consistency``,
 ``object_pairing_consistency``) and Perceptual Visual Quality
-(``style_consistency``). The evaluator consumes scope-correct prepared visual
+(``style_consistency``), with opt-in Functional Validity
+(``functional_consistency``). The evaluator consumes scope-correct prepared visual
 evidence, the canonical grouping report, asset-policy applicability, and an
 injected strict VLM judge. It scores complete applicable metrics and preserves
 missing evidence or malformed judgements as unresolved.
@@ -21,6 +22,8 @@ from benchmark.evaluator.scene_quality.interfaces import (
     CAMERA_SCOPES,
     DEFAULT_SCENE_QUALITY_INTERFACE_CONFIG,
     EVIDENCE_SELECTORS,
+    FUNCTIONAL_VALIDITY,
+    FUNCTIONAL_VALIDITY_METRICS,
     IMAGE_ORDER_TOKENS,
     JUDGMENT_SCOPE_BY_METRIC,
     PERCEPTUAL_VISUAL_QUALITY,
@@ -44,6 +47,8 @@ __all__ = [
     "CAMERA_SCOPES",
     "DEFAULT_SCENE_QUALITY_INTERFACE_CONFIG",
     "EVIDENCE_SELECTORS",
+    "FUNCTIONAL_VALIDITY",
+    "FUNCTIONAL_VALIDITY_METRICS",
     "IMAGE_ORDER_TOKENS",
     "JUDGMENT_SCOPE_BY_METRIC",
     "PERCEPTUAL_VISUAL_QUALITY",

@@ -9,6 +9,7 @@ from typing import Any, Callable, Mapping
 from benchmark.rendering.camera_pose import (
     DEFAULT_CAMERA_CANDIDATE_POLICY,
     generate_camera_pose_candidates,
+    normalize_camera_candidate_policy,
     resolve_camera_pose_mode,
 )
 from benchmark.visual_judge.adapters.legacy_camera import (
@@ -28,6 +29,17 @@ from benchmark.visual_judge.camera_targets import (
 from benchmark.visual_judge.interfaces.camera import (
     CameraSelectionRequest,
     CameraSelectionResult,
+)
+
+
+DETERMINISTIC_SUPPORTED_OBSERVATIONS = frozenset(
+    {
+        # These observations have explicit candidate rejection checks below.
+        # Other DSL tokens remain available to VLM selection, but must not be
+        # treated as deterministically verified by this adapter.
+        "target_visible",
+        "joint_visibility",
+    }
 )
 
 
@@ -67,7 +79,9 @@ class DeterministicLocalCameraSelector:
                 "deterministic candidate_generator must be callable"
             )
         self.candidate_generator = candidate_generator
-        self.candidate_policy = str(candidate_policy)
+        self.candidate_policy = normalize_camera_candidate_policy(
+            candidate_policy
+        )
         self.feature_enricher = feature_enricher
         self.ranking_config = DeterministicCameraRankingConfig.from_value(
             ranking_config
@@ -113,6 +127,57 @@ class DeterministicLocalCameraSelector:
             request.constraints,
             known_target_ids=_known_target_ids(request),
         )
+        unsupported_observations = sorted(
+            (
+                set(constraints.required_observations)
+                | set(constraints.preserved_observations)
+            )
+            - DETERMINISTIC_SUPPORTED_OBSERVATIONS
+        )
+        if unsupported_observations:
+            candidate_ids = [
+                str(candidate.get("id") or "").strip()
+                for candidate in request.candidate_views
+                if isinstance(candidate, dict)
+                and str(candidate.get("id") or "").strip()
+            ]
+            return camera_selection_result_from_value(
+                {
+                    "outcome": "no_feasible_candidate",
+                    "attempted_candidate_ids": candidate_ids,
+                    "rejected_candidates": [
+                        {
+                            "candidate_id": candidate_id,
+                            "reason_codes": [
+                                "observation_not_supported_by_deterministic_selector"
+                            ],
+                            "failed_constraints": unsupported_observations,
+                            "features": {
+                                "deterministic_capability": "unsupported"
+                            },
+                        }
+                        for candidate_id in candidate_ids
+                    ],
+                    "reason_codes": [
+                        "observation_not_supported_by_deterministic_selector"
+                    ],
+                    "reason": (
+                        "the deterministic selector cannot verify required "
+                        "observations: "
+                        + ", ".join(unsupported_observations)
+                    ),
+                    "provenance": {
+                        "strategy": "geometry_visibility_diversity_v1",
+                        "supported_observations": sorted(
+                            DETERMINISTIC_SUPPORTED_OBSERVATIONS
+                        ),
+                        "unsupported_observations": unsupported_observations,
+                        "candidate_generation_skipped": True,
+                    },
+                },
+                request=request,
+                backend=self.backend,
+            )
         started = perf_counter()
         generation_error: str | None = None
         generation_outcome = "controller_candidate_bank"
@@ -265,7 +330,7 @@ class DeterministicLocalCameraSelector:
             "reuses_existing_camera_algorithms": [
                 "generate_camera_pose_candidates",
                 "metric_specific_camera_pose_mode",
-                "feasible_v2_geometry_and_proxy_framing",
+                "local_geometry_and_proxy_framing",
             ],
         }
         if not selected_records:
@@ -347,10 +412,32 @@ class DeterministicCameraRepairSolver:
             for value in constraints.preserved_observations
             if value not in relaxed
         )
+        delegated_observations = tuple(
+            value
+            for value in (*required, *preserved)
+            if value not in DETERMINISTIC_SUPPORTED_OBSERVATIONS
+        )
+        solver_required = tuple(
+            value
+            for value in required
+            if value in DETERMINISTIC_SUPPORTED_OBSERVATIONS
+        )
+        if not solver_required:
+            # The VLM selected only a trusted repair-plan objective. Geometry
+            # realization still needs a technically checkable framing target;
+            # the post-render Judge, not this selector, verifies the delegated
+            # semantic observation.
+            solver_required = ("target_visible",)
+        solver_preserved = tuple(
+            value
+            for value in preserved
+            if value in DETERMINISTIC_SUPPORTED_OBSERVATIONS
+            and value not in solver_required
+        )
         realized_constraints = CameraConstraintSet(
             target_ids=constraints.target_ids,
-            required_observations=required,
-            preserved_observations=preserved,
+            required_observations=solver_required,
+            preserved_observations=solver_preserved,
             preferred_view_families=(
                 plan.preferred_view_families
                 or constraints.preferred_view_families
@@ -367,11 +454,10 @@ class DeterministicCameraRepairSolver:
                 constraints.require_joint_visibility
                 and "require_joint_visibility" not in relaxed
                 and "joint_visibility" not in relaxed
+                and "joint_visibility" in solver_required
             ),
             require_global_anchor=(
-                constraints.require_global_anchor
-                and "require_global_anchor" not in relaxed
-                and "global_context_preserved" not in relaxed
+                False
             ),
             relaxable_constraints=(),
             metric=constraints.metric,
@@ -380,6 +466,10 @@ class DeterministicCameraRepairSolver:
                 **deepcopy(constraints.metadata),
                 "selected_repair_plan": plan.to_dict(),
                 "realization": "deterministic_local_camera_selector",
+                "original_required_observations": list(required),
+                "unverified_observations_requiring_post_render_judge": list(
+                    delegated_observations
+                ),
             },
         )
         budget = deepcopy(request.budget)
@@ -412,15 +502,41 @@ def _candidate_generation_request(
         )
     except ValueError:
         resolved_mode = "visibility_ranked"
+    group_scope = request.context.get("group_scope")
+    event = deepcopy(request.context.get("event") or {})
+    if isinstance(group_scope, dict):
+        event.setdefault("group_id", group_scope.get("group_id"))
+        event.setdefault(
+            "focus_region",
+            deepcopy(group_scope.get("target_bounds")),
+        )
+        event.setdefault(
+            "object_ids",
+            list(group_scope.get("member_ids") or constraints.target_ids),
+        )
     return {
         "metric": request.metric,
         "scene": deepcopy(request.scene),
         "object_ids": list(constraints.target_ids),
         "target_ids": list(constraints.target_ids),
+        "group_scope": (
+            deepcopy(group_scope)
+            if isinstance(group_scope, dict)
+            else None
+        ),
+        "target_bounds": deepcopy(
+            request.context.get("target_bounds")
+        ),
+        "focus_center": deepcopy(
+            request.context.get("focus_center")
+        ),
+        "target_extent": deepcopy(
+            request.context.get("target_extent")
+        ),
         "detector_evidence": deepcopy(
             request.context.get("detector_evidence") or {}
         ),
-        "event": deepcopy(request.context.get("event") or {}),
+        "event": event,
         "_resolved_camera_pose_mode": resolved_mode,
         "_camera_render": deepcopy(
             request.context.get("camera_render") or {}
@@ -744,7 +860,7 @@ def _geometry_feasibility(
     explicit = details.get("feasible")
     if isinstance(explicit, bool):
         return True, explicit
-    if str(candidate.get("candidate_policy") or "") != "feasible_v2":
+    if str(candidate.get("candidate_policy") or "") != "local":
         return False, None
     interval = details.get("feasible_distance_interval_m")
     actual = details.get("actual_distance_m")

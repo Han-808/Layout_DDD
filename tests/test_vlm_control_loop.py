@@ -4,6 +4,7 @@ import json
 from copy import deepcopy
 
 import pytest
+from PIL import Image
 
 from benchmark.visual_judge.control_config import (
     resolve_vlm_evaluation_control,
@@ -40,6 +41,21 @@ from benchmark.visual_judge.runtime import (
 )
 
 
+def _write_nonblank_png(path) -> None:
+    seed = sum(str(path.name).encode("utf-8")) % 200
+    image = Image.new(
+        "RGB",
+        (4, 4),
+        (30 + seed, 230 - seed, 127),
+    )
+    image.putpixel((0, 0), (0, 0, 0))
+    image.save(path)
+
+
+def _write_blank_png(path) -> None:
+    Image.new("RGB", (4, 4), (255, 255, 255)).save(path)
+
+
 def _judge_request(*, evidence: tuple[object, ...] = ("initial.png",)):
     return JudgeRequest(
         task="collision",
@@ -62,17 +78,15 @@ def _gate_result(
         if ready
         else (
             {
-                "code": "target_not_visible",
-                "repairability": (
-                    "camera" if camera_repairable else "rerender"
-                ),
+                "code": "blank_render",
+                "repairability": "rerender",
             },
         )
     )
     return EvidenceGateResult(
         ready=ready,
         camera_repairable=camera_repairable,
-        reason_codes=("evidence_ready",) if ready else ("target_not_visible",),
+        reason_codes=("evidence_ready",) if ready else ("blank_render",),
         deficiencies=deficiencies,
     )
 
@@ -110,8 +124,10 @@ class _Gate:
         self.calls.append("gate")
         self.requests.append(request)
         if len(self.results) > 1:
-            return self.results.pop(0)
-        return self.results[0]
+            result = self.results.pop(0)
+        else:
+            result = self.results[0]
+        return result
 
 
 class _Judge:
@@ -220,17 +236,19 @@ def test_vlm_role_enum_has_only_judge_and_optional_vlm_selector():
     }
 
 
-def test_camera_repairable_evidence_runs_selector_render_gate_judge():
+def test_judge_requested_camera_repair_runs_selector_render_gate_judge():
     result, calls, gate, _, _, _ = _run(
         gate_results=[
-            _gate_result(ready=False, camera_repairable=True),
+            _gate_result(ready=True),
             _gate_result(ready=True),
         ],
-        judge_results=[_valid_result()],
+        judge_results=[_need_more_result(), _valid_result()],
     )
 
     assert result.status == "valid"
-    assert calls == ["gate", "selector", "render", "gate", "judge"]
+    assert calls == [
+        "gate", "judge", "selector", "render", "gate", "judge"
+    ]
     assert len(gate.requests) == 2
     assert list(result.visual_evidence) == ["initial.png", "repair.png"]
 
@@ -238,10 +256,10 @@ def test_camera_repairable_evidence_runs_selector_render_gate_judge():
 def test_renderer_cannot_exceed_max_views_per_round_before_judge():
     result, calls, _, judge, _, _ = _run(
         gate_results=[
-            _gate_result(ready=False, camera_repairable=True),
+            _gate_result(ready=True),
             _gate_result(ready=True),
         ],
-        judge_results=[_valid_result()],
+        judge_results=[_need_more_result()],
         render_result={
             "visual_evidence": ["repair-a.png", "repair-b.png"],
             "merge_policy": "replace",
@@ -258,18 +276,21 @@ def test_renderer_cannot_exceed_max_views_per_round_before_judge():
 
     assert result.status == "unresolved"
     assert result.stop_reason == "renderer_followup_contract_invalid"
-    assert calls == ["gate", "selector", "render", "gate"]
-    assert judge.requests == []
-    assert result.audit["trace"][2]["rendered_view_count"] == 2
+    assert calls == ["gate", "judge", "selector", "render", "gate"]
+    assert len(judge.requests) == 1
+    render_event = next(
+        item for item in result.audit["trace"] if item["stage"] == "render"
+    )
+    assert render_event["rendered_view_count"] == 2
 
 
 def test_same_pose_render_bundle_counts_as_one_view_per_round():
     result, calls, _, judge, _, _ = _run(
         gate_results=[
-            _gate_result(ready=False, camera_repairable=True),
+            _gate_result(ready=True),
             _gate_result(ready=True),
         ],
-        judge_results=[_valid_result()],
+        judge_results=[_need_more_result(), _valid_result()],
         render_result={
             "visual_evidence": [
                 {
@@ -293,18 +314,23 @@ def test_same_pose_render_bundle_counts_as_one_view_per_round():
     )
 
     assert result.status == "valid"
-    assert calls == ["gate", "selector", "render", "gate", "judge"]
-    assert len(judge.requests) == 1
-    assert result.audit["trace"][2]["rendered_view_count"] == 1
+    assert calls == [
+        "gate", "judge", "selector", "render", "gate", "judge"
+    ]
+    assert len(judge.requests) == 2
+    render_event = next(
+        item for item in result.audit["trace"] if item["stage"] == "render"
+    )
+    assert render_event["rendered_view_count"] == 1
 
 
 def test_trusted_view_id_representation_bundle_counts_as_one_camera_view():
     result, calls, _, judge, _, _ = _run(
         gate_results=[
-            _gate_result(ready=False, camera_repairable=True),
+            _gate_result(ready=True),
             _gate_result(ready=True),
         ],
-        judge_results=[_valid_result()],
+        judge_results=[_need_more_result(), _valid_result()],
         render_result={
             "visual_evidence": [
                 {
@@ -331,9 +357,14 @@ def test_trusted_view_id_representation_bundle_counts_as_one_camera_view():
     )
 
     assert result.status == "valid"
-    assert calls == ["gate", "selector", "render", "gate", "judge"]
-    assert len(judge.requests) == 1
-    assert result.audit["trace"][2]["rendered_view_count"] == 1
+    assert calls == [
+        "gate", "judge", "selector", "render", "gate", "judge"
+    ]
+    assert len(judge.requests) == 2
+    render_event = next(
+        item for item in result.audit["trace"] if item["stage"] == "render"
+    )
+    assert render_event["rendered_view_count"] == 1
     assert result.audit["total_images_acquired"] == 4
 
 
@@ -344,7 +375,7 @@ def test_non_camera_repairable_failure_never_calls_judge():
     )
 
     assert result.status == "unresolved"
-    assert result.stop_reason == "evidence_not_camera_repairable"
+    assert result.stop_reason == "blank_evidence"
     assert calls == ["gate"]
     assert not judge.requests
     assert not selector.requests
@@ -377,14 +408,14 @@ def test_zero_evidence_round_budget_stops_before_selector():
         {"budgets": {"max_evidence_rounds": 0}}
     )
     result, calls, _, judge, selector, _ = _run(
-        gate_results=[_gate_result(ready=False, camera_repairable=True)],
-        judge_results=[],
+        gate_results=[_gate_result(ready=True)],
+        judge_results=[_need_more_result()],
         control=control,
     )
 
     assert result.stop_reason == "max_evidence_rounds_exhausted"
-    assert calls == ["gate"]
-    assert not judge.requests
+    assert calls == ["gate", "judge"]
+    assert len(judge.requests) == 1
     assert not selector.requests
 
 
@@ -440,8 +471,8 @@ def test_camera_action_budget_is_checked_before_render():
         {"budgets": {"max_camera_actions": 0}}
     )
     result, calls, _, _, _, renderer = _run(
-        gate_results=[_gate_result(ready=False, camera_repairable=True)],
-        judge_results=[],
+        gate_results=[_gate_result(ready=True)],
+        judge_results=[_need_more_result()],
         selector_result=_selection(
             action={"type": "orbit", "view_id": "view-1"}
         ),
@@ -449,7 +480,7 @@ def test_camera_action_budget_is_checked_before_render():
     )
 
     assert result.stop_reason == "max_camera_actions_exhausted"
-    assert calls == ["gate", "selector"]
+    assert calls == ["gate", "judge", "selector"]
     assert not renderer.requests
 
 
@@ -459,10 +490,10 @@ def test_rendered_packet_over_image_budget_is_gated_before_stopping():
     )
     result, calls, gate, judge, _, _ = _run(
         gate_results=[
-            _gate_result(ready=False, camera_repairable=True),
+            _gate_result(ready=True),
             _gate_result(ready=True),
         ],
-        judge_results=[],
+        judge_results=[_need_more_result()],
         evidence=(),
         render_result={
             "visual_evidence": ["one.png", "two.png"],
@@ -472,9 +503,9 @@ def test_rendered_packet_over_image_budget_is_gated_before_stopping():
     )
 
     assert result.stop_reason == "max_total_images_exhausted"
-    assert calls == ["gate", "selector", "render", "gate"]
+    assert calls == ["gate", "judge", "selector", "render", "gate"]
     assert len(gate.requests) == 2
-    assert not judge.requests
+    assert len(judge.requests) == 1
 
 
 def test_selector_failure_keeps_previous_evidence_and_does_not_rejudge():
@@ -494,10 +525,10 @@ def test_selector_failure_keeps_previous_evidence_and_does_not_rejudge():
 def test_unchanged_rendered_packet_is_gated_then_stops():
     result, calls, gate, judge, _, _ = _run(
         gate_results=[
-            _gate_result(ready=False, camera_repairable=True),
-            _gate_result(ready=False, camera_repairable=True),
+            _gate_result(ready=True),
+            _gate_result(ready=True),
         ],
-        judge_results=[],
+        judge_results=[_need_more_result()],
         render_result={
             "visual_evidence": ["initial.png"],
             "merge_policy": "replace",
@@ -505,9 +536,9 @@ def test_unchanged_rendered_packet_is_gated_then_stops():
     )
 
     assert result.stop_reason == "evidence_packet_unchanged"
-    assert calls == ["gate", "selector", "render", "gate"]
+    assert calls == ["gate", "judge", "selector", "render", "gate"]
     assert len(gate.requests) == 2
-    assert not judge.requests
+    assert len(judge.requests) == 1
 
 
 def test_replace_mode_still_consumes_cumulative_image_budget():
@@ -551,9 +582,9 @@ def test_replace_mode_still_consumes_cumulative_image_budget():
 def test_renderer_cannot_underreport_selected_camera_action():
     result, calls, _, judge, _, _ = _run(
         gate_results=[
-            _gate_result(ready=False, camera_repairable=True),
+            _gate_result(ready=True),
         ],
-        judge_results=[],
+        judge_results=[_need_more_result()],
         selector_result=_selection(
             action={"type": "orbit", "view_id": "view-1"}
         ),
@@ -564,17 +595,17 @@ def test_renderer_cannot_underreport_selected_camera_action():
     )
 
     assert result.stop_reason == "render_failed"
-    assert calls == ["gate", "selector", "render", "gate"]
-    assert not judge.requests
+    assert calls == ["gate", "judge", "selector", "render", "gate"]
+    assert len(judge.requests) == 1
 
 
 def test_invalid_post_render_candidates_are_gated_before_safe_stop():
     result, calls, gate, judge, _, _ = _run(
         gate_results=[
-            _gate_result(ready=False, camera_repairable=True),
+            _gate_result(ready=True),
             _gate_result(ready=True),
         ],
-        judge_results=[],
+        judge_results=[_need_more_result()],
         render_result={
             "visual_evidence": ["repair.png"],
             "next_candidate_views": [{"id": ""}],
@@ -582,9 +613,9 @@ def test_invalid_post_render_candidates_are_gated_before_safe_stop():
     )
 
     assert result.stop_reason == "renderer_followup_contract_invalid"
-    assert calls == ["gate", "selector", "render", "gate"]
+    assert calls == ["gate", "judge", "selector", "render", "gate"]
     assert len(gate.requests) == 2
-    assert not judge.requests
+    assert len(judge.requests) == 1
 
 
 def test_same_image_pixels_with_changed_metadata_are_not_rejudged(tmp_path):
@@ -1256,7 +1287,7 @@ def test_focused_module_layout_preserves_compatibility_imports():
 
 def test_deterministic_evidence_gate_has_no_model_or_metric_verdict(tmp_path):
     evidence = tmp_path / "view.png"
-    evidence.write_bytes(b"not-empty")
+    _write_nonblank_png(evidence)
     gate = DeterministicEvidenceGate()
 
     result = gate.check(
@@ -1269,12 +1300,10 @@ def test_deterministic_evidence_gate_has_no_model_or_metric_verdict(tmp_path):
         )
     )
 
-    assert result.ready is False
-    assert "required_scene_context_missing" in result.reason_codes
-    assert (
-        "required_global_evidence_metadata_missing"
-        in result.reason_codes
-    )
+    assert result.ready is True
+    assert result.provenance["scope"] == "input_integrity_only"
+    assert result.provenance["semantic_checks_applied"] == []
+    assert result.provenance["metric_sufficiency_owner"] == "judge"
     assert not hasattr(gate, "model")
     assert "verdict" not in result.to_dict()
     assert "score" not in result.to_dict()
@@ -1290,34 +1319,16 @@ def test_deterministic_evidence_gate_has_no_model_or_metric_verdict(tmp_path):
         )
 
 
-def test_evidence_gate_path_only_compatibility_requires_explicit_opt_in(
-    tmp_path,
-):
-    evidence = tmp_path / "view.png"
-    evidence.write_bytes(b"not-empty")
-    request = EvidenceGateRequest(
-        task="style_consistency",
-        metric="style_consistency",
-        target_ids=("a",),
-        scene={},
-        visual_evidence=(str(evidence),),
-    )
-
-    strict = DeterministicEvidenceGate().check(request)
-    compatible = DeterministicEvidenceGate(
-        allow_path_only_compatibility=True
-    ).check(request)
-
-    assert strict.ready is False
-    assert compatible.ready is True
-    assert compatible.provenance["technical_assessment"]["status"] == (
-        "compatibility_bypass"
-    )
+def test_evidence_gate_path_only_compatibility_cannot_be_enabled():
+    with pytest.raises(ValueError, match="cannot be bypassed"):
+        DeterministicEvidenceGate(
+            allow_path_only_compatibility=True
+        )
 
 
-def test_non_p0b_gate_requires_and_consumes_visibility_metadata(tmp_path):
+def test_evidence_gate_ignores_metric_visibility_metadata(tmp_path):
     evidence = tmp_path / "scale.png"
-    evidence.write_bytes(b"scale pixels")
+    _write_nonblank_png(evidence)
     base = {
         "path": str(evidence),
         "role": "metric_local",
@@ -1352,58 +1363,53 @@ def test_non_p0b_gate_requires_and_consumes_visibility_metadata(tmp_path):
         )
     )
 
-    assert missing.ready is False
-    assert "target_visibility_not_established" in missing.reason_codes
-    assert "projected_coverage_metadata_missing" in missing.reason_codes
+    assert missing.ready is True
     assert ready.ready is True
+    assert missing.reason_codes == ready.reason_codes
 
 
-def test_evidence_gate_requirement_overrides_are_finite_and_source_audited(
-    tmp_path,
-):
-    evidence = tmp_path / "style.png"
-    evidence.write_bytes(b"style pixels")
-    gate = DeterministicEvidenceGate(
-        metric_requirements={
-            "style_consistency": {
-                "require_view_redundancy_check": False,
-            }
-        }
-    )
+def test_evidence_gate_ignores_failed_visibility_analysis_status(tmp_path):
+    evidence = tmp_path / "view.png"
+    _write_nonblank_png(evidence)
 
-    result = gate.check(
+    result = DeterministicEvidenceGate().check(
         EvidenceGateRequest(
-            task="style_consistency",
-            metric="style_consistency",
-            target_ids=("scene",),
-            scene={"objects": [{"id": "chair"}]},
+            task="scale_consistency",
+            metric="scale_consistency",
+            target_ids=("chair",),
+            scene={},
             visual_evidence=(
                 {
                     "path": str(evidence),
-                    "role": "metric_global",
-                    "view_id": "global",
+                    "visibility": {
+                        "status": "failed",
+                        "reason": "segmentation unavailable",
+                    },
                 },
             ),
-            evidence_goal={
-                "technical_requirements": {
-                    "require_context": True,
-                }
-            },
         )
     )
 
-    sources = result.provenance["technical_assessment"][
-        "requirement_sources"
-    ]
     assert result.ready is True
-    assert sources["required_global_view_count"] == "metric_default"
-    assert sources["require_view_redundancy_check"] == "gate_injection"
-    assert sources["require_context"] == "request_override"
+    assert result.reason_codes == ("evidence_ready",)
 
 
-def test_evidence_gate_rejects_unknown_technical_requirement(tmp_path):
+def test_evidence_gate_rejects_metric_specific_readiness_configuration(
+    tmp_path,
+):
+    with pytest.raises(ValueError, match="metric sufficiency belongs to Judge"):
+        DeterministicEvidenceGate(
+            metric_requirements={
+                "style_consistency": {
+                    "require_view_redundancy_check": False,
+                }
+            }
+        )
+
+
+def test_evidence_goal_cannot_add_semantic_gate_checks(tmp_path):
     evidence = tmp_path / "style.png"
-    evidence.write_bytes(b"style pixels")
+    _write_nonblank_png(evidence)
     request = EvidenceGateRequest(
         task="style_consistency",
         metric="style_consistency",
@@ -1423,21 +1429,15 @@ def test_evidence_gate_rejects_unknown_technical_requirement(tmp_path):
         },
     )
 
-    with pytest.raises(ValueError, match="unknown fields"):
-        DeterministicEvidenceGate().check(request)
-    with pytest.raises(ValueError, match="unknown fields"):
-        DeterministicEvidenceGate(
-            metric_requirements={
-                "style_consistency": {
-                    "typo_require_visibility": True,
-                }
-            }
-        )
+    result = DeterministicEvidenceGate().check(request)
+
+    assert result.ready is True
+    assert result.provenance["semantic_checks_applied"] == []
 
 
-def test_controlled_canonical_gate_reads_public_target_object_ids(tmp_path):
+def test_controlled_metric_sufficiency_is_owned_by_judge(tmp_path):
     evidence = tmp_path / "scale.png"
-    evidence.write_bytes(b"scale pixels")
+    _write_nonblank_png(evidence)
 
     class _Judge:
         def __init__(self):
@@ -1477,20 +1477,17 @@ def test_controlled_canonical_gate_reads_public_target_object_ids(tmp_path):
         }
     )
 
-    assert result["evidence_status"] == "insufficient"
-    assert result["verdict"] == "ambiguous"
-    assert judge.calls == 0
+    assert result["evidence_status"] == "sufficient"
+    assert result["verdict"] == "valid"
+    assert judge.calls == 1
     gate_result = wrapper.audit_records[0]["audit"]["trace"][0]["result"]
-    assert "target_visibility_not_established" in gate_result["reason_codes"]
-    assert (
-        "projected_coverage_metadata_missing"
-        in gate_result["reason_codes"]
-    )
+    assert gate_result["ready"] is True
+    assert gate_result["provenance"]["metric_sufficiency_owner"] == "judge"
 
 
-def test_non_p0b_gate_consumes_renderer_manifest_metadata(tmp_path):
+def test_evidence_gate_validates_renderer_manifest_integrity(tmp_path):
     evidence = tmp_path / "scale.png"
-    evidence.write_bytes(b"scale pixels")
+    _write_nonblank_png(evidence)
     manifest = tmp_path / "manifest.json"
     manifest.write_text(
         json.dumps(
@@ -1541,7 +1538,7 @@ def test_evidence_gate_rejects_invalid_manifest_as_engineering_failure(
     reason_code,
 ):
     evidence = tmp_path / "scale.png"
-    evidence.write_bytes(b"scale pixels")
+    _write_nonblank_png(evidence)
     manifest = tmp_path / "manifest.json"
     manifest.write_text(manifest_contents, encoding="utf-8")
 
@@ -1602,11 +1599,11 @@ def test_evidence_gate_rejects_corrupt_render_as_engineering_failure(
     assert "corrupt_render_evidence" in result.reason_codes
 
 
-def test_pairing_gate_checks_joint_visibility_roles_and_redundancy(tmp_path):
+def test_pairing_semantic_metadata_does_not_change_gate_readiness(tmp_path):
     global_view = tmp_path / "global.png"
     local_view = tmp_path / "local.png"
-    global_view.write_bytes(b"global")
-    local_view.write_bytes(b"local")
+    _write_nonblank_png(global_view)
+    _write_nonblank_png(local_view)
     common = dict(
         task="object_pairing_consistency",
         metric="object_pairing_consistency",
@@ -1670,22 +1667,19 @@ def test_pairing_gate_checks_joint_visibility_roles_and_redundancy(tmp_path):
         )
     )
 
-    assert separated.ready is False
-    assert "joint_visibility_metadata_missing" in separated.reason_codes
-    assert (
-        "view_redundancy_metadata_missing"
-        in missing_redundancy.reason_codes
-    )
+    assert separated.ready is True
+    assert missing_redundancy.ready is True
     assert ready.ready is True
+    assert separated.reason_codes == ready.reason_codes
 
 
-def test_same_view_representations_do_not_satisfy_global_and_local_roles(
+def test_same_view_representations_are_integrity_checked_independently(
     tmp_path,
 ):
     rgb = tmp_path / "rgb.png"
     overlay = tmp_path / "overlay.png"
-    rgb.write_bytes(b"rgb")
-    overlay.write_bytes(b"overlay")
+    _write_nonblank_png(rgb)
+    _write_nonblank_png(overlay)
     visibility = {
         "target_pixel_fractions": {"chair": 0.03, "table": 0.04},
         "projected_coverage_sufficient": True,
@@ -1719,12 +1713,8 @@ def test_same_view_representations_do_not_satisfy_global_and_local_roles(
         )
     )
 
-    assert result.ready is False
-    assert (
-        "required_local_evidence_metadata_missing"
-        in result.reason_codes
-    )
-    assert "view_redundancy_metadata_missing" not in result.reason_codes
+    assert result.ready is True
+    assert result.provenance["decoded_image_count"] == 2
 
 
 def test_deterministic_evidence_gate_rejects_empty_render_file(tmp_path):
@@ -1746,13 +1736,69 @@ def test_deterministic_evidence_gate_rejects_empty_render_file(tmp_path):
     assert "empty_render_file" in result.reason_codes
 
 
-def test_evidence_gate_accepts_sufficient_metadata_subset_in_mixed_oob_packet(
+def test_deterministic_evidence_gate_rejects_blank_render(tmp_path):
+    evidence = tmp_path / "blank.png"
+    _write_blank_png(evidence)
+
+    result = DeterministicEvidenceGate().check(
+        EvidenceGateRequest(
+            task="style_consistency",
+            metric="style_consistency",
+            target_ids=("scene",),
+            scene={},
+            visual_evidence=(str(evidence),),
+        )
+    )
+
+    assert result.ready is False
+    assert result.camera_repairable is False
+    assert result.reason_codes == ("blank_render",)
+
+
+def test_deterministic_evidence_gate_rejects_uniform_gray_render(tmp_path):
+    evidence = tmp_path / "gray.png"
+    Image.new("RGB", (4, 4), (64, 64, 64)).save(evidence)
+
+    result = DeterministicEvidenceGate().check(
+        EvidenceGateRequest(
+            task="style_consistency",
+            metric="style_consistency",
+            target_ids=("scene",),
+            scene={},
+            visual_evidence=(str(evidence),),
+        )
+    )
+
+    assert result.ready is False
+    assert result.reason_codes == ("blank_render",)
+
+
+def test_deterministic_evidence_gate_rejects_undecodable_render(tmp_path):
+    evidence = tmp_path / "not-an-image.png"
+    evidence.write_bytes(b"not an image")
+
+    result = DeterministicEvidenceGate().check(
+        EvidenceGateRequest(
+            task="style_consistency",
+            metric="style_consistency",
+            target_ids=("scene",),
+            scene={},
+            visual_evidence=(str(evidence),),
+        )
+    )
+
+    assert result.ready is False
+    assert result.camera_repairable is False
+    assert result.reason_codes == ("undecodable_render",)
+
+
+def test_evidence_gate_accepts_mixed_packet_without_semantic_metadata_checks(
     tmp_path,
 ):
     global_view = tmp_path / "global.png"
     local_view = tmp_path / "local.png"
-    global_view.write_bytes(b"global pixels")
-    local_view.write_bytes(b"local pixels")
+    _write_nonblank_png(global_view)
+    _write_nonblank_png(local_view)
 
     result = DeterministicEvidenceGate().check(
         EvidenceGateRequest(
@@ -1779,8 +1825,8 @@ def test_evidence_gate_accepts_sufficient_metadata_subset_in_mixed_oob_packet(
     )
 
     assert result.ready is True
-    assert result.provenance["assessment_scope"] == "metadata_subset"
-    assert result.provenance["metadata_evidence_count"] == 1
+    assert result.provenance["decoded_image_count"] == 2
+    assert result.provenance["semantic_checks_applied"] == []
 
 
 @pytest.mark.parametrize(
@@ -1811,6 +1857,23 @@ def test_evidence_gate_accepts_sufficient_metadata_subset_in_mixed_oob_packet(
 def test_evidence_gate_result_rejects_inconsistent_readiness(payload):
     with pytest.raises(ValueError):
         EvidenceGateResult.from_value(payload)
+
+
+def test_evidence_gate_result_rejects_semantic_sufficiency_signal():
+    with pytest.raises(ValueError, match="non-integrity reason codes"):
+        EvidenceGateResult.from_value(
+            {
+                "ready": False,
+                "camera_repairable": False,
+                "reason_codes": ["target_not_visible"],
+                "deficiencies": [
+                    {
+                        "code": "target_not_visible",
+                        "repairability": "rerender",
+                    }
+                ],
+            }
+        )
 
 
 def test_judge_need_more_evidence_requires_structured_request():
@@ -2064,7 +2127,7 @@ def test_existing_judge_adapter_accepts_functional_insufficient_compatibility():
     assert result.evidence_request is not None
     assert result.evidence_request.target_ids == ("a", "b")
     assert result.evidence_request.missing_observations == (
-        "support_contact_region",
+        "contact_surface_visible",
     )
 
 
@@ -2210,7 +2273,7 @@ def test_existing_judge_adapter_replaces_stale_render_evidence_each_round():
 
 def test_existing_metric_method_runs_through_gate_and_judge_adapter(tmp_path):
     evidence = tmp_path / "style.png"
-    evidence.write_bytes(b"render")
+    _write_nonblank_png(evidence)
 
     class _LegacyMetricJudge:
         def __init__(self):
@@ -2318,7 +2381,7 @@ def test_controlled_public_metric_method_uses_gate_and_exact_legacy_result(
     tmp_path,
 ):
     evidence = tmp_path / "style.png"
-    evidence.write_bytes(b"style pixels")
+    _write_nonblank_png(evidence)
 
     class _ModelBackedJudge:
         vlm_control_enabled = True
@@ -2376,8 +2439,8 @@ def test_controlled_public_metric_need_more_runs_provider_gate_and_judge(
 ):
     initial = tmp_path / "initial.png"
     repair = tmp_path / "repair.png"
-    initial.write_bytes(b"initial pixels")
-    repair.write_bytes(b"new repair pixels")
+    _write_nonblank_png(initial)
+    _write_nonblank_png(repair)
 
     class _ModelBackedJudge:
         vlm_control_enabled = True
@@ -2393,7 +2456,7 @@ def test_controlled_public_metric_need_more_runs_provider_gate_and_judge(
                     "verdict": "ambiguous",
                     "confidence": 0.3,
                     "reason": "need the contact region",
-                    "missing_evidence": ["contact_region"],
+                        "missing_evidence": ["global_context_preserved"],
                     "defects": [],
                 }
             return {
@@ -2443,7 +2506,7 @@ def test_controlled_public_metric_need_more_runs_provider_gate_and_judge(
     assert stages == [
         "evidence_gate",
         "judge",
-        "camera_dsl",
+        "acquisition_planner",
         "camera_selector",
         "render",
         "evidence_gate",
@@ -2461,6 +2524,101 @@ def test_controlled_public_metric_need_more_runs_provider_gate_and_judge(
         render_event["provenance"]["selected_acquisition"]
         == selector_event["selected_view_ids"][0]
     )
+
+
+def test_controlled_group_repair_passes_scope_geometry_to_legacy_provider(
+    tmp_path,
+) -> None:
+    initial = tmp_path / "initial-group.png"
+    repair = tmp_path / "repair-group.png"
+    _write_nonblank_png(initial)
+    _write_nonblank_png(repair)
+
+    class _Judge:
+        vlm_control_enabled = True
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def adjudicate_scene_quality(self, request):
+            self.calls += 1
+            if self.calls == 1:
+                return {
+                    "evidence_status": "insufficient",
+                    "verdict": "ambiguous",
+                    "confidence": 0.2,
+                    "reason": "interaction side is hidden",
+                    "missing_evidence": [
+                        "interaction_side_visible"
+                    ],
+                    "defects": [],
+                }
+            return {
+                "evidence_status": "sufficient",
+                "verdict": "valid",
+                "confidence": 0.9,
+                "reason": "the workstation is usable",
+                "missing_evidence": [],
+                "defects": [],
+            }
+
+    provider_calls: list[dict] = []
+
+    def provider(request):
+        provider_calls.append(request)
+        return [str(repair)]
+
+    group_scope = {
+        "group_id": "work",
+        "member_ids": ["chair", "desk"],
+        "target_bounds": {
+            "min": [0.0, 0.0, 0.0],
+            "max": [2.0, 1.0, 1.0],
+        },
+        "focus_center": [1.0, 0.5, 0.5],
+        "extent": [2.0, 1.0, 1.0],
+    }
+    result = ControlledVLMJudge(
+        _Judge(),
+        control=resolve_vlm_evaluation_control(),
+        camera_provider=provider,
+    ).adjudicate_scene_quality(
+        {
+            "metric": "functional_consistency",
+            "camera_scene_context": {
+                "objects": [{"id": "chair"}, {"id": "desk"}]
+            },
+            "target_object_ids": ["chair", "desk"],
+            "group_scope": group_scope,
+            "member_ids": ["chair", "desk"],
+            "target_bounds": group_scope["target_bounds"],
+            "focus_center": group_scope["focus_center"],
+            "target_extent": group_scope["extent"],
+            "render_evidence": [str(initial)],
+            "judgment_scope": {
+                "included": [
+                    "group_real_world_usability",
+                    "interaction_side_accessibility",
+                    "opening_clearance",
+                    "orientation_for_use",
+                    "ensemble_operability",
+                ]
+            },
+        }
+    )
+
+    assert result["verdict"] == "valid"
+    assert len(provider_calls) == 1
+    assert provider_calls[0]["object_ids"] == ["chair", "desk"]
+    assert provider_calls[0]["evidence_scope"] == "group_local"
+    assert provider_calls[0]["group_scope"] == group_scope
+    assert provider_calls[0]["target_bounds"] == group_scope[
+        "target_bounds"
+    ]
+    assert provider_calls[0]["focus_center"] == group_scope[
+        "focus_center"
+    ]
+    assert provider_calls[0]["target_extent"] == group_scope["extent"]
 
 
 def test_controlled_binary_method_never_calls_judge_when_gate_blocks():
@@ -2497,9 +2655,7 @@ def test_controlled_binary_method_never_calls_judge_when_gate_blocks():
         )
 
     assert legacy.calls == 0
-    assert wrapper.audit_records[0]["stop_reason"] == (
-        "evidence_not_camera_repairable"
-    )
+    assert wrapper.audit_records[0]["stop_reason"] == "evidence_missing"
 
 
 def test_builder_controls_legacy_backend_without_model_marker():
@@ -2567,16 +2723,14 @@ def test_builder_gates_generic_legacy_backend_without_model_marker():
     assert result["applicable"] is False
     assert result["score"] is None
     assert legacy.calls == 0
-    assert wrapper.audit_records[0]["stop_reason"] == (
-        "evidence_not_camera_repairable"
-    )
+    assert wrapper.audit_records[0]["stop_reason"] == "evidence_missing"
 
 
 def test_generic_wrapper_preserves_legacy_response_without_confidence(
     tmp_path,
 ):
     evidence = tmp_path / "generic.png"
-    evidence.write_bytes(b"generic pixels")
+    _write_nonblank_png(evidence)
 
     class _LegacyBackend:
         def __init__(self):
@@ -2647,13 +2801,13 @@ def test_builder_allows_only_explicit_strict_opt_out():
     assert backend.calls == 1
 
 
-def test_controlled_oob_mixed_packet_preserves_local_metadata_and_blocks_judge(
+def test_controlled_oob_metric_sufficiency_is_owned_by_judge(
     tmp_path,
 ):
     global_view = tmp_path / "global.png"
     local_view = tmp_path / "local.png"
-    global_view.write_bytes(b"global pixels")
-    local_view.write_bytes(b"local pixels")
+    _write_nonblank_png(global_view)
+    _write_nonblank_png(local_view)
 
     class _ModelBackedJudge:
         vlm_control_enabled = True
@@ -2676,9 +2830,8 @@ def test_controlled_oob_mixed_packet_preserves_local_metadata_and_blocks_judge(
         control=resolve_vlm_evaluation_control(),
     )
 
-    with pytest.raises(EvidenceControlUnresolvedError):
-        wrapper.adjudicate_p0b(
-            {
+    result = wrapper.adjudicate_p0b(
+        {
                 "category": "p0b_structural_adjudication",
                 "metric": "oob",
                 "event": {
@@ -2706,25 +2859,22 @@ def test_controlled_oob_mixed_packet_preserves_local_metadata_and_blocks_judge(
                     }
                 ],
                 "detector_evidence": {},
-            }
-        )
+        }
+    )
 
-    assert legacy.calls == 0
+    assert result["verdict"] == "valid"
+    assert legacy.calls == 1
     gate_event = wrapper.audit_records[0]["audit"]["trace"][0]
     assert gate_event["stage"] == "evidence_gate"
     assert gate_event["images_used"] == [
         str(global_view),
         "local-oob",
     ]
-    assert gate_event["result"]["ready"] is False
-    assert "target_not_visible" in gate_event["result"]["reason_codes"]
+    assert gate_event["result"]["ready"] is True
+    assert gate_event["result"]["reason_codes"] == ["evidence_ready"]
     provenance = gate_event["result"]["provenance"]
-    assert provenance["assessment_scope"] == "metadata_subset"
-    assert provenance["metadata_evidence_count"] == 1
-    assert (
-        "metric_specific_visibility_and_packet_sufficiency"
-        in provenance["checks_applied"]
-    )
+    assert provenance["scope"] == "input_integrity_only"
+    assert provenance["semantic_checks_applied"] == []
 
 
 def test_controlled_provider_honors_explicit_vlm_backend_and_actual_usage(
@@ -2732,8 +2882,8 @@ def test_controlled_provider_honors_explicit_vlm_backend_and_actual_usage(
 ):
     initial = tmp_path / "initial.png"
     repair = tmp_path / "repair.png"
-    initial.write_bytes(b"initial")
-    repair.write_bytes(b"repair")
+    _write_nonblank_png(initial)
+    _write_nonblank_png(repair)
 
     class _Selector:
         def __init__(self):
@@ -2793,7 +2943,7 @@ def test_controlled_provider_honors_explicit_vlm_backend_and_actual_usage(
                     "verdict": "ambiguous",
                     "confidence": 0.2,
                     "reason": "need another view",
-                    "missing_evidence": ["local_view"],
+                    "missing_evidence": ["global_context_preserved"],
                     "defects": [],
                 }
             return {
@@ -2840,18 +2990,20 @@ def test_controlled_provider_honors_explicit_vlm_backend_and_actual_usage(
     assert audit["selector_backend"] == "vlm"
     assert audit["selector_calls_used"] == 1
     assert audit["camera_actions_used"] == 1
-    assert (
-        audit["trace"][2]["result"]["provenance"][
-            "max_internal_camera_actions"
-        ]
-        == 2
+    selector_event = next(
+        item for item in audit["trace"]
+        if item["stage"] == "camera_selector"
     )
-    assert (
-        audit["trace"][3]["result"]["provenance"][
-            "actual_camera_actions"
-        ]
-        == 1
+    render_event = next(
+        item for item in audit["trace"]
+        if item["stage"] == "render"
     )
+    assert selector_event["result"]["provenance"][
+        "max_internal_camera_actions"
+    ] == 2
+    assert render_event["result"]["provenance"][
+        "actual_camera_actions"
+    ] == 1
 
 
 @pytest.mark.parametrize("failure_mode", ["raise", "empty"])
@@ -2860,7 +3012,7 @@ def test_controlled_provider_failure_charges_observed_usage(
     failure_mode,
 ):
     initial = tmp_path / "initial.png"
-    initial.write_bytes(b"initial")
+    _write_nonblank_png(initial)
 
     class _Provider:
         policy_config = {
@@ -2899,7 +3051,7 @@ def test_controlled_provider_failure_charges_observed_usage(
                 "verdict": "ambiguous",
                 "confidence": 0.2,
                 "reason": "need another view",
-                "missing_evidence": ["local_view"],
+                "missing_evidence": ["global_context_preserved"],
                 "defects": [],
             }
 
@@ -2926,7 +3078,9 @@ def test_controlled_provider_failure_charges_observed_usage(
     audit = wrapper.audit_records[0]["audit"]
     assert audit["selector_calls_used"] == 1
     assert audit["camera_actions_used"] == 1
-    render_event = audit["trace"][3]
+    render_event = next(
+        item for item in audit["trace"] if item["stage"] == "render"
+    )
     assert render_event["status"] == "failed"
     assert render_event["observed_internal_selector_calls"] == 1
     assert render_event["observed_camera_actions"] == 1
@@ -2941,7 +3095,7 @@ def test_controlled_provider_rejects_unbound_explicit_vlm_backend(
     tmp_path,
 ):
     evidence = tmp_path / "initial.png"
-    evidence.write_bytes(b"initial")
+    _write_nonblank_png(evidence)
 
     class _Selector:
         def select_camera_views(self, request):
@@ -2982,7 +3136,7 @@ def test_controlled_initial_provider_usage_is_charged_before_binary_judge(
     tmp_path,
 ):
     evidence = tmp_path / "initial.png"
-    evidence.write_bytes(b"initial")
+    _write_nonblank_png(evidence)
 
     class _Provider:
         policy_config = {
@@ -3065,7 +3219,7 @@ def test_controlled_composite_provider_cannot_return_two_independent_views(
         (repair_a, b"repair-a"),
         (repair_b, b"repair-b"),
     ):
-        path.write_bytes(content)
+        _write_nonblank_png(path)
 
     class _Judge:
         vlm_control_enabled = True
@@ -3080,7 +3234,7 @@ def test_controlled_composite_provider_cannot_return_two_independent_views(
                 "verdict": "ambiguous",
                 "confidence": 0.2,
                 "reason": "need another view",
-                "missing_evidence": ["local_view"],
+                "missing_evidence": ["global_context_preserved"],
                 "defects": [],
             }
 
@@ -3127,6 +3281,7 @@ def test_controlled_composite_provider_cannot_return_two_independent_views(
     ] == [
         "evidence_gate",
         "judge",
+        "acquisition_planner",
         "camera_selector",
         "render",
         "evidence_gate",
@@ -3152,8 +3307,8 @@ def test_binary_public_wrapper_repairs_internal_need_more_evidence(
 ):
     initial = tmp_path / "initial.png"
     repair = tmp_path / "repair.png"
-    initial.write_bytes(b"initial")
-    repair.write_bytes(b"repair")
+    _write_nonblank_png(initial)
+    _write_nonblank_png(repair)
 
     class _Judge:
         def __init__(self):
@@ -3250,6 +3405,7 @@ def test_binary_public_wrapper_repairs_internal_need_more_evidence(
     ] == [
         "evidence_gate",
         "judge",
+        "acquisition_planner",
         "camera_selector",
         "render",
         "evidence_gate",
@@ -3258,16 +3414,37 @@ def test_binary_public_wrapper_repairs_internal_need_more_evidence(
     audit = wrapper.audit_records[0]["audit"]
     assert audit["selector_calls_used"] == 1
     assert audit["rounds_used"] == 1
-    assert audit["trace"][2]["result"]["evidence_round"] == 1
-    assert audit["trace"][3]["result"]["provenance"][
+    assert audit["trace"][3]["result"]["evidence_round"] == 1
+    assert audit["trace"][4]["result"]["provenance"][
         "scene_access"
     ] == "read_only"
 
 
-def test_relation_camera_selector_receives_all_plural_relation_targets():
+def test_relation_camera_selector_receives_all_plural_relation_targets(
+    tmp_path,
+):
+    evidence = tmp_path / "relation.png"
+    _write_nonblank_png(evidence)
+
     class _Judge:
         def _adjudicate_relation_control(self, request):
-            raise AssertionError(request)
+            return {
+                "status": "need_more_evidence",
+                "confidence": 0.1,
+                "reason": "need a shared relation view",
+                "defects": [],
+                "evidence_request": {
+                    "target_ids": [
+                        "left",
+                        "right",
+                        "north",
+                        "south",
+                        "middle",
+                    ],
+                    "missing_observations": ["joint_visibility"],
+                    "view_goal": "show all relation targets together",
+                },
+            }
 
     class _Selector:
         def __init__(self):
@@ -3312,7 +3489,7 @@ def test_relation_camera_selector_receives_all_plural_relation_targets():
                         {"id": "middle"},
                     ]
                 },
-                "render_evidence": [],
+                "render_evidence": [str(evidence)],
                 "candidate_views": [
                     {"id": "around-view", "pose": {"id": "around-view"}}
                 ],
@@ -3328,7 +3505,7 @@ def test_relation_camera_selector_receives_all_plural_relation_targets():
     )
     assert wrapper.audit_records[0]["audit"]["trace"][1][
         "stage"
-    ] == "camera_selector"
+    ] == "judge"
 
 
 @pytest.mark.parametrize("backend", ["deterministic", "vlm", "hybrid"])
@@ -3338,8 +3515,8 @@ def test_independent_selector_renderer_path_runs_full_control_loop(
 ):
     initial = tmp_path / "initial.png"
     repair = tmp_path / f"{backend}-repair.png"
-    initial.write_bytes(b"initial")
-    repair.write_bytes(backend.encode("utf-8"))
+    _write_nonblank_png(initial)
+    _write_nonblank_png(repair)
     selector_calls = []
     renderer_calls = []
 
@@ -3388,6 +3565,15 @@ def test_independent_selector_renderer_path_runs_full_control_loop(
 
         def adjudicate_scene_quality(self, request):
             self.requests.append(request)
+            if len(self.requests) == 1:
+                return {
+                    "evidence_status": "insufficient",
+                    "verdict": "ambiguous",
+                    "confidence": 0.2,
+                    "reason": "need a target-focused scale view",
+                    "missing_evidence": ["target_visible"],
+                    "defects": [],
+                }
             return {
                 "evidence_status": "sufficient",
                 "verdict": "valid",
@@ -3430,13 +3616,15 @@ def test_independent_selector_renderer_path_runs_full_control_loop(
     )
 
     assert result["verdict"] == "valid"
-    assert len(judge.requests) == 1
+    assert len(judge.requests) == 2
     assert len(renderer_calls) == 1
     assert [
         event["stage"]
         for event in wrapper.audit_records[0]["audit"]["trace"]
     ] == [
         "evidence_gate",
+        "judge",
+        "acquisition_planner",
         "camera_selector",
         "render",
         "evidence_gate",
@@ -3449,7 +3637,7 @@ def test_independent_selector_renderer_path_runs_full_control_loop(
     assert audit["selector_calls_used"] == 1
     assert audit["rounds_used"] == 1
     assert audit["total_images_acquired"] == 2
-    assert audit["trace"][2]["result"]["provenance"][
+    assert audit["trace"][4]["result"]["provenance"][
         "selected_view_ids"
     ] == ["repair-view"]
     if backend in {"vlm", "hybrid"}:
@@ -3460,7 +3648,7 @@ def test_binary_need_more_without_renderer_exits_unresolved_safely(
     tmp_path,
 ):
     evidence = tmp_path / "initial.png"
-    evidence.write_bytes(b"initial")
+    _write_nonblank_png(evidence)
 
     class _Judge:
         def _adjudicate_p0b_control(self, request):

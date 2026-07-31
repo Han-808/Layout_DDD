@@ -46,10 +46,9 @@ def _write_test_png(path: Path, *, private_text: str | None = None) -> None:
     if private_text is not None:
         metadata = PngImagePlugin.PngInfo()
         metadata.add_text("private_source", private_text)
-    Image.new("RGBA", (4, 3), (12, 34, 56, 128)).save(
-        path,
-        pnginfo=metadata,
-    )
+    image = Image.new("RGBA", (4, 3), (12, 34, 56, 128))
+    image.putpixel((0, 0), (80, 90, 100, 255))
+    image.save(path, pnginfo=metadata)
 
 
 def test_openai_compatible_vlm_judge_sends_images_and_structured_prior(tmp_path: Path) -> None:
@@ -258,6 +257,54 @@ def test_canonical_scene_quality_adapter_preserves_style_contract(
     )
 
 
+def test_canonical_scene_quality_adapter_supports_functional_consistency(
+    tmp_path: Path,
+) -> None:
+    image_path = tmp_path / "functional_group.png"
+    _write_test_png(image_path)
+    model = FakeMultimodalModel(
+        {
+            "evidence_status": "sufficient",
+            "verdict": "valid",
+            "confidence": 0.9,
+            "reason": "The workstation is visibly usable.",
+            "missing_evidence": [],
+            "defects": [],
+        }
+    )
+
+    result = OpenAICompatibleVLMJudge(
+        model
+    ).adjudicate_scene_quality(
+        {
+            "metric": "functional_consistency",
+            "judgment_scope": {
+                "included": [
+                    "group_real_world_usability",
+                    "interaction_side_accessibility",
+                    "opening_clearance",
+                    "orientation_for_use",
+                    "ensemble_operability",
+                ]
+            },
+            "target_object_ids": ["chair", "desk"],
+            "render_evidence": [str(image_path)],
+        }
+    )
+
+    assert result["verdict"] == "valid"
+    context = json.loads(
+        model.calls[0]["messages"][1]["content"][0][
+            "text"
+        ].split("\n", 1)[1]
+    )
+    assert context["metric"] == "functional_consistency"
+    assert "real-world sense" in context["rubric"]
+    assert model.calls[0]["kwargs"]["call_type"] == (
+        "vlm_judge.canonical.functional_consistency"
+    )
+
+
 @pytest.mark.parametrize(
     "response",
     [
@@ -321,7 +368,7 @@ def test_canonical_scene_quality_adapter_rejects_malformed_contract(
         )
 
 
-def test_functional_semantic_preserves_insufficient_evidence_compatibility(
+def test_functional_semantic_preserves_structured_insufficient_compatibility(
     tmp_path: Path,
 ) -> None:
     image_path = tmp_path / "functional.png"
@@ -332,8 +379,16 @@ def test_functional_semantic_preserves_insufficient_evidence_compatibility(
             "verdict": "ambiguous",
             "confidence": 0.2,
             "reason": "The requested work area is occluded.",
-            "missing_evidence": ["claim_scoped_local_view"],
+            "missing_evidence": [],
             "defects": [],
+            "evidence_request": {
+                "target_ids": ["scene"],
+                "missing_observations": [
+                    "group_context_visible"
+                ],
+                "view_goal": "show the requested work area",
+                "metadata": {},
+            },
         }
     )
 
@@ -361,10 +416,43 @@ def test_functional_semantic_preserves_insufficient_evidence_compatibility(
         "functional_semantic_insufficient_evidence_compat_v1"
     )
     assert result["router_state"] == "insufficient_evidence"
-    assert result["missing_evidence"] == ["claim_scoped_local_view"]
+    assert result["evidence_request"]["missing_observations"] == [
+        "group_context_visible"
+    ]
     assert result["vlm_role"] == "judge"
     assert result["decision_contract"] == "canonical_metric_v1"
     assert result["judge_method"] == "adjudicate_functional_semantic"
+    assert "allowed_missing_observations" in context
+    assert "allowed_evidence_request_target_ids" in context
+
+
+def test_canonical_judge_rejects_free_form_missing_evidence(
+    tmp_path: Path,
+) -> None:
+    image_path = tmp_path / "functional-free-form.png"
+    _write_test_png(image_path)
+    judge = OpenAICompatibleVLMJudge(
+        FakeMultimodalModel(
+            {
+                "evidence_status": "insufficient",
+                "verdict": "ambiguous",
+                "confidence": 0.2,
+                "reason": "The requested work area is occluded.",
+                "missing_evidence": [
+                    "please show a better angle"
+                ],
+                "defects": [],
+            }
+        )
+    )
+
+    with pytest.raises(ValueError, match="exact allowed Camera DSL"):
+        judge.adjudicate_functional_semantic(
+            {
+                "metric": "functional_semantic_fidelity",
+                "render_evidence": [str(image_path)],
+            }
+        )
 
 
 def test_vlm_category_supports_not_applicable_response(tmp_path: Path) -> None:
@@ -747,8 +835,12 @@ def test_query_cov_camera_selector_chooses_views_without_metric_verdict(tmp_path
     second = tmp_path / "candidate_b.png"
     private_metadata = PngImagePlugin.PngInfo()
     private_metadata.add_text("private_source", "must-not-leave-process")
-    Image.new("RGBA", (3, 2), (255, 0, 0, 64)).save(first, pnginfo=private_metadata)
-    Image.new("RGBA", (3, 2), (0, 0, 255, 128)).save(second)
+    first_image = Image.new("RGBA", (3, 2), (255, 0, 0, 64))
+    first_image.putpixel((0, 0), (0, 255, 0, 255))
+    first_image.save(first, pnginfo=private_metadata)
+    second_image = Image.new("RGBA", (3, 2), (0, 0, 255, 128))
+    second_image.putpixel((0, 0), (255, 255, 0, 255))
+    second_image.save(second)
     candidates = [
         {
             "id": "generator_first_private_id",
@@ -876,7 +968,9 @@ def test_active_camera_selector_receives_only_sanitized_deficiency(
     tmp_path: Path,
 ) -> None:
     image = tmp_path / "candidate.png"
-    Image.new("RGB", (3, 2), (128, 128, 128)).save(image)
+    rendered = Image.new("RGB", (3, 2), (128, 128, 128))
+    rendered.putpixel((0, 0), (32, 64, 96))
+    rendered.save(image)
     model = FakeMultimodalModel(
         {
             "selected_view_ids": ["candidate_00"],
@@ -933,7 +1027,9 @@ def test_query_cov_camera_selector_excludes_blank_candidate_previews(tmp_path: P
     blank = tmp_path / "blank.png"
     usable = tmp_path / "usable.png"
     blank.write_bytes(b"blank")
-    Image.new("RGB", (2, 2), (12, 34, 56)).save(usable)
+    rendered = Image.new("RGB", (2, 2), (12, 34, 56))
+    rendered.putpixel((0, 0), (78, 90, 12))
+    rendered.save(usable)
     model = FakeMultimodalModel(
         {
             "selected_view_ids": ["candidate_00"],

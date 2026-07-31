@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+from copy import deepcopy
 import json
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+from PIL import Image
 
 from benchmark.adapters import get_adapter
+from benchmark.visual_judge.interfaces.camera import CameraSelectionResult
 from benchmark.scene_io.validate import (
     ArtifactValidationError,
     validate_asset_selection,
@@ -20,6 +23,7 @@ from benchmark.utils.io import load_yaml, read_json, write_json
 from evaluate import run_evaluate
 from generate import run_generate, run_generate_from_natural_language
 from scripts.run_scene_harness import run_scene_harness
+import scripts.run_scene_harness as scene_harness_module
 from benchmark.nl_scene.generation_input import (
     build_direct_natural_language_generation_input,
     build_generation_input,
@@ -613,6 +617,286 @@ def test_scene_harness_full_run_with_external_generated_scene(tmp_path: Path) ->
     assert (out_dir / "generated_scene.json").exists()
     assert (out_dir / "evaluation_report.json").exists()
     assert read_json(out_dir / "evaluation_report.json")["request_id"] == "full"
+
+
+def test_scene_harness_executes_group_l3_deterministic_to_vlm_cascade(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    request_id = "harness_l3_camera"
+    generated_path = write_json(
+        tmp_path / "generated_l3.json",
+        _generated_scene(request_id),
+    )
+
+    class _Renderer:
+        def __init__(self, **kwargs):
+            self.config = kwargs
+            self.calls: list[dict] = []
+
+        @staticmethod
+        def _image(path: Path, color=(70, 100, 130)) -> str:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            image = Image.new("RGB", (32, 32), color)
+            image.putpixel((0, 0), (180, 50, 30))
+            image.save(path)
+            return str(path)
+
+        def render_scene(self, *, scene_path, out_dir, asset_root=None):
+            del scene_path, asset_root
+            destination = Path(out_dir)
+            destination.mkdir(parents=True, exist_ok=True)
+            blend = destination / "scene.blend"
+            blend.write_bytes(b"blend")
+            perspective = self._image(
+                destination / "global_perspective.png"
+            )
+            return {
+                "blend_file": str(blend),
+                "views": [
+                    {
+                        "name": "global_perspective",
+                        "path": perspective,
+                    }
+                ],
+                "collision_geometry": None,
+            }
+
+        def render_camera_views(
+            self,
+            *,
+            blend_file,
+            out_dir,
+            camera_views,
+            preview=False,
+        ):
+            del blend_file
+            self.calls.append(
+                {
+                    "kind": "rgb",
+                    "preview": preview,
+                    "views": deepcopy(camera_views),
+                }
+            )
+            views = []
+            for index, pose in enumerate(camera_views):
+                path = self._image(
+                    Path(out_dir) / f"rgb_{index:02d}.png",
+                    (60, 120, 160),
+                )
+                views.append(
+                    {
+                        "id": pose["id"],
+                        "path": path,
+                        "pose": deepcopy(pose),
+                    }
+                )
+            return {"views": views, "render_gpu_time_seconds": 0.01}
+
+        def render_focus_overlay_views(
+            self,
+            *,
+            blend_file,
+            out_dir,
+            camera_views,
+            overlay_spec,
+            preview=False,
+        ):
+            del blend_file, overlay_spec
+            self.calls.append(
+                {
+                    "kind": "focus",
+                    "preview": preview,
+                    "views": deepcopy(camera_views),
+                }
+            )
+            views = []
+            for index, pose in enumerate(camera_views):
+                path = self._image(
+                    Path(out_dir) / f"focus_{index:02d}.png",
+                    (150, 70, 70),
+                )
+                views.append(
+                    {
+                        "id": pose["id"],
+                        "path": path,
+                        "pose": deepcopy(pose),
+                    }
+                )
+            return {"views": views}
+
+    class _Judge:
+        vlm_control_enabled = True
+
+        def __init__(self):
+            self.scene_quality_requests: list[dict] = []
+
+        def adjudicate_scene_quality(self, request):
+            self.scene_quality_requests.append(deepcopy(request))
+            if len(self.scene_quality_requests) == 1:
+                return {
+                    "evidence_status": "insufficient",
+                    "verdict": "ambiguous",
+                    "confidence": 0.2,
+                    "reason": "Need the complete local context.",
+                    "missing_evidence": [],
+                    "defects": [],
+                    "evidence_request": {
+                        "target_ids": ["obj_000"],
+                        "missing_observations": [
+                            "group_context_visible"
+                        ],
+                        "view_goal": "show the object in its local context",
+                        "metadata": {},
+                    },
+                }
+            return {
+                "evidence_status": "sufficient",
+                "verdict": "valid",
+                "confidence": 0.9,
+                "reason": "The repaired view resolves scale.",
+                "missing_evidence": [],
+                "defects": [],
+            }
+
+        def adjudicate_p0b(self, request):
+            del request
+            return {
+                "verdict": "valid",
+                "confidence": 1.0,
+                "reason": "valid",
+            }
+
+        def adjudicate_relation(self, request):
+            del request
+            return {
+                "verdict": "valid",
+                "confidence": 1.0,
+                "reason": "valid",
+            }
+
+    class _VLMSelector:
+        backend = "harness_vlm_selector"
+        validated_internal_candidate_bank = True
+
+        def __init__(self):
+            self.requests = []
+
+        def select(self, request):
+            self.requests.append(request)
+            pose = {
+                "id": "harness_vlm_view",
+                "location": [2.0, -2.0, 2.0],
+                "target": [2.0, 1.0, 0.5],
+                "lens_mm": 45.0,
+                "sensor_width_mm": 36.0,
+                "geometry_feasible": True,
+                "geometry_feasibility_verified": True,
+                "target_visibility_estimate": True,
+                "joint_visibility_estimate": True,
+                "projected_coverage_estimate": 0.4,
+                "target_object_ids": ["obj_000"],
+            }
+            return CameraSelectionResult(
+                outcome="selected",
+                selected_view_ids=("harness_vlm_view",),
+                selected_views=(pose,),
+                reason_codes=("vlm_repair_selected",),
+                reason="selected one group-local repair view",
+                backend=self.backend,
+                evidence_round=request.evidence_round,
+            )
+
+    monkeypatch.setattr(
+        scene_harness_module,
+        "BlenderRenderer",
+        _Renderer,
+    )
+    judge = _Judge()
+    selector = _VLMSelector()
+    out_dir = tmp_path / request_id
+    manifest = run_scene_harness(
+        instruction="Create a living room.",
+        scene_type="living room",
+        adapter="object_state",
+        method_output=generated_path,
+        out_dir=out_dir,
+        evaluator_vlm_judge=judge,
+        blender_bin="/usr/bin/false",
+        camera_pose_mode="auto",
+        camera_active_selector=selector,
+        object_grouping_report={
+            "status": "complete",
+            "grouping_backend": "vlm",
+            "grouping_policy_id": "vlm_visual_evidence_scope_v2",
+            "object_groups": [
+                {
+                    "group_id": "group_001",
+                    "object_ids": ["obj_000"],
+                }
+            ],
+        },
+        scene_quality_config={
+            "metrics": {
+                "scale_consistency": {"enabled": True},
+                "object_pairing_consistency": {"enabled": False},
+                "style_consistency": {"enabled": False},
+                "functional_consistency": {"enabled": False},
+            }
+        },
+        asset_policy={
+            "mode": "generated_or_open_assets",
+            "identity_owner": "generator",
+            "category_selection_owner": "generator",
+            "scale_owner": "generator",
+            "appearance_owner": "generator",
+            "arrangement_owner": "generator",
+        },
+    )
+
+    report = read_json(manifest["artifacts"]["evaluation_report"])
+    metric = report["reports"]["scene_quality"]["metrics"][
+        "scale_consistency"
+    ]
+    assert metric["judgement"]["verdict"] == "valid"
+    assert len(judge.scene_quality_requests) == 2
+    assert len(selector.requests) == 1
+    grouping_protocol = report["evaluation_config"]["object_grouping"][
+        "input_protocol"
+    ]
+    assert grouping_protocol == {
+        "input_mode": "caller_supplied_unknown",
+        "provenance_status": "not_provided",
+    }
+    attempt = read_json(manifest["artifacts"]["self_reflexive_history"])[
+        "attempts"
+    ][0]
+    assert attempt["l3_camera_control"] == {
+        "mode": "judge_driven_independent_components",
+        "deterministic_selector": "DeterministicLocalCameraSelector",
+        "vlm_selector_configured": True,
+        "renderer": "CameraViewEvidenceRenderer",
+        "scene_access": "read_only",
+    }
+    controlled = report["evaluation_config"]["vlm_evaluation_control"][
+        "integration"
+    ]["runtime"]["controlled_calls"]
+    trace = next(
+        item
+        for item in controlled
+        if item["metric"] == "scale_consistency"
+    )["audit"]["trace"]
+    assert [item["stage"] for item in trace] == [
+        "evidence_gate",
+        "judge",
+        "acquisition_planner",
+        "camera_selector",
+        "camera_escalation",
+        "camera_selector",
+        "render",
+        "evidence_gate",
+        "judge",
+    ]
 
 
 def test_scene_harness_iteration_limit_writes_reflexive_generation_input(tmp_path: Path) -> None:

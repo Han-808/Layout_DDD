@@ -33,7 +33,9 @@ from benchmark.visual_judge.render_views import (
 def _evidence_file(directory: Path, name: str) -> str:
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / name
-    Image.new("RGB", (4, 4), (64, 64, 64)).save(path)
+    image = Image.new("RGB", (4, 4), (64, 64, 64))
+    image.putpixel((0, 0), (128, 64, 32))
+    image.save(path)
     return path.as_posix()
 
 
@@ -813,7 +815,9 @@ def test_active_selector_uses_request_local_proposal_aliases_only(
     tmp_path: Path,
 ) -> None:
     image = tmp_path / "candidate.png"
-    Image.new("RGB", (4, 4), (128, 128, 128)).save(image)
+    rendered = Image.new("RGB", (4, 4), (128, 128, 128))
+    rendered.putpixel((0, 0), (64, 96, 160))
+    rendered.save(image)
     model = _JudgeModel()
     judge = OpenAICompatibleVLMJudge(model)
     model.chat_messages = lambda messages, **kwargs: (

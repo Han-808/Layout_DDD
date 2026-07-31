@@ -10,12 +10,12 @@ from typing import Any
 
 from benchmark.rendering.camera_pose import (
     CAMERA_ACTIONS,
-    CAMERA_CANDIDATE_POLICIES,
     DEFAULT_CAMERA_CANDIDATE_POLICY,
     DEFAULT_CAMERA_MODE_BY_METRIC,
     apply_camera_action,
     generate_camera_pose_candidates,
     generate_global_context_poses,
+    normalize_camera_candidate_policy,
     resolve_camera_pose_mode,
     select_bbox_track_views,
     validate_camera_pose_mode,
@@ -116,13 +116,10 @@ class CameraEvidenceProvider:
         self.max_views = int(max_views)
         self.max_steps = int(max_steps)
         self.candidate_count = int(candidate_count)
-        self.candidate_policy = str(candidate_policy).strip().lower()
+        self.candidate_policy = normalize_camera_candidate_policy(
+            candidate_policy
+        )
         self.active_repair = bool(active_repair)
-        if self.candidate_policy not in CAMERA_CANDIDATE_POLICIES:
-            raise ValueError(
-                "camera candidate policy must be one of "
-                f"{list(CAMERA_CANDIDATE_POLICIES)}"
-            )
         # Collision-only paired RGB + diagnostic-overlay evidence. Opt-in so OOB
         # and Support camera behavior is completely unchanged.
         self.collision_overlay = bool(collision_overlay)
@@ -242,7 +239,14 @@ class CameraEvidenceProvider:
         if not isinstance(request, dict):
             raise TypeError("camera evidence request must be a JSON object")
         metric = str(request.get("metric") or "event").strip().lower()
-        resolved_mode = resolve_camera_pose_mode(self.mode, metric, metric_modes=self.metric_modes)
+        resolved_mode = _request_camera_pose_mode(
+            request,
+            default_mode=resolve_camera_pose_mode(
+                self.mode,
+                metric,
+                metric_modes=self.metric_modes,
+            ),
+        )
         keyed_request = {
             **request,
             "_resolved_camera_pose_mode": resolved_mode,
@@ -2555,6 +2559,39 @@ def _selector_cache_identity(selector: Any | None) -> dict[str, Any] | None:
         "max_context_chars": getattr(selector, "max_context_chars", None),
         "response_format_json": getattr(selector, "response_format_json", None),
     }
+
+
+def _request_camera_pose_mode(
+    request: dict[str, Any],
+    *,
+    default_mode: str,
+) -> str:
+    """Resolve an explicit, validated per-request camera-mode override."""
+
+    policy = request.get("evidence_policy")
+    raw_override = (
+        policy.get("camera_pose_mode")
+        if isinstance(policy, dict)
+        else None
+    )
+    if raw_override is None:
+        return default_mode
+    override = validate_camera_pose_mode(str(raw_override))
+    if override is None or override == "auto":
+        raise ValueError(
+            "request evidence_policy.camera_pose_mode must name a concrete "
+            "camera mode"
+        )
+    scope = str(request.get("evidence_scope") or "").strip()
+    if (
+        scope in {"object_local", "group_local", "pair_local"}
+        and override == "global_only"
+    ):
+        raise ValueError(
+            "local evidence requests cannot override camera_pose_mode to "
+            "global_only"
+        )
+    return override
 
 
 def _slug(value: str) -> str:

@@ -8,7 +8,7 @@ defaults:
   inference: hyak_h200_qwen3vl32b
   evaluation: vlm_as_judge_v1
   render: bbox_perspective_default
-  grouping: deterministic_metadata_geometry
+  grouping: vlm_visual_evidence_scope_v2
   repair: compact_feedback
   viewer: threejs_default
 out: outputs/hssd_small_room_qwen3vl32b_h200

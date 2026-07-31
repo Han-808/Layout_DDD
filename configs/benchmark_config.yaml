@@ -124,6 +124,7 @@ vertical_consistency:
     - mirror
 
 grouping:
+  lifecycle: deprecated_legend_replay_only
   enabled: true
   proximity:
     min_gap_m: 0.25

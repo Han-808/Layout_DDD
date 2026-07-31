@@ -43,12 +43,19 @@ CANONICAL_METRIC_SYSTEM_PROMPT = """You judge one narrowly scoped canonical metr
 and supplied images. Do not judge neighboring metrics. Evidence insufficiency is not validity.
 Return exactly one JSON object:
 {"evidence_status":"sufficient","verdict":"valid","confidence":0.0,"reason":"...",
-"missing_evidence":[],"defects":[]}.
+"missing_evidence":[],"defects":[],"evidence_request":null}.
 evidence_status must be sufficient or insufficient. verdict must be valid, invalid, or ambiguous.
-If evidence is insufficient, verdict must be ambiguous and missing_evidence must name what is
-missing. Invalid requires one or more explicit significant defects in defects; otherwise return
-valid when evidence is sufficient. Each defect should contain scope, target_ids, relation, and
-reason when available. confidence must be between 0 and 1."""
+If evidence is insufficient, verdict must be ambiguous, defects must be empty, and
+evidence_request must be:
+{"target_ids":["object_id"],"missing_observations":["exact_token"],
+"view_goal":"concrete visual goal","metadata":{}}.
+Use only target IDs in allowed_evidence_request_target_ids and exact observation tokens in
+allowed_missing_observations from the user context. missing_evidence may repeat those exact tokens
+for legacy compatibility or remain empty when evidence_request is present. Do not place prose in
+missing_evidence or missing_observations. Do not define camera constraints, poses, repair plans,
+metric scope, or rubric in evidence_request. Invalid requires one or more explicit significant
+defects in defects; otherwise return valid when evidence is sufficient. Each defect should contain
+scope, target_ids, relation, and reason when available. confidence must be between 0 and 1."""
 
 P0B_SYSTEM_PROMPT = """You adjudicate one ambiguous geometry event in a 3D scene benchmark.
 Use the natural-language prompt and extracted relationships only to understand intended semantics.
@@ -82,7 +89,8 @@ goal. missing_observations must contain only exact Camera DSL tokens from the
 allowed_missing_observations supplied in the user context. The finite vocabulary is:
 target_visible, joint_visibility, contact_surface_visible, support_chain_visible,
 architecture_plane_visible, front_back_disambiguated, depth_baseline_available,
-group_context_visible, global_context_preserved, occluder_avoided.
+group_context_visible, interaction_side_visible, limited_local_context,
+global_context_preserved, occluder_avoided.
 Do not put prose in missing_observations. confidence must be between 0 and 1."""
 
 P0B_CONTROL_SYSTEM_PROMPT = (
@@ -170,6 +178,14 @@ CATEGORY_RUBRICS = {
         "Do not judge scale, pairing, layout, orientation, function, prompt fidelity, or physical "
         "plausibility. Invalid requires one or more explicit significant style inconsistencies; "
         "otherwise return valid when evidence is sufficient."
+    ),
+    "functional_consistency": (
+        "Judge whether each supplied local group is visibly usable in a "
+        "real-world sense. Check interaction-side access, opening clearance, "
+        "orientation for use, and ensemble operability. Do not judge prompt "
+        "fidelity, object-category pairing, style, scale, or unrelated exact "
+        "relations. Invalid requires an explicit significant visible "
+        "functional defect; otherwise return valid when evidence is sufficient."
     ),
 }
 
@@ -374,8 +390,15 @@ class OpenAICompatibleVLMJudge:
             "scale_consistency",
             "object_pairing_consistency",
             "style_consistency",
+            "functional_consistency",
         }:
             raise ValueError(f"unsupported canonical metric {metric!r}")
+        allowed_missing_observations = (
+            _allowed_canonical_camera_observations(metric)
+        )
+        allowed_evidence_request_target_ids = (
+            _canonical_evidence_request_target_ids(request)
+        )
         paths = [
             Path(str(value)).expanduser()
             for value in request.get("render_evidence", [])
@@ -393,8 +416,20 @@ class OpenAICompatibleVLMJudge:
                     "verdict": "ambiguous",
                     "confidence": 0.0,
                     "reason": "no rendered evidence was supplied",
-                    "missing_evidence": ["metric_scoped_render_evidence"],
+                    "missing_evidence": ["target_visible"],
                     "defects": [],
+                    "evidence_request": {
+                        "target_ids": list(
+                            allowed_evidence_request_target_ids[:1]
+                            or ("scene",)
+                        ),
+                        "missing_observations": ["target_visible"],
+                        "view_goal": (
+                            "show the requested metric scope in a "
+                            "decodable visual view"
+                        ),
+                        "metadata": {},
+                    },
                 },
                 role=VLMRole.JUDGE,
                 decision_contract=DecisionContract.CANONICAL_METRIC,
@@ -422,6 +457,12 @@ class OpenAICompatibleVLMJudge:
             "visual_style_spec": request.get("visual_style_spec"),
             "canonical_scene": request.get("scene_summary"),
             "deterministic_evidence": request.get("deterministic_evidence"),
+            "allowed_missing_observations": list(
+                allowed_missing_observations
+            ),
+            "allowed_evidence_request_target_ids": list(
+                allowed_evidence_request_target_ids
+            ),
             "evidence_phase": request.get("evidence_phase"),
             "decision_mode": request.get("decision_mode"),
             "phase_instruction": (
@@ -460,6 +501,8 @@ class OpenAICompatibleVLMJudge:
                 "object_groups",
                 "visual_style_spec",
                 "deterministic_evidence",
+                "allowed_missing_observations",
+                "allowed_evidence_request_target_ids",
                 "evidence_phase",
                 "decision_mode",
                 "phase_instruction",
@@ -496,6 +539,12 @@ class OpenAICompatibleVLMJudge:
         validate_canonical_metric_response(
             result,
             allowed_scopes=allowed_scopes,
+            allowed_missing_observations=(
+                allowed_missing_observations
+            ),
+            allowed_target_ids=(
+                allowed_evidence_request_target_ids
+            ),
         )
         return self._audit_result(
             result,
@@ -1378,6 +1427,49 @@ def _sanitize_selector_deficiency(value: Any) -> dict[str, Any]:
     ):
         result["evidence_utility"] = round(float(utility), 6)
     return result
+
+
+def _allowed_canonical_camera_observations(metric: Any) -> list[str]:
+    return _allowed_binary_camera_observations(metric)
+
+
+def _canonical_evidence_request_target_ids(
+    request: dict[str, Any],
+) -> tuple[str, ...]:
+    group_scope = request.get("group_scope")
+    if isinstance(group_scope, dict):
+        members = group_scope.get("member_ids")
+        if isinstance(members, list):
+            values = tuple(
+                dict.fromkeys(
+                    str(value)
+                    for value in members
+                    if isinstance(value, (str, int))
+                    and str(value).strip()
+                )
+            )
+            if values:
+                return values
+
+    values: list[str] = []
+    for key in ("target_object_ids", "object_ids"):
+        raw = request.get(key)
+        if isinstance(raw, list):
+            values.extend(
+                str(value)
+                for value in raw
+                if isinstance(value, (str, int))
+                and str(value).strip()
+            )
+    scene = request.get("scene_summary")
+    if isinstance(scene, dict):
+        for item in scene.get("objects") or []:
+            if not isinstance(item, dict):
+                continue
+            object_id = item.get("id") or item.get("object_id")
+            if object_id is not None and str(object_id).strip():
+                values.append(str(object_id))
+    return tuple(dict.fromkeys((*values, "scene")))
 
 
 def _allowed_binary_camera_observations(

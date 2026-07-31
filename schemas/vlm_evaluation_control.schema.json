@@ -45,7 +45,7 @@
       },
       "escalation": {
         "on_no_feasible_candidate": true,
-        "on_post_render_gate_insufficient": true,
+        "on_post_render_gate_insufficient": false,
         "on_selector_exception": false,
         "on_render_failure": false
       }
@@ -141,7 +141,7 @@
         },
         "escalation": {
           "on_no_feasible_candidate": true,
-          "on_post_render_gate_insufficient": true,
+          "on_post_render_gate_insufficient": false,
           "on_selector_exception": false,
           "on_render_failure": false
         }
@@ -336,7 +336,7 @@
           "additionalProperties": false,
           "default": {
             "on_no_feasible_candidate": true,
-            "on_post_render_gate_insufficient": true,
+            "on_post_render_gate_insufficient": false,
             "on_selector_exception": false,
             "on_render_failure": false
           },
@@ -346,8 +346,8 @@
               "default": true
             },
             "on_post_render_gate_insufficient": {
-              "type": "boolean",
-              "default": true
+              "const": false,
+              "default": false
             },
             "on_selector_exception": {
               "const": false,
@@ -371,7 +371,7 @@
       },
       "properties": {
         "enabled": {
-          "type": "boolean",
+          "const": true,
           "default": true
         },
         "backend": {
@@ -379,7 +379,7 @@
           "default": "deterministic"
         },
         "allow_path_only_compatibility": {
-          "type": "boolean",
+          "const": false,
           "default": false
         }
       }
@@ -436,7 +436,7 @@
       }
     },
     "require_evidence_gate_after_render": {
-      "type": "boolean",
+      "const": true,
       "default": true
     },
     "on_non_camera_repairable_evidence": {

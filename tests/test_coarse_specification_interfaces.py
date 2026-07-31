@@ -56,6 +56,19 @@ def _scene() -> dict:
     }
 
 
+def _grouping() -> dict:
+    return {
+        "grouping_backend": "vlm",
+        "grouping_policy_id": "vlm_visual_evidence_scope_v2",
+        "object_groups": [
+            {
+                "group_id": "work_group",
+                "object_ids": ["desk", "chair", "unrelated_lamp"],
+            }
+        ],
+    }
+
+
 def _contract(*claims: dict) -> dict:
     return {
         "contract_version": "specification_contract_v1",
@@ -150,7 +163,7 @@ def test_canonical_names_are_primary_and_deprecated_helper_is_isolated() -> None
     assert FUNCTIONAL_SEMANTIC_INTERFACE_NAMESPACE == "functional_semantic_fidelity"
     assert (
         FUNCTIONAL_SEMANTIC_INTERFACE_VERSION
-        == "functional_semantic_fidelity_runtime_v1"
+        == "functional_semantic_fidelity_runtime_v2"
     )
     assert FUNCTIONAL_SEMANTIC_METRICS == ("functional_semantic_fidelity",)
     assert DEFAULT_COARSE_SPECIFICATION_CONFIG is DEFAULT_FUNCTIONAL_SEMANTIC_CONFIG
@@ -242,14 +255,7 @@ def test_global_room_claim_uses_prompt_and_global_evidence_only() -> None:
 def test_prompt_explicit_local_functionality_is_claim_target_scoped() -> None:
     provider = RecordingProvider(["desk_chair_local.png"])
     judge = RecordingJudge([{"verdict": "valid", "confidence": 0.8}])
-    grouping = {
-        "groups": [
-            {
-                "group_id": "generic_group",
-                "object_ids": ["desk", "chair", "unrelated_lamp"],
-            }
-        ]
-    }
+    grouping = _grouping()
     report = evaluate_coarse_specification_interfaces(
         _scene(),
         config={"enabled": True},
@@ -269,12 +275,22 @@ def test_prompt_explicit_local_functionality_is_claim_target_scoped() -> None:
     )
     assert report["score"] == 1.0
     assert report["object_grouping_report_supplied"] is True
-    assert report["object_grouping_report_consumed"] is False
+    assert report["object_grouping_report_consumed"] is True
     assert len(provider.requests) == 1
     evidence_request = provider.requests[0]
     assert evidence_request["scene"]["scene_id"] == "s"
-    assert evidence_request["object_ids"] == ["desk", "chair"]
-    assert "unrelated_lamp" not in evidence_request["object_ids"]
+    assert evidence_request["object_ids"] == [
+        "desk",
+        "chair",
+        "unrelated_lamp",
+    ]
+    assert evidence_request["claim_target_ids"] == ["desk", "chair"]
+    assert evidence_request["group_scope"]["group_id"] == "work_group"
+    assert evidence_request["group_scope"]["member_ids"] == [
+        "desk",
+        "chair",
+        "unrelated_lamp",
+    ]
     assert evidence_request["trigger"] == "prompt_specified_local_functionality"
     assert evidence_request["generic_pairing_scan"] is False
     assert judge.requests[0]["phase"] == "prompt_scoped_local"
@@ -287,6 +303,123 @@ def test_prompt_explicit_local_functionality_is_claim_target_scoped() -> None:
         "global.png",
     ]
     assert judge.requests[0]["image_order"] == "local_first_then_global"
+
+
+def test_prompt_local_claim_runs_camera_and_judge_per_selected_group() -> None:
+    provider = RecordingProvider()
+    judge = RecordingJudge(
+        [
+            {"verdict": "valid", "confidence": 0.8},
+            {"verdict": "valid", "confidence": 0.9},
+        ]
+    )
+    grouping = {
+        "grouping_backend": "vlm",
+        "grouping_policy_id": "vlm_visual_evidence_scope_v2",
+        "object_groups": [
+            {
+                "group_id": "work",
+                "object_ids": ["desk", "chair"],
+            },
+            {
+                "group_id": "lighting",
+                "object_ids": ["unrelated_lamp"],
+            },
+        ],
+    }
+
+    report = evaluate_coarse_specification_interfaces(
+        _scene(),
+        config={"enabled": True},
+        prompt="The work area includes the lamp.",
+        specification_contract=_contract(
+            _claim(
+                "local",
+                "local_functionality",
+                target_ids=["desk", "unrelated_lamp"],
+            )
+        ),
+        render_evidence=["global.png"],
+        camera_evidence_provider=provider,
+        vlm_judge=judge,
+        object_grouping_report=grouping,
+    )
+
+    check = report["metrics"]["functional_semantic_fidelity"][
+        "checks"
+    ][0]
+    assert check["status"] == "checked"
+    assert check["score"] == 1.0
+    assert len(provider.requests) == len(judge.requests) == 2
+    assert [request["object_ids"] for request in provider.requests] == [
+        ["desk", "chair"],
+        ["unrelated_lamp"],
+    ]
+    assert [request["group_id"] for request in judge.requests] == [
+        "work",
+        "lighting",
+    ]
+    assert [request["target_ids"] for request in judge.requests] == [
+        ["desk"],
+        ["unrelated_lamp"],
+    ]
+    assert [request["member_ids"] for request in judge.requests] == [
+        ["desk", "chair"],
+        ["unrelated_lamp"],
+    ]
+    assert [
+        [item["id"] for item in request["scene_summary"]["objects"]]
+        for request in judge.requests
+    ] == [
+        ["desk", "chair"],
+        ["unrelated_lamp"],
+    ]
+
+
+def test_functional_group_evidence_can_omit_optional_global_context() -> None:
+    provider = RecordingProvider(["work_local.png"])
+    judge = RecordingJudge(
+        [{"verdict": "valid", "confidence": 0.9}]
+    )
+    report = evaluate_coarse_specification_interfaces(
+        _scene(),
+        config={
+            "enabled": True,
+            "metrics": {
+                "functional_semantic_fidelity": {
+                    "evidence_plan": {
+                        "local_policy": {
+                            "include_global_context": False,
+                        }
+                    }
+                }
+            },
+        },
+        prompt="Provide a usable desk and chair.",
+        specification_contract=_contract(
+            _claim(
+                "local",
+                "local_functionality",
+                target_ids=["desk", "chair"],
+            )
+        ),
+        render_evidence=["global.png"],
+        camera_evidence_provider=provider,
+        vlm_judge=judge,
+        object_grouping_report=_grouping(),
+    )
+
+    check = report["metrics"]["functional_semantic_fidelity"][
+        "checks"
+    ][0]
+    assert check["status"] == "checked"
+    assert provider.requests[0]["group_scope"][
+        "require_global_anchor"
+    ] is False
+    assert judge.requests[0]["render_evidence"] == [
+        "work_local.png"
+    ]
+    assert judge.requests[0]["relevant_global_visual_evidence"] == []
 
 
 def test_required_area_suspicious_global_screen_triggers_local_fallback() -> None:
@@ -320,6 +453,7 @@ def test_required_area_suspicious_global_screen_triggers_local_fallback() -> Non
         render_evidence=["global.png"],
         camera_evidence_provider=provider,
         vlm_judge=judge,
+        object_grouping_report=_grouping(),
     )
     check = report["metrics"]["functional_semantic_fidelity"]["checks"][0]
     assert check["status"] == "checked"
@@ -343,7 +477,12 @@ def test_required_area_not_suspicious_resolves_without_local_call() -> None:
         config={"enabled": True},
         prompt="Include a work area.",
         specification_contract=_contract(
-            _claim("area", "required_functional_areas", expected={"area": "work"})
+            _claim(
+                "area",
+                "required_functional_areas",
+                target_ids=["desk", "chair"],
+                expected={"area": "work"},
+            )
         ),
         render_evidence=["global.png"],
         camera_evidence_provider=provider,
@@ -364,10 +503,16 @@ def test_required_area_insufficient_without_provider_stays_unresolved() -> None:
         config={"enabled": True},
         prompt="Include a work area.",
         specification_contract=_contract(
-            _claim("area", "required_functional_areas", expected={"area": "work"})
+            _claim(
+                "area",
+                "required_functional_areas",
+                target_ids=["desk", "chair"],
+                expected={"area": "work"},
+            )
         ),
         render_evidence=["global.png"],
         vlm_judge=judge,
+        object_grouping_report=_grouping(),
     )
     metric = report["metrics"]["functional_semantic_fidelity"]
     assert metric["status"] == "incomplete"
@@ -414,8 +559,9 @@ def test_local_provider_failure_is_failed_not_valid_or_zero() -> None:
                 target_ids=["desk", "chair"],
             )
         ),
-        camera_evidence_provider=Boom(),
-        vlm_judge=judge,
+            camera_evidence_provider=Boom(),
+            vlm_judge=judge,
+            object_grouping_report=_grouping(),
     )
     metric = report["metrics"]["functional_semantic_fidelity"]
     assert metric["status"] == "incomplete"
@@ -446,6 +592,7 @@ def test_provider_reported_failure_is_failed_not_missing_evidence() -> None:
         ),
         camera_evidence_provider=reported_failure,
         vlm_judge=judge,
+        object_grouping_report=_grouping(),
     )
     check = report["metrics"]["functional_semantic_fidelity"]["checks"][0]
     assert check["status"] == "evidence_provider_failed"
@@ -531,7 +678,9 @@ def test_explicit_invalid_defect_can_score_zero() -> None:
 
 def test_actual_openai_adapter_receives_canonical_claim_context(tmp_path) -> None:
     image_path = tmp_path / "global.png"
-    Image.new("RGB", (8, 8), (120, 120, 120)).save(image_path)
+    image = Image.new("RGB", (8, 8), (120, 120, 120))
+    image.putpixel((0, 0), (30, 60, 90))
+    image.save(image_path)
     model = FakeCanonicalModel()
     judge = OpenAICompatibleVLMJudge(model, max_images=2)
     report = evaluate_coarse_specification_interfaces(
@@ -614,7 +763,10 @@ def test_functional_semantic_default_policy_is_global_then_claim_local() -> None
     )
     local = plan["local_policy"]
     assert local["activation_condition"] == "prompt_specified_local_functionality"
-    assert local["grouping_policy_id"] == "benchmark_owned_claim_targets"
+    assert (
+        local["grouping_policy_id"]
+        == "vlm_visual_evidence_scope_v2"
+    )
     assert local["target_source"] == "benchmark_owned_claim_only"
     assert local["generic_pairing_scan"] is False
     assert set(local["trigger_states"]) == {
