@@ -1,0 +1,215 @@
+schema_version: grouping_blind30_frozen_sample_v1
+experiment_id: grouping_blind30_gpt56_20260730_r1
+seed: 20260730
+sampling_policy: object_count_stratified_random_with_randomized_scene_type_round_robin_v1
+cases:
+  - case_id: case_001
+    source_scene_id: scene_007734_01
+    source_file: Support/Scenes/converted_scenes/scene_007734_01.json
+    source_sha256: 1de7021e867c8cbede9fe6746fb9a4fcc32bf3949dce2219044032ece099ec40
+    scene_type: bedroom
+    object_count: 22
+    stratum: 21-30_objects
+  - case_id: case_002
+    source_scene_id: scene_012013_00
+    source_file: Support/Scenes/converted_scenes/scene_012013_00.json
+    source_sha256: be1c9a157733661093eb4d9fb87330e67e066c0e0af375c68c7a89d084b1bfde
+    scene_type: living room with dining area
+    object_count: 51
+    stratum: 46plus_objects
+  - case_id: case_003
+    source_scene_id: scene_011106_00
+    source_file: Support/Scenes/converted_scenes/scene_011106_00.json
+    source_sha256: 176b5e84ae9418a5eff5bbfde6dc9014cd6da8911ddd8357f267c31179a27db1
+    scene_type: living room
+    object_count: 57
+    stratum: 46plus_objects
+  - case_id: case_004
+    source_scene_id: scene_009441_00
+    source_file: Support/Scenes/converted_scenes/scene_009441_00.json
+    source_sha256: b68b838f0b6041fec43267ee8c2730d99bc9da63654a843dbf5ce1ee364f6c1d
+    scene_type: living and dining room
+    object_count: 21
+    stratum: 21-30_objects
+  - case_id: case_005
+    source_scene_id: scene_008311_00
+    source_file: Support/Scenes/converted_scenes/scene_008311_00.json
+    source_sha256: b93497fa294d4de801cc8c4adccb473074c3de8561c4a9c10f84ef4045a7e57b
+    scene_type: dining room with living area
+    object_count: 35
+    stratum: 31-45_objects
+  - case_id: case_006
+    source_scene_id: scene_001122_00
+    source_file: Support/Scenes/converted_scenes/scene_001122_00.json
+    source_sha256: 5b62237fba51c298a63cd08296c11bed21fb6af686958afe6193a5f8077c3e26
+    scene_type: dining room with living area
+    object_count: 10
+    stratum: 05-10_objects
+  - case_id: case_007
+    source_scene_id: scene_005918_01
+    source_file: Support/Scenes/converted_scenes/scene_005918_01.json
+    source_sha256: 68458d387394d15c7949471e803306272766d770206edf54e4ec13dbd729ad7e
+    scene_type: bedroom
+    object_count: 5
+    stratum: 05-10_objects
+  - case_id: case_008
+    source_scene_id: scene_007794_00
+    source_file: Support/Scenes/converted_scenes/scene_007794_00.json
+    source_sha256: a13e32d12c5355176bd8f3a96bea2192c406211c4d2185209c6ddbdccada14b2
+    scene_type: family room
+    object_count: 21
+    stratum: 21-30_objects
+  - case_id: case_009
+    source_scene_id: scene_000490_03
+    source_file: Support/Scenes/converted_scenes/scene_000490_03.json
+    source_sha256: eaa0d27f2541b2e54f60c3c9550411dcb2929e184f1193f1e65132811303911f
+    scene_type: living room with dining area
+    object_count: 6
+    stratum: 05-10_objects
+  - case_id: case_010
+    source_scene_id: scene_010936_01
+    source_file: Support/Scenes/converted_scenes/scene_010936_01.json
+    source_sha256: a210eb10476bdedc6d451640ffb3415bd33335a8c45de72bdb30e743e3ea41b9
+    scene_type: guest room
+    object_count: 7
+    stratum: 05-10_objects
+  - case_id: case_011
+    source_scene_id: scene_002505_04
+    source_file: Support/Scenes/converted_scenes/scene_002505_04.json
+    source_sha256: 97198fa70a17bbe9765f25718d58ca2f0fc770db27cff9c6c869ae02c438e8a7
+    scene_type: living room
+    object_count: 19
+    stratum: 11-20_objects
+  - case_id: case_012
+    source_scene_id: scene_008704_02
+    source_file: Support/Scenes/converted_scenes/scene_008704_02.json
+    source_sha256: 678f19ce104aec60319b055a5e6658baf146987e04108bdb154b329775aefa66
+    scene_type: office
+    object_count: 32
+    stratum: 31-45_objects
+  - case_id: case_013
+    source_scene_id: scene_001713_01
+    source_file: Support/Scenes/converted_scenes/scene_001713_01.json
+    source_sha256: 37c1ce116a4e692e25f20434866c4ae9c5c6345b499a857691e7263be328eba0
+    scene_type: dining room with kitchen
+    object_count: 19
+    stratum: 11-20_objects
+  - case_id: case_014
+    source_scene_id: scene_002970_03
+    source_file: Support/Scenes/converted_scenes/scene_002970_03.json
+    source_sha256: 414afb12fbbbf6051ae8b2d8498d37e6c19774a18b4daa7d8fa039e9dcef7648
+    scene_type: media room
+    object_count: 28
+    stratum: 21-30_objects
+  - case_id: case_015
+    source_scene_id: scene_007765_01
+    source_file: Support/Scenes/converted_scenes/scene_007765_01.json
+    source_sha256: c1d7dc829d9c4afce7262bcd53cefad6d2a4c44933e74b0050365c7bb3b87db8
+    scene_type: primary bedroom
+    object_count: 35
+    stratum: 31-45_objects
+  - case_id: case_016
+    source_scene_id: scene_012173_00
+    source_file: Support/Scenes/converted_scenes/scene_012173_00.json
+    source_sha256: be65b5e6495cfd529355c5e17b7aa730ab49042865e29ea611bd965513c4715a
+    scene_type: kitchen with dining area
+    object_count: 30
+    stratum: 21-30_objects
+  - case_id: case_017
+    source_scene_id: scene_001358_00
+    source_file: Support/Scenes/converted_scenes/scene_001358_00.json
+    source_sha256: c8f9c2ce0c760dc42a9418cc81b1326a0602c6b40149e302a29475375b75ca43
+    scene_type: living and dining room
+    object_count: 46
+    stratum: 46plus_objects
+  - case_id: case_018
+    source_scene_id: scene_008788_01
+    source_file: Support/Scenes/converted_scenes/scene_008788_01.json
+    source_sha256: c94d95a8732377bb9297fb0db7914f6d1c04a2db7f0c1d4eb263ad7dfc0a8c96
+    scene_type: balcony
+    object_count: 7
+    stratum: 05-10_objects
+  - case_id: case_019
+    source_scene_id: scene_000748_00
+    source_file: Support/Scenes/converted_scenes/scene_000748_00.json
+    source_sha256: e214bce0227907578d1f1bed0a52cde78436f5e99660f2ef0ccef34da030ae09
+    scene_type: spa
+    object_count: 59
+    stratum: 46plus_objects
+  - case_id: case_020
+    source_scene_id: scene_007306_01
+    source_file: Support/Scenes/converted_scenes/scene_007306_01.json
+    source_sha256: 7188e02b42e434713d92dbe29e691a34ec0ab9280cbd9321bd5455b4dcffd25b
+    scene_type: family room
+    object_count: 47
+    stratum: 46plus_objects
+  - case_id: case_021
+    source_scene_id: scene_006401_01
+    source_file: Support/Scenes/converted_scenes/scene_006401_01.json
+    source_sha256: bd63d7c0f303392c04bc7c22872a7e4eefb4c2a9b100ef111e9a69bdd41c249a
+    scene_type: bedroom
+    object_count: 34
+    stratum: 31-45_objects
+  - case_id: case_022
+    source_scene_id: scene_002851_01
+    source_file: Support/Scenes/converted_scenes/scene_002851_01.json
+    source_sha256: 816e2fe58b5d55f37bc92706c80b730d3af9bc5a389fe9ac6b8a798c21646ffc
+    scene_type: bathroom
+    object_count: 5
+    stratum: 05-10_objects
+  - case_id: case_023
+    source_scene_id: scene_009096_01
+    source_file: Support/Scenes/converted_scenes/scene_009096_01.json
+    source_sha256: 7e87c2ea1522ca9cdded7baac60b4b6297ce3ceb85dbb29dd7228bfd8c7c8d75
+    scene_type: game room
+    object_count: 12
+    stratum: 11-20_objects
+  - case_id: case_024
+    source_scene_id: scene_003878_00
+    source_file: Support/Scenes/converted_scenes/scene_003878_00.json
+    source_sha256: 2185b290648c08dbadb6d3f2a32e7aab76f1375266a2af27d78d5b848fc16b7b
+    scene_type: kitchen
+    object_count: 36
+    stratum: 31-45_objects
+  - case_id: case_025
+    source_scene_id: scene_008816_03
+    source_file: Support/Scenes/converted_scenes/scene_008816_03.json
+    source_sha256: a688a2cfb182ca41ea520de8b850606cc3a472dc31dcaf72b41b57481961743d
+    scene_type: kitchen
+    object_count: 14
+    stratum: 11-20_objects
+  - case_id: case_026
+    source_scene_id: scene_001384_00
+    source_file: Support/Scenes/converted_scenes/scene_001384_00.json
+    source_sha256: 5309d263cbfd2d7279b66b09ec0be0a6af2f5e731bf155414d6dacd639f14164
+    scene_type: bedroom with home office
+    object_count: 49
+    stratum: 46plus_objects
+  - case_id: case_027
+    source_scene_id: scene_008883_01
+    source_file: Support/Scenes/converted_scenes/scene_008883_01.json
+    source_sha256: a0b4d94bb84ac33fb5e9dce60e915bbf149f3a450e783d49676aa5aa82daed06
+    scene_type: bedroom with living room
+    object_count: 11
+    stratum: 11-20_objects
+  - case_id: case_028
+    source_scene_id: scene_000931_02
+    source_file: Support/Scenes/converted_scenes/scene_000931_02.json
+    source_sha256: 1fddb47730f5dc659b5c34f15f151cf3d57f116fc409d1bd0721f9ab55ea41d3
+    scene_type: bathroom
+    object_count: 12
+    stratum: 11-20_objects
+  - case_id: case_029
+    source_scene_id: scene_001143_01
+    source_file: Support/Scenes/converted_scenes/scene_001143_01.json
+    source_sha256: 361515170d00c0cfb94e9d6fb8c34b0cc7a0e417c9930861d3359d028547376f
+    scene_type: bedroom with home office
+    object_count: 31
+    stratum: 31-45_objects
+  - case_id: case_030
+    source_scene_id: scene_003242_02
+    source_file: Support/Scenes/converted_scenes/scene_003242_02.json
+    source_sha256: dce5a70bfa996b5e494ff3ef1aee13eb08e7611968b1edee29f79adc9665d8a4
+    scene_type: game room
+    object_count: 26
+    stratum: 21-30_objects

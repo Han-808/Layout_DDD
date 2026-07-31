@@ -1,0 +1,6 @@
+grouping:
+  backend: vlm
+  vlm:
+    max_images: 3
+    max_context_chars: 50000
+    response_format_json: false

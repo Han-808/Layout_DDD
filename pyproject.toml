@@ -68,6 +68,8 @@ testpaths = [
   "tests/test_game_mode.py",
   "tests/test_game_scene_export.py",
   "tests/test_generic_validity.py",
+  "tests/test_grouping_algorithms.py",
+  "tests/test_grouping_blind30_experiment.py",
   "tests/test_input_chain_boundaries.py",
   "tests/test_layout_json_adapter.py",
   "tests/test_nl_scene_mvp.py",

@@ -1,0 +1,18 @@
+grouping:
+  backend: anchor
+  anchor:
+    target_objects_per_group: 6
+    max_anchors: 12
+    max_objects_per_group: 12
+    min_anchor_score: 0.70
+    strong_semantic_anchor_score: 1.05
+    min_anchor_separation_m: 0.75
+    max_assignment_gap_m: 3.0
+    max_assignment_gap_ratio: 0.30
+    semantic_gap_multiplier: 1.20
+    semantic_match_bonus: 0.12
+    same_region_bonus: 0.15
+    region_mismatch_penalty: 0.35
+    support_link_bonus: 1.00
+    support_vertical_tolerance_m: 0.10
+    support_min_xy_overlap_ratio: 0.15
