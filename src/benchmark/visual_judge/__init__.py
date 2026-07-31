@@ -24,10 +24,13 @@ from benchmark.visual_judge.adapters.active_camera import (
 )
 from benchmark.visual_judge.adapters.deterministic_camera import (
     DETERMINISTIC_SUPPORTED_OBSERVATIONS,
+    SEMANTIC_SELECTION_OBSERVATIONS,
     DeterministicCameraRepairSolver,
     DeterministicLocalCameraSelector,
+    TrustedTechnicalCameraCandidateBankBuilder,
 )
 from benchmark.visual_judge.adapters.legacy_renderer import (
+    CameraCandidatePreviewRenderer,
     CameraViewEvidenceRenderer,
 )
 from benchmark.visual_judge.camera_dsl import (
@@ -65,6 +68,7 @@ from benchmark.visual_judge.interfaces import (
     CameraSelectionRequest,
     CameraSelectionResult,
     CameraSelector,
+    TrustedCameraCandidateBank,
     DeterministicCameraSelector,
     EvidenceGate,
     EvidenceGateRequest,
@@ -82,6 +86,10 @@ from benchmark.visual_judge.interfaces import (
 from benchmark.visual_judge.openai_compatible import (
     OpenAICompatibleVLMJudge,
     build_openai_compatible_vlm_judge,
+)
+from benchmark.visual_judge.openai_camera_selector import (
+    OpenAICompatibleCameraSelector,
+    build_openai_compatible_camera_selector,
 )
 from benchmark.visual_judge.p0b import LocalViewProvider, adjudicate_p0b_event
 from benchmark.visual_judge.render_views import CameraEvidenceProvider
@@ -105,18 +113,21 @@ __all__ = [
     "CameraSelectionRequest",
     "CameraSelectionResult",
     "CameraSelector",
+    "CameraCandidatePreviewRenderer",
     "CameraViewEvidenceRenderer",
     "ConditionalActiveCameraEvidenceProvider",
     "ControlledVLMJudge",
     "DEFAULT_P0B_VISUAL_CONFIGS",
     "DEFAULT_DETERMINISTIC_CAMERA_RANKING",
     "DETERMINISTIC_SUPPORTED_OBSERVATIONS",
+    "SEMANTIC_SELECTION_OBSERVATIONS",
     "DEFAULT_VLM_EVALUATION_CONTROL",
     "DecisionContract",
     "DeterministicCameraSelector",
     "DeterministicCameraRepairSolver",
     "DeterministicCameraRankingConfig",
     "DeterministicLocalCameraSelector",
+    "TrustedTechnicalCameraCandidateBankBuilder",
     "DeterministicEvidenceGate",
     "EvidenceGate",
     "EvidenceGateRequest",
@@ -139,6 +150,8 @@ __all__ = [
     "MetricAcquisitionPlanningRequest",
     "MetricSpecificAcquisitionPlanner",
     "OpenAICompatibleVLMJudge",
+    "OpenAICompatibleCameraSelector",
+    "TrustedCameraCandidateBank",
     "VLMCameraSelector",
     "ActiveVLMCameraSelector",
     "VLMSelectionMode",
@@ -153,6 +166,7 @@ __all__ = [
     "build_controlled_vlm_judge",
     "build_camera_selector",
     "build_openai_compatible_vlm_judge",
+    "build_openai_compatible_camera_selector",
     "evaluate_vlm_category",
     "generate_corrective_camera_proposals",
     "resolve_vlm_evaluation_control",

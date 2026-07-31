@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import dataclass
 import hashlib
 import json
 from pathlib import Path
@@ -23,6 +24,164 @@ from benchmark.visual_judge.adapters.legacy_camera import (
 from benchmark.visual_judge.orchestration.budget import (
     selection_action_count as _selection_action_count,
 )
+
+
+@dataclass(frozen=True)
+class CameraCandidatePreviewResult:
+    candidates: tuple[dict[str, Any], ...]
+    manifest_path: str | None
+    provenance: dict[str, Any]
+
+
+class CameraCandidatePreviewRenderer:
+    """Render trusted candidate aliases for selection, never Judge evidence."""
+
+    backend = "trusted_camera_candidate_preview_renderer"
+
+    def __init__(
+        self,
+        *,
+        renderer: Any,
+        blend_file: str | Path,
+        out_dir: str | Path,
+    ) -> None:
+        if not callable(getattr(renderer, "render_camera_views", None)):
+            raise TypeError(
+                "CameraCandidatePreviewRenderer requires "
+                "renderer.render_camera_views(...)"
+            )
+        source = Path(blend_file).expanduser().resolve()
+        if not source.is_file():
+            raise FileNotFoundError(
+                f"camera preview source blend does not exist: {source}"
+            )
+        self.renderer = renderer
+        self.blend_file = source
+        self.out_dir = Path(out_dir).expanduser().resolve()
+
+    def render(
+        self,
+        request: Any,
+    ) -> CameraCandidatePreviewResult:
+        candidates = list(deepcopy(request.candidate_views))
+        if not candidates:
+            raise ValueError(
+                "camera preview rendering requires trusted candidates"
+            )
+        if any(
+            not isinstance(item, dict)
+            or item.get("technical_feasibility") is not True
+            or not isinstance(item.get("pose"), dict)
+            for item in candidates
+        ):
+            raise ValueError(
+                "camera preview rendering accepts only trusted technical "
+                "candidates"
+            )
+        group_scope = request.context.get("group_scope")
+        group_id = (
+            str(group_scope.get("group_id") or "scene")
+            if isinstance(group_scope, dict)
+            else "scene"
+        )
+        destination = (
+            self.out_dir
+            / _slug(request.metric)
+            / _slug(group_id)
+            / f"episode_{int(request.context.get('camera_repair_episode', 0)):02d}"
+            / "candidate_previews"
+        )
+        started = perf_counter()
+        manifest = self.renderer.render_camera_views(
+            blend_file=self.blend_file,
+            out_dir=destination,
+            camera_views=candidates,
+            preview=True,
+        )
+        duration = max(0.0, perf_counter() - started)
+        views = manifest.get("views")
+        if not isinstance(views, list) or not views:
+            raise RuntimeError(
+                "camera preview renderer returned no preview views"
+            )
+        paths_by_id: dict[str, dict[str, Any]] = {}
+        for index, item in enumerate(views):
+            if not isinstance(item, dict):
+                raise RuntimeError(
+                    "camera preview manifest contains a non-object view"
+                )
+            candidate_id = str(
+                item.get("id")
+                or item.get("name")
+                or (
+                    candidates[index].get("id")
+                    if index < len(candidates)
+                    else ""
+                )
+                or ""
+            ).strip()
+            if candidate_id not in {
+                str(candidate.get("id"))
+                for candidate in candidates
+            }:
+                raise RuntimeError(
+                    "camera preview manifest returned an unknown candidate ID"
+                )
+            path = Path(
+                str(item.get("path") or item.get("image_path") or "")
+            ).expanduser()
+            _validate_preview_image(path, alias=candidate_id)
+            paths_by_id[candidate_id] = {
+                "image_path": str(path),
+                "render_status": "ok",
+                "preview_metadata": {
+                    key: deepcopy(value)
+                    for key, value in item.items()
+                    if key not in {"path", "image_path"}
+                },
+            }
+        if set(paths_by_id) != {
+            str(candidate.get("id")) for candidate in candidates
+        }:
+            raise RuntimeError(
+                "camera preview manifest did not render every trusted candidate"
+            )
+        enriched = tuple(
+            {
+                **candidate,
+                **paths_by_id[str(candidate["id"])],
+            }
+            for candidate in candidates
+        )
+        manifest_path = destination / "camera_render_manifest.json"
+        return CameraCandidatePreviewResult(
+            candidates=enriched,
+            manifest_path=(
+                str(manifest_path)
+                if manifest_path.is_file()
+                else None
+            ),
+            provenance={
+                "backend": self.backend,
+                "source_blend": str(self.blend_file),
+                "scene_access": "read_only",
+                "source_blend_modified": (
+                    manifest.get("camera_evidence", {}).get(
+                        "source_blend_modified"
+                    )
+                ),
+                "preview_render_count": len(enriched),
+                "full_render_count": 0,
+                "wall_clock_render_seconds": duration,
+                "render_gpu_time_seconds": manifest.get(
+                    "render_gpu_time_seconds"
+                ),
+                "group_id": group_id,
+                "candidate_ids": [
+                    str(candidate["id"]) for candidate in enriched
+                ],
+            },
+        )
 
 
 class ExistingEvidenceRendererAdapter:
@@ -503,3 +662,31 @@ def _slug(value: str) -> str:
         re.sub(r"[^A-Za-z0-9_.-]+", "_", value).strip("._")
         or "item"
     )
+
+
+def _validate_preview_image(path: Path, *, alias: str) -> None:
+    if not path.is_file():
+        raise ValueError(
+            f"camera candidate preview {alias!r} is missing"
+        )
+    try:
+        from PIL import Image, ImageStat, UnidentifiedImageError
+    except ImportError as exc:  # pragma: no cover - dependency guard
+        raise RuntimeError(
+            "Pillow is required to validate camera candidate previews"
+        ) from exc
+    try:
+        with Image.open(path) as source:
+            source.load()
+            image = source.convert("RGB")
+            if image.width <= 0 or image.height <= 0:
+                raise ValueError("preview has invalid dimensions")
+            extrema = ImageStat.Stat(image).extrema
+    except (UnidentifiedImageError, OSError) as exc:
+        raise ValueError(
+            f"camera candidate preview {alias!r} is corrupt or undecodable"
+        ) from exc
+    if all(low == high for low, high in extrema):
+        raise ValueError(
+            f"camera candidate preview {alias!r} is blank"
+        )

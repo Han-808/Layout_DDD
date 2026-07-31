@@ -191,6 +191,31 @@ def _as_explicit_selector(
                 "with camera_acquisition.vlm.max_repair_plans"
             )
         return value
+    if (
+        backend == "vlm"
+        and getattr(
+            value,
+            "production_camera_selector_transport",
+            False,
+        )
+        is True
+    ):
+        return ActiveVLMCameraSelector(
+            value,
+            selection_mode=vlm_selection_mode,
+            repair_solver=DeterministicCameraRepairSolver(
+                DeterministicLocalCameraSelector(
+                    ranking_config=deterministic_ranking_config,
+                    ranking_config_sources=(
+                        deterministic_ranking_sources
+                    ),
+                )
+            ),
+            pose_validator=getattr(value, "pose_validator", None),
+            allow_freeform_pose=allow_freeform_pose,
+            max_repair_plans=max_repair_plans,
+            max_repair_plans_source=max_repair_plans_source,
+        )
     if callable(getattr(value, "select", None)):
         return value
     if backend == "vlm":
@@ -389,6 +414,7 @@ def build_selection_request(
     actions_used: int,
     rounds_used: int,
     total_images_acquired: int,
+    vlm_selection_mode_override: str | None = None,
 ) -> CameraSelectionRequest:
     stage_max_views = (
         control.vlm_max_selected_views
@@ -436,7 +462,10 @@ def build_selection_request(
             "known_target_ids": list(known_target_ids),
             "attempted_view_ids": list(state.attempted_view_ids),
             "attempted_plan_ids": list(state.attempted_plan_ids),
-            "vlm_selection_mode": control.vlm_selection_mode,
+            "vlm_selection_mode": (
+                vlm_selection_mode_override
+                or control.vlm_selection_mode
+            ),
             "camera_repair_plans": [
                 plan.to_dict() for plan in repair_plans
             ],
@@ -494,7 +523,11 @@ def build_selection_request(
         evidence_round=rounds_used + 1,
         allow_freeform_pose=(
             state.stage == "vlm"
-            and control.vlm_selection_mode == "freeform_pose"
+            and (
+                vlm_selection_mode_override
+                or control.vlm_selection_mode
+            )
+            == "freeform_pose"
             and control.allow_freeform_pose
         ),
         allow_scene_mutation=False,
@@ -537,6 +570,8 @@ def deterministic_escalation_reason(
     constraints: CameraConstraintSet | None = None,
 ) -> str:
     codes = set(selection.reason_codes)
+    if "semantic_selection_required" in codes:
+        return "semantic_selection_required"
     if constraints is not None and diagnose_camera_constraint_conflicts(
         constraints,
         candidate_evaluations=candidate_conflict_evaluations(selection),
@@ -556,12 +591,20 @@ def repair_plans_for_vlm(
     deterministic_selection: CameraSelectionResult | None,
     max_plans: int = 3,
 ) -> tuple[CameraRepairPlan, ...]:
+    if (
+        deterministic_selection is not None
+        and "semantic_selection_required"
+        in deterministic_selection.reason_codes
+    ):
+        return ()
     conflicts = diagnose_camera_constraint_conflicts(
         constraints,
         candidate_evaluations=candidate_conflict_evaluations(
             deterministic_selection
         ),
     )
+    if not conflicts:
+        return ()
     return generate_camera_repair_plans(
         constraints,
         conflicts=conflicts,

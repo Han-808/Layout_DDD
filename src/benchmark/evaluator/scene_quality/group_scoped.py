@@ -149,6 +149,12 @@ def evaluate_group_scoped_judgements(
             decision_mode=decision_mode,
         )
         record["vlm_invoked"] = True
+        audit_records = getattr(vlm_judge, "audit_records", None)
+        audit_start = (
+            len(audit_records)
+            if isinstance(audit_records, list)
+            else None
+        )
         try:
             raw = call_judge(vlm_judge, request)
             adjusted = apply_prompt_exemptions(
@@ -178,6 +184,14 @@ def evaluate_group_scoped_judgements(
                     "error_type": type(exc).__name__,
                     "error": str(exc),
                 },
+            )
+        if (
+            audit_start is not None
+            and isinstance(audit_records, list)
+            and len(audit_records) > audit_start
+        ):
+            record["camera_control_audit"] = deepcopy(
+                audit_records[-1]
             )
         group_results.append(record)
 
@@ -261,6 +275,69 @@ def _aggregate_group_results(
     )
     base["vlm_invoked"] = bool(base["judge_call_count"])
     base["evidence_request"]["vlm_invoked"] = base["vlm_invoked"]
+    control_summaries = [
+        _control_audit_summary(item.get("camera_control_audit"))
+        for item in group_results
+    ]
+    preview_count = sum(
+        int(item["preview_render_count"])
+        for item in control_summaries
+    )
+    controller_final_count = sum(
+        int(item["final_render_count"])
+        for item in control_summaries
+    )
+    initial_render_count = sum(
+        _provider_resolution_render_count(
+            item.get("evidence_resolution")
+        )
+        for item in group_results
+    )
+    final_count = initial_render_count + controller_final_count
+    initial_rendered = any(
+        _provider_resolution_rendered(
+            item.get("evidence_resolution")
+        )
+        for item in group_results
+    )
+    base["renderer_invoked"] = bool(
+        base.get("renderer_invoked")
+        or initial_rendered
+        or final_count
+    )
+    base["preview_renderer_invoked"] = preview_count > 0
+    base["preview_render_count"] = preview_count
+    base["final_render_count"] = final_count
+    base["production_camera_selector_backend"] = next(
+        (
+            item["production_camera_selector_backend"]
+            for item in control_summaries
+            if item["production_camera_selector_backend"]
+        ),
+        None,
+    )
+    base["effective_vlm_selection_mode"] = next(
+        (
+            item["effective_vlm_selection_mode"]
+            for item in control_summaries
+            if item["effective_vlm_selection_mode"]
+        ),
+        None,
+    )
+    base["semantic_selection_triggered"] = any(
+        item["semantic_selection_triggered"]
+        for item in control_summaries
+    )
+    base["trusted_candidate_count"] = max(
+        (
+            item["trusted_candidate_count"]
+            for item in control_summaries
+        ),
+        default=0,
+    )
+    base["evidence_request"]["renderer_invoked"] = base[
+        "renderer_invoked"
+    ]
     base["coverage"] = {
         "eligible_count": len(group_results),
         "resolved_count": len(evaluated),
@@ -381,6 +458,91 @@ def _aggregate_group_results(
         },
     )
     return base
+
+
+def _provider_resolution_rendered(value: Any) -> bool:
+    if not isinstance(value, dict):
+        return False
+    usage = value.get("provider_usage")
+    return (
+        isinstance(usage, dict)
+        and usage.get("cache_hit") is False
+        and bool(usage.get("evidence_refs"))
+    )
+
+
+def _provider_resolution_render_count(value: Any) -> int:
+    if not _provider_resolution_rendered(value):
+        return 0
+    usage = value.get("provider_usage")
+    refs = usage.get("evidence_refs") if isinstance(usage, dict) else []
+    return len(refs) if isinstance(refs, list) else 0
+
+
+def _control_audit_summary(value: Any) -> dict[str, Any]:
+    audit = (
+        value.get("audit")
+        if isinstance(value, dict)
+        else None
+    )
+    telemetry = (
+        audit.get("experiment_telemetry")
+        if isinstance(audit, dict)
+        else None
+    )
+    telemetry = telemetry if isinstance(telemetry, dict) else {}
+    events = telemetry.get("events")
+    events = events if isinstance(events, list) else []
+    selection_events = [
+        item
+        for item in events
+        if isinstance(item, dict)
+        and item.get("kind") == "camera_selection"
+        and item.get("stage") == "vlm"
+    ]
+    trace = (
+        audit.get("trace")
+        if isinstance(audit, dict)
+        and isinstance(audit.get("trace"), list)
+        else []
+    )
+    bank_events = [
+        item
+        for item in trace
+        if isinstance(item, dict)
+        and item.get("stage") == "trusted_candidate_bank"
+    ]
+    return {
+        "preview_render_count": int(
+            telemetry.get("preview_render_count") or 0
+        ),
+        "final_render_count": int(
+            telemetry.get("full_render_count") or 0
+        ),
+        "production_camera_selector_backend": (
+            selection_events[-1].get("selector_backend")
+            if selection_events
+            else None
+        ),
+        "effective_vlm_selection_mode": (
+            selection_events[-1].get("selection_mode")
+            if selection_events
+            else None
+        ),
+        "semantic_selection_triggered": any(
+            item.get("reason") == "semantic_selection_required"
+            for item in events
+            if isinstance(item, dict)
+            and item.get("kind") == "camera_escalation"
+        ),
+        "trusted_candidate_count": max(
+            (
+                int(item.get("candidate_count") or 0)
+                for item in bank_events
+            ),
+            default=0,
+        ),
+    }
 
 
 def _evidence_for_group(

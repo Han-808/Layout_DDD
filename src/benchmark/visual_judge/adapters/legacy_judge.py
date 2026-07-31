@@ -672,6 +672,7 @@ class ControlledVLMJudge:
         deterministic_camera_selector: Any | None = None,
         vlm_camera_selector: Any | None = None,
         evidence_renderer: Any | None = None,
+        candidate_preview_renderer: Any | None = None,
         strict: bool | None = None,
     ) -> None:
         if judge is None:
@@ -685,6 +686,7 @@ class ControlledVLMJudge:
         )
         self.vlm_camera_selector = vlm_camera_selector
         self.evidence_renderer = evidence_renderer
+        self.candidate_preview_renderer = candidate_preview_renderer
         # A Judge is controlled by default regardless of implementation
         # details.  Compatibility callers that are provably non-VLM may opt
         # out explicitly with strict=False; absence of `.model` must never
@@ -790,6 +792,11 @@ class ControlledVLMJudge:
                 None
                 if provider_available
                 else self.vlm_camera_selector
+            ),
+            candidate_preview_renderer=(
+                None
+                if provider_available
+                else self.candidate_preview_renderer
             ),
             control=self.control,
         )
@@ -1022,6 +1029,11 @@ class ControlledVLMJudge:
                 if provider_available
                 else self.vlm_camera_selector
             ),
+            candidate_preview_renderer=(
+                None
+                if provider_available
+                else self.candidate_preview_renderer
+            ),
             control=self.control,
         )
         core_request = _judge_request(request)
@@ -1111,6 +1123,7 @@ def build_controlled_vlm_judge(
     deterministic_camera_selector: Any | None = None,
     vlm_camera_selector: Any | None = None,
     evidence_renderer: Any | None = None,
+    candidate_preview_renderer: Any | None = None,
     strict: bool | None = None,
 ) -> Any | None:
     if judge is None or isinstance(judge, ControlledVLMJudge):
@@ -1123,6 +1136,7 @@ def build_controlled_vlm_judge(
         deterministic_camera_selector=deterministic_camera_selector,
         vlm_camera_selector=vlm_camera_selector,
         evidence_renderer=evidence_renderer,
+        candidate_preview_renderer=candidate_preview_renderer,
         strict=strict,
     )
 

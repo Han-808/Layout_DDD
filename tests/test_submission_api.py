@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 from jsonschema import Draft202012Validator
+from PIL import Image
 
 from benchmark.api.submission import (
     CaseBundleError,
@@ -208,7 +209,9 @@ class _FakeTrustedRenderer:
         views = []
         for name in ("top", "perspective"):
             path = destination / f"standardized_{name}.png"
-            path.write_bytes(f"trusted {name} evidence".encode())
+            image = Image.new("RGB", (2, 2), (40, 60, 80))
+            image.putpixel((0, 0), (180, 120, 60))
+            image.save(path)
             views.append({"name": name, "path": path.as_posix()})
         blend = destination / "scene.blend"
         blend.write_bytes(b"trusted blend")

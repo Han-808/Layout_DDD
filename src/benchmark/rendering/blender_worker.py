@@ -59,6 +59,7 @@ def main() -> None:
     progress_path.unlink(missing_ok=True)
     _record_progress(progress_path, "worker_started")
     scene_data = json.loads(scene_path.read_text(encoding="utf-8"))
+    canonical_object_ids = _canonical_object_ids(scene_data)
 
     _clear_scene()
     render_config = _configure_render(
@@ -95,6 +96,31 @@ def main() -> None:
     _add_lighting(boundary, room_height)
     _record_progress(progress_path, "render_started")
     views = _render_views(boundary, room_height, out_dir, progress_path=progress_path)
+    identity_legend: dict[str, str] = {}
+    identity_palette: dict[str, str] = {}
+    identity_render = {
+        "status": "not_applicable",
+        "reason": "scene_has_no_renderable_objects",
+        "camera_source": "standardized_perspective",
+        "architecture_identity": "neutral_background",
+        "canonical_object_count": 0,
+        "scene_mutated": False,
+    }
+    if canonical_object_ids:
+        identity_view, identity_legend, identity_palette = _render_identity_map(
+            canonical_object_ids,
+            out_dir,
+            progress_path=progress_path,
+        )
+        views.append(identity_view)
+        identity_render = {
+            "status": "available",
+            "camera_source": "standardized_perspective",
+            "architecture_identity": "neutral_background",
+            "canonical_object_count": len(canonical_object_ids),
+            "scene_mutated": False,
+            "color_encoding": "raw_linear_rgb_8bit",
+        }
     _record_progress(progress_path, "render_completed", view_count=len(views))
     blend_path = out_dir / "scene.blend"
     bpy.ops.wm.save_as_mainfile(filepath=str(blend_path))
@@ -110,6 +136,9 @@ def main() -> None:
         "render_config": render_config,
         "blend_file": str(blend_path),
         "views": views,
+        "identity_legend": identity_legend,
+        "identity_palette": identity_palette,
+        "identity_render": identity_render,
         "objects": object_results,
         "collision_geometry_manifest": None,
         "collision_geometry_export": {
@@ -335,6 +364,29 @@ def _boundary(scene_data: dict) -> list[list[float]]:
     if not isinstance(boundary, list) or len(boundary) < 3:
         return [[0.0, 0.0], [5.0, 0.0], [5.0, 5.0], [0.0, 5.0]]
     return [[float(point[0]), float(point[1])] for point in boundary]
+
+
+def _canonical_object_ids(scene_data: dict) -> list[str]:
+    raw_objects = scene_data.get("objects")
+    if not isinstance(raw_objects, list):
+        raise ValueError("canonical scene objects must be a JSON list")
+    result: list[str] = []
+    for index, item in enumerate(raw_objects):
+        if not isinstance(item, dict):
+            raise ValueError(
+                f"canonical scene object {index} must be a JSON object"
+            )
+        object_id = str(item.get("id") or "").strip()
+        if not object_id:
+            raise ValueError(
+                f"canonical scene object {index} is missing id"
+            )
+        if object_id in result:
+            raise ValueError(
+                f"duplicate canonical object id: {object_id}"
+            )
+        result.append(object_id)
+    return result
 
 
 def _build_room(boundary: list[list[float]], height: float) -> None:
@@ -840,6 +892,214 @@ def _render_views(
             }
         )
     return results
+
+
+def _render_identity_map(
+    canonical_object_ids: list[str],
+    out_dir: Path,
+    *,
+    progress_path: Path | None = None,
+) -> tuple[dict, dict[str, str], dict[str, str]]:
+    """Render a read-only multiclass object-identity pass.
+
+    WORKBENCH object colors are temporary display state.  They are restored
+    before the canonical ``scene.blend`` is saved.
+    """
+
+    scene = bpy.context.scene
+    camera = bpy.data.objects.get("camera_perspective")
+    if camera is None or camera.type != "CAMERA":
+        raise RuntimeError(
+            "identity render requires standardized perspective camera"
+        )
+    expected = set(canonical_object_ids)
+    meshes_by_id: dict[str, list] = {
+        object_id: [] for object_id in canonical_object_ids
+    }
+    for obj in bpy.context.scene.objects:
+        if obj.type != "MESH":
+            continue
+        raw_id = obj.get(CANONICAL_ID_PROPERTY)
+        if raw_id is None:
+            continue
+        object_id = str(raw_id).strip()
+        if object_id not in expected:
+            raise ValueError(
+                "renderable mesh references unknown canonical object id: "
+                f"{object_id}"
+            )
+        meshes_by_id[object_id].append(obj)
+    missing = [
+        object_id
+        for object_id, meshes in meshes_by_id.items()
+        if not meshes
+    ]
+    if missing:
+        raise ValueError(
+            "identity render has no renderable mesh for canonical IDs: "
+            + ", ".join(missing)
+        )
+
+    colors = _identity_colors(canonical_object_ids)
+    legend = {
+        _rgba_hex(colors[object_id]): object_id
+        for object_id in canonical_object_ids
+    }
+    palette = {
+        object_id: _rgba_hex(colors[object_id])
+        for object_id in canonical_object_ids
+    }
+    if len(legend) != len(canonical_object_ids):
+        raise ValueError("identity colors must be unique")
+
+    previous_camera = scene.camera
+    previous_filepath = scene.render.filepath
+    previous_engine = scene.render.engine
+    previous_film_transparent = scene.render.film_transparent
+    previous_colors = {
+        obj.name: tuple(obj.color)
+        for obj in scene.objects
+        if hasattr(obj, "color")
+    }
+    view_settings = {
+        "view_transform": scene.view_settings.view_transform,
+        "look": scene.view_settings.look,
+        "exposure": scene.view_settings.exposure,
+        "gamma": scene.view_settings.gamma,
+    }
+    display = scene.display.shading
+    display_settings = {
+        "light": display.light,
+        "color_type": display.color_type,
+        "show_shadows": display.show_shadows,
+        "show_cavity": display.show_cavity,
+        "show_specular_highlight": display.show_specular_highlight,
+        "background_type": display.background_type,
+        "background_color": tuple(display.background_color),
+    }
+    render_path = out_dir / "standardized_identity_map.png"
+    started_at = time.monotonic()
+    try:
+        for obj in scene.objects:
+            if obj.type != "MESH":
+                continue
+            raw_id = obj.get(CANONICAL_ID_PROPERTY)
+            if raw_id is None:
+                obj.color = (0.16, 0.16, 0.16, 1.0)
+            else:
+                obj.color = colors[str(raw_id)]
+        scene.render.engine = "BLENDER_WORKBENCH"
+        scene.render.film_transparent = False
+        # Raw/no-look preserves the assigned identity values in the saved PNG.
+        # Standard/AgX display transforms alter the bytes and would make a
+        # hex-color legend factually incorrect.
+        scene.view_settings.view_transform = "Raw"
+        scene.view_settings.look = "None"
+        scene.view_settings.exposure = 0.0
+        scene.view_settings.gamma = 1.0
+        display.light = "FLAT"
+        display.color_type = "OBJECT"
+        display.show_shadows = False
+        display.show_cavity = False
+        display.show_specular_highlight = False
+        display.background_type = "VIEWPORT"
+        display.background_color = (0.05, 0.05, 0.05)
+        scene.camera = camera
+        scene.render.filepath = str(render_path)
+        if progress_path is not None:
+            _record_progress(
+                progress_path,
+                "view_render_started",
+                view="identity_map",
+                path=str(render_path),
+            )
+        bpy.ops.render.render(write_still=True)
+        pixel_stats = _render_pixel_stats(render_path)
+    finally:
+        for obj in scene.objects:
+            if obj.name in previous_colors:
+                obj.color = previous_colors[obj.name]
+        scene.camera = previous_camera
+        scene.render.filepath = previous_filepath
+        scene.render.engine = previous_engine
+        scene.render.film_transparent = previous_film_transparent
+        scene.view_settings.view_transform = view_settings[
+            "view_transform"
+        ]
+        scene.view_settings.look = view_settings["look"]
+        scene.view_settings.exposure = view_settings["exposure"]
+        scene.view_settings.gamma = view_settings["gamma"]
+        for key, value in display_settings.items():
+            setattr(display, key, value)
+    elapsed_seconds = time.monotonic() - started_at
+    if progress_path is not None:
+        _record_progress(
+            progress_path,
+            "view_render_completed",
+            view="identity_map",
+            path=str(render_path),
+            elapsed_seconds=elapsed_seconds,
+        )
+    return (
+        {
+            "name": "identity_map",
+            "path": str(render_path),
+            "camera_location": list(camera.location),
+            "camera_target": list(
+                bpy.data.objects["camera_perspective"].location
+                + bpy.data.objects["camera_perspective"].matrix_world.to_quaternion()
+                @ Vector((0.0, 0.0, -1.0))
+            ),
+            "elapsed_seconds": elapsed_seconds,
+            "pixel_stats": pixel_stats,
+            "role": "global_identity_overlay",
+            "representation": "identity_map",
+            "color_encoding": "raw_linear_rgb_8bit",
+            "identity_legend": legend,
+        },
+        legend,
+        palette,
+    )
+
+
+def _identity_colors(
+    canonical_object_ids: list[str],
+) -> dict[str, tuple[float, float, float, float]]:
+    result: dict[str, tuple[float, float, float, float]] = {}
+    count = max(1, len(canonical_object_ids))
+    for index, object_id in enumerate(canonical_object_ids):
+        hue = (index * 0.6180339887498949) % 1.0
+        result[object_id] = (*_hsv_to_rgb(hue, 0.72, 0.92), 1.0)
+    return result
+
+
+def _hsv_to_rgb(
+    hue: float,
+    saturation: float,
+    value: float,
+) -> tuple[float, float, float]:
+    sector = int(hue * 6.0)
+    fraction = hue * 6.0 - sector
+    low = value * (1.0 - saturation)
+    descending = value * (1.0 - fraction * saturation)
+    ascending = value * (1.0 - (1.0 - fraction) * saturation)
+    return (
+        (
+            (value, ascending, low),
+            (descending, value, low),
+            (low, value, ascending),
+            (low, descending, value),
+            (ascending, low, value),
+            (value, low, descending),
+        )[sector % 6]
+    )
+
+
+def _rgba_hex(value: tuple[float, float, float, float]) -> str:
+    return "#" + "".join(
+        f"{max(0, min(255, round(component * 255.0))):02X}"
+        for component in value[:3]
+    )
 
 
 def _render_pixel_stats(render_path: Path) -> dict:

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -45,6 +45,7 @@ from benchmark.visual_judge.interfaces.judge import (
 )
 from benchmark.visual_judge.adapters.deterministic_camera import (
     DeterministicLocalCameraSelector,
+    SEMANTIC_SELECTION_OBSERVATIONS,
 )
 from benchmark.visual_judge.orchestration.audit import (
     build_evaluation_audit as _build_evaluation_audit,
@@ -147,6 +148,8 @@ class VLMEvaluationController:
         deterministic_camera_selector: CameraSelector | Any | None = None,
         vlm_camera_selector: CameraSelector | Any | None = None,
         acquisition_planner: EvidenceAcquisitionPlanner | Any | None = None,
+        candidate_bank_builder: Any | None = None,
+        candidate_preview_renderer: Any | None = None,
         evidence_gate: EvidenceGate | None = None,
         control: VLMEvaluationControl | None = None,
     ) -> None:
@@ -218,6 +221,56 @@ class VLMEvaluationController:
                 "default",
             ),
         )
+        self.production_candidate_previews_required = bool(
+            getattr(
+                self.vlm_camera_selector,
+                "requires_candidate_previews",
+                False,
+            )
+        )
+        resolved_builder = candidate_bank_builder
+        if resolved_builder is None:
+            eligible_selectors = tuple(
+                selector
+                for selector in (
+                    self.deterministic_camera_selector,
+                    (
+                        self.camera_selector
+                        if self.production_candidate_previews_required
+                        else None
+                    ),
+                )
+                if isinstance(
+                    selector,
+                    DeterministicLocalCameraSelector,
+                )
+                and (
+                    self.effective_camera_acquisition_policy
+                    != "vlm_only"
+                    or self.production_candidate_previews_required
+                )
+            )
+            for selector in eligible_selectors:
+                candidate = getattr(
+                    selector, "candidate_bank_builder", None
+                )
+                if callable(getattr(candidate, "build", None)):
+                    resolved_builder = candidate
+                    break
+        if resolved_builder is not None and not callable(
+            getattr(resolved_builder, "build", None)
+        ):
+            raise TypeError(
+                "candidate_bank_builder must expose build(request)"
+            )
+        if candidate_preview_renderer is not None and not callable(
+            getattr(candidate_preview_renderer, "render", None)
+        ):
+            raise TypeError(
+                "candidate_preview_renderer must expose render(request)"
+            )
+        self.candidate_bank_builder = resolved_builder
+        self.candidate_preview_renderer = candidate_preview_renderer
 
     def run(
         self,
@@ -255,6 +308,9 @@ class VLMEvaluationController:
         pending_request: EvidenceRequest | None = None
         post_render_validation_error: str | None = None
         last_deterministic_selection: CameraSelectionResult | None = None
+        candidate_bank_episode = -1
+        preview_episode = -1
+        vlm_selection_mode_override: str | None = None
         known_target_ids = _known_target_ids(judge_request, targets)
         relation_type = _request_relation_type(judge_request)
         camera_constraints: CameraConstraintSet | None = None
@@ -465,6 +521,7 @@ class VLMEvaluationController:
                         targets,
                     )
                 acquisition_state.start_episode()
+                vlm_selection_mode_override = None
                 try:
                     camera_constraints = self.acquisition_planner.plan(
                         MetricAcquisitionPlanningRequest(
@@ -565,6 +622,99 @@ class VLMEvaluationController:
                     stop_reason="camera_constraint_contract_invalid",
                 )
 
+            if (
+                self.candidate_bank_builder is not None
+                and candidate_bank_episode
+                != acquisition_state.episode_index
+                and (
+                    self.production_candidate_previews_required
+                    or not candidates
+                    or all(
+                        isinstance(item, dict)
+                        and item.get("technical_feasibility") is True
+                        for item in candidates
+                    )
+                )
+            ):
+                bank_request = _build_selection_request(
+                    control=self.control,
+                    request=judge_request,
+                    evidence=evidence,
+                    targets=targets,
+                    known_target_ids=known_target_ids,
+                    goal=goal,
+                    constraints=camera_constraints,
+                    candidates=candidates,
+                    actions=actions,
+                    selector_context=selector_context,
+                    state=acquisition_state,
+                    repair_plans=(),
+                    deterministic_selection=None,
+                    selector_calls=selector_calls,
+                    actions_used=actions_used,
+                    rounds_used=rounds_used,
+                    total_images_acquired=total_images_acquired,
+                )
+                try:
+                    bank = self.candidate_bank_builder.build(
+                        bank_request,
+                        constraints=camera_constraints,
+                    )
+                except (TypeError, ValueError) as exc:
+                    trace.append(
+                        {
+                            "stage": "trusted_candidate_bank",
+                            "episode_index": (
+                                acquisition_state.episode_index
+                            ),
+                            "status": "failed",
+                            "error": f"{type(exc).__name__}: {exc}",
+                        }
+                    )
+                    return unresolved(
+                        reason=(
+                            "trusted technical camera candidate bank "
+                            "could not be generated"
+                        ),
+                        stop_reason="camera_candidate_bank_failed",
+                    )
+                candidates = bank.candidates
+                candidate_bank_episode = acquisition_state.episode_index
+                trace.append(
+                    {
+                        "stage": "trusted_candidate_bank",
+                        "episode_index": acquisition_state.episode_index,
+                        "status": "completed",
+                        "candidate_count": len(candidates),
+                        "candidate_ids": [
+                            str(item["id"]) for item in candidates
+                        ],
+                        "rejected_candidates": list(
+                            deepcopy(bank.rejected_candidates)
+                        ),
+                        "backend": bank.backend,
+                        "provenance": deepcopy(bank.provenance),
+                    }
+                )
+                if not candidates:
+                    return unresolved(
+                        reason=(
+                            "trusted technical candidate bank contains no "
+                            "feasible camera pose"
+                        ),
+                        stop_reason="no_feasible_candidate",
+                    )
+            active_observations = (
+                set(camera_constraints.required_observations)
+                | set(camera_constraints.preserved_observations)
+            )
+            if (
+                acquisition_state.stage == "vlm"
+                and active_observations
+                & SEMANTIC_SELECTION_OBSERVATIONS
+            ):
+                vlm_selection_mode_override = "candidate_only"
+
             while True:
                 selector = self._selector_for_stage(acquisition_state.stage)
                 if selector is None:
@@ -592,6 +742,15 @@ class VLMEvaluationController:
                     deterministic_selection=last_deterministic_selection,
                     max_plans=self.control.vlm_max_repair_plans,
                 )
+                if (
+                    acquisition_state.stage == "vlm"
+                    and candidates
+                    and not repair_plans
+                ):
+                    # VLM-only selection and non-conflict deterministic
+                    # exhaustion choose among trusted previews. Repair-plan
+                    # mode is reserved for an actual diagnosed conflict.
+                    vlm_selection_mode_override = "candidate_only"
                 selection_request = _build_selection_request(
                     control=self.control,
                     request=judge_request,
@@ -610,7 +769,109 @@ class VLMEvaluationController:
                     actions_used=actions_used,
                     rounds_used=rounds_used,
                     total_images_acquired=total_images_acquired,
+                    vlm_selection_mode_override=(
+                        vlm_selection_mode_override
+                    ),
                 )
+                if (
+                    acquisition_state.stage == "vlm"
+                    and vlm_selection_mode_override
+                    == "candidate_only"
+                    and preview_episode
+                    != acquisition_state.episode_index
+                ):
+                    requires_previews = bool(
+                        getattr(
+                            selector,
+                            "requires_candidate_previews",
+                            False,
+                        )
+                    )
+                    if self.candidate_preview_renderer is None:
+                        if requires_previews:
+                            return unresolved(
+                                reason=(
+                                    "production semantic camera selection "
+                                    "requires trusted candidate previews"
+                                ),
+                                stop_reason=(
+                                    "camera_preview_renderer_unavailable"
+                                ),
+                            )
+                    else:
+                        try:
+                            preview_result = (
+                                self.candidate_preview_renderer.render(
+                                    selection_request
+                                )
+                            )
+                        except Exception as exc:
+                            trace.append(
+                                {
+                                    "stage": "candidate_preview_render",
+                                    "episode_index": (
+                                        acquisition_state.episode_index
+                                    ),
+                                    "status": "failed",
+                                    "error": (
+                                        f"{type(exc).__name__}: {exc}"
+                                    ),
+                                }
+                            )
+                            return unresolved(
+                                reason=(
+                                    "trusted camera candidate preview "
+                                    "rendering failed"
+                                ),
+                                stop_reason="camera_preview_render_failed",
+                            )
+                        candidates = tuple(
+                            deepcopy(preview_result.candidates)
+                        )
+                        preview_episode = (
+                            acquisition_state.episode_index
+                        )
+                        selection_request = replace(
+                            selection_request,
+                            candidate_views=candidates,
+                        )
+                        preview_count = int(
+                            preview_result.provenance.get(
+                                "preview_render_count",
+                                len(candidates),
+                            )
+                        )
+                        trace.append(
+                            {
+                                "stage": "candidate_preview_render",
+                                "episode_index": (
+                                    acquisition_state.episode_index
+                                ),
+                                "status": "completed",
+                                "candidate_ids": [
+                                    str(item["id"])
+                                    for item in candidates
+                                ],
+                                "manifest_path": (
+                                    preview_result.manifest_path
+                                ),
+                                "provenance": deepcopy(
+                                    preview_result.provenance
+                                ),
+                            }
+                        )
+                        telemetry.record_preview_render(
+                            stage="vlm",
+                            preview_count=preview_count,
+                            gpu_time_seconds=_render_duration(
+                                preview_result.provenance
+                            ),
+                            evidence_round=rounds_used + 1,
+                            episode_index=(
+                                acquisition_state.episode_index
+                            ),
+                            provenance=preview_result.provenance,
+                        )
                 selection_execution = repair_executor.select_once(
                     selector=selector,
                     request=selection_request,
@@ -704,6 +965,11 @@ class VLMEvaluationController:
                         total_images_acquired=total_images_acquired,
                     )
                 ):
+                    if (
+                        escalation_reason
+                        == "semantic_selection_required"
+                    ):
+                        vlm_selection_mode_override = "candidate_only"
                     continue
                 if acquisition_state.stage == "vlm":
                     acquisition_state.mark_vlm_failed(selection.outcome)

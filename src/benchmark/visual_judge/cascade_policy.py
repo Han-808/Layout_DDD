@@ -10,6 +10,7 @@ NORMAL_ESCALATION_REASONS = {
     "no_feasible_candidate",
     "camera_constraint_conflict",
     "candidate_ranking_exhausted",
+    "semantic_selection_required",
 }
 ENGINEERING_FAILURE_REASONS = {
     "selector_exception",

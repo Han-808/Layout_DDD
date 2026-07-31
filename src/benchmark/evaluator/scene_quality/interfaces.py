@@ -613,7 +613,22 @@ def evaluate_scene_quality_interfaces(
         "resolved_score": resolved_score,
         "affects_score": bool(active),
         "affects_aggregation": bool(active),
-        "renderer_invoked": False,
+        "renderer_invoked": any(
+            bool(entry.get("renderer_invoked"))
+            for entry in metric_reports.values()
+        ),
+        "preview_renderer_invoked": any(
+            bool(entry.get("preview_renderer_invoked"))
+            for entry in metric_reports.values()
+        ),
+        "preview_render_count": sum(
+            int(entry.get("preview_render_count") or 0)
+            for entry in metric_reports.values()
+        ),
+        "final_render_count": sum(
+            int(entry.get("final_render_count") or 0)
+            for entry in metric_reports.values()
+        ),
         "camera_evidence_provider_invoked": any(
             bool(entry["evidence_request"]["provider_invoked"])
             for entry in metric_reports.values()
@@ -878,6 +893,14 @@ def _evaluate_metric(
         "reason": None,
         "score": None,
         "affects_score": False,
+        "renderer_invoked": _evidence_renderer_invoked(
+            evidence_resolution
+        ),
+        "preview_renderer_invoked": False,
+        "preview_render_count": 0,
+        "final_render_count": (
+            _provider_render_count(evidence_resolution)
+        ),
         "requested_camera_scope": scope,
         "declared_camera_scope": declared_scope,
         "compatibility_scope_fallback": (
@@ -907,7 +930,9 @@ def _evaluate_metric(
             "camera_pose_mode": policy.get("camera_pose_mode"),
             "target_object_ids": selected_object_ids,
             "target_group_ids": selected_group_ids,
-            "renderer_invoked": False,
+            "renderer_invoked": _evidence_renderer_invoked(
+                evidence_resolution
+            ),
             "provider_invoked": bool(evidence_resolution["provider_invoked"]),
             "provider_status": evidence_resolution["provider_status"],
             "provider_reason": evidence_resolution["provider_reason"],
@@ -1024,8 +1049,23 @@ def _evaluate_metric(
     )
     base["evidence_request"]["vlm_invoked"] = True
     base["vlm_invoked"] = True
+    audit_records = getattr(vlm_judge, "audit_records", None)
+    audit_start = (
+        len(audit_records)
+        if isinstance(audit_records, list)
+        else None
+    )
     try:
         raw = _call_scene_quality_judge(vlm_judge, request)
+        if (
+            audit_start is not None
+            and isinstance(audit_records, list)
+            and len(audit_records) > audit_start
+        ):
+            _apply_controller_render_audit(
+                base,
+                audit_records[-1],
+            )
         adjusted = _apply_prompt_exemptions(
             raw,
             metric_name=metric_name,
@@ -1183,6 +1223,9 @@ def _resolve_metric_evidence(
         )
         provider_status = provider_result["status"]
         provider_reason = provider_result["reason"]
+        provider_usage = deepcopy(
+            provider_result.get("provider_usage")
+        )
         scoped_paths = provider_result["paths"]
         provider_global_paths = provider_result.get("global_paths") or []
         for path in provider_global_paths:
@@ -1192,6 +1235,9 @@ def _resolve_metric_evidence(
             source = "camera_evidence_provider"
     elif not scoped_paths:
         provider_reason = f"{scope}_render_evidence_unavailable"
+        provider_usage = None
+    else:
+        provider_usage = None
 
     scoped_image_budget = policy.get("scoped_image_budget")
     if scoped_image_budget is not None:
@@ -1219,6 +1265,7 @@ def _resolve_metric_evidence(
             "global_context_count": len(global_paths),
             "scoped_evidence_count": len(scoped_paths),
             "missing_paths": missing_paths,
+            "provider_usage": provider_usage,
         }
 
     resolved: list[str] = []
@@ -1244,6 +1291,7 @@ def _resolve_metric_evidence(
         "global_context_count": len(global_paths),
         "scoped_evidence_count": len(scoped_paths),
         "missing_paths": [],
+        "provider_usage": provider_usage,
     }
 
 
@@ -1263,6 +1311,60 @@ def _clean_evidence_paths(value: Any) -> list[str]:
             if isinstance(path, (str, Path)) and str(path).strip() and str(path) not in clean:
                 clean.append(str(path))
     return clean
+
+
+def _evidence_renderer_invoked(
+    resolution: dict[str, Any],
+) -> bool:
+    usage = resolution.get("provider_usage")
+    if not isinstance(usage, dict):
+        return False
+    # A cached packet is evidence reuse, not a renderer invocation in this
+    # metric call. Opaque providers do not get guessed into render telemetry.
+    return (
+        resolution.get("provider_invoked") is True
+        and usage.get("cache_hit") is False
+        and bool(usage.get("evidence_refs"))
+    )
+
+
+def _provider_render_count(resolution: dict[str, Any]) -> int:
+    if not _evidence_renderer_invoked(resolution):
+        return 0
+    usage = resolution.get("provider_usage")
+    refs = usage.get("evidence_refs") if isinstance(usage, dict) else []
+    return len(refs) if isinstance(refs, list) else 0
+
+
+def _apply_controller_render_audit(
+    report: dict[str, Any],
+    record: Any,
+) -> None:
+    audit = (
+        record.get("audit")
+        if isinstance(record, dict)
+        else None
+    )
+    telemetry = (
+        audit.get("experiment_telemetry")
+        if isinstance(audit, dict)
+        else None
+    )
+    if not isinstance(telemetry, dict):
+        return
+    preview_count = int(
+        telemetry.get("preview_render_count") or 0
+    )
+    final_count = int(telemetry.get("full_render_count") or 0)
+    report["renderer_invoked"] = bool(
+        report.get("renderer_invoked") or final_count
+    )
+    report["preview_renderer_invoked"] = preview_count > 0
+    report["preview_render_count"] = preview_count
+    report["final_render_count"] = final_count
+    report["evidence_request"]["renderer_invoked"] = report[
+        "renderer_invoked"
+    ]
 
 
 def _request_scene_quality_evidence(
@@ -1349,6 +1451,9 @@ def _request_scene_quality_evidence(
             "error": f"{type(exc).__name__}: {exc}",
             "paths": [],
         }
+    provider_usage = deepcopy(
+        getattr(provider, "last_call_usage", None)
+    )
     if isinstance(raw, dict):
         status = str(raw.get("status") or "available").strip().lower()
         if status in {"failed", "error"} or raw.get("error"):
@@ -1357,12 +1462,14 @@ def _request_scene_quality_evidence(
                 "reason": "camera_evidence_provider_reported_failure",
                 "error": str(raw.get("error") or status),
                 "paths": [],
+                "provider_usage": provider_usage,
             }
         if status in {"insufficient", "unavailable", "not_available"}:
             return {
                 "status": "insufficient",
                 "reason": str(raw.get("reason") or "local_render_evidence_not_available"),
                 "paths": [],
+                "provider_usage": provider_usage,
             }
         paths, global_paths = _split_provider_evidence(
             raw.get("render_evidence_items")
@@ -1380,12 +1487,14 @@ def _request_scene_quality_evidence(
             "status": "insufficient",
             "reason": "camera_evidence_provider_returned_no_evidence",
             "paths": [],
+            "provider_usage": provider_usage,
         }
     return {
         "status": "available",
         "reason": None,
         "paths": paths,
         "global_paths": global_paths,
+        "provider_usage": provider_usage,
     }
 
 

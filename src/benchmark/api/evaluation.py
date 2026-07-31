@@ -94,6 +94,7 @@ from benchmark.scene_io.validate import validate_object_plan
 from benchmark.task_contract import require_scene_matches_architecture
 from benchmark.utils.io import load_yaml, read_json, write_json
 from benchmark.visual_judge import (
+    CameraCandidatePreviewRenderer,
     CameraViewEvidenceRenderer,
     CameraEvidenceProvider,
     DeterministicLocalCameraSelector,
@@ -101,6 +102,7 @@ from benchmark.visual_judge import (
     build_conditional_active_camera_evidence_provider,
     build_controlled_vlm_judge,
     build_openai_compatible_vlm_judge,
+    build_openai_compatible_camera_selector,
     evaluate_vlm_category,
     resolve_vlm_evaluation_control,
 )
@@ -152,6 +154,7 @@ def _run_canonical_evaluate(
     deterministic_camera_selector: object | None = None,
     vlm_camera_selector: object | None = None,
     evidence_renderer: object | None = None,
+    candidate_preview_renderer: object | None = None,
     metric_applicability: dict[str, bool] | None = None,
     spatial_fidelity_ontology: dict | str | Path | None = None,
     visual_style_spec: dict | str | Path | None = None,
@@ -240,6 +243,12 @@ def _run_canonical_evaluate(
             if grouping_identity_legend is not None
             else request.get("identity_overlay_legend")
         ),
+        expected_object_ids=tuple(
+            str(item.get("id"))
+            for item in normalized_scene.get("objects", [])
+            if isinstance(item, dict)
+            and str(item.get("id") or "").strip()
+        ),
     )
     overview_render_evidence = _overview_render_evidence(l3_render_evidence)
     evaluation_plan = build_evaluation_plan(
@@ -264,6 +273,7 @@ def _run_canonical_evaluate(
         deterministic_camera_selector=deterministic_camera_selector,
         vlm_camera_selector=vlm_camera_selector,
         evidence_renderer=evidence_renderer,
+        candidate_preview_renderer=candidate_preview_renderer,
         strict=_explicit_non_vlm_strict_override(vlm_judge),
     )
     resolved_asset_policy = resolve_asset_policy(
@@ -572,6 +582,7 @@ def _run_legacy_game_evaluate(
     deterministic_camera_selector: object | None = None,
     vlm_camera_selector: object | None = None,
     evidence_renderer: object | None = None,
+    candidate_preview_renderer: object | None = None,
     metric_applicability: dict[str, bool] | None = None,
     spatial_fidelity_ontology: dict | str | Path | None = None,
     visual_style_spec: dict | str | Path | None = None,
@@ -627,6 +638,7 @@ def _run_legacy_game_evaluate(
         deterministic_camera_selector=deterministic_camera_selector,
         vlm_camera_selector=vlm_camera_selector,
         evidence_renderer=evidence_renderer,
+        candidate_preview_renderer=candidate_preview_renderer,
         strict=_explicit_non_vlm_strict_override(vlm_judge),
     )
     resolved_visual_style_spec = _resolve_visual_style_spec(visual_style_spec)
@@ -1236,19 +1248,64 @@ def main() -> None:
         if camera_selector_config
         else None
     )
+    l3_vlm_camera_selector = (
+        build_openai_compatible_camera_selector(
+            camera_selector_config
+        )
+        if camera_selector_config
+        else None
+    )
     collision_geometry = _load_collision_geometry_arg(args.collision_geometry)
     local_view_provider = None
     l3_initial_evidence_provider = None
     deterministic_camera_selector = None
     vlm_camera_selector = None
     evidence_renderer = None
+    candidate_preview_renderer = None
     evaluation_profile = load_yaml(
         _path_arg(args.evaluation_profile),
         default={},
     )
-    if resolved_camera_pose_mode is not None:
+    l3_camera_runtime_requested = (
+        not is_legacy_game_profile(evaluation_profile)
+        and (
+            resolved_camera_pose_mode is not None
+            or vlm_control_config is not None
+            or l3_vlm_camera_selector is not None
+        )
+    )
+    camera_runtime_requested = (
+        resolved_camera_pose_mode is not None
+        or l3_camera_runtime_requested
+    )
+    renderer = None
+    evidence_dir = None
+    if camera_runtime_requested:
         if not args.camera_blend_file or not args.blender_bin:
-            parser.error("--camera-pose-mode requires --camera-blend-file and --blender-bin")
+            parser.error(
+                "camera acquisition requires --camera-blend-file and "
+                "--blender-bin"
+            )
+        renderer = BlenderRenderer(
+            blender_bin=_path_arg(args.blender_bin),
+            timeout_seconds=args.blender_timeout_seconds,
+            width=args.camera_render_width,
+            height=args.camera_render_height,
+            render_engine=args.camera_render_engine,
+            cycles_device=args.camera_cycles_device,
+            cycles_samples=args.camera_cycles_samples,
+            cycles_denoising=args.camera_cycles_denoising,
+            preview_render_engine=args.camera_preview_render_engine,
+            preview_width=args.camera_preview_width,
+            preview_height=args.camera_preview_height,
+            preview_cycles_samples=args.camera_preview_cycles_samples,
+        )
+        evidence_dir = (
+            _path_arg(args.camera_evidence_dir)
+            if args.camera_evidence_dir
+            else _path_arg(args.out).parent / "camera_evidence"
+        )
+    if resolved_camera_pose_mode is not None:
         if vlm_judge is None:
             parser.error(
                 "camera pose mode requires a configured VLM judge; bbox_track avoids only "
@@ -1279,25 +1336,8 @@ def main() -> None:
                 "camera active candidate count must be between camera pose max "
                 "views and 8"
             )
-        renderer = BlenderRenderer(
-            blender_bin=_path_arg(args.blender_bin),
-            timeout_seconds=args.blender_timeout_seconds,
-            width=args.camera_render_width,
-            height=args.camera_render_height,
-            render_engine=args.camera_render_engine,
-            cycles_device=args.camera_cycles_device,
-            cycles_samples=args.camera_cycles_samples,
-            cycles_denoising=args.camera_cycles_denoising,
-            preview_render_engine=args.camera_preview_render_engine,
-            preview_width=args.camera_preview_width,
-            preview_height=args.camera_preview_height,
-            preview_cycles_samples=args.camera_preview_cycles_samples,
-        )
-        evidence_dir = (
-            _path_arg(args.camera_evidence_dir)
-            if args.camera_evidence_dir
-            else _path_arg(args.out).parent / "camera_evidence"
-        )
+        assert renderer is not None
+        assert evidence_dir is not None
         if args.camera_active_fallback:
             local_view_provider = build_conditional_active_camera_evidence_provider(
                 renderer=renderer,
@@ -1329,39 +1369,46 @@ def main() -> None:
                 collision_contour=True,
                 collision_geometry=collision_geometry,
             )
-        if not is_legacy_game_profile(evaluation_profile):
-            l3_initial_evidence_provider = CameraEvidenceProvider(
-                renderer=renderer,
-                blend_file=_path_arg(args.camera_blend_file),
-                out_dir=evidence_dir / "l3_initial",
-                mode=resolved_camera_pose_mode,
-                metric_modes=camera_pose_metric_modes,
-                selector=camera_selector,
-                max_views=args.camera_pose_max_views,
-                max_steps=args.camera_pose_max_steps,
-                candidate_count=(
-                    args.camera_active_candidate_count
-                    if args.camera_active_fallback
-                    else max(args.camera_pose_max_views, 6)
-                ),
-                collision_overlay=False,
-                collision_contour=False,
-                collision_geometry=collision_geometry,
-                active_repair=False,
-            )
-            deterministic_camera_selector = (
-                DeterministicLocalCameraSelector(
-                    candidate_policy=(
-                        l3_initial_evidence_provider.candidate_policy
-                    )
+    if l3_camera_runtime_requested:
+        assert renderer is not None
+        assert evidence_dir is not None
+        l3_initial_evidence_provider = CameraEvidenceProvider(
+            renderer=renderer,
+            blend_file=_path_arg(args.camera_blend_file),
+            out_dir=evidence_dir / "l3_initial",
+            mode="visibility_ranked",
+            metric_modes={},
+            selector=None,
+            max_views=args.camera_pose_max_views,
+            max_steps=args.camera_pose_max_steps,
+            candidate_count=(
+                args.camera_active_candidate_count
+                if args.camera_active_fallback
+                else max(args.camera_pose_max_views, 6)
+            ),
+            collision_overlay=False,
+            collision_contour=False,
+            collision_geometry=collision_geometry,
+            active_repair=False,
+        )
+        deterministic_camera_selector = (
+            DeterministicLocalCameraSelector(
+                candidate_policy=(
+                    l3_initial_evidence_provider.candidate_policy
                 )
             )
-            vlm_camera_selector = camera_selector
-            evidence_renderer = CameraViewEvidenceRenderer(
-                renderer=renderer,
-                blend_file=_path_arg(args.camera_blend_file),
-                out_dir=evidence_dir / "l3_controller",
-            )
+        )
+        vlm_camera_selector = l3_vlm_camera_selector
+        evidence_renderer = CameraViewEvidenceRenderer(
+            renderer=renderer,
+            blend_file=_path_arg(args.camera_blend_file),
+            out_dir=evidence_dir / "l3_controller",
+        )
+        candidate_preview_renderer = CameraCandidatePreviewRenderer(
+            renderer=renderer,
+            blend_file=_path_arg(args.camera_blend_file),
+            out_dir=evidence_dir / "l3_controller",
+        )
 
     report = run_evaluate(
         scene=read_json(_path_arg(args.scene)),
@@ -1398,6 +1445,9 @@ def main() -> None:
                 ),
                 "vlm_camera_selector": vlm_camera_selector,
                 "evidence_renderer": evidence_renderer,
+                "candidate_preview_renderer": (
+                    candidate_preview_renderer
+                ),
             }
             if not is_legacy_game_profile(evaluation_profile)
             else {}
@@ -2106,11 +2156,27 @@ def _resolve_object_grouping_report(
         if problems and (
             not allow_non_canonical_input or structural_problem
         ):
+            reported_backend = (
+                str(value.get("grouping_backend") or "unknown")
+                if isinstance(value, dict)
+                else "unspecified_list_contract"
+            )
+            reported_policy = (
+                str(value.get("grouping_policy_id") or "unknown")
+                if isinstance(value, dict)
+                else "unspecified_list_contract"
+            )
             return {
                 "status": "unavailable",
                 "source": "caller_supplied_frozen_grouping",
-                "grouping_backend": "vlm",
-                "grouping_policy_id": VLM_GROUPING_POLICY_ID,
+                "grouping_backend": reported_backend,
+                "grouping_policy_id": reported_policy,
+                "reported_grouping_backend": reported_backend,
+                "reported_grouping_policy_id": reported_policy,
+                "expected_grouping_backend": "vlm",
+                "expected_grouping_policy_id": (
+                    VLM_GROUPING_POLICY_ID
+                ),
                 "reason": "non_canonical_grouping_input_rejected",
                 "non_canonical_grouping_input": True,
                 "validation_errors": problems,

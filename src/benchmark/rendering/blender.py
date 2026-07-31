@@ -221,6 +221,14 @@ class BlenderRenderer:
             "blank_views": blank,
         }
         objects = [item for item in manifest.get("objects", []) if isinstance(item, dict)]
+        identity_validation = _validate_identity_render(
+            manifest,
+            objects=objects,
+        )
+        if identity_validation is not None:
+            manifest["render_validation"][
+                "identity_map"
+            ] = identity_validation
         asset_mesh_count = sum(item.get("representation") == "asset_mesh" for item in objects)
         proxy_count = sum(item.get("representation") == "bbox_proxy" for item in objects)
         manifest["asset_coverage"] = {
@@ -782,6 +790,108 @@ def _saved_image_stats(path: Path) -> dict[str, Any]:
             }
     except OSError as exc:
         raise BlenderRenderError(f"Cannot inspect rendered evidence image {path}: {exc}") from exc
+
+
+def _validate_identity_render(
+    manifest: dict[str, Any],
+    *,
+    objects: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    identity_render = manifest.get("identity_render")
+    if not isinstance(identity_render, dict):
+        # Older renderer manifests remain an explicit degraded grouping input.
+        return None
+    expected_ids = {
+        str(item.get("id") or "").strip()
+        for item in objects
+        if str(item.get("id") or "").strip()
+    }
+    status = str(identity_render.get("status") or "")
+    if status == "not_applicable":
+        if expected_ids:
+            raise BlenderRenderError(
+                "identity render cannot be not_applicable when renderable "
+                "canonical objects exist"
+            )
+        return {
+            "status": "not_applicable",
+            "expected_object_count": 0,
+            "legend_object_count": 0,
+            "visible_exact_identity_count": 0,
+        }
+    if status != "available":
+        raise BlenderRenderError(
+            "identity_render.status must be available or not_applicable"
+        )
+    legend = manifest.get("identity_legend")
+    if not isinstance(legend, dict) or not legend:
+        raise BlenderRenderError(
+            "available identity render requires identity_legend"
+        )
+    legend_ids = [str(value).strip() for value in legend.values()]
+    if (
+        any(not value for value in legend_ids)
+        or len(legend_ids) != len(set(legend_ids))
+        or set(legend_ids) != expected_ids
+    ):
+        raise BlenderRenderError(
+            "identity legend must map exactly once to every rendered "
+            "canonical object ID"
+        )
+    views = [
+        item
+        for item in manifest.get("views", [])
+        if isinstance(item, dict)
+        and item.get("name") == "identity_map"
+    ]
+    if len(views) != 1:
+        raise BlenderRenderError(
+            "available identity render requires exactly one identity_map view"
+        )
+    path = Path(str(views[0].get("path") or ""))
+    try:
+        with Image.open(path) as source:
+            raw_pixels = source.convert("RGB").tobytes()
+            pixels = set(
+                zip(
+                    raw_pixels[0::3],
+                    raw_pixels[1::3],
+                    raw_pixels[2::3],
+                )
+            )
+    except OSError as exc:
+        raise BlenderRenderError(
+            f"cannot decode identity-map image {path}: {exc}"
+        ) from exc
+    palette: set[tuple[int, int, int]] = set()
+    for alias in legend:
+        text = str(alias).strip()
+        if (
+            len(text) != 7
+            or not text.startswith("#")
+        ):
+            raise BlenderRenderError(
+                "identity legend aliases must be #RRGGBB colors"
+            )
+        try:
+            palette.add(tuple(bytes.fromhex(text[1:])))
+        except ValueError as exc:
+            raise BlenderRenderError(
+                "identity legend contains an invalid #RRGGBB color"
+            ) from exc
+    visible_exact = len(palette & pixels)
+    if expected_ids and visible_exact == 0:
+        raise BlenderRenderError(
+            "identity-map PNG contains no exact identity-legend color; "
+            "check Blender color-management settings"
+        )
+    return {
+        "status": "verified",
+        "expected_object_count": len(expected_ids),
+        "legend_object_count": len(legend_ids),
+        "visible_exact_identity_count": visible_exact,
+        "color_encoding": identity_render.get("color_encoding"),
+    }
 
 
 def _load_render_manifest(path: Path, *, label: str) -> dict[str, Any]:

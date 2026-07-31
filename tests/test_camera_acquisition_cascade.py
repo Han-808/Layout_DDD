@@ -403,6 +403,13 @@ def test_raw_vlm_selector_is_wrapped_with_configured_candidate_mode() -> None:
 def test_deterministic_capability_gap_preserves_candidates_for_vlm() -> None:
     calls = []
     payloads = []
+    need_interaction_side = _need_more()
+    need_interaction_side["evidence_request"][
+        "missing_observations"
+    ] = ["interaction_side_visible"]
+    need_interaction_side["evidence_request"][
+        "view_goal"
+    ] = "show the usable interaction side"
 
     def choose_candidate(payload):
         calls.append("vlm_model")
@@ -413,7 +420,7 @@ def test_deterministic_capability_gap_preserves_candidates_for_vlm() -> None:
         }
 
     controller = VLMEvaluationController(
-        judge=_Judge([_need_more(), _valid()], calls),
+        judge=_Judge([need_interaction_side, _valid()], calls),
         renderer=_Renderer([_rendered("vlm")], calls),
         deterministic_camera_selector=DeterministicLocalCameraSelector(),
         vlm_camera_selector=ActiveVLMCameraSelector(
@@ -435,7 +442,17 @@ def test_deterministic_capability_gap_preserves_candidates_for_vlm() -> None:
     )
 
     result = controller.run(
-        _request(),
+        JudgeRequest(
+            task="functional_semantic_fidelity",
+            metric="functional_semantic_fidelity",
+            claim_or_event={"object_ids": ["a", "b"]},
+            scene_context={
+                "objects": [{"id": "a"}, {"id": "b"}]
+            },
+            deterministic_evidence={"status": "unresolved"},
+            visual_evidence=("initial.png",),
+            rubric={"scope": "functional_semantic_fidelity"},
+        ),
         candidate_views=({"id": "vlm-view"},),
     )
 
@@ -452,11 +469,13 @@ def test_deterministic_capability_gap_preserves_candidates_for_vlm() -> None:
     assert [
         candidate["id"] for candidate in payloads[0]["candidate_views"]
     ] == ["vlm-view"]
+    assert payloads[0]["selection_mode"] == "candidate_only"
+    assert not payloads[0].get("trusted_repair_plans")
     assert (
         payloads[0]["deterministic_rejected_candidates"][0][
             "reason_codes"
         ]
-        == ["observation_not_supported_by_deterministic_selector"]
+        == ["semantic_selection_required"]
     )
 
 
@@ -689,7 +708,7 @@ def test_repeated_judge_request_escalates_only_after_deterministic_failure() -> 
     assert selector_events[0]["evidence_round"] == 1
     assert selector_events[0]["episode_index"] == 1
     assert selector_events[0]["selector_backend"] == "deterministic"
-    assert selector_events[2]["selection_mode"] == "repair_plan"
+    assert selector_events[2]["selection_mode"] == "candidate_only"
     gate_events = [
         event
         for event in telemetry["events"]
@@ -1383,6 +1402,11 @@ def test_group_scoped_judge_repair_preserves_context_and_subset_focus() -> None:
         0.5,
         0.5,
     ]
+    assert result.audit["focus_target_ids"] == ["a"]
+    assert result.audit["authoritative_group_member_ids"] == [
+        "a",
+        "b",
+    ]
     assert deterministic.requests[0].context["target_extent"] == [
         2.0,
         1.0,
@@ -1799,7 +1823,7 @@ def test_total_selector_budget_is_shared_across_judge_requests() -> None:
     assert calls.count("render") == 1
 
 
-def test_controller_runs_real_repair_plan_vlm_adapter_then_renderer():
+def test_no_conflict_uses_candidate_only_instead_of_inventing_repair_plan():
     calls = []
     deterministic = _Selector(
         "deterministic",
@@ -1807,17 +1831,17 @@ def test_controller_runs_real_repair_plan_vlm_adapter_then_renderer():
         calls,
     )
 
-    def choose_plan(payload):
+    def choose_candidate(payload):
         calls.append("vlm_model")
+        assert payload["selection_mode"] == "candidate_only"
+        assert not payload.get("trusted_repair_plans")
         return {
-            "selected_plan_id": payload["trusted_repair_plans"][0][
-                "plan_id"
-            ],
-            "reason": "preserve all constraints and try a new view",
+            "selected_view_ids": ["vlm-view"],
+            "reason": "select one trusted candidate preview",
         }
 
     vlm = ActiveVLMCameraSelector(
-        choose_plan,
+        choose_candidate,
         selection_mode="repair_plan",
         repair_solver=DeterministicCameraRepairSolver(),
     )
@@ -1880,13 +1904,9 @@ def test_controller_runs_real_repair_plan_vlm_adapter_then_renderer():
         for event in result.audit["trace"]
         if event.get("selection_stage") == "vlm"
     )
-    assert selection["selected_plan_id"] == (
-        "preserve_all_constraints"
-    )
-    # A no-feasible search records evaluated candidates separately from
-    # rendered attempts, so the trusted repair plan may re-evaluate det-view
-    # under its new constraint set.
-    assert selection["selected_view_ids"] == ["det-view"]
+    assert selection["outcome"] == "selected"
+    assert selection["selected_view_ids"] == ["vlm-view"]
+    assert selection["selected_plan_id"] is None
 
 
 def test_conflict_repair_plan_is_reachable_from_controller(tmp_path) -> None:

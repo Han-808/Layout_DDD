@@ -823,8 +823,12 @@ def test_scene_harness_executes_group_l3_deterministic_to_vlm_cascade(
         out_dir=out_dir,
         evaluator_vlm_judge=judge,
         blender_bin="/usr/bin/false",
-        camera_pose_mode="auto",
         camera_active_selector=selector,
+        vlm_evaluation_control={
+            "camera_acquisition": {
+                "policy": "deterministic_then_vlm",
+            }
+        },
         object_grouping_report={
             "status": "complete",
             "grouping_backend": "vlm",
@@ -859,6 +863,11 @@ def test_scene_harness_executes_group_l3_deterministic_to_vlm_cascade(
         "scale_consistency"
     ]
     assert metric["judgement"]["verdict"] == "valid"
+    assert metric["renderer_invoked"] is True
+    assert metric["final_render_count"] >= 1
+    assert report["reports"]["scene_quality"][
+        "renderer_invoked"
+    ] is True
     assert len(judge.scene_quality_requests) == 2
     assert len(selector.requests) == 1
     grouping_protocol = report["evaluation_config"]["object_grouping"][
@@ -877,6 +886,11 @@ def test_scene_harness_executes_group_l3_deterministic_to_vlm_cascade(
         "vlm_selector_configured": True,
         "renderer": "CameraViewEvidenceRenderer",
         "scene_access": "read_only",
+        "initial_group_camera": {
+            "mode": "visibility_ranked",
+            "selector": "deterministic",
+            "source": "default",
+        },
     }
     controlled = report["evaluation_config"]["vlm_evaluation_control"][
         "integration"
@@ -890,8 +904,10 @@ def test_scene_harness_executes_group_l3_deterministic_to_vlm_cascade(
         "evidence_gate",
         "judge",
         "acquisition_planner",
+        "trusted_candidate_bank",
         "camera_selector",
         "camera_escalation",
+        "candidate_preview_render",
         "camera_selector",
         "render",
         "evidence_gate",

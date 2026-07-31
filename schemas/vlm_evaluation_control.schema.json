@@ -12,6 +12,10 @@
       "allow_freeform_pose": false,
       "allow_scene_mutation": false
     },
+    "initial_group_camera": {
+      "mode": "visibility_ranked",
+      "selector": "deterministic"
+    },
     "camera_acquisition": {
       "policy": "deterministic_then_vlm",
       "deterministic": {
@@ -102,6 +106,24 @@
         "allow_scene_mutation": {
           "const": false,
           "default": false
+        }
+      }
+    },
+    "initial_group_camera": {
+      "type": "object",
+      "additionalProperties": false,
+      "default": {
+        "mode": "visibility_ranked",
+        "selector": "deterministic"
+      },
+      "properties": {
+        "mode": {
+          "const": "visibility_ranked",
+          "default": "visibility_ranked"
+        },
+        "selector": {
+          "const": "deterministic",
+          "default": "deterministic"
         }
       }
     },

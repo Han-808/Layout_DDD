@@ -16,6 +16,77 @@ CAMERA_SELECTION_OUTCOMES = {
 
 
 @dataclass(frozen=True)
+class TrustedCameraCandidateBank:
+    """Controller-owned, technically validated camera candidates.
+
+    The bank contains poses only.  Semantic preference is deliberately left to
+    a CameraSelector and render sufficiency remains the Judge's responsibility.
+    """
+
+    candidates: tuple[dict[str, Any], ...]
+    rejected_candidates: tuple[dict[str, Any], ...] = ()
+    backend: str = "deterministic"
+    provenance: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        seen: set[str] = set()
+        for candidate in self.candidates:
+            if not isinstance(candidate, dict):
+                raise ValueError(
+                    "trusted camera candidates must be JSON objects"
+                )
+            candidate_id = str(candidate.get("id") or "").strip()
+            if not candidate_id or candidate_id in seen:
+                raise ValueError(
+                    "trusted camera candidate IDs must be unique and non-empty"
+                )
+            seen.add(candidate_id)
+            pose = candidate.get("pose")
+            if not isinstance(pose, dict):
+                raise ValueError(
+                    "trusted camera candidate requires a validated pose"
+                )
+            for key in ("location", "target"):
+                value = pose.get(key)
+                if (
+                    not isinstance(value, (list, tuple))
+                    or len(value) != 3
+                    or any(
+                        isinstance(item, bool)
+                        or not isinstance(item, (int, float))
+                        for item in value
+                    )
+                ):
+                    raise ValueError(
+                        f"trusted camera candidate pose.{key} must be a "
+                        "numeric 3-vector"
+                    )
+            lens = pose.get("lens_mm")
+            if (
+                isinstance(lens, bool)
+                or not isinstance(lens, (int, float))
+                or float(lens) <= 0.0
+            ):
+                raise ValueError(
+                    "trusted camera candidate pose.lens_mm must be positive"
+                )
+            if candidate.get("technical_feasibility") is not True:
+                raise ValueError(
+                    "trusted camera candidates must pass technical feasibility"
+                )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "candidates": list(deepcopy(self.candidates)),
+            "rejected_candidates": list(
+                deepcopy(self.rejected_candidates)
+            ),
+            "backend": self.backend,
+            "provenance": deepcopy(self.provenance),
+        }
+
+
+@dataclass(frozen=True)
 class CameraSelectionRequest:
     task: str
     metric: str

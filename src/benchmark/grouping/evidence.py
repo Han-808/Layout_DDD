@@ -34,6 +34,7 @@ def prepare_grouping_evidence(
     value: Any,
     *,
     identity_legend: dict[str, Any] | None = None,
+    expected_object_ids: list[str] | tuple[str, ...] | None = None,
 ) -> GroupingEvidencePacket:
     """Normalize role-aware grouping evidence without inventing identity data."""
 
@@ -60,6 +61,24 @@ def prepare_grouping_evidence(
         normalized.append(item)
 
     normalized = _deduplicate_by_path(normalized)
+    if discovered_legend:
+        legend_ids = list(discovered_legend.values())
+        if len(legend_ids) != len(set(legend_ids)):
+            raise ValueError(
+                "grouping identity legend must map one alias to each "
+                "unique canonical object ID"
+            )
+        if expected_object_ids is not None:
+            expected = {
+                str(value).strip()
+                for value in expected_object_ids
+                if str(value).strip()
+            }
+            if set(legend_ids) != expected:
+                raise ValueError(
+                    "grouping identity legend must cover exactly the "
+                    "renderable canonical object IDs"
+                )
     roles = tuple(
         dict.fromkeys(str(item["role"]) for item in normalized)
     )

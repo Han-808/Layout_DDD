@@ -688,6 +688,16 @@ def test_non_vlm_frozen_grouping_is_rejected_unless_diagnostic() -> None:
     )
     assert rejected["status"] == "unavailable"
     assert rejected["non_canonical_grouping_input"] is True
+    assert rejected["reported_grouping_backend"] == "topology"
+    assert (
+        rejected["reported_grouping_policy_id"]
+        == "topology_grouping_v1"
+    )
+    assert rejected["expected_grouping_backend"] == "vlm"
+    assert (
+        rejected["expected_grouping_policy_id"]
+        == "vlm_visual_evidence_scope_v2"
+    )
     assert "grouping_backend_must_be_vlm" in rejected[
         "validation_errors"
     ]
@@ -810,3 +820,38 @@ def test_reference_grouping_configs_construct_expected_backend(
     )
 
     assert algorithm.backend == backend
+
+
+def test_grouping_identity_legend_must_cover_unique_scene_ids(
+    tmp_path: Path,
+) -> None:
+    from PIL import Image
+    from benchmark.grouping import prepare_grouping_evidence
+
+    items = []
+    for name, role in (
+        ("perspective", "global_perspective_rgb"),
+        ("top", "global_top_rgb"),
+        ("identity_map", "global_identity_overlay"),
+    ):
+        path = tmp_path / f"{name}.png"
+        Image.new("RGB", (8, 8), (20, 40, 60)).save(path)
+        item = {
+            "path": str(path),
+            "role": role,
+            "representation": (
+                "identity_map" if name == "identity_map" else "rgb"
+            ),
+        }
+        if name == "identity_map":
+            item["identity_legend"] = {
+                "red": "a",
+                "blue": "a",
+            }
+        items.append(item)
+
+    with pytest.raises(ValueError, match="unique canonical object ID"):
+        prepare_grouping_evidence(
+            items,
+            expected_object_ids=("a", "b"),
+        )

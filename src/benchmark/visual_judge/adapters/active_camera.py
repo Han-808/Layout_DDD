@@ -136,6 +136,9 @@ class ActiveVLMCameraSelector:
         self.last_call_usage: dict[str, int] = {
             "vlm_call_count": 0
         }
+        self.requires_candidate_previews = bool(
+            getattr(selector, "requires_candidate_previews", False)
+        )
         if self.selection_mode == "repair_plan" and not callable(
             getattr(repair_solver, "realize", None)
         ):
@@ -171,10 +174,23 @@ class ActiveVLMCameraSelector:
             raise ValueError(
                 "Camera DSL targets conflict with selector request"
             )
-        if self.selection_mode == "candidate_only":
+        effective_mode = _effective_selection_mode(
+            request,
+            configured=self.selection_mode,
+            allow_freeform_pose=self.allow_freeform_pose,
+        )
+        if effective_mode == "candidate_only":
             return self._select_candidate(request, constraints)
-        if self.selection_mode == "repair_plan":
+        if effective_mode == "repair_plan":
+            if not callable(getattr(self.repair_solver, "realize", None)):
+                raise ValueError(
+                    "repair_plan call requires CameraRepairSolver.realize"
+                )
             return self._select_plan(request, constraints)
+        if not callable(getattr(self.pose_validator, "validate", None)):
+            raise ValueError(
+                "freeform_pose call requires CameraPoseValidator.validate"
+            )
         return self._select_pose(request, constraints)
 
     def _select_candidate(
@@ -377,7 +393,7 @@ class ActiveVLMCameraSelector:
         request: CameraSelectionRequest,
     ) -> tuple[CameraRepairPlan, ...]:
         controller_plans = request.context.get("camera_repair_plans")
-        if controller_plans:
+        if "camera_repair_plans" in request.context:
             if not isinstance(controller_plans, (list, tuple)):
                 raise ValueError(
                     "controller camera_repair_plans must be a JSON list"
@@ -618,6 +634,17 @@ def _vlm_provenance(
         "adapter_version": ACTIVE_VLM_CAMERA_SELECTOR_VERSION,
         "selection_mode": selection_mode,
         "selector_method": adapter.method_name,
+        "selector_backend": str(
+            getattr(
+                adapter.selector,
+                "backend",
+                adapter.backend,
+            )
+        ),
+        "selector_adapter": (
+            f"{type(adapter.selector).__module__}."
+            f"{type(adapter.selector).__qualname__}"
+        ),
         "vlm_call_count": int(
             adapter.last_call_usage.get("vlm_call_count", 1)
         ),
@@ -697,6 +724,21 @@ def _request_metric(
         relation_type=(
             str(relation_type) if relation_type is not None else None
         ),
+    )
+
+
+def _effective_selection_mode(
+    request: CameraSelectionRequest,
+    *,
+    configured: str,
+    allow_freeform_pose: bool,
+) -> str:
+    requested = str(
+        request.context.get("vlm_selection_mode") or configured
+    ).strip()
+    return validate_vlm_selection_mode(
+        requested,
+        allow_freeform_pose=allow_freeform_pose,
     )
 
 

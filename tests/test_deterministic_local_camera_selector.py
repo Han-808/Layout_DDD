@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 from benchmark.visual_judge.adapters.deterministic_camera import (
@@ -218,11 +220,14 @@ def test_unsupported_observation_returns_structured_no_feasible() -> None:
     assert result.outcome == "no_feasible_candidate"
     assert result.attempted_candidate_ids == ("candidate",)
     assert result.reason_codes == (
-        "observation_not_supported_by_deterministic_selector",
+        "semantic_selection_required",
     )
     assert result.rejected_candidates[0]["failed_constraints"] == [
         "interaction_side_visible"
     ]
+    assert (
+        result.provenance["candidate_generation_skipped"] is False
+    )
 
 
 def test_opaque_candidate_fails_closed_as_structured_no_feasible() -> None:
@@ -406,11 +411,32 @@ def test_generated_camera_bank_uses_exact_group_scope() -> None:
         },
     )
 
-    result = DeterministicLocalCameraSelector(
+    selector = DeterministicLocalCameraSelector(
         candidate_generator=generator,
-    ).select(request)
+    )
+    bank = selector.build_candidate_bank(
+        request,
+        constraints=constraints,
+    )
+    result = selector.select(
+        replace(request, candidate_views=bank.candidates)
+    )
 
     assert result.outcome == "selected"
+    selected = bank.candidates[0]
+    assert selected["id"] == "group-view"
+    assert selected["group_id"] == "group_001"
+    assert selected["target_ids"] == ["a", "b"]
+    assert selected["technical_feasibility"] is True
+    assert set(selected["pose"]) >= {
+        "location",
+        "target",
+        "lens_mm",
+    }
+    assert selected["target_visibility_estimate"] is True
+    assert selected["joint_visibility_estimate"] is True
+    assert selected["projected_coverage_estimate"] == 0.1
+    assert selected["view_family"]
     generated = captured[0]["request"]
     assert generated["object_ids"] == ["a", "b"]
     assert generated["target_ids"] == ["a", "b"]
@@ -424,6 +450,90 @@ def test_generated_camera_bank_uses_exact_group_scope() -> None:
         generated["event"]["focus_region"]
         == group_scope["target_bounds"]
     )
+
+
+def test_trusted_bank_keeps_valid_poses_for_real_constraint_conflict():
+    constraints = CameraConstraintSet(
+        target_ids=("a", "b"),
+        required_observations=(
+            "target_visible",
+            "joint_visibility",
+        ),
+        require_joint_visibility=True,
+        relaxable_constraints=(
+            "target_visible",
+            "joint_visibility",
+        ),
+        metric="collision",
+        view_goal="show both targets together",
+    )
+    request = CameraSelectionRequest(
+        task="collision",
+        metric="collision",
+        target_ids=("a", "b"),
+        scene={"objects": [{"id": "a"}, {"id": "b"}]},
+        evidence_goal={},
+        existing_visual_evidence=(),
+        budget={"max_views_per_round": 1, "candidate_budget": 8},
+        constraints=constraints.to_dict(),
+        candidate_views=(
+            _candidate(
+                "target-conflict",
+                target_visible=False,
+                jointly_visible=True,
+            ),
+            _candidate(
+                "joint-conflict",
+                target_visible=True,
+                jointly_visible=False,
+            ),
+        ),
+    )
+    selector = DeterministicLocalCameraSelector()
+
+    bank = selector.build_candidate_bank(
+        request,
+        constraints=constraints,
+    )
+    selection = selector.select(
+        replace(request, candidate_views=bank.candidates)
+    )
+    plans = repair_plans_for_vlm(
+        constraints=constraints,
+        deterministic_selection=selection,
+    )
+
+    assert {item["id"] for item in bank.candidates} == {
+        "target-conflict",
+        "joint-conflict",
+    }
+    assert all(
+        item["technical_feasibility"] is True
+        for item in bank.candidates
+    )
+    estimates = {
+        item["id"]: (
+            item["target_visibility_estimate"],
+            item["joint_visibility_estimate"],
+        )
+        for item in bank.candidates
+    }
+    assert estimates == {
+        "target-conflict": (False, True),
+        "joint-conflict": (True, False),
+    }
+    assert selection.outcome == "no_feasible_candidate"
+    assert {
+        item["candidate_id"]: item["reason_codes"]
+        for item in selection.rejected_candidates
+    } == {
+        "target-conflict": ["target_not_visible"],
+        "joint-conflict": ["joint_visibility_unavailable"],
+    }
+    assert {plan.relaxed_constraints for plan in plans} == {
+        ("target_visible",),
+        ("joint_visibility",),
+    }
 
 
 def test_rejected_constraints_drive_conflict_repair_plans() -> None:

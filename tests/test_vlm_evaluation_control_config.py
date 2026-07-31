@@ -130,6 +130,7 @@ def test_four_camera_ablation_configs_share_the_same_total_budget():
         ),
     }
     totals = []
+    initial_cameras = []
 
     for policy, name in names.items():
         patch = json.loads(
@@ -140,11 +141,44 @@ def test_four_camera_ablation_configs_share_the_same_total_budget():
         resolved = resolve_vlm_evaluation_control(patch)
         assert resolved.camera_acquisition_policy == policy
         assert resolved.vlm_selection_mode == "repair_plan"
+        initial_cameras.append(
+            resolved.to_dict()["initial_group_camera"]
+        )
+        assert resolved.sources[
+            "initial_group_camera.mode"
+        ] == "config"
+        assert resolved.sources[
+            "initial_group_camera.selector"
+        ] == "config"
         totals.append(
             resolved.to_dict()["camera_acquisition"]["total"]
         )
 
     assert totals == [totals[0]] * len(totals)
+    assert initial_cameras == [
+        {
+            "mode": "visibility_ranked",
+            "selector": "deterministic",
+        }
+    ] * len(initial_cameras)
+
+
+@pytest.mark.parametrize(
+    "initial_camera",
+    [
+        {"mode": "query_cov"},
+        {"selector": "vlm"},
+    ],
+)
+def test_official_initial_group_camera_rejects_active_selection(
+    initial_camera: dict,
+) -> None:
+    value = {"initial_group_camera": initial_camera}
+
+    with pytest.raises(Exception):
+        _validate(value)
+    with pytest.raises(ValueError, match="initial_group_camera"):
+        resolve_vlm_evaluation_control(value)
 
 
 def test_additive_partial_config_overrides_only_explicit_fields() -> None:

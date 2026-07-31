@@ -9,6 +9,10 @@ import pytest
 from PIL import Image
 
 from benchmark.rendering import BlenderRenderError, BlenderRenderer
+from benchmark.grouping import (
+    grouping_evidence_from_render_manifest,
+    prepare_grouping_evidence,
+)
 
 
 def _write_nonuniform_png(path: Path) -> None:
@@ -69,6 +73,102 @@ def test_blender_renderer_launches_trusted_worker_and_validates_views(monkeypatc
     assert manifest["render_validation"]["pixel_stats_source"] == "saved_png_pillow"
     assert manifest["views"][0]["pixel_stats"]["luminance_range"] > 0
     assert (tmp_path / "renders" / "blender.stdout.log").read_text(encoding="utf-8") == "rendered"
+
+
+def test_canonical_manifest_identity_pass_is_consumed_by_grouping(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    blender_bin = tmp_path / "blender"
+    blender_bin.write_text("fake", encoding="utf-8")
+    blender_bin.chmod(0o755)
+    scene_path = tmp_path / "scene.json"
+    scene_path.write_text(
+        json.dumps(
+            {
+                "scene_id": "identity",
+                "objects": [{"id": "a"}, {"id": "b"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def fake_run(command, **kwargs):
+        del kwargs
+        out_dir = Path(command[command.index("--out-dir") + 1])
+        views = []
+        for name, color in (
+            ("top", (30, 40, 50)),
+            ("perspective", (70, 80, 90)),
+            ("identity_map", (120, 30, 180)),
+        ):
+            path = out_dir / f"standardized_{name}.png"
+            image = Image.new("RGB", (8, 8), color)
+            if name == "identity_map":
+                image.putpixel((0, 0), (234, 66, 18))
+                image.putpixel((1, 0), (18, 142, 234))
+            else:
+                image.putpixel((0, 0), (250, 240, 20))
+            image.save(path)
+            views.append({"name": name, "path": str(path)})
+        (out_dir / "render_manifest.json").write_text(
+            json.dumps(
+                {
+                    "backend": "blender_canonical_scene_v1",
+                    "views": views,
+                    "identity_legend": {
+                        "#EA4212": "a",
+                        "#128EEA": "b",
+                    },
+                    "identity_render": {
+                        "status": "available",
+                        "color_encoding": "raw_linear_rgb_8bit",
+                    },
+                    "objects": [
+                        {"id": "a", "representation": "bbox_proxy"},
+                        {"id": "b", "representation": "bbox_proxy"},
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        return SimpleNamespace(
+            returncode=0, stdout="rendered", stderr=""
+        )
+
+    monkeypatch.setattr(
+        "benchmark.rendering.blender.subprocess.run", fake_run
+    )
+    manifest = BlenderRenderer(
+        blender_bin=blender_bin
+    ).render_scene(
+        scene_path=scene_path,
+        out_dir=tmp_path / "renders",
+    )
+    grouping_items = grouping_evidence_from_render_manifest(manifest)
+    packet = prepare_grouping_evidence(
+        grouping_items,
+        expected_object_ids=("a", "b"),
+    )
+
+    assert [item["name"] for item in manifest["views"]] == [
+        "top",
+        "perspective",
+        "identity_map",
+    ]
+    assert manifest["identity_legend"] == {
+        "#EA4212": "a",
+        "#128EEA": "b",
+    }
+    assert packet.input_mode == "identity_aware_perspective_top"
+    assert packet.identity_legend == manifest["identity_legend"]
+    assert manifest["render_validation"]["identity_map"] == {
+        "status": "verified",
+        "expected_object_count": 2,
+        "legend_object_count": 2,
+        "visible_exact_identity_count": 2,
+        "color_encoding": "raw_linear_rgb_8bit",
+    }
 
 
 def test_blender_renderer_fails_before_subprocess_for_missing_binary(tmp_path: Path) -> None:

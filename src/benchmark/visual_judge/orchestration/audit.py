@@ -255,6 +255,36 @@ def _jsonable(value: Any) -> Any:
     return str(value)
 
 
+def _latest_focus_target_ids(
+    trace: list[dict[str, Any]],
+    *,
+    fallback: Any,
+) -> list[str]:
+    for event in reversed(trace):
+        if (
+            not isinstance(event, dict)
+            or event.get("stage") != "acquisition_planner"
+        ):
+            continue
+        evidence_request = event.get("evidence_request")
+        if not isinstance(evidence_request, dict):
+            continue
+        target_ids = evidence_request.get("target_ids")
+        if isinstance(target_ids, list) and target_ids:
+            return [
+                str(value)
+                for value in target_ids
+                if str(value).strip()
+            ]
+    if not isinstance(fallback, (list, tuple)):
+        return []
+    return [
+        str(value)
+        for value in fallback
+        if str(value).strip()
+    ]
+
+
 def build_evaluation_audit(
     *,
     schema_version: str,
@@ -290,6 +320,37 @@ def build_evaluation_audit(
     recovery_outcome = _evidence_recovery_outcome(
         trace,
         final_status=final_status,
+    )
+    telemetry_value = telemetry.to_dict(stop_reason=stop_reason)
+    selection_events = [
+        item
+        for item in telemetry_value.get("events", [])
+        if isinstance(item, dict)
+        and item.get("kind") == "camera_selection"
+    ]
+    vlm_selection_events = [
+        item
+        for item in selection_events
+        if item.get("stage") == "vlm"
+    ]
+    bank_events = [
+        item
+        for item in trace
+        if isinstance(item, dict)
+        and item.get("stage") == "trusted_candidate_bank"
+        and item.get("status") == "completed"
+    ]
+    group_scope = judge_request.context.get("group_scope")
+    group_scope = (
+        group_scope if isinstance(group_scope, dict) else {}
+    )
+    focus_target_ids = _latest_focus_target_ids(
+        trace,
+        fallback=(
+            judge_request.context.get("target_object_ids")
+            or group_scope.get("member_ids")
+            or []
+        ),
     )
     return _jsonable(
         {
@@ -330,8 +391,43 @@ def build_evaluation_audit(
                     total_images_acquired=total_images_acquired,
                 ),
             },
-            "experiment_telemetry": telemetry.to_dict(
-                stop_reason=stop_reason
+            "experiment_telemetry": telemetry_value,
+            "preview_renderer_invoked": (
+                int(telemetry_value.get("preview_render_count") or 0)
+                > 0
+            ),
+            "preview_render_count": int(
+                telemetry_value.get("preview_render_count") or 0
+            ),
+            "final_render_count": int(
+                telemetry_value.get("full_render_count") or 0
+            ),
+            "production_camera_selector_backend": (
+                vlm_selection_events[-1].get("selector_backend")
+                if vlm_selection_events
+                else None
+            ),
+            "effective_vlm_selection_mode": (
+                vlm_selection_events[-1].get("selection_mode")
+                if vlm_selection_events
+                else None
+            ),
+            "semantic_selection_triggered": any(
+                item.get("reason")
+                == "semantic_selection_required"
+                for item in telemetry_value.get("events", [])
+                if isinstance(item, dict)
+                and item.get("kind") == "camera_escalation"
+            ),
+            "trusted_candidate_count": (
+                int(bank_events[-1].get("candidate_count") or 0)
+                if bank_events
+                else 0
+            ),
+            "group_id": group_scope.get("group_id"),
+            "focus_target_ids": focus_target_ids,
+            "authoritative_group_member_ids": list(
+                group_scope.get("member_ids") or []
             ),
             "selector_backend": str(
                 getattr(
@@ -429,7 +525,14 @@ def record_selector_failure(
         selected_plan_id=None,
         selector_backend=str(getattr(selector, "backend", stage)),
         selection_mode=(
-            control.vlm_selection_mode if stage == "vlm" else None
+            str(
+                selection_request.context.get(
+                    "vlm_selection_mode",
+                    control.vlm_selection_mode,
+                )
+            )
+            if stage == "vlm"
+            else None
         ),
         vlm_call_count=(
             provenance_count(
@@ -506,9 +609,19 @@ def record_camera_selection(
         selected_view_ids=selection.selected_view_ids,
         attempted_plan_ids=selection.attempted_plan_ids,
         selected_plan_id=selection.selected_plan_id,
-        selector_backend=selection.backend,
+        selector_backend=str(
+            selection.provenance.get("selector_backend")
+            or selection.backend
+        ),
         selection_mode=(
-            control.vlm_selection_mode if stage == "vlm" else None
+            str(
+                selection_request.context.get(
+                    "vlm_selection_mode",
+                    control.vlm_selection_mode,
+                )
+            )
+            if stage == "vlm"
+            else None
         ),
         vlm_call_count=(
             provenance_count(

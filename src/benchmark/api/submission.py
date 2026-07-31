@@ -36,6 +36,7 @@ from benchmark.evaluator.specification_fidelity import (
     validate_specification_contract,
 )
 from benchmark.io_contracts import O1_OBJECT_STATE, O3_SCENE_PACKAGE
+from benchmark.grouping import grouping_evidence_from_render_manifest
 from benchmark.reference_annotation import annotation_scoring_gate, validate_reference_annotation
 from benchmark.rendering import BlenderRenderer
 from benchmark.rendering.camera_pose import validate_camera_pose_mode, validate_metric_camera_modes
@@ -486,6 +487,7 @@ def evaluate_submission(
     render_manifest: dict[str, Any] | None = None
     render_paths: list[str] = []
     collision_geometry: dict[str, Any] | None = None
+    grouping_visual_evidence: list[dict[str, Any]] | None = None
     local_view_provider = None
     if renderer is not None:
         render_dir = destination / "renders"
@@ -502,6 +504,9 @@ def evaluate_submission(
             asset_root=asset_root,
         )
         render_paths = _trusted_render_paths(render_manifest, render_dir)
+        grouping_visual_evidence = (
+            grouping_evidence_from_render_manifest(render_manifest)
+        )
         collision_geometry = (
             render_manifest.get("collision_geometry")
             if isinstance(render_manifest.get("collision_geometry"), dict)
@@ -594,6 +599,7 @@ def evaluate_submission(
         reference_annotation=bundle.reference_annotation,
         collision_geometry=collision_geometry,
         render_evidence=render_paths,
+        grouping_visual_evidence=grouping_visual_evidence,
         vlm_judge=vlm_judge,
         evaluation_profile=bundle.evaluation_profile,
         support_enabled=None,
@@ -1158,6 +1164,11 @@ def _trusted_render_paths(manifest: dict[str, Any], render_dir: Path) -> list[st
     for index, item in enumerate(views):
         if not isinstance(item, dict):
             raise SubmissionEvaluationError(f"renderer view {index} is not a JSON object")
+        if str(item.get("name") or "") == "identity_map":
+            # Identity passes are grouping input, never ordinary Judge
+            # evidence. Preserve every legacy renderer's existing RGB view
+            # names and ordering.
+            continue
         path = Path(str(item.get("path") or "")).expanduser().resolve()
         try:
             path.relative_to(trusted_root)
@@ -1166,6 +1177,10 @@ def _trusted_render_paths(manifest: dict[str, Any], render_dir: Path) -> list[st
         if not path.is_file():
             raise SubmissionEvaluationError(f"renderer evidence does not exist: {path}")
         paths.append(path.as_posix())
+    if not paths:
+        raise SubmissionEvaluationError(
+            "trusted renderer returned no RGB overview views"
+        )
     return paths
 
 

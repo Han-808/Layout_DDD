@@ -19,6 +19,10 @@ DEFAULT_VLM_EVALUATION_CONTROL: dict[str, Any] = {
         "allow_freeform_pose": False,
         "allow_scene_mutation": False,
     },
+    "initial_group_camera": {
+        "mode": "visibility_ranked",
+        "selector": "deterministic",
+    },
     "camera_acquisition": {
         "policy": "deterministic_then_vlm",
         "deterministic": {
@@ -86,6 +90,8 @@ class VLMEvaluationControl:
     camera_selector_backend: str
     allow_freeform_pose: bool
     allow_scene_mutation: bool
+    initial_group_camera_mode: str
+    initial_group_camera_selector: str
     camera_acquisition_policy: str
     deterministic_max_rounds: int
     deterministic_candidate_budget: int
@@ -123,6 +129,10 @@ class VLMEvaluationControl:
                 "backend": self.camera_selector_backend,
                 "allow_freeform_pose": self.allow_freeform_pose,
                 "allow_scene_mutation": self.allow_scene_mutation,
+            },
+            "initial_group_camera": {
+                "mode": self.initial_group_camera_mode,
+                "selector": self.initial_group_camera_selector,
             },
             "camera_acquisition": {
                 "policy": self.camera_acquisition_policy,
@@ -218,6 +228,8 @@ def resolve_vlm_evaluation_control(
             "camera_selector.backend",
             "camera_selector.allow_freeform_pose",
             "camera_selector.allow_scene_mutation",
+            "initial_group_camera.mode",
+            "initial_group_camera.selector",
             "camera_acquisition.policy",
             "camera_acquisition.deterministic.max_rounds",
             "camera_acquisition.deterministic.candidate_budget",
@@ -342,6 +354,7 @@ def _from_mapping(
     sources: dict[str, str],
 ) -> VLMEvaluationControl:
     selector = value["camera_selector"]
+    initial_group_camera = value["initial_group_camera"]
     acquisition = value["camera_acquisition"]
     deterministic = acquisition["deterministic"]
     vlm = acquisition["vlm"]
@@ -354,6 +367,12 @@ def _from_mapping(
         camera_selector_backend=str(selector["backend"]),
         allow_freeform_pose=bool(selector["allow_freeform_pose"]),
         allow_scene_mutation=bool(selector["allow_scene_mutation"]),
+        initial_group_camera_mode=str(
+            initial_group_camera["mode"]
+        ),
+        initial_group_camera_selector=str(
+            initial_group_camera["selector"]
+        ),
         camera_acquisition_policy=str(acquisition["policy"]),
         deterministic_max_rounds=int(deterministic["max_rounds"]),
         deterministic_candidate_budget=int(
@@ -422,6 +441,9 @@ def _validate_patch(value: dict[str, Any]) -> None:
     nested_allowed = {
         "camera_selector": set(
             DEFAULT_VLM_EVALUATION_CONTROL["camera_selector"]
+        ),
+        "initial_group_camera": set(
+            DEFAULT_VLM_EVALUATION_CONTROL["initial_group_camera"]
         ),
         "camera_acquisition": set(
             DEFAULT_VLM_EVALUATION_CONTROL["camera_acquisition"]
@@ -500,6 +522,17 @@ def _validate_resolved(value: dict[str, Any]) -> None:
         raise ValueError(
             "camera_selector.allow_scene_mutation cannot be enabled; "
             "CameraSelector and evidence renderer scene access is read-only"
+        )
+    initial = value["initial_group_camera"]
+    if str(initial["mode"]) != "visibility_ranked":
+        raise ValueError(
+            "official camera-policy evaluation requires "
+            "initial_group_camera.mode=visibility_ranked"
+        )
+    if str(initial["selector"]) != "deterministic":
+        raise ValueError(
+            "official camera-policy evaluation requires "
+            "initial_group_camera.selector=deterministic"
         )
     acquisition = value["camera_acquisition"]
     if str(acquisition["policy"]) not in {
