@@ -42,16 +42,12 @@ from copy import deepcopy
 from typing import Any, Iterable
 
 
-# Default deterministic evidence-partition grouping policy. This is an evidence
-# partition / localization algorithm, NOT a Functional Grouping verdict or
-# semantic ground truth. It is referenced, never forked.
-#
-# The implementation lives in the installed evaluator namespace. The historical
-# import path is only a compatibility re-export, so there is one implementation
-# and one source of grouping behavior.
-GROUPING_POLICY_ID = "deterministic_metadata_geometry"
-GROUPING_IMPLEMENTATION = "src/benchmark/evaluator/object_grouping.py"
-GROUPING_CONFIG_PATH = "configs/grouping/deterministic_metadata_geometry.yaml"
+# Active grouping is a VLM-produced downstream visual-evidence partition. The
+# deterministic topology/anchor implementations remain explicit deprecated
+# replay backends but are not active defaults or silent fallbacks.
+GROUPING_POLICY_ID = "vlm_visual_evidence_scope_v2"
+GROUPING_IMPLEMENTATION = "src/benchmark/grouping/vlm.py"
+GROUPING_CONFIG_PATH = "configs/grouping/vlm_visual_evidence_scope_v2.yaml"
 GROUPING_ROLE = "evidence_partition_not_metric_verdict"
 
 # Adaptive evidence strategies.
@@ -280,6 +276,13 @@ def validate_local_policy(policy: Any, *, where: str = "local_policy") -> dict[s
                 f"{where}.activation_condition must be one of "
                 f"{list(LOCAL_ACTIVATION_CONDITIONS)}, got {condition!r}"
             )
+    if (
+        "include_global_context" in policy
+        and not isinstance(policy["include_global_context"], bool)
+    ):
+        raise EvidenceContractError(
+            f"{where}.include_global_context must be boolean"
+        )
     return policy
 
 

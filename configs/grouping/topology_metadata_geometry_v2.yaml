@@ -1,5 +1,6 @@
 grouping:
   backend: topology
+  lifecycle: deprecated_explicit_replay_only
   topology:
     enabled: true
     proximity:

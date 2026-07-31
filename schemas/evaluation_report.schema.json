@@ -319,7 +319,8 @@
               "properties": {
                 "scale_consistency": {"type": "object"},
                 "object_pairing_consistency": {"type": "object"},
-                "style_consistency": {"type": "object"}
+                "style_consistency": {"type": "object"},
+                "functional_consistency": {"type": "object"}
               }
             }
           }
@@ -706,12 +707,24 @@
         "object_grouping": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["policy", "source", "affects_score_directly"],
+          "required": [
+            "policy",
+            "source",
+            "status",
+            "backend",
+            "affects_score_directly"
+          ],
           "properties": {
             "policy": {
-              "const": "deterministic_metadata_geometry"
+              "const": "vlm_visual_evidence_scope_v2"
             },
             "source": {"type": "string"},
+            "status": {
+              "enum": ["complete", "unavailable"]
+            },
+            "backend": {
+              "type": ["string", "null"]
+            },
             "affects_score_directly": {"const": false}
           }
         },
@@ -791,7 +804,8 @@
           "properties": {
             "scale_consistency": {"type": "object"},
             "object_pairing_consistency": {"type": "object"},
-            "style_consistency": {"type": "object"}
+            "style_consistency": {"type": "object"},
+            "functional_consistency": {"type": "object"}
           }
         },
         "l4_downstream_task_functionality": {

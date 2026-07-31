@@ -2526,6 +2526,101 @@ def test_controlled_public_metric_need_more_runs_provider_gate_and_judge(
     )
 
 
+def test_controlled_group_repair_passes_scope_geometry_to_legacy_provider(
+    tmp_path,
+) -> None:
+    initial = tmp_path / "initial-group.png"
+    repair = tmp_path / "repair-group.png"
+    _write_nonblank_png(initial)
+    _write_nonblank_png(repair)
+
+    class _Judge:
+        vlm_control_enabled = True
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def adjudicate_scene_quality(self, request):
+            self.calls += 1
+            if self.calls == 1:
+                return {
+                    "evidence_status": "insufficient",
+                    "verdict": "ambiguous",
+                    "confidence": 0.2,
+                    "reason": "interaction side is hidden",
+                    "missing_evidence": [
+                        "interaction_side_visible"
+                    ],
+                    "defects": [],
+                }
+            return {
+                "evidence_status": "sufficient",
+                "verdict": "valid",
+                "confidence": 0.9,
+                "reason": "the workstation is usable",
+                "missing_evidence": [],
+                "defects": [],
+            }
+
+    provider_calls: list[dict] = []
+
+    def provider(request):
+        provider_calls.append(request)
+        return [str(repair)]
+
+    group_scope = {
+        "group_id": "work",
+        "member_ids": ["chair", "desk"],
+        "target_bounds": {
+            "min": [0.0, 0.0, 0.0],
+            "max": [2.0, 1.0, 1.0],
+        },
+        "focus_center": [1.0, 0.5, 0.5],
+        "extent": [2.0, 1.0, 1.0],
+    }
+    result = ControlledVLMJudge(
+        _Judge(),
+        control=resolve_vlm_evaluation_control(),
+        camera_provider=provider,
+    ).adjudicate_scene_quality(
+        {
+            "metric": "functional_consistency",
+            "camera_scene_context": {
+                "objects": [{"id": "chair"}, {"id": "desk"}]
+            },
+            "target_object_ids": ["chair", "desk"],
+            "group_scope": group_scope,
+            "member_ids": ["chair", "desk"],
+            "target_bounds": group_scope["target_bounds"],
+            "focus_center": group_scope["focus_center"],
+            "target_extent": group_scope["extent"],
+            "render_evidence": [str(initial)],
+            "judgment_scope": {
+                "included": [
+                    "group_real_world_usability",
+                    "interaction_side_accessibility",
+                    "opening_clearance",
+                    "orientation_for_use",
+                    "ensemble_operability",
+                ]
+            },
+        }
+    )
+
+    assert result["verdict"] == "valid"
+    assert len(provider_calls) == 1
+    assert provider_calls[0]["object_ids"] == ["chair", "desk"]
+    assert provider_calls[0]["evidence_scope"] == "group_local"
+    assert provider_calls[0]["group_scope"] == group_scope
+    assert provider_calls[0]["target_bounds"] == group_scope[
+        "target_bounds"
+    ]
+    assert provider_calls[0]["focus_center"] == group_scope[
+        "focus_center"
+    ]
+    assert provider_calls[0]["target_extent"] == group_scope["extent"]
+
+
 def test_controlled_binary_method_never_calls_judge_when_gate_blocks():
     class _ModelBackedJudge:
         vlm_control_enabled = True

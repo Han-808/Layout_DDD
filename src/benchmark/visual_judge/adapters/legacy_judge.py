@@ -1089,7 +1089,9 @@ def _judge_request(request: dict[str, Any]) -> JudgeRequest:
         if isinstance(request.get("relation"), dict)
         else {}
     )
-    scene_context = request.get("scene_summary")
+    scene_context = request.get("camera_scene_context")
+    if not isinstance(scene_context, dict):
+        scene_context = request.get("scene_summary")
     if not isinstance(scene_context, dict):
         scene_context = request.get("scene")
     if not isinstance(scene_context, dict):
@@ -1146,8 +1148,15 @@ def _evidence_goal(
     *,
     camera_repairable: bool,
 ) -> dict[str, Any]:
+    explicit_goal = request.get("evidence_goal")
     policy = request.get("visual_evidence_policy")
-    result = deepcopy(policy) if isinstance(policy, dict) else {}
+    result = (
+        deepcopy(explicit_goal)
+        if isinstance(explicit_goal, dict)
+        else deepcopy(policy)
+        if isinstance(policy, dict)
+        else {}
+    )
     result.setdefault(
         "view_goal",
         f"show_metric_scoped_{request.get('metric') or 'visual'}_evidence",
@@ -1225,6 +1234,10 @@ def _canonical_unresolved_response(
         "images_used": list(result.audit.get("images_used") or []),
         "evidence_control_stop_reason": result.stop_reason,
     }
+    if result.evidence_request is not None:
+        value["evidence_request"] = (
+            result.evidence_request.to_dict()
+        )
     if method_name == "adjudicate_functional_semantic":
         value["canonical_verdict"] = "ambiguous"
         value["verdict"] = "insufficient_evidence"
@@ -1264,11 +1277,20 @@ def _selector_context(request: dict[str, Any]) -> dict[str, Any]:
         "allow_adjustment",
         "color_legend",
         "corrective_proposals",
+        "event",
+        "detector_evidence",
+        "camera_render",
         "evidence_deficiency",
         "preview_degradation",
         "preview_role",
         "preview_visibility_warning",
         "selection_phase",
+        "group_scope",
+        "grouping_role",
+        "member_ids",
+        "target_bounds",
+        "focus_center",
+        "target_extent",
     ):
         if key in request:
             result[key] = deepcopy(request[key])

@@ -1,5 +1,6 @@
 schema_version: grouping_blind30_experiment_v1
 experiment_id: grouping_blind30_gpt56_20260730_r1
+lifecycle: deprecated_explicit_three_backend_replay_only
 output_root: Support/artifacts/outputs/grouping_blind30_gpt56_20260730_r1
 seed: 20260730
 

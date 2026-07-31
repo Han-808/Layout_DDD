@@ -16,9 +16,9 @@ weighted metrics:
 ``required_functional_areas``, and ``local_functionality`` are claim
 components only. They are never metric names or configuration aliases.
 
-No generic object-pair or grouping scan is performed. ``object_grouping_report``
-is accepted for canonical API compatibility but is deliberately not consumed by
-this evaluator.
+No generic object-pair scan is performed. For prompt-owned group-local claims,
+the supplied grouping partition is consumed only to decompose camera evidence
+and Judge calls into bounded local scopes; grouping never creates a new claim.
 
 Ownership note: generic scale appropriateness and generic object
 co-occurrence/pairing coherence are **not** owned by high-level L2 in the
@@ -37,25 +37,35 @@ from typing import Any
 from benchmark.evaluator.evidence_contract import (
     FINAL_VLM_CONTEXT_CONTRACT,
     FUNCTIONAL_SEMANTIC_COMPONENTS,
+    GROUPING_POLICY_ID,
     canonical_hierarchy,
     validate_evidence_plan,
 )
 from benchmark.evaluator.specification_fidelity.contract import (
     canonical_specification_claims,
 )
+from benchmark.evaluator.specification_fidelity.group_scoped import (
+    aggregate_group_judgements as _aggregate_group_judgements,
+    normalize_grouping_partition as _normalize_functional_grouping,
+    request_group_local_evidence as _request_group_local_evidence,
+)
 from benchmark.visual_judge.roles import (
     DecisionContract,
     VLMRole,
     vlm_audit_metadata,
 )
+from benchmark.visual_judge.group_scope import (
+    GroupCameraScope,
+    group_scope_evidence_goal,
+)
 
 
-FUNCTIONAL_SEMANTIC_INTERFACE_VERSION = "functional_semantic_fidelity_runtime_v1"
+FUNCTIONAL_SEMANTIC_INTERFACE_VERSION = "functional_semantic_fidelity_runtime_v2"
 FUNCTIONAL_SEMANTIC_INTERFACE_NAMESPACE = "functional_semantic_fidelity"
 CANONICAL_L2_PROFILE_KEY = "l2_specification_fidelity"
 
 FUNCTIONAL_SEMANTIC_FIDELITY = "functional_semantic_fidelity"
-SPECIFICATION_CLAIM_TARGET_POLICY_ID = "benchmark_owned_claim_targets"
+SPECIFICATION_CLAIM_TARGET_POLICY_ID = GROUPING_POLICY_ID
 FUNCTIONAL_SEMANTIC_METRICS = (FUNCTIONAL_SEMANTIC_FIDELITY,)
 _COMPONENT_ONLY_NAMES = tuple(FUNCTIONAL_SEMANTIC_COMPONENTS)
 _RETIRED_METRIC_NAMES = (
@@ -94,6 +104,7 @@ DEFAULT_FUNCTIONAL_SEMANTIC_CONFIG: dict[str, Any] = {
                 "local_policy": {
                     "camera_scope": "group_local",
                     "grouping_policy_id": SPECIFICATION_CLAIM_TARGET_POLICY_ID,
+                    "include_global_context": True,
                     "activation_condition": "prompt_specified_local_functionality",
                     "trigger_states": [
                         "prompt_specified_local_functionality",
@@ -230,7 +241,21 @@ def evaluate_functional_semantic_fidelity(
     top_enabled = bool(resolved["enabled"])
     metric_config = resolved["metrics"][FUNCTIONAL_SEMANTIC_FIDELITY]
     metric_enabled = bool(metric_config["enabled"])
+    evidence_plan = metric_config.get("evidence_plan")
+    local_policy = (
+        evidence_plan.get("local_policy")
+        if isinstance(evidence_plan, dict)
+        and isinstance(evidence_plan.get("local_policy"), dict)
+        else {}
+    )
+    include_group_global_context = bool(
+        local_policy.get("include_global_context", True)
+    )
     global_paths = _normalize_evidence_paths(render_evidence)
+    grouping_groups = _normalize_functional_grouping(
+        object_grouping_report,
+        scene=scene,
+    )
 
     if not top_enabled or not metric_enabled:
         checks: list[dict[str, Any]] = []
@@ -278,6 +303,13 @@ def evaluate_functional_semantic_fidelity(
                     authorized_deviations=authorized_deviations,
                     asset_policy=asset_policy,
                     counters=counters,
+                    grouping_groups=grouping_groups,
+                    grouping_report=(
+                        object_grouping_report
+                        if isinstance(object_grouping_report, dict)
+                        else None
+                    ),
+                    include_global_context=include_group_global_context,
                 )
             )
         status, reason = _metric_status(checks)
@@ -290,6 +322,32 @@ def evaluate_functional_semantic_fidelity(
             judge_calls=counters["judge"],
         )
 
+    grouping_consumed = any(
+        isinstance(check, dict)
+        and (
+            "group_results" in check
+            or check.get("reason")
+            in {
+                "object_grouping_unavailable",
+                "claim_targets_not_mapped_to_group",
+            }
+        )
+        for check in metric_report.get("checks") or []
+    )
+    metric_report["object_grouping_report_consumed"] = grouping_consumed
+    metric_report["grouping_policy"] = (
+        {
+            "policy_id": object_grouping_report.get(
+                "grouping_policy_id"
+            ),
+            "backend": object_grouping_report.get(
+                "grouping_backend"
+            ),
+        }
+        if grouping_consumed
+        and isinstance(object_grouping_report, dict)
+        else None
+    )
     metric_reports = {FUNCTIONAL_SEMANTIC_FIDELITY: metric_report}
     provider_invoked = bool(metric_report["camera_evidence_provider_invoked"])
     judge_invoked = bool(metric_report["vlm_invoked"])
@@ -317,8 +375,20 @@ def evaluate_functional_semantic_fidelity(
         "camera_evidence_provider_invoked": provider_invoked,
         "vlm_invoked": judge_invoked,
         "metrics": metric_reports,
-        "grouping_policy": None,
-        "object_grouping_report_consumed": False,
+        "grouping_policy": (
+            {
+                "policy_id": object_grouping_report.get(
+                    "grouping_policy_id"
+                ),
+                "backend": object_grouping_report.get(
+                    "grouping_backend"
+                ),
+            }
+            if grouping_groups is not None
+            and isinstance(object_grouping_report, dict)
+            else None
+        ),
+        "object_grouping_report_consumed": grouping_consumed,
         "object_grouping_report_supplied": object_grouping_report is not None,
         "final_vlm_context_contract": list(FINAL_VLM_CONTEXT_CONTRACT),
         "hierarchy": canonical_hierarchy(),
@@ -361,6 +431,9 @@ def _evaluate_functional_claim(
     authorized_deviations: Any,
     asset_policy: Any,
     counters: dict[str, int],
+    grouping_groups: list[dict[str, Any]] | None,
+    grouping_report: dict[str, Any] | None,
+    include_global_context: bool,
 ) -> dict[str, Any]:
     claim_id = str(claim.get("claim_id") or "")
     component = str(claim.get("component") or "")
@@ -385,24 +458,35 @@ def _evaluate_functional_claim(
         }
 
     if component == "local_functionality":
-        local_result = _request_local_evidence(
+        local_result = _request_group_local_evidence(
             claim=claim,
             scene=scene,
             prompt=prompt,
             trigger="prompt_specified_local_functionality",
             camera_evidence_provider=camera_evidence_provider,
             counters=counters,
+            grouping_groups=grouping_groups,
+            grouping_report=grouping_report,
+            include_global_context=include_global_context,
+            metric=FUNCTIONAL_SEMANTIC_FIDELITY,
+            claim_target_ids=_claim_target_ids,
+            request_local_evidence=_request_local_evidence,
         )
         if local_result["status"] != "available":
             return {**base, **local_result}
-        return _final_judgement(
-            base={**base, "local_evidence_paths": local_result["paths"]},
+        return _final_group_judgements(
+            base={
+                **base,
+                "local_evidence_paths": local_result["paths"],
+            },
             claim=claim,
             scene=scene,
             prompt=prompt,
             phase="prompt_scoped_local",
-            global_paths=global_paths,
-            local_paths=local_result["paths"],
+            global_paths=(
+                global_paths if include_global_context else []
+            ),
+            packets=local_result["group_packets"],
             vlm_judge=vlm_judge,
             authorized_deviations=authorized_deviations,
             asset_policy=asset_policy,
@@ -424,13 +508,19 @@ def _evaluate_functional_claim(
         if screen.get("status") in {"checked", "vlm_adjudication_failed"}:
             return screen
         trigger = str(screen.get("router_state") or "insufficient_evidence")
-        local_result = _request_local_evidence(
+        local_result = _request_group_local_evidence(
             claim=claim,
             scene=scene,
             prompt=prompt,
             trigger=trigger,
             camera_evidence_provider=camera_evidence_provider,
             counters=counters,
+            grouping_groups=grouping_groups,
+            grouping_report=grouping_report,
+            include_global_context=include_global_context,
+            metric=FUNCTIONAL_SEMANTIC_FIDELITY,
+            claim_target_ids=_claim_target_ids,
+            request_local_evidence=_request_local_evidence,
         )
         if local_result["status"] != "available":
             return {
@@ -439,7 +529,7 @@ def _evaluate_functional_claim(
                 "global_screen": screen.get("global_screen"),
                 "router_state": trigger,
             }
-        return _final_judgement(
+        return _final_group_judgements(
             base={
                 **base,
                 "local_evidence_paths": local_result["paths"],
@@ -450,8 +540,10 @@ def _evaluate_functional_claim(
             scene=scene,
             prompt=prompt,
             phase="required_area_local_fallback",
-            global_paths=global_paths,
-            local_paths=local_result["paths"],
+            global_paths=(
+                global_paths if include_global_context else []
+            ),
+            packets=local_result["group_packets"],
             vlm_judge=vlm_judge,
             authorized_deviations=authorized_deviations,
             asset_policy=asset_policy,
@@ -572,6 +664,7 @@ def _final_judgement(
     authorized_deviations: Any,
     asset_policy: Any,
     counters: dict[str, int],
+    group_scope: GroupCameraScope | None = None,
 ) -> dict[str, Any]:
     if not global_paths and not local_paths:
         return {
@@ -593,6 +686,7 @@ def _final_judgement(
             authorized_deviations=authorized_deviations,
             asset_policy=asset_policy,
             counters=counters,
+            group_scope=group_scope,
         )
         normalized = _normalize_judge_response(raw, decision_mode="final")
     except Exception as exc:
@@ -624,6 +718,51 @@ def _final_judgement(
     }
 
 
+def _final_group_judgements(
+    *,
+    base: dict[str, Any],
+    claim: dict[str, Any],
+    scene: dict[str, Any],
+    prompt: str,
+    phase: str,
+    global_paths: list[str],
+    packets: list[dict[str, Any]],
+    vlm_judge: Any,
+    authorized_deviations: Any,
+    asset_policy: Any,
+    counters: dict[str, int],
+) -> dict[str, Any]:
+    def judge_group(
+        packet: dict[str, Any],
+        scope: GroupCameraScope,
+    ) -> dict[str, Any]:
+        return _final_judgement(
+            base={
+                "group_id": scope.group_id,
+                "member_ids": list(scope.member_ids),
+                "group_scope": scope.to_dict(),
+                "local_evidence_paths": list(packet["paths"]),
+            },
+            claim=claim,
+            scene=scene,
+            prompt=prompt,
+            phase=phase,
+            global_paths=global_paths,
+            local_paths=packet["paths"],
+            vlm_judge=vlm_judge,
+            authorized_deviations=authorized_deviations,
+            asset_policy=asset_policy,
+            counters=counters,
+            group_scope=scope,
+        )
+
+    return _aggregate_group_judgements(
+        base=base,
+        packets=packets,
+        judge_group=judge_group,
+    )
+
+
 def _invoke_judge(
     *,
     claim: dict[str, Any],
@@ -637,6 +776,7 @@ def _invoke_judge(
     authorized_deviations: Any,
     asset_policy: Any,
     counters: dict[str, int],
+    group_scope: GroupCameraScope | None = None,
 ) -> dict[str, Any]:
     request = _judge_request(
         claim=claim,
@@ -648,6 +788,7 @@ def _invoke_judge(
         local_paths=local_paths,
         authorized_deviations=authorized_deviations,
         asset_policy=asset_policy,
+        group_scope=group_scope,
     )
     call = getattr(vlm_judge, "adjudicate_functional_semantic", None)
     if not callable(call):
@@ -679,6 +820,7 @@ def _judge_request(
     local_paths: list[str],
     authorized_deviations: Any,
     asset_policy: Any,
+    group_scope: GroupCameraScope | None = None,
 ) -> dict[str, Any]:
     target_ids = _claim_target_ids(claim)
     required_response = (
@@ -690,7 +832,7 @@ def _judge_request(
         if decision_mode == "screen"
         else {"verdict": "valid|invalid|insufficient_evidence"}
     )
-    return {
+    request = {
         "category": "functional_semantic_fidelity_adjudication",
         "metric": FUNCTIONAL_SEMANTIC_FIDELITY,
         "phase": phase,
@@ -732,6 +874,7 @@ def _judge_request(
         },
         "natural_language_prompt": prompt,
         "prompt": prompt,
+        "camera_scene_context": deepcopy(scene),
         "scene_summary": _compact_scene(scene),
         "target_ids": target_ids,
         "involved_objects": _target_objects(scene, target_ids),
@@ -758,13 +901,58 @@ def _judge_request(
             "insufficient_evidence rather than guessing."
         ),
         "generic_pairing_scan": False,
-        "object_grouping_report_consumed": False,
+        "object_grouping_report_consumed": group_scope is not None,
         **vlm_audit_metadata(
             VLMRole.JUDGE,
             decision_contract=DecisionContract.CANONICAL_METRIC,
             judge_method="adjudicate_functional_semantic",
         ),
     }
+    if group_scope is not None:
+        scope_value = group_scope.to_dict()
+        group_member_ids = list(group_scope.member_ids)
+        group_member_set = set(group_member_ids)
+        group_claim_target_ids = [
+            target_id
+            for target_id in target_ids
+            if target_id in group_member_set
+        ]
+        group_objects = _target_objects(scene, group_member_ids)
+        request["scene_summary"]["objects"] = deepcopy(group_objects)
+        request["scene_summary"]["object_count"] = len(group_objects)
+        request["scene_summary"]["group_scope"] = deepcopy(
+            scope_value
+        )
+        request.update(
+            {
+                "group_scope": scope_value,
+                "group_id": group_scope.group_id,
+                "member_ids": group_member_ids,
+                "group_claim_target_ids": group_claim_target_ids,
+                "target_ids": group_claim_target_ids,
+                "involved_objects": deepcopy(group_objects),
+                "target_bounds": deepcopy(
+                    scope_value["target_bounds"]
+                ),
+                "focus_center": list(group_scope.focus_center),
+                "target_extent": list(group_scope.extent),
+                "evidence_goal": group_scope_evidence_goal(
+                    group_scope
+                ),
+                "grouping_role": (
+                    "primary_visual_evidence_decomposition"
+                ),
+            }
+        )
+        request["event"]["group_id"] = group_scope.group_id
+        request["event"]["object_ids"] = group_member_ids
+        request["event"]["claim_target_ids"] = (
+            group_claim_target_ids
+        )
+        request["event"]["focus_region"] = deepcopy(
+            scope_value["target_bounds"]
+        )
+    return request
 
 
 def _normalize_judge_response(
@@ -867,6 +1055,7 @@ def _request_local_evidence(
     trigger: str,
     camera_evidence_provider: Any,
     counters: dict[str, int],
+    group_scope: GroupCameraScope | None = None,
 ) -> dict[str, Any]:
     if camera_evidence_provider is None:
         return {
@@ -896,6 +1085,11 @@ def _request_local_evidence(
             "reason": "claim_scoped_required_area_targets_missing",
             "paths": [],
         }
+    scoped_target_ids = (
+        list(group_scope.member_ids)
+        if group_scope is not None
+        else target_ids
+    )
     request = {
         "category": "functional_semantic_evidence_request",
         "metric": FUNCTIONAL_SEMANTIC_FIDELITY,
@@ -906,18 +1100,43 @@ def _request_local_evidence(
         "event": {
             "type": str(claim.get("component") or "functional_semantic_claim"),
             "claim_id": claim.get("claim_id"),
-            "object_ids": target_ids,
+            "object_ids": scoped_target_ids,
             "area_id": claim.get("area_id"),
         },
-        "object_ids": target_ids,
+        "object_ids": scoped_target_ids,
+        "claim_target_ids": target_ids,
         "natural_language_prompt": prompt,
         "scene_summary": _compact_scene(scene),
         "evidence_scope": "benchmark_claim_target_local",
         "trigger": trigger,
         "selection_role": "visual_evidence_only_do_not_judge_metric",
         "generic_pairing_scan": False,
-        "object_grouping_report_consumed": False,
+        "object_grouping_report_consumed": group_scope is not None,
     }
+    if group_scope is not None:
+        scope_value = group_scope.to_dict()
+        request.update(
+            {
+                "group_scope": scope_value,
+                "group_id": group_scope.group_id,
+                "member_ids": list(group_scope.member_ids),
+                "target_bounds": deepcopy(
+                    scope_value["target_bounds"]
+                ),
+                "focus_center": list(group_scope.focus_center),
+                "target_extent": list(group_scope.extent),
+                "evidence_goal": group_scope_evidence_goal(
+                    group_scope
+                ),
+                "grouping_role": (
+                    "primary_visual_evidence_decomposition"
+                ),
+            }
+        )
+        request["event"]["group_id"] = group_scope.group_id
+        request["event"]["focus_region"] = deepcopy(
+            scope_value["target_bounds"]
+        )
     call = getattr(
         camera_evidence_provider,
         "provide_functional_semantic_evidence",

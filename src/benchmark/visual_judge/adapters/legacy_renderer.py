@@ -218,6 +218,21 @@ def _provider_request(request: EvidenceRenderRequest) -> dict[str, Any]:
             ),
             "evidence_scope": "metric_scoped",
         }
+    for key in (
+        "group_scope",
+        "grouping_role",
+        "member_ids",
+        "target_bounds",
+        "focus_center",
+        "target_extent",
+    ):
+        if key in request.context:
+            result.setdefault(
+                key,
+                deepcopy(request.context[key]),
+            )
+    if isinstance(result.get("group_scope"), dict):
+        result["evidence_scope"] = "group_local"
     result["_camera_selection_phase"] = "active_fallback"
     result["_camera_evidence_deficiency"] = deepcopy(
         request.evidence_goal
@@ -237,6 +252,7 @@ def _call_provider(
         "scale_consistency",
         "object_pairing_consistency",
         "style_consistency",
+        "functional_consistency",
     }:
         call = getattr(provider, "provide_scene_quality_evidence", None)
         if callable(call):

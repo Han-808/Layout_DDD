@@ -1,5 +1,24 @@
 # Object grouping
 
+## Current decision (2026-07-31)
+
+The canonical grouping algorithm is now **VLM-only**. `VLMGroupingAlgorithm`
+with policy `vlm_visual_evidence_scope_v2` and prompt version
+`vlm_grouping_prompt_v2` is the only backend used by the canonical evaluator,
+metric routing, and downstream camera/evidence acquisition.
+
+`topology` and `anchor` remain importable only for explicit historical replay
+and regression comparison. They are not defaults, are not fallback paths, and
+are not part of the active experiment launcher. If the VLM is unavailable, the
+workflow reports an explicit unavailable/unresolved state rather than silently
+switching algorithms.
+
+The active 20-scene replay is configured in
+`configs/experiments/grouping_vlm20_visual_scope_v2.yaml`. It uses four seeded
+scenes from each object-count stratum and re-runs the current VLM contract on
+the shared frozen renders. Its generated gallery is written under
+`Support/artifacts/outputs/grouping_vlm20_visual_scope_v2_20260731_r1/review/`.
+
 Grouping defines which objects share a local visual-evidence scope. It is a
 complete object partition, not a benchmark metric:
 
@@ -32,7 +51,8 @@ from benchmark.grouping import group_scene
 
 result = group_scene(
     scene,
-    config={"grouping": {"backend": "anchor"}},
+    config={"grouping": {"backend": "vlm"}},
+    model=chat_model,
 )
 report = result.to_dict()
 ```
@@ -40,9 +60,32 @@ report = result.to_dict()
 `report["object_groups"]` is directly compatible with existing
 `object_grouping_report` consumers.
 
+## Downstream evidence wiring
+
+The canonical L3 evaluator now treats each selected group as an immutable
+camera target rather than unioning members from multiple groups. It derives
+that group's exact member IDs, axis-aligned target bounds, focus center, and
+extent, then sends one request through the existing deterministic local camera
+selector. If the Judge requests a refinement, the Controller keeps the same
+group membership; a request that crosses into another group fails closed.
+
+- Object Pairing stays limited to group-member category and semantic-role
+  compatibility.
+- Scale is evaluated per group, with the cached global scene image available
+  as optional room context.
+- Style runs once on global evidence and renders local evidence only for
+  implicated groups.
+- Functional Consistency is available as an opt-in, non-canonical diagnostic
+  for group-level real-world usability; it does not change the frozen L3
+  hierarchy or weights.
+
+The global scene packet is reused across group requests. Local evidence cannot
+replace a required global anchor, and a global image alone cannot satisfy a
+group-local evidence request.
+
 ## Backends
 
-### `topology`
+### Deprecated replay backends: `topology` and `anchor`
 
 `TopologyGroupingAlgorithm` is the deterministic graph baseline refined from
 the existing `deterministic_metadata_geometry` implementation. It uses:
@@ -52,12 +95,6 @@ the existing `deterministic_metadata_geometry` implementation. It uses:
 3. explicit relation and derived-support edges;
 4. metadata-local and scale-aware proximity edges;
 5. existing group diameter and object-count limits.
-
-The existing production `deterministic_metadata_geometry` path remains
-unchanged. The new backend is an explicit experimental interface over that
-implementation.
-
-### `anchor`
 
 `AnchorGroupingAlgorithm` first selects stable objects such as beds, sofas,
 desks, dining tables, or other large/supporting objects. It then assigns
@@ -71,6 +108,10 @@ objects using, in order:
 Semantic affinity is intentionally weak. Spatially local but semantically odd
 objects stay in the local scope so a downstream pairing Judge can still detect
 them. If no assignment is defensible, the object remains a singleton.
+
+Both backends remain importable only for explicit historical replay. Neither is
+selected by the canonical evaluator, the factory default, or as a fallback
+when VLM grouping is unavailable.
 
 ### `vlm`
 
@@ -110,9 +151,11 @@ order without mutating the scene and records that policy in result provenance.
 
 Reference configurations:
 
-- `configs/grouping/topology_metadata_geometry_v2.yaml`
-- `configs/grouping/anchor_object_v1.yaml`
-- `configs/grouping/vlm_semantic_partition_v1.yaml`
+- active: `configs/grouping/vlm_visual_evidence_scope_v2.yaml`;
+- deprecated replay only: `configs/grouping/topology_metadata_geometry_v2.yaml`;
+- deprecated replay only: `configs/grouping/anchor_object_v1.yaml`.
 
-The factory defaults to `topology`. Selecting `vlm` requires an injected model
-with `chat_messages()`. No backend is allowed to mutate the scene.
+The factory defaults to `vlm`, which requires an injected model with
+`chat_messages()`. Missing or failed VLM grouping is an explicit unavailable
+state in the canonical evaluator; it never silently falls back to topology or
+anchor. No backend is allowed to mutate the scene.

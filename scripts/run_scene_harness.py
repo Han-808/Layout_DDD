@@ -746,7 +746,8 @@ def main() -> None:
         default=None,
         help=(
             "Optional frozen grouping report; otherwise the canonical "
-            "deterministic grouping algorithm runs."
+            "VLM visual-evidence-scope grouping backend runs. Topology and "
+            "anchor are deprecated replay-only backends."
         ),
     )
     parser.add_argument(

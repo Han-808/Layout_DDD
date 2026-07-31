@@ -40,6 +40,9 @@ def test_component_experiment_resolves_and_saves_config(
 
     assert resolved.data["experiment_name"] == "hssd_small_room_mock"
     assert resolved.data["config_refs"]["dataset"].endswith("configs/datasets/hssd_downloaded_small.yaml")
+    assert resolved.data["config_refs"]["grouping"].endswith(
+        "configs/grouping/vlm_visual_evidence_scope_v2.yaml"
+    )
     assert resolved.data["config_hash"]
     assert resolved.model_config["models"]["mock"]["judge_evidence_budgeting"] is False
     assert resolved.benchmark_config["evaluation"]["evaluator"] == "vlm_as_judge_v1"

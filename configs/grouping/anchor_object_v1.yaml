@@ -1,5 +1,6 @@
 grouping:
   backend: anchor
+  lifecycle: deprecated_explicit_replay_only
   anchor:
     target_objects_per_group: 6
     max_anchors: 12

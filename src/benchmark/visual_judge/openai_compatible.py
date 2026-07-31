@@ -171,6 +171,14 @@ CATEGORY_RUBRICS = {
         "plausibility. Invalid requires one or more explicit significant style inconsistencies; "
         "otherwise return valid when evidence is sufficient."
     ),
+    "functional_consistency": (
+        "Judge whether each supplied local group is visibly usable in a "
+        "real-world sense. Check interaction-side access, opening clearance, "
+        "orientation for use, and ensemble operability. Do not judge prompt "
+        "fidelity, object-category pairing, style, scale, or unrelated exact "
+        "relations. Invalid requires an explicit significant visible "
+        "functional defect; otherwise return valid when evidence is sufficient."
+    ),
 }
 
 
@@ -374,6 +382,7 @@ class OpenAICompatibleVLMJudge:
             "scale_consistency",
             "object_pairing_consistency",
             "style_consistency",
+            "functional_consistency",
         }:
             raise ValueError(f"unsupported canonical metric {metric!r}")
         paths = [

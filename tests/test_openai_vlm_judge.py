@@ -257,6 +257,54 @@ def test_canonical_scene_quality_adapter_preserves_style_contract(
     )
 
 
+def test_canonical_scene_quality_adapter_supports_functional_consistency(
+    tmp_path: Path,
+) -> None:
+    image_path = tmp_path / "functional_group.png"
+    _write_test_png(image_path)
+    model = FakeMultimodalModel(
+        {
+            "evidence_status": "sufficient",
+            "verdict": "valid",
+            "confidence": 0.9,
+            "reason": "The workstation is visibly usable.",
+            "missing_evidence": [],
+            "defects": [],
+        }
+    )
+
+    result = OpenAICompatibleVLMJudge(
+        model
+    ).adjudicate_scene_quality(
+        {
+            "metric": "functional_consistency",
+            "judgment_scope": {
+                "included": [
+                    "group_real_world_usability",
+                    "interaction_side_accessibility",
+                    "opening_clearance",
+                    "orientation_for_use",
+                    "ensemble_operability",
+                ]
+            },
+            "target_object_ids": ["chair", "desk"],
+            "render_evidence": [str(image_path)],
+        }
+    )
+
+    assert result["verdict"] == "valid"
+    context = json.loads(
+        model.calls[0]["messages"][1]["content"][0][
+            "text"
+        ].split("\n", 1)[1]
+    )
+    assert context["metric"] == "functional_consistency"
+    assert "real-world sense" in context["rubric"]
+    assert model.calls[0]["kwargs"]["call_type"] == (
+        "vlm_judge.canonical.functional_consistency"
+    )
+
+
 @pytest.mark.parametrize(
     "response",
     [

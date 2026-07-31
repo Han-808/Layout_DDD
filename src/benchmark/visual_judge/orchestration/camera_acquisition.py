@@ -396,6 +396,37 @@ def build_selection_request(
         else control.deterministic_max_selected_views
     )
     context = deepcopy(selector_context)
+    # Group membership and its derived geometry are controller-owned request
+    # scope. Preserve them even when the caller uses the separated
+    # Judge/Selector/Renderer interfaces directly rather than a legacy wrapper.
+    for key in (
+        "group_scope",
+        "grouping_role",
+        "member_ids",
+        "target_bounds",
+        "focus_center",
+        "target_extent",
+    ):
+        if key in request.context:
+            context[key] = deepcopy(request.context[key])
+    group_scope = context.get("group_scope")
+    if isinstance(group_scope, dict):
+        context.setdefault(
+            "member_ids",
+            deepcopy(group_scope.get("member_ids")),
+        )
+        context.setdefault(
+            "target_bounds",
+            deepcopy(group_scope.get("target_bounds")),
+        )
+        context.setdefault(
+            "focus_center",
+            deepcopy(group_scope.get("focus_center")),
+        )
+        context.setdefault(
+            "target_extent",
+            deepcopy(group_scope.get("extent")),
+        )
     context.update(
         {
             "camera_acquisition_policy": state.policy,

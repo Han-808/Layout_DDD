@@ -59,14 +59,17 @@ def test_canonical_hierarchy_places_oor_oar_in_l2_fine_grained() -> None:
 def test_grouping_policy_provenance_shape() -> None:
     provenance = grouping_policy_provenance()
     assert provenance == {
-        "policy_id": "deterministic_metadata_geometry",
-        "implementation": "src/benchmark/evaluator/object_grouping.py",
-        "config": "configs/grouping/deterministic_metadata_geometry.yaml",
+        "policy_id": "vlm_visual_evidence_scope_v2",
+        "implementation": "src/benchmark/grouping/vlm.py",
+        "config": "configs/grouping/vlm_visual_evidence_scope_v2.yaml",
         "role": "evidence_partition_not_metric_verdict",
     }
-    assert GROUPING_POLICY_ID == "deterministic_metadata_geometry"
-    assert GROUPING_IMPLEMENTATION == "src/benchmark/evaluator/object_grouping.py"
-    assert GROUPING_CONFIG_PATH == "configs/grouping/deterministic_metadata_geometry.yaml"
+    assert GROUPING_POLICY_ID == "vlm_visual_evidence_scope_v2"
+    assert GROUPING_IMPLEMENTATION == "src/benchmark/grouping/vlm.py"
+    assert (
+        GROUPING_CONFIG_PATH
+        == "configs/grouping/vlm_visual_evidence_scope_v2.yaml"
+    )
     # JSON round-trips.
     assert json.loads(json.dumps(provenance)) == provenance
 

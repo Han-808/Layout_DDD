@@ -1248,6 +1248,140 @@ def test_judge_cannot_expand_camera_targets_beyond_original_scene_scope():
     assert "unknown target IDs" in failure["error"]
 
 
+def test_group_scoped_judge_repair_preserves_the_whole_group() -> None:
+    calls = []
+    request = JudgeRequest(
+        task="functional_consistency",
+        metric="functional_consistency",
+        claim_or_event={"group_id": "work"},
+        scene_context={
+            "objects": [{"id": "a"}, {"id": "b"}, {"id": "c"}]
+        },
+        deterministic_evidence={"status": "unresolved"},
+        visual_evidence=("initial.png",),
+        rubric={"scope": "functional_consistency"},
+        context={
+            "group_scope": {
+                "group_id": "work",
+                "member_ids": ["a", "b"],
+                "target_bounds": {
+                    "min": [0.0, 0.0, 0.0],
+                    "max": [2.0, 1.0, 1.0],
+                },
+                "focus_center": [1.0, 0.5, 0.5],
+                "extent": [2.0, 1.0, 1.0],
+            }
+        },
+    )
+    need_more = {
+        "status": "need_more_evidence",
+        "confidence": 0.2,
+        "reason": "The interaction side is not visible.",
+        "defects": [],
+        "evidence_request": {
+            "target_ids": ["a"],
+            "missing_observations": [
+                "interaction_side_visible"
+            ],
+            "view_goal": "show the interaction side",
+        },
+    }
+    deterministic = _Selector(
+        "deterministic",
+        [_selected("det-view")],
+        calls,
+    )
+    controller = VLMEvaluationController(
+        judge=_Judge([need_more, _valid()], calls),
+        renderer=_Renderer([_rendered("det")], calls),
+        deterministic_camera_selector=deterministic,
+        evidence_gate=_Gate(
+            [_gate(ready=True), _gate(ready=True)],
+            calls,
+        ),
+        control=_control("deterministic_then_vlm"),
+    )
+
+    result = controller.run(
+        request,
+        candidate_views=({"id": "det-view"},),
+    )
+
+    assert result.status == "valid"
+    assert deterministic.requests[0].target_ids == ("a", "b")
+    assert deterministic.requests[0].constraints["target_ids"] == [
+        "a",
+        "b",
+    ]
+    assert deterministic.requests[0].context["group_scope"][
+        "member_ids"
+    ] == ["a", "b"]
+    assert deterministic.requests[0].context["target_bounds"] == {
+        "min": [0.0, 0.0, 0.0],
+        "max": [2.0, 1.0, 1.0],
+    }
+    assert deterministic.requests[0].context["focus_center"] == [
+        1.0,
+        0.5,
+        0.5,
+    ]
+    assert deterministic.requests[0].context["target_extent"] == [
+        2.0,
+        1.0,
+        1.0,
+    ]
+
+
+def test_group_scoped_judge_cannot_request_another_group_member() -> None:
+    calls = []
+    request = JudgeRequest(
+        task="functional_consistency",
+        metric="functional_consistency",
+        claim_or_event={"group_id": "work"},
+        scene_context={
+            "objects": [{"id": "a"}, {"id": "b"}, {"id": "c"}]
+        },
+        deterministic_evidence={"status": "unresolved"},
+        visual_evidence=("initial.png",),
+        rubric={"scope": "functional_consistency"},
+        context={
+            "group_scope": {
+                "group_id": "work",
+                "member_ids": ["a", "b"],
+            }
+        },
+    )
+    need_more = {
+        "status": "need_more_evidence",
+        "confidence": 0.2,
+        "reason": "Need a different target.",
+        "defects": [],
+        "evidence_request": {
+            "target_ids": ["c"],
+            "missing_observations": ["target_visible"],
+            "view_goal": "show c",
+        },
+    }
+    deterministic = _Selector("deterministic", [], calls)
+    controller = VLMEvaluationController(
+        judge=_Judge([need_more], calls),
+        renderer=_Renderer([], calls),
+        deterministic_camera_selector=deterministic,
+        evidence_gate=_Gate([_gate(ready=True)], calls),
+        control=_control("deterministic_then_vlm"),
+    )
+
+    result = controller.run(request)
+
+    assert result.status == "unresolved"
+    assert (
+        result.stop_reason
+        == "judge_evidence_request_outside_group_scope"
+    )
+    assert calls == ["gate", "judge"]
+    assert not deterministic.requests
+
+
 @pytest.mark.parametrize("unobservable_id", ["scene-1", "asset-a", "Chair"])
 def test_scene_operational_ids_and_names_cannot_authorize_targets(
     unobservable_id,

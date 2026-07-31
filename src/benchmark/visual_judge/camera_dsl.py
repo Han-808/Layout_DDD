@@ -17,6 +17,8 @@ CameraObservation = Literal[
     "front_back_disambiguated",
     "depth_baseline_available",
     "group_context_visible",
+    "interaction_side_visible",
+    "limited_local_context",
     "global_context_preserved",
     "occluder_avoided",
 ]
@@ -166,11 +168,29 @@ METRIC_CAMERA_REQUIREMENTS: dict[str, MetricCameraRequirement] = {
         extra=("contact_surface_visible", "support_chain_visible"),
     ),
     "functional_semantic_fidelity": _requirement(
-        ("group_context_visible", "global_context_preserved"),
+        (
+            "group_context_visible",
+            "interaction_side_visible",
+            "limited_local_context",
+            "global_context_preserved",
+        ),
         extra=(
             "joint_visibility",
             "contact_surface_visible",
             "support_chain_visible",
+        ),
+    ),
+    "functional_consistency": _requirement(
+        (
+            "group_context_visible",
+            "interaction_side_visible",
+            "limited_local_context",
+        ),
+        extra=(
+            "joint_visibility",
+            "contact_surface_visible",
+            "support_chain_visible",
+            "front_back_disambiguated",
         ),
     ),
     "scale_consistency": _requirement(
@@ -185,8 +205,10 @@ METRIC_CAMERA_REQUIREMENTS: dict[str, MetricCameraRequirement] = {
         (
             "joint_visibility",
             "group_context_visible",
+            "limited_local_context",
             "global_context_preserved",
         ),
+        extra=("interaction_side_visible",),
     ),
     "style_consistency": _requirement(
         ("group_context_visible", "global_context_preserved"),
@@ -199,6 +221,8 @@ _METRIC_ALIASES = {
     "orientation": "facing",
     "face_to": "facing",
     "functional_semantic": "functional_semantic_fidelity",
+    "functional_plausibility": "functional_consistency",
+    "functional_validity": "functional_consistency",
     "scale": "scale_consistency",
     "object_pairing": "object_pairing_consistency",
     "style": "style_consistency",
@@ -260,6 +284,9 @@ _OBSERVATION_ALIASES.update(
         "front_back": ("front_back_disambiguated",),
         "depth_baseline": ("depth_baseline_available",),
         "group_context": ("group_context_visible",),
+        "interaction_side": ("interaction_side_visible",),
+        "bounded_local_context": ("limited_local_context",),
+        "limited_local_context": ("limited_local_context",),
         "global_context": ("global_context_preserved",),
         "avoid_occluder": ("occluder_avoided",),
         "global_composition": (

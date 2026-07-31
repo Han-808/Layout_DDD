@@ -68,7 +68,10 @@ from benchmark.evaluator.profile import (
     resolve_evaluation_profile,
 )
 from benchmark.evaluator.generic_validity.mesh_geometry import load_collision_geometry_manifest
-from benchmark.evaluator.object_grouping import build_object_grouping_report
+from benchmark.grouping import (
+    VLM_GROUPING_POLICY_ID,
+    group_scene,
+)
 from benchmark.nl_scene.converter import COARSE_GRAINED, FINE_GRAINED
 from benchmark.reference_annotation import (
     ReferenceAnnotationError,
@@ -131,8 +134,9 @@ def _run_canonical_evaluate(
     object_plan: dict | None = None,
     reference_annotation: dict | None = None,
     collision_geometry: dict | None = None,
-    render_evidence: list[str] | dict[str, list[str]] | None = None,
+    render_evidence: list[str] | dict[str, Any] | None = None,
     vlm_judge: object | None = None,
+    grouping_model: object | None = None,
     evaluation_profile: dict | None = None,
     support_enabled: bool | None = None,
     p0b_official_mode: bool = False,
@@ -338,6 +342,12 @@ def _run_canonical_evaluate(
         object_grouping_report,
         scene=normalized_scene,
         request=request,
+        visual_evidence=overview_render_evidence,
+        model=(
+            grouping_model
+            if grouping_model is not None
+            else _grouping_chat_model(vlm_judge)
+        ),
     )
     reports["object_grouping"] = grouping_report
 
@@ -458,8 +468,10 @@ def _run_canonical_evaluate(
                 "prompt_granularity_controls_activation": False,
             },
             "object_grouping": {
-                "policy": "deterministic_metadata_geometry",
+                "policy": VLM_GROUPING_POLICY_ID,
                 "source": grouping_report.get("source"),
+                "status": grouping_report.get("status", "complete"),
+                "backend": grouping_report.get("grouping_backend"),
                 "affects_score_directly": False,
             },
             "visual_config_unchanged": True,
@@ -507,6 +519,7 @@ def _run_legacy_game_evaluate(
     collision_geometry: dict | None = None,
     render_evidence: list[str] | None = None,
     vlm_judge: object | None = None,
+    grouping_model: object | None = None,
     evaluation_profile: dict | None = None,
     support_enabled: bool | None = None,
     p0b_official_mode: bool = False,
@@ -529,6 +542,7 @@ def _run_legacy_game_evaluate(
     | VLMEvaluationControl
     | None = None,
 ) -> dict:
+    del grouping_model
     if not eval_oor and not eval_oar and not eval_generic_validity:
         eval_generic_validity = True
     normalized_scene = normalize_scene(scene, asset_csv=asset_csv, asset_root=asset_root, enrich_assets=enrich_assets)
@@ -1053,7 +1067,8 @@ def main() -> None:
         default=None,
         help=(
             "Optional frozen object-grouping report. When omitted, the canonical "
-            "deterministic grouping algorithm runs."
+            "VLM visual-evidence grouping backend runs; if no grouping model is "
+            "available, grouping-dependent metrics remain unresolved."
         ),
     )
     parser.add_argument(
@@ -1325,8 +1340,8 @@ def main() -> None:
 
 
 def _normalize_canonical_render_evidence(
-    value: list[str] | dict[str, list[str]] | None,
-) -> list[str] | dict[str, list[str]]:
+    value: list[str] | dict[str, Any] | None,
+) -> list[str] | dict[str, Any]:
     """Preserve metric-scoped L3 packets while normalizing path strings."""
 
     if value is None:
@@ -1343,11 +1358,32 @@ def _normalize_canonical_render_evidence(
         raise TypeError(
             "render_evidence must be a path list or a metric/scope-keyed mapping"
         )
-    normalized: dict[str, list[str]] = {}
+    normalized: dict[str, Any] = {}
     for raw_key, raw_paths in value.items():
         key = str(raw_key).strip()
         if not key:
             raise ValueError("render_evidence mapping keys must be non-empty")
+        if isinstance(raw_paths, dict):
+            normalized[key] = {}
+            for raw_group_id, raw_group_paths in raw_paths.items():
+                group_id = str(raw_group_id).strip()
+                if not group_id:
+                    raise ValueError(
+                        f"render_evidence.{key} group keys must be non-empty"
+                    )
+                if not isinstance(raw_group_paths, list):
+                    raise TypeError(
+                        f"render_evidence.{key}.{group_id} must be a path list"
+                    )
+                normalized[key][group_id] = list(
+                    dict.fromkeys(
+                        str(item)
+                        for item in raw_group_paths
+                        if isinstance(item, (str, Path))
+                        and str(item).strip()
+                    )
+                )
+            continue
         if not isinstance(raw_paths, list):
             raise TypeError(f"render_evidence.{key} must be a path list")
         normalized[key] = list(
@@ -1438,7 +1474,7 @@ def _runtime_vlm_control_manifest(
 
 
 def _overview_render_evidence(
-    value: list[str] | dict[str, list[str]],
+    value: list[str] | dict[str, Any],
 ) -> list[str]:
     if isinstance(value, list):
         return list(value)
@@ -1450,7 +1486,7 @@ def _overview_render_evidence(
 
 
 def _render_evidence_count(
-    value: list[str] | dict[str, list[str]],
+    value: list[str] | dict[str, Any],
 ) -> int:
     if isinstance(value, list):
         return len(value)
@@ -1458,7 +1494,18 @@ def _render_evidence_count(
         {
             path
             for paths in value.values()
-            for path in paths
+            for path in (
+                [
+                    nested
+                    for group_paths in paths.values()
+                    if isinstance(group_paths, list)
+                    for nested in group_paths
+                ]
+                if isinstance(paths, dict)
+                else paths
+                if isinstance(paths, list)
+                else []
+            )
         }
     )
 
@@ -1933,6 +1980,8 @@ def _resolve_object_grouping_report(
     *,
     scene: dict,
     request: dict,
+    visual_evidence: list[str],
+    model: object | None,
 ) -> dict[str, Any]:
     if isinstance(value, dict):
         result = deepcopy(value)
@@ -1944,20 +1993,75 @@ def _resolve_object_grouping_report(
             "source": "caller_supplied_frozen_grouping",
         }
     grouping_config_path = (
-        PROJECT_ROOT / "configs" / "grouping" / "deterministic_metadata_geometry.yaml"
+        PROJECT_ROOT
+        / "configs"
+        / "grouping"
+        / "vlm_visual_evidence_scope_v2.yaml"
     )
     grouping_config = (
         load_yaml(grouping_config_path, default={})
         if grouping_config_path.exists()
         else {}
     )
+    if model is None:
+        return {
+            "status": "unavailable",
+            "source": "canonical_runtime_default",
+            "grouping_backend": "vlm",
+            "grouping_policy_id": VLM_GROUPING_POLICY_ID,
+            "reason": "vlm_grouping_model_not_configured",
+            "fallback_used": False,
+        }
     grouping_case = deepcopy(request)
     if "room" not in grouping_case and isinstance(scene.get("room"), dict):
         grouping_case["room"] = deepcopy(scene["room"])
-    result = build_object_grouping_report(scene, grouping_case, grouping_config)
+    try:
+        result = group_scene(
+            scene,
+            case=grouping_case,
+            visual_evidence=visual_evidence,
+            config=grouping_config,
+            context={
+                "natural_language_request": request.get("instruction"),
+                "scene_intent": request.get("scene_type"),
+                "grouping_goal": "downstream_visual_evidence_scope",
+            },
+            model=model,
+        ).to_dict()
+    except Exception as exc:
+        return {
+            "status": "unavailable",
+            "source": "canonical_runtime_default",
+            "grouping_backend": "vlm",
+            "grouping_policy_id": VLM_GROUPING_POLICY_ID,
+            "reason": "vlm_grouping_failed",
+            "error": f"{type(exc).__name__}: {exc}",
+            "fallback_used": False,
+        }
+    result["status"] = "complete"
     result["source"] = "canonical_runtime_default"
-    result["policy_id"] = "deterministic_metadata_geometry"
+    result["fallback_used"] = False
     return result
+
+
+def _grouping_chat_model(value: object | None) -> object | None:
+    """Resolve the chat client without treating a deterministic path as fallback."""
+
+    candidates = [value]
+    if value is not None:
+        candidates.extend(
+            [
+                getattr(value, "model", None),
+                getattr(value, "_judge", None),
+            ]
+        )
+        wrapped = getattr(value, "_judge", None)
+        if wrapped is not None:
+            candidates.append(getattr(wrapped, "model", None))
+    for candidate in candidates:
+        if callable(getattr(candidate, "chat_messages", None)):
+            return candidate
+    return None
 
 
 def _is_canonical_score(value: Any) -> bool:

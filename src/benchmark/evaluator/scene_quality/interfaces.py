@@ -6,6 +6,7 @@ subfamilies:
 - **L3a Semantic Coherence** — ``scale_consistency`` and
   ``object_pairing_consistency``;
 - **L3b Perceptual Visual Quality** — ``style_consistency``.
+- **L3c Functional Validity** — optional ``functional_consistency``.
 
 ``object_pairing_consistency`` is evaluated only after the configured grouping
 algorithm supplies object groups. Its verdict covers group-member category and
@@ -39,6 +40,15 @@ from benchmark.evaluator.scene_quality.authorized_deviations import (
     deviations_for_metric,
     validate_authorized_deviations,
 )
+from benchmark.evaluator.scene_quality.group_scoped import (
+    evaluate_group_scoped_judgements as _evaluate_group_scoped_judgements,
+    group_evidence_resolution_summary as _group_evidence_resolution_summary,
+    group_packet_audit as _group_packet_audit,
+    resolve_group_evidence_packets as _resolve_group_evidence_packets,
+)
+from benchmark.evaluator.scene_quality.style_global_first import (
+    evaluate_style_global_then_group_local as _evaluate_style_global_then_group_local,
+)
 from benchmark.evaluator.evidence_contract import (
     EVIDENCE_STRATEGIES,
     FINAL_VLM_CONTEXT_CONTRACT,
@@ -56,9 +66,13 @@ from benchmark.visual_judge.roles import (
     VLMRole,
     vlm_audit_metadata,
 )
+from benchmark.visual_judge.group_scope import (
+    GroupCameraScope,
+    group_scope_evidence_goal,
+)
 
 
-SCENE_QUALITY_INTERFACE_VERSION = "scene_quality_v1"
+SCENE_QUALITY_INTERFACE_VERSION = "scene_quality_v2"
 
 # Canonical L3 output namespace.
 SCENE_QUALITY_INTERFACE_NAMESPACE = "l3_scene_quality"
@@ -68,17 +82,27 @@ _RETIRED_METRIC_NAMES = ("object_coexistence_consistency",)
 # Subfamilies of L3 Scene Quality.
 SEMANTIC_COHERENCE = "semantic_coherence"
 PERCEPTUAL_VISUAL_QUALITY = "perceptual_visual_quality"
+FUNCTIONAL_VALIDITY = "functional_validity"
 SEMANTIC_COHERENCE_METRICS = ("scale_consistency", "object_pairing_consistency")
 PERCEPTUAL_VISUAL_QUALITY_METRICS = ("style_consistency",)
+FUNCTIONAL_VALIDITY_METRICS = ("functional_consistency",)
+# The frozen profile and aggregate keep the original three L3 metrics. Functional
+# consistency is an additive, explicitly enabled diagnostic interface until the
+# benchmark hierarchy assigns it aggregate ownership.
 SCENE_QUALITY_INTERFACE_METRICS = (
     "style_consistency",
     "scale_consistency",
     "object_pairing_consistency",
 )
+SUPPORTED_SCENE_QUALITY_METRICS = (
+    *SCENE_QUALITY_INTERFACE_METRICS,
+    "functional_consistency",
+)
 SUBFAMILY_BY_METRIC = {
     "style_consistency": PERCEPTUAL_VISUAL_QUALITY,
     "scale_consistency": SEMANTIC_COHERENCE,
     "object_pairing_consistency": SEMANTIC_COHERENCE,
+    "functional_consistency": FUNCTIONAL_VALIDITY,
 }
 JUDGMENT_SCOPE_BY_METRIC = {
     "style_consistency": {
@@ -101,6 +125,23 @@ JUDGMENT_SCOPE_BY_METRIC = {
         ],
         "prerequisite": "object_grouping_report",
     },
+    "functional_consistency": {
+        "included": [
+            "group_real_world_usability",
+            "interaction_side_accessibility",
+            "opening_clearance",
+            "orientation_for_use",
+            "ensemble_operability",
+        ],
+        "excluded": [
+            "prompt_fidelity",
+            "category_pairing",
+            "style",
+            "scale",
+            "exact_relation_fidelity",
+        ],
+        "prerequisite": "object_grouping_report",
+    },
 }
 
 METRIC_RUBRICS = {
@@ -119,6 +160,13 @@ METRIC_RUBRICS = {
         "have significantly incompatible categories or semantic roles. Position, "
         "distance, angle, orientation, access, ergonomic layout, and functional "
         "arrangement are explicitly outside this metric."
+    ),
+    "functional_consistency": (
+        "Judge whether the supplied local group can be used in a real-world "
+        "sense. Check visible interaction-side access, opening clearance, "
+        "orientation for use, and ensemble operability. Do not judge prompt "
+        "fidelity, category pairing, style, scale, or unrelated exact spatial "
+        "relations."
     ),
 }
 
@@ -166,14 +214,30 @@ DEFAULT_SCENE_QUALITY_INTERFACE_CONFIG: dict[str, Any] = {
                 "camera_pose_mode": None,
             },
             "evidence_plan": {
-                "evidence_strategy": "global_only",
+                "evidence_strategy": "global_screen_then_local",
                 "global_policy": {
                     "view_family": "global_top",
                     "image_budget": 1,
                     "top_down": True,
                 },
-                "local_policy": None,
-                "router_options": None,
+                "local_policy": {
+                    "camera_scope": "group_local",
+                    "grouping_policy_id": GROUPING_POLICY_ID,
+                    "image_budget": 2,
+                    "trigger_states": [
+                        "suspicious",
+                        "insufficient_evidence",
+                    ],
+                },
+                "router_options": {
+                    "global_screen_then_local": {
+                        "router": "vlm_global_screen",
+                        "trigger_states": [
+                            "suspicious",
+                            "insufficient_evidence",
+                        ],
+                    },
+                },
                 "text_context": [
                     "original_prompt",
                     "parsed_prompt_requirements",
@@ -187,34 +251,27 @@ DEFAULT_SCENE_QUALITY_INTERFACE_CONFIG: dict[str, Any] = {
             "implemented": True,
             "weight": 1.0 / 3.0,
             "evidence_policy": {
-                "camera_scope": "object_local",
+                "camera_scope": "group_local",
                 "camera_mode": "metric_local",
                 "selector": "deterministic",
-                "image_budget": 1,
+                "image_budget": 3,
                 "presentation": "raw",
-                "image_order": None,
-                "include_global_context": False,
+                "image_order": ["group_local", "global_context"],
+                "include_global_context": True,
                 "camera_pose_mode": None,
             },
             "evidence_plan": {
-                "evidence_strategy": None,
-                "available_strategies": ["global_screen_then_local", "script_screen_then_local"],
-                "selected_router": None,
-                "router_options": {
-                    "global_screen_then_local": {
-                        "router": "vlm_global_screen",
-                        "trigger_states": ["suspicious", "insufficient_evidence"],
-                    },
-                    "script_screen_then_local": {
-                        "router": "canonical_l3_scale_candidate_router",
-                        "trigger_states": ["statistical_outlier", "unknown_coverage"],
-                        "executes_router": False,
-                    },
+                "evidence_strategy": "global_and_local",
+                "global_policy": {
+                    "view_family": "global_perspective",
+                    "image_budget": 1,
+                    "top_down": False,
                 },
                 "local_policy": {
-                    "camera_scope": "object_local",
+                    "camera_scope": "group_local",
                     "grouping_policy_id": GROUPING_POLICY_ID,
                 },
+                "router_options": None,
                 "text_context": [
                     "original_prompt",
                     "parsed_prompt_requirements",
@@ -253,6 +310,45 @@ DEFAULT_SCENE_QUALITY_INTERFACE_CONFIG: dict[str, Any] = {
                 "text_context": [
                     "original_prompt",
                     "parsed_prompt_requirements",
+                    "authorized_deviations",
+                    "asset_policy",
+                    "object_grouping_report",
+                ],
+            },
+        },
+        # Additive experimental metric. It is implemented and can be enabled
+        # explicitly without changing the frozen three-metric L3 weights.
+        "functional_consistency": {
+            "enabled": False,
+            "implemented": True,
+            # A positive local weight lets explicit diagnostic runs execute.
+            # The evaluator still excludes this optional interface from the
+            # frozen canonical aggregate below.
+            "weight": 1.0,
+            "evidence_policy": {
+                "camera_scope": "group_local",
+                "camera_mode": "metric_local",
+                "selector": "deterministic",
+                "image_budget": 3,
+                "presentation": "raw",
+                "image_order": ["group_local", "global_context"],
+                "include_global_context": True,
+                "camera_pose_mode": None,
+            },
+            "evidence_plan": {
+                "evidence_strategy": "global_and_local",
+                "global_policy": {
+                    "view_family": "global_perspective",
+                    "image_budget": 1,
+                    "top_down": False,
+                },
+                "local_policy": {
+                    "camera_scope": "group_local",
+                    "grouping_policy_id": GROUPING_POLICY_ID,
+                },
+                "router_options": None,
+                "text_context": [
+                    "original_prompt",
                     "authorized_deviations",
                     "asset_policy",
                     "object_grouping_report",
@@ -308,7 +404,7 @@ def resolve_scene_quality_config(
     # accumulated separately rather than collapsed into the built-in defaults.
     global_defaults: dict[str, Any] = {}
     explicit_metric_policies: dict[str, dict[str, Any]] = {
-        name: {} for name in SCENE_QUALITY_INTERFACE_METRICS
+        name: {} for name in SUPPORTED_SCENE_QUALITY_METRICS
     }
     for layer in layers:
         layer_defaults = layer.get("evidence_policy_defaults")
@@ -319,7 +415,7 @@ def resolve_scene_quality_config(
         layer_metrics = layer.get("metrics")
         if layer_metrics is not None:
             layer_metrics = _as_object(layer_metrics, "metrics")
-            for name in SCENE_QUALITY_INTERFACE_METRICS:
+            for name in SUPPORTED_SCENE_QUALITY_METRICS:
                 metric_patch = layer_metrics.get(name)
                 if isinstance(metric_patch, dict) and metric_patch.get("evidence_policy") is not None:
                     explicit_metric_policies[name] = _deep_merge(
@@ -337,7 +433,7 @@ def resolve_scene_quality_config(
         raise SceneQualityInterfaceConfigError(
             "l3_scene_quality.metrics must be a JSON object"
         )
-    for metric_name in SCENE_QUALITY_INTERFACE_METRICS:
+    for metric_name in SUPPORTED_SCENE_QUALITY_METRICS:
         metric_config = metrics.get(metric_name)
         if not isinstance(metric_config, dict):
             raise SceneQualityInterfaceConfigError(
@@ -364,7 +460,7 @@ def evaluate_scene_quality_interfaces(
     config: dict[str, Any] | None = None,
     *,
     object_grouping_report: dict[str, Any] | list[dict[str, Any]] | None = None,
-    render_evidence: list[str] | dict[str, list[str]] | None = None,
+    render_evidence: list[str] | dict[str, Any] | None = None,
     camera_evidence_provider: Any = None,
     vlm_judge: Any = None,
     authorized_deviations: Any = None,
@@ -392,7 +488,7 @@ def evaluate_scene_quality_interfaces(
     deviations = validate_authorized_deviations(
         authorized_deviations,
         metric_normalizer=str,
-        allowed_metrics=SCENE_QUALITY_INTERFACE_METRICS,
+        allowed_metrics=SUPPORTED_SCENE_QUALITY_METRICS,
     )
 
     object_ids = _scene_object_ids(scene)
@@ -405,7 +501,7 @@ def evaluate_scene_quality_interfaces(
         raise TypeError("metric_applicability must be a JSON object or null")
     applicability = metric_applicability if isinstance(metric_applicability, dict) else {}
     unknown_applicability = sorted(
-        set(applicability) - set(SCENE_QUALITY_INTERFACE_METRICS)
+        set(applicability) - set(SUPPORTED_SCENE_QUALITY_METRICS)
     )
     if unknown_applicability:
         raise ValueError(
@@ -424,7 +520,7 @@ def evaluate_scene_quality_interfaces(
     top_enabled = bool(resolved["enabled"])
 
     metric_reports: dict[str, dict[str, Any]] = {}
-    for metric_name in SCENE_QUALITY_INTERFACE_METRICS:
+    for metric_name in SUPPORTED_SCENE_QUALITY_METRICS:
         metric_config = resolved["metrics"][metric_name]
         metric_reports[metric_name] = _evaluate_metric(
             metric_name=metric_name,
@@ -434,6 +530,11 @@ def evaluate_scene_quality_interfaces(
             object_ids=object_ids,
             groups=groups,
             grouping_available=grouping_available,
+            grouping_report=(
+                object_grouping_report
+                if isinstance(object_grouping_report, dict)
+                else None
+            ),
             render_evidence=render_evidence,
             camera_evidence_provider=camera_evidence_provider,
             vlm_judge=vlm_judge,
@@ -479,7 +580,7 @@ def evaluate_scene_quality_interfaces(
     resolved_count = len(resolved_entries)
     active_metric_names = [
         name
-        for name in SCENE_QUALITY_INTERFACE_METRICS
+        for name in SUPPORTED_SCENE_QUALITY_METRICS
         if metric_reports[name]["affects_score"]
     ]
     resolved_metric_names = [
@@ -522,6 +623,7 @@ def evaluate_scene_quality_interfaces(
         "subfamilies": {
             SEMANTIC_COHERENCE: list(SEMANTIC_COHERENCE_METRICS),
             PERCEPTUAL_VISUAL_QUALITY: list(PERCEPTUAL_VISUAL_QUALITY_METRICS),
+            FUNCTIONAL_VALIDITY: list(FUNCTIONAL_VALIDITY_METRICS),
         },
         "grouping_policy": grouping_policy_provenance(),
         "final_vlm_context_contract": list(FINAL_VLM_CONTEXT_CONTRACT),
@@ -596,7 +698,8 @@ def _evaluate_metric(
     object_ids: list[str],
     groups: list[dict[str, Any]] | None,
     grouping_available: bool,
-    render_evidence: list[str] | dict[str, list[str]] | None,
+    grouping_report: dict[str, Any] | None,
+    render_evidence: list[str] | dict[str, Any] | None,
     camera_evidence_provider: Any,
     vlm_judge: Any,
     prompt: str | None,
@@ -604,7 +707,22 @@ def _evaluate_metric(
     authorized_deviations: list[dict[str, Any]],
     applicability: Any,
 ) -> dict[str, Any]:
-    policy = metric_config["evidence_policy"]
+    policy = deepcopy(metric_config["evidence_policy"])
+    declared_scope = str(policy["camera_scope"])
+    # Existing direct callers can still adjudicate a scale packet without
+    # supplying the new grouping dependency. Canonical runs provide grouping
+    # and therefore take the group-scoped branch below.
+    legacy_scale_scope = bool(
+        metric_name == "scale_consistency"
+        and declared_scope in _GROUP_SCOPES
+        and not grouping_available
+    )
+    if legacy_scale_scope:
+        policy.update(
+            camera_scope="object_local",
+            include_global_context=False,
+            image_order=None,
+        )
     scope = str(policy["camera_scope"])
     enabled = bool(metric_config["enabled"])
 
@@ -620,6 +738,11 @@ def _evaluate_metric(
         if grouping_available and groups is not None:
             eligible_groups: list[dict[str, Any]] = []
             scene_ids = set(object_ids)
+            minimum_members = (
+                2
+                if metric_name == "object_pairing_consistency"
+                else 1
+            )
             for group in groups:
                 members = list(
                     dict.fromkeys(
@@ -628,7 +751,7 @@ def _evaluate_metric(
                         if str(member) in scene_ids
                     )
                 )
-                if len(members) >= 2:
+                if len(members) >= minimum_members:
                     eligible_groups.append({**group, "object_ids": members})
             selected_groups_for_judge = deepcopy(eligible_groups)
             selected_group_ids = [
@@ -654,22 +777,48 @@ def _evaluate_metric(
         and eligible_count > 0
         and vlm_judge is not None
     )
-    (
-        resolved_evidence,
-        evidence_resolution,
-    ) = _resolve_metric_evidence(
-        render_evidence,
-        metric_name=metric_name,
-        policy=policy,
-        scene=scene,
-        prompt=prompt,
-        selected_object_ids=selected_object_ids,
-        selected_group_ids=selected_group_ids,
-        selected_groups=selected_groups_for_judge,
-        camera_evidence_provider=(
-            camera_evidence_provider if should_acquire_evidence else None
-        ),
-    )
+    group_evidence_packets: list[dict[str, Any]] = []
+    if scope in _GROUP_SCOPES:
+        group_evidence_packets = _resolve_group_evidence_packets(
+            render_evidence,
+            metric_name=metric_name,
+            policy=policy,
+            scene=scene,
+            prompt=prompt,
+            groups=selected_groups_for_judge,
+            grouping_report=grouping_report,
+            camera_evidence_provider=(
+                camera_evidence_provider if should_acquire_evidence else None
+            ),
+            resolve_metric_evidence=_resolve_metric_evidence,
+        )
+        resolved_evidence = list(
+            dict.fromkeys(
+                path
+                for packet in group_evidence_packets
+                for path in packet["paths"]
+            )
+        )
+        evidence_resolution = _group_evidence_resolution_summary(
+            group_evidence_packets
+        )
+    else:
+        (
+            resolved_evidence,
+            evidence_resolution,
+        ) = _resolve_metric_evidence(
+            render_evidence,
+            metric_name=metric_name,
+            policy=policy,
+            scene=scene,
+            prompt=prompt,
+            selected_object_ids=selected_object_ids,
+            selected_group_ids=selected_group_ids,
+            selected_groups=selected_groups_for_judge,
+            camera_evidence_provider=(
+                camera_evidence_provider if should_acquire_evidence else None
+            ),
+        )
     evidence_available = bool(resolved_evidence)
     available, unavailable_reason, dependencies = _dependency_state(
         scope=scope,
@@ -693,6 +842,12 @@ def _evaluate_metric(
         "score": None,
         "affects_score": False,
         "requested_camera_scope": scope,
+        "declared_camera_scope": declared_scope,
+        "compatibility_scope_fallback": (
+            "scale_object_local_without_grouping"
+            if legacy_scale_scope
+            else None
+        ),
         "resolved_evidence_policy": deepcopy(policy),
         "evidence_plan": deepcopy(metric_config.get("evidence_plan")),
         "grouping_policy": (
@@ -723,6 +878,10 @@ def _evaluate_metric(
             "scope_satisfied": bool(evidence_resolution["scope_satisfied"]),
             "missing_paths": list(evidence_resolution.get("missing_paths") or []),
             "vlm_invoked": False,
+            "group_requests": [
+                _group_packet_audit(packet)
+                for packet in group_evidence_packets
+            ],
         },
         "authorized_deviations": authorized_deviations,
         "applicability": applicability_record,
@@ -747,12 +906,14 @@ def _evaluate_metric(
     if applicable_state == "not_relevant":
         base.update(status="not_applicable", reason="metric_not_relevant_for_asset_policy")
         return base
-    base["affects_score"] = True
+    base["affects_score"] = (
+        metric_name in SCENE_QUALITY_INTERFACE_METRICS
+    )
     if applicable_state == "pending":
         base.update(status="unresolved", reason="metric_applicability_pending")
         return base
     if eligible_count == 0:
-        if metric_name == "object_pairing_consistency" and not grouping_available:
+        if scope in _GROUP_SCOPES and not grouping_available:
             base.update(status="unresolved", reason="object_grouping_unavailable")
         else:
             base.update(status="not_applicable", reason="no_eligible_targets", affects_score=False)
@@ -760,6 +921,21 @@ def _evaluate_metric(
     if vlm_judge is None:
         base.update(status="unresolved", reason="vlm_judge_not_configured")
         return base
+    if scope in _GROUP_SCOPES:
+        return _evaluate_group_scoped_judgements(
+            base=base,
+            metric_name=metric_name,
+            scene=scene,
+            prompt=prompt,
+            packets=group_evidence_packets,
+            vlm_judge=vlm_judge,
+            authorized_deviations=authorized_deviations,
+            visual_style_spec=visual_style_spec,
+            build_judge_request=_judge_request,
+            call_judge=_call_scene_quality_judge,
+            apply_prompt_exemptions=_apply_prompt_exemptions,
+            normalize_judgement=_normalize_judgement,
+        )
     if not available:
         base.update(status="unresolved", reason=unavailable_reason)
         return base
@@ -770,18 +946,32 @@ def _evaluate_metric(
         and metric_config["evidence_plan"].get("evidence_strategy")
         == "global_screen_then_local"
     ):
-        return _evaluate_style_global_then_local(
+        return _evaluate_style_global_then_group_local(
             base=base,
             metric_config=metric_config,
             scene=scene,
             object_ids=object_ids,
+            groups=groups,
+            grouping_report=grouping_report,
             global_evidence=resolved_evidence,
+            render_evidence=render_evidence,
             camera_evidence_provider=camera_evidence_provider,
             vlm_judge=vlm_judge,
             prompt=prompt,
             visual_style_spec=visual_style_spec,
             authorized_deviations=authorized_deviations,
-            eligible_count=eligible_count,
+            build_judge_request=_judge_request,
+            call_judge=_call_scene_quality_judge,
+            apply_prompt_exemptions=_apply_prompt_exemptions,
+            normalize_judgement=_normalize_judgement,
+            resolve_group_evidence_packets=(
+                _resolve_group_evidence_packets
+            ),
+            resolve_metric_evidence=_resolve_metric_evidence,
+            group_packet_audit=_group_packet_audit,
+            evaluate_group_scoped_judgements=(
+                _evaluate_group_scoped_judgements
+            ),
         )
 
     request = _judge_request(
@@ -825,196 +1015,6 @@ def _evaluate_metric(
     base["reason"] = outcome["reason"]
     base["score"] = outcome["score"]
     if outcome["status"] == "evaluated":
-        base["coverage"] = {
-            "eligible_count": eligible_count,
-            "resolved_count": eligible_count,
-            "fraction": 1.0,
-            "complete": True,
-        }
-    return base
-
-
-def _evaluate_style_global_then_local(
-    *,
-    base: dict[str, Any],
-    metric_config: dict[str, Any],
-    scene: dict[str, Any],
-    object_ids: list[str],
-    global_evidence: list[str],
-    camera_evidence_provider: Any,
-    vlm_judge: Any,
-    prompt: str | None,
-    visual_style_spec: dict[str, Any] | None,
-    authorized_deviations: list[dict[str, Any]],
-    eligible_count: int,
-) -> dict[str, Any]:
-    """Screen global style, then inspect frozen local views only when needed."""
-
-    global_request = _judge_request(
-        metric_name="style_consistency",
-        scene=scene,
-        prompt=prompt,
-        render_evidence=global_evidence,
-        selected_object_ids=[],
-        selected_group_ids=[],
-        groups=[],
-        authorized_deviations=authorized_deviations,
-        visual_style_spec=visual_style_spec,
-        evidence_phase="global_screen",
-        decision_mode="screen",
-    )
-    base["evidence_request"]["vlm_invoked"] = True
-    base["vlm_invoked"] = True
-    base["judge_call_count"] = 1
-    try:
-        global_raw = _call_scene_quality_judge(vlm_judge, global_request)
-        global_adjusted = _apply_prompt_exemptions(
-            global_raw,
-            metric_name="style_consistency",
-            authorized_deviations=authorized_deviations,
-        )
-        global_outcome = _normalize_judgement(
-            global_adjusted,
-            metric_name="style_consistency",
-            valid_object_ids=set(object_ids),
-        )
-    except Exception as exc:
-        base.update(
-            status="unresolved",
-            reason="vlm_global_style_screen_failed",
-            route="global_screen_failed",
-            judgement={
-                "error_type": type(exc).__name__,
-                "error": str(exc),
-            },
-        )
-        return base
-
-    base["global_screen"] = deepcopy(global_adjusted)
-    if (
-        global_outcome["status"] == "evaluated"
-        and global_outcome["score"] == 1.0
-    ):
-        base.update(
-            status="evaluated",
-            reason=None,
-            score=1.0,
-            route="global_screen_resolved",
-            router_state="not_suspicious",
-            judgement=global_adjusted,
-        )
-        base["coverage"] = {
-            "eligible_count": eligible_count,
-            "resolved_count": eligible_count,
-            "fraction": 1.0,
-            "complete": True,
-        }
-        return base
-
-    router_state = (
-        "insufficient_evidence"
-        if global_adjusted.get("evidence_status") == "insufficient"
-        else "suspicious"
-    )
-    suspect_ids = list(
-        dict.fromkeys(
-            str(target_id)
-            for defect in global_adjusted.get("defects") or []
-            if isinstance(defect, dict)
-            for target_id in defect.get("target_ids") or []
-            if str(target_id) in set(object_ids)
-        )
-    )
-    plan = metric_config.get("evidence_plan") or {}
-    local_plan = (
-        plan.get("local_policy")
-        if isinstance(plan.get("local_policy"), dict)
-        else {}
-    )
-    local_policy = {
-        "camera_scope": "object_local",
-        "camera_mode": "metric_local",
-        "selector": "deterministic",
-        "image_budget": int(local_plan.get("image_budget") or 4),
-        "presentation": "raw",
-        "image_order": ["metric_local", "global_context"],
-        "include_global_context": True,
-        "camera_pose_mode": None,
-    }
-    local_result = _request_scene_quality_evidence(
-        camera_evidence_provider,
-        metric_name="style_consistency",
-        policy=local_policy,
-        scene=scene,
-        prompt=prompt,
-        selected_object_ids=suspect_ids,
-        selected_group_ids=[],
-        selected_groups=[],
-    )
-    base["evidence_request"].update(
-        {
-            "provider_invoked": True,
-            "provider_status": local_result["status"],
-            "provider_reason": local_result["reason"],
-            "target_object_ids": suspect_ids,
-        }
-    )
-    base["router_state"] = router_state
-    base["route"] = "global_screen_then_local"
-    if local_result["status"] != "available":
-        base.update(
-            status="unresolved",
-            reason=local_result["reason"]
-            or "style_local_render_evidence_unavailable",
-            judgement=global_adjusted,
-        )
-        return base
-
-    local_paths = list(local_result["paths"])
-    final_evidence = list(dict.fromkeys([*local_paths, *global_evidence]))
-    base["local_evidence_paths"] = local_paths
-    base["evidence_paths"] = final_evidence
-    final_request = _judge_request(
-        metric_name="style_consistency",
-        scene=scene,
-        prompt=prompt,
-        render_evidence=final_evidence,
-        selected_object_ids=suspect_ids,
-        selected_group_ids=[],
-        groups=[],
-        authorized_deviations=authorized_deviations,
-        visual_style_spec=visual_style_spec,
-        evidence_phase="local_confirmation",
-        decision_mode="final",
-    )
-    try:
-        final_raw = _call_scene_quality_judge(vlm_judge, final_request)
-        final_adjusted = _apply_prompt_exemptions(
-            final_raw,
-            metric_name="style_consistency",
-            authorized_deviations=authorized_deviations,
-        )
-        final_outcome = _normalize_judgement(
-            final_adjusted,
-            metric_name="style_consistency",
-            valid_object_ids=set(object_ids),
-        )
-    except Exception as exc:
-        base.update(
-            status="unresolved",
-            reason="vlm_local_style_confirmation_failed",
-            judgement={
-                "error_type": type(exc).__name__,
-                "error": str(exc),
-            },
-        )
-        return base
-    base["judge_call_count"] = 2
-    base["judgement"] = final_adjusted
-    base["status"] = final_outcome["status"]
-    base["reason"] = final_outcome["reason"]
-    base["score"] = final_outcome["score"]
-    if final_outcome["status"] == "evaluated":
         base["coverage"] = {
             "eligible_count": eligible_count,
             "resolved_count": eligible_count,
@@ -1075,7 +1075,7 @@ def _dependency_state(
 
 
 def _resolve_metric_evidence(
-    value: list[str] | dict[str, list[str]] | None,
+    value: list[str] | dict[str, Any] | None,
     *,
     metric_name: str,
     policy: dict[str, Any],
@@ -1085,6 +1085,7 @@ def _resolve_metric_evidence(
     selected_group_ids: list[str],
     selected_groups: list[dict[str, Any]],
     camera_evidence_provider: Any,
+    group_scope: GroupCameraScope | None = None,
 ) -> tuple[list[str], dict[str, Any]]:
     """Resolve evidence without confusing a global overview for local proof.
 
@@ -1140,6 +1141,8 @@ def _resolve_metric_evidence(
             selected_object_ids=selected_object_ids,
             selected_group_ids=selected_group_ids,
             selected_groups=selected_groups,
+            group_scope=group_scope,
+            existing_global_paths=global_paths,
         )
         provider_status = provider_result["status"]
         provider_reason = provider_result["reason"]
@@ -1152,6 +1155,15 @@ def _resolve_metric_evidence(
             source = "camera_evidence_provider"
     elif not scoped_paths:
         provider_reason = f"{scope}_render_evidence_unavailable"
+
+    scoped_image_budget = policy.get("scoped_image_budget")
+    if scoped_image_budget is not None:
+        scoped_limit = int(scoped_image_budget)
+        if scoped_limit < 0:
+            raise ValueError(
+                "scoped_image_budget must be non-negative"
+            )
+        scoped_paths = scoped_paths[:scoped_limit]
 
     missing_paths = [
         path
@@ -1226,6 +1238,8 @@ def _request_scene_quality_evidence(
     selected_object_ids: list[str],
     selected_group_ids: list[str],
     selected_groups: list[dict[str, Any]],
+    group_scope: GroupCameraScope | None = None,
+    existing_global_paths: list[str] | None = None,
 ) -> dict[str, Any]:
     request = {
         "category": "scene_quality_evidence_request",
@@ -1247,8 +1261,39 @@ def _request_scene_quality_evidence(
         "natural_language_prompt": prompt,
         "evidence_scope": str(policy["camera_scope"]),
         "evidence_policy": deepcopy(policy),
+        "existing_global_evidence": list(
+            existing_global_paths or []
+        ),
+        "global_context_mode": (
+            "reuse_existing"
+            if existing_global_paths
+            else "not_available"
+        ),
         "selection_role": "visual_evidence_only_do_not_judge_metric",
     }
+    if group_scope is not None:
+        scope_value = group_scope.to_dict()
+        request.update(
+            {
+                "group_scope": scope_value,
+                "member_ids": list(group_scope.member_ids),
+                "target_bounds": deepcopy(
+                    scope_value["target_bounds"]
+                ),
+                "focus_center": list(group_scope.focus_center),
+                "target_extent": list(group_scope.extent),
+                "evidence_goal": group_scope_evidence_goal(
+                    group_scope
+                ),
+                "grouping_role": (
+                    "primary_visual_evidence_decomposition"
+                ),
+            }
+        )
+        request["event"]["group_id"] = group_scope.group_id
+        request["event"]["focus_region"] = deepcopy(
+            scope_value["target_bounds"]
+        )
     call = getattr(provider, "provide_scene_quality_evidence", None)
     if not callable(call) and callable(provider):
         call = provider
@@ -1396,6 +1441,7 @@ def _judge_request(
     visual_style_spec: dict[str, Any] | None,
     evidence_phase: str = "final",
     decision_mode: str = "final",
+    group_scope: GroupCameraScope | None = None,
 ) -> dict[str, Any]:
     objects = [
         _compact_object(item)
@@ -1411,15 +1457,21 @@ def _judge_request(
         for group in groups or []
         if not selected_group_ids or str(group.get("group_id")) in set(selected_group_ids)
     ]
-    return {
+    request = {
         "category": SCENE_QUALITY_INTERFACE_NAMESPACE,
         "metric": metric_name,
         "evidence_phase": evidence_phase,
         "decision_mode": decision_mode,
         "metric_rubric": METRIC_RUBRICS[metric_name],
         "judgment_scope": deepcopy(JUDGMENT_SCOPE_BY_METRIC[metric_name]),
+        "event": {
+            "type": metric_name,
+            "object_ids": list(selected_object_ids),
+            "group_ids": list(selected_group_ids),
+        },
         "prompt": prompt,
         "natural_language_prompt": prompt,
+        "camera_scene_context": deepcopy(scene),
         "scene_summary": {
             "scene_id": scene.get("scene_id"),
             "scene_type": scene.get("scene_type"),
@@ -1457,6 +1509,33 @@ def _judge_request(
             judge_method="adjudicate_scene_quality",
         ),
     }
+    if group_scope is not None:
+        scope_value = group_scope.to_dict()
+        request["scene_summary"]["group_scope"] = deepcopy(
+            scope_value
+        )
+        request.update(
+            {
+                "group_scope": scope_value,
+                "member_ids": list(group_scope.member_ids),
+                "target_bounds": deepcopy(
+                    scope_value["target_bounds"]
+                ),
+                "focus_center": list(group_scope.focus_center),
+                "target_extent": list(group_scope.extent),
+                "evidence_goal": group_scope_evidence_goal(
+                    group_scope
+                ),
+                "grouping_role": (
+                    "primary_visual_evidence_decomposition"
+                ),
+            }
+        )
+        request["event"]["group_id"] = group_scope.group_id
+        request["event"]["focus_region"] = deepcopy(
+            scope_value["target_bounds"]
+        )
+    return request
 
 
 def _compact_object(value: dict[str, Any]) -> dict[str, Any]:
@@ -1798,6 +1877,11 @@ def _normalize_groups(
     if object_grouping_report is None:
         return None
     if isinstance(object_grouping_report, dict):
+        if (
+            object_grouping_report.get("status") == "unavailable"
+            and object_grouping_report.get("object_groups") is None
+        ):
+            return None
         groups = object_grouping_report.get("object_groups")
     else:
         groups = object_grouping_report

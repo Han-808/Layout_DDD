@@ -10,12 +10,12 @@ from typing import Any
 
 from benchmark.rendering.camera_pose import (
     CAMERA_ACTIONS,
-    CAMERA_CANDIDATE_POLICIES,
     DEFAULT_CAMERA_CANDIDATE_POLICY,
     DEFAULT_CAMERA_MODE_BY_METRIC,
     apply_camera_action,
     generate_camera_pose_candidates,
     generate_global_context_poses,
+    normalize_camera_candidate_policy,
     resolve_camera_pose_mode,
     select_bbox_track_views,
     validate_camera_pose_mode,
@@ -116,13 +116,10 @@ class CameraEvidenceProvider:
         self.max_views = int(max_views)
         self.max_steps = int(max_steps)
         self.candidate_count = int(candidate_count)
-        self.candidate_policy = str(candidate_policy).strip().lower()
+        self.candidate_policy = normalize_camera_candidate_policy(
+            candidate_policy
+        )
         self.active_repair = bool(active_repair)
-        if self.candidate_policy not in CAMERA_CANDIDATE_POLICIES:
-            raise ValueError(
-                "camera candidate policy must be one of "
-                f"{list(CAMERA_CANDIDATE_POLICIES)}"
-            )
         # Collision-only paired RGB + diagnostic-overlay evidence. Opt-in so OOB
         # and Support camera behavior is completely unchanged.
         self.collision_overlay = bool(collision_overlay)

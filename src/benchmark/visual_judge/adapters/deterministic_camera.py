@@ -9,6 +9,7 @@ from typing import Any, Callable, Mapping
 from benchmark.rendering.camera_pose import (
     DEFAULT_CAMERA_CANDIDATE_POLICY,
     generate_camera_pose_candidates,
+    normalize_camera_candidate_policy,
     resolve_camera_pose_mode,
 )
 from benchmark.visual_judge.adapters.legacy_camera import (
@@ -67,7 +68,9 @@ class DeterministicLocalCameraSelector:
                 "deterministic candidate_generator must be callable"
             )
         self.candidate_generator = candidate_generator
-        self.candidate_policy = str(candidate_policy)
+        self.candidate_policy = normalize_camera_candidate_policy(
+            candidate_policy
+        )
         self.feature_enricher = feature_enricher
         self.ranking_config = DeterministicCameraRankingConfig.from_value(
             ranking_config
@@ -265,7 +268,7 @@ class DeterministicLocalCameraSelector:
             "reuses_existing_camera_algorithms": [
                 "generate_camera_pose_candidates",
                 "metric_specific_camera_pose_mode",
-                "feasible_v2_geometry_and_proxy_framing",
+                "local_geometry_and_proxy_framing",
             ],
         }
         if not selected_records:
@@ -412,15 +415,41 @@ def _candidate_generation_request(
         )
     except ValueError:
         resolved_mode = "visibility_ranked"
+    group_scope = request.context.get("group_scope")
+    event = deepcopy(request.context.get("event") or {})
+    if isinstance(group_scope, dict):
+        event.setdefault("group_id", group_scope.get("group_id"))
+        event.setdefault(
+            "focus_region",
+            deepcopy(group_scope.get("target_bounds")),
+        )
+        event.setdefault(
+            "object_ids",
+            list(group_scope.get("member_ids") or constraints.target_ids),
+        )
     return {
         "metric": request.metric,
         "scene": deepcopy(request.scene),
         "object_ids": list(constraints.target_ids),
         "target_ids": list(constraints.target_ids),
+        "group_scope": (
+            deepcopy(group_scope)
+            if isinstance(group_scope, dict)
+            else None
+        ),
+        "target_bounds": deepcopy(
+            request.context.get("target_bounds")
+        ),
+        "focus_center": deepcopy(
+            request.context.get("focus_center")
+        ),
+        "target_extent": deepcopy(
+            request.context.get("target_extent")
+        ),
         "detector_evidence": deepcopy(
             request.context.get("detector_evidence") or {}
         ),
-        "event": deepcopy(request.context.get("event") or {}),
+        "event": event,
         "_resolved_camera_pose_mode": resolved_mode,
         "_camera_render": deepcopy(
             request.context.get("camera_render") or {}
@@ -744,7 +773,7 @@ def _geometry_feasibility(
     explicit = details.get("feasible")
     if isinstance(explicit, bool):
         return True, explicit
-    if str(candidate.get("candidate_policy") or "") != "feasible_v2":
+    if str(candidate.get("candidate_policy") or "") != "local":
         return False, None
     interval = details.get("feasible_distance_interval_m")
     actual = details.get("actual_distance_m")

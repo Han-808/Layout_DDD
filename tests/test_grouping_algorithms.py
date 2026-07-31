@@ -9,6 +9,9 @@ import pytest
 import yaml
 
 from benchmark.grouping import (
+    ACTIVE_GROUPING_BACKENDS,
+    DEFAULT_GROUPING_BACKEND,
+    DEPRECATED_GROUPING_BACKENDS,
     GROUPING_ROLE,
     AnchorGroupingAlgorithm,
     GroupingRequest,
@@ -20,6 +23,7 @@ from benchmark.grouping import (
     normalize_grouping_scene,
 )
 from benchmark.evaluator.scene_quality.interfaces import _normalize_groups
+from benchmark.api.evaluation import _resolve_object_grouping_report
 from benchmark.evaluator.evidence_contract import (
     GROUPING_ROLE as EVALUATOR_GROUPING_ROLE,
 )
@@ -298,6 +302,11 @@ def test_vlm_backend_uses_partition_prompt_and_visual_context(
     assert "not a benchmark metric" in system
     assert "verdict, score, confidence" in system
     assert "make groups look more plausible" in system
+    assert "A group is a downstream visual-evidence scope." in system
+    assert (
+        "Do not merge spatially distant zones merely because their objects "
+        "have related semantic roles."
+    ) in system
     content = call["messages"][1]["content"]
     assert content[1]["type"] == "image_url"
     assert content[1]["image_url"]["url"].startswith(
@@ -468,11 +477,56 @@ def test_factory_backends_share_one_interface() -> None:
         build_grouping_algorithm({"grouping": {"backend": "vlm"}})
 
 
-def test_group_scene_default_is_topology_and_returns_result() -> None:
-    result = group_scene(_mixed_scene())
+def test_group_scene_default_is_vlm_and_never_falls_back() -> None:
+    assert DEFAULT_GROUPING_BACKEND == "vlm"
+    assert ACTIVE_GROUPING_BACKENDS == ("vlm",)
+    assert DEPRECATED_GROUPING_BACKENDS == ("topology", "anchor")
+    with pytest.raises(
+        ValueError,
+        match="requires an injected chat model",
+    ):
+        group_scene(_mixed_scene())
+
+    result = group_scene(
+        _mixed_scene(),
+        model=_Model(_vlm_response()),
+    )
 
     assert isinstance(result, GroupingResult)
-    assert result.backend == "topology"
+    assert result.backend == "vlm"
+
+
+def test_canonical_grouping_route_is_vlm_only_and_fail_closed() -> None:
+    resolved = _resolve_object_grouping_report(
+        None,
+        scene=_mixed_scene(),
+        request={"instruction": "Create a bedroom and work area."},
+        visual_evidence=[],
+        model=_Model(_vlm_response()),
+    )
+    assert resolved["status"] == "complete"
+    assert resolved["grouping_backend"] == "vlm"
+    assert (
+        resolved["grouping_policy_id"]
+        == "vlm_visual_evidence_scope_v2"
+    )
+    assert resolved["fallback_used"] is False
+
+    unavailable = _resolve_object_grouping_report(
+        None,
+        scene=_mixed_scene(),
+        request={},
+        visual_evidence=[],
+        model=None,
+    )
+    assert unavailable == {
+        "status": "unavailable",
+        "source": "canonical_runtime_default",
+        "grouping_backend": "vlm",
+        "grouping_policy_id": "vlm_visual_evidence_scope_v2",
+        "reason": "vlm_grouping_model_not_configured",
+        "fallback_used": False,
+    }
 
 
 @pytest.mark.parametrize("backend", ["topology", "anchor"])
@@ -536,7 +590,7 @@ def test_vlm_request_config_overrides_constructor_defaults() -> None:
     [
         ("topology_metadata_geometry_v2.yaml", "topology"),
         ("anchor_object_v1.yaml", "anchor"),
-        ("vlm_semantic_partition_v1.yaml", "vlm"),
+        ("vlm_visual_evidence_scope_v2.yaml", "vlm"),
     ],
 )
 def test_reference_grouping_configs_construct_expected_backend(

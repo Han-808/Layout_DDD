@@ -13,8 +13,13 @@ from benchmark.grouping.topology import TopologyGroupingAlgorithm
 from benchmark.grouping.vlm import VLMGroupingAlgorithm
 
 
+# All three names remain accepted by the compatibility factory. Only VLM is an
+# active/default grouping implementation; topology and anchor are retained for
+# explicit historical replay and are never selected as a fallback.
 GROUPING_BACKENDS = ("topology", "anchor", "vlm")
-DEFAULT_GROUPING_BACKEND = "topology"
+ACTIVE_GROUPING_BACKENDS = ("vlm",)
+DEPRECATED_GROUPING_BACKENDS = ("topology", "anchor")
+DEFAULT_GROUPING_BACKEND = "vlm"
 
 
 def build_grouping_algorithm(

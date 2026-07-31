@@ -35,6 +35,8 @@ _OBSERVATION_METRIC = {
     "front_back_disambiguated": "facing",
     "depth_baseline_available": "depth_relation",
     "group_context_visible": "functional_semantic_fidelity",
+    "interaction_side_visible": "functional_semantic_fidelity",
+    "limited_local_context": "object_pairing_consistency",
     "global_context_preserved": "style_consistency",
     "occluder_avoided": "collision",
 }
@@ -132,6 +134,28 @@ def test_metric_acquisition_planner_translates_judge_request() -> None:
     assert result.metadata["planner_backend"] == (
         "metric_specific_camera_dsl"
     )
+
+
+def test_functional_consistency_maps_to_local_usability_observations() -> None:
+    result = MetricSpecificAcquisitionPlanner().plan(
+        MetricAcquisitionPlanningRequest(
+            metric="functional_consistency",
+            evidence_request=EvidenceRequest(
+                target_ids=("chair", "desk"),
+                missing_observations=(
+                    "interaction_side_visible",
+                ),
+                view_goal="show whether the workstation can be used",
+            ),
+            known_target_ids=("chair", "desk"),
+        )
+    )
+
+    assert result.target_ids == ("chair", "desk")
+    assert result.required_observations == (
+        "interaction_side_visible",
+    )
+    assert result.metric == "functional_consistency"
 
 
 def test_metric_acquisition_planner_rejects_unknown_target() -> None:

@@ -1,5 +1,6 @@
 grouping:
   backend: vlm
+  lifecycle: deprecated_use_vlm_visual_evidence_scope_v2
   vlm:
     max_images: 4
     max_context_chars: 50000

@@ -1,0 +1,25 @@
+schema_version: grouping_vlm20_experiment_v1
+experiment_id: grouping_vlm20_visual_scope_v2_20260731_r1
+output_root: Support/artifacts/outputs/grouping_vlm20_visual_scope_v2_20260731_r1
+source_experiment_root: Support/artifacts/outputs/grouping_blind30_gpt56_20260730_r1
+seed: 20260731
+
+sample:
+  size: 20
+  per_stratum: 4
+
+grouping_config: configs/grouping/vlm_visual_evidence_scope_v2.yaml
+
+model:
+  name: gpt-5.6-terra-grouping-via-local-litellm
+  endpoint: http://127.0.0.1:4010/v1
+  model: gpt-5.6-terra
+  api_key_env: LITELLM_MASTER_KEY
+  max_tokens: 12000
+  context_length: 128000
+  timeout_seconds: 3000
+  response_format_json: false
+  max_retries: 1
+  retry_backoff_seconds: 2.0
+  max_tokens_field: max_tokens
+  send_temperature: false

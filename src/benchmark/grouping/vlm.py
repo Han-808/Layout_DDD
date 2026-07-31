@@ -23,8 +23,8 @@ from benchmark.grouping.scene import (
 from benchmark.models import parse_json_object
 
 
-VLM_GROUPING_POLICY_ID = "vlm_semantic_partition_v1"
-VLM_GROUPING_PROMPT_VERSION = "vlm_grouping_prompt_v1"
+VLM_GROUPING_POLICY_ID = "vlm_visual_evidence_scope_v2"
+VLM_GROUPING_PROMPT_VERSION = "vlm_grouping_prompt_v2"
 
 DEFAULT_VLM_GROUPING_CONFIG: dict[str, Any] = {
     "max_images": 4,
@@ -39,6 +39,8 @@ Your only task is to partition the listed renderable object IDs into local
 context groups that can later be shown to a separate metric Judge. Grouping
 defines evidence scope; it is not a benchmark metric and it is not scene
 ground truth.
+
+A group is a downstream visual-evidence scope. Prefer the smallest local context that preserves the relevant support, attachment, interaction, and ensemble cues. A non-singleton group should normally be jointly observable within a small bounded number of local views. Do not merge spatially distant zones merely because their objects have related semantic roles.
 
 Rules:
 1. Include every listed object ID exactly once. Never invent, omit, duplicate,
@@ -255,7 +257,14 @@ def _prompt_context(
                 "singleton_when_membership_is_uncertain",
             ],
             "consumer": (
-                "group-local visual evidence and object-pairing evaluation"
+                "per-group camera targeting, group-local visual evidence, "
+                "and downstream implicit-validity evaluation"
+            ),
+            "scope_definition": (
+                "A group is the smallest downstream visual-evidence scope "
+                "that preserves relevant support, attachment, interaction, "
+                "and ensemble cues and is normally jointly observable within "
+                "a small bounded number of local views."
             ),
             "scientific_boundary": (
                 "partition scope only; no position, orientation, topology, "

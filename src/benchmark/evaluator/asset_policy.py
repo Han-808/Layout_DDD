@@ -122,7 +122,12 @@ def scene_quality_applicability(policy: dict[str, Any] | None) -> dict[str, dict
                 "decision_role": "applicability_only",
                 "workflow": "canonical_l0_l4",
             }
-            for metric in ("scale_consistency", "object_pairing_consistency", "style_consistency")
+            for metric in (
+                "scale_consistency",
+                "object_pairing_consistency",
+                "style_consistency",
+                "functional_consistency",
+            )
         }
 
     mode = str(policy.get("mode", DEFAULT_ASSET_POLICY["mode"]))
@@ -156,10 +161,22 @@ def scene_quality_applicability(policy: dict[str, Any] | None) -> dict[str, dict
     if mode in selection_modes:
         style_basis.append(f"mode={mode}")
 
+    # Functional consistency concerns generic real-world usability of the
+    # generated arrangement, independent of whether the prompt requested a
+    # specific function.
+    functional_basis: list[str] = []
+    if _owner(policy, "arrangement_owner") == "generator":
+        functional_basis.append("arrangement_owner=generator")
+    if _owner(policy, "category_selection_owner") == "generator":
+        functional_basis.append("category_selection_owner=generator")
+
     return {
         "scale_consistency": _applicability_record(scale_basis),
         "object_pairing_consistency": _applicability_record(pairing_basis),
         "style_consistency": _applicability_record(style_basis),
+        "functional_consistency": _applicability_record(
+            functional_basis
+        ),
     }
 
 

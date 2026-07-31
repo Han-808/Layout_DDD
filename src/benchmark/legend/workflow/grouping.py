@@ -1,8 +1,8 @@
-"""Compatibility import for the canonical object-grouping implementation.
+"""Compatibility import for the deprecated deterministic grouping replay.
 
-New evaluator code must import :mod:`benchmark.evaluator.object_grouping`.
-The old path remains available to historical callers without maintaining a
-second implementation.
+The active evaluator uses :mod:`benchmark.grouping.vlm`. This old path remains
+available only to historical ``benchmark.legend`` callers without maintaining
+a second legacy implementation.
 """
 
 from benchmark.evaluator.object_grouping import (

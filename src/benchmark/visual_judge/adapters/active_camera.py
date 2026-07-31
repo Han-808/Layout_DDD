@@ -432,7 +432,7 @@ def _base_payload(
     request: CameraSelectionRequest,
     constraints: CameraConstraintSet,
 ) -> dict[str, Any]:
-    return {
+    payload = {
         "vlm_role": "vlm_camera_selector",
         "decision_contract": "camera_selection_v1",
         "selection_mode": (
@@ -442,6 +442,7 @@ def _base_payload(
         "task": request.task,
         "metric": request.metric,
         "target_ids": list(request.target_ids),
+        "evidence_goal": deepcopy(request.evidence_goal),
         "scene_context": deepcopy(request.scene),
         "camera_constraints": constraints.to_dict(),
         "candidate_views": list(deepcopy(request.candidate_views)),
@@ -458,6 +459,20 @@ def _base_payload(
         "evidence_round": request.evidence_round,
         "scene_access": "read_only",
     }
+    # Group geometry is authoritative controller context.  Preserve it across
+    # deterministic-to-VLM escalation instead of asking the VLM to infer the
+    # target scope again from the full scene.
+    for field in (
+        "group_scope",
+        "member_ids",
+        "target_bounds",
+        "focus_center",
+        "target_extent",
+        "grouping_role",
+    ):
+        if field in request.context:
+            payload[field] = deepcopy(request.context[field])
+    return payload
 
 
 def _strict_response(

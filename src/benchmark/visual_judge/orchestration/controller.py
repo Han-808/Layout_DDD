@@ -402,6 +402,52 @@ class VLMEvaluationController:
                     raise ValueError(
                         "Judge need_more_evidence requires evidence_request"
                     )
+                protected_group_targets = _protected_group_targets(
+                    judge_request
+                )
+                if protected_group_targets:
+                    outside_scope = sorted(
+                        set(pending_request.target_ids)
+                        - set(protected_group_targets)
+                    )
+                    if outside_scope:
+                        trace.append(
+                            {
+                                "stage": "judge_evidence_request",
+                                "evidence_round": rounds_used,
+                                "status": "invalid",
+                                "reason": (
+                                    "Judge requested targets outside the "
+                                    "immutable group scope"
+                                ),
+                                "outside_group_scope_target_ids": (
+                                    outside_scope
+                                ),
+                                "group_scope_target_ids": list(
+                                    protected_group_targets
+                                ),
+                            }
+                        )
+                        return unresolved(
+                            reason=(
+                                "Judge evidence request attempted to change "
+                                "the grouping scope"
+                            ),
+                            stop_reason=(
+                                "judge_evidence_request_outside_group_scope"
+                            ),
+                        )
+                    pending_request = EvidenceRequest(
+                        target_ids=protected_group_targets,
+                        missing_observations=(
+                            pending_request.missing_observations
+                        ),
+                        view_goal=pending_request.view_goal,
+                        metadata={
+                            **deepcopy(pending_request.metadata),
+                            "group_scope_preserved": True,
+                        },
+                    )
                 goal = _goal_from_judge_request(goal, pending_request)
                 if pending_request.target_ids:
                     targets = pending_request.target_ids
@@ -1020,3 +1066,23 @@ class VLMEvaluationController:
             audit=audit,
             manifest_path=written_path,
         )
+
+
+def _protected_group_targets(
+    request: JudgeRequest,
+) -> tuple[str, ...]:
+    scope = request.context.get("group_scope")
+    if not isinstance(scope, dict):
+        return ()
+    values = scope.get("member_ids")
+    if not isinstance(values, list):
+        values = request.context.get("member_ids")
+    if not isinstance(values, list):
+        return ()
+    return tuple(
+        dict.fromkeys(
+            str(value)
+            for value in values
+            if isinstance(value, (str, int)) and str(value).strip()
+        )
+    )
