@@ -400,6 +400,66 @@ def test_raw_vlm_selector_is_wrapped_with_configured_candidate_mode() -> None:
     assert raw.payloads[0]["vlm_role"] == "vlm_camera_selector"
 
 
+def test_deterministic_capability_gap_preserves_candidates_for_vlm() -> None:
+    calls = []
+    payloads = []
+
+    def choose_candidate(payload):
+        calls.append("vlm_model")
+        payloads.append(payload)
+        return {
+            "selected_view_ids": ["vlm-view"],
+            "reason": "use the trusted candidate to inspect contact",
+        }
+
+    controller = VLMEvaluationController(
+        judge=_Judge([_need_more(), _valid()], calls),
+        renderer=_Renderer([_rendered("vlm")], calls),
+        deterministic_camera_selector=DeterministicLocalCameraSelector(),
+        vlm_camera_selector=ActiveVLMCameraSelector(
+            choose_candidate,
+            selection_mode="candidate_only",
+        ),
+        evidence_gate=_Gate(
+            [_gate(ready=True), _gate(ready=True)],
+            calls,
+        ),
+        control=resolve_vlm_evaluation_control(
+            {
+                "camera_acquisition": {
+                    "policy": "deterministic_then_vlm",
+                    "vlm": {"selection_mode": "candidate_only"},
+                }
+            }
+        ),
+    )
+
+    result = controller.run(
+        _request(),
+        candidate_views=({"id": "vlm-view"},),
+    )
+
+    assert result.status == "valid"
+    assert calls == [
+        "gate",
+        "judge",
+        "vlm_model",
+        "render",
+        "gate",
+        "judge",
+    ]
+    assert payloads[0]["attempted_candidate_ids"] == []
+    assert [
+        candidate["id"] for candidate in payloads[0]["candidate_views"]
+    ] == ["vlm-view"]
+    assert (
+        payloads[0]["deterministic_rejected_candidates"][0][
+            "reason_codes"
+        ]
+        == ["observation_not_supported_by_deterministic_selector"]
+    )
+
+
 def test_default_existing_backend_uses_local_deterministic_stage_with_vlm_di():
     class _RawVLMSelector:
         def select_camera_views(self, payload):
@@ -1248,7 +1308,7 @@ def test_judge_cannot_expand_camera_targets_beyond_original_scene_scope():
     assert "unknown target IDs" in failure["error"]
 
 
-def test_group_scoped_judge_repair_preserves_the_whole_group() -> None:
+def test_group_scoped_judge_repair_preserves_context_and_subset_focus() -> None:
     calls = []
     request = JudgeRequest(
         task="functional_consistency",
@@ -1308,11 +1368,9 @@ def test_group_scoped_judge_repair_preserves_the_whole_group() -> None:
     )
 
     assert result.status == "valid"
-    assert deterministic.requests[0].target_ids == ("a", "b")
-    assert deterministic.requests[0].constraints["target_ids"] == [
-        "a",
-        "b",
-    ]
+    assert deterministic.requests[0].target_ids == ("a",)
+    assert deterministic.requests[0].constraints["target_ids"] == ["a"]
+    assert deterministic.requests[0].evidence_goal["target_ids"] == ["a"]
     assert deterministic.requests[0].context["group_scope"][
         "member_ids"
     ] == ["a", "b"]
@@ -1329,6 +1387,67 @@ def test_group_scoped_judge_repair_preserves_the_whole_group() -> None:
         2.0,
         1.0,
         1.0,
+    ]
+
+
+def test_group_scoped_judge_may_request_full_group_focus() -> None:
+    calls = []
+    request = JudgeRequest(
+        task="scale_consistency",
+        metric="scale_consistency",
+        claim_or_event={"group_id": "work"},
+        scene_context={
+            "objects": [{"id": "a"}, {"id": "b"}, {"id": "c"}]
+        },
+        deterministic_evidence={"status": "unresolved"},
+        visual_evidence=("initial.png",),
+        rubric={"scope": "scale_consistency"},
+        context={
+            "group_scope": {
+                "group_id": "work",
+                "member_ids": ["a", "b"],
+            }
+        },
+    )
+    need_more = {
+        "status": "need_more_evidence",
+        "confidence": 0.2,
+        "reason": "Both objects need a clearer view.",
+        "defects": [],
+        "evidence_request": {
+            "target_ids": ["a", "b"],
+            "missing_observations": ["joint_visibility"],
+            "view_goal": "show the complete group together",
+        },
+    }
+    deterministic = _Selector(
+        "deterministic",
+        [_selected("det-view")],
+        calls,
+    )
+    controller = VLMEvaluationController(
+        judge=_Judge([need_more, _valid()], calls),
+        renderer=_Renderer([_rendered("det")], calls),
+        deterministic_camera_selector=deterministic,
+        evidence_gate=_Gate(
+            [_gate(ready=True), _gate(ready=True)],
+            calls,
+        ),
+        control=_control("deterministic_then_vlm"),
+    )
+
+    result = controller.run(
+        request,
+        candidate_views=({"id": "det-view"},),
+    )
+
+    assert result.status == "valid"
+    selection_request = deterministic.requests[0]
+    assert selection_request.target_ids == ("a", "b")
+    assert selection_request.constraints["target_ids"] == ["a", "b"]
+    assert selection_request.context["group_scope"]["member_ids"] == [
+        "a",
+        "b",
     ]
 
 

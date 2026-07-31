@@ -2127,7 +2127,7 @@ def test_existing_judge_adapter_accepts_functional_insufficient_compatibility():
     assert result.evidence_request is not None
     assert result.evidence_request.target_ids == ("a", "b")
     assert result.evidence_request.missing_observations == (
-        "support_contact_region",
+        "contact_surface_visible",
     )
 
 

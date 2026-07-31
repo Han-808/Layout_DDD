@@ -156,7 +156,11 @@ def evaluate_style_global_then_group_local(
         "presentation": "raw",
         "image_order": [local_scope, "global_context"],
         "include_global_context": True,
-        "camera_pose_mode": None,
+        # Style remains global-first. This request-level override applies only
+        # to the suspicious/insufficient local-confirmation phase and prevents
+        # the metric-wide ``auto`` default (global_only) from suppressing the
+        # required group-local render.
+        "camera_pose_mode": "visibility_ranked",
     }
     local_evidence_input: dict[str, Any]
     if isinstance(render_evidence, dict):

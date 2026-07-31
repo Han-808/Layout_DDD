@@ -320,7 +320,23 @@
                 "scale_consistency": {"type": "object"},
                 "object_pairing_consistency": {"type": "object"},
                 "style_consistency": {"type": "object"},
-                "functional_consistency": {"type": "object"}
+                "functional_consistency": {
+                  "type": "object",
+                  "properties": {
+                    "metric_status": {
+                      "const": "experimental_non_scoring"
+                    },
+                    "activation_policy": {
+                      "const": "explicit_config_only"
+                    },
+                    "included_in_canonical_aggregate": {
+                      "const": false
+                    },
+                    "affects_score": {
+                      "const": false
+                    }
+                  }
+                }
               }
             }
           }
@@ -724,6 +740,12 @@
             },
             "backend": {
               "type": ["string", "null"]
+            },
+            "input_protocol": {
+              "type": "object"
+            },
+            "canonical_input": {
+              "type": "boolean"
             },
             "affects_score_directly": {"const": false}
           }

@@ -71,6 +71,7 @@ from benchmark.evaluator.generic_validity.mesh_geometry import load_collision_ge
 from benchmark.grouping import (
     VLM_GROUPING_POLICY_ID,
     group_scene,
+    prepare_grouping_evidence,
 )
 from benchmark.nl_scene.converter import COARSE_GRAINED, FINE_GRAINED
 from benchmark.reference_annotation import (
@@ -93,7 +94,9 @@ from benchmark.scene_io.validate import validate_object_plan
 from benchmark.task_contract import require_scene_matches_architecture
 from benchmark.utils.io import load_yaml, read_json, write_json
 from benchmark.visual_judge import (
+    CameraViewEvidenceRenderer,
     CameraEvidenceProvider,
+    DeterministicLocalCameraSelector,
     VLMEvaluationControl,
     build_conditional_active_camera_evidence_provider,
     build_controlled_vlm_judge,
@@ -135,12 +138,16 @@ def _run_canonical_evaluate(
     reference_annotation: dict | None = None,
     collision_geometry: dict | None = None,
     render_evidence: list[str] | dict[str, Any] | None = None,
+    grouping_visual_evidence: list[Any] | dict[str, Any] | None = None,
+    grouping_identity_legend: dict[str, Any] | None = None,
+    allow_non_canonical_grouping_input: bool = False,
     vlm_judge: object | None = None,
     grouping_model: object | None = None,
     evaluation_profile: dict | None = None,
     support_enabled: bool | None = None,
     p0b_official_mode: bool = False,
     p0b_local_view_provider: object | None = None,
+    l3_initial_evidence_provider: object | None = None,
     camera_selector: object | None = None,
     deterministic_camera_selector: object | None = None,
     vlm_camera_selector: object | None = None,
@@ -222,6 +229,18 @@ def _run_canonical_evaluate(
     active_l2_metrics = _active_specification_families(resolved_contract)
     resolved_profile = resolve_evaluation_profile(evaluation_profile)
     l3_render_evidence = _normalize_canonical_render_evidence(render_evidence)
+    grouping_evidence = prepare_grouping_evidence(
+        (
+            grouping_visual_evidence
+            if grouping_visual_evidence is not None
+            else l3_render_evidence
+        ),
+        identity_legend=(
+            grouping_identity_legend
+            if grouping_identity_legend is not None
+            else request.get("identity_overlay_legend")
+        ),
+    )
     overview_render_evidence = _overview_render_evidence(l3_render_evidence)
     evaluation_plan = build_evaluation_plan(
         prompt_granularity=prompt_granularity,
@@ -342,7 +361,10 @@ def _run_canonical_evaluate(
         object_grouping_report,
         scene=normalized_scene,
         request=request,
-        visual_evidence=overview_render_evidence,
+        visual_evidence=list(grouping_evidence.visual_evidence),
+        grouping_input_protocol=grouping_evidence.provenance(),
+        identity_legend=grouping_evidence.identity_legend,
+        allow_non_canonical_input=allow_non_canonical_grouping_input,
         model=(
             grouping_model
             if grouping_model is not None
@@ -358,7 +380,11 @@ def _run_canonical_evaluate(
         prompt=prompt,
         specification_contract=resolved_contract,
         render_evidence=renders,
-        camera_evidence_provider=p0b_local_view_provider,
+        camera_evidence_provider=(
+            l3_initial_evidence_provider
+            if l3_initial_evidence_provider is not None
+            else p0b_local_view_provider
+        ),
         vlm_judge=runtime_vlm_judge,
         object_grouping_report=grouping_report,
         authorized_deviations=resolved_authorized_deviations,
@@ -384,7 +410,11 @@ def _run_canonical_evaluate(
         vlm_judge=runtime_vlm_judge,
         object_grouping_report=grouping_report,
         render_evidence=l3_render_evidence,
-        camera_evidence_provider=p0b_local_view_provider,
+        camera_evidence_provider=(
+            l3_initial_evidence_provider
+            if l3_initial_evidence_provider is not None
+            else p0b_local_view_provider
+        ),
         authorized_deviations=resolved_authorized_deviations,
         metric_applicability=scene_quality_applicability(resolved_asset_policy),
         visual_style_spec=resolved_visual_style_spec,
@@ -472,7 +502,21 @@ def _run_canonical_evaluate(
                 "source": grouping_report.get("source"),
                 "status": grouping_report.get("status", "complete"),
                 "backend": grouping_report.get("grouping_backend"),
+                # Report only the evidence protocol that actually produced
+                # this grouping. A caller-supplied frozen partition must not
+                # inherit provenance from unrelated images rendered during
+                # the current evaluation run.
+                "input_protocol": _reported_grouping_input_protocol(
+                    grouping_report
+                ),
                 "affects_score_directly": False,
+                "canonical_input": (
+                    grouping_report.get(
+                        "non_canonical_grouping_input"
+                    )
+                    is not True
+                    and grouping_report.get("status") == "complete"
+                ),
             },
             "visual_config_unchanged": True,
             "vlm_evaluation_control": _runtime_vlm_control_manifest(
@@ -971,8 +1015,9 @@ def main() -> None:
         action=argparse.BooleanOptionalAction,
         default=False,
         help=(
-            "Invoke bounded VLM-active camera search only after deterministic "
-            "evidence is measured as insufficient."
+            "Legacy P0b compatibility switch. Canonical L3 camera repair is "
+            "triggered by Judge.need_more_evidence and managed by the "
+            "Controller."
         ),
     )
     parser.add_argument(
@@ -1193,6 +1238,14 @@ def main() -> None:
     )
     collision_geometry = _load_collision_geometry_arg(args.collision_geometry)
     local_view_provider = None
+    l3_initial_evidence_provider = None
+    deterministic_camera_selector = None
+    vlm_camera_selector = None
+    evidence_renderer = None
+    evaluation_profile = load_yaml(
+        _path_arg(args.evaluation_profile),
+        default={},
+    )
     if resolved_camera_pose_mode is not None:
         if not args.camera_blend_file or not args.blender_bin:
             parser.error("--camera-pose-mode requires --camera-blend-file and --blender-bin")
@@ -1276,6 +1329,39 @@ def main() -> None:
                 collision_contour=True,
                 collision_geometry=collision_geometry,
             )
+        if not is_legacy_game_profile(evaluation_profile):
+            l3_initial_evidence_provider = CameraEvidenceProvider(
+                renderer=renderer,
+                blend_file=_path_arg(args.camera_blend_file),
+                out_dir=evidence_dir / "l3_initial",
+                mode=resolved_camera_pose_mode,
+                metric_modes=camera_pose_metric_modes,
+                selector=camera_selector,
+                max_views=args.camera_pose_max_views,
+                max_steps=args.camera_pose_max_steps,
+                candidate_count=(
+                    args.camera_active_candidate_count
+                    if args.camera_active_fallback
+                    else max(args.camera_pose_max_views, 6)
+                ),
+                collision_overlay=False,
+                collision_contour=False,
+                collision_geometry=collision_geometry,
+                active_repair=False,
+            )
+            deterministic_camera_selector = (
+                DeterministicLocalCameraSelector(
+                    candidate_policy=(
+                        l3_initial_evidence_provider.candidate_policy
+                    )
+                )
+            )
+            vlm_camera_selector = camera_selector
+            evidence_renderer = CameraViewEvidenceRenderer(
+                renderer=renderer,
+                blend_file=_path_arg(args.camera_blend_file),
+                out_dir=evidence_dir / "l3_controller",
+            )
 
     report = run_evaluate(
         scene=read_json(_path_arg(args.scene)),
@@ -1297,11 +1383,25 @@ def main() -> None:
         collision_geometry=collision_geometry,
         render_evidence=[str(_path_arg(path)) for path in args.render_evidence],
         vlm_judge=vlm_judge,
-        evaluation_profile=load_yaml(_path_arg(args.evaluation_profile), default={}),
+        evaluation_profile=evaluation_profile,
         support_enabled=args.support_enabled,
         p0b_official_mode=args.p0b_official_mode,
         p0b_local_view_provider=local_view_provider,
         camera_selector=camera_selector,
+        **(
+            {
+                "l3_initial_evidence_provider": (
+                    l3_initial_evidence_provider
+                ),
+                "deterministic_camera_selector": (
+                    deterministic_camera_selector
+                ),
+                "vlm_camera_selector": vlm_camera_selector,
+                "evidence_renderer": evidence_renderer,
+            }
+            if not is_legacy_game_profile(evaluation_profile)
+            else {}
+        ),
         spatial_fidelity_ontology=(
             _path_arg(args.spatial_fidelity_ontology)
             if args.spatial_fidelity_ontology
@@ -1980,18 +2080,60 @@ def _resolve_object_grouping_report(
     *,
     scene: dict,
     request: dict,
-    visual_evidence: list[str],
-    model: object | None,
+    visual_evidence: list[Any],
+    grouping_input_protocol: dict[str, Any] | None = None,
+    identity_legend: dict[str, str] | None = None,
+    allow_non_canonical_input: bool = False,
+    model: object | None = None,
 ) -> dict[str, Any]:
-    if isinstance(value, dict):
-        result = deepcopy(value)
-        result.setdefault("source", "caller_supplied_frozen_grouping")
+    if isinstance(value, (dict, list)):
+        caller_input_protocol = _caller_grouping_input_protocol(value)
+        result, problems = _validate_caller_grouping_report(
+            value,
+            scene=scene,
+        )
+        structural_problem = any(
+            problem.startswith(
+                (
+                    "object_groups",
+                    "duplicate_",
+                    "unknown_object_ids",
+                    "missing_object_ids",
+                )
+            )
+            for problem in problems
+        )
+        if problems and (
+            not allow_non_canonical_input or structural_problem
+        ):
+            return {
+                "status": "unavailable",
+                "source": "caller_supplied_frozen_grouping",
+                "grouping_backend": "vlm",
+                "grouping_policy_id": VLM_GROUPING_POLICY_ID,
+                "reason": "non_canonical_grouping_input_rejected",
+                "non_canonical_grouping_input": True,
+                "validation_errors": problems,
+                "fallback_used": False,
+                "provenance": {
+                    "grouping_input_protocol": caller_input_protocol,
+                },
+            }
+        result.setdefault(
+            "source", "caller_supplied_frozen_grouping"
+        )
+        provenance = result.get("provenance")
+        if not isinstance(provenance, dict):
+            provenance = {}
+            result["provenance"] = provenance
+        provenance["grouping_input_protocol"] = caller_input_protocol
+        if problems:
+            result["non_canonical_grouping_input"] = True
+            result["validation_errors"] = problems
+            result["diagnostic_only"] = True
+        else:
+            result["non_canonical_grouping_input"] = False
         return result
-    if isinstance(value, list):
-        return {
-            "object_groups": deepcopy(value),
-            "source": "caller_supplied_frozen_grouping",
-        }
     grouping_config_path = (
         PROJECT_ROOT
         / "configs"
@@ -2011,6 +2153,11 @@ def _resolve_object_grouping_report(
             "grouping_policy_id": VLM_GROUPING_POLICY_ID,
             "reason": "vlm_grouping_model_not_configured",
             "fallback_used": False,
+            "provenance": {
+                "grouping_input_protocol": deepcopy(
+                    grouping_input_protocol or {}
+                )
+            },
         }
     grouping_case = deepcopy(request)
     if "room" not in grouping_case and isinstance(scene.get("room"), dict):
@@ -2025,6 +2172,12 @@ def _resolve_object_grouping_report(
                 "natural_language_request": request.get("instruction"),
                 "scene_intent": request.get("scene_type"),
                 "grouping_goal": "downstream_visual_evidence_scope",
+                "identity_overlay_legend": deepcopy(
+                    identity_legend or {}
+                ),
+                "grouping_input_protocol": deepcopy(
+                    grouping_input_protocol or {}
+                ),
             },
             model=model,
         ).to_dict()
@@ -2037,11 +2190,143 @@ def _resolve_object_grouping_report(
             "reason": "vlm_grouping_failed",
             "error": f"{type(exc).__name__}: {exc}",
             "fallback_used": False,
+            "provenance": {
+                "grouping_input_protocol": deepcopy(
+                    grouping_input_protocol or {}
+                )
+            },
         }
     result["status"] = "complete"
     result["source"] = "canonical_runtime_default"
     result["fallback_used"] = False
+    provenance = result.get("provenance")
+    if not isinstance(provenance, dict):
+        provenance = {}
+        result["provenance"] = provenance
+    provenance["grouping_input_protocol"] = deepcopy(
+        grouping_input_protocol or {}
+    )
     return result
+
+
+def _reported_grouping_input_protocol(
+    grouping_report: dict[str, Any],
+) -> dict[str, Any]:
+    provenance = grouping_report.get("provenance")
+    if not isinstance(provenance, dict):
+        return {}
+    protocol = provenance.get("grouping_input_protocol")
+    return deepcopy(protocol) if isinstance(protocol, dict) else {}
+
+
+def _caller_grouping_input_protocol(
+    value: dict[str, Any] | list[Any],
+) -> dict[str, Any]:
+    provenance = value.get("provenance") if isinstance(value, dict) else None
+    protocol = (
+        provenance.get("grouping_input_protocol")
+        if isinstance(provenance, dict)
+        else None
+    )
+    if isinstance(protocol, dict) and protocol:
+        return deepcopy(protocol)
+    return {
+        "input_mode": "caller_supplied_unknown",
+        "provenance_status": "not_provided",
+    }
+
+
+def _validate_caller_grouping_report(
+    value: dict[str, Any] | list[Any],
+    *,
+    scene: dict[str, Any],
+) -> tuple[dict[str, Any], list[str]]:
+    result = (
+        deepcopy(value)
+        if isinstance(value, dict)
+        else {
+            "object_groups": deepcopy(value),
+        }
+    )
+    problems: list[str] = []
+    if result.get("status") != "complete":
+        problems.append("status_must_be_complete")
+    if result.get("grouping_backend") != "vlm":
+        problems.append("grouping_backend_must_be_vlm")
+    if (
+        result.get("grouping_policy_id")
+        != VLM_GROUPING_POLICY_ID
+    ):
+        problems.append(
+            "grouping_policy_id_must_be_"
+            + VLM_GROUPING_POLICY_ID
+        )
+    groups = result.get("object_groups")
+    if not isinstance(groups, list):
+        problems.append("object_groups_must_be_a_list")
+        return result, problems
+
+    expected = {
+        str(item.get("id") or item.get("object_id"))
+        for item in scene.get("objects") or []
+        if isinstance(item, dict)
+        and (item.get("id") is not None or item.get("object_id") is not None)
+    }
+    assigned: list[str] = []
+    group_ids: list[str] = []
+    for index, group in enumerate(groups):
+        if not isinstance(group, dict):
+            problems.append(
+                f"object_groups_{index}_must_be_an_object"
+            )
+            continue
+        group_id = str(group.get("group_id") or "").strip()
+        if not group_id:
+            problems.append(
+                f"object_groups_{index}_group_id_missing"
+            )
+        else:
+            group_ids.append(group_id)
+        members = group.get("object_ids")
+        if (
+            not isinstance(members, list)
+            or not members
+            or any(
+                not isinstance(member, (str, int))
+                or not str(member).strip()
+                for member in members
+            )
+        ):
+            problems.append(
+                f"object_groups_{index}_object_ids_invalid"
+            )
+            continue
+        assigned.extend(str(member) for member in members)
+    if len(group_ids) != len(set(group_ids)):
+        problems.append("duplicate_group_ids")
+    duplicate_members = sorted(
+        {
+            object_id
+            for object_id in assigned
+            if assigned.count(object_id) > 1
+        }
+    )
+    if duplicate_members:
+        problems.append(
+            "duplicate_object_assignments:"
+            + ",".join(duplicate_members)
+        )
+    unknown = sorted(set(assigned) - expected)
+    if unknown:
+        problems.append(
+            "unknown_object_ids:" + ",".join(unknown)
+        )
+    missing = sorted(expected - set(assigned))
+    if missing:
+        problems.append(
+            "missing_object_ids:" + ",".join(missing)
+        )
+    return result, problems
 
 
 def _grouping_chat_model(value: object | None) -> object | None:

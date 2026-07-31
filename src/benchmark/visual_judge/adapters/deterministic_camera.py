@@ -32,6 +32,17 @@ from benchmark.visual_judge.interfaces.camera import (
 )
 
 
+DETERMINISTIC_SUPPORTED_OBSERVATIONS = frozenset(
+    {
+        # These observations have explicit candidate rejection checks below.
+        # Other DSL tokens remain available to VLM selection, but must not be
+        # treated as deterministically verified by this adapter.
+        "target_visible",
+        "joint_visibility",
+    }
+)
+
+
 class NoFeasibleCameraCandidates(ValueError):
     """Normal geometry-search exhaustion from an injected candidate generator."""
 
@@ -116,6 +127,57 @@ class DeterministicLocalCameraSelector:
             request.constraints,
             known_target_ids=_known_target_ids(request),
         )
+        unsupported_observations = sorted(
+            (
+                set(constraints.required_observations)
+                | set(constraints.preserved_observations)
+            )
+            - DETERMINISTIC_SUPPORTED_OBSERVATIONS
+        )
+        if unsupported_observations:
+            candidate_ids = [
+                str(candidate.get("id") or "").strip()
+                for candidate in request.candidate_views
+                if isinstance(candidate, dict)
+                and str(candidate.get("id") or "").strip()
+            ]
+            return camera_selection_result_from_value(
+                {
+                    "outcome": "no_feasible_candidate",
+                    "attempted_candidate_ids": candidate_ids,
+                    "rejected_candidates": [
+                        {
+                            "candidate_id": candidate_id,
+                            "reason_codes": [
+                                "observation_not_supported_by_deterministic_selector"
+                            ],
+                            "failed_constraints": unsupported_observations,
+                            "features": {
+                                "deterministic_capability": "unsupported"
+                            },
+                        }
+                        for candidate_id in candidate_ids
+                    ],
+                    "reason_codes": [
+                        "observation_not_supported_by_deterministic_selector"
+                    ],
+                    "reason": (
+                        "the deterministic selector cannot verify required "
+                        "observations: "
+                        + ", ".join(unsupported_observations)
+                    ),
+                    "provenance": {
+                        "strategy": "geometry_visibility_diversity_v1",
+                        "supported_observations": sorted(
+                            DETERMINISTIC_SUPPORTED_OBSERVATIONS
+                        ),
+                        "unsupported_observations": unsupported_observations,
+                        "candidate_generation_skipped": True,
+                    },
+                },
+                request=request,
+                backend=self.backend,
+            )
         started = perf_counter()
         generation_error: str | None = None
         generation_outcome = "controller_candidate_bank"
@@ -350,10 +412,32 @@ class DeterministicCameraRepairSolver:
             for value in constraints.preserved_observations
             if value not in relaxed
         )
+        delegated_observations = tuple(
+            value
+            for value in (*required, *preserved)
+            if value not in DETERMINISTIC_SUPPORTED_OBSERVATIONS
+        )
+        solver_required = tuple(
+            value
+            for value in required
+            if value in DETERMINISTIC_SUPPORTED_OBSERVATIONS
+        )
+        if not solver_required:
+            # The VLM selected only a trusted repair-plan objective. Geometry
+            # realization still needs a technically checkable framing target;
+            # the post-render Judge, not this selector, verifies the delegated
+            # semantic observation.
+            solver_required = ("target_visible",)
+        solver_preserved = tuple(
+            value
+            for value in preserved
+            if value in DETERMINISTIC_SUPPORTED_OBSERVATIONS
+            and value not in solver_required
+        )
         realized_constraints = CameraConstraintSet(
             target_ids=constraints.target_ids,
-            required_observations=required,
-            preserved_observations=preserved,
+            required_observations=solver_required,
+            preserved_observations=solver_preserved,
             preferred_view_families=(
                 plan.preferred_view_families
                 or constraints.preferred_view_families
@@ -370,11 +454,10 @@ class DeterministicCameraRepairSolver:
                 constraints.require_joint_visibility
                 and "require_joint_visibility" not in relaxed
                 and "joint_visibility" not in relaxed
+                and "joint_visibility" in solver_required
             ),
             require_global_anchor=(
-                constraints.require_global_anchor
-                and "require_global_anchor" not in relaxed
-                and "global_context_preserved" not in relaxed
+                False
             ),
             relaxable_constraints=(),
             metric=constraints.metric,
@@ -383,6 +466,10 @@ class DeterministicCameraRepairSolver:
                 **deepcopy(constraints.metadata),
                 "selected_repair_plan": plan.to_dict(),
                 "realization": "deterministic_local_camera_selector",
+                "original_required_observations": list(required),
+                "unverified_observations_requiring_post_render_judge": list(
+                    delegated_observations
+                ),
             },
         )
         budget = deepcopy(request.budget)

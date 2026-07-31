@@ -368,7 +368,7 @@ def test_canonical_scene_quality_adapter_rejects_malformed_contract(
         )
 
 
-def test_functional_semantic_preserves_insufficient_evidence_compatibility(
+def test_functional_semantic_preserves_structured_insufficient_compatibility(
     tmp_path: Path,
 ) -> None:
     image_path = tmp_path / "functional.png"
@@ -379,8 +379,16 @@ def test_functional_semantic_preserves_insufficient_evidence_compatibility(
             "verdict": "ambiguous",
             "confidence": 0.2,
             "reason": "The requested work area is occluded.",
-            "missing_evidence": ["claim_scoped_local_view"],
+            "missing_evidence": [],
             "defects": [],
+            "evidence_request": {
+                "target_ids": ["scene"],
+                "missing_observations": [
+                    "group_context_visible"
+                ],
+                "view_goal": "show the requested work area",
+                "metadata": {},
+            },
         }
     )
 
@@ -408,10 +416,43 @@ def test_functional_semantic_preserves_insufficient_evidence_compatibility(
         "functional_semantic_insufficient_evidence_compat_v1"
     )
     assert result["router_state"] == "insufficient_evidence"
-    assert result["missing_evidence"] == ["claim_scoped_local_view"]
+    assert result["evidence_request"]["missing_observations"] == [
+        "group_context_visible"
+    ]
     assert result["vlm_role"] == "judge"
     assert result["decision_contract"] == "canonical_metric_v1"
     assert result["judge_method"] == "adjudicate_functional_semantic"
+    assert "allowed_missing_observations" in context
+    assert "allowed_evidence_request_target_ids" in context
+
+
+def test_canonical_judge_rejects_free_form_missing_evidence(
+    tmp_path: Path,
+) -> None:
+    image_path = tmp_path / "functional-free-form.png"
+    _write_test_png(image_path)
+    judge = OpenAICompatibleVLMJudge(
+        FakeMultimodalModel(
+            {
+                "evidence_status": "insufficient",
+                "verdict": "ambiguous",
+                "confidence": 0.2,
+                "reason": "The requested work area is occluded.",
+                "missing_evidence": [
+                    "please show a better angle"
+                ],
+                "defects": [],
+            }
+        )
+    )
+
+    with pytest.raises(ValueError, match="exact allowed Camera DSL"):
+        judge.adjudicate_functional_semantic(
+            {
+                "metric": "functional_semantic_fidelity",
+                "render_evidence": [str(image_path)],
+            }
+        )
 
 
 def test_vlm_category_supports_not_applicable_response(tmp_path: Path) -> None:

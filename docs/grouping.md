@@ -75,13 +75,22 @@ group membership; a request that crosses into another group fails closed.
   as optional room context.
 - Style runs once on global evidence and renders local evidence only for
   implicated groups.
-- Functional Consistency is available as an opt-in, non-canonical diagnostic
-  for group-level real-world usability; it does not change the frozen L3
-  hierarchy or weights.
+- Functional Consistency is marked `experimental_non_scoring`: it is
+  implemented, disabled by default, enabled only through explicit config, and
+  excluded from the canonical L3 aggregate and weights. It evaluates generic
+  real-world usability; L2 `functional_semantic_fidelity` remains the owner of
+  prompt-conditioned functional requirements.
 
 The global scene packet is reused across group requests. Local evidence cannot
 replace a required global anchor, and a global image alone cannot satisfy a
 group-local evidence request.
+
+Canonical L3 semantic repair is Judge-driven:
+`Judge.need_more_evidence → Camera DSL planner → deterministic selector →
+render → integrity-only EvidenceGate → Judge`, with VLM camera selection
+available only after a normal deterministic no-feasible/conflict/exhaustion
+outcome. The older deterministic visual-sufficiency trigger remains only in
+the explicitly labeled P0b compatibility provider.
 
 ## Backends
 

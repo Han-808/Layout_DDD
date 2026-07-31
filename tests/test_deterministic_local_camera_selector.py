@@ -22,9 +22,8 @@ def _constraints() -> CameraConstraintSet:
     return CameraConstraintSet(
         target_ids=("a", "b"),
         required_observations=(
-            "contact_surface_visible",
+            "target_visible",
             "joint_visibility",
-            "occluder_avoided",
         ),
         min_projected_coverage=0.02,
         require_joint_visibility=True,
@@ -192,6 +191,40 @@ def test_preserve_all_repair_plan_is_realized_by_deterministic_solver():
     assert result.selected_view_ids == ("repair-view",)
 
 
+def test_unsupported_observation_returns_structured_no_feasible() -> None:
+    constraints = CameraConstraintSet(
+        target_ids=("a", "b"),
+        required_observations=("interaction_side_visible",),
+        metric="functional_consistency",
+        view_goal="show the usable interaction side",
+    )
+    request = CameraSelectionRequest(
+        task="functional_consistency",
+        metric="functional_consistency",
+        target_ids=("a", "b"),
+        scene={"objects": [{"id": "a"}, {"id": "b"}]},
+        evidence_goal={},
+        existing_visual_evidence=(),
+        budget={
+            "max_views_per_round": 1,
+            "candidate_budget": 8,
+        },
+        constraints=constraints.to_dict(),
+        candidate_views=(_candidate("candidate"),),
+    )
+
+    result = DeterministicLocalCameraSelector().select(request)
+
+    assert result.outcome == "no_feasible_candidate"
+    assert result.attempted_candidate_ids == ("candidate",)
+    assert result.reason_codes == (
+        "observation_not_supported_by_deterministic_selector",
+    )
+    assert result.rejected_candidates[0]["failed_constraints"] == [
+        "interaction_side_visible"
+    ]
+
+
 def test_opaque_candidate_fails_closed_as_structured_no_feasible() -> None:
     result = DeterministicLocalCameraSelector().select(
         _request(({"id": "opaque"},))
@@ -208,6 +241,7 @@ def test_opaque_candidate_fails_closed_as_structured_no_feasible() -> None:
         "joint_visibility_unverified",
     } <= set(rejected["reason_codes"])
     assert set(rejected["failed_constraints"]) == {
+        "target_visible",
         "min_projected_coverage",
         "joint_visibility",
     }
@@ -338,9 +372,8 @@ def test_generated_camera_bank_uses_exact_group_scope() -> None:
     constraints = CameraConstraintSet(
         target_ids=("a", "b"),
         required_observations=(
+            "target_visible",
             "joint_visibility",
-            "group_context_visible",
-            "limited_local_context",
         ),
         require_joint_visibility=True,
         metric="object_pairing_consistency",

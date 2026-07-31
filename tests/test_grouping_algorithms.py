@@ -20,6 +20,7 @@ from benchmark.grouping import (
     VLMGroupingAlgorithm,
     build_grouping_algorithm,
     group_scene,
+    prepare_grouping_evidence,
     normalize_grouping_scene,
 )
 from benchmark.evaluator.scene_quality.interfaces import _normalize_groups
@@ -526,7 +527,207 @@ def test_canonical_grouping_route_is_vlm_only_and_fail_closed() -> None:
         "grouping_policy_id": "vlm_visual_evidence_scope_v2",
         "reason": "vlm_grouping_model_not_configured",
         "fallback_used": False,
+        "provenance": {"grouping_input_protocol": {}},
     }
+
+
+def test_canonical_grouping_evidence_protocol_is_identity_aware(
+    tmp_path: Path,
+) -> None:
+    perspective = tmp_path / "global_perspective.png"
+    top = tmp_path / "global_top.png"
+    identity = tmp_path / "global_identity.png"
+    for index, path in enumerate((perspective, top, identity)):
+        image = Image.new("RGB", (4, 4), (50 + index, 60, 70))
+        image.putpixel((0, 0), (10, 20 + index, 30))
+        image.save(path)
+
+    packet = prepare_grouping_evidence(
+        {
+            "global_perspective": str(perspective),
+            "global_top": str(top),
+            "identity_map": str(identity),
+        },
+        identity_legend={
+            "A": "bed",
+            "B": "nightstand",
+            "C": "desk",
+            "D": "chair",
+        },
+    )
+
+    assert packet.input_mode == "identity_aware_perspective_top"
+    assert packet.degraded_reasons == ()
+    assert packet.available_roles == (
+        "global_perspective_rgb",
+        "global_top_rgb",
+        "global_identity_overlay",
+    )
+    identity_item = next(
+        item
+        for item in packet.visual_evidence
+        if item["representation"] == "identity_map"
+    )
+    assert identity_item["identity_legend"]["A"] == "bed"
+    assert packet.provenance()["protocol_version"] == (
+        "grouping_evidence_protocol_v1"
+    )
+    model = _Model(_vlm_response())
+    resolved = _resolve_object_grouping_report(
+        None,
+        scene=_mixed_scene(),
+        request={"instruction": "Create two functional zones."},
+        visual_evidence=list(packet.visual_evidence),
+        grouping_input_protocol=packet.provenance(),
+        identity_legend=packet.identity_legend,
+        model=model,
+    )
+    assert resolved["status"] == "complete"
+    call_text = model.calls[0]["messages"][1]["content"][0]["text"]
+    assert "identity_overlay_legend" in call_text
+    assert '"A":"bed"' in call_text
+
+
+def test_canonical_grouping_records_degraded_input_protocol(
+    tmp_path: Path,
+) -> None:
+    overview = tmp_path / "overview.png"
+    Image.new("RGB", (4, 4), (80, 90, 100)).save(overview)
+    packet = prepare_grouping_evidence([str(overview)])
+    model = _Model(_vlm_response())
+
+    resolved = _resolve_object_grouping_report(
+        None,
+        scene=_mixed_scene(),
+        request={"instruction": "Create two functional zones."},
+        visual_evidence=list(packet.visual_evidence),
+        grouping_input_protocol=packet.provenance(),
+        identity_legend=packet.identity_legend,
+        model=model,
+    )
+
+    protocol = resolved["provenance"]["grouping_input_protocol"]
+    assert protocol["input_mode"] == "generic_overview_degraded"
+    assert "identity_map_missing" in protocol["degraded_reasons"]
+
+
+def test_caller_grouping_does_not_inherit_current_run_evidence_protocol() -> None:
+    report = {
+        "status": "complete",
+        "grouping_backend": "vlm",
+        "grouping_policy_id": "vlm_visual_evidence_scope_v2",
+        "object_groups": [
+            {
+                "group_id": "group_001",
+                "object_ids": ["bed", "nightstand"],
+            },
+            {
+                "group_id": "group_002",
+                "object_ids": ["desk", "chair"],
+            },
+        ],
+    }
+    current_run_protocol = {
+        "input_mode": "identity_aware_perspective_top",
+        "protocol_version": "grouping_evidence_protocol_v1",
+    }
+
+    resolved = _resolve_object_grouping_report(
+        report,
+        scene=_mixed_scene(),
+        request={},
+        visual_evidence=[],
+        grouping_input_protocol=current_run_protocol,
+    )
+
+    assert resolved["provenance"]["grouping_input_protocol"] == {
+        "input_mode": "caller_supplied_unknown",
+        "provenance_status": "not_provided",
+    }
+
+    report["provenance"] = {
+        "grouping_input_protocol": {
+            "input_mode": "caller_recorded_protocol",
+            "protocol_version": "external_v1",
+        }
+    }
+    resolved_with_provenance = _resolve_object_grouping_report(
+        report,
+        scene=_mixed_scene(),
+        request={},
+        visual_evidence=[],
+        grouping_input_protocol=current_run_protocol,
+    )
+    assert resolved_with_provenance["provenance"][
+        "grouping_input_protocol"
+    ] == report["provenance"]["grouping_input_protocol"]
+
+
+def test_non_vlm_frozen_grouping_is_rejected_unless_diagnostic() -> None:
+    topology_report = {
+        "status": "complete",
+        "grouping_backend": "topology",
+        "grouping_policy_id": "topology_grouping_v1",
+        "object_groups": [
+            {
+                "group_id": "group_001",
+                "object_ids": ["bed", "nightstand"],
+            },
+            {
+                "group_id": "group_002",
+                "object_ids": ["desk", "chair"],
+            },
+        ],
+    }
+
+    rejected = _resolve_object_grouping_report(
+        topology_report,
+        scene=_mixed_scene(),
+        request={},
+        visual_evidence=[],
+    )
+    assert rejected["status"] == "unavailable"
+    assert rejected["non_canonical_grouping_input"] is True
+    assert "grouping_backend_must_be_vlm" in rejected[
+        "validation_errors"
+    ]
+
+    diagnostic = _resolve_object_grouping_report(
+        topology_report,
+        scene=_mixed_scene(),
+        request={},
+        visual_evidence=[],
+        allow_non_canonical_input=True,
+    )
+    assert diagnostic["status"] == "complete"
+    assert diagnostic["grouping_backend"] == "topology"
+    assert diagnostic["non_canonical_grouping_input"] is True
+    assert diagnostic["diagnostic_only"] is True
+
+
+def test_invalid_partition_is_rejected_even_in_diagnostic_mode() -> None:
+    missing_member_report = {
+        "status": "complete",
+        "grouping_backend": "vlm",
+        "grouping_policy_id": "vlm_visual_evidence_scope_v2",
+        "object_groups": [
+            {
+                "group_id": "group_001",
+                "object_ids": ["bed", "nightstand", "desk"],
+            }
+        ],
+    }
+
+    rejected = _resolve_object_grouping_report(
+        missing_member_report,
+        scene=_mixed_scene(),
+        request={},
+        visual_evidence=[],
+        allow_non_canonical_input=True,
+    )
+    assert rejected["status"] == "unavailable"
+    assert rejected["reason"] == "non_canonical_grouping_input_rejected"
+    assert "missing_object_ids:chair" in rejected["validation_errors"]
 
 
 @pytest.mark.parametrize("backend", ["topology", "anchor"])

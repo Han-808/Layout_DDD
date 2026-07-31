@@ -17,6 +17,12 @@ from benchmark.grouping.factory import (
     build_grouping_algorithm,
     group_scene,
 )
+from benchmark.grouping.evidence import (
+    GROUPING_EVIDENCE_PROTOCOL_VERSION,
+    GroupingEvidencePacket,
+    grouping_evidence_from_render_manifest,
+    prepare_grouping_evidence,
+)
 from benchmark.grouping.interfaces import (
     GROUPING_ROLE,
     GroupingAlgorithm,
@@ -52,8 +58,10 @@ __all__ = [
     "GROUPING_BACKENDS",
     "GROUPING_ROLE",
     "GroupingAlgorithm",
+    "GroupingEvidencePacket",
     "GroupingRequest",
     "GroupingResult",
+    "GROUPING_EVIDENCE_PROTOCOL_VERSION",
     "NormalizedGroupingScene",
     "ObjectGroup",
     "TOPOLOGY_GROUPING_POLICY_ID",
@@ -64,5 +72,7 @@ __all__ = [
     "VLMGroupingAlgorithm",
     "build_grouping_algorithm",
     "group_scene",
+    "grouping_evidence_from_render_manifest",
+    "prepare_grouping_evidence",
     "normalize_grouping_scene",
 ]

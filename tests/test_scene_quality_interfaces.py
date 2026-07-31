@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
+from PIL import Image
 
 from benchmark.evaluator.scene_quality import (
     PERCEPTUAL_VISUAL_QUALITY_METRICS,
@@ -12,6 +14,7 @@ from benchmark.evaluator.scene_quality import (
     resolve_scene_quality_config,
     validate_authorized_deviations,
 )
+from benchmark.visual_judge import CameraEvidenceProvider
 from benchmark.evaluator.scene_quality.authorized_deviations import (
     AuthorizedDeviationError,
     deviation_matches,
@@ -167,6 +170,10 @@ def test_default_is_canonical_l3_and_policy_remains_overridable() -> None:
         resolved["metrics"]["functional_consistency"]["enabled"]
         is False
     )
+    functional = resolved["metrics"]["functional_consistency"]
+    assert functional["metric_status"] == "experimental_non_scoring"
+    assert functional["activation_policy"] == "explicit_config_only"
+    assert functional["included_in_canonical_aggregate"] is False
     serialized = json.dumps(resolved, sort_keys=True)
     assert "object_coexistence_consistency" not in serialized
     assert "sceneonto_scale_candidate_router" not in serialized
@@ -196,6 +203,26 @@ def test_default_is_canonical_l3_and_policy_remains_overridable() -> None:
     assert policy["camera_mode"] == "metric_local"
     assert policy["image_budget"] == 3
     assert policy["presentation"] == "highlight"
+
+    attempted_promotion = resolve_scene_quality_config(
+        {
+            "metrics": {
+                "functional_consistency": {
+                    "enabled": True,
+                    "metric_status": "canonical_scoring",
+                    "activation_policy": "profile_and_applicability",
+                    "included_in_canonical_aggregate": True,
+                }
+            }
+        }
+    )["metrics"]["functional_consistency"]
+    assert attempted_promotion["enabled"] is True
+    assert (
+        attempted_promotion["metric_status"]
+        == "experimental_non_scoring"
+    )
+    assert attempted_promotion["activation_policy"] == "explicit_config_only"
+    assert attempted_promotion["included_in_canonical_aggregate"] is False
 
 
 def test_style_global_screen_does_not_request_local_when_clear(tmp_path) -> None:
@@ -293,6 +320,138 @@ def test_style_suspicion_requests_local_then_rejudges(tmp_path) -> None:
         images["global_a"],
         images["global_b"],
     ]
+
+
+class _StyleLocalRenderer:
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    def render_camera_views(
+        self,
+        *,
+        blend_file,
+        out_dir,
+        camera_views,
+        preview=False,
+    ):
+        destination = Path(out_dir)
+        destination.mkdir(parents=True, exist_ok=True)
+        self.calls.append(
+            {
+                "pass": "rgb",
+                "preview": preview,
+                "camera_views": camera_views,
+            }
+        )
+        views = []
+        for index, pose in enumerate(camera_views):
+            path = destination / f"rgb_{index:02d}.png"
+            image = Image.new("RGB", (32, 32), (80, 110, 140))
+            image.putpixel((0, 0), (160, 70, 40))
+            image.save(path)
+            views.append(
+                {"id": pose["id"], "path": str(path), "pose": pose}
+            )
+        return {"views": views}
+
+    def render_focus_overlay_views(
+        self,
+        *,
+        blend_file,
+        out_dir,
+        camera_views,
+        overlay_spec,
+        preview=False,
+    ):
+        destination = Path(out_dir)
+        destination.mkdir(parents=True, exist_ok=True)
+        self.calls.append(
+            {
+                "pass": "focus",
+                "preview": preview,
+                "camera_views": camera_views,
+            }
+        )
+        color = tuple(
+            round(channel * 255)
+            for channel in overlay_spec["targets"][0]["color"]
+        )
+        views = []
+        for index, pose in enumerate(camera_views):
+            path = destination / f"focus_{index:02d}.png"
+            image = Image.new("RGB", (32, 32), (40, 40, 40))
+            for x in range(7, 25):
+                for y in range(7, 25):
+                    image.putpixel((x, y), color)
+            image.save(path)
+            views.append(
+                {"id": pose["id"], "path": str(path), "pose": pose}
+            )
+        return {"views": views}
+
+
+def test_style_suspicion_uses_real_provider_group_local_override(
+    tmp_path,
+) -> None:
+    images = _images(tmp_path, "global_a", "global_b")
+    blend = tmp_path / "scene.blend"
+    blend.write_bytes(b"blend")
+    renderer = _StyleLocalRenderer()
+    provider = CameraEvidenceProvider(
+        renderer=renderer,
+        blend_file=blend,
+        out_dir=tmp_path / "style_camera",
+        mode="auto",
+        max_views=1,
+    )
+    judge_calls: list[dict] = []
+    suspicious = {
+        "evidence_status": "sufficient",
+        "verdict": "invalid",
+        "confidence": 0.8,
+        "reason": "The chair appears to use a conflicting style.",
+        "missing_evidence": [],
+        "defects": [
+            {
+                "scope": "significant_visible_style_incompatibility",
+                "target_ids": ["chair_01"],
+                "relation": "rendering_style_outlier",
+                "reason": "The chair appears to use a conflicting style.",
+            }
+        ],
+    }
+
+    def judge(request: dict) -> dict:
+        judge_calls.append(request)
+        return suspicious if len(judge_calls) == 1 else _valid()
+
+    metric = evaluate_scene_quality_interfaces(
+        _scene(),
+        config=_style_global_then_local_config(),
+        object_grouping_report=_grouping_report(),
+        render_evidence=[images["global_a"], images["global_b"]],
+        camera_evidence_provider=provider,
+        vlm_judge=judge,
+        metric_applicability=_relevant("style_consistency"),
+    )["metrics"]["style_consistency"]
+
+    assert metric["route"] == "global_screen_then_group_local"
+    assert metric["judgement"]["verdict"] == "valid"
+    assert [call["evidence_phase"] for call in judge_calls] == [
+        "global_screen",
+        "local_confirmation",
+    ]
+    assert any(call["pass"] == "focus" for call in renderer.calls)
+    manifests = list(
+        (tmp_path / "style_camera").glob(
+            "*/camera_evidence_manifest.json"
+        )
+    )
+    assert len(manifests) == 1
+    manifest = json.loads(manifests[0].read_text(encoding="utf-8"))
+    assert manifest["resolved_mode"] == "visibility_ranked"
+    assert manifest["metric"] == "style_consistency"
+    assert metric["local_evidence_paths"]
 
 
 def test_canonical_profile_l3_section_is_the_profile_override() -> None:

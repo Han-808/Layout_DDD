@@ -83,6 +83,7 @@ _RETIRED_METRIC_NAMES = ("object_coexistence_consistency",)
 SEMANTIC_COHERENCE = "semantic_coherence"
 PERCEPTUAL_VISUAL_QUALITY = "perceptual_visual_quality"
 FUNCTIONAL_VALIDITY = "functional_validity"
+EXPERIMENTAL_NON_SCORING = "experimental_non_scoring"
 SEMANTIC_COHERENCE_METRICS = ("scale_consistency", "object_pairing_consistency")
 PERCEPTUAL_VISUAL_QUALITY_METRICS = ("style_consistency",)
 FUNCTIONAL_VALIDITY_METRICS = ("functional_consistency",)
@@ -321,6 +322,9 @@ DEFAULT_SCENE_QUALITY_INTERFACE_CONFIG: dict[str, Any] = {
         "functional_consistency": {
             "enabled": False,
             "implemented": True,
+            "metric_status": EXPERIMENTAL_NON_SCORING,
+            "activation_policy": "explicit_config_only",
+            "included_in_canonical_aggregate": False,
             # A positive local weight lets explicit diagnostic runs execute.
             # The evaluator still excludes this optional interface from the
             # frozen canonical aggregate below.
@@ -440,6 +444,14 @@ def resolve_scene_quality_config(
                 f"l3_scene_quality.metrics.{metric_name} must be a JSON object"
             )
         _validate_metric_flags(metric_name, metric_config)
+        if metric_name == "functional_consistency":
+            metric_config.update(
+                {
+                    "metric_status": EXPERIMENTAL_NON_SCORING,
+                    "activation_policy": "explicit_config_only",
+                    "included_in_canonical_aggregate": False,
+                }
+            )
         built_in = DEFAULT_SCENE_QUALITY_INTERFACE_CONFIG["metrics"][metric_name]["evidence_policy"]
         policy = _deep_merge(deepcopy(built_in), global_defaults)
         policy = _deep_merge(policy, explicit_metric_policies[metric_name])
@@ -617,6 +629,18 @@ def evaluate_scene_quality_interfaces(
         },
         "active_metrics": active_metric_names,
         "resolved_metrics": resolved_metric_names,
+        "experimental_metrics": {
+            "functional_consistency": {
+                "status": EXPERIMENTAL_NON_SCORING,
+                "enabled": bool(
+                    resolved["metrics"][
+                        "functional_consistency"
+                    ]["enabled"]
+                ),
+                "activation_policy": "explicit_config_only",
+                "included_in_canonical_aggregate": False,
+            }
+        },
         "active_metric_signature": (
             "+".join(active_metric_names) if active_metric_names else "none"
         ),
@@ -836,6 +860,19 @@ def _evaluate_metric(
         "interface_version": SCENE_QUALITY_INTERFACE_VERSION,
         "implemented": True,
         "enabled": enabled,
+        "metric_status": (
+            EXPERIMENTAL_NON_SCORING
+            if metric_name == "functional_consistency"
+            else "canonical_scoring"
+        ),
+        "activation_policy": (
+            "explicit_config_only"
+            if metric_name == "functional_consistency"
+            else "profile_and_applicability"
+        ),
+        "included_in_canonical_aggregate": (
+            metric_name in SCENE_QUALITY_INTERFACE_METRICS
+        ),
         "weight": float(metric_config.get("weight", 1.0)),
         "status": "unresolved",
         "reason": None,

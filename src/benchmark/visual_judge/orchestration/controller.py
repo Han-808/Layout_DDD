@@ -438,7 +438,10 @@ class VLMEvaluationController:
                             ),
                         )
                     pending_request = EvidenceRequest(
-                        target_ids=protected_group_targets,
+                        # Group membership remains immutable context, while a
+                        # Judge may focus one repair view on a strict non-empty
+                        # subset of that group.
+                        target_ids=pending_request.target_ids,
                         missing_observations=(
                             pending_request.missing_observations
                         ),
@@ -446,6 +449,12 @@ class VLMEvaluationController:
                         metadata={
                             **deepcopy(pending_request.metadata),
                             "group_scope_preserved": True,
+                            "authoritative_group_member_ids": list(
+                                protected_group_targets
+                            ),
+                            "camera_focus_target_ids": list(
+                                pending_request.target_ids
+                            ),
                         },
                     )
                 goal = _goal_from_judge_request(goal, pending_request)
