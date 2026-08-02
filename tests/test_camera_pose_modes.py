@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 from copy import deepcopy
 from pathlib import Path
 
@@ -912,6 +913,66 @@ def test_query_cov_provider_uses_preview_selection_and_one_bounded_step(tmp_path
     assert cached_manifest["call_usage"] == provider.last_call_usage
     assert cached_manifest["selection"] == manifest["selection"]
     assert cached_manifest["render_evidence"] == manifest["render_evidence"]
+
+
+def test_camera_provider_rehashes_same_size_same_mtime_source_blend(
+    tmp_path: Path,
+) -> None:
+    blend = tmp_path / "scene.blend"
+    blend.write_bytes(b"blend")
+    original_stat = blend.stat()
+    first = CameraEvidenceProvider(
+        renderer=_FakeRenderer(),
+        blend_file=blend,
+        out_dir=tmp_path / "first_evidence",
+        mode="bbox_track",
+    )
+
+    blend.write_bytes(b"BLEND")
+    os.utime(
+        blend,
+        ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns),
+    )
+    second = CameraEvidenceProvider(
+        renderer=_FakeRenderer(),
+        blend_file=blend,
+        out_dir=tmp_path / "second_evidence",
+        mode="bbox_track",
+    )
+
+    assert second.source_blend_sha256 != first.source_blend_sha256
+
+
+def test_camera_provider_rehashes_same_size_same_mtime_cached_evidence(
+    tmp_path: Path,
+) -> None:
+    blend = tmp_path / "scene.blend"
+    blend.write_bytes(b"blend")
+    renderer = _FakeRenderer()
+    provider = CameraEvidenceProvider(
+        renderer=renderer,
+        blend_file=blend,
+        out_dir=tmp_path / "evidence",
+        mode="bbox_track",
+        max_views=1,
+    )
+    request = _request()
+
+    paths = provider(request)
+    evidence_path = Path(paths[0])
+    original_stat = evidence_path.stat()
+    evidence_path.write_bytes(b"bad")
+    os.utime(
+        evidence_path,
+        ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns),
+    )
+
+    rerendered_paths = provider(request)
+
+    assert len(renderer.calls) == 2
+    assert provider.last_call_usage["cache_hit"] is False
+    assert rerendered_paths == paths
+    assert evidence_path.read_bytes() == b"png"
 
 
 def test_query_cov_can_render_frozen_vlm_selection_without_runtime_selector(

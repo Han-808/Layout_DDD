@@ -40,6 +40,10 @@ DEFAULT_COLLISION_CONFIG = {
     "obb_sat_eps": 1.0e-6,
     "mesh_enclosure_eps_m": 1.0e-4,
     "separation_threshold_m": 0.02,
+    "zero_penetration_contact_policy": "route_vlm",
+    "tangent_plane_contact_policy": "route_vlm",
+    "tangent_plane_max_thickness_m": 0.002,
+    "tangent_contact_tolerance_m": 0.001,
     "score_mode": "invalid_pair_count_over_objects",
 }
 
@@ -159,7 +163,9 @@ def check_collision(
             "Deterministic geometry is evidence, not the final semantic judge.",
             "Candidates are proposed by a high-recall detector; selection carries no verdict prior.",
             "Only final invalid pairs count as collisions; candidate overlap alone is not penalized.",
-            "Support, containment, assembly, and relation claims never auto-exempt a pair.",
+            "Exact coplanar zero-penetration contact may be accepted directly when the frozen profile enables it.",
+            "Intended decorative attachment or assembly may be Collision-valid after VLM adjudication; relationship claims alone never auto-exempt a pair.",
+            "The frozen score denominator is canonical object count.",
         ],
     }
 
@@ -252,6 +258,20 @@ def _evaluate_pair(
             )
             return pair
 
+    if _is_direct_valid_zero_penetration_contact(
+        obb,
+        enclosure_safe=enclosure_safe,
+        config=cfg,
+    ):
+        pair.update(
+            {
+                "route": "direct_valid_zero_penetration_contact",
+                "final_verdict": "valid",
+                "affects_collision_score": True,
+            }
+        )
+        return pair
+
     mesh_evidence = None
     if mesh_a and mesh_b:
         mesh_evidence = evaluate_mesh_pair(
@@ -268,6 +288,24 @@ def _evaluate_pair(
             pair.update(
                 {
                     "route": "direct_valid_mesh_separated",
+                    "final_verdict": "valid",
+                    "affects_collision_score": True,
+                }
+            )
+            return pair
+        tangent_certificate = _tangent_plane_contact_certificate(
+            obj_a,
+            obj_b,
+            obb=obb,
+            mesh_evidence=mesh_evidence,
+            enclosure_safe=enclosure_safe,
+            config=cfg,
+        )
+        if tangent_certificate is not None:
+            pair["tangent_plane_contact_evidence"] = tangent_certificate
+            pair.update(
+                {
+                    "route": "direct_valid_tangent_plane_contact",
                     "final_verdict": "valid",
                     "affects_collision_score": True,
                 }
@@ -390,6 +428,127 @@ def _validate_collision_config(config: dict[str, Any]) -> None:
         raise ValueError("collision.separation_threshold_m must be a finite non-negative number")
     if config.get("score_mode") != "invalid_pair_count_over_objects":
         raise ValueError("collision.score_mode must be 'invalid_pair_count_over_objects'")
+    if config.get("zero_penetration_contact_policy") not in {
+        "route_vlm",
+        "direct_valid",
+    }:
+        raise ValueError(
+            "collision.zero_penetration_contact_policy must be "
+            "'route_vlm' or 'direct_valid'"
+        )
+    if config.get("tangent_plane_contact_policy") not in {
+        "route_vlm",
+        "direct_valid",
+    }:
+        raise ValueError(
+            "collision.tangent_plane_contact_policy must be "
+            "'route_vlm' or 'direct_valid'"
+        )
+    for name in (
+        "tangent_plane_max_thickness_m",
+        "tangent_contact_tolerance_m",
+    ):
+        value = float(config.get(name, DEFAULT_COLLISION_CONFIG[name]))
+        if not math.isfinite(value) or value < 0.0:
+            raise ValueError(
+                f"collision.{name} must be a finite non-negative number"
+            )
+
+
+def _is_direct_valid_zero_penetration_contact(
+    obb: dict[str, Any],
+    *,
+    enclosure_safe: bool,
+    config: dict[str, Any],
+) -> bool:
+    """Accept a tangent contact only when complete meshes stay inside the OBBs."""
+
+    if config.get("zero_penetration_contact_policy") != "direct_valid":
+        return False
+    if not enclosure_safe or obb.get("obb_certifiably_separated"):
+        return False
+    depth = obb.get("minimum_overlap_depth_proxy_m")
+    if depth is None:
+        return False
+    epsilon = float(config.get("obb_sat_eps", 1.0e-6))
+    return -epsilon <= float(depth) <= epsilon
+
+
+def _tangent_plane_contact_certificate(
+    obj_a: Any,
+    obj_b: Any,
+    *,
+    obb: dict[str, Any],
+    mesh_evidence: dict[str, Any],
+    enclosure_safe: bool,
+    config: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Certify a thin plane touching, rather than slicing, another object.
+
+    This is intentionally narrower than a generic small-penetration exemption.
+    The other OBB must stay on one side of the thin plane's centre sheet, so a
+    wall/decoration plane passing through the middle of an object still routes
+    to the VLM.
+    """
+
+    if config.get("tangent_plane_contact_policy") != "direct_valid":
+        return None
+    if not enclosure_safe:
+        return None
+    if mesh_evidence.get("surface_intersection") is not True:
+        return None
+    intersection = mesh_evidence.get("intersection")
+    if not isinstance(intersection, dict) or not bool(
+        intersection.get("definitive")
+    ):
+        return None
+    depth = obb.get("minimum_overlap_depth_proxy_m")
+    if depth is None:
+        return None
+    tolerance = float(config["tangent_contact_tolerance_m"])
+    if float(depth) > tolerance:
+        return None
+    maximum_thickness = float(config["tangent_plane_max_thickness_m"])
+    for plane, other in ((obj_a, obj_b), (obj_b, obj_a)):
+        half = np.asarray(plane.half, dtype=float)
+        full_sizes = 2.0 * half
+        thin_axes = np.flatnonzero(full_sizes <= maximum_thickness)
+        if not len(thin_axes):
+            continue
+        axis = int(thin_axes[np.argmin(full_sizes[thin_axes])])
+        normal = np.asarray(plane.R, dtype=float)[:, axis]
+        normal /= max(float(np.linalg.norm(normal)), 1.0e-12)
+        plane_center = float(np.dot(np.asarray(plane.center), normal))
+        plane_half = float(half[axis])
+        other_center = float(np.dot(np.asarray(other.center), normal))
+        other_radius = float(
+            np.sum(
+                np.abs(np.asarray(other.R, dtype=float).T @ normal)
+                * np.asarray(other.half, dtype=float)
+            )
+        )
+        lower = other_center - other_radius
+        upper = other_center + other_radius
+        negative_side = upper <= plane_center + plane_half + tolerance
+        positive_side = lower >= plane_center - plane_half - tolerance
+        if not (negative_side or positive_side):
+            continue
+        return {
+            "certificate": "thin_plane_tangent_same_side_v1",
+            "plane_object_id": str(plane.id),
+            "other_object_id": str(other.id),
+            "thin_axis": axis,
+            "plane_thickness_m": float(full_sizes[axis]),
+            "other_projected_interval_m": [float(lower), float(upper)],
+            "plane_projected_interval_m": [
+                float(plane_center - plane_half),
+                float(plane_center + plane_half),
+            ],
+            "side": "negative" if negative_side else "positive",
+            "overlap_depth_proxy_m": float(depth),
+            "contact_tolerance_m": tolerance,
+        }
+    return None
 
 
 def _geometry_base_dir(collision_geometry: dict | None) -> Path | None:

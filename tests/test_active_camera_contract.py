@@ -302,7 +302,7 @@ def _candidate(view_id: str = "view_00") -> dict:
         "location": [2.0, 2.0, 1.5],
         "target": [0.0, 0.0, 0.5],
         "lens_mm": 52.0,
-        "candidate_policy": "feasible_v2",
+        "candidate_policy": "local",
         "room_bounds": [-4.0, 4.0, -4.0, 4.0, 0.0, 3.0],
     }
 

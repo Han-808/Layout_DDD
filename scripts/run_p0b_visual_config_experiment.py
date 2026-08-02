@@ -239,7 +239,7 @@ def prepare_bank(args: argparse.Namespace) -> int:
             collision_overlay=True,
             collision_geometry=geometry,
             highlighted_global_pose_policy="legacy_metric",
-            candidate_policy="legacy_v1",
+            candidate_policy="legacy",
         )
         preparation_contract = _candidate_preparation_contract(
             args=args,
@@ -260,7 +260,7 @@ def prepare_bank(args: argparse.Namespace) -> int:
             candidates = generate_camera_pose_candidates(
                 keyed_request,
                 max_candidates=int(args.candidate_count),
-                policy="legacy_v1",
+                policy="legacy",
             )
             overlay_spec = provider._build_focus_spec(local_request)
             preview_role = "highlighted_focus"
@@ -560,7 +560,7 @@ def finalize_case(args: argparse.Namespace) -> int:
                 collision_geometry=geometry,
                 frozen_view_ids=selected_ids,
                 highlighted_global_pose_policy="legacy_metric",
-                candidate_policy="legacy_v1",
+                candidate_policy="legacy",
             )
             finalization_contract = _finalization_resume_contract(
                 args=args,
@@ -798,7 +798,7 @@ def _candidate_preparation_contract(
         "blend_sha256": _file_sha256(blend_file),
         "collision_geometry_sha256": provider.collision_geometry_sha256,
         "configuration": {
-            "candidate_policy": "legacy_v1",
+            "candidate_policy": "legacy",
             "max_views": int(args.max_views),
             "candidate_count": int(args.candidate_count),
             "provider_policy": provider.policy_config,
@@ -871,7 +871,7 @@ def _finalization_resume_contract(
         "blend_sha256": _file_sha256(blend_file),
         "collision_geometry_sha256": provider.collision_geometry_sha256,
         "configuration": {
-            "candidate_policy": "legacy_v1",
+            "candidate_policy": "legacy",
             "camera_mode": str(arm["camera_mode"]),
             "metric_camera_modes": deepcopy(arm["metric_modes"]),
             "evidence_style": str(arm["evidence_style"]),

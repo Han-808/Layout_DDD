@@ -53,7 +53,13 @@ def test_six_i1_i2_o1_o2_o3_combinations_are_declared(
 
 
 def test_current_registry_contains_no_legacy_adapter_aliases() -> None:
-    assert list_adapters() == ["layout_json", "object_state", "scene_package", "scene_program"]
+    assert list_adapters() == [
+        "catalog_placement",
+        "layout_json",
+        "object_state",
+        "scene_package",
+        "scene_program",
+    ]
     with pytest.raises(KeyError):
         get_adapter("manual")
     with pytest.raises(KeyError):

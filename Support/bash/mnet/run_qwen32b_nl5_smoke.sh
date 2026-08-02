@@ -152,6 +152,7 @@ while IFS=$'\t' read -r case_id scene_type instruction_b64; do
   set +e
   "$BENCH_PY" scripts/run_scene_harness.py \
     --instruction "$instruction" \
+    --physical-wall-policy always_enclosed \
     --scene-type "$scene_type" \
     --prompt-granularity "$PROMPT_GRANULARITY" \
     --no-structure \

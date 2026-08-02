@@ -5,6 +5,7 @@ import shutil
 
 import numpy as np
 import pytest
+from PIL import Image
 
 from benchmark.game_scene.mode import (
     GAME_ACTIVE_METRICS,
@@ -74,7 +75,9 @@ class _Page:
 
     def screenshot(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(b"frozen game frame")
+        image = Image.new("RGB", (2, 2), (30, 50, 70))
+        image.putpixel((0, 0), (160, 100, 40))
+        image.save(path)
 
     def probe(self, script: str, options: dict) -> dict:
         self.probe_count += 1
@@ -100,7 +103,9 @@ class _Page:
         views = []
         for pose in poses:
             path = destination / f"global_{pose['id']}.png"
-            path.write_bytes(b"controlled global frame")
+            image = Image.new("RGB", (2, 2), (45, 65, 85))
+            image.putpixel((0, 0), (185, 125, 65))
+            image.save(path)
             views.append(
                 {
                     "id": pose["id"],

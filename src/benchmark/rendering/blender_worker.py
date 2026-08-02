@@ -42,6 +42,13 @@ VERTICAL_ANCHOR_TOP = "top"
 # ``.blend`` files that only carry ``asset_<id>`` / ``proxy_<id>`` names still
 # resolve by name.
 CANONICAL_ID_PROPERTY = "benchmark_object_id"
+ARCHITECTURE_CONTRACT_PROPERTY = "benchmark_architecture_contract"
+CANONICAL_WALL_IDS = (
+    "north_wall",
+    "south_wall",
+    "east_wall",
+    "west_wall",
+)
 DEFAULT_COLLISION_MAX_VERTICES_PER_OBJECT = 50_000
 DEFAULT_COLLISION_MAX_FACES_PER_OBJECT = 100_000
 DEFAULT_COLLISION_MAX_TOTAL_VERTICES = 200_000
@@ -59,6 +66,10 @@ def main() -> None:
     progress_path.unlink(missing_ok=True)
     _record_progress(progress_path, "worker_started")
     scene_data = json.loads(scene_path.read_text(encoding="utf-8"))
+    architecture = json.loads(
+        Path(args.architecture_contract).resolve().read_text(encoding="utf-8")
+    )
+    active_wall_ids = _active_wall_ids(architecture)
     canonical_object_ids = _canonical_object_ids(scene_data)
 
     _clear_scene()
@@ -73,8 +84,22 @@ def main() -> None:
     _record_progress(progress_path, "render_configured", render_config=render_config)
     boundary = _boundary(scene_data)
     room_height = float(scene_data.get("scene_height") or 2.8)
-    _build_room(boundary, room_height)
-    _record_progress(progress_path, "room_built")
+    rendered_wall_ids = _build_room(
+        boundary,
+        room_height,
+        active_wall_ids=active_wall_ids,
+    )
+    bpy.context.scene[ARCHITECTURE_CONTRACT_PROPERTY] = json.dumps(
+        architecture,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    _record_progress(
+        progress_path,
+        "room_built",
+        active_wall_ids=active_wall_ids,
+        rendered_wall_ids=rendered_wall_ids,
+    )
     object_results = []
     for item in scene_data.get("objects", []):
         if not isinstance(item, dict):
@@ -145,6 +170,21 @@ def main() -> None:
             "status": "pending",
             "limits": _collision_geometry_limits(args),
         },
+        "architecture": architecture,
+        "architecture_policy_version": architecture.get(
+            "architecture_policy_version"
+        ),
+        "wall_policy": architecture["physical_walls"]["policy"],
+        "logical_boundary_present": bool(
+            architecture["logical_boundary"]["enabled"]
+        ),
+        "physical_walls_enabled": bool(active_wall_ids),
+        "active_wall_ids": active_wall_ids,
+        "activation_sources": list(
+            architecture["physical_walls"].get("activation_sources") or []
+        ),
+        "rendered_wall_ids": rendered_wall_ids,
+        "floor_rendered": True,
     }
     render_manifest_path = out_dir / "render_manifest.json"
     render_manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
@@ -175,6 +215,7 @@ def _parse_args() -> argparse.Namespace:
     values = sys.argv[sys.argv.index("--") + 1 :] if "--" in sys.argv else []
     parser = argparse.ArgumentParser()
     parser.add_argument("--scene-json", required=True)
+    parser.add_argument("--architecture-contract", required=True)
     parser.add_argument("--out-dir", required=True)
     parser.add_argument("--asset-root", default=None)
     parser.add_argument("--width", type=int, default=768)
@@ -389,7 +430,29 @@ def _canonical_object_ids(scene_data: dict) -> list[str]:
     return result
 
 
-def _build_room(boundary: list[list[float]], height: float) -> None:
+def _source_architecture_contract() -> dict | None:
+    raw = bpy.context.scene.get(ARCHITECTURE_CONTRACT_PROPERTY)
+    if raw is None:
+        return None
+    try:
+        value = json.loads(str(raw))
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            "source blend contains invalid benchmark architecture provenance"
+        ) from exc
+    if not isinstance(value, dict):
+        raise ValueError(
+            "source blend benchmark architecture provenance must be a JSON object"
+        )
+    return value
+
+
+def _build_room(
+    boundary: list[list[float]],
+    height: float,
+    *,
+    active_wall_ids: list[str] | tuple[str, ...],
+) -> list[str]:
     floor_vertices = [(x, y, 0.0) for x, y in boundary]
     floor_mesh = bpy.data.meshes.new("benchmark_floor_mesh")
     floor_mesh.from_pydata(floor_vertices, [], [list(range(len(floor_vertices)))])
@@ -397,21 +460,86 @@ def _build_room(boundary: list[list[float]], height: float) -> None:
     bpy.context.collection.objects.link(floor)
     floor.data.materials.append(_material("floor", (0.34, 0.36, 0.39, 1.0)))
 
+    active = set(_active_wall_ids({"physical_walls": {"active_wall_ids": active_wall_ids}}))
     thickness = 0.08
+    rendered: list[str] = []
     for index, start in enumerate(boundary):
         end = boundary[(index + 1) % len(boundary)]
+        wall_id = _wall_id_for_edge(boundary, index)
+        if wall_id not in active:
+            continue
         dx, dy = end[0] - start[0], end[1] - start[1]
         length = math.hypot(dx, dy)
         bpy.ops.mesh.primitive_cube_add(
             location=((start[0] + end[0]) / 2.0, (start[1] + end[1]) / 2.0, height / 2.0)
         )
         wall = bpy.context.object
-        wall.name = f"benchmark_wall_{index:02d}"
+        wall.name = f"benchmark_{wall_id}"
+        wall["benchmark_architecture_id"] = wall_id
         wall.dimensions = (length, thickness, height)
         wall.rotation_euler[2] = math.atan2(dy, dx)
-        wall.data.materials.append(_material(f"wall_{index}", (0.60, 0.62, 0.66, 1.0)))
+        wall.data.materials.append(_material(wall_id, (0.60, 0.62, 0.66, 1.0)))
         bpy.context.view_layer.objects.active = wall
         bpy.ops.object.transform_apply(location=False, rotation=False, scale=True)
+        rendered.append(wall_id)
+    return [
+        wall_id for wall_id in CANONICAL_WALL_IDS if wall_id in rendered
+    ]
+
+
+def _active_wall_ids(architecture: dict) -> list[str]:
+    physical = (
+        architecture.get("physical_walls")
+        if isinstance(architecture, dict)
+        else None
+    )
+    values = (
+        physical.get("active_wall_ids")
+        if isinstance(physical, dict)
+        else None
+    )
+    if not isinstance(values, (list, tuple)):
+        raise ValueError(
+            "architecture.physical_walls.active_wall_ids must be a list"
+        )
+    result = []
+    for value in values:
+        wall_id = str(value)
+        if wall_id not in CANONICAL_WALL_IDS:
+            raise ValueError(f"unknown physical wall ID {wall_id!r}")
+        if wall_id not in result:
+            result.append(wall_id)
+    return [
+        wall_id for wall_id in CANONICAL_WALL_IDS if wall_id in result
+    ]
+
+
+def _wall_id_for_edge(
+    boundary: list[list[float]],
+    index: int,
+) -> str:
+    midpoints = [
+        (
+            (point[0] + boundary[(offset + 1) % len(boundary)][0]) / 2.0,
+            (point[1] + boundary[(offset + 1) % len(boundary)][1]) / 2.0,
+        )
+        for offset, point in enumerate(boundary)
+    ]
+    east_index = max(range(len(midpoints)), key=lambda item: midpoints[item][0])
+    west_index = min(range(len(midpoints)), key=lambda item: midpoints[item][0])
+    north_index = max(range(len(midpoints)), key=lambda item: midpoints[item][1])
+    south_index = min(range(len(midpoints)), key=lambda item: midpoints[item][1])
+    by_index = {
+        north_index: "north_wall",
+        south_index: "south_wall",
+        east_index: "east_wall",
+        west_index: "west_wall",
+    }
+    if index not in by_index:
+        raise ValueError(
+            "physical wall activation requires an axis-aligned rectangular boundary"
+        )
+    return by_index[index]
 
 
 def _build_object(

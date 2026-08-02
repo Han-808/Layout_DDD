@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from copy import deepcopy
 
+from benchmark.architecture_policy import validate_architecture_contract
 from benchmark.nl_scene.generation_input import build_generator_visible_payload
 
 
@@ -30,9 +31,10 @@ Every relationship must declare family="oor" for object-object or family="oar" f
 object-architecture. It must be binary: subject, predicate, and object must each be one string.
 Never put an array or object in a relationship field. When the same predicate applies to
 multiple targets, emit one relationship entry per target. subject must reference an emitted
-object id. object must reference either an emitted object id or one of the benchmark architecture
-tokens: north_wall, south_wall, east_wall, west_wall, floor, or ceiling. The benchmark room has no doors,
-windows, columns, partitions, or other architecture. Never invent region pseudo-ids such as
+object id. object must reference either an emitted object id or one of the active benchmark architecture
+tokens supplied for this case. Inactive architecture does not exist and must never be emitted or
+referenced. The benchmark room has no doors, windows, columns, partitions, or other architecture.
+Never invent region pseudo-ids such as
 foot_of_object_1."""
 
 OUTPUT_CONTRACT = {
@@ -71,6 +73,10 @@ def build_layout_json_method_input(generation_input: dict) -> dict:
     contract = generation_input.get("generation_contract") if isinstance(generation_input.get("generation_contract"), dict) else {}
     input_mode = str(contract.get("input_mode") or "natural_language_direct")
     visible = build_generator_visible_payload(generation_input)
+    architecture = validate_architecture_contract(
+        visible["benchmark_environment"]["architecture"]
+    )
+    allowed_architecture_tokens = architecture["allowed_architecture_tokens"]
     user_payload = {
         "natural_language": visible["natural_language"],
         "benchmark_environment": visible["benchmark_environment"],
@@ -99,6 +105,10 @@ def build_layout_json_method_input(generation_input: dict) -> dict:
             "previous_evaluation": reflection.get("previous_evaluation"),
         }
     user_prompt = (
+        "Allowed architecture tokens for this case (and no others):\n"
+        f"{json.dumps(allowed_architecture_tokens, ensure_ascii=True, separators=(',', ':'))}\n"
+        "Do not emit a wall relationship when no wall token is listed. The logical room boundary "
+        "is not a physical wall.\n"
         "Generate the requested scene using this output-shape example. Replace all example values and add every requested object:\n"
         f"{json.dumps(output_contract, ensure_ascii=True, separators=(',', ':'))}\n"
         f"{asset_grounding_instructions}\n"

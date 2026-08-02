@@ -35,6 +35,7 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
+from benchmark.architecture_policy import architecture_contract_from_scene
 from benchmark.evaluator.scene_quality.authorized_deviations import (
     deviation_matches,
     deviations_for_metric,
@@ -1396,6 +1397,7 @@ def _request_scene_quality_evidence(
             "scene_id": scene.get("scene_id"),
             "scene_type": scene.get("scene_type"),
             "object_count": len(scene.get("objects") or []),
+            "architecture": architecture_contract_from_scene(scene),
         },
         "natural_language_prompt": prompt,
         "evidence_scope": str(policy["camera_scope"]),
@@ -1623,6 +1625,7 @@ def _judge_request(
             "scene_type": scene.get("scene_type"),
             "boundary": deepcopy(scene.get("boundary")),
             "scene_height": scene.get("scene_height"),
+            "architecture": architecture_contract_from_scene(scene),
             "object_count": len(scene.get("objects") or []),
             "objects": objects,
         },

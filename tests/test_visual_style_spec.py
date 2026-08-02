@@ -4,6 +4,7 @@ import hashlib
 from pathlib import Path
 
 import pytest
+from PIL import Image
 
 from benchmark.api.evaluation import run_evaluate
 from benchmark.api.submission import CaseBundleError, load_case_bundle
@@ -113,6 +114,12 @@ def _style_only_config() -> dict:
     }
 
 
+def _write_render(path: Path) -> None:
+    image = Image.new("RGB", (4, 4), (20, 40, 60))
+    image.putpixel((0, 0), (80, 100, 120))
+    image.save(path)
+
+
 def test_compile_visual_style_prompt_is_deterministic() -> None:
     prompt = compile_visual_style_prompt(_spec())
 
@@ -156,7 +163,7 @@ def test_summary_reports_no_spec() -> None:
 
 def test_run_evaluate_sends_style_spec_to_scene_quality_judge(tmp_path: Path) -> None:
     render = tmp_path / "render.png"
-    render.write_bytes(b"evidence")
+    _write_render(render)
     judge = _RecordingJudge()
 
     report = run_evaluate(
@@ -186,7 +193,7 @@ def test_run_evaluate_routes_model_backed_public_method_through_controller(
     tmp_path: Path,
 ) -> None:
     render = tmp_path / "render.png"
-    render.write_bytes(b"evidence")
+    _write_render(render)
 
     class _ModelBackedRecordingJudge(_RecordingJudge):
         vlm_control_enabled = True
@@ -228,7 +235,7 @@ def test_run_evaluate_routes_model_backed_public_method_through_controller(
 
 def test_scene_quality_style_spec_stays_none_without_a_spec(tmp_path: Path) -> None:
     render = tmp_path / "render.png"
-    render.write_bytes(b"evidence")
+    _write_render(render)
     judge = _RecordingJudge()
 
     report = run_evaluate(
@@ -255,7 +262,7 @@ def test_scene_quality_style_spec_stays_none_without_a_spec(tmp_path: Path) -> N
 def test_run_evaluate_accepts_a_style_spec_path(tmp_path: Path) -> None:
     spec_path = write_json(tmp_path / "style.json", _spec())
     render = tmp_path / "render.png"
-    render.write_bytes(b"evidence")
+    _write_render(render)
     judge = _RecordingJudge()
 
     run_evaluate(

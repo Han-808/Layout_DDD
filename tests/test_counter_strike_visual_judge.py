@@ -78,7 +78,11 @@ def _write_png(path: Path, color: tuple[int, int, int]) -> Path:
     return path
 
 
-def _evidence(tmp_path: Path) -> tuple[CounterStrikeFrozenEvidence, Path]:
+def _evidence(
+    tmp_path: Path,
+    *,
+    dark_globals: bool = False,
+) -> tuple[CounterStrikeFrozenEvidence, Path]:
     capture = tmp_path / "capture"
     capture.mkdir()
     global_views = []
@@ -86,7 +90,11 @@ def _evidence(tmp_path: Path) -> tuple[CounterStrikeFrozenEvidence, Path]:
     for index in range(2):
         path = _write_png(
             capture / f"global_{index}.png",
-            (30 + index, 40, 50),
+            (
+                (14 + index, 16, 18)
+                if dark_globals
+                else (30 + index, 40, 50)
+            ),
         )
         global_views.append(
             CounterStrikeEvidenceDescriptor(
@@ -129,6 +137,7 @@ def _zone_roles(*, missing: str | None = None) -> list[dict[str, str]]:
         {
             "role": role,
             "status": "missing" if role == missing else "clear",
+            "spatial_region": f"distinct_{role}_region",
             "evidence": f"visible geometry for {role}",
         }
         for role in REQUIRED_ROLES
@@ -217,6 +226,14 @@ def _cover_response(*, count: int = 4) -> dict[str, Any]:
     }
 
 
+def _threshold_inconsistent_cover_response() -> dict[str, Any]:
+    response = _cover_response()
+    response["verdict"] = "invalid"
+    response["score"] = 0.8
+    response["defects"] = ["Fewer than four archetypes are defensible."]
+    return response
+
+
 def _judge(
     model: _FakeModel,
     *,
@@ -257,13 +274,17 @@ def _neutral_context(metric: str) -> dict[str, Any]:
     }
 
 
+def _repeat3(response: dict[str, Any]) -> list[dict[str, Any]]:
+    return [response, response, response]
+
+
 def test_global_sufficient_packet_resolves_without_selector(
     tmp_path: Path,
 ) -> None:
     evidence, topology = _evidence(tmp_path)
     response = _zone_response()
     model = _FakeModel(
-        {"cs_static_design.zone_clarity": [response, response]}
+        {"cs_static_design.zone_clarity": _repeat3(response)}
     )
 
     result = _judge(model).judge_metric(
@@ -281,6 +302,7 @@ def test_global_sufficient_packet_resolves_without_selector(
     assert [call["call_type"] for call in model.calls] == [
         "cs_static_design.zone_clarity",
         "cs_static_design.zone_clarity",
+        "cs_static_design.zone_clarity",
     ]
 
 
@@ -295,6 +317,8 @@ def test_insufficient_global_packet_uses_frozen_regional_selector_then_rejudges(
             "cs_static_design.zone_clarity": [
                 insufficient,
                 insufficient,
+                insufficient,
+                sufficient,
                 sufficient,
                 sufficient,
             ]
@@ -320,7 +344,7 @@ def test_insufficient_global_packet_uses_frozen_regional_selector_then_rejudges(
     )
 
     assert result.status == "checked"
-    assert result.evidence_phase == "global_plus_regional_fallback"
+    assert result.evidence_phase == "global_plus_regional"
     assert result.selected_regional_ids == ("style_region_02",)
     assert result.selector is not None
     assert result.selector["selected_view_ids"] == ["style_region_02"]
@@ -329,10 +353,85 @@ def test_insufficient_global_packet_uses_frozen_regional_selector_then_rejudges(
         "cs_static_design.zone_clarity",
         "cs_static_design.zone_clarity",
         "cs_static_design.zone_clarity",
+        "cs_static_design.zone_clarity",
+        "cs_static_design.zone_clarity",
     ]
     assert [call["call_type"] for call in selector_model.calls] == [
         "cs_static_design.selector.zone_clarity"
     ]
+
+
+def test_dark_global_packet_forces_bounded_angle_and_brightness_repair(
+    tmp_path: Path,
+) -> None:
+    evidence, topology = _evidence(tmp_path, dark_globals=True)
+    sufficient = _zone_response()
+    model = _FakeModel(
+        {
+            "cs_static_design.zone_clarity": [
+                *_repeat3(sufficient),
+                *_repeat3(sufficient),
+            ]
+        }
+    )
+    selector_model = _FakeModel({})
+
+    result = _judge(model, selector_model=selector_model).judge_metric(
+        "zone_clarity",
+        evidence=evidence,
+        topology_diagram=topology,
+        topology_context=_neutral_context("zone_clarity"),
+    )
+
+    assert result.status == "checked"
+    assert result.evidence_phase == "global_brightness_repaired"
+    assert result.selected_regional_ids == ()
+    assert result.brightness_repaired_view_ids == (
+        "brightness__global_oblique_00",
+        "brightness__global_oblique_01",
+    )
+    assert result.selector is None
+    assert len(model.calls) == 3
+    assert len(selector_model.calls) == 0
+    repaired = tuple(
+        tmp_path.glob(
+            "counter_strike_observation_repairs/"
+            "brightness_global_oblique_00_*.png"
+        )
+    )
+    assert len(repaired) == 1
+
+
+def test_insufficient_repeat_remains_unresolved_without_helpful_fallback(
+    tmp_path: Path,
+) -> None:
+    evidence, topology = _evidence(tmp_path)
+    insufficient = _insufficient_response()
+    model = _FakeModel(
+        {"cs_static_design.zone_clarity": _repeat3(insufficient)}
+    )
+    selector_model = _FakeModel(
+        {
+            "cs_static_design.selector.zone_clarity": [
+                {
+                    "evidence_status": "no_helpful_candidate",
+                    "selected_view_ids": [],
+                    "reason": "No regional view exposes the missing fact.",
+                }
+            ]
+        }
+    )
+
+    result = _judge(model, selector_model=selector_model).judge_metric(
+        "zone_clarity",
+        evidence=evidence,
+        topology_diagram=topology,
+        topology_context=_neutral_context("zone_clarity"),
+    )
+
+    assert result.status == "unresolved"
+    assert result.verdict == "ambiguous"
+    assert result.score is None
 
 
 @pytest.mark.parametrize(
@@ -369,6 +468,7 @@ def test_selector_cannot_return_verdict_or_unknown_ids(
             "cs_static_design.zone_clarity": [
                 insufficient,
                 insufficient,
+                insufficient,
             ]
         }
     )
@@ -391,7 +491,7 @@ def test_selector_cannot_return_verdict_or_unknown_ids(
     assert caught.value.code == expected_code
 
 
-def test_repeat_verdict_disagreement_is_unresolved_not_majority_vote(
+def test_repeat_verdict_disagreement_uses_majority_and_median(
     tmp_path: Path,
 ) -> None:
     evidence, topology = _evidence(tmp_path)
@@ -402,7 +502,7 @@ def test_repeat_verdict_disagreement_is_unresolved_not_majority_vote(
         roles=_zone_roles(missing="main_engagement"),
     )
     model = _FakeModel(
-        {"cs_static_design.zone_clarity": [valid, invalid]}
+        {"cs_static_design.zone_clarity": [valid, invalid, valid]}
     )
 
     result = _judge(model).judge_metric(
@@ -412,10 +512,12 @@ def test_repeat_verdict_disagreement_is_unresolved_not_majority_vote(
         topology_context=_neutral_context("zone_clarity"),
     )
 
-    assert result.status == "unresolved"
-    assert result.verdict == "ambiguous"
-    assert result.score is None
+    assert result.status == "checked"
+    assert result.verdict == "valid"
+    assert result.score == pytest.approx(0.8)
     assert result.to_dict()["repeat_agreement"] is False
+    assert result.to_dict()["verdict_aggregation"] == "strict_majority"
+    assert result.to_dict()["score_aggregation"] == "median"
 
 
 def test_valid_zone_result_requires_configured_clear_role_count(
@@ -427,7 +529,7 @@ def test_valid_zone_result_requires_configured_clear_role_count(
     roles[1]["status"] = "weak"
     response = _zone_response(roles=roles)
     model = _FakeModel(
-        {"cs_static_design.zone_clarity": [response, response]}
+        {"cs_static_design.zone_clarity": _repeat3(response)}
     )
 
     with pytest.raises(CounterStrikeVisualJudgeError) as caught:
@@ -447,9 +549,8 @@ def test_one_weakly_read_role_still_permits_a_valid_zone_result(
 ) -> None:
     """The bar is a majority of clear roles, not unanimity.
 
-    A role that is present but not delimited by its own geometry is what
-    ``weak`` exists to record.  If one of those sank the verdict the status
-    would be indistinguishable from ``missing``.
+    ``weak`` records a plausible but uncertain role.  Under the permissive
+    policy, one weak role does not erase four repeatably locatable roles.
     """
 
     evidence, topology = _evidence(tmp_path)
@@ -457,7 +558,7 @@ def test_one_weakly_read_role_still_permits_a_valid_zone_result(
     roles[-1]["status"] = "weak"
     response = _zone_response(roles=roles)
     model = _FakeModel(
-        {"cs_static_design.zone_clarity": [response, response]}
+        {"cs_static_design.zone_clarity": _repeat3(response)}
     )
 
     result = _judge(model).judge_metric(
@@ -469,6 +570,52 @@ def test_one_weakly_read_role_still_permits_a_valid_zone_result(
 
     assert result.status == "checked"
     assert result.verdict == "valid"
+
+
+def test_zone_prompt_encodes_permissive_functional_legibility(
+    tmp_path: Path,
+) -> None:
+    evidence, topology = _evidence(tmp_path)
+    response = _zone_response()
+    model = _FakeModel(
+        {"cs_static_design.zone_clarity": _repeat3(response)}
+    )
+
+    _judge(model).judge_metric(
+        "zone_clarity",
+        evidence=evidence,
+        topology_diagram=topology,
+        topology_context=_neutral_context("zone_clarity"),
+    )
+
+    prompt = json.dumps(model.calls[0]["messages"])
+    assert "permissive functional-legibility policy" in prompt
+    assert "open departure band" in prompt
+    assert "without being an enclosed corridor" in prompt
+    assert "same region cannot satisfy more than one role" in prompt
+
+
+def test_valid_zone_result_rejects_overlapping_role_regions(
+    tmp_path: Path,
+) -> None:
+    evidence, topology = _evidence(tmp_path)
+    roles = _zone_roles()
+    roles[1]["spatial_region"] = roles[0]["spatial_region"]
+    response = _zone_response(roles=roles)
+    model = _FakeModel(
+        {"cs_static_design.zone_clarity": _repeat3(response)}
+    )
+
+    with pytest.raises(CounterStrikeVisualJudgeError) as caught:
+        _judge(model).judge_metric(
+            "zone_clarity",
+            evidence=evidence,
+            topology_diagram=topology,
+            topology_context=_neutral_context("zone_clarity"),
+        )
+
+    assert caught.value.code == "metric_response_schema_invalid"
+    assert "non-overlapping spatial_region" in str(caught.value)
 
 
 def test_zone_prompt_states_the_bar_the_response_is_validated_against(
@@ -483,7 +630,7 @@ def test_zone_prompt_states_the_bar_the_response_is_validated_against(
     evidence, topology = _evidence(tmp_path)
     response = _zone_response()
     model = _FakeModel(
-        {"cs_static_design.zone_clarity": [response, response]}
+        {"cs_static_design.zone_clarity": _repeat3(response)}
     )
 
     _judge(model).judge_metric(
@@ -510,6 +657,7 @@ def test_valid_landmark_result_requires_three_distinct_named_regions(
             "cs_static_design.landmark_legibility": [
                 too_few,
                 too_few,
+                too_few,
             ]
         }
     )
@@ -526,13 +674,69 @@ def test_valid_landmark_result_requires_three_distinct_named_regions(
     assert "distinct named landmarks" in str(caught.value)
 
 
+def test_valid_landmark_result_rejects_repeated_identity_cue(
+    tmp_path: Path,
+) -> None:
+    evidence, topology = _evidence(tmp_path)
+    repeated = _landmark_response()
+    for item in repeated["landmarks"]:
+        item["visible_cue"] = "the same generic rectangular box"
+    model = _FakeModel(
+        {
+            "cs_static_design.landmark_legibility": [
+                repeated,
+                repeated,
+                repeated,
+            ]
+        }
+    )
+
+    with pytest.raises(CounterStrikeVisualJudgeError) as caught:
+        _judge(model).judge_metric(
+            "landmark_legibility",
+            evidence=evidence,
+            topology_diagram=topology,
+            topology_context=_neutral_context("landmark_legibility"),
+        )
+
+    assert caught.value.code == "metric_response_schema_invalid"
+    assert "visible identity cues" in str(caught.value)
+
+
+def test_landmark_prompt_encodes_strict_identity_policy(
+    tmp_path: Path,
+) -> None:
+    evidence, topology = _evidence(tmp_path)
+    response = _landmark_response()
+    model = _FakeModel(
+        {
+            "cs_static_design.landmark_legibility": [
+                response,
+                response,
+                response,
+            ]
+        }
+    )
+
+    _judge(model).judge_metric(
+        "landmark_legibility",
+        evidence=evidence,
+        topology_diagram=topology,
+        topology_context=_neutral_context("landmark_legibility"),
+    )
+
+    prompt = json.dumps(model.calls[0]["messages"])
+    assert "strict identity policy" in prompt
+    assert "Position alone is not an identity" in prompt
+
+
 def test_valid_cover_result_requires_structured_visible_diversity(
     tmp_path: Path,
 ) -> None:
     evidence, topology = _evidence(tmp_path)
     response = _cover_response()
     model = _FakeModel(
-        {"cs_static_design.cover_diversity": [response, response]}
+        {"cs_static_design.cover_diversity": _repeat3(response)}
     )
 
     result = _judge(model).judge_metric(
@@ -548,13 +752,150 @@ def test_valid_cover_result_requires_structured_visible_diversity(
     assert len(result.repeats[0]["cover_findings"]) == 4
 
 
+def test_valid_cover_result_rejects_repeated_archetype_cue(
+    tmp_path: Path,
+) -> None:
+    evidence, topology = _evidence(tmp_path)
+    repeated = _cover_response()
+    for item in repeated["cover_findings"]:
+        item["visible_cue"] = "the same generic rectangular box"
+    model = _FakeModel(
+        {"cs_static_design.cover_diversity": _repeat3(repeated)}
+    )
+
+    with pytest.raises(CounterStrikeVisualJudgeError) as caught:
+        _judge(model).judge_metric(
+            "cover_diversity",
+            evidence=evidence,
+            topology_diagram=topology,
+            topology_context=_neutral_context("cover_diversity"),
+        )
+
+    assert caught.value.code == "metric_response_schema_invalid"
+    assert "identity cues" in str(caught.value)
+
+
+def test_cover_prompt_encodes_strict_archetype_equivalence(
+    tmp_path: Path,
+) -> None:
+    evidence, topology = _evidence(tmp_path)
+    response = _cover_response()
+    model = _FakeModel(
+        {"cs_static_design.cover_diversity": _repeat3(response)}
+    )
+
+    _judge(model).judge_metric(
+        "cover_diversity",
+        evidence=evidence,
+        topology_diagram=topology,
+        topology_context=_neutral_context("cover_diversity"),
+    )
+
+    prompt = json.dumps(model.calls[0]["messages"])
+    assert "strict archetype-equivalence policy" in prompt
+    assert "Height or width labels alone" in prompt
+    assert "neutral occupancy diagram are insufficient" in prompt
+
+
+def test_cover_prompt_exposes_threshold_and_a_contract_valid_example(
+    tmp_path: Path,
+) -> None:
+    evidence, topology = _evidence(tmp_path)
+    response = _cover_response()
+    model = _FakeModel(
+        {"cs_static_design.cover_diversity": _repeat3(response)}
+    )
+
+    _judge(model).judge_metric(
+        "cover_diversity",
+        evidence=evidence,
+        topology_diagram=topology,
+        topology_context=_neutral_context("cover_diversity"),
+    )
+
+    user_text = model.calls[0]["messages"][1]["content"][0]["text"]
+    context = json.loads(user_text.split("\n", 1)[1])
+    threshold = context["decision_contract"]["valid_threshold"]
+    assert threshold == pytest.approx(0.6)
+    assert "score >= valid_threshold" in context["decision_contract"][
+        "verdict_score_rule"
+    ]
+    example = context["response_schema"]
+    assert example["verdict"] == "valid"
+    assert example["score"] >= threshold
+    assert len(example["cover_findings"]) == 4
+
+
+def test_threshold_inconsistent_repeat_is_retried_without_changing_repeat_count(
+    tmp_path: Path,
+) -> None:
+    evidence, topology = _evidence(tmp_path)
+    valid = _cover_response()
+    model = _FakeModel(
+        {
+            "cs_static_design.cover_diversity": [
+                _threshold_inconsistent_cover_response(),
+                valid,
+                valid,
+                valid,
+            ]
+        }
+    )
+
+    result = _judge(model).judge_metric(
+        "cover_diversity",
+        evidence=evidence,
+        topology_diagram=topology,
+        topology_context=_neutral_context("cover_diversity"),
+    )
+
+    assert result.status == "checked"
+    assert result.verdict == "valid"
+    assert len(result.repeats) == 3
+    assert len(model.calls) == 4
+    assert result.repeats[0]["response_contract_retry_count"] == 1
+    assert result.repeats[0]["response_contract_retry_codes"] == [
+        "verdict_score_inconsistent"
+    ]
+    assert all(
+        repeat["response_contract_retry_count"] == 0
+        for repeat in result.repeats[1:]
+    )
+
+
+def test_threshold_inconsistent_repeat_fails_after_bounded_retry(
+    tmp_path: Path,
+) -> None:
+    evidence, topology = _evidence(tmp_path)
+    inconsistent = _threshold_inconsistent_cover_response()
+    model = _FakeModel(
+        {
+            "cs_static_design.cover_diversity": [
+                inconsistent,
+                inconsistent,
+            ]
+        }
+    )
+
+    with pytest.raises(CounterStrikeVisualJudgeError) as caught:
+        _judge(model).judge_metric(
+            "cover_diversity",
+            evidence=evidence,
+            topology_diagram=topology,
+            topology_context=_neutral_context("cover_diversity"),
+        )
+
+    assert caught.value.code == "verdict_score_inconsistent"
+    assert len(model.calls) == 2
+
+
 def test_visual_judge_rejects_deterministic_score_context(
     tmp_path: Path,
 ) -> None:
     evidence, topology = _evidence(tmp_path)
     response = _zone_response()
     model = _FakeModel(
-        {"cs_static_design.zone_clarity": [response, response]}
+        {"cs_static_design.zone_clarity": _repeat3(response)}
     )
 
     with pytest.raises(CounterStrikeVisualJudgeError) as caught:
@@ -580,7 +921,7 @@ def test_zone_result_requires_exactly_one_finding_per_required_role(
     duplicated = _zone_roles() + [_zone_roles()[0]]
     response = _zone_response(roles=duplicated)
     model = _FakeModel(
-        {"cs_static_design.zone_clarity": [response, response]}
+        {"cs_static_design.zone_clarity": _repeat3(response)}
     )
 
     with pytest.raises(CounterStrikeVisualJudgeError) as caught:
@@ -619,7 +960,7 @@ def test_result_metadata_is_allowlisted_and_never_contains_credentials_or_paths(
         "local_path": "/private/sensitive/capture.png",
     }
     model = _FakeModel(
-        {"cs_static_design.zone_clarity": [response, response]},
+        {"cs_static_design.zone_clarity": _repeat3(response)},
         request_metadata=metadata,
     )
 
@@ -657,6 +998,7 @@ def test_judge_revalidates_frozen_evidence_hash_before_model_call(
     model = _FakeModel(
         {
             "cs_static_design.zone_clarity": [
+                _zone_response(),
                 _zone_response(),
                 _zone_response(),
             ]

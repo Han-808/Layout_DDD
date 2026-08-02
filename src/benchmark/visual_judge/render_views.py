@@ -8,6 +8,7 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
+from benchmark.architecture_policy import validate_architecture_contract
 from benchmark.rendering.camera_pose import (
     CAMERA_ACTIONS,
     DEFAULT_CAMERA_CANDIDATE_POLICY,
@@ -58,7 +59,7 @@ from benchmark.visual_judge.visual_config import DEFAULT_P0B_VISUAL_CONFIGS
 
 FOCUS_CAMERA_MODES = {"visibility_ranked", "support_contact_plane", "query_cov"}
 HIGHLIGHTED_GLOBAL_POSE_POLICIES = {"global_top", "legacy_metric"}
-CAMERA_EVIDENCE_CACHE_CONTRACT_VERSION = "camera_evidence_cache_contract_v4"
+CAMERA_EVIDENCE_CACHE_CONTRACT_VERSION = "camera_evidence_cache_contract_v5"
 _CAMERA_EVIDENCE_IMPLEMENTATION_FILES = (
     "src/benchmark/rendering/blender.py",
     "src/benchmark/rendering/blender_camera_worker.py",
@@ -68,6 +69,8 @@ _CAMERA_EVIDENCE_IMPLEMENTATION_FILES = (
     "src/benchmark/rendering/camera_pose.py",
     "src/benchmark/rendering/collision_overlay.py",
     "src/benchmark/rendering/segmentation_contour.py",
+    "src/benchmark/architecture_policy.py",
+    "src/benchmark/task_contract.py",
     "src/benchmark/visual_judge/active_fallback.py",
     "src/benchmark/visual_judge/active_policy.py",
     "src/benchmark/visual_judge/evidence_sufficiency.py",
@@ -76,7 +79,6 @@ _CAMERA_EVIDENCE_IMPLEMENTATION_FILES = (
     "src/benchmark/visual_judge/render_views.py",
     "src/benchmark/visual_judge/roles.py",
 )
-_BLEND_HASH_CACHE: dict[tuple[str, int, int], str] = {}
 
 
 class CameraEvidenceProvider:
@@ -101,6 +103,7 @@ class CameraEvidenceProvider:
         highlighted_global_pose_policy: str = "global_top",
         candidate_policy: str = DEFAULT_CAMERA_CANDIDATE_POLICY,
         active_repair: bool = False,
+        architecture_contract: dict[str, Any] | None = None,
     ) -> None:
         self.renderer = renderer
         self.blend_file = Path(blend_file).expanduser().resolve()
@@ -120,6 +123,11 @@ class CameraEvidenceProvider:
             candidate_policy
         )
         self.active_repair = bool(active_repair)
+        self.architecture_contract = (
+            deepcopy(validate_architecture_contract(architecture_contract))
+            if architecture_contract is not None
+            else None
+        )
         # Collision-only paired RGB + diagnostic-overlay evidence. Opt-in so OOB
         # and Support camera behavior is completely unchanged.
         self.collision_overlay = bool(collision_overlay)
@@ -195,6 +203,7 @@ class CameraEvidenceProvider:
             "source_blend_sha256": self.source_blend_sha256,
             "renderer": _renderer_cache_config(self.renderer),
             "implementation_contract": deepcopy(self.implementation_contract),
+            "architecture_contract": deepcopy(self.architecture_contract),
             "collision_geometry_sha256": self.collision_geometry_sha256,
             "collision_geometry_contract": deepcopy(self.collision_geometry_contract),
             "frozen_view_ids": deepcopy(self.frozen_view_ids),
@@ -2450,20 +2459,11 @@ def _event_key(request: dict[str, Any]) -> str:
 
 def _content_sha256(path: Path) -> str:
     resolved = path.expanduser().resolve()
-    stat = resolved.stat()
-    key = (str(resolved), int(stat.st_size), int(stat.st_mtime_ns))
-    cached = _BLEND_HASH_CACHE.get(key)
-    if cached is not None:
-        return cached
     digest = hashlib.sha256()
     with resolved.open("rb") as handle:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
-    value = digest.hexdigest()
-    for stale_key in [item for item in _BLEND_HASH_CACHE if item[0] == str(resolved)]:
-        _BLEND_HASH_CACHE.pop(stale_key, None)
-    _BLEND_HASH_CACHE[key] = value
-    return value
+    return digest.hexdigest()
 
 
 def _canonical_json_sha256(value: Any) -> str:

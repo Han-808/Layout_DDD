@@ -172,7 +172,7 @@ def test_camera_ablation_resume_requires_exact_successful_contract(tmp_path: Pat
             "implementation": {"camera_pose.py": "code-a"},
         },
         "observation_config": {
-            "candidate_policy": "legacy_v1",
+            "candidate_policy": "legacy",
             "max_views": 2,
             "candidate_count": 6,
         },

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render a judge-free camera-evidence audit over cal_dataset1 distortions.
+"""Render a judge-free camera-evidence audit over routed cal_dataset1 events.
 
 The experiment holds presentation and image budget fixed.  For every routed
 Collision, OOB, or Support event it renders two raw/highlight pose pairs from:
@@ -43,6 +43,7 @@ from benchmark.visual_judge.p0b import build_p0b_local_evidence_request
 
 
 DISTORTION_SPLITS = ("obvious_distortion", "subtle_distortion")
+SUPPORTED_SPLITS = (*DISTORTION_SPLITS, "fine_edge")
 METRICS = ("collision", "oob", "support")
 ARMS = ("fixed_global_highlight", "metric_local_highlight")
 LOCAL_ROLES = {
@@ -69,6 +70,7 @@ def main() -> None:
         dataset_root,
         splits=set(args.split),
         metrics=set(args.metric),
+        case_ids=set(args.case_id),
         max_cases=args.max_cases,
     )
     plan = _plan_manifest(dataset_root, cases, args)
@@ -156,16 +158,22 @@ def _parse_args() -> argparse.Namespace:
         "--asset-root",
         default=str(PROJECT_ROOT / "Support" / "Assets" / "imaginarium_assets"),
     )
-    parser.add_argument("--split", action="append", choices=DISTORTION_SPLITS, default=[])
+    parser.add_argument("--split", action="append", choices=SUPPORTED_SPLITS, default=[])
     parser.add_argument("--metric", action="append", choices=METRICS, default=[])
+    parser.add_argument(
+        "--case-id",
+        action="append",
+        default=[],
+        help="Restrict rendering to one or more exact case IDs.",
+    )
     parser.add_argument("--max-cases", type=int, default=0)
     parser.add_argument("--max-views", type=int, default=2, choices=(2,))
     parser.add_argument("--candidate-count", type=int, default=6, choices=range(2, 9))
     parser.add_argument(
         "--candidate-policy",
         choices=CAMERA_CANDIDATE_POLICIES,
-        default="legacy_v1",
-        help="Camera candidate generator; legacy_v1 preserves the original audit.",
+        default="legacy",
+        help="Camera candidate generator; legacy preserves the original audit.",
     )
     parser.add_argument("--plan-only", action="store_true")
     parser.add_argument("--resume", action=argparse.BooleanOptionalAction, default=True)
@@ -199,13 +207,20 @@ def _selected_events(
     *,
     splits: set[str],
     metrics: set[str],
+    case_ids: set[str] | None = None,
     max_cases: int = 0,
 ) -> list[dict[str, Any]]:
     payload = _read_json(dataset_root / "cases.json")
+    case_ids = case_ids or set()
+    found_case_ids: set[str] = set()
     selected: list[dict[str, Any]] = []
     for raw_case in payload.get("cases") or []:
         if not isinstance(raw_case, dict) or str(raw_case.get("split")) not in splits:
             continue
+        case_id = str(raw_case.get("case_id") or "")
+        if case_ids and case_id not in case_ids:
+            continue
+        found_case_ids.add(case_id)
         case = deepcopy(raw_case)
         fixture = dataset_root / str(case["fixture_dir"])
         gt = _read_json(fixture / "event_gt.json")
@@ -223,6 +238,12 @@ def _selected_events(
         selected.append(case)
         if max_cases > 0 and len(selected) >= max_cases:
             break
+    missing_case_ids = case_ids - found_case_ids
+    if missing_case_ids:
+        raise ValueError(
+            "requested case IDs are absent from the selected splits: "
+            + ", ".join(sorted(missing_case_ids))
+        )
     return selected
 
 
@@ -238,7 +259,7 @@ def _plan_manifest(dataset_root: Path, cases: list[dict[str, Any]], args: argpar
         },
         "events_by_severity": {
             severity: sum(event.get("severity_class") == severity for case in cases for event in case["events"])
-            for severity in ("obvious", "subtle")
+            for severity in ("obvious", "subtle", "edge")
         },
     }
     return {
@@ -252,7 +273,7 @@ def _plan_manifest(dataset_root: Path, cases: list[dict[str, Any]], args: argpar
         },
         "controlled_variable": "camera_pose_policy",
         "frozen": {
-            "events": "must_route distorted events only",
+            "events": "must_route events from the explicitly selected splits",
             "presentation": "raw_plus_same_pose_highlight",
             "pose_count": int(args.max_views),
             "image_count": int(args.max_views) * 2,

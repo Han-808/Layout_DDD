@@ -52,6 +52,9 @@ class CounterStrikeEvidenceDescriptor:
     role: str
     path: Path
     sha256: str
+    presentation: str = "raw"
+    source_view_id: str | None = None
+    luminance: dict[str, float] | None = None
 
 
 @dataclass(frozen=True)

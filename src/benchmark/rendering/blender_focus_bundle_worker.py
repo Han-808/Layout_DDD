@@ -20,7 +20,7 @@ if str(WORKER_DIR) not in sys.path:
     sys.path.insert(0, str(WORKER_DIR))
 
 from blender_collision_overlay_worker import _apply_overlay, _overlay_targets, _render_pose
-from blender_worker import _configure_render
+from blender_worker import _configure_render, _source_architecture_contract
 
 
 def main() -> None:
@@ -70,6 +70,7 @@ def main() -> None:
         for index, pose in enumerate(global_views)
     ]
     targets = _overlay_targets(overlay_spec)
+    architecture = _source_architecture_contract()
     manifest = {
         "backend": "blender_read_only_focus_bundle_v1",
         "source_blend": str(Path(bpy.data.filepath).resolve()) if bpy.data.filepath else None,
@@ -86,6 +87,22 @@ def main() -> None:
         "overlay_views": overlay_views,
         "global_overlay_views": global_overlay_views,
         "views": rgb_views + overlay_views + global_overlay_views,
+        "architecture": architecture,
+        "architecture_policy_version": (
+            architecture.get("architecture_policy_version")
+            if isinstance(architecture, dict)
+            else None
+        ),
+        "active_wall_ids": (
+            list(
+                (architecture.get("physical_walls") or {}).get(
+                    "active_wall_ids"
+                )
+                or []
+            )
+            if isinstance(architecture, dict)
+            else []
+        ),
     }
     (out_dir / "focus_bundle_manifest.json").write_text(
         json.dumps(manifest, indent=2),

@@ -282,6 +282,11 @@ def run_counter_strike_case(
         cs_visual_judge = build_counter_strike_visual_judge(
             deepcopy(model_payload),
             benchmark_config=config,
+            evidence_repair_dir=(
+                destination
+                / "counter_strike_l4"
+                / "observation_repairs"
+            ),
         )
         result = evaluate_counter_strike_frozen_capture(
             out_dir=destination,

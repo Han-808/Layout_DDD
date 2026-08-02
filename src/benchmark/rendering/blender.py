@@ -9,6 +9,10 @@ from typing import Any
 
 from PIL import Image, ImageStat
 
+from benchmark.architecture_policy import (
+    architecture_contract_from_scene,
+    validate_architecture_contract,
+)
 
 RENDER_ENGINES = (
     "BLENDER_WORKBENCH",
@@ -97,7 +101,6 @@ class BlenderRenderer:
             collision_max_total_faces,
             "collision_max_total_faces",
         )
-        self._blend_hash_cache: dict[tuple[str, int, int], str] = {}
 
     def render_scene(
         self,
@@ -110,6 +113,18 @@ class BlenderRenderer:
         destination = Path(out_dir).expanduser().resolve()
         destination.mkdir(parents=True, exist_ok=True)
         self._preflight(scene)
+        try:
+            scene_data = json.loads(scene.read_text(encoding="utf-8"))
+            architecture = architecture_contract_from_scene(scene_data)
+        except (OSError, json.JSONDecodeError, ValueError) as exc:
+            raise BlenderRenderError(
+                f"invalid scene architecture contract: {exc}"
+            ) from exc
+        architecture_path = destination / "architecture_contract.json"
+        architecture_path.write_text(
+            json.dumps(architecture, indent=2),
+            encoding="utf-8",
+        )
         worker = Path(__file__).with_name("blender_worker.py").resolve()
         command = [
             str(self.blender_bin),
@@ -124,6 +139,8 @@ class BlenderRenderer:
             str(scene),
             "--out-dir",
             str(destination),
+            "--architecture-contract",
+            str(architecture_path),
             "--width",
             str(self.width),
             "--height",
@@ -184,6 +201,19 @@ class BlenderRenderer:
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
             raise BlenderRenderError(f"Invalid Blender render manifest: {manifest_path}") from exc
+        try:
+            rendered_architecture = validate_architecture_contract(
+                manifest.get("architecture")
+            )
+        except ValueError as exc:
+            raise BlenderRenderError(
+                f"Blender render manifest has an invalid architecture contract: {exc}"
+            ) from exc
+        if rendered_architecture != architecture:
+            raise BlenderRenderError(
+                "Blender render architecture contract differs from the canonical "
+                "scene architecture contract"
+            )
         if timed_out:
             collision_export = manifest.get("collision_geometry_export")
             if not isinstance(collision_export, dict) or collision_export.get("status") == "pending":
@@ -256,6 +286,241 @@ class BlenderRenderer:
             )
         return manifest
 
+    def render_prepared_scene(
+        self,
+        *,
+        blend_file: str | Path,
+        normalized_scene_path: str | Path,
+        out_dir: str | Path,
+    ) -> dict[str, Any]:
+        """Render a previously verified blend without rematerializing it.
+
+        Geometry comes exclusively from ``blend_file``.  The normalized JSON is
+        used only to verify registered identity and trusted architecture.  The
+        worker opens the blend with auto-execution disabled, adds ephemeral
+        benchmark cameras/lights in memory, and never saves the source scene.
+        """
+
+        source = Path(blend_file).expanduser().resolve()
+        normalized = Path(normalized_scene_path).expanduser().resolve()
+        destination = Path(out_dir).expanduser().resolve()
+        destination.mkdir(parents=True, exist_ok=True)
+        self._preflight_blend(source)
+        self._preflight(normalized)
+        if source == normalized:
+            raise BlenderRenderError(
+                "trusted blend and normalized scene paths must be distinct"
+            )
+        try:
+            normalized_data = json.loads(normalized.read_text(encoding="utf-8"))
+            architecture = architecture_contract_from_scene(normalized_data)
+        except (OSError, json.JSONDecodeError, ValueError) as exc:
+            raise BlenderRenderError(
+                f"invalid prepared normalized scene contract: {exc}"
+            ) from exc
+
+        # These are deliberately uncached full-file hashes.  A read-only worker
+        # must not be able to hide a same-size/same-mtime source modification.
+        source_hash_before = _sha256_file(source)
+        normalized_hash_before = _sha256_file(normalized)
+        worker = Path(__file__).with_name(
+            "blender_prepared_worker.py"
+        ).resolve()
+        command = [
+            str(self.blender_bin),
+            "--background",
+            "--factory-startup",
+            "--disable-autoexec",
+            str(source),
+            "--python-exit-code",
+            "1",
+            "--python",
+            str(worker),
+            "--",
+            "--normalized-scene-json",
+            str(normalized),
+            "--out-dir",
+            str(destination),
+            "--width",
+            str(self.width),
+            "--height",
+            str(self.height),
+            "--render-engine",
+            self.render_engine,
+            "--cycles-device",
+            self.cycles_device,
+            "--cycles-samples",
+            str(self.cycles_samples),
+            "--collision-max-vertices-per-object",
+            str(self.collision_max_vertices_per_object),
+            "--collision-max-faces-per-object",
+            str(self.collision_max_faces_per_object),
+            "--collision-max-total-vertices",
+            str(self.collision_max_total_vertices),
+            "--collision-max-total-faces",
+            str(self.collision_max_total_faces),
+        ]
+        if self.cycles_denoising:
+            command.append("--cycles-denoising")
+
+        completed = None
+        timeout_error: subprocess.TimeoutExpired | None = None
+        try:
+            completed = subprocess.run(
+                command,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=self.timeout_seconds,
+            )
+        except subprocess.TimeoutExpired as exc:
+            timeout_error = exc
+            stdout = _subprocess_stream_text(exc.stdout)
+            stderr = _subprocess_stream_text(exc.stderr)
+            (destination / "prepared_blender.stdout.log").write_text(
+                stdout,
+                encoding="utf-8",
+            )
+            (destination / "prepared_blender.stderr.log").write_text(
+                stderr,
+                encoding="utf-8",
+            )
+        else:
+            (destination / "prepared_blender.stdout.log").write_text(
+                completed.stdout,
+                encoding="utf-8",
+            )
+            (destination / "prepared_blender.stderr.log").write_text(
+                completed.stderr,
+                encoding="utf-8",
+            )
+        finally:
+            source_hash_after = _sha256_file(source)
+            normalized_hash_after = _sha256_file(normalized)
+
+        if source_hash_after != source_hash_before:
+            raise BlenderRenderError(
+                "read-only prepared renderer modified the trusted source blend"
+            )
+        if normalized_hash_after != normalized_hash_before:
+            raise BlenderRenderError(
+                "read-only prepared renderer modified the normalized scene"
+            )
+        if timeout_error is not None:
+            raise BlenderRenderError(
+                f"Blender prepared render timed out after {self.timeout_seconds}s"
+            ) from timeout_error
+        assert completed is not None
+        if completed.returncode != 0:
+            detail = (completed.stderr or completed.stdout)[-4000:]
+            raise BlenderRenderError(
+                "Blender prepared worker exited with code "
+                f"{completed.returncode}: {detail}"
+            )
+
+        manifest_path = destination / "prepared_render_manifest.json"
+        manifest = _load_render_manifest(
+            manifest_path,
+            label="prepared render",
+        )
+        rendered_source = Path(
+            str(manifest.get("blend_file") or "")
+        ).expanduser().resolve()
+        if rendered_source != source:
+            raise BlenderRenderError(
+                "prepared render manifest does not identify the trusted source blend"
+            )
+        rendered_normalized = Path(
+            str(manifest.get("normalized_scene_path") or "")
+        ).expanduser().resolve()
+        if rendered_normalized != normalized:
+            raise BlenderRenderError(
+                "prepared render manifest does not identify the normalized scene"
+            )
+        if manifest.get("source_scene_saved") is not False:
+            raise BlenderRenderError(
+                "prepared render worker did not attest read-only source handling"
+            )
+        try:
+            rendered_architecture = validate_architecture_contract(
+                manifest.get("architecture")
+            )
+        except ValueError as exc:
+            raise BlenderRenderError(
+                f"prepared render manifest has invalid architecture: {exc}"
+            ) from exc
+        if rendered_architecture != architecture:
+            raise BlenderRenderError(
+                "prepared render architecture differs from normalized scene"
+            )
+
+        blank = _validate_render_views(manifest)
+        objects = [
+            item for item in manifest.get("objects", []) if isinstance(item, dict)
+        ]
+        identity_validation = _validate_identity_render(
+            manifest,
+            objects=objects,
+        )
+        if identity_validation is not None:
+            manifest.setdefault("render_validation", {})[
+                "identity_map"
+            ] = identity_validation
+        asset_mesh_count = sum(
+            item.get("representation") == "asset_mesh" for item in objects
+        )
+        manifest["asset_coverage"] = {
+            "object_count": len(objects),
+            "asset_mesh_count": asset_mesh_count,
+            "bbox_proxy_count": 0,
+            "asset_mesh_rate": (
+                asset_mesh_count / len(objects) if objects else 0.0
+            ),
+            "required": True,
+        }
+        geometry_manifest = manifest.get("collision_geometry_manifest")
+        if (
+            isinstance(geometry_manifest, str)
+            and Path(geometry_manifest).is_file()
+        ):
+            manifest["collision_geometry"] = json.loads(
+                Path(geometry_manifest).read_text(encoding="utf-8")
+            )
+            manifest["collision_geometry"][
+                "manifest_path"
+            ] = geometry_manifest
+            manifest["collision_geometry"]["summary"] = dict(
+                manifest["collision_geometry"].get("export_summary") or {}
+            )
+        manifest.update(
+            {
+                "blend_file": source.as_posix(),
+                "normalized_scene_path": normalized.as_posix(),
+                "source_blend_sha256_before": source_hash_before,
+                "source_blend_sha256_after": source_hash_after,
+                "source_blend_modified": False,
+                "normalized_scene_sha256_before": normalized_hash_before,
+                "normalized_scene_sha256_after": normalized_hash_after,
+                "normalized_scene_modified": False,
+                "auto_execution_disabled": True,
+                "trusted_source_verified": True,
+            }
+        )
+        manifest_path.write_text(
+            json.dumps(manifest, indent=2),
+            encoding="utf-8",
+        )
+        if blank:
+            raise BlenderRenderError(
+                "Blender produced blank or near-uniform prepared views "
+                f"{blank}; engine={self.render_engine}"
+            )
+        if objects and asset_mesh_count != len(objects):
+            raise BlenderRenderError(
+                "prepared renderer encountered a non-catalog proxy representation"
+            )
+        return manifest
+
     def render_camera_views(
         self,
         *,
@@ -277,7 +542,7 @@ class BlenderRenderer:
         destination.mkdir(parents=True, exist_ok=True)
         self._preflight_blend(source)
         source_stat_before = _file_stat_signature(source)
-        source_hash_before = self._cached_blend_hash(source, source_stat_before)
+        source_hash_before = _sha256_file(source)
         if not isinstance(camera_views, list) or not camera_views:
             raise ValueError("camera_views must be a non-empty list")
         poses_path = destination / "camera_views.json"
@@ -337,11 +602,7 @@ class BlenderRenderer:
             detail = (completed.stderr or completed.stdout)[-2000:]
             raise BlenderRenderError(f"Blender camera worker exited with code {completed.returncode}: {detail}")
         source_stat_after = _file_stat_signature(source)
-        source_hash_after = (
-            source_hash_before
-            if source_stat_after == source_stat_before
-            else self._cached_blend_hash(source, source_stat_after)
-        )
+        source_hash_after = _sha256_file(source)
         if source_hash_after != source_hash_before:
             raise BlenderRenderError("Read-only camera worker modified the source Blender scene")
         manifest_path = destination / "camera_render_manifest.json"
@@ -396,7 +657,7 @@ class BlenderRenderer:
         if not isinstance(overlay_spec, dict) or not overlay_spec:
             raise ValueError("overlay_spec must be a non-empty JSON object")
         source_stat_before = _file_stat_signature(source)
-        source_hash_before = self._cached_blend_hash(source, source_stat_before)
+        source_hash_before = _sha256_file(source)
         poses_path = destination / "camera_views.json"
         poses_path.write_text(json.dumps(camera_views, indent=2), encoding="utf-8")
         overlay_path = destination / "collision_overlay_spec.json"
@@ -458,11 +719,7 @@ class BlenderRenderer:
             detail = (completed.stderr or completed.stdout)[-2000:]
             raise BlenderRenderError(f"Blender collision overlay worker exited with code {completed.returncode}: {detail}")
         source_stat_after = _file_stat_signature(source)
-        source_hash_after = (
-            source_hash_before
-            if source_stat_after == source_stat_before
-            else self._cached_blend_hash(source, source_stat_after)
-        )
+        source_hash_after = _sha256_file(source)
         if source_hash_after != source_hash_before:
             raise BlenderRenderError("Read-only collision overlay worker modified the source Blender scene")
         manifest_path = destination / "collision_overlay_manifest.json"
@@ -517,7 +774,7 @@ class BlenderRenderer:
         if not isinstance(overlay_spec, dict) or not overlay_spec:
             raise ValueError("overlay_spec must be a non-empty JSON object")
         source_stat_before = _file_stat_signature(source)
-        source_hash_before = self._cached_blend_hash(source, source_stat_before)
+        source_hash_before = _sha256_file(source)
         poses_path = destination / "camera_views.json"
         poses_path.write_text(json.dumps(camera_views, indent=2), encoding="utf-8")
         overlay_path = destination / "mask_overlay_spec.json"
@@ -570,11 +827,7 @@ class BlenderRenderer:
             detail = (completed.stderr or completed.stdout)[-2000:]
             raise BlenderRenderError(f"Blender identity-mask worker exited with code {completed.returncode}: {detail}")
         source_stat_after = _file_stat_signature(source)
-        source_hash_after = (
-            source_hash_before
-            if source_stat_after == source_stat_before
-            else self._cached_blend_hash(source, source_stat_after)
-        )
+        source_hash_after = _sha256_file(source)
         if source_hash_after != source_hash_before:
             raise BlenderRenderError("Read-only identity-mask worker modified the source Blender scene")
         manifest_path = destination / "target_id_mask_manifest.json"
@@ -626,7 +879,7 @@ class BlenderRenderer:
             raise ValueError("overlay_spec must be a non-empty JSON object")
 
         source_stat_before = _file_stat_signature(source)
-        source_hash_before = self._cached_blend_hash(source, source_stat_before)
+        source_hash_before = _sha256_file(source)
         request_path = destination / "focus_bundle_request.json"
         request_path.write_text(
             json.dumps(
@@ -693,11 +946,7 @@ class BlenderRenderer:
             )
 
         source_stat_after = _file_stat_signature(source)
-        source_hash_after = (
-            source_hash_before
-            if source_stat_after == source_stat_before
-            else self._cached_blend_hash(source, source_stat_after)
-        )
+        source_hash_after = _sha256_file(source)
         if source_hash_after != source_hash_before:
             raise BlenderRenderError("Read-only focus evidence worker modified the source Blender scene")
         manifest_path = destination / "focus_bundle_manifest.json"
@@ -760,14 +1009,6 @@ class BlenderRenderer:
             raise BlenderRenderError(f"Blender path is not executable: {self.blender_bin}")
         if not blend_file.is_file():
             raise BlenderRenderError(f"Blender scene does not exist: {blend_file}")
-
-    def _cached_blend_hash(self, path: Path, signature: tuple[str, int, int]) -> str:
-        digest = self._blend_hash_cache.get(signature)
-        if digest is None:
-            digest = _sha256_file(path)
-            self._blend_hash_cache = {signature: digest}
-        return digest
-
 
 def _saved_image_stats(path: Path) -> dict[str, Any]:
     try:

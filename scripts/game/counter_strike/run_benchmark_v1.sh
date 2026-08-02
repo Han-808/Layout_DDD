@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Resumable five-case Counter-Strike static 3D benchmark.
+# Resumable six-case Counter-Strike static 3D benchmark.
 #
 # The proxy and LITELLM_MASTER_KEY must already exist in this terminal.  The
 # script never prints the key.  Each case captures its original Three.js runtime
@@ -46,6 +46,7 @@ CASE_SLUGS=(
   "hy3"
   "kimi_k3"
   "minimax_m3"
+  "qwen3_8_max_preview"
 )
 CORPUS_DIRS=(
   "Claude-Opus-4_7"
@@ -53,6 +54,7 @@ CORPUS_DIRS=(
   "Hy3"
   "Kimi-K3"
   "MiniMax-M3"
+  "Qwen3_8-Max-Preview"
 )
 CONTRACTS=(
   "$REPO/configs/game/counter_strike/corpus/claude_opus_4_7.json"
@@ -60,6 +62,7 @@ CONTRACTS=(
   "$REPO/configs/game/counter_strike/corpus/hy3.json"
   "$REPO/configs/game/counter_strike/corpus/kimi_k3.json"
   "$REPO/configs/game/counter_strike/corpus/minimax_m3.json"
+  "$REPO/configs/game/counter_strike/corpus/qwen3_8_max_preview.json"
 )
 
 if [[ "$PHASE" != "capture" ]]; then
@@ -76,17 +79,21 @@ if [[ "$PHASE" != "capture" ]]; then
     exit 2
   fi
   echo "==== GPT-5.6-Sol multimodal preflight ===="
-  "$PYTHON" scripts/check_model_endpoint.py \
-    --endpoint http://127.0.0.1:4010/v1 \
-    --model gpt-5.6-sol \
-    --api-key-env LITELLM_MASTER_KEY \
-    --timeout-seconds 3000 \
-    --max-tokens 200 \
-    --no-send-temperature \
-    --no-response-format-json \
-    --multimodal \
-    --image-path "$PREFLIGHT_IMAGE" \
-    >"$RUN_ROOT/model_preflight.json"
+  if ! "$PYTHON" scripts/check_model_endpoint.py \
+      --endpoint http://127.0.0.1:4010/v1 \
+      --model gpt-5.6-sol \
+      --api-key-env LITELLM_MASTER_KEY \
+      --timeout-seconds 3000 \
+      --max-tokens 200 \
+      --no-send-temperature \
+      --no-response-format-json \
+      --multimodal \
+      --image-path "$PREFLIGHT_IMAGE" \
+      >"$RUN_ROOT/model_preflight.json"; then
+    echo "GPT-5.6-Sol multimodal preflight failed; see " \
+      "$RUN_ROOT/model_preflight.json" >&2
+    exit 2
+  fi
   echo "GPT-5.6-Sol multimodal preflight: passed"
 fi
 

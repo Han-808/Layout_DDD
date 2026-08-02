@@ -1,4 +1,14 @@
-# Thirty-scene blind grouping experiment
+# Thirty-scene blind grouping experiment (historical)
+
+> Deprecated comparison fixture. The canonical evaluator and its launchers use
+> VLM grouping only. This three-backend experiment remains available solely for
+> historical replay; set `ALLOW_DEPRECATED_GROUPING_COMPARISON=1` explicitly
+> when re-running its grouping phase.
+
+The grouping decision is settled: do not use this fixture to select the active
+backend. For the current VLM-only run, use
+`configs/experiments/grouping_vlm20_visual_scope_v2.yaml` and
+`scripts/run_grouping_vlm20.py`.
 
 This experiment compares the three grouping implementations through one
 shared interface:
@@ -88,13 +98,14 @@ echo "PID=$(cat "$RUN_ROOT/run.pid")"
 echo "LOG=$RUN_ROOT/launcher.log"
 ```
 
-The launcher:
+The historical launcher:
 
 1. verifies or recreates the frozen materialized inputs;
 2. renders the shared scene evidence;
 3. verifies the existing port-4010 listener is LiteLLM;
 4. runs a real text and multimodal GPT-5.6-Sol preflight;
-5. runs topology, anchor, and VLM grouping;
+5. runs topology, anchor, and VLM grouping only for explicit historical
+   comparison;
 6. validates complete, non-overlapping object partitions;
 7. builds the blind review UI.
 
@@ -144,6 +155,40 @@ When served locally, reviews are saved atomically to:
 Browser local storage remains a fallback, but the local review server is the
 authoritative reusable record.
 
+## Scoring after the blind review
+
+Do not run the scorer until the blind review is complete. It reads the private
+method key only after the human labels are finished, then maps each result's
+quality label to a numeric value:
+
+- `correct` = `1.0`;
+- `partially_correct` = `0.5`;
+- `incorrect` = `0.0`.
+
+`unclear` is reported as unscored rather than silently treated as incorrect.
+The normalized score is `score_sum / scored_label_count`; coverage and
+unscored counts are recorded separately. The scorer reports overall, backend,
+and three object-count groups: `<11`, `11–30`, and `>30` objects.
+
+```bash
+cd /Users/han_mohan/Desktop/Layout_DDD
+
+.venv/bin/python scripts/score_grouping_blind30_review.py \
+  --output-root \
+  Support/artifacts/outputs/grouping_blind30_gpt56_20260730_r1
+```
+
+The command requires all 30 scenes and all three result labels per scene to be
+present and marked reviewed. For a provisional progress check, add
+`--allow-incomplete`; the output is marked `complete: false` and must not be
+used as the final experiment score.
+
+The unblinded score file is written to:
+
+```text
+<output_root>/human_reviews/grouping_scores.json
+```
+
 ## Output layout
 
 ```text
@@ -165,6 +210,7 @@ authoritative reusable record.
     assets/
   human_reviews/
     blind_reviews.json
+    grouping_scores.json
 ```
 
 Failures remain explicit `failure.json` records. They are never converted to

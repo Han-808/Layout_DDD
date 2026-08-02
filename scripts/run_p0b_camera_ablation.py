@@ -125,7 +125,7 @@ HIGHLIGHT_EVIDENCE_ROLES = {"metric_local_highlight", "collision_pair_overlay"}
 GLOBAL_HIGHLIGHT_ROLE = "metric_highlighted_global"
 EVENT_SCHEMA_VERSION = "p0b_camera_ablation_event_v2"
 RESUME_CONTRACT_SCHEMA_VERSION = "p0b_camera_ablation_resume_contract_v1"
-CAMERA_CANDIDATE_POLICY = "legacy_v1"
+CAMERA_CANDIDATE_POLICY = "legacy"
 HIGHLIGHTED_GLOBAL_POSE_POLICY = "legacy_metric"
 
 

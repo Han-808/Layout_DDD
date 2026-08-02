@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from benchmark.architecture_policy import validate_architecture_contract
 from benchmark.io_contracts import I2_NATURAL_LANGUAGE_STRUCTURE, O1_OBJECT_STATE, input_type_for_mode
 from benchmark.nl_scene.converter import FINE_GRAINED
 from benchmark.task_contract import architecture_contract_for_room
@@ -43,6 +44,7 @@ def build_generation_input(
     object_plan: dict | None = None,
     asset_selection: dict | None = None,
     evaluator_output_type: str = O1_OBJECT_STATE,
+    architecture_contract: dict | None = None,
 ) -> dict:
     """Build the generator-facing input from public benchmark artifacts only.
 
@@ -70,6 +72,11 @@ def build_generation_input(
         input_mode = STRUCTURED_NATURAL_LANGUAGE_INPUT_MODE
     else:
         input_mode = DIRECT_NATURAL_LANGUAGE_INPUT_MODE
+    architecture = (
+        validate_architecture_contract(architecture_contract)
+        if architecture_contract is not None
+        else architecture_contract_for_room(scene_request.get("room"))
+    )
     generation_input: dict[str, Any] = {
         "request_id": str(scene_request.get("request_id") or "request_001"),
         "scene_request": scene_request,
@@ -80,7 +87,7 @@ def build_generation_input(
             "input_type": input_type_for_mode(input_mode),
             "evaluator_output_type": str(evaluator_output_type),
             "requires_asset_selection": structure and has_assets,
-            "architecture": architecture_contract_for_room(scene_request.get("room")),
+            "architecture": architecture,
         },
     }
     if structure:
@@ -104,6 +111,7 @@ def build_direct_natural_language_generation_input(
     metadata: dict | None = None,
     prompt_granularity: str = FINE_GRAINED,
     evaluator_output_type: str = O1_OBJECT_STATE,
+    architecture_contract: dict | None = None,
 ) -> dict:
     """Interface-only helper for generators that expect raw natural language."""
 
@@ -127,6 +135,7 @@ def build_direct_natural_language_generation_input(
         object_plan=None,
         asset_selection=None,
         evaluator_output_type=evaluator_output_type,
+        architecture_contract=architecture_contract,
     )
 
 

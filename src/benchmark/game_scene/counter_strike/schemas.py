@@ -125,17 +125,49 @@ COUNTER_STRIKE_BENCHMARK_CONFIG_SCHEMA: dict[str, Any] = {
                         {
                             "enabled": {"type": "boolean"},
                             "implementation": {
-                                "const": "frozen_browser_regional_bank"
+                                "const": (
+                                    "frozen_browser_regional_plus_"
+                                    "brightness_repair"
+                                )
                             },
                             "selector_judge_decoupled": {"const": True},
                             "max_extra_views": _integer(minimum=0),
+                            "minimum_usable_global_views": _integer(
+                                minimum=1, maximum=2
+                            ),
+                            "brightness_repair": _closed_object(
+                                {
+                                    "enabled": {"const": True},
+                                    "median_luminance_threshold": _number(
+                                        minimum=0.0, maximum=1.0
+                                    ),
+                                    "p90_luminance_threshold": _number(
+                                        minimum=0.0, maximum=1.0
+                                    ),
+                                    "target_median_luminance": _number(
+                                        exclusive_minimum=0.0, maximum=1.0
+                                    ),
+                                    "max_gain": _number(
+                                        minimum=1.0, maximum=4.0
+                                    ),
+                                }
+                            ),
                             "exhaustion_status": {"const": "unresolved"},
                         }
                     ),
                     "judge": _closed_object(
                         {
-                            "repeats": _integer(minimum=1),
-                            "require_repeat_agreement": {"type": "boolean"},
+                            "repeats": _integer(minimum=3),
+                            "verdict_aggregation": {
+                                "const": "strict_majority"
+                            },
+                            "score_aggregation": {"const": "median"},
+                            "response_contract_retries": _integer(
+                                minimum=0, maximum=2
+                            ),
+                            "insufficient_evidence_policy": {
+                                "const": "unresolved"
+                            },
                             "confidence_is_not_calibration": {"const": True},
                         }
                     ),
@@ -147,6 +179,11 @@ COUNTER_STRIKE_BENCHMARK_CONFIG_SCHEMA: dict[str, Any] = {
                         {
                             "backend": {
                                 "const": "deterministic_topology_plus_vlm"
+                            },
+                            "interpretation_policy": {
+                                "const": (
+                                    "permissive_functional_legibility_v1"
+                                )
                             },
                             "required_roles": {
                                 "const": [
@@ -167,6 +204,9 @@ COUNTER_STRIKE_BENCHMARK_CONFIG_SCHEMA: dict[str, Any] = {
                                 minimum=0.0, maximum=1.0
                             ),
                             "min_clear_roles": _integer(minimum=0, maximum=5),
+                            "require_non_overlapping_roles": {
+                                "const": True
+                            },
                         }
                     ),
                     "route_structure": _weighted_metric(
@@ -219,6 +259,9 @@ COUNTER_STRIKE_BENCHMARK_CONFIG_SCHEMA: dict[str, Any] = {
                     "landmark_legibility": _weighted_metric(
                         {
                             "backend": {"const": "vlm_global_then_regional"},
+                            "interpretation_policy": {
+                                "const": "strict_visual_identity_v1"
+                            },
                             "required_landmarks": _integer(minimum=1),
                             "require_nameable_visual_cue": {"type": "boolean"},
                             "require_spatially_distinct_regions": {
@@ -234,6 +277,11 @@ COUNTER_STRIKE_BENCHMARK_CONFIG_SCHEMA: dict[str, Any] = {
                             "backend": {
                                 "const": (
                                     "deterministic_cover_assemblies_plus_vlm"
+                                )
+                            },
+                            "interpretation_policy": {
+                                "const": (
+                                    "strict_archetype_equivalence_v1"
                                 )
                             },
                             "score_components": _closed_object(

@@ -99,8 +99,10 @@ def test_architecture_contract_and_scene_gate_use_resolved_room() -> None:
         "scene_height": room["height"],
     }
 
-    assert architecture["wall_count"] == 4
-    assert architecture["elements"] == ["floor", "walls", "ceiling"]
+    assert architecture["wall_count"] == 0
+    assert architecture["elements"] == ["floor", "ceiling"]
+    assert architecture["logical_boundary"]["enabled"] is True
+    assert architecture["physical_walls"]["policy"] == "explicit_only"
     require_scene_matches_architecture(scene, room)
 
     scene["scene_height"] = 3.0

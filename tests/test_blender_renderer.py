@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
@@ -21,6 +22,11 @@ def _write_nonuniform_png(path: Path) -> None:
     image.save(path)
 
 
+def _architecture_from_command(command: list[str]) -> dict:
+    path = Path(command[command.index("--architecture-contract") + 1])
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
 def test_blender_renderer_launches_trusted_worker_and_validates_views(monkeypatch, tmp_path: Path) -> None:
     blender_bin = tmp_path / "blender"
     blender_bin.write_text("fake", encoding="utf-8")
@@ -38,7 +44,11 @@ def test_blender_renderer_launches_trusted_worker_and_validates_views(monkeypatc
         view_path = out_dir / "standardized_top.png"
         _write_nonuniform_png(view_path)
         (out_dir / "render_manifest.json").write_text(
-            json.dumps({"backend": "blender_canonical_scene_v1", "views": [{"name": "top", "path": str(view_path)}]}),
+            json.dumps({
+                "backend": "blender_canonical_scene_v1",
+                "architecture": _architecture_from_command(command),
+                "views": [{"name": "top", "path": str(view_path)}],
+            }),
             encoding="utf-8",
         )
         return SimpleNamespace(returncode=0, stdout="rendered", stderr="")
@@ -113,9 +123,10 @@ def test_canonical_manifest_identity_pass_is_consumed_by_grouping(
             views.append({"name": name, "path": str(path)})
         (out_dir / "render_manifest.json").write_text(
             json.dumps(
-                {
-                    "backend": "blender_canonical_scene_v1",
-                    "views": views,
+                    {
+                        "backend": "blender_canonical_scene_v1",
+                        "architecture": _architecture_from_command(command),
+                        "views": views,
                     "identity_legend": {
                         "#EA4212": "a",
                         "#128EEA": "b",
@@ -233,6 +244,66 @@ def test_blender_renderer_renders_read_only_track_camera_views(monkeypatch, tmp_
     assert manifest["camera_evidence"]["source_blend_modified"] is False
     assert manifest["camera_evidence"]["source_blend_sha256_before"] == manifest["camera_evidence"]["source_blend_sha256_after"]
     assert manifest["views"][0]["pixel_stats"]["luminance_range"] > 0
+
+
+def test_camera_renderer_detects_same_size_same_mtime_blend_replacement(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    blender_bin = tmp_path / "blender"
+    blender_bin.write_text("fake", encoding="utf-8")
+    blender_bin.chmod(0o755)
+    blend_file = tmp_path / "scene.blend"
+    blend_file.write_bytes(b"blend")
+    original_stat = blend_file.stat()
+
+    def fake_run(command, **kwargs):
+        del kwargs
+        blend_file.write_bytes(b"BLEND")
+        os.utime(
+            blend_file,
+            ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns),
+        )
+        out_dir = Path(command[command.index("--out-dir") + 1])
+        view_path = out_dir / "camera.png"
+        _write_nonuniform_png(view_path)
+        (out_dir / "camera_render_manifest.json").write_text(
+            json.dumps(
+                {
+                    "views": [
+                        {
+                            "id": "camera",
+                            "name": "camera",
+                            "path": str(view_path),
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(
+        "benchmark.rendering.blender.subprocess.run",
+        fake_run,
+    )
+    renderer = BlenderRenderer(blender_bin=blender_bin)
+
+    with pytest.raises(
+        BlenderRenderError,
+        match="modified the source Blender scene",
+    ):
+        renderer.render_camera_views(
+            blend_file=blend_file,
+            out_dir=tmp_path / "camera",
+            camera_views=[
+                {
+                    "id": "camera",
+                    "location": [1, 1, 1],
+                    "target": [0, 0, 0],
+                }
+            ],
+        )
 
 
 def test_blender_renderer_rejects_unknown_cycles_device(tmp_path: Path) -> None:
@@ -379,6 +450,7 @@ def test_blender_renderer_rejects_blank_render_manifest(monkeypatch, tmp_path: P
         (out_dir / "render_manifest.json").write_text(
             json.dumps(
                 {
+                    "architecture": _architecture_from_command(command),
                     "views": [
                         {
                             "name": "top",
@@ -413,6 +485,7 @@ def test_blender_renderer_rejects_proxy_only_asset_run(monkeypatch, tmp_path: Pa
         (out_dir / "render_manifest.json").write_text(
             json.dumps(
                 {
+                    "architecture": _architecture_from_command(command),
                     "views": [{"name": "top", "path": str(view_path)}],
                     "objects": [
                         {
@@ -470,6 +543,7 @@ def test_blender_renderer_preserves_completed_views_when_optional_geometry_times
         (out_dir / "render_manifest.json").write_text(
             json.dumps(
                 {
+                    "architecture": _architecture_from_command(command),
                     "views": [{"name": "top", "path": str(view_path)}],
                     "objects": [],
                     "collision_geometry_manifest": None,

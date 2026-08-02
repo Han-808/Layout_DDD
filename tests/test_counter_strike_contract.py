@@ -111,6 +111,28 @@ def test_checked_in_benchmark_config_loads_as_frozen_profile() -> None:
         "landmark_legibility",
         "cover_diversity",
     }
+    assert (
+        loaded.raw["l4_metrics"]["zone_clarity"]["interpretation_policy"]
+        == "permissive_functional_legibility_v1"
+    )
+    assert (
+        loaded.raw["l4_metrics"]["landmark_legibility"][
+            "interpretation_policy"
+        ]
+        == "strict_visual_identity_v1"
+    )
+    assert (
+        loaded.raw["l4_metrics"]["cover_diversity"][
+            "interpretation_policy"
+        ]
+        == "strict_archetype_equivalence_v1"
+    )
+    assert (
+        loaded.raw["visual_evidence"]["judge"][
+            "response_contract_retries"
+        ]
+        == 1
+    )
 
 
 def test_benchmark_config_rejects_unknown_or_inert_fields(tmp_path: Path) -> None:

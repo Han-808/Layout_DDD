@@ -11,6 +11,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from PIL import Image
 
 from benchmark.api.submission import (
     SubmissionEvaluationError,
@@ -102,7 +103,9 @@ class _Renderer:
         views = []
         for name in ("top", "perspective"):
             frame = destination / f"game_{name}.png"
-            frame.write_bytes(f"game {name} frame".encode())
+            image = Image.new("RGB", (2, 2), (35, 55, 75))
+            image.putpixel((0, 0), (170, 110, 50))
+            image.save(frame)
             views.append({"name": name, "path": frame.as_posix()})
         return {
             "backend": "fake_game_renderer",

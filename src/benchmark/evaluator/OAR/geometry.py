@@ -6,6 +6,10 @@ from typing import Iterable
 
 import numpy as np
 
+from benchmark.architecture_policy import (
+    active_wall_ids_from_contract,
+    architecture_contract_from_scene,
+)
 from benchmark.evaluator.OOR.geometry import (
     NormalizedObject,
     get_footprint_corners_xy,
@@ -42,6 +46,7 @@ class NormalizedRoom:
     min_y: float
     max_y: float
     centroid: np.ndarray
+    logical_boundary_segments: list[WallSegment]
     wall_segments: list[WallSegment]
     corners: list[Corner]
 
@@ -76,7 +81,15 @@ def normalize_room(scene: dict) -> NormalizedRoom:
     min_x, max_x = float(np.min(boundary[:, 0])), float(np.max(boundary[:, 0]))
     min_y, max_y = float(np.min(boundary[:, 1])), float(np.max(boundary[:, 1]))
     centroid = np.mean(boundary, axis=0)
-    walls = get_wall_segments(boundary)
+    logical_segments = get_wall_segments(boundary)
+    active_wall_ids = set(
+        active_wall_ids_from_contract(architecture_contract_from_scene(scene))
+    )
+    walls = [
+        segment
+        for segment in logical_segments
+        if f"{segment.name}_wall" in active_wall_ids
+    ]
     corners = get_corner_points(boundary)
     return NormalizedRoom(
         boundary=boundary,
@@ -86,6 +99,7 @@ def normalize_room(scene: dict) -> NormalizedRoom:
         min_y=min_y,
         max_y=max_y,
         centroid=centroid,
+        logical_boundary_segments=logical_segments,
         wall_segments=walls,
         corners=corners,
     )

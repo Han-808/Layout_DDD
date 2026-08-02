@@ -493,6 +493,29 @@ def test_layout_json_adapter_calls_openai_compatible_endpoint(monkeypatch: pytes
     assert (tmp_path / "generator" / "model_request_metadata.json").exists()
 
 
+def test_layout_json_v1_raw_response_replays_with_frozen_semantics(
+    tmp_path: Path,
+) -> None:
+    raw_response = tmp_path / "historical_model_response.txt"
+    raw_response.write_text(
+        json.dumps(_layout_json(), ensure_ascii=False, separators=(",", ":"))
+        + "\n",
+        encoding="utf-8",
+    )
+    adapter = get_adapter("layout_json")
+
+    replayed_path = adapter.materialize_output(
+        raw_response,
+        _generation_input(),
+        tmp_path / "replay",
+    )
+
+    assert read_json(replayed_path) == convert_layout_json_to_scene(
+        _layout_json(),
+        _generation_input(),
+    )
+
+
 def test_layout_json_adapter_does_not_repair_schema_invalid_output(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     payloads: list[dict] = []
     invalid_layout = _layout_json()

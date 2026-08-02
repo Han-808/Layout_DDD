@@ -181,7 +181,7 @@ def prepare_case(args: argparse.Namespace) -> int:
         collision_overlay=args.collision_overlay,
         collision_geometry=collision_geometry,
         highlighted_global_pose_policy="legacy_metric",
-        candidate_policy="legacy_v1",
+        candidate_policy="legacy",
     )
     producer_implementation = _source_file_hashes(
         (
@@ -286,7 +286,7 @@ def prepare_case(args: argparse.Namespace) -> int:
                 "metric_camera_modes": deepcopy(deterministic["metric_modes"]),
                 "evidence_style": str(deterministic["evidence_style"]),
                 "camera_max_steps": 0,
-                "candidate_policy": "legacy_v1",
+                "candidate_policy": "legacy",
                 "max_views": int(args.max_views),
                 "candidate_count": int(args.candidate_count),
                 "collision_overlay": bool(args.collision_overlay),

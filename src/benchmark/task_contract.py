@@ -4,8 +4,14 @@ import math
 from copy import deepcopy
 from typing import Any, Mapping
 
+from benchmark.architecture_policy import (
+    ARCHITECTURE_CONTRACT_ID,
+    DEFAULT_PHYSICAL_WALL_POLICY,
+    build_architecture_contract,
+)
 
-ARCHITECTURE_ID = "rectangular_enclosed_room_v1"
+
+ARCHITECTURE_ID = ARCHITECTURE_CONTRACT_ID
 ROOM_DIMENSION_POLICY = "room_dimension_policy_v1"
 ROOM_AXES = ("width", "depth", "height")
 DEFAULT_ROOM_DIMENSIONS: dict[str, float] = {
@@ -38,10 +44,8 @@ def resolve_room_contract(
 ) -> dict[str, Any]:
     """Resolve explicit room dimensions and deterministically fill missing axes.
 
-    The room topology is always a rectangular enclosure with a floor, four
-    walls, and a ceiling. Structured and natural-language dimensions are both
-    treated as input claims; conflicting claims fail instead of being silently
-    repaired.
+    The room remains a bounded rectangular coordinate domain. Physical wall
+    activation is resolved separately from this logical boundary.
     """
 
     structured = _structured_room_dimensions(room, tolerance=tolerance)
@@ -93,18 +97,44 @@ def resolve_room_contract(
     )
 
 
-def architecture_contract_for_room(room: dict | None) -> dict[str, Any]:
+def architecture_contract_for_room(
+    room: dict | None,
+    *,
+    physical_wall_policy: str = DEFAULT_PHYSICAL_WALL_POLICY,
+    active_wall_ids: tuple[str, ...] | list[str] = (),
+    policy_source: str = "canonical_default",
+) -> dict[str, Any]:
     """Describe the resolved generator/evaluator architecture contract."""
 
     resolved = deepcopy(room) if _is_resolved_room(room) else resolve_room_contract(room)
-    return {
-        "id": ARCHITECTURE_ID,
-        "source": "benchmark_task_contract",
-        "room": resolved,
-        "elements": ["floor", "walls", "ceiling"],
-        "wall_count": 4,
-        "floor_z": 0.0,
-    }
+    resolved_walls = (
+        ("north_wall", "south_wall", "east_wall", "west_wall")
+        if physical_wall_policy == "always_enclosed" and not active_wall_ids
+        else active_wall_ids
+    )
+    return build_architecture_contract(
+        resolved,
+        physical_wall_policy=physical_wall_policy,
+        requested_policy=physical_wall_policy,
+        policy_source=policy_source,
+        active_wall_ids=resolved_walls,
+        activation_sources=(
+            ("compatibility_policy",)
+            if physical_wall_policy == "always_enclosed"
+            else ()
+        ),
+        activation_claims=(
+            (
+                {
+                    "source": "compatibility_policy",
+                    "claim": "always_enclosed",
+                    "active_wall_ids": list(resolved_walls),
+                },
+            )
+            if physical_wall_policy == "always_enclosed"
+            else ()
+        ),
+    )
 
 
 def room_matches_contract(
@@ -271,7 +301,7 @@ def _build_room(
         },
         "dimension_provenance": {axis: str(provenance[axis]) for axis in ROOM_AXES},
         "resolution_policy": ROOM_DIMENSION_POLICY,
-        "topology": "rectangular_enclosed_room",
+        "topology": "rectangular_logical_boundary",
         "floor_z": 0.0,
     }
 

@@ -75,11 +75,15 @@
         },
         "prompt_granularity_role": {"const": "metadata_only"},
         "evaluation_status": {
-          "enum": ["complete", "incomplete"]
+          "enum": ["complete", "incomplete", "not_evaluable"]
         },
         "benchmark_score": {"$ref": "#/$defs/score"},
         "benchmark_score_status": {
-          "enum": ["complete", "insufficient_metric_coverage"]
+          "enum": [
+            "complete",
+            "insufficient_metric_coverage",
+            "not_evaluable"
+          ]
         },
         "evaluation_plan": {
           "$ref": "#/$defs/canonicalEvaluationPlan"
@@ -171,7 +175,7 @@
       "properties": {
         "layer": {"const": "l0_structural_validity"},
         "status": {
-          "enum": ["passed", "failed", "incomplete"]
+          "enum": ["passed", "failed", "incomplete", "not_evaluable"]
         },
         "score": {"type": "null"},
         "affects_score": {"const": false},
@@ -180,7 +184,70 @@
           "items": {"type": "string"},
           "minItems": 1
         },
-        "reason": {"type": ["string", "null"]}
+        "reason": {"type": ["string", "null"]},
+        "readiness": {
+          "$ref": "#/$defs/submissionReadinessReport"
+        }
+      }
+    },
+    "submissionReadinessReport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "gate_version",
+        "status",
+        "reason_codes",
+        "failure_owner",
+        "checks",
+        "provenance"
+      ],
+      "properties": {
+        "gate_version": {"const": "submission_readiness_v1"},
+        "status": {
+          "enum": ["ready", "not_evaluable"]
+        },
+        "reason_codes": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "failure_owner": {
+          "type": ["string", "null"]
+        },
+        "checks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true,
+            "required": ["id", "passed"],
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "passed": {"type": "boolean"},
+              "reason_codes": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "uniqueItems": true
+              },
+              "failure_owner": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          },
+          "minItems": 1
+        },
+        "provenance": {
+          "type": "object"
+        }
       }
     },
     "l1Report": {
@@ -899,6 +966,26 @@
         },
         "visual_style_spec": {
           "enum": ["benchmark_hash_verified", "not_applicable"]
+        },
+        "trusted_render_source": {
+          "type": "string"
+        },
+        "trusted_render_source_sha256": {
+          "type": ["string", "null"],
+          "pattern": "^[0-9a-fA-F]{64}$"
+        },
+        "prepared_trusted_render_source": {
+          "type": "string"
+        },
+        "prepared_trusted_render_source_sha256": {
+          "type": ["string", "null"],
+          "pattern": "^[0-9a-fA-F]{64}$"
+        },
+        "trusted_render_source_rederived_at_evaluation": {
+          "const": true
+        },
+        "submitted_native_blend_rendered_directly": {
+          "type": "boolean"
         }
       }
     },

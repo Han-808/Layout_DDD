@@ -4,6 +4,7 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
+from benchmark.architecture_policy import architecture_contract_from_scene
 from benchmark.visual_judge.visual_config import (
     DEFAULT_P0B_VISUAL_CONFIGS,
     compose_default_p0b_visual_evidence,
@@ -136,12 +137,7 @@ def adjudicate_p0b_event(
         for item in scene.get("objects", [])
         if isinstance(item, dict) and str(item.get("id")) in resolved_ids
     ]
-    architecture = {
-        "boundary": deepcopy(scene.get("boundary")),
-        "height": scene.get("scene_height"),
-        "floor_z": 0.0,
-        "elements": ["floor", "walls", "ceiling"],
-    }
+    architecture = architecture_contract_from_scene(scene)
     local_request = build_p0b_local_evidence_request(
         metric=metric_name,
         event=event,

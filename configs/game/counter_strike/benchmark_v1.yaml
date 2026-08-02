@@ -40,19 +40,36 @@ visual_evidence:
   regional_image_budget: 4
   active_fallback:
     enabled: true
-    implementation: frozen_browser_regional_bank
+    implementation: frozen_browser_regional_plus_brightness_repair
     selector_judge_decoupled: true
     max_extra_views: 2
+    minimum_usable_global_views: 2
+    brightness_repair:
+      enabled: true
+      median_luminance_threshold: 0.10
+      p90_luminance_threshold: 0.25
+      target_median_luminance: 0.24
+      max_gain: 2.50
     exhaustion_status: unresolved
   judge:
-    repeats: 2
-    require_repeat_agreement: true
+    repeats: 3
+    verdict_aggregation: strict_majority
+    score_aggregation: median
+    # Retry only a malformed model-authored response for the same repeat.
+    # Transport failures and evidence-contract failures remain hard failures.
+    response_contract_retries: 1
+    insufficient_evidence_policy: unresolved
     confidence_is_not_calibration: true
 
 l4_metrics:
   zone_clarity:
     weight: 0.20
     backend: deterministic_topology_plus_vlm
+    interpretation_policy: permissive_functional_legibility_v1
+    # Interpretation policy is intentionally permissive: open but repeatably
+    # locatable functional regions count. Enclosure or a doorway is not a
+    # prerequisite when spawn placement, departure space, route convergence,
+    # and peripheral bypass geometry make the role legible.
     required_roles:
       - team_a_spawn
       - team_b_spawn
@@ -70,6 +87,9 @@ l4_metrics:
     # metrics have carried a countable bar since the profile was written; this
     # gives zone_clarity the same kind, leaving one role able to read weakly.
     min_clear_roles: 4
+    # A single spatial patch cannot be relabelled as several roles to satisfy
+    # the count. Each role must identify its own region.
+    require_non_overlapping_roles: true
 
   route_structure:
     weight: 0.20
@@ -102,6 +122,10 @@ l4_metrics:
   landmark_legibility:
     weight: 0.20
     backend: vlm_global_then_regional
+    interpretation_policy: strict_visual_identity_v1
+    # Strict identity policy: position, rotation, or scale of a generic repeated
+    # box/wall is not enough. Each counted cue needs a salient, nameable visual
+    # identity in the original runtime views.
     required_landmarks: 3
     require_nameable_visual_cue: true
     require_spatially_distinct_regions: true
@@ -110,6 +134,10 @@ l4_metrics:
   cover_diversity:
     weight: 0.20
     backend: deterministic_cover_assemblies_plus_vlm
+    interpretation_policy: strict_archetype_equivalence_v1
+    # Strict archetype policy: merge fragments and repeated instances first.
+    # Size/color/orientation alone cannot turn one generic primitive family
+    # into several visual cover forms.
     score_components:
       deterministic: 0.45
       perceptual: 0.55

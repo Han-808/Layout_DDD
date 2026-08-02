@@ -14,6 +14,10 @@ __all__ = [
     "run_generate",
     "run_generate_from_natural_language",
     "TrustedCaseBundle",
+    "MaterializationResult",
+    "prepare_submission",
+    "evaluate_prepared_submission",
+    "evaluate_artifact_submission",
     "evaluate_submission",
     "load_case_bundle",
 ]
@@ -26,6 +30,16 @@ _EXPORTS = {
         "run_generate_from_natural_language",
     ),
     "TrustedCaseBundle": ("benchmark.api.submission", "TrustedCaseBundle"),
+    "MaterializationResult": ("benchmark.api.submission", "MaterializationResult"),
+    "prepare_submission": ("benchmark.api.submission", "prepare_submission"),
+    "evaluate_prepared_submission": (
+        "benchmark.api.submission",
+        "evaluate_prepared_submission",
+    ),
+    "evaluate_artifact_submission": (
+        "benchmark.api.submission",
+        "evaluate_artifact_submission",
+    ),
     "evaluate_submission": ("benchmark.api.submission", "evaluate_submission"),
     "load_case_bundle": ("benchmark.api.submission", "load_case_bundle"),
 }

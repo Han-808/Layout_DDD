@@ -109,7 +109,7 @@ evaluation:
     weapons, controls, HUD, animation, or player skill.
   default_visual_style_spec: counter_strike_static_arena_style_v1.json
   style_spec_policy: required_benchmark_owned
-  intentional_contact_policy: conditional_vlm_no_implicit_exemption
+  intentional_contact_policy: conditional_vlm_intentional_assembly_allowed
 
 failure_semantics:
   unsupported_runtime: not_ingestable

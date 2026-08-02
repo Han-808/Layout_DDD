@@ -100,7 +100,8 @@ def test_p0b_request_contains_rich_context_and_injected_local_view(tmp_path: Pat
     assert request["natural_language_prompt"].startswith("Place a dark cabinet")
     assert request["extracted_relationships"][0]["predicate"] == "beside"
     assert [item["category"] for item in request["objects"]] == ["bed", "cabinet"]
-    assert request["architecture"]["elements"] == ["floor", "walls", "ceiling"]
+    assert request["architecture"]["elements"] == ["floor", "ceiling"]
+    assert request["architecture"]["physical_walls"]["active_wall_ids"] == []
     assert request["detector_evidence"]["normalized_overlap"] == 0.25
     assert "unintended physical surface interpenetration" in request["metric_rubric"]
     assert "no verdict prior" in request["metric_rubric"]

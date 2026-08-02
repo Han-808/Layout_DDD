@@ -1,0 +1,155 @@
+{
+  "registry_version": 1,
+  "description": "Pinned download manifest for the PointLLM family on MNET. This is not a judge config: PointLLM exposes no OpenAI-compatible endpoint and takes point clouds, not images. Consumed by scripts/verify_pointllm_checkpoint.py and Support/bash/mnet/download_pointllm_models.sh.",
+  "models_root": "/mnt/group/cmh/models",
+  "models": {
+    "PointLLM_7B_v1.2": {
+      "role": "baseline",
+      "paper": "arXiv:2308.16911 (PointLLM, ECCV 2024)",
+      "code": "https://github.com/InternRobotics/PointLLM",
+      "hf_repo": "RunsenXu/PointLLM_7B_v1.2",
+      "revision": "37d8c15aaff8e7e05f04729dcb6960d5758e9f86",
+      "local_dir": "/mnt/group/cmh/models/PointLLM_7B_v1.2",
+      "license": "cc-by-nc-4.0",
+      "expected_file_count": 13,
+      "total_bytes": 27653353612,
+      "architectures": ["PointLLMLlamaForCausalLM"],
+      "model_type": "pointllm",
+      "vocab_size": 32003,
+      "index_total_size": 27084755472,
+      "index_tensor_count": 489,
+      "files": {
+        ".gitattributes": {"size": 1519},
+        "README.md": {"size": 30},
+        "added_tokens.json": {"size": 79},
+        "config.json": {"size": 868},
+        "generation_config.json": {"size": 137},
+        "point_proj.bin": {
+          "size": 567884206,
+          "sha256": "c13ff87ab0da7774e383bc2fecc12c4e4773f80fee01c1fe8ef8148fc63eb9d3"
+        },
+        "pytorch_model-00001-of-00003.bin": {
+          "size": 9878038738,
+          "sha256": "d88c71f870f1f0232872eb937d8fe506d3e57405be3a751396d3b11708ed6b07"
+        },
+        "pytorch_model-00002-of-00003.bin": {
+          "size": 9894801014,
+          "sha256": "271f703595b7af549b715ca7503e297320b1c9c0fb3d33b4125930ca974c0990"
+        },
+        "pytorch_model-00003-of-00003.bin": {
+          "size": 7312083996,
+          "sha256": "4ea5cc85e04b434a4105d79d9bb0a9193fe37cb5e77f0fdfee3edd6c161293a7"
+        },
+        "pytorch_model.bin.index.json": {"size": 42089},
+        "special_tokens_map.json": {"size": 435},
+        "tokenizer.model": {
+          "size": 499723,
+          "sha256": "9e556afd44213b6bd1be2b850ebbbd98f5481437a8021afaf58ee7fb1818d347"
+        },
+        "tokenizer_config.json": {"size": 778}
+      }
+    },
+    "PointLLM-R-7B": {
+      "role": "treatment",
+      "paper": "arXiv:2605.22013 (PointLLM-R, SIGGRAPH 2026)",
+      "code": "https://github.com/Xqle/PointLLM-R",
+      "hf_repo": "QileXu/PointLLM-R-7B",
+      "revision": "13ae00388e5b1c0af9b7a20d898aad8ef00f398d",
+      "local_dir": "/mnt/group/cmh/models/PointLLM-R-7B",
+      "license": "mit",
+      "base_model": "RunsenXu/PointLLM_7B_v1.2",
+      "expected_file_count": 12,
+      "total_bytes": 27085489527,
+      "architectures": ["PointLLMLlamaForCausalLM"],
+      "model_type": "pointllm",
+      "vocab_size": 32003,
+      "index_total_size": 27084755472,
+      "index_tensor_count": 489,
+      "cot_response_markers": ["<REASONING>", "<ANSWER>"],
+      "files": {
+        ".gitattributes": {"size": 1519},
+        "README.md": {"size": 2089},
+        "added_tokens.json": {"size": 79},
+        "config.json": {"size": 893},
+        "generation_config.json": {"size": 137},
+        "pytorch_model-00001-of-00003.bin": {
+          "size": 9878043129,
+          "sha256": "844a998fb59a98f88f73476878dff46dc316e53474c23530e0de52fa9411c338"
+        },
+        "pytorch_model-00002-of-00003.bin": {
+          "size": 9894805597,
+          "sha256": "7ca6bfec00c11a0083635c09e1298762ed2439ca47a0323b0aa44d7e9a295c84"
+        },
+        "pytorch_model-00003-of-00003.bin": {
+          "size": 7312093059,
+          "sha256": "cfe3cb00f2504162a191f859079f5b1d32ddfc593686aa93265a4ed197e6e68f"
+        },
+        "pytorch_model.bin.index.json": {"size": 42089},
+        "special_tokens_map.json": {"size": 435},
+        "tokenizer.model": {
+          "size": 499723,
+          "sha256": "9e556afd44213b6bd1be2b850ebbbd98f5481437a8021afaf58ee7fb1818d347"
+        },
+        "tokenizer_config.json": {"size": 778}
+      }
+    }
+  },
+  "datasets": {
+    "modelnet40_test": {
+      "purpose": "self-contained real point clouds for stage-3 inference validation (2468 objects, no Objaverse download required)",
+      "hf_repo": "RunsenXu/PointLLM",
+      "repo_type": "dataset",
+      "revision": "3e3b4699f81af8bc7dcb92622feff6653e237c1e",
+      "allow_patterns": ["modelnet40_test_8192pts_fps.dat"],
+      "local_dir": "/mnt/group/cmh/models/pointllm_data/modelnet40_data",
+      "approx_bytes": 485530000
+    },
+    "objaverse_val_gt": {
+      "purpose": "reference GT for the 200/3000-object Objaverse captioning split",
+      "hf_repo": "RunsenXu/PointLLM",
+      "repo_type": "dataset",
+      "revision": "3e3b4699f81af8bc7dcb92622feff6653e237c1e",
+      "allow_patterns": [
+        "PointLLM_brief_description_val_200_GT.json",
+        "PointLLM_brief_description_val_3000_GT.json",
+        "val_object_ids_3000.txt"
+      ],
+      "local_dir": "/mnt/group/cmh/models/pointllm_data/anno_data",
+      "approx_bytes": 1150000
+    },
+    "pocoti_55k": {
+      "purpose": "PointLLM-R chain-of-thought training annotations; required only to reproduce fine-tuning, not for inference",
+      "hf_repo": "QileXu/PoCoTI-55K",
+      "repo_type": "dataset",
+      "revision": "9f26490518dc275204b4f18b8f614723b9ae3266",
+      "allow_patterns": ["PoCoTI_55K.json"],
+      "local_dir": "/mnt/group/cmh/models/pointllm_data/anno_data",
+      "approx_bytes": 55670000,
+      "optional": true
+    },
+    "omniobject3d_val_gt": {
+      "purpose": "PointLLM-R OmniObject3D zero-shot classification GT",
+      "hf_repo": "QileXu/OmniObject3D_brief_description_val_GT",
+      "repo_type": "dataset",
+      "revision": "9930a1f587ac5db25087813a1611089f4f5fb273",
+      "allow_patterns": ["omniobject3d_brief_description_val_GT.json"],
+      "local_dir": "/mnt/group/cmh/models/pointllm_data/anno_data",
+      "approx_bytes": 890000,
+      "optional": true
+    },
+    "objaverse_660k_point_clouds": {
+      "purpose": "660K Objaverse colored point clouds required by the Objaverse benchmarks; ~77 GB compressed plus the same again uncompressed",
+      "hf_repo": "RunsenXu/PointLLM",
+      "repo_type": "dataset",
+      "revision": "3e3b4699f81af8bc7dcb92622feff6653e237c1e",
+      "allow_patterns": [
+        "Objaverse_660K_8192_npy_split_aa",
+        "Objaverse_660K_8192_npy_split_ab"
+      ],
+      "local_dir": "/mnt/group/cmh/models/pointllm_data/objaverse_download",
+      "approx_bytes": 77591750000,
+      "optional": true,
+      "note": "Opt-in only. Concatenate the two splits, untar to 8192_npy, then delete the tarball. Do not download unless an Objaverse-split experiment is actually scheduled."
+    }
+  }
+}

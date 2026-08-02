@@ -68,16 +68,23 @@ l1_physical_plausibility:
     - accessibility
   metric_config:
     collision:
-      # Game meshes are authored at gameplay scale rather than furniture scale,
-      # and touching geometry (wheels on road, balls on felt) is intended. A
-      # wider separation threshold keeps ordinary contact off the VLM route.
-      #
-      # Consulted once the narrow phase has an exact surface distance. Should the
-      # trimesh/fcl backend be unavailable the distance degrades to a lower bound,
-      # near-contact pairs go to the judge whatever this value says, and the pair
-      # records `minimum_surface_distance_backend: numpy_aabb_gap` so the
-      # degradation is visible in the report.
+      # This threshold is consulted only for positively separated meshes; it
+      # does not exempt a reported surface intersection. Should trimesh/fcl be
+      # unavailable the distance degrades to a lower bound, near-contact pairs
+      # go to the judge, and the report records the degraded backend.
       separation_threshold_m: 0.05
+      # Complete mesh-in-OBB guards plus a zero-depth SAT tangent plane certify
+      # ordinary coplanar contact without a VLM call.
+      zero_penetration_contact_policy: direct_valid
+      # A CS-only conservative certificate also accepts up to 1 mm of numeric
+      # overlap when an at-most-2 mm plane touches the outside of an object.
+      # The other OBB must stay on one side of the plane centre, so a wall plane
+      # slicing through a box is still sent to the VLM.
+      tangent_plane_contact_policy: direct_valid
+      tangent_plane_max_thickness_m: 0.002
+      tangent_contact_tolerance_m: 0.001
+      # Keep the canonical object-count denominator explicitly.
+      score_mode: invalid_pair_count_over_objects
     navigability:
       # Counter-Strike static arenas in the supported corpus are single-floor.
       # The score is exactly largest_connected_free_area / total_free_area.

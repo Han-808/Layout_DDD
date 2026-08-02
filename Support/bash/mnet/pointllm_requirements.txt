@@ -1,0 +1,57 @@
+# Pinned inference dependency set for the PointLLM family on MNET.
+#
+# Derived from the upstream PointLLM pyproject.toml, reduced to what inference
+# and generative-classification evaluation need. Training-only packages
+# (deepspeed, peft, flash-attn, wandb), the Gradio serving stack, and the
+# GPT-judging stack are deliberately excluded; add them in a separate,
+# explicitly recorded step if an experiment needs them.
+#
+# Install with:
+#   pip install --extra-index-url https://download.pytorch.org/whl/cu121 -r <this file>
+#
+# Target interpreter: Python 3.11, which MNET already provides. Upstream tested
+# on 3.10.13, but the only package that actually required 3.10 was
+# tokenizers 0.12.1, which ships cp310 wheels and no cp311. Every other pin here
+# has a cp311 wheel or is pure Python.
+#
+# Deviations from upstream's tested environment, and why:
+#   - tokenizers 0.13.3 instead of 0.12.1. transformers 4.28 declares
+#     "tokenizers>=0.11.1,!=0.11.3,<0.14", so 0.13.3 is within its supported
+#     range and removes the need to build a separate 3.10 interpreter. The
+#     checkpoints ship tokenizer.model and no tokenizer.json, so LLaMA loads
+#     through the sentencepiece slow tokenizer and barely touches this package.
+#   - torch 2.1.2+cu121 instead of 2.0.1+cu117. H20 is Hopper (sm_90), which
+#     CUDA 11.7 does not target. cu118 or newer is mandatory on this hardware.
+#   - numpy is pinned below 2.0. The transformers 4.28 era predates numpy 2 and
+#     fails at import against it.
+#   - huggingface_hub is pinned to a version contemporary with transformers
+#     4.28. Recent releases dropped symbols that 4.28 imports, and transformers
+#     4.28 itself caps it at <1.0. Weights load from a local directory, so the
+#     hub is only an import dependency.
+
+--extra-index-url https://download.pytorch.org/whl/cu121
+
+torch==2.1.2+cu121
+torchvision==0.16.2+cu121
+
+numpy==1.26.4
+scipy==1.11.4
+
+transformers @ git+https://github.com/huggingface/transformers.git@cae78c46
+tokenizers==0.13.3
+huggingface_hub==0.20.3
+sentencepiece==0.1.99
+accelerate==0.27.2
+safetensors==0.4.2
+
+einops==0.7.0
+timm==0.4.12
+easydict==1.11
+ftfy==6.0.1
+regex
+termcolor
+plyfile==1.0.3
+h5py==3.10.0
+shortuuid
+tqdm
+requests

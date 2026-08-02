@@ -456,7 +456,7 @@ def _validate_evaluation(value: Any, config_path: Path) -> Path:
     _require_value(
         data,
         "intentional_contact_policy",
-        "conditional_vlm_no_implicit_exemption",
+        "conditional_vlm_intentional_assembly_allowed",
         "game_mode.evaluation",
     )
     return profile_path

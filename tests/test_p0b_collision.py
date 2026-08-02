@@ -12,6 +12,7 @@ import pytest
 
 from benchmark.evaluator.generic_validity.collision import (
     CollisionEvaluationError,
+    _tangent_plane_contact_certificate,
     check_collision,
 )
 from benchmark.evaluator.generic_validity.geometry import normalize_object
@@ -176,6 +177,115 @@ def test_obb_separation_skips_mesh_and_vlm() -> None:
     assert pair["route"] == "direct_valid_obb_separated"
     assert pair["final_verdict"] == "valid"
     assert judge.calls == 0
+
+
+def test_zero_penetration_coplanar_contact_is_direct_valid_when_enabled(
+    tmp_path: Path,
+) -> None:
+    mesh_a = tmp_path / "a.ply"
+    mesh_b = tmp_path / "b.ply"
+    _box_mesh(mesh_a, [0.5, 0.5, 0.5], [1.0, 1.0, 1.0])
+    _box_mesh(mesh_b, [1.5, 0.5, 0.5], [1.0, 1.0, 1.0])
+    geometry = _geometry_manifest(
+        tmp_path,
+        {
+            "a": {
+                "representation": TRIANGLE_MESH_REPRESENTATION,
+                "geometry_path": "a.ply",
+                "transform_baked": True,
+                "geometry_source": "test",
+                "complete": True,
+            },
+            "b": {
+                "representation": TRIANGLE_MESH_REPRESENTATION,
+                "geometry_path": "b.ply",
+                "transform_baked": True,
+                "geometry_source": "test",
+                "complete": True,
+            },
+        },
+    )
+    scene = _scene(
+        [
+            _obj("a", [0.5, 0.5, 0.5], [1.0, 1.0, 1.0]),
+            _obj("b", [1.5, 0.5, 0.5], [1.0, 1.0, 1.0]),
+        ]
+    )
+    judge = _Judge("invalid")
+
+    report = check_collision(
+        scene,
+        {"zero_penetration_contact_policy": "direct_valid"},
+        collision_geometry=geometry,
+        vlm_judge=judge,
+    )
+
+    pair = report["pairs"][0]
+    assert pair["obb_evidence"]["minimum_overlap_depth_proxy_m"] == pytest.approx(0.0)
+    assert pair["route"] == "direct_valid_zero_penetration_contact"
+    assert pair["final_verdict"] == "valid"
+    assert report["score_mode"] == "invalid_pair_count_over_objects"
+    assert report["score"] == pytest.approx(1.0)
+    assert judge.calls == 0
+
+
+def test_thin_plane_near_tangent_contact_has_safe_certificate() -> None:
+    plane = normalize_object(
+        _obj("floor_plane", [1.0, 1.0, 0.0], [3.0, 3.0, 0.001])
+    )
+    box = normalize_object(
+        _obj("crate", [1.0, 1.0, 0.5004], [1.0, 1.0, 1.0])
+    )
+    obb = obb_sat_test(plane, box)
+
+    certificate = _tangent_plane_contact_certificate(
+        plane,
+        box,
+        obb=obb,
+        mesh_evidence={
+            "surface_intersection": True,
+            "intersection": {"definitive": True},
+        },
+        enclosure_safe=True,
+        config={
+            "tangent_plane_contact_policy": "direct_valid",
+            "tangent_plane_max_thickness_m": 0.002,
+            "tangent_contact_tolerance_m": 0.001,
+        },
+    )
+
+    assert certificate is not None
+    assert certificate["plane_object_id"] == "floor_plane"
+    assert certificate["other_object_id"] == "crate"
+    assert certificate["side"] == "positive"
+
+
+def test_thin_plane_slicing_object_never_receives_tangent_certificate() -> None:
+    plane = normalize_object(
+        _obj("wall_plane", [1.0, 1.0, 0.5], [3.0, 3.0, 0.001])
+    )
+    box = normalize_object(
+        _obj("crate", [1.0, 1.0, 0.5], [1.0, 1.0, 1.0])
+    )
+    obb = obb_sat_test(plane, box)
+
+    certificate = _tangent_plane_contact_certificate(
+        plane,
+        box,
+        obb=obb,
+        mesh_evidence={
+            "surface_intersection": True,
+            "intersection": {"definitive": True},
+        },
+        enclosure_safe=True,
+        config={
+            "tangent_plane_contact_policy": "direct_valid",
+            "tangent_plane_max_thickness_m": 0.002,
+            "tangent_contact_tolerance_m": 0.001,
+        },
+    )
+
+    assert certificate is None
 
 
 # 4. OBB overlap without mesh calls VLM exactly once

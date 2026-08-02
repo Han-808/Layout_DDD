@@ -218,6 +218,28 @@ def _validate_benchmark_semantics(raw: dict[str, Any]) -> None:
             "composite.canonical_metric_weights L3 must sum to 1",
         )
     l4 = raw["l4_metrics"]
+    judge = raw["visual_evidence"]["judge"]
+    repeats = int(judge["repeats"])
+    if repeats < 3 or repeats % 2 == 0:
+        raise CounterStrikeConfigError(
+            "invalid_repeat_policy",
+            "visual_evidence.judge.repeats must be an odd integer >= 3 "
+            "for strict-majority aggregation",
+        )
+    repair = raw["visual_evidence"]["active_fallback"]["brightness_repair"]
+    median_threshold = float(repair["median_luminance_threshold"])
+    p90_threshold = float(repair["p90_luminance_threshold"])
+    target_median = float(repair["target_median_luminance"])
+    if median_threshold >= p90_threshold:
+        raise CounterStrikeConfigError(
+            "invalid_brightness_repair_bounds",
+            "brightness median threshold must be lower than the p90 threshold",
+        )
+    if target_median <= median_threshold:
+        raise CounterStrikeConfigError(
+            "invalid_brightness_repair_bounds",
+            "brightness target median must exceed the dark median threshold",
+        )
     _require_sum_one(
         {name: metric["weight"] for name, metric in l4.items()},
         label="l4_metrics weights",

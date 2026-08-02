@@ -18,6 +18,10 @@ from typing import Any
 
 import numpy as np
 
+from benchmark.architecture_policy import (
+    active_wall_ids_from_contract,
+    architecture_contract_from_scene,
+)
 from benchmark.evaluator.generic_validity.geometry import (
     get_obb_corners,
     get_room_boundary,
@@ -669,6 +673,9 @@ def _evaluate_object(
         boundary,
         has_boundary,
     )
+    active_physical_wall_ids = list(
+        active_wall_ids_from_contract(architecture_contract_from_scene(scene))
+    )
     architecture_contact_candidates = _architecture_contact_candidates(
         architecture_plane_clearances,
         tolerance_m=candidate_tol,
@@ -764,6 +771,7 @@ def _evaluate_object(
         "geometry_provenance": geometry_provenance,
         "architecture_plane_clearances_m": architecture_plane_clearances,
         "architecture_contact_candidates": architecture_contact_candidates,
+        "active_physical_wall_ids": active_physical_wall_ids,
         "representative_samples": _representative_samples(hits, center_hit, max_rep),
         "routing_reasons": routing_reasons,
         "requires_vlm": False,
@@ -800,6 +808,7 @@ def _evaluate_object(
         "object_id": obj.id,
         "object_ids": [obj.id, *candidate_support_ids],
         "architecture_element": "floor_walls_ceiling_and_supports",
+        "active_physical_wall_ids": active_physical_wall_ids,
         "candidate_selection_policy": SUPPORT_CANDIDATE_SELECTION_POLICY,
         "gap_band": gap_band,
         "measured_support_modes": measured_support_modes,
@@ -947,6 +956,7 @@ def _detector_evidence(
         "representative_ray_hits": record["representative_samples"],
         "architecture_plane_clearances_m": record["architecture_plane_clearances_m"],
         "architecture_contact_candidates": record["architecture_contact_candidates"],
+        "active_physical_wall_ids": record["active_physical_wall_ids"],
         "routing_reasons": record["routing_reasons"],
         "evidence_level": record["evidence_level"],
         "evaluated_object": {
@@ -1002,6 +1012,9 @@ def _architecture_plane_clearances(
     corners = np.asarray(get_obb_corners(obj), dtype=float)
     minimum = np.min(corners, axis=0)
     maximum = np.max(corners, axis=0)
+    active_wall_ids = set(
+        active_wall_ids_from_contract(architecture_contract_from_scene(scene))
+    )
     result: dict[str, float | None] = {
         "west": None,
         "east": None,
@@ -1013,14 +1026,15 @@ def _architecture_plane_clearances(
     if has_boundary:
         room_minimum = np.min(boundary[:, :2], axis=0)
         room_maximum = np.max(boundary[:, :2], axis=0)
-        result.update(
-            {
-                "west": float(minimum[0] - room_minimum[0]),
-                "east": float(room_maximum[0] - maximum[0]),
-                "south": float(minimum[1] - room_minimum[1]),
-                "north": float(room_maximum[1] - maximum[1]),
-            }
-        )
+        values = {
+            "west": float(minimum[0] - room_minimum[0]),
+            "east": float(room_maximum[0] - maximum[0]),
+            "south": float(minimum[1] - room_minimum[1]),
+            "north": float(room_maximum[1] - maximum[1]),
+        }
+        for direction, clearance in values.items():
+            if f"{direction}_wall" in active_wall_ids:
+                result[direction] = clearance
     return result
 
 

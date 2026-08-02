@@ -20,6 +20,7 @@ from benchmark.evaluator.generic_validity.support import (
     check_support,
     disabled_support_report,
 )
+from benchmark.task_contract import architecture_contract_for_room
 from benchmark.utils.io import read_json
 
 
@@ -30,14 +31,20 @@ ROOT = Path(__file__).resolve().parents[1]
 # Fixtures / helpers
 # --------------------------------------------------------------------------- #
 def _scene(objects: list[dict], boundary: list[list[float]] | None = None, height: float = 2.8) -> dict:
+    room_boundary = boundary or [[0, 0], [4, 0], [4, 3], [0, 3]]
     return {
         "schema_version": "canonical_scene_v1",
         "scene_id": "support_test",
         "scene_type": "room",
-        "boundary": boundary or [[0, 0], [4, 0], [4, 3], [0, 3]],
+        "boundary": room_boundary,
         "scene_height": height,
         "objects": objects,
         "metadata": {
+            "architecture_contract": architecture_contract_for_room(
+                {"boundary": room_boundary, "height": height},
+                physical_wall_policy="always_enclosed",
+                policy_source="legacy_test_fixture",
+            ),
             "coordinate_frame": {
                 "origin": "room_min_corner_floor",
                 "axes": "x_width_y_depth_z_up",

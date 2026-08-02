@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from benchmark.architecture_policy import architecture_contract_from_scene
 from benchmark.visual_judge.roles import (
     DecisionContract,
     VLMRole,
@@ -32,6 +33,7 @@ def evaluate_vlm_category(
             "scene_type": scene.get("scene_type"),
             "boundary": scene.get("boundary"),
             "scene_height": scene.get("scene_height"),
+            "architecture": architecture_contract_from_scene(scene),
             "object_count": len(scene.get("objects", [])) if isinstance(scene.get("objects"), list) else 0,
             "objects": [_compact_object(item) for item in scene.get("objects", []) if isinstance(item, dict)],
         },
