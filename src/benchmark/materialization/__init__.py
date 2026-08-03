@@ -13,12 +13,18 @@ from benchmark.materialization.geometry import (
     finite_vec3,
     nearly_equal,
     rotation_matrix_xyz_degrees,
-    uniform_fit,
+    exact_uniform_scale,
     world_bounds,
 )
 from benchmark.materialization.native_registry import (
     NativeRegistryAuthority,
     write_benchmark_native_registry,
+)
+from benchmark.materialization.public_native import (
+    PUBLIC_NATIVE_MAPPING_VERSION,
+    load_public_native_instance_mapping,
+    seal_inspected_public_native_registry,
+    validate_public_native_instance_mapping,
 )
 from benchmark.materialization.consistency import (
     CONSISTENCY_TOLERANCE_M,
@@ -43,6 +49,7 @@ __all__ = [
     "MaterializationError",
     "MaterializationResult",
     "NativeRegistryAuthority",
+    "PUBLIC_NATIVE_MAPPING_VERSION",
     "READINESS_GATE_VERSION",
     "finite_vec3",
     "nearly_equal",
@@ -51,8 +58,11 @@ __all__ = [
     "rebuild_materialization_plan_from_source",
     "rotation_matrix_xyz_degrees",
     "run_consistency_gate",
-    "uniform_fit",
+    "load_public_native_instance_mapping",
+    "seal_inspected_public_native_registry",
+    "exact_uniform_scale",
     "verify_prepared_submission",
     "world_bounds",
+    "validate_public_native_instance_mapping",
     "write_benchmark_native_registry",
 ]

@@ -28,6 +28,7 @@ L3_CAMERA_METRICS = (
     "object_pairing_consistency",
     "style_consistency",
     "functional_consistency",
+    "semantic_placement_consistency",
 )
 CAMERA_EVIDENCE_METRICS = (*P0B_CAMERA_METRICS, *L3_CAMERA_METRICS)
 DEFAULT_CAMERA_MODE_BY_METRIC = {
@@ -43,6 +44,7 @@ DEFAULT_CAMERA_MODE_BY_METRIC = {
     "scale_consistency": "visibility_ranked",
     "object_pairing_consistency": "visibility_ranked",
     "functional_consistency": "visibility_ranked",
+    "semantic_placement_consistency": "visibility_ranked",
     # Style consumes the trusted overview packet by default.
     "style_consistency": "global_only",
 }

@@ -95,7 +95,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--out-json", required=True)
     parser.add_argument(
         "--mode",
-        choices=["sanitized", "registered_native"],
+        choices=["sanitized", "registered_native", "public_native"],
         required=True,
     )
     parser.add_argument("--expected-registry-json")
@@ -455,7 +455,7 @@ def _inspect(
         "light_count": len(bpy.data.lights),
     }
     catalog_placement = None
-    if mode == "registered_native" and passed:
+    if mode in {"registered_native", "public_native"} and passed:
         catalog_placement = {
             "schema_version": "catalog_placement_v1",
             "instances": [
@@ -496,7 +496,9 @@ def _placement_instance(item: dict) -> dict:
         "instance_id": item["instance_id"],
         "asset_id": item["asset_id"],
         "center_m": item["center_m"],
-        "target_size_m": item["target_size_m"],
+        "uniform_scale": item.get(
+            "requested_uniform_scale", item.get("uniform_scale")
+        ),
         "rotation_euler_xyz_deg": item["rotation_euler_xyz_deg"],
     }
     if item.get("slot_id") is not None:
@@ -626,7 +628,12 @@ def _inspect_instance(
                 "_adapter_contract_revision"
             ),
             "benchmark_center_m": expected.get("center_m"),
-            "benchmark_target_size_m": expected.get("target_size_m"),
+            "benchmark_requested_uniform_scale": expected.get(
+                "requested_uniform_scale"
+            ),
+            "benchmark_effective_uniform_scale": expected.get(
+                "effective_uniform_scale"
+            ),
             "benchmark_rotation_euler_xyz_deg": expected.get(
                 "rotation_euler_xyz_deg"
             ),
@@ -638,6 +645,9 @@ def _inspect_instance(
                 "catalog_bbox_size_m"
             ),
             "benchmark_local_bbox_size_m": expected.get("local_bbox_size_m"),
+            "benchmark_actual_local_bbox_size_m": expected.get(
+                "actual_local_bbox_size_m"
+            ),
             "benchmark_mesh_sha256": (
                 expected.get("asset_hashes", {}).get("mesh_sha256")
                 if isinstance(expected.get("asset_hashes"), dict)
@@ -748,7 +758,7 @@ def _inspect_instance(
     )
     material_fingerprint = _material_fingerprint(meshes)
     asset_assembly_fingerprint = _asset_assembly_fingerprint(root, meshes)
-    if mode == "registered_native":
+    if mode in {"registered_native", "public_native"}:
         unsupported_material_state = _unsupported_native_material_state(
             meshes
         )
@@ -759,37 +769,58 @@ def _inspect_instance(
             {"unsupported_state": unsupported_material_state},
             "unsupported_native_material_state",
         )
-        registry_record = expected.get("_registry_record")
-        expected_geometry = _expected_fingerprint(
-            registry_record if isinstance(registry_record, dict) else {},
-            "geometry",
-        )
-        expected_material = _expected_fingerprint(
-            registry_record if isinstance(registry_record, dict) else {},
-            "material",
-        )
-        fingerprint_mismatches = {}
-        for label, observed, wanted in (
-            ("geometry_sha256", geometry_fingerprint, expected_geometry),
-            ("material_sha256", material_fingerprint, expected_material),
-        ):
-            if (
-                wanted is None
-                or observed is None
-                or str(observed).lower() != str(wanted).lower()
+        if mode == "registered_native":
+            registry_record = expected.get("_registry_record")
+            expected_geometry = _expected_fingerprint(
+                registry_record if isinstance(registry_record, dict) else {},
+                "geometry",
+            )
+            expected_material = _expected_fingerprint(
+                registry_record if isinstance(registry_record, dict) else {},
+                "material",
+            )
+            fingerprint_mismatches = {}
+            for label, observed, wanted in (
+                (
+                    "geometry_sha256",
+                    geometry_fingerprint,
+                    expected_geometry,
+                ),
+                (
+                    "material_sha256",
+                    material_fingerprint,
+                    expected_material,
+                ),
             ):
-                fingerprint_mismatches[label] = {
-                    "expected": wanted,
-                    "observed": observed,
-                    "expected_required": True,
-                }
-        _check(
-            checks,
-            f"benchmark_owned_fingerprints:{instance_id}",
-            not fingerprint_mismatches,
-            {"mismatches": fingerprint_mismatches},
-            "registered_asset_fingerprint_mismatch",
-        )
+                if (
+                    wanted is None
+                    or observed is None
+                    or str(observed).lower() != str(wanted).lower()
+                ):
+                    fingerprint_mismatches[label] = {
+                        "expected": wanted,
+                        "observed": observed,
+                        "expected_required": True,
+                    }
+            _check(
+                checks,
+                f"benchmark_owned_fingerprints:{instance_id}",
+                not fingerprint_mismatches,
+                {"mismatches": fingerprint_mismatches},
+                "registered_asset_fingerprint_mismatch",
+            )
+        else:
+            _check(
+                checks,
+                f"public_native_fingerprints_derived:{instance_id}",
+                bool(geometry_fingerprint and material_fingerprint),
+                {
+                    "geometry_sha256": geometry_fingerprint,
+                    "material_sha256": material_fingerprint,
+                    "policy": "trusted_inspector_derived",
+                },
+                "native_fingerprint_derivation_failed",
+            )
     exported_world_bounds = bounds.get("world_bounds_observed")
     expected_rotation = _vec3_or_none(expected.get("rotation_euler_xyz_deg"))
     if isinstance(exported_world_bounds, dict) and expected_rotation is not None:
@@ -820,9 +851,16 @@ def _inspect_instance(
         "root_matrix_world": _matrix_rows(root.matrix_world),
         "root_location": [float(value) for value in root.matrix_world.translation],
         "center_m": bounds.get("center_m_observed"),
-        "target_size_m": expected.get("target_size_m"),
         "rotation_euler_xyz_deg": expected.get("rotation_euler_xyz_deg"),
+        "requested_uniform_scale": expected.get(
+            "requested_uniform_scale",
+            expected.get("uniform_scale"),
+        ),
+        "effective_uniform_scale": matrix_validation.get("uniform_scale"),
         "uniform_scale": matrix_validation.get("uniform_scale"),
+        "actual_local_bbox_size_m": bounds.get(
+            "local_bbox_size_m_observed"
+        ),
         "local_bbox_size_m": bounds.get("local_bbox_size_m_observed"),
         "world_bounds": exported_world_bounds,
         "render_enabled": not any(
@@ -3545,8 +3583,9 @@ def _merge_expected_records(
         if isinstance(transform, dict):
             for key in (
                 "center_m",
-                "target_size_m",
                 "rotation_euler_xyz_deg",
+                "requested_uniform_scale",
+                "effective_uniform_scale",
                 "uniform_scale",
             ):
                 if record.get(key) is None and transform.get(key) is not None:
@@ -3564,12 +3603,12 @@ def _merge_expected_records(
         ):
             record["local_bbox_size_m"] = local_bbox.get("size_m")
         source_size = _vec3_or_none(record.get("catalog_bbox_size_m"))
-        target_size = _vec3_or_none(record.get("target_size_m"))
-        if record.get("uniform_scale") is None and source_size and target_size:
-            record["uniform_scale"] = min(
-                target_size[index] / source_size[index]
-                for index in range(3)
-            )
+        if record.get("requested_uniform_scale") is None:
+            record["requested_uniform_scale"] = record.get("uniform_scale")
+        if record.get("effective_uniform_scale") is None:
+            record["effective_uniform_scale"] = record.get("uniform_scale")
+        if record.get("uniform_scale") is None:
+            record["uniform_scale"] = record.get("effective_uniform_scale")
         scale = _number_or_none(record.get("uniform_scale"))
         if (
             record.get("local_bbox_size_m") is None
@@ -3579,6 +3618,10 @@ def _merge_expected_records(
             record["local_bbox_size_m"] = [
                 component * scale for component in source_size
             ]
+        if record.get("actual_local_bbox_size_m") is None:
+            record["actual_local_bbox_size_m"] = record.get(
+                "local_bbox_size_m"
+            )
         records[instance_id] = record
     # Retain top-level provenance for property comparison without polluting the
     # public instance record schema.

@@ -30,6 +30,7 @@ from benchmark.evaluator.generic_validity.mesh_collision import (
 )
 from benchmark.evaluator.generic_validity.obb_sat import obb_encloses_points, obb_sat_test, obb_sat_test_parts
 from benchmark.rendering.blender_worker import _uniform_contain_fit
+from benchmark.visual_judge.contracts import ResponseSchemaRepairError
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -521,6 +522,38 @@ def test_invalid_vlm_verdict_fails_parsing() -> None:
     assert report["pairs"][0]["adjudication_error"] is not None
     assert report["pairs"][0]["route"] == "vlm_adjudication_failed"
     assert report["coverage"]["vlm_adjudicated_pairs"] == 0
+
+
+def test_binary_schema_failure_audit_is_preserved_in_event_report() -> None:
+    schema_audit = {
+        "policy": "single_schema_repair_retry_v1",
+        "attempt_count": 2,
+        "repair_retry_count": 1,
+        "recovered": False,
+        "attempts": [],
+    }
+
+    class BadJudge:
+        vlm_control_enabled = False
+
+        def adjudicate_p0b(self, request: dict) -> dict:
+            raise ResponseSchemaRepairError(
+                "binary response remained invalid",
+                schema_audit=schema_audit,
+            )
+
+    scene = _scene([
+        _obj("a", [1.0, 1.0, 0.5], [1.0, 1.0, 1.0]),
+        _obj("b", [1.2, 1.0, 0.5], [1.0, 1.0, 1.0]),
+    ])
+
+    report = check_collision(scene, vlm_judge=BadJudge())
+
+    pair = report["pairs"][0]
+    assert pair["route"] == "vlm_adjudication_failed"
+    assert pair["adjudication_failure_audit"] == schema_audit
+    assert report["status"] == "requires_vlm"
+    assert report["score"] is None
 
 
 # 15. VLM valid/invalid update pair and aggregate reports

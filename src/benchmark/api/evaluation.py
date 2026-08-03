@@ -1243,18 +1243,18 @@ def main() -> None:
     )
     if not isinstance(camera_selector_config, dict):
         parser.error("--camera-selector-config must point to a JSON object")
-    camera_selector = (
-        build_openai_compatible_vlm_judge(camera_selector_config)
-        if camera_selector_config
-        else None
-    )
-    l3_vlm_camera_selector = (
+    production_camera_selector = (
         build_openai_compatible_camera_selector(
             camera_selector_config
         )
         if camera_selector_config
         else None
     )
+    # One camera-only transport serves both the legacy P0b provider contract
+    # and the Controller's L3 selector adapter.  A selector config must never
+    # be materialized as a metric Judge.
+    camera_selector = production_camera_selector
+    l3_vlm_camera_selector = production_camera_selector
     collision_geometry = _load_collision_geometry_arg(args.collision_geometry)
     local_view_provider = None
     l3_initial_evidence_provider = None

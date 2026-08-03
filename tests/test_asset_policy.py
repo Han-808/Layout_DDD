@@ -78,7 +78,12 @@ def test_applicability_is_declarative_only() -> None:
             }
         )
     )
-    for metric in ("scale_consistency", "object_pairing_consistency", "style_consistency"):
+    for metric in (
+        "scale_consistency",
+        "object_pairing_consistency",
+        "style_consistency",
+        "semantic_placement_consistency",
+    ):
         assert generated[metric]["applicability"] == "relevant"
         assert generated[metric]["decision_role"] == "applicability_only"
         assert generated[metric]["workflow"] == "canonical_l0_l4"
@@ -110,6 +115,10 @@ def test_arrangement_ownership_does_not_activate_category_only_pairing() -> None
         "workflow": "canonical_l0_l4",
     }
     assert applicability["scale_consistency"]["applicability"] == "relevant"
+    assert (
+        applicability["semantic_placement_consistency"]["applicability"]
+        == "relevant"
+    )
 
 
 @pytest.mark.parametrize("granularity", ["fine_grained", "coarse_grained"])

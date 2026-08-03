@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://layout-ddd.local/schemas/public_native_instance_mapping_v1.schema.json",
+  "title": "Public native fixed-catalog instance mapping v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "instances"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "public_native_instance_mapping_v1"
+    },
+    "instances": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "instance_id",
+          "asset_id",
+          "native_root_name",
+          "center_m",
+          "uniform_scale",
+          "rotation_euler_xyz_deg"
+        ],
+        "properties": {
+          "instance_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "asset_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "native_root_name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "center_m": {
+            "$ref": "#/$defs/finiteVec3"
+          },
+          "uniform_scale": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "rotation_euler_xyz_deg": {
+            "$ref": "#/$defs/finiteVec3"
+          },
+          "slot_id": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "finiteVec3": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "items": {
+        "type": "number"
+      }
+    }
+  }
+}

@@ -193,6 +193,15 @@ METRIC_CAMERA_REQUIREMENTS: dict[str, MetricCameraRequirement] = {
             "front_back_disambiguated",
         ),
     ),
+    "semantic_placement_consistency": _requirement(
+        (
+            "target_visible",
+            "group_context_visible",
+            "limited_local_context",
+            "global_context_preserved",
+        ),
+        extra=("contact_surface_visible", "joint_visibility"),
+    ),
     "scale_consistency": _requirement(
         ("target_visible",),
         extra=(
@@ -223,6 +232,9 @@ _METRIC_ALIASES = {
     "functional_semantic": "functional_semantic_fidelity",
     "functional_plausibility": "functional_consistency",
     "functional_validity": "functional_consistency",
+    "semantic_placement": "semantic_placement_consistency",
+    "semantics_placement": "semantic_placement_consistency",
+    "placement_consistency": "semantic_placement_consistency",
     "scale": "scale_consistency",
     "object_pairing": "object_pairing_consistency",
     "style": "style_consistency",

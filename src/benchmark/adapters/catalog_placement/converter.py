@@ -12,6 +12,7 @@ from benchmark.adapters.catalog_placement.prompt import (
     CATALOG_PLACEMENT_VERSION,
     public_slot_ids_from_generation_input as _prompt_public_slot_ids,
 )
+from benchmark.nl_scene.generation_input import STRUCTURED_ASSETS_INPUT_MODE
 from benchmark.scene_io.validate import (
     ArtifactValidationError,
     validate_generated_scene,
@@ -47,10 +48,55 @@ def selected_asset_ids_from_generation_input(
     return set(_selected_asset_catalog(generation_input))
 
 
+def public_task_slots_from_generation_input(
+    generation_input: dict,
+) -> dict[str, dict[str, Any]]:
+    """Return benchmark-owned intended semantics keyed by public slot ID."""
+
+    object_plan = generation_input.get("object_plan")
+    if not isinstance(object_plan, dict):
+        return {}
+    result: dict[str, dict[str, Any]] = {}
+    for index, item in enumerate(object_plan.get("objects", [])):
+        if not isinstance(item, dict):
+            continue
+        slot_id = str(item.get("slot_id") or item.get("id") or "").strip()
+        if not slot_id:
+            continue
+        metadata = item.get("metadata")
+        metadata = metadata if isinstance(metadata, dict) else {}
+        raw_role = (
+            item["role"]
+            if "role" in item
+            else metadata.get("intended_role")
+        )
+        intended_role = (
+            str(raw_role).strip()
+            if raw_role not in (None, "")
+            else None
+        )
+        semantics: dict[str, Any] = {
+            "slot_id": slot_id,
+            "intended_category": str(item.get("category") or "").strip(),
+            "intended_role": intended_role,
+            "description": str(item.get("description") or "").strip(),
+            "source": "public_object_plan",
+        }
+        existing = result.get(slot_id)
+        if existing is not None and existing != semantics:
+            raise ArtifactValidationError(
+                "generation_input.object_plan contains conflicting intended "
+                f"semantics for public slot {slot_id!r} at objects.{index}"
+            )
+        result[slot_id] = semantics
+    return result
+
+
 def validate_catalog_placement(
     placement: dict,
     *,
     public_slot_ids: Iterable[str] | None = None,
+    require_slot_binding: bool = False,
 ) -> dict:
     """Validate the strict generator-owned placement contract."""
 
@@ -89,6 +135,12 @@ def validate_catalog_placement(
                 "catalog_placement_v1 validation failed at "
                 f"instances.{index}.asset_id: value must not be blank"
             )
+        if require_slot_binding and instance.get("slot_id") is None:
+            raise ArtifactValidationError(
+                "catalog_placement_v1 validation failed at "
+                f"instances.{index}.slot_id: structured_assets requires a "
+                "generator-visible public slot binding"
+            )
         if "slot_id" in instance and not str(instance["slot_id"]).strip():
             raise ArtifactValidationError(
                 "catalog_placement_v1 validation failed at "
@@ -104,8 +156,16 @@ def validate_catalog_placement(
                 f"instances.{index}.slot_id: {instance['slot_id']!r} is not a "
                 "generator-visible public slot"
             )
-        for field in ("center_m", "target_size_m", "rotation_euler_xyz_deg"):
+        for field in ("center_m", "rotation_euler_xyz_deg"):
             _finite_vec3(instance[field], f"instances.{index}.{field}")
+        uniform_scale = _finite_number(
+            instance["uniform_scale"], f"instances.{index}.uniform_scale"
+        )
+        if uniform_scale <= 0.0:
+            raise ArtifactValidationError(
+                "catalog_placement_v1 validation failed at "
+                f"instances.{index}.uniform_scale: value must be positive"
+            )
     return placement
 
 
@@ -113,6 +173,7 @@ def extract_catalog_placement(
     payload: Any,
     *,
     public_slot_ids: Iterable[str] | None = None,
+    require_slot_binding: bool = False,
 ) -> dict:
     """Extract a placement from raw JSON text or an OpenAI chat envelope."""
 
@@ -140,6 +201,7 @@ def extract_catalog_placement(
     return validate_catalog_placement(
         placement,
         public_slot_ids=public_slot_ids,
+        require_slot_binding=require_slot_binding,
     )
 
 
@@ -150,8 +212,18 @@ def convert_catalog_placement_to_scene(
     """Convert fixed-catalog identities and rigid poses into canonical_scene_v1."""
 
     public_slots = public_slot_ids_from_generation_input(generation_input)
-    validate_catalog_placement(placement, public_slot_ids=public_slots)
     validate_generation_input(generation_input)
+    contract = generation_input.get("generation_contract")
+    structured_assets = (
+        isinstance(contract, dict)
+        and contract.get("input_mode") == STRUCTURED_ASSETS_INPUT_MODE
+    )
+    validate_catalog_placement(
+        placement,
+        public_slot_ids=public_slots,
+        require_slot_binding=structured_assets,
+    )
+    task_slots = public_task_slots_from_generation_input(generation_input)
     request = generation_input["scene_request"]
     request_id = str(
         generation_input.get("request_id") or request.get("request_id") or ""
@@ -191,6 +263,7 @@ def convert_catalog_placement_to_scene(
             selected_asset=catalog_entry["selected_asset"],
             selection_object_ids=catalog_entry["selection_object_ids"],
             evaluator_object_id=evaluator_object_id,
+            task_slot=task_slots.get(str(slot_id)) if slot_id is not None else None,
         )
         objects.append(converted)
         registry_entries.append(registry_entry)
@@ -219,8 +292,8 @@ def convert_catalog_placement_to_scene(
             "instance_registry": deepcopy(registry),
             "transform_semantics": {
                 "center": "scaled_catalog_canonical_local_bbox_center_world_m",
-                "target_size": "pre_rotation_local_axes_envelope_m",
-                "fit": "uniform_contain_min_axis_ratio",
+                "requested_scale": "generator_uniform_scale",
+                "effective_scale": "exactly_equal_to_requested_uniform_scale",
                 "rotation": "intrinsic_xyz_degrees_column_vector_rz_ry_rx",
             },
         },
@@ -325,6 +398,7 @@ def _convert_instance(
     selected_asset: dict,
     selection_object_ids: list[str],
     evaluator_object_id: str,
+    task_slot: dict[str, Any] | None,
 ) -> tuple[dict, dict]:
     asset_id = str(instance["asset_id"])
     category = _selected_asset_string(selected_asset, "category", asset_id)
@@ -353,23 +427,22 @@ def _convert_instance(
         )
 
     center = _finite_vec3(instance["center_m"], "center_m")
-    target_size = _positive_vec3(instance["target_size_m"], "target_size_m")
+    requested_uniform_scale = _finite_number(
+        instance["uniform_scale"], "uniform_scale"
+    )
+    if requested_uniform_scale <= 0.0:
+        raise ArtifactValidationError("uniform_scale must be finite and positive")
     rotation = _finite_vec3(
         instance["rotation_euler_xyz_deg"], "rotation_euler_xyz_deg"
     )
-    fit_ratios = [
-        target_size[axis] / source_bbox_size[axis] for axis in range(3)
-    ]
-    uniform_scale = min(fit_ratios)
-    if not math.isfinite(uniform_scale) or uniform_scale <= 0.0:
-        raise ArtifactValidationError(
-            f"instance {instance['instance_id']!r} uniform scale must be finite and positive"
-        )
+    effective_uniform_scale = requested_uniform_scale
     actual_local_size = [
-        _clean_float(source_bbox_size[axis] * uniform_scale) for axis in range(3)
+        _clean_float(source_bbox_size[axis] * effective_uniform_scale)
+        for axis in range(3)
     ]
     scaled_source_center = [
-        _clean_float(source_bbox_center[axis] * uniform_scale) for axis in range(3)
+        _clean_float(source_bbox_center[axis] * effective_uniform_scale)
+        for axis in range(3)
     ]
     rotation_matrix = rotation_matrix_rz_ry_rx(rotation)
     rotated_source_center = _matvec3(rotation_matrix, scaled_source_center)
@@ -388,13 +461,11 @@ def _convert_instance(
         "slot_id": slot_id,
         "selection_object_ids": sorted(selection_object_ids),
         "center_m": center,
-        "target_size_m": target_size,
         "rotation_euler_xyz_deg": rotation,
         "catalog_bbox_center_local_m": source_bbox_center,
         "catalog_bbox_size_m": source_bbox_size,
-        "fit_ratios": fit_ratios,
-        "fit_mode": "uniform_contain_min_axis_ratio",
-        "uniform_scale": float(uniform_scale),
+        "requested_uniform_scale": float(requested_uniform_scale),
+        "effective_uniform_scale": float(effective_uniform_scale),
         "actual_local_bbox_size_m": actual_local_size,
         "scaled_catalog_bbox_center_local_m": scaled_source_center,
         "asset_root_translation_m": root_translation,
@@ -421,6 +492,8 @@ def _convert_instance(
             "asset_metadata": selected_metadata,
         },
     }
+    if task_slot is not None:
+        obj["metadata"]["task_slot"] = deepcopy(task_slot)
     for key in ("retrieval_category", "desc", "short_desc"):
         value = selected_asset.get(key)
         if value is not None:
@@ -430,10 +503,11 @@ def _convert_instance(
         "evaluator_object_id": evaluator_object_id,
         "asset_id": asset_id,
         "slot_id": slot_id,
+        "task_slot": deepcopy(task_slot),
         "center_m": center,
-        "target_size_m": target_size,
         "rotation_euler_xyz_deg": rotation,
-        "uniform_scale": float(uniform_scale),
+        "requested_uniform_scale": float(requested_uniform_scale),
+        "effective_uniform_scale": float(effective_uniform_scale),
         "actual_local_bbox_size_m": actual_local_size,
         "world_obb": deepcopy(bounds["world_obb"]),
         "world_aabb": deepcopy(bounds["world_aabb"]),

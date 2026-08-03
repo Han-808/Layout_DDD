@@ -158,6 +158,30 @@ def test_functional_consistency_maps_to_local_usability_observations() -> None:
     assert result.metric == "functional_consistency"
 
 
+def test_semantic_placement_maps_to_context_not_physical_support() -> None:
+    result = MetricSpecificAcquisitionPlanner().plan(
+        MetricAcquisitionPlanningRequest(
+            metric="semantic_placement_consistency",
+            evidence_request=EvidenceRequest(
+                target_ids=("phone", "side_table"),
+                missing_observations=(
+                    "target_visible",
+                    "group_context_visible",
+                ),
+                view_goal="show whether the phone location makes sense",
+            ),
+            known_target_ids=("phone", "side_table"),
+        )
+    )
+
+    assert result.metric == "semantic_placement_consistency"
+    assert result.required_observations == (
+        "target_visible",
+        "group_context_visible",
+    )
+    assert "support_chain_visible" not in result.required_observations
+
+
 def test_metric_acquisition_planner_rejects_unknown_target() -> None:
     with pytest.raises(ValueError, match="unknown target IDs"):
         MetricSpecificAcquisitionPlanner().plan(

@@ -4,8 +4,9 @@ This worker is deliberately narrower than the legacy scene renderer:
 
 * it starts from factory state and accepts benchmark-resolved mesh paths only;
 * import failure is fatal and never falls back to a proxy;
-* placement uses uniform contain scaling with the catalog bbox center mapped
-  exactly to ``center_m`` (there is no floor/ceiling anchoring);
+* placement applies the generator-requested uniform scale exactly, with the
+  scaled catalog bbox center mapped to ``center_m`` (there is no
+  floor/ceiling anchoring);
 * it writes a sanitized ``.blend`` and a construction report, but never calls
   Blender's render operator.
 """
@@ -35,7 +36,6 @@ from blender_worker import (  # noqa: E402
     _build_room,
     _clear_scene,
     _root_location,
-    _uniform_contain_fit,
     _world_bounds,
 )
 
@@ -47,6 +47,7 @@ CANONICAL_ID_PROPERTY = "benchmark_object_id"
 ASSET_ID_PROPERTY = "benchmark_asset_id"
 ROLE_PROPERTY = "benchmark_role"
 MESH_TOLERANCE_M = 1.0e-5
+SHAPE_KEY_BAKE_TOLERANCE_M = 1.0e-8
 SUPPORTED_MESH_SUFFIXES = {".fbx", ".glb", ".gltf", ".obj"}
 
 
@@ -101,11 +102,19 @@ def main() -> None:
     scene["benchmark_request_id"] = str(request["request_id"])
     scene["benchmark_request_boundary"] = _canonical_json(boundary)
     scene["benchmark_scene_height"] = float(scene_height)
+    factory_timing = {
+        "fps": int(scene.render.fps),
+        "fps_base": float(scene.render.fps_base),
+    }
 
     built_instances = [
         _build_instance(item, plan=plan)
         for item in instances
     ]
+    scene_normalizations = _restore_factory_scene_timing(
+        scene,
+        expected=factory_timing,
+    )
     _pack_external_images()
     _assert_sanitized_build_state()
     bpy.context.view_layer.update()
@@ -125,7 +134,8 @@ def main() -> None:
         "out_blend_sha256": _sha256_file(out_blend),
         "render_invocation_count": 0,
         "placement": {
-            "fit_mode": "uniform_contain",
+            "scale_mode": "exact_uniform_scale",
+            "requested_scale_equals_effective_scale": True,
             "vertical_anchor": None,
             "rotation_semantics": "intrinsic_xyz_degrees_Rz_Ry_Rx",
             "center_semantics": "scaled_catalog_local_bbox_center_in_world",
@@ -136,6 +146,7 @@ def main() -> None:
         "architecture": architecture,
         "rendered_wall_ids": rendered_wall_ids,
         "instances": built_instances,
+        "scene_normalizations": scene_normalizations,
         "source_scene_saved": True,
         "source_scene_kind": "benchmark_owned_sanitized_output",
     }
@@ -235,12 +246,6 @@ def _validate_instance(item: object, *, index: int) -> dict:
     result["center_m"] = _finite_vector(
         result.get("center_m"), 3, f"instances[{index}].center_m"
     )
-    result["target_size_m"] = _finite_vector(
-        result.get("target_size_m"),
-        3,
-        f"instances[{index}].target_size_m",
-        positive=True,
-    )
     result["rotation_euler_xyz_deg"] = _finite_vector(
         result.get("rotation_euler_xyz_deg"),
         3,
@@ -257,10 +262,26 @@ def _validate_instance(item: object, *, index: int) -> dict:
         f"instances[{index}].catalog_bbox_size_m",
         positive=True,
     )
+    result["actual_local_bbox_size_m"] = _finite_vector(
+        result.get("actual_local_bbox_size_m"),
+        3,
+        f"instances[{index}].actual_local_bbox_size_m",
+        positive=True,
+    )
     result["local_bbox_size_m"] = _finite_vector(
         result.get("local_bbox_size_m"),
         3,
         f"instances[{index}].local_bbox_size_m",
+        positive=True,
+    )
+    result["requested_uniform_scale"] = _finite_number(
+        result.get("requested_uniform_scale"),
+        f"instances[{index}].requested_uniform_scale",
+        positive=True,
+    )
+    result["effective_uniform_scale"] = _finite_number(
+        result.get("effective_uniform_scale"),
+        f"instances[{index}].effective_uniform_scale",
         positive=True,
     )
     result["uniform_scale"] = _finite_number(
@@ -268,17 +289,36 @@ def _validate_instance(item: object, *, index: int) -> dict:
         f"instances[{index}].uniform_scale",
         positive=True,
     )
-    fit = _uniform_contain_fit(
-        result["catalog_bbox_size_m"],
-        result["target_size_m"],
-    )
-    if not _close(result["uniform_scale"], fit["uniform_scale"]):
+    if not _close(
+        result["requested_uniform_scale"],
+        result["effective_uniform_scale"],
+    ):
         raise ValueError(
-            f"instances[{index}].uniform_scale disagrees with uniform contain fit"
+            f"instances[{index}].effective_uniform_scale must exactly follow "
+            "requested_uniform_scale"
         )
-    if not _close_vector(result["local_bbox_size_m"], fit["rendered_size"]):
+    if not _close(
+        result["uniform_scale"], result["effective_uniform_scale"]
+    ):
         raise ValueError(
-            f"instances[{index}].local_bbox_size_m disagrees with uniform contain fit"
+            f"instances[{index}].uniform_scale disagrees with effective scale"
+        )
+    expected_local_size = [
+        component * result["effective_uniform_scale"]
+        for component in result["catalog_bbox_size_m"]
+    ]
+    if not _close_vector(
+        result["actual_local_bbox_size_m"], expected_local_size
+    ):
+        raise ValueError(
+            f"instances[{index}].actual_local_bbox_size_m disagrees with exact "
+            "uniform scale"
+        )
+    if not _close_vector(
+        result["local_bbox_size_m"], result["actual_local_bbox_size_m"]
+    ):
+        raise ValueError(
+            f"instances[{index}].local_bbox_size_m disagrees with actual local bbox"
         )
     expected_bounds = _expected_world_bounds(
         result["center_m"],
@@ -339,7 +379,10 @@ def _build_instance(item: dict, *, plan: dict) -> dict:
         )
 
     try:
-        imported, meshes = _strict_import(path, asset_dir=asset_dir)
+        imported, meshes, asset_normalizations = _strict_import(
+            path,
+            asset_dir=asset_dir,
+        )
     finally:
         source_hash_after = _sha256_file(path)
         asset_tree_hash_after = _sha256_asset_tree(asset_dir)
@@ -419,12 +462,15 @@ def _build_instance(item: dict, *, plan: dict) -> dict:
         "mesh_sha256_after": source_hash_after,
         "asset_tree_sha256_before": asset_tree_hash_before,
         "asset_tree_sha256_after": asset_tree_hash_after,
+        "asset_normalizations": asset_normalizations,
         "catalog_bbox_center_m_expected": item["catalog_bbox_center_m"],
         "catalog_bbox_center_m_imported": source_center,
         "catalog_bbox_size_m_expected": item["catalog_bbox_size_m"],
         "catalog_bbox_size_m_imported": source_size,
         "center_m": item["center_m"],
-        "target_size_m": item["target_size_m"],
+        "requested_uniform_scale": item["requested_uniform_scale"],
+        "effective_uniform_scale": item["effective_uniform_scale"],
+        "actual_local_bbox_size_m": item["actual_local_bbox_size_m"],
         "local_bbox_size_m": item["local_bbox_size_m"],
         "rotation_euler_xyz_deg": item["rotation_euler_xyz_deg"],
         "uniform_scale": scale,
@@ -435,9 +481,14 @@ def _build_instance(item: dict, *, plan: dict) -> dict:
     }
 
 
-def _strict_import(path: Path, *, asset_dir: Path) -> tuple[list, list]:
+def _strict_import(
+    path: Path,
+    *,
+    asset_dir: Path,
+) -> tuple[list, list, list[dict]]:
     before = set(bpy.data.objects)
     before_images = set(bpy.data.images)
+    before_materials = set(bpy.data.materials)
     _validate_text_dependency_paths(path, asset_dir=asset_dir)
     suffix = path.suffix.lower()
     if suffix == ".fbx":
@@ -482,17 +533,23 @@ def _strict_import(path: Path, *, asset_dir: Path) -> tuple[list, list]:
             raise RuntimeError(
                 f"frozen rigid asset {path.name} contains object animation"
             )
+    normalizations = _bake_static_shape_key_mixes(
+        meshes,
+        asset_name=path.name,
+    )
     for mesh in meshes:
         if len(mesh.data.vertices) == 0:
             raise RuntimeError(
                 f"frozen rigid asset {path.name} contains an empty mesh"
             )
-        shape_keys = getattr(mesh.data, "shape_keys", None)
-        if shape_keys is not None:
-            raise RuntimeError(
-                f"frozen rigid asset {path.name} contains shape keys"
-            )
-    for image in set(bpy.data.images) - before_images:
+    normalizations.extend(
+        _prune_zero_polygon_material_slots(
+            meshes,
+            imported_materials=set(bpy.data.materials) - before_materials,
+            imported_images=set(bpy.data.images) - before_images,
+        )
+    )
+    for image in list(set(bpy.data.images) - before_images):
         if (
             image.source != "FILE"
             or not image.filepath
@@ -508,10 +565,229 @@ def _strict_import(path: Path, *, asset_dir: Path) -> tuple[list, list]:
                 f"hashed dependency tree: {image_path}"
             ) from exc
         if not image_path.is_file():
-            raise RuntimeError(
-                f"frozen catalog image dependency does not exist: {image_path}"
+            normalizations.append(
+                _replace_missing_image_with_diagnostic_fallback(
+                    image,
+                    missing_path=image_path,
+                )
             )
-    return imported, meshes
+    return imported, meshes, normalizations
+
+
+def _bake_static_shape_key_mixes(
+    meshes: list,
+    *,
+    asset_name: str,
+) -> list[dict]:
+    """Bake a fixed current shape-key mix without changing visible geometry."""
+
+    records: list[dict] = []
+    for obj in meshes:
+        shape_keys = getattr(obj.data, "shape_keys", None)
+        if shape_keys is None:
+            continue
+        animation = getattr(shape_keys, "animation_data", None)
+        if (
+            animation is not None
+            and (
+                getattr(animation, "action", None) is not None
+                or tuple(getattr(animation, "drivers", ()) or ())
+                or tuple(getattr(animation, "nla_tracks", ()) or ())
+            )
+        ):
+            raise RuntimeError(
+                f"frozen rigid asset {asset_name} contains animated shape keys"
+            )
+        before = _evaluated_local_vertex_coordinates(obj)
+        key_state = [
+            {
+                "name": str(key.name),
+                "value": float(key.value),
+                "mute": bool(key.mute),
+            }
+            for key in shape_keys.key_blocks
+        ]
+        with bpy.context.temp_override(
+            object=obj,
+            active_object=obj,
+            selected_objects=[obj],
+            selected_editable_objects=[obj],
+        ):
+            bpy.ops.object.shape_key_remove(
+                all=True,
+                apply_mix=True,
+            )
+        bpy.context.view_layer.update()
+        after = _evaluated_local_vertex_coordinates(obj)
+        if len(before) != len(after):
+            raise RuntimeError(
+                f"shape-key bake changed vertex count for {asset_name}"
+            )
+        max_delta = max(
+            (
+                (Vector(left) - Vector(right)).length
+                for left, right in zip(before, after)
+            ),
+            default=0.0,
+        )
+        if not math.isfinite(max_delta) or (
+            max_delta > SHAPE_KEY_BAKE_TOLERANCE_M
+        ):
+            raise RuntimeError(
+                f"shape-key bake changed visible geometry for {asset_name}: "
+                f"max_delta_m={max_delta!r}"
+            )
+        records.append(
+            {
+                "type": "static_shape_key_mix_baked",
+                "object_name": obj.name,
+                "shape_keys": key_state,
+                "vertex_count": len(after),
+                "max_vertex_delta_m": float(max_delta),
+                "source_modified": False,
+            }
+        )
+    return records
+
+
+def _evaluated_local_vertex_coordinates(obj) -> list[tuple[float, float, float]]:
+    depsgraph = bpy.context.evaluated_depsgraph_get()
+    evaluated = obj.evaluated_get(depsgraph)
+    mesh = evaluated.to_mesh(
+        preserve_all_data_layers=False,
+        depsgraph=depsgraph,
+    )
+    try:
+        return [
+            (float(vertex.co.x), float(vertex.co.y), float(vertex.co.z))
+            for vertex in mesh.vertices
+        ]
+    finally:
+        evaluated.to_mesh_clear()
+
+
+def _prune_zero_polygon_material_slots(
+    meshes: list,
+    *,
+    imported_materials: set,
+    imported_images: set,
+) -> list[dict]:
+    """Remove imported material slots that cannot affect any polygon."""
+
+    records: list[dict] = []
+    for obj in meshes:
+        used_indices = {
+            int(polygon.material_index)
+            for polygon in obj.data.polygons
+        }
+        for index in range(len(obj.data.materials) - 1, -1, -1):
+            if index in used_indices:
+                continue
+            material = obj.data.materials[index]
+            records.append(
+                {
+                    "type": "zero_polygon_material_slot_pruned",
+                    "object_name": obj.name,
+                    "slot_index": index,
+                    "material_name": (
+                        str(material.name) if material is not None else None
+                    ),
+                    "source_modified": False,
+                }
+            )
+            obj.data.materials.pop(index=index)
+    for material in sorted(
+        imported_materials,
+        key=lambda value: value.name,
+    ):
+        if material.users == 0:
+            bpy.data.materials.remove(material)
+    for image in sorted(
+        imported_images,
+        key=lambda value: value.name,
+    ):
+        if image.users == 0:
+            bpy.data.images.remove(image)
+    return records
+
+
+def _replace_missing_image_with_diagnostic_fallback(
+    image,
+    *,
+    missing_path: Path,
+) -> dict:
+    """Freeze Blender's missing-image magenta diagnostic into the blend."""
+
+    original_name = str(image.name)
+    original_colorspace = str(image.colorspace_settings.name)
+    original_alpha_mode = str(image.alpha_mode)
+    image.name = f"{original_name}__unresolved"
+    replacement = bpy.data.images.new(
+        name=original_name,
+        width=1,
+        height=1,
+        alpha=True,
+        float_buffer=False,
+    )
+    try:
+        replacement.colorspace_settings.name = original_colorspace
+        replacement.alpha_mode = original_alpha_mode
+        replacement.pixels[:] = (1.0, 0.0, 1.0, 1.0)
+        replacement.pack()
+    except (TypeError, ValueError, RuntimeError) as exc:
+        bpy.data.images.remove(replacement)
+        raise RuntimeError(
+            "cannot preserve missing-image state while freezing "
+            f"diagnostic fallback for {missing_path}"
+        ) from exc
+
+    replaced_references = 0
+    node_trees = []
+    for owner in (
+        *tuple(bpy.data.materials),
+        *tuple(bpy.data.worlds),
+        *tuple(bpy.data.node_groups),
+    ):
+        tree = getattr(owner, "node_tree", None)
+        if tree is not None:
+            node_trees.append(tree)
+    seen_trees = set()
+    for tree in node_trees:
+        pointer = int(tree.as_pointer())
+        if pointer in seen_trees:
+            continue
+        seen_trees.add(pointer)
+        for node in tree.nodes:
+            if getattr(node, "image", None) == image:
+                node.image = replacement
+                node.id_data.update_tag()
+                replaced_references += 1
+    if replaced_references == 0:
+        bpy.data.images.remove(replacement)
+        raise RuntimeError(
+            "missing frozen catalog image has no verifiable shader reference: "
+            f"{missing_path}"
+        )
+    if image.users != 0:
+        bpy.data.images.remove(replacement)
+        raise RuntimeError(
+            "cannot fully replace missing frozen catalog image dependency: "
+            f"{missing_path}; remaining_users={image.users}"
+        )
+    bpy.data.images.remove(image)
+    bpy.context.view_layer.update()
+    return {
+        "type": "missing_image_diagnostic_fallback_packed",
+        "image_name": original_name,
+        "missing_path": missing_path.as_posix(),
+        "replacement_rgba_8bit": [255, 0, 255, 255],
+        "colorspace": original_colorspace,
+        "alpha_mode": original_alpha_mode,
+        "shader_reference_count": replaced_references,
+        "packed": bool(replacement.packed_files),
+        "semantic": "preserve_blender_missing_image_diagnostic",
+        "source_modified": False,
+    }
 
 
 def _validate_text_dependency_paths(path: Path, *, asset_dir: Path) -> None:
@@ -566,12 +842,20 @@ def _stamp_root(root, item: dict, *, plan: dict) -> None:
         plan["adapter_contract_revision"]
     )
     root["benchmark_center_m"] = item["center_m"]
-    root["benchmark_target_size_m"] = item["target_size_m"]
+    root["benchmark_requested_uniform_scale"] = float(
+        item["requested_uniform_scale"]
+    )
+    root["benchmark_effective_uniform_scale"] = float(
+        item["effective_uniform_scale"]
+    )
     root["benchmark_rotation_euler_xyz_deg"] = item["rotation_euler_xyz_deg"]
     root["benchmark_uniform_scale"] = float(item["uniform_scale"])
     root["benchmark_catalog_bbox_center_m"] = item["catalog_bbox_center_m"]
     root["benchmark_catalog_bbox_size_m"] = item["catalog_bbox_size_m"]
     root["benchmark_local_bbox_size_m"] = item["local_bbox_size_m"]
+    root["benchmark_actual_local_bbox_size_m"] = item[
+        "actual_local_bbox_size_m"
+    ]
     root["benchmark_mesh_sha256"] = str(
         item["asset_hashes"]["mesh_sha256"]
     ).lower()
@@ -606,6 +890,32 @@ def _pack_external_images() -> None:
             "sanitized blend contains unpacked external images: "
             + ", ".join(sorted(remaining))
         )
+
+
+def _restore_factory_scene_timing(
+    scene,
+    *,
+    expected: dict[str, float | int],
+) -> list[dict]:
+    """Undo importer-owned timing side effects before freezing the scene."""
+
+    normalizations = []
+    for field in ("fps", "fps_base"):
+        observed = getattr(scene.render, field)
+        wanted = expected[field]
+        if observed == wanted:
+            continue
+        normalizations.append(
+            {
+                "type": "factory_render_timing_restored",
+                "field": f"scene.render.{field}",
+                "imported_value": observed,
+                "restored_value": wanted,
+                "source_modified": False,
+            }
+        )
+        setattr(scene.render, field, wanted)
+    return normalizations
 
 
 def _assert_sanitized_build_state() -> None:

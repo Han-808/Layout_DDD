@@ -249,8 +249,9 @@ def test_real_blender_materializes_and_independently_inspects_frozen_asset(
                     "instance_id": "clock_left",
                     "asset_id": ASSET_ID,
                     "center_m": [1.25, 1.5, 0.8],
-                    "target_size_m": [0.4, 0.4, 0.4],
+                    "uniform_scale": 2.0,
                     "rotation_euler_xyz_deg": [10.0, 20.0, 30.0],
+                    "slot_id": "clock_slot",
                 }
             ],
         },
@@ -267,9 +268,21 @@ def test_real_blender_materializes_and_independently_inspects_frozen_asset(
     consistency = read_json(result.consistency_report_path)
     scene = read_json(result.normalized_scene_path)
     registry = read_json(result.instance_registry_path)
+    build_report = read_json(
+        result.trusted_render_source_path.with_suffix(
+            result.trusted_render_source_path.suffix + ".build.json"
+        )
+    )
 
     assert readiness["status"] == "ready"
     assert consistency["status"] == "passed"
+    assert build_report["placement"]["scale_mode"] == (
+        "exact_uniform_scale"
+    )
+    assert build_report["placement"][
+        "requested_scale_equals_effective_scale"
+    ] is True
+    assert "fit_mode" not in build_report["placement"]
     assert result.trusted_render_source_path.is_file()
     assert result.hashes["trusted_render_source_sha256"]
     assert scene["objects"][0]["id"] == "clock_left"
@@ -402,7 +415,7 @@ def test_real_blender_materializes_and_independently_inspects_frozen_asset(
             "asset_id": observed["asset_id"],
             "native_root_name": observed["root_object_name"],
             "center_m": observed["center_m"],
-            "target_size_m": observed["target_size_m"],
+            "uniform_scale": observed["requested_uniform_scale"],
             "rotation_euler_xyz_deg": observed[
                 "rotation_euler_xyz_deg"
             ],
@@ -455,6 +468,123 @@ def test_real_blender_materializes_and_independently_inspects_frozen_asset(
     assert rematerialized_inspection["technical_state"]["camera_count"] == 0
     assert rematerialized_inspection["technical_state"]["light_count"] == 0
     assert native_prepared.trusted_render_source_path != native_appearance
+
+    public_mapping_path = write_json(
+        tmp_path / "public_native_mapping.json",
+        {
+            "schema_version": "public_native_instance_mapping_v1",
+            "instances": [
+                {
+                    "instance_id": observed["instance_id"],
+                    "asset_id": observed["asset_id"],
+                    "native_root_name": observed["root_object_name"],
+                    "center_m": observed["center_m"],
+                    "uniform_scale": observed["requested_uniform_scale"],
+                    "rotation_euler_xyz_deg": observed[
+                        "rotation_euler_xyz_deg"
+                    ],
+                    "slot_id": observed["slot_id"],
+                }
+            ],
+        },
+    )
+    public_native_prepared = prepare_submission(
+        artifact=native_appearance,
+        case_bundle=_bundle(tmp_path),
+        out_dir=tmp_path / "public_native_prepared",
+        asset_root=ASSET_ROOT,
+        asset_csv=ASSET_CSV,
+        blender_bin=BLENDER,
+        native_instance_mapping_path=public_mapping_path,
+        native_registry_authority=native_registry_authority,
+        timeout_seconds=120,
+    )
+    public_native_provenance = read_json(
+        public_native_prepared.provenance_path
+    )
+    derived_registry = read_json(
+        tmp_path
+        / "public_native_prepared"
+        / "benchmark_derived_native_registry.json"
+    )
+    native_registry_authority.verify(derived_registry)
+    assert read_json(public_native_prepared.readiness_report_path)[
+        "status"
+    ] == "ready"
+    assert public_native_provenance["native_registry"]["origin"] == (
+        "benchmark_derived_from_public_native_mapping"
+    )
+    assert public_native_provenance["native_source_inspection"][
+        "inspection_mode"
+    ] == "public_native"
+    assert hashlib.sha256(native_appearance.read_bytes()).hexdigest() == (
+        native_hash_before
+    )
+    assert public_native_prepared.trusted_render_source_path != (
+        native_appearance
+    )
+    preserved_public_mapping = Path(
+        public_native_provenance["public_native_mapping"]["path"]
+    )
+    assert preserved_public_mapping.parent == (
+        tmp_path / "public_native_prepared"
+    ).resolve()
+    public_mapping_path.unlink()
+    public_report = evaluate_prepared_submission(
+        prepared_submission=public_native_prepared,
+        case_bundle=_bundle(tmp_path),
+        out_dir=tmp_path / "public_native_evaluation",
+        renderer=BlenderRenderer(
+            blender_bin=BLENDER,
+            timeout_seconds=120,
+            width=128,
+            height=128,
+            render_engine="BLENDER_WORKBENCH",
+            require_asset_mesh=True,
+        ),
+        vlm_judge=_Judge(),
+        asset_root=ASSET_ROOT,
+        asset_csv=ASSET_CSV,
+        blender_bin=BLENDER,
+        native_registry_authority=native_registry_authority,
+        official_mode=True,
+    )
+    assert public_report["layer_reports"]["l0_structural_validity"][
+        "readiness"
+    ]["status"] == "ready"
+
+    preserved_public_mapping.write_text(
+        '{"schema_version":"public_native_instance_mapping_v1",'
+        '"instances":[]}\n',
+        encoding="utf-8",
+    )
+    tampered_mapping_report = evaluate_prepared_submission(
+        prepared_submission=public_native_prepared,
+        case_bundle=_bundle(tmp_path),
+        out_dir=tmp_path / "public_native_mapping_tamper",
+        renderer=BlenderRenderer(
+            blender_bin=BLENDER,
+            timeout_seconds=120,
+            width=128,
+            height=128,
+            render_engine="BLENDER_WORKBENCH",
+            require_asset_mesh=True,
+        ),
+        vlm_judge=_Judge(),
+        asset_root=ASSET_ROOT,
+        asset_csv=ASSET_CSV,
+        blender_bin=BLENDER,
+        native_registry_authority=native_registry_authority,
+        official_mode=False,
+    )
+    tampered_readiness = tampered_mapping_report["layer_reports"][
+        "l0_structural_validity"
+    ]["readiness"]
+    assert tampered_readiness["status"] == "not_evaluable"
+    assert {
+        "invalid_prepared_native_mapping",
+        "native_instance_mapping_hash_binding_mismatch",
+    } <= set(tampered_readiness["reason_codes"])
 
     unsupported_native = tmp_path / "native_unsupported.blend"
     shutil.copyfile(native_appearance, unsupported_native)

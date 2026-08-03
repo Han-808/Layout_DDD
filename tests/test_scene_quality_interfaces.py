@@ -9,12 +9,18 @@ from PIL import Image
 from benchmark.evaluator.scene_quality import (
     PERCEPTUAL_VISUAL_QUALITY_METRICS,
     SCENE_QUALITY_INTERFACE_METRICS,
+    SEMANTIC_PLACEMENT_METRICS,
     SEMANTIC_COHERENCE_METRICS,
     evaluate_scene_quality_interfaces,
     resolve_scene_quality_config,
     validate_authorized_deviations,
 )
 from benchmark.visual_judge import CameraEvidenceProvider
+from benchmark.visual_judge.l3_prompts import (
+    L3_METRIC_BOUNDARY_RULES,
+    L3_METRIC_PROMPT_VERSION,
+    L3_METRIC_RUBRICS,
+)
 from benchmark.evaluator.scene_quality.authorized_deviations import (
     AuthorizedDeviationError,
     deviation_matches,
@@ -153,6 +159,37 @@ def _style_global_then_local_config() -> dict:
     return config
 
 
+def test_l3_metric_prompts_have_versioned_generic_boundaries() -> None:
+    assert L3_METRIC_PROMPT_VERSION == "l3_metric_boundaries_v1"
+    assert set(L3_METRIC_RUBRICS) == {
+        "scale_consistency",
+        "style_consistency",
+        "object_pairing_consistency",
+        "functional_consistency",
+        "semantic_placement_consistency",
+    }
+    assert any(
+        "Evidence insufficiency and semantic uncertainty are different"
+        in rule
+        for rule in L3_METRIC_BOUNDARY_RULES
+    )
+    assert "relocation counterfactual" in (
+        L3_METRIC_RUBRICS["object_pairing_consistency"]
+    )
+    assert "ordinary real-world function" in (
+        L3_METRIC_RUBRICS["functional_consistency"]
+    )
+    assert "current location independently fails" in (
+        L3_METRIC_RUBRICS["semantic_placement_consistency"]
+    )
+    assert "Apparent image size alone" in (
+        L3_METRIC_RUBRICS["scale_consistency"]
+    )
+    assert "visual-style outlier" in (
+        L3_METRIC_RUBRICS["style_consistency"]
+    )
+
+
 def test_default_is_canonical_l3_and_policy_remains_overridable() -> None:
     resolved = resolve_scene_quality_config()
     assert resolved["enabled"] is True
@@ -174,6 +211,14 @@ def test_default_is_canonical_l3_and_policy_remains_overridable() -> None:
     assert functional["metric_status"] == "experimental_non_scoring"
     assert functional["activation_policy"] == "explicit_config_only"
     assert functional["included_in_canonical_aggregate"] is False
+    placement = resolved["metrics"]["semantic_placement_consistency"]
+    assert placement["enabled"] is False
+    assert placement["metric_status"] == "experimental_non_scoring"
+    assert placement["activation_policy"] == "explicit_config_only"
+    assert placement["included_in_canonical_aggregate"] is False
+    assert set(SEMANTIC_PLACEMENT_METRICS) == {
+        "semantic_placement_consistency"
+    }
     serialized = json.dumps(resolved, sort_keys=True)
     assert "object_coexistence_consistency" not in serialized
     assert "sceneonto_scale_candidate_router" not in serialized
@@ -223,6 +268,32 @@ def test_default_is_canonical_l3_and_policy_remains_overridable() -> None:
     )
     assert attempted_promotion["activation_policy"] == "explicit_config_only"
     assert attempted_promotion["included_in_canonical_aggregate"] is False
+
+    attempted_placement_promotion = resolve_scene_quality_config(
+        {
+            "metrics": {
+                "semantic_placement_consistency": {
+                    "enabled": True,
+                    "metric_status": "canonical_scoring",
+                    "activation_policy": "profile_and_applicability",
+                    "included_in_canonical_aggregate": True,
+                }
+            }
+        }
+    )["metrics"]["semantic_placement_consistency"]
+    assert attempted_placement_promotion["enabled"] is True
+    assert (
+        attempted_placement_promotion["metric_status"]
+        == "experimental_non_scoring"
+    )
+    assert (
+        attempted_placement_promotion["activation_policy"]
+        == "explicit_config_only"
+    )
+    assert (
+        attempted_placement_promotion["included_in_canonical_aggregate"]
+        is False
+    )
 
 
 def test_style_global_screen_does_not_request_local_when_clear(tmp_path) -> None:
@@ -517,6 +588,13 @@ def test_all_three_metrics_evaluate_and_aggregate_when_complete(tmp_path) -> Non
         request["judge_method"] == "adjudicate_scene_quality"
         for request in calls
     )
+    assert all(
+        request["metric_prompt_version"] == L3_METRIC_PROMPT_VERSION
+        and request["metric_boundary_rules"] == list(
+            L3_METRIC_BOUNDARY_RULES
+        )
+        for request in calls
+    )
     pairing_request = next(
         request
         for request in calls
@@ -524,6 +602,12 @@ def test_all_three_metrics_evaluate_and_aggregate_when_complete(tmp_path) -> Non
     )
     assert pairing_request["object_groups"][0]["group_id"] == "group_001"
     assert "orientation" in pairing_request["judgment_scope"]["excluded"]
+    assert "scene_member_category_compatibility" in (
+        pairing_request["judgment_scope"]["included"]
+    )
+    assert "visual-evidence scope, not compatibility ground truth" in (
+        pairing_request["metric_rubric"]
+    )
     assert pairing_request["natural_language_prompt"].startswith("Create")
     assert pairing_request["render_evidence"] == [
         images["global"],
@@ -949,7 +1033,11 @@ def test_group_scope_bounds_include_object_rotation(tmp_path) -> None:
 
 @pytest.mark.parametrize(
     "metric_name",
-    ["scale_consistency", "functional_consistency"],
+    [
+        "scale_consistency",
+        "functional_consistency",
+        "semantic_placement_consistency",
+    ],
 )
 def test_other_group_metrics_keep_camera_requests_per_group(
     tmp_path,
@@ -1012,8 +1100,11 @@ def test_other_group_metrics_keep_camera_requests_per_group(
         return _valid()
 
     config = _only(metric_name)
-    if metric_name == "functional_consistency":
-        config["metrics"]["functional_consistency"] = {
+    if metric_name in {
+        "functional_consistency",
+        "semantic_placement_consistency",
+    }:
+        config["metrics"][metric_name] = {
             "enabled": True,
             "weight": 1.0,
         }
@@ -1052,6 +1143,14 @@ def test_other_group_metrics_keep_camera_requests_per_group(
         images["global"] in request["render_evidence"]
         for request in judge_calls
     )
+    if metric_name == "semantic_placement_consistency":
+        assert all(
+            "collision" in request["judgment_scope"]["excluded"]
+            and "physical_support" in request["judgment_scope"]["excluded"]
+            and "semantic suitability of its support surface"
+            in request["metric_rubric"]
+            for request in judge_calls
+        )
 
 
 def test_style_suspicion_drills_into_the_implicated_group_only(

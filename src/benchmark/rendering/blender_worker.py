@@ -306,7 +306,17 @@ def _configure_render(
     cycles_denoising: bool,
 ) -> dict:
     scene = bpy.context.scene
-    scene.render.engine = render_engine
+    requested_render_engine = render_engine
+    try:
+        scene.render.engine = render_engine
+    except TypeError:
+        # Blender 5.2 renamed the Eevee enum from BLENDER_EEVEE_NEXT to
+        # BLENDER_EEVEE. Keep the public renderer contract stable while
+        # recording the runtime enum below.
+        if render_engine != "BLENDER_EEVEE_NEXT":
+            raise
+        scene.render.engine = "BLENDER_EEVEE"
+    active_render_engine = str(scene.render.engine)
     scene.render.resolution_x = max(64, int(width))
     scene.render.resolution_y = max(64, int(height))
     scene.render.resolution_percentage = 100
@@ -336,6 +346,8 @@ def _configure_render(
             "cycles_samples": int(scene.cycles.samples),
             "cycles_denoising": bool(scene.cycles.use_denoising),
             "persistent_data": bool(scene.render.use_persistent_data),
+            "render_engine_requested": requested_render_engine,
+            "render_engine_active": active_render_engine,
             **device_config,
         }
     return {
@@ -348,6 +360,8 @@ def _configure_render(
         "cycles_device_active": None,
         "cycles_devices_enabled": [],
         "cycles_device_errors": [],
+        "render_engine_requested": requested_render_engine,
+        "render_engine_active": active_render_engine,
     }
 
 

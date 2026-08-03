@@ -44,6 +44,7 @@ from benchmark.materialization import (
     MaterializationResult,
     NativeRegistryAuthority,
     export_materialized_representations,
+    load_public_native_instance_mapping,
     prepare_catalog_submission,
     rebuild_materialization_plan_from_source,
     verify_prepared_submission,
@@ -80,6 +81,7 @@ from benchmark.visual_judge import (
     CameraEvidenceProvider,
     VLMEvaluationControl,
     build_conditional_active_camera_evidence_provider,
+    build_openai_compatible_camera_selector,
     build_openai_compatible_vlm_judge,
     resolve_vlm_evaluation_control,
 )
@@ -413,6 +415,7 @@ def prepare_submission(
     public_slot_ids: set[str] | list[str] | tuple[str, ...] | None = None,
     native_registry_path: str | Path | None = None,
     native_registry_authority: NativeRegistryAuthority | None = None,
+    native_instance_mapping_path: str | Path | None = None,
     timeout_seconds: int = 900,
 ) -> MaterializationResult:
     """Sanitize a generator-native artifact and run technical readiness gates."""
@@ -437,6 +440,7 @@ def prepare_submission(
         public_slot_ids=public_slot_ids,
         native_registry_path=native_registry_path,
         native_registry_authority=native_registry_authority,
+        native_instance_mapping_path=native_instance_mapping_path,
         timeout_seconds=timeout_seconds,
     )
 
@@ -455,6 +459,7 @@ def evaluate_prepared_submission(
     generation_input: dict[str, Any] | None = None,
     native_registry_path: str | Path | None = None,
     native_registry_authority: NativeRegistryAuthority | None = None,
+    native_instance_mapping_path: str | Path | None = None,
     official_mode: bool = True,
     vlm_evaluation_control: dict[str, Any]
     | VLMEvaluationControl
@@ -492,6 +497,7 @@ def evaluate_prepared_submission(
             generation_input=generation_input,
             native_registry_path=native_registry_path,
             native_registry_authority=native_registry_authority,
+            native_instance_mapping_path=native_instance_mapping_path,
             official_mode=official_mode,
         )
     readiness_path = write_json(
@@ -578,6 +584,11 @@ def evaluate_prepared_submission(
                 "benchmark_score_status": "not_evaluable",
             },
         )
+        if official_mode:
+            raise SubmissionEvaluationError(
+                "official submission is not evaluable; "
+                f"inspect {report_path}"
+            )
         return report
 
     if renderer is None:
@@ -719,6 +730,7 @@ def evaluate_artifact_submission(
     public_slot_ids: set[str] | list[str] | tuple[str, ...] | None = None,
     native_registry_path: str | Path | None = None,
     native_registry_authority: NativeRegistryAuthority | None = None,
+    native_instance_mapping_path: str | Path | None = None,
     official_mode: bool = True,
     vlm_evaluation_control: dict[str, Any]
     | VLMEvaluationControl
@@ -739,6 +751,7 @@ def evaluate_artifact_submission(
         public_slot_ids=public_slot_ids,
         native_registry_path=native_registry_path,
         native_registry_authority=native_registry_authority,
+        native_instance_mapping_path=native_instance_mapping_path,
         timeout_seconds=timeout_seconds,
     )
     return evaluate_prepared_submission(
@@ -754,6 +767,10 @@ def evaluate_artifact_submission(
         generation_input=generation_input,
         native_registry_path=native_registry_path,
         native_registry_authority=native_registry_authority,
+        # Preparation preserves the unsigned mapping inside the prepared
+        # artifact and binds it by hash. Evaluation must use that authoritative
+        # copy rather than depend on the submitter's original path.
+        native_instance_mapping_path=None,
         official_mode=official_mode,
         vlm_evaluation_control=vlm_evaluation_control,
     )
@@ -1238,7 +1255,7 @@ def main() -> None:
     _reject_literal_api_key(selector_config, "camera selector config")
     judge = build_openai_compatible_vlm_judge(judge_config) if judge_config else None
     selector = (
-        build_openai_compatible_vlm_judge(selector_config)
+        build_openai_compatible_camera_selector(selector_config)
         if selector_config
         else None
     )
@@ -1616,6 +1633,7 @@ def _audit_prepared_submission_for_evaluation(
     generation_input: dict[str, Any] | None = None,
     native_registry_path: str | Path | None = None,
     native_registry_authority: NativeRegistryAuthority | None = None,
+    native_instance_mapping_path: str | Path | None = None,
     official_mode: bool,
 ) -> tuple[dict[str, Any], Path | None, Path | None]:
     """Bind preparation inputs and freshly inspect the render source.
@@ -1835,6 +1853,113 @@ def _audit_prepared_submission_for_evaluation(
             }
         )
 
+    expected_native_mapping_hash = str(
+        representation_hashes.get(
+            "native_instance_mapping_sha256"
+        )
+        or ""
+    ).lower()
+    core_public_mapping = provenance_core.get("public_native_mapping")
+    core_public_mapping = (
+        core_public_mapping
+        if isinstance(core_public_mapping, dict)
+        else {}
+    )
+    if expected_native_mapping_hash:
+        raw_prepared_mapping_path = str(
+            core_public_mapping.get("path") or ""
+        ).strip()
+        prepared_mapping_path = (
+            Path(raw_prepared_mapping_path).expanduser().resolve()
+            if raw_prepared_mapping_path
+            else None
+        )
+        if prepared_mapping_path is None:
+            failures.append(
+                {
+                    "code": "missing_prepared_native_mapping_binding",
+                    "path": "provenance_core.public_native_mapping.path",
+                }
+            )
+        else:
+            if not prepared_mapping_path.is_file():
+                failures.append(
+                    {
+                        "code": "native_instance_mapping_missing",
+                        "path": prepared_mapping_path.as_posix(),
+                    }
+                )
+            else:
+                actual_mapping_hash = sha256_file(
+                    prepared_mapping_path
+                ).lower()
+                audit_provenance[
+                    "native_instance_mapping_sha256"
+                ] = actual_mapping_hash
+                try:
+                    load_public_native_instance_mapping(
+                        prepared_mapping_path
+                    )
+                except Exception as exc:
+                    failures.append(
+                        {
+                            "code": "invalid_prepared_native_mapping",
+                            "path": prepared_mapping_path.as_posix(),
+                            "error": f"{type(exc).__name__}: {exc}",
+                        }
+                    )
+                if (
+                    actual_mapping_hash != expected_native_mapping_hash
+                    or str(core_public_mapping.get("sha256") or "").lower()
+                    != expected_native_mapping_hash
+                ):
+                    failures.append(
+                        {
+                            "code": (
+                                "native_instance_mapping_hash_binding_mismatch"
+                            ),
+                            "path": prepared_mapping_path.as_posix(),
+                            "expected_sha256": expected_native_mapping_hash,
+                            "actual_sha256": actual_mapping_hash,
+                        }
+                    )
+        if native_instance_mapping_path is not None:
+            supplied_mapping_path = Path(
+                native_instance_mapping_path
+            ).expanduser().resolve()
+            audit_provenance[
+                "supplied_native_instance_mapping_path"
+            ] = supplied_mapping_path.as_posix()
+            if supplied_mapping_path.is_file():
+                supplied_mapping_hash = sha256_file(
+                    supplied_mapping_path
+                ).lower()
+                audit_provenance[
+                    "supplied_native_instance_mapping_sha256"
+                ] = supplied_mapping_hash
+                if supplied_mapping_hash != expected_native_mapping_hash:
+                    failures.append(
+                        {
+                            "code": (
+                                "supplied_native_instance_mapping_hash_mismatch"
+                            ),
+                            "path": supplied_mapping_path.as_posix(),
+                            "expected_sha256": expected_native_mapping_hash,
+                            "actual_sha256": supplied_mapping_hash,
+                        }
+                    )
+            else:
+                audit_provenance[
+                    "supplied_native_instance_mapping_available"
+                ] = False
+    elif native_instance_mapping_path is not None:
+        failures.append(
+            {
+                "code": "unexpected_native_instance_mapping_binding",
+                "path": "native_instance_mapping_path",
+            }
+        )
+
     resolved_native_registry: Path | None = None
     core_native_registry = provenance_core.get("native_registry")
     core_native_registry = (
@@ -1874,7 +1999,15 @@ def _audit_prepared_submission_for_evaluation(
             if raw_prepared_registry_path
             else None
         )
-        if native_registry_path is None and official_mode:
+        registry_was_derived = (
+            core_native_registry.get("origin")
+            == "benchmark_derived_from_public_native_mapping"
+        )
+        if (
+            native_registry_path is None
+            and official_mode
+            and not registry_was_derived
+        ):
             failures.append(
                 {
                     "code": "official_native_registry_required",
@@ -2796,6 +2929,7 @@ def _prepared_evaluation_readiness(
         audit_check.update(
             {
                 "reason_codes": reason_codes,
+                "failure_stage": "evaluation_time_trust_audit",
                 "failure_owner": failure_owner,
                 "failures": deepcopy(failures),
             }
@@ -2810,6 +2944,9 @@ def _prepared_evaluation_readiness(
     return build_readiness_report(
         status="not_evaluable" if failures else "ready",
         reason_codes=reason_codes,
+        failure_stage=(
+            "evaluation_time_trust_audit" if failures else None
+        ),
         failure_owner=failure_owner if failures else None,
         checks=checks,
         provenance=readiness_provenance,
@@ -3141,6 +3278,17 @@ def _non_empty_string(value: Any, path: str) -> str:
     if not text:
         raise CaseBundleError(f"{path} must be a non-empty string")
     return text
+
+
+def _reject_literal_api_key(
+    config: dict[str, Any] | None,
+    label: str,
+) -> None:
+    if isinstance(config, dict) and "api_key" in config:
+        raise ValueError(
+            f"{label} must not contain literal api_key; "
+            "use api_key_env instead"
+        )
 
 
 if __name__ == "__main__":

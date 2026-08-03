@@ -583,6 +583,7 @@ def _call_provider(
         "object_pairing_consistency",
         "style_consistency",
         "functional_consistency",
+        "semantic_placement_consistency",
     }:
         call = getattr(provider, "provide_scene_quality_evidence", None)
         if callable(call):

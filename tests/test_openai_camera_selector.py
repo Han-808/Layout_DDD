@@ -28,6 +28,7 @@ class _Model:
     def __init__(self, response: dict):
         self.response = response
         self.calls: list[dict] = []
+        self.last_request_metadata: dict = {}
 
     def chat_messages(self, messages, **kwargs):
         self.calls.append({"messages": messages, "kwargs": kwargs})
@@ -137,6 +138,53 @@ def test_production_candidate_only_transport_and_active_contract(
     ]
     user_content = model.calls[0]["messages"][1]["content"]
     assert any(item.get("type") == "image_url" for item in user_content)
+
+
+def test_legacy_query_cov_compatibility_does_not_construct_judge(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from benchmark.visual_judge.openai_compatible import (
+        OpenAICompatibleVLMJudge,
+    )
+
+    def fail_judge_construction(*args, **kwargs):
+        raise AssertionError(
+            "camera transport must not construct a metric Judge"
+        )
+
+    monkeypatch.setattr(
+        OpenAICompatibleVLMJudge,
+        "__init__",
+        fail_judge_construction,
+    )
+    transport = OpenAICompatibleCameraSelector(
+        _Model(
+            {
+                "selected_view_ids": ["candidate_00"],
+                "action": None,
+                "reason": "bounded trusted candidate",
+            }
+        )
+    )
+    candidate = _candidate(tmp_path / "legacy-preview.png")
+
+    result = transport.select_camera_views(
+        {
+            "metric": "collision",
+            "candidates": [candidate],
+            "max_views": 1,
+            "allow_adjustment": False,
+            "allowed_actions": [],
+            "preview_role": "highlighted_focus",
+        }
+    )
+
+    assert result["selected_view_ids"] == ["trusted-view"]
+    assert result["vlm_role"] == "vlm_camera_selector"
+    assert transport.last_request_metadata["selection_mode"] == (
+        "legacy_query_cov"
+    )
 
 
 def test_production_repair_plan_transport_contract() -> None:

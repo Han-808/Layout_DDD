@@ -289,6 +289,12 @@ def test_four_concrete_modes_and_auto_metric_resolution() -> None:
         == "visibility_ranked"
     )
     assert resolve_camera_pose_mode("auto", "style_consistency") == "global_only"
+    assert (
+        resolve_camera_pose_mode(
+            "auto", "semantic_placement_consistency"
+        )
+        == "visibility_ranked"
+    )
     assert DEFAULT_CAMERA_MODE_BY_METRIC["object_architecture_penetration"] == "visibility_ranked"
     overrides = parse_metric_camera_modes(
         [

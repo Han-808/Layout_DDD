@@ -29,6 +29,9 @@ from benchmark.visual_judge.p0b import (
     LocalViewProvider,
     adjudicate_p0b_event,
 )
+from benchmark.visual_judge.contracts import (
+    response_schema_audit_from_exception,
+)
 from benchmark.visual_judge.runtime import EvidenceControlUnresolvedError
 
 
@@ -357,6 +360,9 @@ def _evaluate_pair(
     except Exception as exc:
         pair["adjudication_error"] = f"{type(exc).__name__}: {exc}"
         pair["route"] = "vlm_adjudication_failed"
+        schema_audit = response_schema_audit_from_exception(exc)
+        if schema_audit is not None:
+            pair["adjudication_failure_audit"] = schema_audit
         if bool(cfg.get("official_mode")):
             raise CollisionEvaluationError(pair["adjudication_error"]) from exc
         return pair

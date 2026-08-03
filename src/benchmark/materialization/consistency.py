@@ -89,6 +89,11 @@ def run_consistency_gate(
                 scene_materialization.get("slot_id"),
                 observed.get("slot_id"),
             ),
+            "task_slot": (
+                expected.get("task_slot"),
+                registry.get("task_slot"),
+                _nested(scene, "metadata.task_slot"),
+            ),
             "center_m": (
                 expected.get("center_m"),
                 _nested(registry, "transform.center_m"),
@@ -101,19 +106,25 @@ def run_consistency_gate(
                 scene.get("rotation"),
                 observed.get("rotation_euler_xyz_deg"),
             ),
-            "target_size_m": (
-                expected.get("target_size_m"),
-                _nested(registry, "transform.target_size_m"),
-                scene_materialization.get("target_size_m"),
-                observed.get("target_size_m"),
+            "requested_uniform_scale": (
+                expected.get("requested_uniform_scale"),
+                _nested(registry, "transform.requested_uniform_scale"),
+                scene_materialization.get("requested_uniform_scale"),
+                observed.get("requested_uniform_scale"),
             ),
-            "uniform_scale": (
-                expected.get("uniform_scale"),
-                _nested(registry, "transform.uniform_scale"),
-                scene_materialization.get("uniform_scale"),
-                observed.get("uniform_scale"),
+            "effective_uniform_scale": (
+                expected.get("effective_uniform_scale"),
+                _nested(registry, "transform.effective_uniform_scale"),
+                scene_materialization.get("effective_uniform_scale"),
+                observed.get("effective_uniform_scale"),
             ),
-            "local_bbox_size_m": (
+            "actual_local_bbox_size_m": (
+                expected.get("actual_local_bbox_size_m"),
+                _nested(registry, "local_bbox.size_m"),
+                scene_materialization.get("actual_local_bbox_size_m"),
+                observed.get("actual_local_bbox_size_m"),
+            ),
+            "local_bbox_size_m_alias": (
                 expected.get("local_bbox_size_m"),
                 _nested(registry, "local_bbox.size_m"),
                 scene.get("size"),

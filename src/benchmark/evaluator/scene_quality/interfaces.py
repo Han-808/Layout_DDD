@@ -6,14 +6,16 @@ subfamilies:
 - **L3a Semantic Coherence** — ``scale_consistency`` and
   ``object_pairing_consistency``;
 - **L3b Perceptual Visual Quality** — ``style_consistency``.
-- **L3c Functional Validity** — optional ``functional_consistency``.
+- **L3c Functional Validity** — optional ``functional_consistency``;
+- **L3d Semantic Placement** — optional
+  ``semantic_placement_consistency``.
 
 ``object_pairing_consistency`` is evaluated only after the configured grouping
-algorithm supplies object groups. Its verdict covers group-member category and
-role compatibility. Object position, distance, angle, orientation, access, and
-functional arrangement are not pairing defects: prompt-specified local
-function belongs to L2 ``functional_semantic_fidelity`` and explicit relations
-belong to L2 OOR/OAR.
+algorithm supplies object groups. Its verdict covers target category and role
+compatibility with both the scene and local group context. Object position,
+distance, angle, orientation, access, and functional arrangement are not
+pairing defects: prompt-specified local function belongs to L2
+``functional_semantic_fidelity`` and explicit relations belong to L2 OOR/OAR.
 
 The module consumes prepared visual evidence and an injected VLM judge. When a
 local metric lacks scope-correct evidence, it may request a packet from an
@@ -71,9 +73,14 @@ from benchmark.visual_judge.group_scope import (
     GroupCameraScope,
     group_scope_evidence_goal,
 )
+from benchmark.visual_judge.l3_prompts import (
+    L3_METRIC_BOUNDARY_RULES,
+    L3_METRIC_PROMPT_VERSION,
+    L3_METRIC_RUBRICS,
+)
 
 
-SCENE_QUALITY_INTERFACE_VERSION = "scene_quality_v2"
+SCENE_QUALITY_INTERFACE_VERSION = "scene_quality_v3"
 
 # Canonical L3 output namespace.
 SCENE_QUALITY_INTERFACE_NAMESPACE = "l3_scene_quality"
@@ -84,13 +91,15 @@ _RETIRED_METRIC_NAMES = ("object_coexistence_consistency",)
 SEMANTIC_COHERENCE = "semantic_coherence"
 PERCEPTUAL_VISUAL_QUALITY = "perceptual_visual_quality"
 FUNCTIONAL_VALIDITY = "functional_validity"
+SEMANTIC_PLACEMENT = "semantic_placement"
 EXPERIMENTAL_NON_SCORING = "experimental_non_scoring"
 SEMANTIC_COHERENCE_METRICS = ("scale_consistency", "object_pairing_consistency")
 PERCEPTUAL_VISUAL_QUALITY_METRICS = ("style_consistency",)
 FUNCTIONAL_VALIDITY_METRICS = ("functional_consistency",)
+SEMANTIC_PLACEMENT_METRICS = ("semantic_placement_consistency",)
 # The frozen profile and aggregate keep the original three L3 metrics. Functional
-# consistency is an additive, explicitly enabled diagnostic interface until the
-# benchmark hierarchy assigns it aggregate ownership.
+# and semantic-placement consistency are additive, explicitly enabled diagnostic
+# interfaces until the benchmark hierarchy assigns them aggregate ownership.
 SCENE_QUALITY_INTERFACE_METRICS = (
     "style_consistency",
     "scale_consistency",
@@ -99,12 +108,18 @@ SCENE_QUALITY_INTERFACE_METRICS = (
 SUPPORTED_SCENE_QUALITY_METRICS = (
     *SCENE_QUALITY_INTERFACE_METRICS,
     "functional_consistency",
+    "semantic_placement_consistency",
+)
+EXPERIMENTAL_SCENE_QUALITY_METRICS = (
+    "functional_consistency",
+    "semantic_placement_consistency",
 )
 SUBFAMILY_BY_METRIC = {
     "style_consistency": PERCEPTUAL_VISUAL_QUALITY,
     "scale_consistency": SEMANTIC_COHERENCE,
     "object_pairing_consistency": SEMANTIC_COHERENCE,
     "functional_consistency": FUNCTIONAL_VALIDITY,
+    "semantic_placement_consistency": SEMANTIC_PLACEMENT,
 }
 JUDGMENT_SCOPE_BY_METRIC = {
     "style_consistency": {
@@ -116,7 +131,12 @@ JUDGMENT_SCOPE_BY_METRIC = {
         "excluded": ["ordinary_product_size_variation", "minor_ratio_difference"],
     },
     "object_pairing_consistency": {
-        "included": ["group_member_category_compatibility", "group_member_role_compatibility"],
+        "included": [
+            "scene_member_category_compatibility",
+            "scene_member_role_compatibility",
+            "group_member_category_compatibility",
+            "group_member_role_compatibility",
+        ],
         "excluded": [
             "position",
             "distance",
@@ -144,33 +164,34 @@ JUDGMENT_SCOPE_BY_METRIC = {
         ],
         "prerequisite": "object_grouping_report",
     },
+    "semantic_placement_consistency": {
+        "included": [
+            "semantically_inappropriate_support_surface",
+            "implausible_placement_height",
+            "semantically_inappropriate_scene_zone",
+            "implausible_local_context",
+        ],
+        "excluded": [
+            "collision",
+            "penetration",
+            "out_of_bounds",
+            "physical_support",
+            "contact_stability",
+            "prompt_fidelity",
+            "category_pairing",
+            "style",
+            "scale",
+            "orientation_for_use",
+            "accessibility",
+            "opening_clearance",
+            "ensemble_operability",
+            "exact_relation_fidelity",
+        ],
+        "prerequisite": "object_grouping_report",
+    },
 }
 
-METRIC_RUBRICS = {
-    "style_consistency": (
-        "Judge only significant visible style incompatibility among the scene's "
-        "objects and against any supplied frozen visual-style directives. Minor "
-        "variation and subjective preference are valid."
-    ),
-    "scale_consistency": (
-        "Judge only significant visible category-relative scale incoherence. "
-        "Allow ordinary product-size variation and any exact prompt-authorized "
-        "surreal scale relation."
-    ),
-    "object_pairing_consistency": (
-        "After grouping, judge only whether members of each supplied object group "
-        "have significantly incompatible categories or semantic roles. Position, "
-        "distance, angle, orientation, access, ergonomic layout, and functional "
-        "arrangement are explicitly outside this metric."
-    ),
-    "functional_consistency": (
-        "Judge whether the supplied local group can be used in a real-world "
-        "sense. Check visible interaction-side access, opening clearance, "
-        "orientation for use, and ensemble operability. Do not judge prompt "
-        "fidelity, category pairing, style, scale, or unrelated exact spatial "
-        "relations."
-    ),
-}
+METRIC_RUBRICS = L3_METRIC_RUBRICS
 
 # Camera-policy vocabularies. Reuse the repository's evidence vocabulary rather
 # than inventing a parallel abstraction. ``camera_pose_mode`` (optional) bridges
@@ -360,6 +381,45 @@ DEFAULT_SCENE_QUALITY_INTERFACE_CONFIG: dict[str, Any] = {
                 ],
             },
         },
+        # Additive experimental metric. This concerns semantic location only;
+        # L1 remains the sole owner of collision and physical support.
+        "semantic_placement_consistency": {
+            "enabled": False,
+            "implemented": True,
+            "metric_status": EXPERIMENTAL_NON_SCORING,
+            "activation_policy": "explicit_config_only",
+            "included_in_canonical_aggregate": False,
+            "weight": 1.0,
+            "evidence_policy": {
+                "camera_scope": "group_local",
+                "camera_mode": "metric_local",
+                "selector": "deterministic",
+                "image_budget": 3,
+                "presentation": "raw",
+                "image_order": ["group_local", "global_context"],
+                "include_global_context": True,
+                "camera_pose_mode": None,
+            },
+            "evidence_plan": {
+                "evidence_strategy": "global_and_local",
+                "global_policy": {
+                    "view_family": "global_perspective",
+                    "image_budget": 1,
+                    "top_down": False,
+                },
+                "local_policy": {
+                    "camera_scope": "group_local",
+                    "grouping_policy_id": GROUPING_POLICY_ID,
+                },
+                "router_options": None,
+                "text_context": [
+                    "original_prompt",
+                    "authorized_deviations",
+                    "asset_policy",
+                    "object_grouping_report",
+                ],
+            },
+        },
     },
 }
 
@@ -445,7 +505,7 @@ def resolve_scene_quality_config(
                 f"l3_scene_quality.metrics.{metric_name} must be a JSON object"
             )
         _validate_metric_flags(metric_name, metric_config)
-        if metric_name == "functional_consistency":
+        if metric_name in EXPERIMENTAL_SCENE_QUALITY_METRICS:
             metric_config.update(
                 {
                     "metric_status": EXPERIMENTAL_NON_SCORING,
@@ -605,6 +665,7 @@ def evaluate_scene_quality_interfaces(
     return {
         "category": SCENE_QUALITY_INTERFACE_NAMESPACE,
         "interface_version": str(resolved.get("version") or SCENE_QUALITY_INTERFACE_VERSION),
+        "metric_prompt_version": L3_METRIC_PROMPT_VERSION,
         "level": "l3_scene_quality",
         "implemented": True,
         "enabled": top_enabled,
@@ -646,16 +707,17 @@ def evaluate_scene_quality_interfaces(
         "active_metrics": active_metric_names,
         "resolved_metrics": resolved_metric_names,
         "experimental_metrics": {
-            "functional_consistency": {
+            metric_name: {
                 "status": EXPERIMENTAL_NON_SCORING,
                 "enabled": bool(
                     resolved["metrics"][
-                        "functional_consistency"
+                        metric_name
                     ]["enabled"]
                 ),
                 "activation_policy": "explicit_config_only",
                 "included_in_canonical_aggregate": False,
             }
+            for metric_name in EXPERIMENTAL_SCENE_QUALITY_METRICS
         },
         "active_metric_signature": (
             "+".join(active_metric_names) if active_metric_names else "none"
@@ -664,6 +726,7 @@ def evaluate_scene_quality_interfaces(
             SEMANTIC_COHERENCE: list(SEMANTIC_COHERENCE_METRICS),
             PERCEPTUAL_VISUAL_QUALITY: list(PERCEPTUAL_VISUAL_QUALITY_METRICS),
             FUNCTIONAL_VALIDITY: list(FUNCTIONAL_VALIDITY_METRICS),
+            SEMANTIC_PLACEMENT: list(SEMANTIC_PLACEMENT_METRICS),
         },
         "grouping_policy": grouping_policy_provenance(),
         "final_vlm_context_contract": list(FINAL_VLM_CONTEXT_CONTRACT),
@@ -705,8 +768,14 @@ def evaluate_scene_quality_interfaces(
                 "when explicitly specified by the prompt"
             ),
             "object_pairing_scope": (
-                "L3 grouped category_and_role_compatibility_only; excludes "
-                "position, distance, angle, orientation, and arrangement"
+                "L3 scene_and_group category_and_role_compatibility_only; "
+                "excludes position, distance, angle, orientation, and "
+                "arrangement"
+            ),
+            "semantic_placement_owner": (
+                "Optional non-scoring L3 semantic placement judges whether an "
+                "otherwise physically possible location makes sense in the "
+                "scene; L1 remains the owner of collision, OOB, and support"
             ),
         },
         "double_count_guard": {
@@ -718,7 +787,8 @@ def evaluate_scene_quality_interfaces(
         },
         "notes": [
             "Semantic Coherence (scale/pairing) and Perceptual Visual Quality (style) are distinct subfamilies.",
-            "Object pairing runs after external grouping and judges only group-member category/role compatibility.",
+            "Object pairing runs after external grouping and judges target category/role compatibility with both scene and local-group context.",
+            "Semantic placement is an opt-in non-scoring diagnostic for scene- and local-context location plausibility; it excludes collision and physical support.",
             "Prompt-specified local functionality is owned by L2; explicit position/angle relations are owned by OOR/OAR.",
             "An L3 invalid verdict requires a significant, explicitly identified, visible metric-scoped defect; otherwise sufficient evidence resolves valid.",
             "Camera/evidence policies are configurable defaults resolved from a unified layered configuration.",
@@ -874,16 +944,17 @@ def _evaluate_metric(
         "family": SUBFAMILY_BY_METRIC[metric_name],
         "judgment_scope": deepcopy(JUDGMENT_SCOPE_BY_METRIC[metric_name]),
         "interface_version": SCENE_QUALITY_INTERFACE_VERSION,
+        "metric_prompt_version": L3_METRIC_PROMPT_VERSION,
         "implemented": True,
         "enabled": enabled,
         "metric_status": (
             EXPERIMENTAL_NON_SCORING
-            if metric_name == "functional_consistency"
+            if metric_name in EXPERIMENTAL_SCENE_QUALITY_METRICS
             else "canonical_scoring"
         ),
         "activation_policy": (
             "explicit_config_only"
-            if metric_name == "functional_consistency"
+            if metric_name in EXPERIMENTAL_SCENE_QUALITY_METRICS
             else "profile_and_applicability"
         ),
         "included_in_canonical_aggregate": (
@@ -1610,6 +1681,8 @@ def _judge_request(
         "metric": metric_name,
         "evidence_phase": evidence_phase,
         "decision_mode": decision_mode,
+        "metric_prompt_version": L3_METRIC_PROMPT_VERSION,
+        "metric_boundary_rules": list(L3_METRIC_BOUNDARY_RULES),
         "metric_rubric": METRIC_RUBRICS[metric_name],
         "judgment_scope": deepcopy(JUDGMENT_SCOPE_BY_METRIC[metric_name]),
         "event": {

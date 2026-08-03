@@ -1,0 +1,42 @@
+{
+  "contract_version": "counter_strike_case_contract_v1",
+  "case_id": "cs_fps_qwen3_8_max_preview",
+  "corpus_id": "Qwen3_8-Max-Preview",
+  "source_frame": {
+    "up_axis": "y",
+    "unit_scale": 1.0
+  },
+  "source_assertions": [
+    {
+      "path": "index.html",
+      "sha256": "65c5d0d640b0d9e62344209c96018e3bbbe1c9767edc969bf0de44ea178f1c87",
+      "evidence": "SPAWNS T/CT declarations"
+    }
+  ],
+  "team_spawns": {
+    "team_a": {
+      "points": [
+        [-40.0, 0.0, -6.0],
+        [-40.0, 0.0, -2.0],
+        [-40.0, 0.0, 2.0],
+        [-40.0, 0.0, 6.0],
+        [-41.0, 0.0, 0.0]
+      ],
+      "jitter_radius_m": 0.0
+    },
+    "team_b": {
+      "points": [
+        [40.0, 0.0, -6.0],
+        [40.0, 0.0, -2.0],
+        [40.0, 0.0, 2.0],
+        [40.0, 0.0, 6.0],
+        [41.0, 0.0, 0.0]
+      ],
+      "jitter_radius_m": 0.0
+    }
+  },
+  "annotation": {
+    "source": "benchmark_audited_source_declaration",
+    "score_authority": false
+  }
+}

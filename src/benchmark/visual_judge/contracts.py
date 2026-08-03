@@ -1,7 +1,37 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from copy import deepcopy
 from typing import Any
+
+
+class ResponseSchemaRepairError(ValueError):
+    """Raised after the one allowed response-schema repair also fails."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        schema_audit: dict[str, Any],
+    ) -> None:
+        super().__init__(message)
+        self.schema_audit = deepcopy(schema_audit)
+
+
+def response_schema_audit_from_exception(
+    error: BaseException,
+) -> dict[str, Any] | None:
+    """Recover response-schema audit data through wrapped exception chains."""
+
+    seen: set[int] = set()
+    current: BaseException | None = error
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        audit = getattr(current, "schema_audit", None)
+        if isinstance(audit, dict):
+            return deepcopy(audit)
+        current = current.__cause__ or current.__context__
+    return None
 
 
 def validate_generic_visual_response(result: dict[str, Any]) -> dict[str, Any]:

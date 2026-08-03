@@ -538,9 +538,9 @@ def _validate_instance_geometry(
             _id_property_value(root.get("benchmark_center_m")),
             expected.get("center"),
         ),
-        "target_size_m": (
-            _id_property_value(root.get("benchmark_target_size_m")),
-            materialization.get("target_size_m"),
+        "requested_uniform_scale": (
+            root.get("benchmark_requested_uniform_scale"),
+            materialization.get("requested_uniform_scale"),
         ),
         "rotation_euler_xyz_deg": (
             _id_property_value(
@@ -548,15 +548,21 @@ def _validate_instance_geometry(
             ),
             expected.get("rotation"),
         ),
-        "uniform_scale": (
-            root.get("benchmark_uniform_scale"),
-            materialization.get("uniform_scale"),
+        "effective_uniform_scale": (
+            root.get("benchmark_effective_uniform_scale"),
+            materialization.get("effective_uniform_scale"),
         ),
         "local_bbox_size_m": (
             _id_property_value(
                 root.get("benchmark_local_bbox_size_m")
             ),
             expected.get("size"),
+        ),
+        "actual_local_bbox_size_m": (
+            _id_property_value(
+                root.get("benchmark_actual_local_bbox_size_m")
+            ),
+            materialization.get("actual_local_bbox_size_m"),
         ),
     }
     for field, (observed, wanted) in comparisons.items():

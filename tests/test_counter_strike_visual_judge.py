@@ -8,6 +8,7 @@ from typing import Any
 from PIL import Image
 import pytest
 
+import benchmark.game_scene.counter_strike.judge as judge_module
 from benchmark.game_scene.counter_strike import (
     GLOBAL_EVIDENCE_ROLE,
     REGIONAL_EVIDENCE_ROLE,
@@ -18,6 +19,7 @@ from benchmark.game_scene.counter_strike import (
 from benchmark.game_scene.counter_strike.judge import (
     CounterStrikeVisualJudge,
     CounterStrikeVisualJudgeError,
+    build_counter_strike_visual_judge,
 )
 
 
@@ -67,6 +69,55 @@ class _FakeModel:
         if not queue:
             raise AssertionError(f"unexpected model call {call_type!r}")
         return json.dumps(queue.pop(0))
+
+
+def test_production_builder_uses_distinct_judge_and_camera_runtimes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    judge_model = _FakeModel({})
+    selector_model = _FakeModel({})
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    def fake_judge_builder(config: dict[str, Any]):
+        calls.append(("judge", config))
+        return type("_JudgeRuntime", (), {"model": judge_model})()
+
+    def fake_selector_builder(config: dict[str, Any]):
+        calls.append(("camera_selector", config))
+        return type(
+            "_SelectorRuntime",
+            (),
+            {"model": selector_model},
+        )()
+
+    monkeypatch.setattr(
+        judge_module,
+        "build_openai_compatible_vlm_judge",
+        fake_judge_builder,
+    )
+    monkeypatch.setattr(
+        judge_module,
+        "build_openai_compatible_camera_selector",
+        fake_selector_builder,
+    )
+    model_config = {
+        "provider": "openai_compatible",
+        "model": "test-model",
+    }
+
+    result = build_counter_strike_visual_judge(
+        model_config,
+        benchmark_config=load_counter_strike_benchmark_config(
+            BENCHMARK_CONFIG
+        ),
+    )
+
+    assert result.model is judge_model
+    assert result.selector_model is selector_model
+    assert calls == [
+        ("judge", model_config),
+        ("camera_selector", model_config),
+    ]
 
 
 def _sha256(path: Path) -> str:

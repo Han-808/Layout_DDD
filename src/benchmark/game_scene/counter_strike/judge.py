@@ -27,6 +27,9 @@ from PIL import Image, ImageEnhance, ImageOps, UnidentifiedImageError
 from benchmark.visual_judge.openai_compatible import (
     build_openai_compatible_vlm_judge,
 )
+from benchmark.visual_judge.openai_camera_selector import (
+    build_openai_compatible_camera_selector,
+)
 
 from .evidence import (
     CounterStrikeEvidenceDescriptor,
@@ -824,7 +827,7 @@ def build_counter_strike_visual_judge(
     """Build the CS adapter on the repository's shared safe model transport."""
 
     shared = build_openai_compatible_vlm_judge(model_config)
-    selector = build_openai_compatible_vlm_judge(model_config)
+    selector = build_openai_compatible_camera_selector(model_config)
     return CounterStrikeVisualJudge(
         shared.model,
         benchmark_config=benchmark_config,

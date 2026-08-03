@@ -125,6 +125,7 @@ def run_scene_harness(
     case_bundle: Any | str | Path | None = None,
     native_registry_path: str | Path | None = None,
     native_registry_authority: Any | None = None,
+    native_instance_mapping_path: str | Path | None = None,
     structure: bool | None = None,
     prompt_granularity: str = FINE_GRAINED,
     generator_structure: dict | None = None,
@@ -492,6 +493,7 @@ def run_scene_harness(
             case_bundle=case_bundle,
             native_registry_path=native_registry_path,
             native_registry_authority=native_registry_authority,
+            native_instance_mapping_path=native_instance_mapping_path,
             blender_bin=blender_bin,
             blender_timeout_seconds=int(blender_timeout_seconds),
         )
@@ -839,6 +841,15 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--native-instance-mapping",
+        default=None,
+        help=(
+            "Submitter-authored public_native_instance_mapping_v1 JSON for "
+            "a fixed-catalog .blend. The benchmark derives and seals the "
+            "authoritative registry after read-only inspection."
+        ),
+    )
+    parser.add_argument(
         "--native-registry-authority-key-file",
         default=None,
         help=(
@@ -1172,18 +1183,18 @@ def main() -> None:
         _reject_literal_api_key(camera_selector_config, "camera selector config")
     except ValueError as exc:
         parser.error(str(exc))
-    camera_active_selector = (
-        build_openai_compatible_vlm_judge(camera_selector_config)
-        if camera_selector_config
-        else None
-    )
-    l3_vlm_camera_selector = (
+    production_camera_selector = (
         build_openai_compatible_camera_selector(
             camera_selector_config
         )
         if camera_selector_config
         else None
     )
+    # The legacy P0b camera path and the canonical L3 Controller receive the
+    # same dedicated camera-selector transport.  A selector config must never
+    # be materialized as a metric Judge.
+    camera_active_selector = production_camera_selector
+    l3_vlm_camera_selector = production_camera_selector
     vlm_evaluation_control = (
         read_json(_path_arg(args.vlm_evaluation_control))
         if args.vlm_evaluation_control
@@ -1219,10 +1230,17 @@ def main() -> None:
             )
         except (OSError, ValueError) as exc:
             parser.error(f"cannot load native registry authority: {exc}")
-    if args.native_registry and native_registry_authority is None:
+    if args.native_registry and args.native_instance_mapping:
         parser.error(
-            "--native-registry requires the benchmark-owned authority key "
-            "file and key id"
+            "--native-registry and --native-instance-mapping are mutually "
+            "exclusive"
+        )
+    if (
+        args.native_registry or args.native_instance_mapping
+    ) and native_registry_authority is None:
+        parser.error(
+            "native Blender submission requires the benchmark-owned "
+            "authority key file and key id"
         )
 
     manifest = run_scene_harness(
@@ -1246,6 +1264,11 @@ def main() -> None:
             _path_arg(args.native_registry) if args.native_registry else None
         ),
         native_registry_authority=native_registry_authority,
+        native_instance_mapping_path=(
+            _path_arg(args.native_instance_mapping)
+            if args.native_instance_mapping
+            else None
+        ),
         run_generation=args.run_generation,
         iteration_limit=args.iteration_limit,
         structure=args.structure,
@@ -1384,6 +1407,7 @@ def _run_generation_evaluation_loop(
     case_bundle: Any | str | Path | None = None,
     native_registry_path: str | Path | None = None,
     native_registry_authority: Any | None = None,
+    native_instance_mapping_path: str | Path | None = None,
     blender_bin: str | Path | None = None,
     blender_timeout_seconds: int = 900,
 ) -> dict:
@@ -1447,6 +1471,9 @@ def _run_generation_evaluation_loop(
                 generation_input=generation_input,
                 native_registry_path=native_registry_path,
                 native_registry_authority=native_registry_authority,
+                native_instance_mapping_path=(
+                    native_instance_mapping_path
+                ),
                 timeout_seconds=blender_timeout_seconds,
             )
             report = evaluate_prepared_submission(
@@ -1466,6 +1493,9 @@ def _run_generation_evaluation_loop(
                 generation_input=generation_input,
                 native_registry_path=native_registry_path,
                 native_registry_authority=native_registry_authority,
+                native_instance_mapping_path=(
+                    native_instance_mapping_path
+                ),
                 official_mode=True,
                 vlm_evaluation_control=vlm_evaluation_control,
             )

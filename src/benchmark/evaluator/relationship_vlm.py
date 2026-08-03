@@ -110,11 +110,14 @@ def pending_relation_result(
     relation: dict,
     reason: str,
     error: str | None = None,
+    error_audit: dict[str, Any] | None = None,
     detector_evidence: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     evidence: dict[str, Any] = {"reason": reason}
     if error:
         evidence["error"] = str(error)
+    if isinstance(error_audit, dict):
+        evidence["adjudication_failure_audit"] = deepcopy(error_audit)
     if isinstance(detector_evidence, dict):
         evidence["detector_evidence"] = deepcopy(detector_evidence)
     return copy_relation_identity({

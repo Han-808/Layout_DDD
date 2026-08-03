@@ -46,6 +46,7 @@ def _failed_readiness() -> dict:
     return build_readiness_report(
         status="not_evaluable",
         reason_codes=["registry_scene_asset_id_mismatch"],
+        failure_stage="materialization_consistency",
         failure_owner="generator",
         checks=[
             {
@@ -286,6 +287,9 @@ def test_build_readiness_report_has_only_the_gate_contract_fields() -> None:
         "gate_version",
         "status",
         "reason_codes",
+        "failure_stage",
+        "primary_failure_owner",
+        "contributing_owners",
         "failure_owner",
         "checks",
         "provenance",
@@ -293,6 +297,9 @@ def test_build_readiness_report_has_only_the_gate_contract_fields() -> None:
     assert report["gate_version"] == "submission_readiness_v1"
     assert report["status"] == "ready"
     assert report["reason_codes"] == []
+    assert report["failure_stage"] is None
+    assert report["primary_failure_owner"] is None
+    assert report["contributing_owners"] == []
     assert report["failure_owner"] is None
     assert [check["id"] for check in report["checks"]] == [
         "artifact_schema",
@@ -323,7 +330,66 @@ def test_readiness_is_fail_closed_for_empty_or_failed_checks() -> None:
     assert empty["reason_codes"] == ["readiness_checks_missing"]
     assert failed["status"] == "not_evaluable"
     assert failed["reason_codes"] == ["trusted_blend_hash_failed"]
+    assert failed["failure_stage"] == "submission_readiness"
+    assert failed["primary_failure_owner"] == "infrastructure"
+    assert failed["contributing_owners"] == []
     assert failed["failure_owner"] == "infrastructure"
+
+
+def test_readiness_attributes_primary_and_contributing_owners() -> None:
+    report = build_readiness_report(
+        status="not_evaluable",
+        failure_stage="evaluation_time_trust_audit",
+        primary_failure_owner="benchmark",
+        contributing_owners=["submission", "benchmark"],
+        checks=[
+            {
+                "id": "trusted_catalog",
+                "passed": False,
+                "failure_owner": "submission",
+                "reason_codes": ["catalog_binding_mismatch"],
+            },
+            {
+                "id": "trusted_renderer",
+                "passed": False,
+                "failure_owner": "benchmark",
+                "reason_codes": ["renderer_unavailable"],
+            },
+        ],
+    )
+
+    assert report["failure_stage"] == "evaluation_time_trust_audit"
+    assert report["primary_failure_owner"] == "benchmark"
+    assert report["contributing_owners"] == ["submission"]
+    assert report["failure_owner"] == "benchmark"
+    assert report["reason_codes"] == [
+        "catalog_binding_mismatch",
+        "renderer_unavailable",
+    ]
+
+
+def test_legacy_failure_owner_is_normalized_into_structured_attribution() -> None:
+    normalized = readiness_module._normalize_readiness(
+        {
+            "gate_version": "submission_readiness_v1",
+            "status": "not_evaluable",
+            "reason_codes": ["legacy_failure"],
+            "failure_owner": "generator",
+            "checks": [
+                {
+                    "id": "legacy_check",
+                    "passed": False,
+                    "reason_codes": ["legacy_failure"],
+                }
+            ],
+            "provenance": {},
+        }
+    )
+
+    assert normalized["failure_stage"] == "submission_readiness"
+    assert normalized["primary_failure_owner"] == "generator"
+    assert normalized["contributing_owners"] == []
+    assert normalized["failure_owner"] == "generator"
 
 
 def test_readiness_rejects_unknown_status_and_duplicate_checks() -> None:
@@ -436,6 +502,91 @@ def test_existing_success_l0_without_readiness_remains_schema_compatible() -> No
 
     schema = read_json(ROOT / "schemas" / "evaluation_report.schema.json")
     Draft202012Validator(schema).validate(compatible_success)
+
+
+def test_legacy_readiness_v1_without_additive_attribution_fields_validates() -> None:
+    report = build_not_evaluable_evaluation_report(
+        readiness=_failed_readiness(),
+        request_id="request",
+    )
+
+    def strip_additive_fields(value) -> None:
+        if isinstance(value, dict):
+            if value.get("gate_version") == "submission_readiness_v1":
+                value.pop("failure_stage", None)
+                value.pop("primary_failure_owner", None)
+                value.pop("contributing_owners", None)
+            for child in value.values():
+                strip_additive_fields(child)
+        elif isinstance(value, list):
+            for child in value:
+                strip_additive_fields(child)
+
+    strip_additive_fields(report)
+    schema = read_json(ROOT / "schemas" / "evaluation_report.schema.json")
+    Draft202012Validator(schema).validate(report)
+
+
+@pytest.mark.parametrize(
+    ("message", "source_kind", "expected_stage"),
+    [
+        (
+            "generator artifact JSON must be an object",
+            "json_file",
+            "source_parsing",
+        ),
+        (
+            "instances[0].uniform_scale must be finite",
+            "json_file",
+            "generator_contract_validation",
+        ),
+        (
+            "instances[0].slot_id is not a public slot",
+            "json_file",
+            "slot_binding",
+        ),
+        (
+            "unknown frozen catalog asset_id chair_x",
+            "json_file",
+            "asset_resolution",
+        ),
+        (
+            "read-only blend inspector exited with status 1",
+            "native_blend",
+            "native_inspection",
+        ),
+        (
+            "public native instance mapping is not valid JSON",
+            "native_blend",
+            "source_parsing",
+        ),
+        (
+            "public native instance mapping has invalid root fields",
+            "native_blend",
+            "generator_contract_validation",
+        ),
+        (
+            "catalog materializer exited with status 1",
+            "json_file",
+            "materialization",
+        ),
+    ],
+)
+def test_preparation_failure_stage_is_narrowly_attributed(
+    message: str,
+    source_kind: str,
+    expected_stage: str,
+) -> None:
+    readiness = preparation_module._failure_readiness(
+        preparation_module.MaterializationError(message),
+        provenance={
+            "adapter_contract_revision": "catalog_placement_v1",
+            "case_bundle_manifest_sha256": "a" * 64,
+            "source": {"kind": source_kind},
+        },
+    )
+
+    assert readiness["failure_stage"] == expected_stage
 
 
 def test_readiness_module_has_no_evaluator_import_boundary() -> None:
@@ -597,6 +748,7 @@ def test_readiness_failure_calls_no_renderer_gate_judge_or_metrics(
         out_dir=tmp_path / "evaluation",
         renderer=_ForbiddenRenderer(),
         vlm_judge=_ForbiddenJudge(),
+        official_mode=False,
     )
 
     assert calls == {
@@ -612,6 +764,88 @@ def test_readiness_failure_calls_no_renderer_gate_judge_or_metrics(
     assert not (tmp_path / "evaluation" / "renders").exists()
     schema = read_json(ROOT / "schemas" / "evaluation_report.schema.json")
     Draft202012Validator(schema).validate(report)
+
+
+def test_official_readiness_failure_writes_audit_artifacts_then_raises(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prepared, _, _ = _catalog_bound_stub(tmp_path)
+    monkeypatch.setattr(
+        submission_module,
+        "verify_prepared_submission",
+        lambda *args, **kwargs: _failed_readiness(),
+    )
+    destination = tmp_path / "official_evaluation"
+
+    with pytest.raises(
+        submission_module.SubmissionEvaluationError,
+        match="official submission is not evaluable.*evaluation_report.json",
+    ):
+        evaluate_prepared_submission(
+            prepared_submission=prepared,
+            case_bundle=_trusted_bundle(tmp_path),
+            out_dir=destination,
+            official_mode=True,
+        )
+
+    readiness = read_json(destination / "evaluation_readiness_report.json")
+    report = read_json(destination / "evaluation_report.json")
+    manifest = read_json(destination / "submission_run_manifest.json")
+    assert readiness["status"] == "not_evaluable"
+    assert readiness["failure_stage"] == "materialization_consistency"
+    assert readiness["primary_failure_owner"] == "generator"
+    assert report["evaluation_status"] == "not_evaluable"
+    assert manifest["status"] == "not_evaluable"
+    assert manifest["evaluation_report"] == (
+        destination / "evaluation_report.json"
+    ).as_posix()
+
+
+@pytest.mark.parametrize("official_mode", [False, True])
+def test_artifact_entrypoint_preserves_readiness_failure_mode(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    official_mode: bool,
+) -> None:
+    prepared, _, _ = _catalog_bound_stub(tmp_path)
+    monkeypatch.setattr(
+        submission_module,
+        "prepare_submission",
+        lambda **kwargs: prepared,
+    )
+    monkeypatch.setattr(
+        submission_module,
+        "verify_prepared_submission",
+        lambda *args, **kwargs: _failed_readiness(),
+    )
+    destination = tmp_path / f"artifact_{official_mode}"
+    kwargs = {
+        "artifact": {"contract_version": "catalog_placement_v1"},
+        "case_bundle": _trusted_bundle(tmp_path),
+        "out_dir": destination,
+        "asset_root": tmp_path / "assets",
+        "asset_csv": tmp_path / "assets.csv",
+        "blender_bin": tmp_path / "blender",
+        "official_mode": official_mode,
+    }
+
+    if official_mode:
+        with pytest.raises(
+            submission_module.SubmissionEvaluationError,
+            match="official submission is not evaluable",
+        ):
+            submission_module.evaluate_artifact_submission(**kwargs)
+    else:
+        report = submission_module.evaluate_artifact_submission(**kwargs)
+        assert report["evaluation_status"] == "not_evaluable"
+
+    assert read_json(destination / "evaluation_report.json")[
+        "evaluation_status"
+    ] == "not_evaluable"
+    assert read_json(destination / "submission_run_manifest.json")[
+        "official_mode"
+    ] is official_mode
 
 
 def test_prepared_renderer_auxiliary_methods_force_and_bind_trusted_blend(
@@ -1003,6 +1237,7 @@ def test_prepared_csv_binding_mismatch_is_readiness_failure_before_downstream(
         vlm_judge=_ForbiddenJudge(),
         asset_root=asset_root,
         asset_csv=replacement_csv,
+        official_mode=False,
     )
 
     assert calls == {
@@ -1081,16 +1316,22 @@ def test_official_prepared_catalog_arguments_are_required_before_downstream(
         forbidden_evidence_gate,
     )
 
-    report = evaluate_prepared_submission(
-        prepared_submission=prepared,
-        case_bundle=_trusted_bundle(tmp_path),
-        out_dir=tmp_path / "evaluation",
-        renderer=_ForbiddenRenderer(),
-        vlm_judge=_ForbiddenJudge(),
-        official_mode=True,
-    )
+    destination = tmp_path / "evaluation"
+    with pytest.raises(
+        submission_module.SubmissionEvaluationError,
+        match="official submission is not evaluable.*evaluation_report.json",
+    ):
+        evaluate_prepared_submission(
+            prepared_submission=prepared,
+            case_bundle=_trusted_bundle(tmp_path),
+            out_dir=destination,
+            renderer=_ForbiddenRenderer(),
+            vlm_judge=_ForbiddenJudge(),
+            official_mode=True,
+        )
 
     assert calls == []
+    report = read_json(destination / "evaluation_report.json")
     assert report["evaluation_status"] == "not_evaluable"
     assert report["benchmark_score"] is None
     readiness = report["layer_reports"][L0]["readiness"]
@@ -1099,6 +1340,10 @@ def test_official_prepared_catalog_arguments_are_required_before_downstream(
         "official_catalog_asset_root_required",
         "official_catalog_asset_csv_required",
     }.issubset(readiness["reason_codes"])
+    assert readiness["failure_stage"] == "evaluation_time_trust_audit"
+    assert readiness["primary_failure_owner"] == "submission"
+    manifest = read_json(destination / "submission_run_manifest.json")
+    assert manifest["status"] == "not_evaluable"
     assert not (tmp_path / "evaluation" / "renders").exists()
 
 
@@ -1133,15 +1378,19 @@ def test_evaluation_audit_derives_catalog_and_reruns_fresh_consistency(
                 {
                     "instance_id": "chair",
                     "asset_id": "asset",
-                    "center_m": [1.0, 1.0, 0.5],
-                    "target_size_m": [1.0, 1.0, 1.0],
-                    "rotation_euler_xyz_deg": [0.0, 0.0, 0.0],
+                        "center_m": [1.0, 1.0, 0.5],
+                        "uniform_scale": 1.0,
+                        "rotation_euler_xyz_deg": [0.0, 0.0, 0.0],
+                        "slot_id": "chair_slot",
                 }
             ]
         },
-        case_bundle=bundle,
-        catalog=catalog,
-    )
+            case_bundle=bundle,
+            catalog=catalog,
+            task_slots=preparation_module._task_slots_for_generation_input(
+                generation_input
+            ),
+        )
     expected = plan["instances"][0]
     blend_inspection = {
         "status": "passed",
@@ -1152,7 +1401,15 @@ def test_evaluation_audit_derives_catalog_and_reruns_fresh_consistency(
                 "asset_id": expected["asset_id"],
                 "slot_id": expected["slot_id"],
                 "center_m": deepcopy(expected["center_m"]),
-                "target_size_m": deepcopy(expected["target_size_m"]),
+                "requested_uniform_scale": expected[
+                    "requested_uniform_scale"
+                ],
+                "effective_uniform_scale": expected[
+                    "effective_uniform_scale"
+                ],
+                "actual_local_bbox_size_m": deepcopy(
+                    expected["actual_local_bbox_size_m"]
+                ),
                 "rotation_euler_xyz_deg": deepcopy(
                     expected["rotation_euler_xyz_deg"]
                 ),
@@ -1186,8 +1443,9 @@ def test_evaluation_audit_derives_catalog_and_reruns_fresh_consistency(
                     "instance_id": "chair",
                     "asset_id": "asset",
                     "center_m": [1.0, 1.0, 0.5],
-                    "target_size_m": [1.0, 1.0, 1.0],
+                    "uniform_scale": 1.0,
                     "rotation_euler_xyz_deg": [0.0, 0.0, 0.0],
+                    "slot_id": "chair_slot",
                 }
             ],
         },
@@ -1425,8 +1683,9 @@ def test_evaluation_audit_derives_catalog_and_reruns_fresh_consistency(
                     "instance_id": "chair",
                     "asset_id": "asset",
                     "center_m": [2.0, 1.0, 0.5],
-                    "target_size_m": [1.0, 1.0, 1.0],
+                    "uniform_scale": 1.0,
                     "rotation_euler_xyz_deg": [0.0, 0.0, 0.0],
+                    "slot_id": "chair_slot",
                 }
             ],
         },

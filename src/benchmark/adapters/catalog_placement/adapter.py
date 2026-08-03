@@ -121,6 +121,7 @@ class CatalogPlacementAdapter(GenerationAdapter):
             placement = extract_catalog_placement(
                 response_text,
                 public_slot_ids=method_input.get("public_slot_ids", []),
+                require_slot_binding=True,
             )
         except ArtifactValidationError as error:
             self.last_run_metadata = {

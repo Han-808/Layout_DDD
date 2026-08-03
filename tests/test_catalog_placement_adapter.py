@@ -131,13 +131,13 @@ def _instance(
     instance_id: str,
     *,
     center: list[float],
-    slot_id: str | None = None,
+    slot_id: str | None = "public_chair_slot",
 ) -> dict:
     value = {
         "instance_id": instance_id,
         "asset_id": "wrong_lamp_asset",
         "center_m": center,
-        "target_size_m": [1.0, 3.0, 10.0],
+        "uniform_scale": 0.5,
         "rotation_euler_xyz_deg": [0.0, 0.0, 90.0],
     }
     if slot_id is not None:
@@ -191,7 +191,11 @@ def test_only_literal_public_slot_is_allowed_and_never_repairs_wrong_asset() -> 
     }
     method_input = build_catalog_placement_method_input(generation_input)
     assert method_input["public_slot_ids"] == ["public_chair_slot"]
-    assert "public_chair_slot#1" not in json.dumps(method_input)
+    serialized_method_input = json.dumps(method_input)
+    assert "public_chair_slot#1" not in serialized_method_input
+    assert "uniform_scale" in serialized_method_input
+    assert "target_size_m" not in serialized_method_input
+    assert "slot_id is required" in serialized_method_input
 
     placement = {
         "instances": [
@@ -208,6 +212,13 @@ def test_only_literal_public_slot_is_allowed_and_never_repairs_wrong_asset() -> 
     assert obj["category"] == "lamp"
     assert obj["description"] == "a frozen brass floor lamp"
     assert obj["metadata"]["catalog_placement"]["slot_id"] == "public_chair_slot"
+    assert obj["metadata"]["task_slot"] == {
+        "slot_id": "public_chair_slot",
+        "intended_category": "chair",
+        "intended_role": "seating",
+        "description": "task-side chair role",
+        "source": "public_object_plan",
+    }
 
     hidden = {
         "instances": [
@@ -222,7 +233,19 @@ def test_only_literal_public_slot_is_allowed_and_never_repairs_wrong_asset() -> 
         convert_catalog_placement_to_scene(hidden, generation_input)
 
 
-def test_contract_rejects_semantic_fields_nonfinite_and_nonpositive_sizes() -> None:
+def test_structured_assets_requires_literal_public_slot_binding() -> None:
+    generation_input = _generation_input(count=1)
+    missing = _instance("missing_slot", center=[1.0, 2.0, 3.0])
+    missing.pop("slot_id")
+    with pytest.raises(
+        ArtifactValidationError, match="structured_assets requires"
+    ):
+        convert_catalog_placement_to_scene(
+            {"instances": [missing]}, generation_input
+        )
+
+
+def test_contract_rejects_semantic_fields_nonfinite_and_nonpositive_scale() -> None:
     base = {
         "instances": [_instance("one", center=[1.0, 2.0, 3.0])]
     }
@@ -237,7 +260,7 @@ def test_contract_rejects_semantic_fields_nonfinite_and_nonpositive_sizes() -> N
         validate_catalog_placement(nonfinite)
 
     nonpositive = json.loads(json.dumps(base))
-    nonpositive["instances"][0]["target_size_m"][1] = 0.0
+    nonpositive["instances"][0]["uniform_scale"] = 0.0
     with pytest.raises(ArtifactValidationError):
         validate_catalog_placement(nonpositive)
 
@@ -248,7 +271,7 @@ def test_contract_rejects_semantic_fields_nonfinite_and_nonpositive_sizes() -> N
         )
 
 
-def test_uniform_fit_rotation_and_bounds_follow_frozen_convention() -> None:
+def test_exact_uniform_scale_rotation_and_bounds_follow_frozen_convention() -> None:
     scene = convert_catalog_placement_to_scene(
         {
             "instances": [
@@ -259,9 +282,9 @@ def test_uniform_fit_rotation_and_bounds_follow_frozen_convention() -> None:
     )
     metadata = scene["objects"][0]["metadata"]["catalog_placement"]
 
-    # min([1/2, 3/4, 10/8]) = 0.5; actual local size is separate
-    # from the requested target envelope.
-    assert metadata["uniform_scale"] == pytest.approx(0.5)
+    assert metadata["requested_uniform_scale"] == pytest.approx(0.5)
+    assert metadata["effective_uniform_scale"] == pytest.approx(0.5)
+    assert "target_size_m" not in metadata
     assert metadata["actual_local_bbox_size_m"] == pytest.approx(
         [1.0, 2.0, 4.0]
     )
@@ -282,6 +305,13 @@ def test_uniform_fit_rotation_and_bounds_follow_frozen_convention() -> None:
     assert metadata["asset_root_translation_m"] == pytest.approx(
         [9.75, 19.875, 29.5]
     )
+    registry = scene["metadata"]["instance_registry"]["instances"][0]
+    assert registry["requested_uniform_scale"] == pytest.approx(0.5)
+    assert registry["effective_uniform_scale"] == pytest.approx(0.5)
+    assert registry["actual_local_bbox_size_m"] == pytest.approx(
+        [1.0, 2.0, 4.0]
+    )
+    assert "target_size_m" not in registry
 
 
 def test_adapter_preserves_raw_artifact_bytes(tmp_path: Path) -> None:
@@ -290,8 +320,9 @@ def test_adapter_preserves_raw_artifact_bytes(tmp_path: Path) -> None:
         '{\n  "schema_version": "catalog_placement_v1",\n'
         '  "instances": [{"instance_id": "one", '
         '"asset_id": "wrong_lamp_asset", "center_m": [1, 2, 3], '
-        '"target_size_m": [1, 3, 10], '
-        '"rotation_euler_xyz_deg": [0, 0, 90]}]\n}\n'
+        '"uniform_scale": 0.5, '
+        '"rotation_euler_xyz_deg": [0, 0, 90], '
+        '"slot_id": "public_chair_slot"}]\n}\n'
     ).encode("utf-8")
     source.write_bytes(raw)
     output = tmp_path / "output"

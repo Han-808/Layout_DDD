@@ -15,8 +15,8 @@ CATALOG_PLACEMENT_VERSION = "catalog_placement_v1"
 SYSTEM_PROMPT = """You place instances of benchmark-provided frozen catalog assets.
 Return exactly one JSON object and no explanation or Markdown. The only root fields are
 schema_version and instances. schema_version, when present, is "catalog_placement_v1".
-Each instance has exactly instance_id, asset_id, center_m, target_size_m,
-rotation_euler_xyz_deg, and optionally slot_id. Never emit category, description,
+Each instance has exactly instance_id, asset_id, center_m, uniform_scale,
+rotation_euler_xyz_deg, and slot_id. Never emit category, description,
 scene type, coordinate declarations, relationships, evaluator IDs, metric claims,
 verdicts, scores, lighting, materials, cameras, or rendering settings.
 
@@ -27,15 +27,20 @@ selected_asset.jid from the supplied frozen catalog.
 
 Coordinates are fixed and must not be declared in the output: meters, z-up, +x along
 room width, +y along room depth, with the room-min-corner floor as origin. center_m is
-the world position of the scaled catalog canonical local-bbox center. target_size_m is
-a positive pre-rotation envelope along the asset's canonical local axes. The benchmark
-uses uniform contain-fit scaling: min(target_size_m[i] / catalog_bbox_size_m[i]).
+the world position of the scaled catalog canonical local-bbox center. uniform_scale is
+a finite positive scalar applied exactly and equally on all three local axes of the
+frozen asset. The materializer must not shrink, contain-fit, or otherwise reinterpret
+this generator-owned scale.
 rotation_euler_xyz_deg is intrinsic XYZ Euler degrees, applied to column vectors as
 Rz @ Ry @ Rx about the canonical bbox center. Express floor or support placement
 directly through center_m; there is no vertical-anchor field.
 
-slot_id is optional provenance. It may be copied only from public_slot_ids supplied
-below. It does not bind the asset, choose evaluator identity or category, or make any
+Because this adapter receives structured_assets input, slot_id is required on every
+instance and must exactly match one of public_slot_ids supplied below. Multiple
+instances may use the same public slot when its requested count is greater than one;
+stable instance_id values distinguish them. Never invent private or numbered slot
+identifiers. slot_id binds the instance to intended task semantics, but it does not
+repair the selected asset, choose evaluator identity or actual category, or make any
 metric claim."""
 
 OUTPUT_CONTRACT = {
@@ -45,9 +50,9 @@ OUTPUT_CONTRACT = {
             "instance_id": "chair_left",
             "asset_id": "selected_asset.jid",
             "center_m": [1.0, 2.0, 0.5],
-            "target_size_m": [0.8, 0.8, 1.0],
+            "uniform_scale": 1.0,
             "rotation_euler_xyz_deg": [0.0, 0.0, 90.0],
-            "slot_id": "optional_public_slot_id",
+            "slot_id": "required_public_slot_id",
         }
     ],
 }

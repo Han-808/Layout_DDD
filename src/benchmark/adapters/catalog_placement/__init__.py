@@ -6,6 +6,7 @@ from benchmark.adapters.catalog_placement.converter import (
     convert_catalog_placement_to_scene,
     extract_catalog_placement,
     public_slot_ids_from_generation_input,
+    public_task_slots_from_generation_input,
     selected_asset_ids_from_generation_input,
     validate_catalog_placement,
 )
@@ -22,6 +23,7 @@ __all__ = [
     "convert_catalog_placement_to_scene",
     "extract_catalog_placement",
     "public_slot_ids_from_generation_input",
+    "public_task_slots_from_generation_input",
     "selected_asset_ids_from_generation_input",
     "validate_catalog_placement",
 ]

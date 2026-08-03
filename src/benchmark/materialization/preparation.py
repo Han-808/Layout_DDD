@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import shutil
 from copy import deepcopy
 from pathlib import Path
@@ -20,8 +21,16 @@ from benchmark.materialization.contracts import (
     MaterializationError,
     MaterializationResult,
 )
-from benchmark.materialization.geometry import finite_vec3, uniform_fit, world_bounds
+from benchmark.materialization.geometry import (
+    exact_uniform_scale,
+    finite_vec3,
+    world_bounds,
+)
 from benchmark.materialization.native_registry import NativeRegistryAuthority
+from benchmark.materialization.public_native import (
+    load_public_native_instance_mapping,
+    seal_inspected_public_native_registry,
+)
 from benchmark.scene_io.validate import validate_scene_package
 from benchmark.utils.io import read_json, write_json
 
@@ -41,6 +50,7 @@ def prepare_catalog_submission(
     public_slot_ids: set[str] | list[str] | tuple[str, ...] | None = None,
     native_registry_path: str | Path | None = None,
     native_registry_authority: NativeRegistryAuthority | None = None,
+    native_instance_mapping_path: str | Path | None = None,
     timeout_seconds: int = 900,
 ) -> MaterializationResult:
     """Prepare an untrusted placement artifact without running evaluation."""
@@ -138,49 +148,144 @@ def prepare_catalog_submission(
         if source_kind == "native_blend":
             if native_registry_authority is None:
                 raise MaterializationError(
-                    "registered native Blender placement requires a "
-                    "benchmark-owned native registry signing authority"
+                    "native Blender placement requires the trusted benchmark "
+                    "registry authority; submitters never receive this secret"
                 )
-            if native_registry_path is None:
+            if (
+                native_registry_path is not None
+                and native_instance_mapping_path is not None
+            ):
                 raise MaterializationError(
-                    "registered native Blender placement requires a benchmark-owned "
-                    "native_registry_path"
+                    "native Blender placement accepts either an internal signed "
+                    "registry or a public unsigned instance mapping, not both"
                 )
-            resolved_native_registry = (
-                Path(native_registry_path).expanduser().resolve()
-            )
-            if not resolved_native_registry.is_file():
+            if (
+                native_registry_path is None
+                and native_instance_mapping_path is None
+            ):
                 raise MaterializationError(
-                    "benchmark-owned native placement registry does not exist: "
-                    f"{resolved_native_registry}"
+                    "native Blender placement requires native_registry_path "
+                    "or native_instance_mapping_path"
                 )
-            native_registry = _validate_native_registry_authority(
-                resolved_native_registry,
-                source_blend_sha256=hashes["source_artifact_sha256"],
-                case_bundle=case_bundle,
-                authority=native_registry_authority,
-            )
-            hashes["native_registry_sha256"] = sha256_file(
-                resolved_native_registry
-            )
-            provenance["native_registry"] = {
-                "path": resolved_native_registry.as_posix(),
-                "sha256": hashes["native_registry_sha256"],
-                "producer": native_registry["producer"],
-                "registry_revision": native_registry["registry_revision"],
-                "source_blend_sha256": native_registry[
-                    "source_blend_sha256"
-                ],
-                "authority_key_id": native_registry["authority"]["key_id"],
-            }
+            public_mapping = None
+            resolved_public_mapping = None
+            registry_origin = "benchmark_presealed_internal"
+            if native_instance_mapping_path is not None:
+                source_public_mapping = Path(
+                    native_instance_mapping_path
+                ).expanduser().resolve()
+                source_mapping_hash_before = sha256_file(
+                    source_public_mapping
+                )
+                resolved_public_mapping = (
+                    destination / "public_native_instance_mapping.json"
+                ).resolve()
+                if source_public_mapping != resolved_public_mapping:
+                    shutil.copyfile(
+                        source_public_mapping,
+                        resolved_public_mapping,
+                    )
+                source_mapping_hash_after = sha256_file(
+                    source_public_mapping
+                )
+                prepared_mapping_hash = sha256_file(
+                    resolved_public_mapping
+                )
+                if not (
+                    source_mapping_hash_before
+                    == source_mapping_hash_after
+                    == prepared_mapping_hash
+                ):
+                    raise MaterializationError(
+                        "public native instance mapping changed while it was "
+                        "being preserved for trusted inspection"
+                    )
+                public_mapping = load_public_native_instance_mapping(
+                    resolved_public_mapping
+                )
+                hashes["native_instance_mapping_sha256"] = (
+                    prepared_mapping_hash
+                )
+                provenance["public_native_mapping"] = {
+                    "path": resolved_public_mapping.as_posix(),
+                    "source_path": source_public_mapping.as_posix(),
+                    "sha256": hashes[
+                        "native_instance_mapping_sha256"
+                    ],
+                    "schema_version": public_mapping["schema_version"],
+                    "authority": "submitter_unsigned_identity_mapping",
+                    "source_sha256_before": source_mapping_hash_before,
+                    "source_sha256_after": source_mapping_hash_after,
+                    "source_modified_during_preservation": False,
+                    "prepared_copy_authoritative": True,
+                }
+                inspection_identity_path = resolved_public_mapping
+                inspection_mode = "public_native"
+                registry_origin = (
+                    "benchmark_derived_from_public_native_mapping"
+                )
+            else:
+                assert native_registry_path is not None
+                resolved_native_registry = Path(
+                    native_registry_path
+                ).expanduser().resolve()
+                if not resolved_native_registry.is_file():
+                    raise MaterializationError(
+                        "benchmark-owned native placement registry does not "
+                        f"exist: {resolved_native_registry}"
+                    )
+                _validate_native_registry_authority(
+                    resolved_native_registry,
+                    source_blend_sha256=hashes[
+                        "source_artifact_sha256"
+                    ],
+                    case_bundle=case_bundle,
+                    authority=native_registry_authority,
+                )
+                inspection_identity_path = resolved_native_registry
+                inspection_mode = "registered_native"
             try:
                 placement, native_inspection = _inspect_native_source(
                     raw_path=raw_path,
-                    registry_path=resolved_native_registry,
+                    registry_path=inspection_identity_path,
                     catalog=catalog,
                     out_dir=destination,
                     blender_bin=Path(blender_bin).expanduser().resolve(),
                     timeout_seconds=timeout_seconds,
+                    inspection_mode=inspection_mode,
+                )
+                if public_mapping is not None:
+                    assert resolved_public_mapping is not None
+                    public_mapping = _reload_public_mapping_after_inspection(
+                        resolved_public_mapping,
+                        expected_sha256=prepared_mapping_hash,
+                        inspection=native_inspection,
+                    )
+                    resolved_native_registry = (
+                        seal_inspected_public_native_registry(
+                            destination
+                            / "benchmark_derived_native_registry.json",
+                            authority=native_registry_authority,
+                            source_blend_path=raw_path,
+                            case_bundle_manifest_sha256=str(
+                                getattr(
+                                    case_bundle,
+                                    "manifest_sha256",
+                                    "",
+                                )
+                            ),
+                            catalog_snapshot_id=catalog.snapshot_id,
+                            public_mapping=public_mapping,
+                            inspection=native_inspection,
+                        )
+                    )
+                native_registry = _validate_native_registry_authority(
+                    resolved_native_registry,
+                    source_blend_sha256=hashes[
+                        "source_artifact_sha256"
+                    ],
+                    case_bundle=case_bundle,
+                    authority=native_registry_authority,
                 )
             finally:
                 original_native_sha256_after = (
@@ -205,6 +310,28 @@ def prepare_catalog_submission(
                     raise MaterializationError(
                         "native inspection modified the submitted source blend"
                     )
+            hashes["native_registry_sha256"] = sha256_file(
+                resolved_native_registry
+            )
+            provenance["native_registry"] = {
+                "path": resolved_native_registry.as_posix(),
+                "sha256": hashes["native_registry_sha256"],
+                "producer": native_registry["producer"],
+                "registry_revision": native_registry["registry_revision"],
+                "source_blend_sha256": native_registry[
+                    "source_blend_sha256"
+                ],
+                "authority_key_id": native_registry["authority"]["key_id"],
+                "origin": registry_origin,
+                "public_mapping_path": (
+                    resolved_public_mapping.as_posix()
+                    if resolved_public_mapping is not None
+                    else None
+                ),
+                "public_mapping_sha256": hashes.get(
+                    "native_instance_mapping_sha256"
+                ),
+            }
             provenance["native_source_inspection"] = native_inspection
             from benchmark.adapters.catalog_placement.converter import (
                 validate_catalog_placement,
@@ -212,7 +339,19 @@ def prepare_catalog_submission(
 
             placement = validate_catalog_placement(
                 placement,
-                public_slot_ids=slots,
+                # A legacy/internal native registry may preserve a slot label
+                # even when no generator-visible structured input accompanies
+                # the submission.  In that compatibility path the label is
+                # provenance only: there is no public slot allow-list against
+                # which it can be validated, and no intended task semantics
+                # are inferred from it.  When structured input is present,
+                # keep the strict public-slot binding.
+                public_slot_ids=(
+                    slots if generation_input is not None else None
+                ),
+                require_slot_binding=_requires_structured_slot_binding(
+                    generation_input
+                ),
             )
         else:
             from benchmark.adapters.catalog_placement.converter import (
@@ -222,16 +361,38 @@ def prepare_catalog_submission(
             placement = extract_catalog_placement(
                 raw_payload,
                 public_slot_ids=slots,
+                require_slot_binding=_requires_structured_slot_binding(
+                    generation_input
+                ),
             )
         plan = _build_plan(
             placement,
             case_bundle=case_bundle,
             catalog=catalog,
             selected_asset_ids=selected_asset_ids,
+            task_slots=_task_slots_for_generation_input(generation_input),
         )
         plan_path = write_json(destination / "materialization_plan.json", plan)
         hashes["materialization_plan_sha256"] = sha256_file(plan_path)
         provenance["artifacts"]["materialization_plan"] = plan_path.as_posix()
+        provenance["instance_transforms"] = [
+            {
+                "instance_id": item["instance_id"],
+                "slot_id": item.get("slot_id"),
+                "asset_id": item["asset_id"],
+                "requested_uniform_scale": item[
+                    "requested_uniform_scale"
+                ],
+                "effective_uniform_scale": item[
+                    "effective_uniform_scale"
+                ],
+                "actual_local_bbox_size_m": deepcopy(
+                    item["actual_local_bbox_size_m"]
+                ),
+                "world_bounds": deepcopy(item["world_bounds"]),
+            }
+            for item in plan["instances"]
+        ]
 
         from benchmark.materialization.blender import materialize_catalog_scene
 
@@ -287,6 +448,12 @@ def prepare_catalog_submission(
                 "native_registry": deepcopy(
                     provenance.get("native_registry")
                 ),
+                "public_native_mapping": deepcopy(
+                    provenance.get("public_native_mapping")
+                ),
+                "instance_transforms": deepcopy(
+                    provenance.get("instance_transforms") or []
+                ),
                 "representation_hashes": {
                     key: hashes[key]
                     for key in (
@@ -300,6 +467,7 @@ def prepare_catalog_submission(
                         "adapter_contract_revision_sha256",
                         "generator_visible_input_sha256",
                         "native_registry_sha256",
+                        "native_instance_mapping_sha256",
                     )
                     if key in hashes
                 },
@@ -504,6 +672,7 @@ def verify_prepared_submission(
             "adapter_contract_revision_sha256",
             "generator_visible_input_sha256",
             "native_registry_sha256",
+            "native_instance_mapping_sha256",
         ):
             if provenance_hashes.get(key) != result.hashes.get(key):
                 failures.append(
@@ -581,6 +750,7 @@ def verify_prepared_submission(
                     "adapter_contract_revision_sha256",
                     "generator_visible_input_sha256",
                     "native_registry_sha256",
+                    "native_instance_mapping_sha256",
                 ):
                     if representation_hashes.get(key) != result.hashes.get(key):
                         failures.append(
@@ -780,6 +950,7 @@ def verify_prepared_submission(
             reason_codes=sorted(
                 {str(item.get("code") or "prepared_artifact_invalid") for item in failures}
             ),
+            failure_stage="prepared_submission_verification",
             failure_owner="submission",
             checks={"prepared_artifact_integrity": {"status": "failed", "failures": failures}},
             provenance={
@@ -787,10 +958,9 @@ def verify_prepared_submission(
                 "preparation_provenance_path": result.provenance_path.as_posix(),
             },
         )
-    verified = deepcopy(readiness)
     existing_checks = (
-        deepcopy(verified.get("checks"))
-        if isinstance(verified.get("checks"), list)
+        deepcopy(readiness.get("checks"))
+        if isinstance(readiness.get("checks"), list)
         else []
     )
     existing_checks.append(
@@ -800,8 +970,17 @@ def verify_prepared_submission(
             "provenance": {"verified_hash_count": len(expected_files)},
         }
     )
-    verified["checks"] = existing_checks
-    return verified
+    from benchmark.materialization.readiness import build_readiness_report
+
+    return build_readiness_report(
+        status="ready",
+        checks=existing_checks,
+        provenance=(
+            readiness.get("provenance")
+            if isinstance(readiness.get("provenance"), dict)
+            else {}
+        ),
+    )
 
 
 def rebuild_materialization_plan_from_source(
@@ -890,7 +1069,16 @@ def rebuild_materialization_plan_from_source(
 
         placement = validate_catalog_placement(
             placement,
-            public_slot_ids=slots,
+            # Mirror initial native preparation exactly. Without a structured
+            # generator input, a registry-preserved slot label is provenance,
+            # not a public slot claim that can be checked against an empty
+            # allow-list.
+            public_slot_ids=(
+                slots if generation_input is not None else None
+            ),
+            require_slot_binding=_requires_structured_slot_binding(
+                generation_input
+            ),
         )
     elif source_kind in {"in_memory_json", "json_file", "raw_text"}:
         if generation_input is None:
@@ -911,6 +1099,9 @@ def rebuild_materialization_plan_from_source(
         placement = extract_catalog_placement(
             payload,
             public_slot_ids=slots,
+            require_slot_binding=_requires_structured_slot_binding(
+                generation_input
+            ),
         )
     else:
         raise MaterializationError(
@@ -922,6 +1113,7 @@ def rebuild_materialization_plan_from_source(
         case_bundle=case_bundle,
         catalog=catalog,
         selected_asset_ids=selected_asset_ids,
+        task_slots=_task_slots_for_generation_input(generation_input),
     )
 
 
@@ -940,6 +1132,7 @@ def _build_plan(
     case_bundle: Any,
     catalog: FrozenCatalog,
     selected_asset_ids: set[str] | None = None,
+    task_slots: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     room = getattr(case_bundle, "scene_request", {}).get("room")
     if not isinstance(room, dict):
@@ -985,26 +1178,40 @@ def _build_plan(
                 "generator-visible selected frozen-asset catalog"
             )
         asset = catalog.resolve(raw_asset_id)
-        fit = uniform_fit(asset.canonical_bbox_size_m, raw["target_size_m"])
+        scale = exact_uniform_scale(
+            asset.canonical_bbox_size_m,
+            raw["uniform_scale"],
+        )
         bounds = world_bounds(
             raw["center_m"],
-            fit["local_bbox_size_m"],
+            scale["actual_local_bbox_size_m"],
             raw["rotation_euler_xyz_deg"],
         )
         instance_id = str(raw["instance_id"])
+        slot_id = raw.get("slot_id")
+        task_slot = (
+            deepcopy(task_slots.get(str(slot_id)))
+            if slot_id is not None and isinstance(task_slots, dict)
+            else None
+        )
         instances.append(
             {
                 "instance_id": instance_id,
                 "evaluator_object_id": instance_id,
                 "asset_id": asset.asset_id,
-                "slot_id": raw.get("slot_id"),
+                "slot_id": slot_id,
+                "task_slot": task_slot,
                 "center_m": list(raw["center_m"]),
-                "target_size_m": list(raw["target_size_m"]),
                 "rotation_euler_xyz_deg": list(raw["rotation_euler_xyz_deg"]),
-                "uniform_scale": fit["uniform_scale"],
+                "requested_uniform_scale": scale["requested_uniform_scale"],
+                "effective_uniform_scale": scale["effective_uniform_scale"],
+                "uniform_scale": scale["effective_uniform_scale"],
                 "catalog_bbox_center_m": list(asset.canonical_bbox_center_m),
                 "catalog_bbox_size_m": list(asset.canonical_bbox_size_m),
-                "local_bbox_size_m": fit["local_bbox_size_m"],
+                "actual_local_bbox_size_m": scale[
+                    "actual_local_bbox_size_m"
+                ],
+                "local_bbox_size_m": scale["actual_local_bbox_size_m"],
                 "world_bounds": bounds,
                 "category": asset.category,
                 "retrieval_category": asset.retrieval_category,
@@ -1058,9 +1265,11 @@ def _export_scene_and_registry(
             "evaluator_object_id",
             "asset_id",
             "center_m",
-            "target_size_m",
             "rotation_euler_xyz_deg",
+            "requested_uniform_scale",
+            "effective_uniform_scale",
             "uniform_scale",
+            "actual_local_bbox_size_m",
             "local_bbox_size_m",
             "world_bounds",
             "geometry_sha256",
@@ -1074,8 +1283,15 @@ def _export_scene_and_registry(
         materialization = {
             "instance_id": instance_id,
             "slot_id": observed.get("slot_id"),
-            "target_size_m": deepcopy(observed["target_size_m"]),
-            "uniform_scale": float(observed["uniform_scale"]),
+            "requested_uniform_scale": float(
+                observed["requested_uniform_scale"]
+            ),
+            "effective_uniform_scale": float(
+                observed["effective_uniform_scale"]
+            ),
+            "actual_local_bbox_size_m": deepcopy(
+                observed["actual_local_bbox_size_m"]
+            ),
             "catalog_bbox_center_m": deepcopy(expected["catalog_bbox_center_m"]),
             "catalog_bbox_size_m": deepcopy(expected["catalog_bbox_size_m"]),
             "local_bbox_size_m": deepcopy(observed["local_bbox_size_m"]),
@@ -1112,6 +1328,7 @@ def _export_scene_and_registry(
                 },
                 "metadata": {
                     "interactive": False,
+                    "task_slot": deepcopy(expected.get("task_slot")),
                     "appearance_provenance": {
                         "source": "frozen_catalog_asset_materials",
                         "asset_id": expected["asset_id"],
@@ -1133,20 +1350,27 @@ def _export_scene_and_registry(
                 "evaluator_object_id": str(observed["evaluator_object_id"]),
                 "asset_id": str(observed["asset_id"]),
                 "slot_id": observed.get("slot_id"),
+                "task_slot": deepcopy(expected.get("task_slot")),
                 "transform": {
                     "center_m": deepcopy(observed["center_m"]),
-                    "target_size_m": deepcopy(observed["target_size_m"]),
                     "rotation_euler_xyz_deg": deepcopy(
                         observed["rotation_euler_xyz_deg"]
                     ),
-                    "uniform_scale": float(observed["uniform_scale"]),
+                    "requested_uniform_scale": float(
+                        observed["requested_uniform_scale"]
+                    ),
+                    "effective_uniform_scale": float(
+                        observed["effective_uniform_scale"]
+                    ),
                 },
                 "canonical_bbox": {
                     "center_m": deepcopy(expected["catalog_bbox_center_m"]),
                     "size_m": deepcopy(expected["catalog_bbox_size_m"]),
                 },
                 "local_bbox": {
-                    "size_m": deepcopy(observed["local_bbox_size_m"]),
+                    "size_m": deepcopy(
+                        observed["actual_local_bbox_size_m"]
+                    ),
                 },
                 "world_bounds": deepcopy(observed["world_bounds"]),
                 "blend_object": str(observed.get("root_object_name") or ""),
@@ -1237,6 +1461,30 @@ def _resolve_public_slot_ids(
             "supplied public_slot_ids do not match generator-visible structured input"
         )
     return derived
+
+
+def _requires_structured_slot_binding(
+    generation_input: dict[str, Any] | None,
+) -> bool:
+    if not isinstance(generation_input, dict):
+        return False
+    contract = generation_input.get("generation_contract")
+    return (
+        isinstance(contract, dict)
+        and contract.get("input_mode") == "structured_assets"
+    )
+
+
+def _task_slots_for_generation_input(
+    generation_input: dict[str, Any] | None,
+) -> dict[str, dict[str, Any]]:
+    if not isinstance(generation_input, dict):
+        return {}
+    from benchmark.adapters.catalog_placement.converter import (
+        public_task_slots_from_generation_input,
+    )
+
+    return public_task_slots_from_generation_input(generation_input)
 
 
 def _validate_generation_input_binding(
@@ -1351,6 +1599,7 @@ def _inspect_native_source(
     out_dir: Path,
     blender_bin: Path,
     timeout_seconds: int,
+    inspection_mode: str = "registered_native",
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     if not registry_path.is_file():
         raise MaterializationError(
@@ -1381,17 +1630,34 @@ def _inspect_native_source(
             "instances": catalog_rows,
         },
     )
-    from benchmark.materialization.blender import inspect_registered_native_blend
+    from benchmark.materialization.blender import (
+        inspect_public_native_blend,
+        inspect_registered_native_blend,
+    )
 
     inspection_path = out_dir / "native_source_inspection.json"
-    inspection = inspect_registered_native_blend(
-        blend_path=raw_path,
-        registry_path=registry_path,
-        catalog_plan_path=catalog_plan_path,
-        out_path=inspection_path,
-        blender_bin=blender_bin,
-        timeout_seconds=timeout_seconds,
-    )
+    if inspection_mode == "registered_native":
+        inspection = inspect_registered_native_blend(
+            blend_path=raw_path,
+            registry_path=registry_path,
+            catalog_plan_path=catalog_plan_path,
+            out_path=inspection_path,
+            blender_bin=blender_bin,
+            timeout_seconds=timeout_seconds,
+        )
+    elif inspection_mode == "public_native":
+        inspection = inspect_public_native_blend(
+            blend_path=raw_path,
+            instance_mapping_path=registry_path,
+            catalog_plan_path=catalog_plan_path,
+            out_path=inspection_path,
+            blender_bin=blender_bin,
+            timeout_seconds=timeout_seconds,
+        )
+    else:
+        raise MaterializationError(
+            f"unsupported native inspection mode {inspection_mode!r}"
+        )
     placement = inspection.get("catalog_placement")
     if not isinstance(placement, dict):
         raise MaterializationError(
@@ -1403,7 +1669,10 @@ def _inspect_native_source(
         else {}
     )
     return placement, {
+        "status": inspection.get("status"),
+        "reason_codes": deepcopy(inspection.get("reason_codes") or []),
         "registry_path": registry_path.as_posix(),
+        "inspection_mode": inspection_mode,
         "inspection_path": inspection_path.as_posix(),
         "source_sha256_before": source_integrity.get(
             "source_blend_sha256_before"
@@ -1416,6 +1685,17 @@ def _inspect_native_source(
             "auto_execution_disabled"
         ),
         "source_scene_saved": source_integrity.get("source_scene_saved"),
+        "expected_registry_sha256_before": source_integrity.get(
+            "expected_registry_sha256_before"
+        ),
+        "expected_registry_sha256_after": source_integrity.get(
+            "expected_registry_sha256_after"
+        ),
+        "instances": [
+            deepcopy(item)
+            for item in inspection.get("instances", [])
+            if isinstance(item, dict)
+        ],
         "instance_fingerprints": [
             {
                 "instance_id": str(item.get("instance_id") or ""),
@@ -1499,6 +1779,37 @@ def _verify_native_frozen_asset_fingerprints(
         )
 
 
+def _reload_public_mapping_after_inspection(
+    mapping_path: Path,
+    *,
+    expected_sha256: str,
+    inspection: dict[str, Any],
+) -> dict[str, Any]:
+    """Bind the exact inspected public map to the in-memory sealing input."""
+
+    inspected_hash_before = str(
+        inspection.get("expected_registry_sha256_before") or ""
+    ).lower()
+    inspected_hash_after = str(
+        inspection.get("expected_registry_sha256_after") or ""
+    ).lower()
+    hash_before_reload = sha256_file(mapping_path)
+    mapping = load_public_native_instance_mapping(mapping_path)
+    hash_after_reload = sha256_file(mapping_path)
+    if not (
+        inspected_hash_before
+        == inspected_hash_after
+        == str(expected_sha256).lower()
+        == hash_before_reload
+        == hash_after_reload
+    ):
+        raise MaterializationError(
+            "prepared public native instance mapping changed between trusted "
+            "inspection and registry sealing"
+        )
+    return mapping
+
+
 def _validate_native_registry_authority(
     registry_path: Path,
     *,
@@ -1575,7 +1886,7 @@ def _validate_native_registry_authority(
         "asset_id",
         "native_root_name",
         "center_m",
-        "target_size_m",
+        "uniform_scale",
         "rotation_euler_xyz_deg",
         "geometry_sha256",
         "material_sha256",
@@ -1625,11 +1936,22 @@ def _validate_native_registry_authority(
             seen.add(value)
         for key in ("center_m", "rotation_euler_xyz_deg"):
             finite_vec3(item.get(key), f"native_registry.instances[{index}].{key}")
-        finite_vec3(
-            item.get("target_size_m"),
-            f"native_registry.instances[{index}].target_size_m",
-            positive=True,
-        )
+        raw_scale = item.get("uniform_scale")
+        if isinstance(raw_scale, bool):
+            raise MaterializationError(
+                f"native_registry.instances[{index}].uniform_scale must be numeric"
+            )
+        try:
+            uniform_scale = float(raw_scale)
+        except (TypeError, ValueError) as exc:
+            raise MaterializationError(
+                f"native_registry.instances[{index}].uniform_scale must be numeric"
+            ) from exc
+        if not math.isfinite(uniform_scale) or uniform_scale <= 0.0:
+            raise MaterializationError(
+                f"native_registry.instances[{index}].uniform_scale must be "
+                "finite and greater than zero"
+            )
         for key in ("geometry_sha256", "material_sha256"):
             digest = str(item.get(key) or "").lower()
             if len(digest) != 64 or any(
@@ -1651,6 +1973,7 @@ def _readiness_from_consistency(
     return _build_readiness(
         status="ready" if passed else "not_evaluable",
         reason_codes=[] if passed else ["materialization_consistency_failed"],
+        failure_stage=None if passed else "materialization_consistency",
         failure_owner=None if passed else "benchmark",
         checks={
             "artifact": {"status": "passed"},
@@ -1679,6 +2002,7 @@ def _failure_readiness(
     return _build_readiness(
         status="not_evaluable",
         reason_codes=[_reason_code(error)],
+        failure_stage=_failure_stage(error, provenance=provenance),
         failure_owner=failure_owner,
         checks={
             "artifact": {
@@ -1703,10 +2027,82 @@ def _failure_readiness(
     )
 
 
+def _failure_stage(
+    error: Exception,
+    *,
+    provenance: dict[str, Any],
+) -> str:
+    """Attribute preparation failures to the narrowest known boundary."""
+
+    message = str(error).lower()
+    reason_code = _reason_code(error)
+    if reason_code == "invalid_slot_provenance":
+        return "slot_binding"
+    if reason_code == "invalid_catalog_asset":
+        if "catalog metadata" in message or "catalog csv" in message:
+            return "catalog_validation"
+        return "asset_resolution"
+    if "public native instance mapping" in message:
+        if (
+            "does not exist" in message
+            or "not valid json" in message
+        ):
+            return "source_parsing"
+        if any(
+            marker in message
+            for marker in (
+                "must be",
+                "invalid",
+                "duplicate",
+                "non-empty",
+            )
+        ):
+            return "generator_contract_validation"
+        return "native_inspection"
+    if (
+        "read-only blend inspector" in message
+        or "native source inspection" in message
+        or "native placement registry" in message
+    ):
+        return "native_inspection"
+    if reason_code in {
+        "benchmark_materialization_failed",
+        "benchmark_materialization_timeout",
+        "benchmark_blender_unavailable",
+    }:
+        return "materialization"
+    if reason_code in {
+        "invalid_instance_identity",
+        "invalid_transform",
+    }:
+        return "generator_contract_validation"
+    source = (
+        provenance.get("source")
+        if isinstance(provenance.get("source"), dict)
+        else {}
+    )
+    if reason_code == "invalid_geometry" and source.get("kind") == "native_blend":
+        return "native_inspection"
+    if reason_code == "invalid_generator_artifact":
+        if any(
+            marker in message
+            for marker in (
+                "json",
+                "artifact does not exist",
+                "must be an object",
+                "unsupported generator artifact",
+            )
+        ):
+            return "source_parsing"
+        return "generator_contract_validation"
+    return "materialization"
+
+
 def _build_readiness(
     *,
     status: str,
     reason_codes: list[str],
+    failure_stage: str | None,
     failure_owner: str | None,
     checks: dict[str, Any],
     provenance: dict[str, Any],
@@ -1716,6 +2112,7 @@ def _build_readiness(
     return build_readiness_report(
         status=status,
         reason_codes=reason_codes,
+        failure_stage=failure_stage,
         failure_owner=failure_owner,
         checks=checks,
         provenance=provenance,
@@ -1750,7 +2147,7 @@ def _reason_code(error: Exception) -> str:
         or "finite" in message
         or "scale" in message
         or "center_m" in message
-        or "target_size_m" in message
+        or "uniform_scale" in message
         or "rotation_euler_xyz_deg" in message
     ):
         return "invalid_transform"

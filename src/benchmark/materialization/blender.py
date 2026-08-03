@@ -175,6 +175,33 @@ def inspect_registered_native_blend(
     )
 
 
+def inspect_public_native_blend(
+    *,
+    blend_path: Path,
+    instance_mapping_path: Path,
+    catalog_plan_path: Path,
+    out_path: Path,
+    blender_bin: Path,
+    timeout_seconds: int = 900,
+) -> dict[str, Any]:
+    """Inspect a submitter-authored fixed-catalog scene read-only.
+
+    The unsigned mapping supplies only public instance/root identity and
+    generator-owned rigid transforms. The inspector derives fingerprints; it
+    never saves or renders the submitted scene.
+    """
+
+    return _inspect_blend(
+        blend_path=blend_path,
+        expected_registry_path=instance_mapping_path,
+        catalog_plan_path=catalog_plan_path,
+        out_path=out_path,
+        blender_bin=blender_bin,
+        timeout_seconds=timeout_seconds,
+        mode="public_native",
+    )
+
+
 def _inspect_blend(
     *,
     blend_path: Path,

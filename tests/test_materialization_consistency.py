@@ -8,7 +8,7 @@ import pytest
 
 from benchmark.materialization.consistency import run_consistency_gate
 from benchmark.materialization.catalog import FrozenCatalog
-from benchmark.materialization.geometry import uniform_fit, world_bounds
+from benchmark.materialization.geometry import exact_uniform_scale, world_bounds
 from benchmark.materialization.contracts import MaterializationError
 from benchmark.materialization.native_registry import (
     NativeRegistryAuthority,
@@ -26,19 +26,20 @@ from benchmark.utils.io import read_json, write_json
 def _representations() -> tuple[dict, dict, dict, dict, dict[str, str]]:
     center = [1.0, 2.0, 0.75]
     rotation = [10.0, 20.0, 30.0]
-    target = [1.0, 2.0, 3.0]
-    fit = uniform_fit([2.0, 2.0, 2.0], target)
-    bounds = world_bounds(center, fit["local_bbox_size_m"], rotation)
+    scale = exact_uniform_scale([2.0, 2.0, 2.0], 0.5)
+    local_size = scale["actual_local_bbox_size_m"]
+    bounds = world_bounds(center, local_size, rotation)
     expected = {
         "instance_id": "chair_left",
         "evaluator_object_id": "chair_left",
         "asset_id": "asset_chair",
         "slot_id": "chair_slot",
         "center_m": center,
-        "target_size_m": target,
         "rotation_euler_xyz_deg": rotation,
-        "uniform_scale": fit["uniform_scale"],
-        "local_bbox_size_m": fit["local_bbox_size_m"],
+        "requested_uniform_scale": 0.5,
+        "effective_uniform_scale": 0.5,
+        "actual_local_bbox_size_m": local_size,
+        "local_bbox_size_m": local_size,
         "world_bounds": bounds,
     }
     plan = {"instances": [deepcopy(expected)]}
@@ -51,11 +52,11 @@ def _representations() -> tuple[dict, dict, dict, dict, dict[str, str]]:
                 "slot_id": expected["slot_id"],
                 "transform": {
                     "center_m": center,
-                    "target_size_m": target,
                     "rotation_euler_xyz_deg": rotation,
-                    "uniform_scale": fit["uniform_scale"],
+                    "requested_uniform_scale": 0.5,
+                    "effective_uniform_scale": 0.5,
                 },
-                "local_bbox": {"size_m": fit["local_bbox_size_m"]},
+                "local_bbox": {"size_m": local_size},
                 "world_bounds": bounds,
             }
         ]
@@ -67,13 +68,14 @@ def _representations() -> tuple[dict, dict, dict, dict, dict[str, str]]:
                 "asset_ref": {"asset_key": expected["asset_id"]},
                 "center": center,
                 "rotation": rotation,
-                "size": fit["local_bbox_size_m"],
+                "size": local_size,
                 "metadata": {
                     "materialization": {
                         "instance_id": expected["instance_id"],
                         "slot_id": expected["slot_id"],
-                        "target_size_m": target,
-                        "uniform_scale": fit["uniform_scale"],
+                        "requested_uniform_scale": 0.5,
+                        "effective_uniform_scale": 0.5,
+                        "actual_local_bbox_size_m": local_size,
                         "world_bounds": bounds,
                     }
                 },
@@ -101,6 +103,19 @@ def _representations() -> tuple[dict, dict, dict, dict, dict[str, str]]:
         )
     }
     return plan, registry, scene, inspection, hashes
+
+
+def test_exact_uniform_scale_preserves_generator_owned_scalar() -> None:
+    scaled = exact_uniform_scale([2.0, 4.0, 8.0], 1.25)
+
+    assert scaled == {
+        "requested_uniform_scale": 1.25,
+        "effective_uniform_scale": 1.25,
+        "catalog_bbox_size_m": [2.0, 4.0, 8.0],
+        "actual_local_bbox_size_m": [2.5, 5.0, 10.0],
+    }
+    with pytest.raises(MaterializationError, match="must be numeric"):
+        exact_uniform_scale([2.0, 4.0, 8.0], [1.0, 3.0, 10.0])
 
 
 def test_consistency_gate_accepts_exact_four_way_identity_and_geometry() -> None:
@@ -244,7 +259,7 @@ def test_preparation_rejects_slots_without_generator_visible_input(
                     "instance_id": "chair",
                     "asset_id": "asset",
                     "center_m": [1.0, 1.0, 0.5],
-                    "target_size_m": [1.0, 1.0, 1.0],
+                    "uniform_scale": 1.0,
                     "rotation_euler_xyz_deg": [0.0, 0.0, 0.0],
                     "slot_id": "private_slot",
                 }
@@ -384,8 +399,9 @@ def test_preparation_rejects_allowlisted_asset_not_visible_to_generator(
                     "instance_id": "table",
                     "asset_id": "unselected_asset",
                     "center_m": [1.0, 1.0, 0.5],
-                    "target_size_m": [1.0, 1.0, 1.0],
+                    "uniform_scale": 1.0,
                     "rotation_euler_xyz_deg": [0.0, 0.0, 0.0],
+                    "slot_id": "chair_slot",
                 }
             ],
         },
@@ -517,7 +533,7 @@ def test_native_registry_authority_seal_rejects_self_authored_tampering(
                 "asset_id": "asset",
                 "native_root_name": "benchmark_instance_chair",
                 "center_m": [1.0, 1.0, 0.5],
-                "target_size_m": [1.0, 1.0, 1.0],
+                "uniform_scale": 1.0,
                 "rotation_euler_xyz_deg": [0.0, 0.0, 0.0],
                 "geometry_sha256": "b" * 64,
                 "material_sha256": "c" * 64,
@@ -567,7 +583,7 @@ def test_non_finite_in_memory_artifact_is_preserved_before_rejection(
                     "instance_id": "chair",
                     "asset_id": "asset",
                     "center_m": [float("nan"), 1.0, 0.5],
-                    "target_size_m": [1.0, 1.0, 1.0],
+                    "uniform_scale": 1.0,
                     "rotation_euler_xyz_deg": [0.0, 0.0, 0.0],
                 }
             ]

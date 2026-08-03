@@ -214,6 +214,20 @@
           },
           "uniqueItems": true
         },
+        "failure_stage": {
+          "type": ["string", "null"]
+        },
+        "primary_failure_owner": {
+          "type": ["string", "null"]
+        },
+        "contributing_owners": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
         "failure_owner": {
           "type": ["string", "null"]
         },
@@ -238,6 +252,10 @@
                 "uniqueItems": true
               },
               "failure_owner": {
+                "type": "string",
+                "minLength": 1
+              },
+              "failure_stage": {
                 "type": "string",
                 "minLength": 1
               }
@@ -388,6 +406,23 @@
                 "object_pairing_consistency": {"type": "object"},
                 "style_consistency": {"type": "object"},
                 "functional_consistency": {
+                  "type": "object",
+                  "properties": {
+                    "metric_status": {
+                      "const": "experimental_non_scoring"
+                    },
+                    "activation_policy": {
+                      "const": "explicit_config_only"
+                    },
+                    "included_in_canonical_aggregate": {
+                      "const": false
+                    },
+                    "affects_score": {
+                      "const": false
+                    }
+                  }
+                },
+                "semantic_placement_consistency": {
                   "type": "object",
                   "properties": {
                     "metric_status": {
@@ -894,7 +929,8 @@
             "scale_consistency": {"type": "object"},
             "object_pairing_consistency": {"type": "object"},
             "style_consistency": {"type": "object"},
-            "functional_consistency": {"type": "object"}
+            "functional_consistency": {"type": "object"},
+            "semantic_placement_consistency": {"type": "object"}
           }
         },
         "l4_downstream_task_functionality": {

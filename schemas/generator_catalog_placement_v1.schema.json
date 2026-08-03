@@ -30,15 +30,6 @@
         "$ref": "#/$defs/finiteNumber"
       }
     },
-    "positiveVec3": {
-      "type": "array",
-      "minItems": 3,
-      "maxItems": 3,
-      "items": {
-        "type": "number",
-        "exclusiveMinimum": 0
-      }
-    },
     "instance": {
       "type": "object",
       "additionalProperties": false,
@@ -46,7 +37,7 @@
         "instance_id",
         "asset_id",
         "center_m",
-        "target_size_m",
+        "uniform_scale",
         "rotation_euler_xyz_deg"
       ],
       "properties": {
@@ -65,8 +56,10 @@
         "center_m": {
           "$ref": "#/$defs/vec3"
         },
-        "target_size_m": {
-          "$ref": "#/$defs/positiveVec3"
+        "uniform_scale": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Generator-requested uniform scale applied exactly to the frozen catalog asset."
         },
         "rotation_euler_xyz_deg": {
           "$ref": "#/$defs/vec3"

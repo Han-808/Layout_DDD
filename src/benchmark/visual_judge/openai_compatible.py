@@ -17,12 +17,16 @@ from benchmark.visual_judge.contracts import (
     validate_canonical_metric_response,
     validate_generic_visual_response,
 )
+from benchmark.visual_judge.response_repair import (
+    repair_binary_response_schema_once,
+)
 from benchmark.visual_judge.roles import (
     DecisionContract,
     VLMRole,
     vlm_audit_metadata,
 )
 from benchmark.visual_judge.interfaces import JudgeResult
+from benchmark.visual_judge.l3_prompts import L3_METRIC_RUBRICS
 from benchmark.visual_judge.camera_dsl import (
     CAMERA_OBSERVATIONS,
     METRIC_CAMERA_REQUIREMENTS,
@@ -38,9 +42,12 @@ objects or relations. Return exactly one JSON object with:
 score and confidence must be between 0 and 1. If the supplied views cannot support this category,
 return applicable=false, score=null, and explain why in summary."""
 
-CANONICAL_METRIC_SYSTEM_PROMPT = """You judge one narrowly scoped canonical metric for a
+CANONICAL_METRIC_SYSTEM_PROMPT = """You judge one narrowly scoped metric for a
 3D scene benchmark. Use the original prompt, prompt-authorized deviations, structured context,
 and supplied images. Do not judge neighboring metrics. Evidence insufficiency is not validity.
+Apply any supplied metric_boundary_rules as authoritative metric-ownership rules.
+Semantic borderline cases are not evidence insufficiency: when the evidence is adequate but no clear,
+significant in-scope defect is established, return valid.
 Return exactly one JSON object:
 {"evidence_status":"sufficient","verdict":"valid","confidence":0.0,"reason":"...",
 "missing_evidence":[],"defects":[],"evidence_request":null}.
@@ -54,8 +61,8 @@ allowed_missing_observations from the user context. missing_evidence may repeat 
 for legacy compatibility or remain empty when evidence_request is present. Do not place prose in
 missing_evidence or missing_observations. Do not define camera constraints, poses, repair plans,
 metric scope, or rubric in evidence_request. Invalid requires one or more explicit significant
-defects in defects; otherwise return valid when evidence is sufficient. Each defect should contain
-scope, target_ids, relation, and reason when available. confidence must be between 0 and 1."""
+defects in defects; otherwise return valid when evidence is sufficient. Each defect must contain
+scope, target_ids, relation, and reason. confidence must be between 0 and 1."""
 
 P0B_SYSTEM_PROMPT = """You adjudicate one ambiguous geometry event in a 3D scene benchmark.
 Use the natural-language prompt and extracted relationships only to understand intended semantics.
@@ -81,8 +88,10 @@ _EVIDENCE_AWARE_BINARY_OUTPUT_CONTRACT = """Return exactly one JSON object:
 {"status":"valid","confidence":0.0,"reason":"...","defects":[],
 "evidence_request":null}.
 status must be valid, invalid, or need_more_evidence. valid and invalid must use
-evidence_request=null. If the supplied views cannot support a safe binary conclusion, do not guess:
-return need_more_evidence with defects=[] and a structured evidence_request:
+evidence_request=null. defects must always be exactly the empty JSON list []; put every semantic
+explanation in reason and never return strings or objects inside defects. If the supplied views
+cannot support a safe binary conclusion, do not guess: return need_more_evidence with defects=[]
+and a structured evidence_request:
 {"target_ids":["object_id"],"missing_observations":["..."],"view_goal":"...","metadata":{}}.
 The request must identify the targets, missing technical observation, and a concrete evidence view
 goal. missing_observations must contain only exact Camera DSL tokens from the
@@ -160,33 +169,7 @@ CATEGORY_RUBRICS = {
         "local functionality. Invalid requires at least one explicit significant unmet requirement; "
         "otherwise return valid when evidence is sufficient."
     ),
-    "scale_consistency": (
-        "Judge generic visible relative scale coherence only. Apply exact prompt-authorized "
-        "surreal or unusual scale deviations before judging. Do not judge object pairing, layout, "
-        "orientation, function, style, or physical plausibility. Invalid requires an explicit "
-        "significant scale defect; otherwise return valid when evidence is sufficient."
-    ),
-    "object_pairing_consistency": (
-        "Judge only whether members of each supplied object group have broadly compatible object "
-        "categories and roles. Do not judge position, distance, direction, angle, orientation, "
-        "access, local functional arrangement, style, scale, or whether the prompt was followed. "
-        "Apply exact prompt-authorized pair deviations. Invalid requires an explicit significant "
-        "category/role incompatibility; otherwise return valid when evidence is sufficient."
-    ),
-    "style_consistency": (
-        "Judge visible style consistency only, after applying prompt-authorized style deviations. "
-        "Do not judge scale, pairing, layout, orientation, function, prompt fidelity, or physical "
-        "plausibility. Invalid requires one or more explicit significant style inconsistencies; "
-        "otherwise return valid when evidence is sufficient."
-    ),
-    "functional_consistency": (
-        "Judge whether each supplied local group is visibly usable in a "
-        "real-world sense. Check interaction-side access, opening clearance, "
-        "orientation for use, and ensemble operability. Do not judge prompt "
-        "fidelity, object-category pairing, style, scale, or unrelated exact "
-        "relations. Invalid requires an explicit significant visible "
-        "functional defect; otherwise return valid when evidence is sufficient."
-    ),
+    **L3_METRIC_RUBRICS,
 }
 
 
@@ -391,6 +374,7 @@ class OpenAICompatibleVLMJudge:
             "object_pairing_consistency",
             "style_consistency",
             "functional_consistency",
+            "semantic_placement_consistency",
         }:
             raise ValueError(f"unsupported canonical metric {metric!r}")
         allowed_missing_observations = (
@@ -446,7 +430,9 @@ class OpenAICompatibleVLMJudge:
             **audit,
             "family": family,
             "metric": metric,
-            "rubric": CATEGORY_RUBRICS[metric],
+            "metric_prompt_version": request.get("metric_prompt_version"),
+            "metric_boundary_rules": request.get("metric_boundary_rules"),
+            "rubric": request.get("metric_rubric") or CATEGORY_RUBRICS[metric],
             "metric_rubric": request.get("metric_rubric"),
             "natural_language_request": request.get("prompt"),
             "authorized_deviations": request.get("authorized_deviations"),
@@ -491,6 +477,8 @@ class OpenAICompatibleVLMJudge:
                 "decision_contract",
                 "judge_method",
                 "metric",
+                "metric_prompt_version",
+                "metric_boundary_rules",
                 "rubric",
                 "metric_rubric",
                 "natural_language_request",
@@ -546,12 +534,18 @@ class OpenAICompatibleVLMJudge:
                 allowed_evidence_request_target_ids
             ),
         )
+        request_metadata = dict(self.model.last_request_metadata)
+        if request.get("metric_prompt_version") is not None:
+            request_metadata["metric_prompt_version"] = str(
+                request["metric_prompt_version"]
+            )
         return self._audit_result(
             result,
             role=VLMRole.JUDGE,
             decision_contract=DecisionContract.CANONICAL_METRIC,
             judge_method=judge_method,
             images_used=[str(path.resolve()) for path in selected],
+            request_metadata=request_metadata,
         )
 
     def adjudicate_p0b(self, request: dict) -> dict:
@@ -634,39 +628,57 @@ class OpenAICompatibleVLMJudge:
             {"type": "image_url", "image_url": {"url": _image_data_url(path)}}
             for path in selected
         )
-        raw = self.model.chat_messages(
-            [
-                {
-                    "role": "system",
-                    "content": (
-                        P0B_CONTROL_SYSTEM_PROMPT
-                        if _allow_need_more_evidence
-                        else P0B_SYSTEM_PROMPT
-                    ),
-                },
-                {"role": "user", "content": content},
-            ],
-            response_format_json=self.response_format_json,
-            call_type=f"vlm_judge.p0b.{request.get('metric') or 'event'}",
-        )
-        result = parse_json_object(raw)
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    P0B_CONTROL_SYSTEM_PROMPT
+                    if _allow_need_more_evidence
+                    else P0B_SYSTEM_PROMPT
+                ),
+            },
+            {"role": "user", "content": content},
+        ]
+        call_type = f"vlm_judge.p0b.{request.get('metric') or 'event'}"
+        schema_audit = None
         if _allow_need_more_evidence:
-            result = _normalize_evidence_aware_binary_response(
-                result,
-                judge_label="P0b judge",
+            result, schema_audit = (
+                repair_binary_response_schema_once(
+                    model=self.model,
+                    messages=messages,
+                    response_format_json=self.response_format_json,
+                    call_type=call_type,
+                    judge_label="P0b judge",
+                    validator=lambda value: (
+                        _normalize_evidence_aware_binary_response(
+                            value,
+                            judge_label="P0b judge",
+                        )
+                    ),
+                )
             )
         else:
+            raw = self.model.chat_messages(
+                messages,
+                response_format_json=self.response_format_json,
+                call_type=call_type,
+            )
+            result = parse_json_object(raw)
             validate_binary_judge_response(
                 result,
                 judge_label="P0b judge",
                 confidence_label="VLM judge",
             )
+        request_metadata = dict(self.model.last_request_metadata)
+        if schema_audit is not None:
+            request_metadata["response_schema_validation"] = schema_audit
         return self._audit_result(
             result,
             role=VLMRole.JUDGE,
             decision_contract=DecisionContract.P0B_BINARY,
             judge_method="adjudicate_p0b",
             images_used=[str(path.resolve()) for path in selected],
+            request_metadata=request_metadata,
         )
 
     def adjudicate_relation(self, request: dict) -> dict:
@@ -743,39 +755,60 @@ class OpenAICompatibleVLMJudge:
             {"type": "image_url", "image_url": {"url": _image_data_url(path)}}
             for path in selected
         )
-        raw = self.model.chat_messages(
-            [
-                {
-                    "role": "system",
-                    "content": (
-                        RELATION_CONTROL_SYSTEM_PROMPT
-                        if _allow_need_more_evidence
-                        else RELATION_SYSTEM_PROMPT
-                    ),
-                },
-                {"role": "user", "content": content},
-            ],
-            response_format_json=self.response_format_json,
-            call_type=f"vlm_judge.relationship.{request.get('family') or 'unknown'}",
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    RELATION_CONTROL_SYSTEM_PROMPT
+                    if _allow_need_more_evidence
+                    else RELATION_SYSTEM_PROMPT
+                ),
+            },
+            {"role": "user", "content": content},
+        ]
+        call_type = (
+            "vlm_judge.relationship."
+            f"{request.get('family') or 'unknown'}"
         )
-        result = parse_json_object(raw)
+        schema_audit = None
         if _allow_need_more_evidence:
-            result = _normalize_evidence_aware_binary_response(
-                result,
-                judge_label="relationship judge",
+            result, schema_audit = (
+                repair_binary_response_schema_once(
+                    model=self.model,
+                    messages=messages,
+                    response_format_json=self.response_format_json,
+                    call_type=call_type,
+                    judge_label="relationship judge",
+                    validator=lambda value: (
+                        _normalize_evidence_aware_binary_response(
+                            value,
+                            judge_label="relationship judge",
+                        )
+                    ),
+                )
             )
         else:
+            raw = self.model.chat_messages(
+                messages,
+                response_format_json=self.response_format_json,
+                call_type=call_type,
+            )
+            result = parse_json_object(raw)
             validate_binary_judge_response(
                 result,
                 judge_label="relationship judge",
                 confidence_label="VLM judge",
             )
+        request_metadata = dict(self.model.last_request_metadata)
+        if schema_audit is not None:
+            request_metadata["response_schema_validation"] = schema_audit
         return self._audit_result(
             result,
             role=VLMRole.JUDGE,
             decision_contract=DecisionContract.RELATION_BINARY,
             judge_method="adjudicate_relation",
             images_used=[str(path.resolve()) for path in selected],
+            request_metadata=request_metadata,
         )
 
     def adjudicate_spatial_fidelity(self, request: dict) -> dict:
@@ -887,201 +920,278 @@ class OpenAICompatibleVLMJudge:
         return call(request)
 
     def select_camera_views(self, request: dict) -> dict:
-        if not isinstance(request, dict):
-            raise TypeError("camera selector request must be a JSON object")
-        candidates = [item for item in request.get("candidates", []) if isinstance(item, dict)]
-        if not candidates:
-            raise ValueError("camera selector requires at least one candidate")
-        usable_candidates = [
-            item
-            for item in candidates
-            if str(item.get("render_status") or "ok") != "blank"
-        ]
-        if not usable_candidates:
-            raise ValueError("camera selector received no non-blank candidate previews")
-        if len(usable_candidates) > self.max_images:
-            raise ValueError(
-                "camera selector candidate bank exceeds max_images; implicit "
-                f"truncation is forbidden ({len(usable_candidates)} > "
-                f"{self.max_images})"
-            )
-        internal_ids = [str(item.get("id") or "") for item in usable_candidates]
-        if any(not value for value in internal_ids) or len(set(internal_ids)) != len(internal_ids):
-            raise ValueError("camera selector candidates require unique non-empty internal IDs")
-        candidate_paths = [Path(str(item.get("image_path"))).expanduser() for item in usable_candidates]
-        missing = [str(path) for path in candidate_paths if not path.is_file()]
-        if missing:
-            raise FileNotFoundError(f"camera selector preview evidence does not exist: {missing}")
-        selected_candidates = sorted(
-            usable_candidates,
-            key=_selector_candidate_order_key,
-        )
-        paths = [Path(str(item.get("image_path"))).expanduser() for item in selected_candidates]
-        max_views = max(1, min(int(request.get("max_views") or 1), len(selected_candidates)))
-        alias_to_internal = {
-            f"candidate_{index:02d}": str(item.get("id"))
-            for index, item in enumerate(selected_candidates)
-        }
-        internal_to_alias = {
-            internal: alias
-            for alias, internal in alias_to_internal.items()
-        }
-        aliases = list(alias_to_internal)
-        allowed_actions = _selector_allowed_actions(request.get("allowed_actions"))
-        selection_phase = str(request.get("selection_phase") or "").strip().lower()
-        corrective_proposals: list[dict[str, Any]] = []
-        proposal_lookup: dict[str, dict[str, Any]] = {}
-        if selection_phase == "active_fallback":
-            corrective_proposals, proposal_lookup = selector_safe_proposals(
-                [
-                    item
-                    for item in request.get("corrective_proposals", [])
-                    if isinstance(item, dict)
-                ],
-                internal_to_alias=internal_to_alias,
-            )
-        allow_adjustment = bool(request.get("allow_adjustment")) and bool(
-            corrective_proposals
-            if selection_phase == "active_fallback"
-            else allowed_actions
-        )
-        audit = vlm_audit_metadata(
-            VLMRole.VLM_CAMERA_SELECTOR,
-            decision_contract=DecisionContract.CAMERA_SELECTION,
-            judge_method="select_camera_views",
-        )
-        context = {
-            **audit,
-            "candidates": [
-                {
-                    "id": alias,
-                    "pose": _minimal_selector_pose(item.get("pose")),
-                }
-                for alias, item in zip(aliases, selected_candidates)
-            ],
-            "max_views": max_views,
-            "allow_adjustment": allow_adjustment,
-            "allowed_actions": allowed_actions if allow_adjustment else [],
-            "metric_family": _selector_metric_family(request.get("metric")),
-            "preview_role": _selector_preview_role(request.get("preview_role")),
-            "preview_warning_class": _selector_preview_warning_class(
-                request.get("preview_visibility_warning")
-                if request.get("preview_visibility_warning") is not None
-                else request.get("preview_degradation")
-            ),
-            "color_legend": _sanitize_selector_legend(request.get("color_legend")),
-        }
-        if selection_phase == "active_fallback":
-            context["selection_phase"] = "active_fallback"
-            context["evidence_deficiency"] = _sanitize_selector_deficiency(
-                request.get("evidence_deficiency")
-            )
-            context["corrective_proposals"] = (
-                corrective_proposals if allow_adjustment else []
-            )
-        context_text = _budgeted_context_json(
-            context,
-            self.max_context_chars,
-            priority_keys=(
-                "vlm_role",
-                "decision_contract",
-                "judge_method",
-                "metric_family",
-                "preview_role",
-                "preview_warning_class",
-                "color_legend",
-                "candidates",
-                "max_views",
-                "allow_adjustment",
-                "allowed_actions",
-                "selection_phase",
-                "evidence_deficiency",
-                "corrective_proposals",
-            ),
-        )
-        content: list[dict[str, Any]] = [
-            {
-                "type": "text",
-                "text": "Select camera evidence only; do not adjudicate the event.\n" + context_text,
-            }
-        ]
-        content.extend(
-            {
-                "type": "image_url",
-                "image_url": {"url": _selector_image_data_url(path, alias=alias)},
-            }
-            for alias, path in zip(aliases, paths)
-        )
-        raw = self.model.chat_messages(
-            [
-                {"role": "system", "content": CAMERA_SELECTION_SYSTEM_PROMPT},
-                {"role": "user", "content": content},
-            ],
+        return select_openai_compatible_camera_views(
+            model=self.model,
+            request=request,
+            max_images=self.max_images,
+            max_context_chars=self.max_context_chars,
             response_format_json=self.response_format_json,
-            call_type=(
-                "vlm_camera_pose.active_fallback"
-                if selection_phase == "active_fallback"
-                else "vlm_camera_pose.query_cov"
-            ),
         )
-        parsed = parse_json_object(raw)
-        available = set(alias_to_internal)
-        resolved_aliases = validate_camera_selection_response(
-            parsed,
-            available_view_ids=available,
-            max_views=max_views,
+
+
+def select_openai_compatible_camera_views(
+    *,
+    model: OpenAICompatibleModel,
+    request: dict[str, Any],
+    max_images: int = 6,
+    max_context_chars: int = 30000,
+    response_format_json: bool | None = None,
+) -> dict[str, Any]:
+    """Execute the frozen query-cov/active camera contract without a Judge."""
+
+    if not isinstance(request, dict):
+        raise TypeError("camera selector request must be a JSON object")
+    candidates = [
+        item
+        for item in request.get("candidates", [])
+        if isinstance(item, dict)
+    ]
+    if not candidates:
+        raise ValueError("camera selector requires at least one candidate")
+    usable_candidates = [
+        item
+        for item in candidates
+        if str(item.get("render_status") or "ok") != "blank"
+    ]
+    if not usable_candidates:
+        raise ValueError(
+            "camera selector received no non-blank candidate previews"
         )
-        action = parsed.get("action")
-        resolved_action = None
-        if action is not None:
-            if not allow_adjustment or not isinstance(action, dict):
-                raise ValueError("camera selector returned an action outside the adjustment contract")
-            if selection_phase == "active_fallback":
-                proposal_alias = str(action.get("proposal_id") or "")
-                proposal = proposal_lookup.get(proposal_alias)
-                if proposal is None:
-                    raise ValueError(
-                        "active camera selector action references an unknown "
-                        "corrective proposal"
-                    )
-                resolved_action = {
-                    "proposal_id": str(proposal.get("proposal_id") or ""),
-                    "view_id": str(proposal.get("parent_view_id") or ""),
-                    "type": str(proposal.get("action_primitive") or ""),
-                    "family": str(proposal.get("family") or ""),
-                }
-            else:
-                if str(action.get("view_id") or "") not in available:
-                    raise ValueError("camera selector action references an unknown candidate")
-                if str(action.get("type") or "") not in set(allowed_actions):
-                    raise ValueError("camera selector requested an unsupported action")
-                resolved_action = {
-                    "view_id": alias_to_internal[str(action["view_id"])],
-                    "type": str(action["type"]),
-                }
-        reason = parsed.get("reason")
-        request_metadata = dict(self.model.last_request_metadata)
-        request_metadata.update(
+    image_limit = max(1, int(max_images))
+    if len(usable_candidates) > image_limit:
+        raise ValueError(
+            "camera selector candidate bank exceeds max_images; implicit "
+            f"truncation is forbidden ({len(usable_candidates)} > "
+            f"{image_limit})"
+        )
+    internal_ids = [
+        str(item.get("id") or "")
+        for item in usable_candidates
+    ]
+    if (
+        any(not value for value in internal_ids)
+        or len(set(internal_ids)) != len(internal_ids)
+    ):
+        raise ValueError(
+            "camera selector candidates require unique non-empty internal IDs"
+        )
+    candidate_paths = [
+        Path(str(item.get("image_path"))).expanduser()
+        for item in usable_candidates
+    ]
+    missing = [str(path) for path in candidate_paths if not path.is_file()]
+    if missing:
+        raise FileNotFoundError(
+            f"camera selector preview evidence does not exist: {missing}"
+        )
+    selected_candidates = sorted(
+        usable_candidates,
+        key=_selector_candidate_order_key,
+    )
+    paths = [
+        Path(str(item.get("image_path"))).expanduser()
+        for item in selected_candidates
+    ]
+    max_views = max(
+        1,
+        min(
+            int(request.get("max_views") or 1),
+            len(selected_candidates),
+        ),
+    )
+    alias_to_internal = {
+        f"candidate_{index:02d}": str(item.get("id"))
+        for index, item in enumerate(selected_candidates)
+    }
+    internal_to_alias = {
+        internal: alias
+        for alias, internal in alias_to_internal.items()
+    }
+    aliases = list(alias_to_internal)
+    allowed_actions = _selector_allowed_actions(
+        request.get("allowed_actions")
+    )
+    selection_phase = str(
+        request.get("selection_phase") or ""
+    ).strip().lower()
+    corrective_proposals: list[dict[str, Any]] = []
+    proposal_lookup: dict[str, dict[str, Any]] = {}
+    if selection_phase == "active_fallback":
+        corrective_proposals, proposal_lookup = selector_safe_proposals(
+            [
+                item
+                for item in request.get("corrective_proposals", [])
+                if isinstance(item, dict)
+            ],
+            internal_to_alias=internal_to_alias,
+        )
+    allow_adjustment = bool(request.get("allow_adjustment")) and bool(
+        corrective_proposals
+        if selection_phase == "active_fallback"
+        else allowed_actions
+    )
+    audit = vlm_audit_metadata(
+        VLMRole.VLM_CAMERA_SELECTOR,
+        decision_contract=DecisionContract.CAMERA_SELECTION,
+        judge_method="select_camera_views",
+    )
+    context = {
+        **audit,
+        "candidates": [
             {
-                "selector_candidate_order_policy": "stable_pose_image_digest_v1",
-                "selector_candidate_alias_policy": "per_request_sequential_alias_v1",
+                "id": alias,
+                "pose": _minimal_selector_pose(item.get("pose")),
             }
+            for alias, item in zip(aliases, selected_candidates)
+        ],
+        "max_views": max_views,
+        "allow_adjustment": allow_adjustment,
+        "allowed_actions": allowed_actions if allow_adjustment else [],
+        "metric_family": _selector_metric_family(request.get("metric")),
+        "preview_role": _selector_preview_role(
+            request.get("preview_role")
+        ),
+        "preview_warning_class": _selector_preview_warning_class(
+            request.get("preview_visibility_warning")
+            if request.get("preview_visibility_warning") is not None
+            else request.get("preview_degradation")
+        ),
+        "color_legend": _sanitize_selector_legend(
+            request.get("color_legend")
+        ),
+    }
+    if selection_phase == "active_fallback":
+        context["selection_phase"] = "active_fallback"
+        context["evidence_deficiency"] = _sanitize_selector_deficiency(
+            request.get("evidence_deficiency")
         )
-        return self._audit_result(
-            {
-                "selected_view_ids": [
-                    alias_to_internal[value] for value in resolved_aliases
-                ],
-                "action": resolved_action,
-                "reason": str(reason)[:1000] if reason is not None else "",
+        context["corrective_proposals"] = (
+            corrective_proposals if allow_adjustment else []
+        )
+    context_text = _budgeted_context_json(
+        context,
+        max(1000, int(max_context_chars)),
+        priority_keys=(
+            "vlm_role",
+            "decision_contract",
+            "judge_method",
+            "metric_family",
+            "preview_role",
+            "preview_warning_class",
+            "color_legend",
+            "candidates",
+            "max_views",
+            "allow_adjustment",
+            "allowed_actions",
+            "selection_phase",
+            "evidence_deficiency",
+            "corrective_proposals",
+        ),
+    )
+    content: list[dict[str, Any]] = [
+        {
+            "type": "text",
+            "text": (
+                "Select camera evidence only; do not adjudicate the event.\n"
+                + context_text
+            ),
+        }
+    ]
+    content.extend(
+        {
+            "type": "image_url",
+            "image_url": {
+                "url": _selector_image_data_url(path, alias=alias)
             },
-            role=VLMRole.VLM_CAMERA_SELECTOR,
-            decision_contract=DecisionContract.CAMERA_SELECTION,
-            judge_method="select_camera_views",
-            # Preserve an auditable image count without exposing local names or paths.
-            images_used=aliases,
-            request_metadata=request_metadata,
-        )
+        }
+        for alias, path in zip(aliases, paths)
+    )
+    use_json_response = (
+        bool(getattr(model, "response_format_json", True))
+        if response_format_json is None
+        else bool(response_format_json)
+    )
+    raw = model.chat_messages(
+        [
+            {"role": "system", "content": CAMERA_SELECTION_SYSTEM_PROMPT},
+            {"role": "user", "content": content},
+        ],
+        response_format_json=use_json_response,
+        call_type=(
+            "vlm_camera_pose.active_fallback"
+            if selection_phase == "active_fallback"
+            else "vlm_camera_pose.query_cov"
+        ),
+    )
+    parsed = parse_json_object(raw)
+    available = set(alias_to_internal)
+    resolved_aliases = validate_camera_selection_response(
+        parsed,
+        available_view_ids=available,
+        max_views=max_views,
+    )
+    action = parsed.get("action")
+    resolved_action = None
+    if action is not None:
+        if not allow_adjustment or not isinstance(action, dict):
+            raise ValueError(
+                "camera selector returned an action outside the adjustment "
+                "contract"
+            )
+        if selection_phase == "active_fallback":
+            proposal_alias = str(action.get("proposal_id") or "")
+            proposal = proposal_lookup.get(proposal_alias)
+            if proposal is None:
+                raise ValueError(
+                    "active camera selector action references an unknown "
+                    "corrective proposal"
+                )
+            resolved_action = {
+                "proposal_id": str(proposal.get("proposal_id") or ""),
+                "view_id": str(proposal.get("parent_view_id") or ""),
+                "type": str(proposal.get("action_primitive") or ""),
+                "family": str(proposal.get("family") or ""),
+            }
+        else:
+            if str(action.get("view_id") or "") not in available:
+                raise ValueError(
+                    "camera selector action references an unknown candidate"
+                )
+            if str(action.get("type") or "") not in set(allowed_actions):
+                raise ValueError(
+                    "camera selector requested an unsupported action"
+                )
+            resolved_action = {
+                "view_id": alias_to_internal[str(action["view_id"])],
+                "type": str(action["type"]),
+            }
+    reason = parsed.get("reason")
+    request_metadata = dict(model.last_request_metadata)
+    request_metadata.update(
+        {
+            "selector_candidate_order_policy": (
+                "stable_pose_image_digest_v1"
+            ),
+            "selector_candidate_alias_policy": (
+                "per_request_sequential_alias_v1"
+            ),
+        }
+    )
+    result = {
+        "selected_view_ids": [
+            alias_to_internal[value]
+            for value in resolved_aliases
+        ],
+        "action": resolved_action,
+        "reason": str(reason)[:1000] if reason is not None else "",
+    }
+    result.update(audit)
+    result["model"] = model.model_id
+    result["endpoint"] = model.endpoint
+    # Preserve an auditable image count without exposing local names or paths.
+    result["images_used"] = aliases
+    result["request_metadata"] = request_metadata
+    return result
 
 
 def _normalize_evidence_aware_binary_response(
@@ -1090,7 +1200,12 @@ def _normalize_evidence_aware_binary_response(
     judge_label: str,
 ) -> dict[str, Any]:
     if value.get("status") is not None:
-        return JudgeResult.from_value(value).to_dict()
+        result = JudgeResult.from_value(value)
+        if result.defects:
+            raise ValueError(
+                f"{judge_label} defects must be exactly an empty JSON list"
+            )
+        return result.to_dict()
     validate_binary_judge_response(
         value,
         judge_label=judge_label,

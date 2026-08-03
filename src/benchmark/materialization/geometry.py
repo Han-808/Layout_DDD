@@ -29,22 +29,35 @@ def finite_vec3(value: Any, path: str, *, positive: bool = False) -> list[float]
     return result
 
 
-def uniform_fit(
+def exact_uniform_scale(
     catalog_bbox_size_m: Iterable[float],
-    target_size_m: Iterable[float],
+    requested_uniform_scale: Any,
 ) -> dict[str, Any]:
-    source = finite_vec3(list(catalog_bbox_size_m), "catalog_bbox_size_m", positive=True)
-    target = finite_vec3(list(target_size_m), "target_size_m", positive=True)
-    ratios = [target[index] / source[index] for index in range(3)]
-    scale = min(ratios)
+    """Apply a generator-owned uniform scale without contain-fit reinterpretation."""
+
+    source = finite_vec3(
+        list(catalog_bbox_size_m), "catalog_bbox_size_m", positive=True
+    )
+    if isinstance(requested_uniform_scale, bool):
+        raise MaterializationError(
+            "requested_uniform_scale must be numeric, not boolean"
+        )
+    try:
+        scale = float(requested_uniform_scale)
+    except (TypeError, ValueError) as exc:
+        raise MaterializationError(
+            "requested_uniform_scale must be numeric"
+        ) from exc
     if not math.isfinite(scale) or scale <= 0.0:
-        raise MaterializationError("uniform scale must be finite and greater than zero")
-    actual = [source[index] * scale for index in range(3)]
+        raise MaterializationError(
+            "requested_uniform_scale must be finite and greater than zero"
+        )
+    actual = [component * scale for component in source]
     return {
-        "uniform_scale": scale,
+        "requested_uniform_scale": scale,
+        "effective_uniform_scale": scale,
         "catalog_bbox_size_m": source,
-        "target_size_m": target,
-        "local_bbox_size_m": actual,
+        "actual_local_bbox_size_m": actual,
     }
 
 

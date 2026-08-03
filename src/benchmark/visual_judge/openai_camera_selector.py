@@ -82,6 +82,11 @@ class OpenAICompatibleCameraSelector:
             max_preview_images,
             "max_preview_images",
         )
+        # Legacy P0b providers inspect ``max_images`` and call
+        # ``select_camera_views``.  Keep that public compatibility surface on
+        # the dedicated selector transport so the CLI does not have to build a
+        # metric Judge merely to select camera evidence.
+        self.max_images = self.max_preview_images
         self.max_context_chars = _positive_int(
             max_context_chars,
             "max_context_chars",
@@ -201,6 +206,38 @@ class OpenAICompatibleCameraSelector:
         }
         return response
 
+    def select_camera_views(
+        self,
+        request: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Serve the frozen P0b selector contract through this transport.
+
+        The compatibility implementation remains the established,
+        camera-only prompt and validator; only its construction boundary moves
+        from the metric-Judge builder to the dedicated camera-selector
+        builder.
+        """
+
+        from benchmark.visual_judge.openai_compatible import (
+            select_openai_compatible_camera_views,
+        )
+
+        result = select_openai_compatible_camera_views(
+            model=self.model,
+            request=request,
+            max_images=self.max_preview_images,
+            max_context_chars=self.max_context_chars,
+            response_format_json=self.response_format_json,
+        )
+        self.last_request_metadata = {
+            **dict(result.get("request_metadata") or {}),
+            "selection_mode": "legacy_query_cov",
+            "transport": (
+                f"{type(self).__module__}.{type(self).__qualname__}"
+            ),
+        }
+        return result
+
 
 def build_openai_compatible_camera_selector(
     config: dict[str, Any],
@@ -260,7 +297,10 @@ def build_openai_compatible_camera_selector(
     return OpenAICompatibleCameraSelector(
         model,
         max_preview_images=int(
-            config.get("max_preview_images", 8)
+            config.get(
+                "max_preview_images",
+                config.get("max_images", 8),
+            )
         ),
         max_context_chars=int(
             config.get("max_context_chars", 30000)

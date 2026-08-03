@@ -72,6 +72,9 @@ def build_readiness_report(
     *,
     status: str | None = None,
     reason_codes: Iterable[str] | None = None,
+    failure_stage: str | None = None,
+    primary_failure_owner: str | None = None,
+    contributing_owners: Iterable[str] | None = None,
     failure_owner: str | None = None,
     checks: Mapping[str, Any] | Iterable[Mapping[str, Any]] | None = None,
     provenance: Mapping[str, Any] | None = None,
@@ -125,12 +128,27 @@ def build_readiness_report(
     resolved_reasons = _deduplicate((*explicit_reasons, *derived_reasons))
     if resolved_status == "ready":
         resolved_reasons = []
-        resolved_owner = None
+        resolved_stage = None
+        resolved_primary_owner = None
+        resolved_contributing_owners: list[str] = []
     else:
         if not resolved_reasons:
             resolved_reasons = ["submission_readiness_failed"]
-        resolved_owner = _failure_owner(
-            failure_owner,
+        resolved_stage = _failure_stage(
+            failure_stage,
+            failed_checks=failed_checks,
+        )
+        resolved_primary_owner = _primary_failure_owner(
+            (
+                primary_failure_owner
+                if str(primary_failure_owner or "").strip()
+                else failure_owner
+            ),
+            failed_checks=failed_checks,
+        )
+        resolved_contributing_owners = _contributing_owners(
+            contributing_owners,
+            primary=resolved_primary_owner,
             failed_checks=failed_checks,
         )
 
@@ -138,7 +156,12 @@ def build_readiness_report(
         "gate_version": READINESS_GATE_VERSION,
         "status": resolved_status,
         "reason_codes": resolved_reasons,
-        "failure_owner": resolved_owner,
+        "failure_stage": resolved_stage,
+        "primary_failure_owner": resolved_primary_owner,
+        "contributing_owners": resolved_contributing_owners,
+        # Backward-compatible alias. New consumers should use
+        # ``primary_failure_owner`` and ``contributing_owners``.
+        "failure_owner": resolved_primary_owner,
         "checks": deepcopy(normalized_checks),
         "provenance": deepcopy(dict(provenance or {})),
     }
@@ -329,6 +352,17 @@ def _normalize_readiness(value: Mapping[str, Any]) -> dict[str, Any]:
     return build_readiness_report(
         status=str(value.get("status") or ""),
         reason_codes=value.get("reason_codes"),
+        failure_stage=(
+            str(value["failure_stage"])
+            if value.get("failure_stage") is not None
+            else None
+        ),
+        primary_failure_owner=(
+            str(value["primary_failure_owner"])
+            if value.get("primary_failure_owner") is not None
+            else None
+        ),
+        contributing_owners=value.get("contributing_owners"),
         failure_owner=(
             str(value["failure_owner"])
             if value.get("failure_owner") is not None
@@ -412,6 +446,10 @@ def _normalize_checks(
             owner = str(record.pop("failure_owner") or "").strip()
             if owner:
                 normalized_record["failure_owner"] = owner
+        if "failure_stage" in record:
+            stage = str(record.pop("failure_stage") or "").strip()
+            if stage:
+                normalized_record["failure_stage"] = stage
         if record:
             normalized_record["provenance"] = deepcopy(record)
         normalized.append(normalized_record)
@@ -434,7 +472,23 @@ def _reason_codes(values: Any) -> list[str]:
     return _deduplicate(result)
 
 
-def _failure_owner(
+def _failure_stage(
+    explicit: str | None,
+    *,
+    failed_checks: Iterable[Mapping[str, Any]],
+) -> str:
+    stage = str(explicit or "").strip()
+    if stage:
+        return stage
+    stages = _deduplicate(
+        str(check.get("failure_stage") or "").strip()
+        for check in failed_checks
+        if str(check.get("failure_stage") or "").strip()
+    )
+    return stages[0] if len(stages) == 1 else "multiple" if stages else "submission_readiness"
+
+
+def _primary_failure_owner(
     explicit: str | None,
     *,
     failed_checks: Iterable[Mapping[str, Any]],
@@ -447,7 +501,49 @@ def _failure_owner(
         for check in failed_checks
         if str(check.get("failure_owner") or "").strip()
     )
-    return owners[0] if len(owners) == 1 else "multiple" if owners else "unknown"
+    return owners[0] if owners else "unknown"
+
+
+def _contributing_owners(
+    explicit: Iterable[str] | None,
+    *,
+    primary: str,
+    failed_checks: Iterable[Mapping[str, Any]],
+) -> list[str]:
+    explicit_owners = _attribution_values(
+        explicit,
+        field_name="contributing_owners",
+    )
+    check_owners = [
+        str(check.get("failure_owner") or "").strip()
+        for check in failed_checks
+        if str(check.get("failure_owner") or "").strip()
+    ]
+    return [
+        owner
+        for owner in _deduplicate((*explicit_owners, *check_owners))
+        if owner != primary
+    ]
+
+
+def _attribution_values(
+    values: Iterable[str] | None,
+    *,
+    field_name: str,
+) -> list[str]:
+    if values is None:
+        return []
+    if isinstance(values, str):
+        values = [values]
+    if not isinstance(values, Iterable):
+        raise TypeError(f"{field_name} must be an iterable of strings")
+    result: list[str] = []
+    for value in values:
+        normalized = str(value or "").strip()
+        if not normalized:
+            raise ValueError(f"{field_name} must contain non-empty strings")
+        result.append(normalized)
+    return _deduplicate(result)
 
 
 def _layer_weights(profile: Mapping[str, Any]) -> dict[str, float]:

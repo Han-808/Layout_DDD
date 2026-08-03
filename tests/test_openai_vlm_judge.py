@@ -11,6 +11,11 @@ from PIL import Image, PngImagePlugin
 
 from benchmark.visual_judge import OpenAICompatibleVLMJudge, build_openai_compatible_vlm_judge, evaluate_vlm_category
 from benchmark.visual_judge.openai_compatible import _selector_candidate_order_key
+from benchmark.visual_judge.contracts import ResponseSchemaRepairError
+from benchmark.visual_judge.l3_prompts import (
+    L3_METRIC_BOUNDARY_RULES,
+    L3_METRIC_PROMPT_VERSION,
+)
 from benchmark.visual_judge.runtime import EvidenceControlUnresolvedError
 
 
@@ -18,14 +23,21 @@ class FakeMultimodalModel:
     model_id = "Qwen3-VL-32B-Instruct-64K"
     endpoint = "http://127.0.0.1:8298/v1"
 
-    def __init__(self, response: dict) -> None:
-        self.response = response
+    def __init__(self, response: dict | list[dict]) -> None:
+        self.responses = (
+            list(response) if isinstance(response, list) else [response]
+        )
         self.calls = []
         self.last_request_metadata = {"image_count": 1}
 
     def chat_messages(self, messages, **kwargs) -> str:
         self.calls.append({"messages": messages, "kwargs": kwargs})
-        return json.dumps(self.response)
+        index = min(len(self.calls) - 1, len(self.responses) - 1)
+        self.last_request_metadata = {
+            "image_count": 1,
+            "call_type": kwargs.get("call_type"),
+        }
+        return json.dumps(self.responses[index])
 
 
 def _request(image_path: Path) -> dict:
@@ -278,6 +290,8 @@ def test_canonical_scene_quality_adapter_supports_functional_consistency(
     ).adjudicate_scene_quality(
         {
             "metric": "functional_consistency",
+            "metric_prompt_version": L3_METRIC_PROMPT_VERSION,
+            "metric_boundary_rules": list(L3_METRIC_BOUNDARY_RULES),
             "judgment_scope": {
                 "included": [
                     "group_real_world_usability",
@@ -299,9 +313,85 @@ def test_canonical_scene_quality_adapter_supports_functional_consistency(
         ].split("\n", 1)[1]
     )
     assert context["metric"] == "functional_consistency"
-    assert "real-world sense" in context["rubric"]
+    assert "ordinary real-world function" in context["rubric"]
+    assert context["metric_prompt_version"] == L3_METRIC_PROMPT_VERSION
+    assert context["metric_boundary_rules"] == list(
+        L3_METRIC_BOUNDARY_RULES
+    )
+    assert result["request_metadata"]["metric_prompt_version"] == (
+        L3_METRIC_PROMPT_VERSION
+    )
+    system_prompt = model.calls[0]["messages"][0]["content"]
+    assert "Semantic borderline cases are not evidence insufficiency" in (
+        system_prompt
+    )
     assert model.calls[0]["kwargs"]["call_type"] == (
         "vlm_judge.canonical.functional_consistency"
+    )
+
+
+def test_scene_quality_adapter_keeps_semantic_placement_out_of_l1(
+    tmp_path: Path,
+) -> None:
+    image_path = tmp_path / "placement_group.png"
+    _write_test_png(image_path)
+    model = FakeMultimodalModel(
+        {
+            "evidence_status": "sufficient",
+            "verdict": "invalid",
+            "confidence": 0.9,
+            "reason": "The phone is implausibly placed on the floor.",
+            "missing_evidence": [],
+            "defects": [
+                {
+                    "scope": "semantically_inappropriate_support_surface",
+                    "target_ids": ["phone"],
+                    "relation": "phone_on_floor",
+                    "reason": "The floor is not a plausible semantic surface.",
+                }
+            ],
+        }
+    )
+
+    result = OpenAICompatibleVLMJudge(
+        model
+    ).adjudicate_scene_quality(
+        {
+            "metric": "semantic_placement_consistency",
+            "judgment_scope": {
+                "included": [
+                    "semantically_inappropriate_support_surface",
+                    "implausible_placement_height",
+                    "semantically_inappropriate_scene_zone",
+                    "implausible_local_context",
+                ],
+                "excluded": [
+                    "collision",
+                    "physical_support",
+                ],
+            },
+            "target_object_ids": ["phone", "side_table"],
+            "scene_summary": {
+                "scene_type": "living_room",
+                "objects": [
+                    {"id": "phone", "category": "telephone"},
+                    {"id": "side_table", "category": "side_table"},
+                ],
+            },
+            "render_evidence": [str(image_path)],
+        }
+    )
+
+    assert result["verdict"] == "invalid"
+    context = json.loads(
+        model.calls[0]["messages"][1]["content"][0][
+            "text"
+        ].split("\n", 1)[1]
+    )
+    assert "current location" in context["rubric"]
+    assert "An L1 condition alone" in context["rubric"]
+    assert model.calls[0]["kwargs"]["call_type"] == (
+        "vlm_judge.canonical.semantic_placement_consistency"
     )
 
 
@@ -641,6 +731,117 @@ def test_binary_judges_have_internal_structured_need_more_path(
     assert "allowed_missing_observations" in user_text
     assert expected_observation in user_text
     assert "Do not put prose in missing_observations" in system_prompt
+
+
+@pytest.mark.parametrize(
+    ("control_method", "payload"),
+    [
+        (
+            "_adjudicate_p0b_control",
+            {
+                "metric": "collision",
+                "event": {"object_ids": ["a", "b"]},
+            },
+        ),
+        (
+            "_adjudicate_relation_control",
+            {
+                "family": "oor",
+                "relation": {
+                    "type": "mirrors",
+                    "subject_id": "a",
+                    "object_id": "b",
+                },
+            },
+        ),
+    ],
+)
+def test_internal_binary_schema_failure_gets_one_same_evidence_repair(
+    tmp_path: Path,
+    control_method: str,
+    payload: dict,
+) -> None:
+    image_path = tmp_path / "binary-repair.png"
+    _write_test_png(image_path)
+    first = {
+        "status": "invalid",
+        "confidence": 0.8,
+        "reason": "The visible event is invalid.",
+        "defects": ["free-form defect"],
+        "evidence_request": None,
+    }
+    repaired = {
+        **first,
+        "defects": [],
+    }
+    model = FakeMultimodalModel([first, repaired])
+    judge = OpenAICompatibleVLMJudge(model)
+
+    result = getattr(judge, control_method)(
+        {**payload, "render_evidence": [str(image_path)]}
+    )
+
+    assert result["status"] == "invalid"
+    assert result["defects"] == []
+    assert len(model.calls) == 2
+    assert model.calls[1]["kwargs"]["call_type"].endswith(
+        ".schema_repair"
+    )
+    assert model.calls[1]["messages"][:2] == (
+        model.calls[0]["messages"]
+    )
+    assert model.calls[1]["messages"][2] == {
+        "role": "assistant",
+        "content": json.dumps(first),
+    }
+    assert "defects exactly []" in (
+        model.calls[1]["messages"][3]["content"]
+    )
+    audit = result["request_metadata"][
+        "response_schema_validation"
+    ]
+    assert audit["attempt_count"] == 2
+    assert audit["repair_retry_count"] == 1
+    assert audit["recovered"] is True
+    assert json.loads(audit["attempts"][0]["raw_response"]) == first
+
+
+def test_internal_binary_schema_repair_fails_closed_after_one_retry(
+    tmp_path: Path,
+) -> None:
+    image_path = tmp_path / "binary-repair-failure.png"
+    _write_test_png(image_path)
+    invalid = {
+        "status": "invalid",
+        "confidence": 0.8,
+        "reason": "invalid event",
+        "defects": ["still not allowed"],
+        "evidence_request": None,
+    }
+    model = FakeMultimodalModel([invalid, invalid, {
+        "status": "valid",
+        "confidence": 1.0,
+        "reason": "must never be called",
+        "defects": [],
+        "evidence_request": None,
+    }])
+    judge = OpenAICompatibleVLMJudge(model)
+
+    with pytest.raises(ResponseSchemaRepairError) as raised:
+        judge._adjudicate_p0b_control(
+            {
+                "metric": "collision",
+                "event": {"object_ids": ["a", "b"]},
+                "render_evidence": [str(image_path)],
+            }
+        )
+
+    assert len(model.calls) == 2
+    audit = raised.value.schema_audit
+    assert audit["attempt_count"] == 2
+    assert audit["repair_retry_count"] == 1
+    assert audit["recovered"] is False
+    assert len(audit["attempts"]) == 2
 
 
 def test_spatial_fidelity_judge_is_binary_and_treats_rarity_as_routing_only(
