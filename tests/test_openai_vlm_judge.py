@@ -169,6 +169,83 @@ def test_direct_canonical_public_method_returns_compatible_unresolved_without_mo
 
 
 @pytest.mark.parametrize(
+    "metric",
+    [
+        "scale_consistency",
+        "object_pairing_consistency",
+    ],
+)
+def test_explicit_json_screen_calls_model_without_images(metric):
+    model = FakeMultimodalModel(
+        {
+            "evidence_status": "sufficient",
+            "verdict": "valid",
+            "confidence": 0.9,
+            "reason": "The structured scene data raises no concern.",
+            "missing_evidence": [],
+            "defects": [],
+            "evidence_request": None,
+        }
+    )
+    judge = OpenAICompatibleVLMJudge(model)
+
+    result = judge.screen_scene_quality(
+        {
+            "metric": metric,
+            "evidence_phase": "json_screen",
+            "decision_mode": "screen",
+            "target_object_ids": ["chair", "desk"],
+            "judgment_scope": {
+                "included": [
+                    (
+                        "significant_visible_category_relative_"
+                        "scale_incoherence"
+                    )
+                    if metric == "scale_consistency"
+                    else "group_member_category_compatibility"
+                ]
+            },
+            "scene_summary": {
+                "scene_type": "bedroom",
+                "objects": [
+                    {
+                        "id": "chair",
+                        "category": "chair",
+                        "size": [0.5, 0.5, 0.9],
+                    },
+                    {
+                        "id": "desk",
+                        "category": "desk",
+                        "size": [1.2, 0.6, 0.75],
+                    },
+                ],
+            },
+            "render_evidence": [],
+        }
+    )
+
+    assert result["verdict"] == "valid"
+    assert result["images_used"] == []
+    assert len(model.calls) == 1
+    content = model.calls[0]["messages"][1]["content"]
+    assert len(content) == 1
+    context = json.loads(content[0]["text"].split("\n", 1)[1])
+    assert context["evidence_phase"] == "json_screen"
+    assert context["decision_mode"] == "screen"
+    assert "JSON-only routing screen" in context["phase_instruction"]
+    assert "Additional visual evidence can be acquired" in (
+        context["phase_instruction"]
+    )
+    system_prompt = model.calls[0]["messages"][0]["content"]
+    assert "Additional visual evidence can be acquired" in system_prompt
+    assert "do not default to valid" not in system_prompt
+    assert "instead of guessing" not in context["phase_instruction"]
+    assert model.calls[0]["kwargs"]["call_type"] == (
+        f"vlm_judge.screen.{metric}"
+    )
+
+
+@pytest.mark.parametrize(
     ("method_name", "request_payload"),
     [
         (

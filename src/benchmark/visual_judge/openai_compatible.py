@@ -45,6 +45,7 @@ return applicable=false, score=null, and explain why in summary."""
 CANONICAL_METRIC_SYSTEM_PROMPT = """You judge one narrowly scoped metric for a
 3D scene benchmark. Use the original prompt, prompt-authorized deviations, structured context,
 and supplied images. Do not judge neighboring metrics. Evidence insufficiency is not validity.
+Additional visual evidence can be acquired through a structured evidence_request.
 Apply any supplied metric_boundary_rules as authoritative metric-ownership rules.
 Semantic borderline cases are not evidence insufficiency: when the evidence is adequate but no clear,
 significant in-scope defect is established, return valid.
@@ -318,6 +319,23 @@ class OpenAICompatibleVLMJudge:
             request,
         )
 
+    def screen_scene_quality(self, request: dict) -> dict:
+        """Run an explicit non-rendering L3 routing screen.
+
+        Screening is owned by the metric evaluator.  It deliberately bypasses
+        the camera Controller because an invalid/insufficient screen is a route
+        to visual confirmation rather than a final metric verdict.
+        """
+
+        if (
+            str(request.get("decision_mode") or "").strip().lower()
+            != "screen"
+        ):
+            raise ValueError(
+                "screen_scene_quality requires decision_mode='screen'"
+            )
+        return self._adjudicate_scene_quality_raw(request)
+
     def _adjudicate_scene_quality_raw(self, request: dict) -> dict:
         return self._adjudicate_canonical_metric(
             request,
@@ -393,7 +411,13 @@ class OpenAICompatibleVLMJudge:
             raise FileNotFoundError(
                 f"canonical metric render evidence does not exist: {missing_paths}"
             )
-        if not selected:
+        text_only_screen = bool(
+            metric
+            in {"scale_consistency", "object_pairing_consistency"}
+            and request.get("evidence_phase") == "json_screen"
+            and request.get("decision_mode") == "screen"
+        )
+        if not selected and not text_only_screen:
             return self._audit_result(
                 {
                     "evidence_status": "insufficient",
@@ -451,21 +475,10 @@ class OpenAICompatibleVLMJudge:
             ),
             "evidence_phase": request.get("evidence_phase"),
             "decision_mode": request.get("decision_mode"),
-            "phase_instruction": (
-                "This is the global screening pass. Return valid when the global "
-                "views are sufficient and show no significant in-scope style "
-                "defect. Return invalid only with explicit target IDs for a "
-                "significant visible defect. Return ambiguous/insufficient when "
-                "closer local evidence is needed; do not guess."
-                if metric == "style_consistency"
-                and request.get("evidence_phase") == "global_screen"
-                else
-                "This is the final local-confirmation pass. Use the local views "
-                "first and the global views as context; independently confirm or "
-                "reject the suspected style defect."
-                if metric == "style_consistency"
-                and request.get("evidence_phase") == "local_confirmation"
-                else None
+            "phase_instruction": _canonical_phase_instruction(
+                metric=metric,
+                evidence_phase=request.get("evidence_phase"),
+                decision_mode=request.get("decision_mode"),
             ),
             "view_names": _generic_view_names(selected),
         }
@@ -507,13 +520,18 @@ class OpenAICompatibleVLMJudge:
             {"type": "image_url", "image_url": {"url": _image_data_url(path)}}
             for path in selected
         )
+        call_type = (
+            f"vlm_judge.screen.{metric}"
+            if request.get("decision_mode") == "screen"
+            else f"vlm_judge.canonical.{metric}"
+        )
         raw = self.model.chat_messages(
             [
                 {"role": "system", "content": CANONICAL_METRIC_SYSTEM_PROMPT},
                 {"role": "user", "content": content},
             ],
             response_format_json=self.response_format_json,
-            call_type=f"vlm_judge.canonical.{metric}",
+            call_type=call_type,
         )
         result = parse_json_object(raw)
         allowed_scopes = (
@@ -1225,6 +1243,75 @@ def _generic_view_names(paths: list[Path]) -> list[str]:
     """Return request-local aliases instead of exposing local filenames."""
 
     return [f"image_{index:02d}" for index, _ in enumerate(paths)]
+
+
+def _canonical_phase_instruction(
+    *,
+    metric: str,
+    evidence_phase: Any,
+    decision_mode: Any,
+) -> str:
+    phase = str(evidence_phase or "final").strip().lower()
+    mode = str(decision_mode or "final").strip().lower()
+    acquire_more = "Additional visual evidence can be acquired."
+    if (
+        phase == "json_screen"
+        and mode == "screen"
+        and metric
+        in {"scale_consistency", "object_pairing_consistency"}
+    ):
+        return (
+            "This is a JSON-only routing screen, not visual confirmation of "
+            "a defect. Use the canonical dimensions, categories, scene type, "
+            "and supplied group membership only to identify whether a "
+            "plausible in-scope concern needs visual inspection. Return valid "
+            "when the structured data gives no such concern. Return invalid "
+            "with explicit target IDs to mark a suspicious candidate that "
+            "must receive visual confirmation; this invalid screen is not the "
+            "final metric verdict. Return insufficient/ambiguous when the JSON "
+            "cannot safely complete the screen. "
+            + acquire_more
+        )
+    if metric == "style_consistency" and phase == "global_screen":
+        return (
+            "This is the one-global-view screening pass. Return valid when "
+            "the global view and structured context show no significant "
+            "in-scope style concern. Return invalid only as a localized "
+            "suspicion for group-local confirmation. "
+            + acquire_more
+        )
+    if metric == "style_consistency" and phase == "local_confirmation":
+        return (
+            "This is the group-local confirmation pass. Use the global view "
+            "as scene context and the local view to independently confirm or "
+            "reject the routed style suspicion. "
+            + acquire_more
+        )
+    if (
+        metric in {"scale_consistency", "object_pairing_consistency"}
+        and phase == "visual_confirmation"
+    ):
+        return (
+            "This is visual confirmation of a JSON-screened candidate. Use "
+            "the global view for scene context and the group-local view for "
+            "the routed targets. The prior screen is not evidence that the "
+            "candidate is invalid. "
+            + acquire_more
+        )
+    if (
+        metric
+        in {
+            "functional_consistency",
+            "semantic_placement_consistency",
+        }
+        and phase == "initial_visual"
+    ):
+        return (
+            "This is the initial global-plus-local visual pass. Judge only "
+            "what the current scene context and target-local view establish. "
+            + acquire_more
+        )
+    return acquire_more
 
 
 def _sanitize_outbound_view_evidence(value: Any) -> Any:

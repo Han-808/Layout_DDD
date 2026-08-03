@@ -273,7 +273,15 @@ def test_canonical_l3_group_judge_repair_reaches_vlm_and_renders(
         },
         scene_quality_config={
             "metrics": {
-                "scale_consistency": {"enabled": True},
+                "scale_consistency": {
+                    "enabled": True,
+                    # This test isolates the post-Judge Controller repair
+                    # cascade; JSON-first routing is covered separately.
+                    "evidence_plan": {
+                        "evidence_strategy": "global_and_local",
+                        "router_options": None,
+                    },
+                },
                 "object_pairing_consistency": {"enabled": False},
                 "style_consistency": {"enabled": False},
                 "functional_consistency": {"enabled": False},

@@ -49,6 +49,9 @@ from benchmark.evaluator.scene_quality.group_scoped import (
     group_packet_audit as _group_packet_audit,
     resolve_group_evidence_packets as _resolve_group_evidence_packets,
 )
+from benchmark.evaluator.scene_quality.json_screen_first import (
+    evaluate_json_screen_then_group_visual as _evaluate_json_screen_then_group_visual,
+)
 from benchmark.evaluator.scene_quality.style_global_first import (
     evaluate_style_global_then_group_local as _evaluate_style_global_then_group_local,
 )
@@ -246,7 +249,12 @@ DEFAULT_SCENE_QUALITY_INTERFACE_CONFIG: dict[str, Any] = {
                 "local_policy": {
                     "camera_scope": "group_local",
                     "grouping_policy_id": GROUPING_POLICY_ID,
-                    "image_budget": 2,
+                    "image_budget": 1,
+                    "max_packet_images": 3,
+                    "image_order": [
+                        "global_context",
+                        "group_local",
+                    ],
                     "trigger_states": [
                         "suspicious",
                         "insufficient_evidence",
@@ -278,13 +286,15 @@ DEFAULT_SCENE_QUALITY_INTERFACE_CONFIG: dict[str, Any] = {
                 "camera_mode": "metric_local",
                 "selector": "deterministic",
                 "image_budget": 3,
+                "global_image_budget": 1,
+                "scoped_image_budget": 1,
                 "presentation": "raw",
-                "image_order": ["group_local", "global_context"],
+                "image_order": ["global_context", "group_local"],
                 "include_global_context": True,
                 "camera_pose_mode": None,
             },
             "evidence_plan": {
-                "evidence_strategy": "global_and_local",
+                "evidence_strategy": "json_screen_then_visual",
                 "global_policy": {
                     "view_family": "global_perspective",
                     "image_budget": 1,
@@ -293,8 +303,22 @@ DEFAULT_SCENE_QUALITY_INTERFACE_CONFIG: dict[str, Any] = {
                 "local_policy": {
                     "camera_scope": "group_local",
                     "grouping_policy_id": GROUPING_POLICY_ID,
+                    "image_budget": 1,
+                    "max_packet_images": 3,
+                    "trigger_states": [
+                        "suspicious",
+                        "insufficient_evidence",
+                    ],
                 },
-                "router_options": None,
+                "router_options": {
+                    "json_screen_then_visual": {
+                        "router": "vlm_json_screen",
+                        "trigger_states": [
+                            "suspicious",
+                            "insufficient_evidence",
+                        ],
+                    },
+                },
                 "text_context": [
                     "original_prompt",
                     "parsed_prompt_requirements",
@@ -313,13 +337,15 @@ DEFAULT_SCENE_QUALITY_INTERFACE_CONFIG: dict[str, Any] = {
                 "camera_mode": "metric_local",
                 "selector": "deterministic",
                 "image_budget": 3,
+                "global_image_budget": 1,
+                "scoped_image_budget": 1,
                 "presentation": "raw",
                 "image_order": ["global_context", "group_local"],
                 "include_global_context": True,
                 "camera_pose_mode": None,
             },
             "evidence_plan": {
-                "evidence_strategy": "global_and_local",
+                "evidence_strategy": "json_screen_then_visual",
                 "global_policy": {
                     "view_family": "wall_occlusion_aware_room_perspective",
                     "image_budget": 1,
@@ -328,8 +354,22 @@ DEFAULT_SCENE_QUALITY_INTERFACE_CONFIG: dict[str, Any] = {
                 "local_policy": {
                     "camera_scope": "group_local",
                     "grouping_policy_id": GROUPING_POLICY_ID,
+                    "image_budget": 1,
+                    "max_packet_images": 3,
+                    "trigger_states": [
+                        "suspicious",
+                        "insufficient_evidence",
+                    ],
                 },
-                "router_options": None,
+                "router_options": {
+                    "json_screen_then_visual": {
+                        "router": "vlm_json_screen",
+                        "trigger_states": [
+                            "suspicious",
+                            "insufficient_evidence",
+                        ],
+                    },
+                },
                 "text_context": [
                     "original_prompt",
                     "parsed_prompt_requirements",
@@ -356,8 +396,10 @@ DEFAULT_SCENE_QUALITY_INTERFACE_CONFIG: dict[str, Any] = {
                 "camera_mode": "metric_local",
                 "selector": "deterministic",
                 "image_budget": 3,
+                "global_image_budget": 1,
+                "scoped_image_budget": 1,
                 "presentation": "raw",
-                "image_order": ["group_local", "global_context"],
+                "image_order": ["global_context", "group_local"],
                 "include_global_context": True,
                 "camera_pose_mode": None,
             },
@@ -371,6 +413,7 @@ DEFAULT_SCENE_QUALITY_INTERFACE_CONFIG: dict[str, Any] = {
                 "local_policy": {
                     "camera_scope": "group_local",
                     "grouping_policy_id": GROUPING_POLICY_ID,
+                    "image_budget": 1,
                 },
                 "router_options": None,
                 "text_context": [
@@ -395,8 +438,10 @@ DEFAULT_SCENE_QUALITY_INTERFACE_CONFIG: dict[str, Any] = {
                 "camera_mode": "metric_local",
                 "selector": "deterministic",
                 "image_budget": 3,
+                "global_image_budget": 1,
+                "scoped_image_budget": 1,
                 "presentation": "raw",
-                "image_order": ["group_local", "global_context"],
+                "image_order": ["global_context", "group_local"],
                 "include_global_context": True,
                 "camera_pose_mode": None,
             },
@@ -410,6 +455,7 @@ DEFAULT_SCENE_QUALITY_INTERFACE_CONFIG: dict[str, Any] = {
                 "local_policy": {
                     "camera_scope": "group_local",
                     "grouping_policy_id": GROUPING_POLICY_ID,
+                    "image_budget": 1,
                 },
                 "router_options": None,
                 "text_context": [
@@ -818,6 +864,17 @@ def _evaluate_metric(
     applicability: Any,
 ) -> dict[str, Any]:
     policy = deepcopy(metric_config["evidence_policy"])
+    evidence_plan = (
+        metric_config.get("evidence_plan")
+        if isinstance(metric_config.get("evidence_plan"), dict)
+        else {}
+    )
+    json_screen_first = bool(
+        metric_name
+        in {"scale_consistency", "object_pairing_consistency"}
+        and evidence_plan.get("evidence_strategy")
+        == "json_screen_then_visual"
+    )
     declared_scope = str(policy["camera_scope"])
     # Existing direct callers can still adjudicate a scale packet without
     # supplying the new grouping dependency. Canonical runs provide grouping
@@ -898,7 +955,9 @@ def _evaluate_metric(
             groups=selected_groups_for_judge,
             grouping_report=grouping_report,
             camera_evidence_provider=(
-                camera_evidence_provider if should_acquire_evidence else None
+                camera_evidence_provider
+                if should_acquire_evidence and not json_screen_first
+                else None
             ),
             resolve_metric_evidence=_resolve_metric_evidence,
         )
@@ -926,7 +985,9 @@ def _evaluate_metric(
             selected_group_ids=selected_group_ids,
             selected_groups=selected_groups_for_judge,
             camera_evidence_provider=(
-                camera_evidence_provider if should_acquire_evidence else None
+                camera_evidence_provider
+                if should_acquire_evidence and not json_screen_first
+                else None
             ),
         )
     evidence_available = bool(resolved_evidence)
@@ -996,6 +1057,12 @@ def _evaluate_metric(
             "camera_mode": policy["camera_mode"],
             "selector": policy["selector"],
             "image_budget": policy["image_budget"],
+            "global_image_budget": policy.get(
+                "global_image_budget"
+            ),
+            "scoped_image_budget": policy.get(
+                "scoped_image_budget"
+            ),
             "presentation": policy["presentation"],
             "image_order": policy["image_order"],
             "include_global_context": policy["include_global_context"],
@@ -1055,6 +1122,38 @@ def _evaluate_metric(
     if vlm_judge is None:
         base.update(status="unresolved", reason="vlm_judge_not_configured")
         return base
+    if json_screen_first:
+        return _evaluate_json_screen_then_group_visual(
+            base=base,
+            metric_name=metric_name,
+            metric_config=metric_config,
+            scene=scene,
+            object_ids=object_ids,
+            groups=(
+                selected_groups_for_judge
+                if grouping_available
+                else None
+            ),
+            grouping_report=grouping_report,
+            render_evidence=render_evidence,
+            camera_evidence_provider=camera_evidence_provider,
+            vlm_judge=vlm_judge,
+            prompt=prompt,
+            visual_style_spec=visual_style_spec,
+            authorized_deviations=authorized_deviations,
+            build_judge_request=_judge_request,
+            call_judge=_call_scene_quality_judge,
+            apply_prompt_exemptions=_apply_prompt_exemptions,
+            normalize_judgement=_normalize_judgement,
+            resolve_group_evidence_packets=(
+                _resolve_group_evidence_packets
+            ),
+            resolve_metric_evidence=_resolve_metric_evidence,
+            group_packet_audit=_group_packet_audit,
+            evaluate_group_scoped_judgements=(
+                _evaluate_group_scoped_judgements
+            ),
+        )
     if scope in _GROUP_SCOPES:
         return _evaluate_group_scoped_judgements(
             base=base,
@@ -1069,6 +1168,16 @@ def _evaluate_metric(
             call_judge=_call_scene_quality_judge,
             apply_prompt_exemptions=_apply_prompt_exemptions,
             normalize_judgement=_normalize_judgement,
+            evidence_phase=(
+                "initial_visual"
+                if metric_name
+                in {
+                    "functional_consistency",
+                    "semantic_placement_consistency",
+                }
+                else "final"
+            ),
+            decision_mode="final",
         )
     if not available:
         base.update(status="unresolved", reason=unavailable_reason)
@@ -1319,6 +1428,14 @@ def _resolve_metric_evidence(
                 "scoped_image_budget must be non-negative"
             )
         scoped_paths = scoped_paths[:scoped_limit]
+    global_image_budget = policy.get("global_image_budget")
+    if global_image_budget is not None:
+        global_limit = int(global_image_budget)
+        if global_limit < 0:
+            raise ValueError(
+                "global_image_budget must be non-negative"
+            )
+        global_paths = global_paths[:global_limit]
 
     missing_paths = [
         path
@@ -1773,7 +1890,11 @@ def _compact_object(value: dict[str, Any]) -> dict[str, Any]:
 
 
 def _call_scene_quality_judge(judge: Any, request: dict[str, Any]) -> dict[str, Any]:
-    call = getattr(judge, "adjudicate_scene_quality", None)
+    call = None
+    if str(request.get("decision_mode") or "").lower() == "screen":
+        call = getattr(judge, "screen_scene_quality", None)
+    if not callable(call):
+        call = getattr(judge, "adjudicate_scene_quality", None)
     if not callable(call):
         call = getattr(judge, "evaluate", judge)
     if not callable(call):
@@ -2048,6 +2169,27 @@ def _validate_evidence_policy(metric_name: str, policy: dict[str, Any]) -> dict[
         raise SceneQualityInterfaceConfigError(
             f"{metric_name}.evidence_policy.image_budget must be a positive integer, got {budget!r}"
         )
+    for quota_name in (
+        "global_image_budget",
+        "scoped_image_budget",
+    ):
+        quota = policy.get(quota_name)
+        if quota is None:
+            continue
+        if (
+            isinstance(quota, bool)
+            or not isinstance(quota, int)
+            or quota < 0
+        ):
+            raise SceneQualityInterfaceConfigError(
+                f"{metric_name}.evidence_policy.{quota_name} "
+                "must be a non-negative integer"
+            )
+        if quota > budget:
+            raise SceneQualityInterfaceConfigError(
+                f"{metric_name}.evidence_policy.{quota_name} "
+                "cannot exceed image_budget"
+            )
     if not isinstance(policy.get("include_global_context"), bool):
         raise SceneQualityInterfaceConfigError(
             f"{metric_name}.evidence_policy.include_global_context must be boolean"

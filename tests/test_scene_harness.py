@@ -680,9 +680,12 @@ def test_scene_harness_executes_group_l3_deterministic_to_vlm_cascade(
             )
             views = []
             for index, pose in enumerate(camera_views):
+                view_code = sum(
+                    str(pose.get("id") or f"view_{index}").encode("utf-8")
+                ) % 200
                 path = self._image(
                     Path(out_dir) / f"rgb_{index:02d}.png",
-                    (60, 120, 160),
+                    (30 + view_code, 120, 160),
                 )
                 views.append(
                     {
@@ -842,7 +845,15 @@ def test_scene_harness_executes_group_l3_deterministic_to_vlm_cascade(
         },
         scene_quality_config={
             "metrics": {
-                "scale_consistency": {"enabled": True},
+                    "scale_consistency": {
+                        "enabled": True,
+                        # Keep this test focused on the Controller repair
+                        # cascade after an initial visual Judge request.
+                        "evidence_plan": {
+                            "evidence_strategy": "global_and_local",
+                            "router_options": None,
+                        },
+                    },
                 "object_pairing_consistency": {"enabled": False},
                 "style_consistency": {"enabled": False},
                 "functional_consistency": {"enabled": False},

@@ -54,6 +54,7 @@ GROUPING_ROLE = "evidence_partition_not_metric_verdict"
 EVIDENCE_STRATEGIES = (
     "global_only",
     "global_screen_then_local",
+    "json_screen_then_visual",
     "script_screen_then_local",
     "global_and_local",
 )
@@ -283,6 +284,18 @@ def validate_local_policy(policy: Any, *, where: str = "local_policy") -> dict[s
         raise EvidenceContractError(
             f"{where}.include_global_context must be boolean"
         )
+    for budget_name in ("image_budget", "max_packet_images"):
+        if budget_name not in policy:
+            continue
+        budget = policy[budget_name]
+        if (
+            isinstance(budget, bool)
+            or not isinstance(budget, int)
+            or budget < 1
+        ):
+            raise EvidenceContractError(
+                f"{where}.{budget_name} must be a positive integer"
+            )
     return policy
 
 

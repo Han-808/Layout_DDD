@@ -46,6 +46,7 @@ def evaluate_style_global_then_group_local(
         decision_mode="screen",
     )
     base["evidence_request"]["vlm_invoked"] = True
+    base["evidence_request"]["evidence_phase"] = "global_screen"
     base["vlm_invoked"] = True
     base["judge_call_count"] = 1
     try:
@@ -140,21 +141,41 @@ def evaluate_style_global_then_group_local(
         if compatibility_without_grouping
         else "group_local"
     )
-    local_image_budget = int(local_plan.get("image_budget") or 2)
+    global_plan = (
+        plan.get("global_policy")
+        if isinstance(plan.get("global_policy"), dict)
+        else {}
+    )
+    global_image_budget = max(
+        0,
+        int(global_plan.get("image_budget") or 1),
+    )
+    selected_global_evidence = list(
+        dict.fromkeys(global_evidence)
+    )[:global_image_budget]
+    local_image_budget = int(local_plan.get("image_budget") or 1)
+    max_packet_images = max(
+        local_image_budget + len(selected_global_evidence),
+        int(
+            local_plan.get("max_packet_images")
+            or local_image_budget + len(selected_global_evidence)
+        ),
+    )
+    image_order = local_plan.get("image_order")
+    if not isinstance(image_order, list) or not image_order:
+        image_order = ["global_context", local_scope]
     local_policy = {
         "camera_scope": local_scope,
         "camera_mode": "metric_local",
         "selector": "deterministic",
-        # The local budget controls corrective views.  Reused global anchors
-        # are reserved separately so local-first ordering cannot truncate the
-        # scene context that the style contract requires.
-        "image_budget": (
-            local_image_budget
-            + len(dict.fromkeys(global_evidence))
-        ),
+        # The local budget controls corrective views. Reused global anchors are
+        # reserved separately so packet truncation cannot remove required
+        # scene context.
+        "image_budget": max_packet_images,
+        "global_image_budget": len(selected_global_evidence),
         "scoped_image_budget": local_image_budget,
         "presentation": "raw",
-        "image_order": [local_scope, "global_context"],
+        "image_order": list(image_order),
         "include_global_context": True,
         # Style remains global-first. This request-level override applies only
         # to the suspicious/insufficient local-confirmation phase and prevents
@@ -167,7 +188,7 @@ def evaluate_style_global_then_group_local(
         local_evidence_input = deepcopy(render_evidence)
     else:
         local_evidence_input = {}
-    local_evidence_input["global"] = list(global_evidence)
+    local_evidence_input["global"] = selected_global_evidence
     packets = resolve_group_evidence_packets(
         local_evidence_input,
         metric_name="style_consistency",
@@ -219,12 +240,21 @@ def evaluate_style_global_then_group_local(
             path
             for packet in packets
             for path in packet["paths"]
-            if path not in global_evidence
+            if path not in selected_global_evidence
         )
     )
     base["evidence_request"].update(
         {
             "camera_scope": local_scope,
+            "image_budget": local_policy["image_budget"],
+            "global_image_budget": local_policy[
+                "global_image_budget"
+            ],
+            "scoped_image_budget": local_policy[
+                "scoped_image_budget"
+            ],
+            "image_order": list(local_policy["image_order"]),
+            "evidence_phase": "local_confirmation",
             "provider_invoked": any(
                 packet["resolution"].get("provider_invoked") is True
                 for packet in packets

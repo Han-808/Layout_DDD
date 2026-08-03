@@ -8,9 +8,10 @@ semantics.
 from __future__ import annotations
 
 
-L3_METRIC_PROMPT_VERSION = "l3_metric_boundaries_v1"
+L3_METRIC_PROMPT_VERSION = "l3_metric_evidence_routing_v3"
 
 L3_METRIC_BOUNDARY_RULES = (
+    "Additional visual evidence can be acquired.",
     "Evidence insufficiency and semantic uncertainty are different. Return "
     "insufficient evidence only when another visual observation could "
     "materially resolve the decision. If the evidence is adequate but no "
