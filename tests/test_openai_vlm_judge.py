@@ -232,17 +232,477 @@ def test_explicit_json_screen_calls_model_without_images(metric):
     context = json.loads(content[0]["text"].split("\n", 1)[1])
     assert context["evidence_phase"] == "json_screen"
     assert context["decision_mode"] == "screen"
-    assert "JSON-only routing screen" in context["phase_instruction"]
+    assert "structured-data routing screen" in (
+        context["phase_instruction"]
+    )
+    if metric == "scale_consistency":
+        assert "physical dimensions remain materially suspicious" in (
+            context["phase_instruction"]
+        )
+        assert "final scale defect" in context["phase_instruction"]
+    else:
+        assert "Apply the relocation test" in (
+            context["phase_instruction"]
+        )
+        assert "final pairing defect" in context["phase_instruction"]
     assert "Additional visual evidence can be acquired" in (
         context["phase_instruction"]
     )
     system_prompt = model.calls[0]["messages"][0]["content"]
     assert "Additional visual evidence can be acquired" in system_prompt
+    assert "Follow this decision order" in system_prompt
+    assert "rearranging the authored layout" in system_prompt
     assert "do not default to valid" not in system_prompt
     assert "instead of guessing" not in context["phase_instruction"]
     assert model.calls[0]["kwargs"]["call_type"] == (
         f"vlm_judge.screen.{metric}"
     )
+
+
+@pytest.mark.parametrize(
+    ("metric", "required_text", "forbidden_text"),
+    [
+        (
+            "scale_consistency",
+            "physical-size mismatch remains material",
+            "relocation test again",
+        ),
+        (
+            "object_pairing_consistency",
+            "Apply the relocation test again",
+            "physical-size mismatch remains material",
+        ),
+    ],
+)
+def test_visual_confirmation_phase_instructions_are_metric_specific(
+    tmp_path: Path,
+    metric: str,
+    required_text: str,
+    forbidden_text: str,
+) -> None:
+    image_path = tmp_path / f"{metric}.png"
+    _write_test_png(image_path)
+    model = FakeMultimodalModel(
+        {
+            "evidence_status": "sufficient",
+            "verdict": "valid",
+            "confidence": 0.8,
+            "reason": "The visual candidate is valid.",
+            "missing_evidence": [],
+            "defects": [],
+            "evidence_request": None,
+        }
+    )
+
+    OpenAICompatibleVLMJudge(model).adjudicate_scene_quality(
+        {
+            "metric": metric,
+            "evidence_phase": "visual_confirmation",
+            "decision_mode": "final",
+            "target_object_ids": ["chair"],
+            "judgment_scope": {"included": []},
+            "scene_summary": {
+                "scene_type": "room",
+                "objects": [{"id": "chair", "category": "chair"}],
+            },
+            "render_evidence": [str(image_path)],
+        }
+    )
+
+    context = json.loads(
+        model.calls[0]["messages"][1]["content"][0]["text"].split(
+            "\n", 1
+        )[1]
+    )
+    assert required_text in context["phase_instruction"]
+    assert forbidden_text not in context["phase_instruction"]
+
+
+def test_canonical_json_screen_gets_one_same_evidence_schema_repair() -> None:
+    invalid_scope = {
+        "evidence_status": "sufficient",
+        "verdict": "invalid",
+        "confidence": 0.8,
+        "reason": "The chair is materially undersized for its category.",
+        "missing_evidence": [],
+        "defects": [
+            {
+                "scope": "functional_access_obstruction",
+                "target_ids": ["chair"],
+                "relation": "category-relative physical scale",
+                "reason": "The chair is materially undersized.",
+            }
+        ],
+        "evidence_request": None,
+    }
+    repaired = {
+        "evidence_status": "sufficient",
+        "verdict": "invalid",
+        "confidence": 0.8,
+        "reason": "The chair is materially undersized for its category.",
+        "missing_evidence": [],
+        "defects": [
+            {
+                "scope": (
+                    "significant_visible_category_relative_"
+                    "scale_incoherence"
+                ),
+                "target_ids": ["chair"],
+                "relation": "category-relative physical scale",
+                "reason": "The chair is materially undersized.",
+            }
+        ],
+        "evidence_request": None,
+    }
+    model = FakeMultimodalModel([invalid_scope, repaired])
+    judge = OpenAICompatibleVLMJudge(model)
+
+    result = judge.screen_scene_quality(
+        {
+            "metric": "scale_consistency",
+            "evidence_phase": "json_screen",
+            "decision_mode": "screen",
+            "target_object_ids": ["chair"],
+            "judgment_scope": {
+                "included": [
+                    "significant_visible_category_relative_scale_incoherence"
+                ]
+            },
+            "scene_summary": {
+                "scene_type": "office",
+                "objects": [
+                    {
+                        "id": "chair",
+                        "category": "chair",
+                        "size": [0.6, 0.6, 1.0],
+                    }
+                ],
+            },
+            "render_evidence": [],
+        }
+    )
+
+    assert result["verdict"] == "invalid"
+    assert len(model.calls) == 2
+    assert model.calls[1]["kwargs"]["call_type"] == (
+        "vlm_judge.screen.scale_consistency.schema_repair"
+    )
+    assert model.calls[1]["messages"][:2] == model.calls[0]["messages"]
+    assert model.calls[1]["messages"][2] == {
+        "role": "assistant",
+        "content": json.dumps(invalid_scope),
+    }
+    repair_prompt = model.calls[1]["messages"][3]["content"]
+    assert "Judge only the requested metric" in repair_prompt
+    assert "out-of-scope issue" in repair_prompt
+    assert (
+        'allowed defect scopes: '
+        '["significant_visible_category_relative_scale_incoherence"]'
+        in repair_prompt
+    )
+    audit = result["request_metadata"]["response_schema_validation"]
+    assert audit["policy"] == "single_canonical_schema_repair_retry_v1"
+    assert audit["attempt_count"] == 2
+    assert audit["repair_retry_count"] == 1
+    assert audit["recovered"] is True
+    assert audit["semantic_preservation"]["locked_fields"] == {
+        "evidence_status": "sufficient",
+        "verdict": "invalid",
+        "defect_count": 1,
+        "defect_target_sets": (("chair",),),
+    }
+    assert audit["semantic_preservation"][
+        "restored_natural_language_fields"
+    ] == []
+
+
+def test_canonical_schema_repair_rejects_semantic_verdict_change() -> None:
+    invalid_scope = {
+        "evidence_status": "sufficient",
+        "verdict": "invalid",
+        "confidence": 0.8,
+        "reason": "The floor lamp is materially undersized.",
+        "missing_evidence": [],
+        "defects": [
+            {
+                "scope": "scale_consistency",
+                "target_ids": ["floor_lamp"],
+                "relation": "category-relative height",
+                "reason": "The object is materially too short.",
+            }
+        ],
+        "evidence_request": None,
+    }
+    changed_to_ambiguous = {
+        "evidence_status": "insufficient",
+        "verdict": "ambiguous",
+        "confidence": 0.5,
+        "reason": "A visual comparison is required.",
+        "missing_evidence": ["target_visible"],
+        "defects": [],
+        "evidence_request": {
+            "target_ids": ["floor_lamp"],
+            "missing_observations": ["target_visible"],
+            "view_goal": "show the floor lamp",
+            "metadata": {},
+        },
+    }
+    model = FakeMultimodalModel(
+        [invalid_scope, changed_to_ambiguous]
+    )
+
+    with pytest.raises(ResponseSchemaRepairError) as raised:
+        OpenAICompatibleVLMJudge(model).screen_scene_quality(
+            {
+                "metric": "scale_consistency",
+                "evidence_phase": "json_screen",
+                "decision_mode": "screen",
+                "target_object_ids": ["floor_lamp"],
+                "judgment_scope": {
+                    "included": [
+                        (
+                            "significant_visible_category_relative_"
+                            "scale_incoherence"
+                        )
+                    ]
+                },
+                "scene_summary": {
+                    "scene_type": "lounge",
+                    "objects": [
+                        {
+                            "id": "floor_lamp",
+                            "category": "floor_lamp",
+                            "size": [0.3, 0.3, 1.1],
+                        }
+                    ],
+                },
+                "render_evidence": [],
+            }
+        )
+
+    assert "changed locked semantic fields" in str(raised.value)
+    assert raised.value.schema_audit["recovered"] is False
+
+
+def test_canonical_schema_repair_restores_original_explanation() -> None:
+    invalid_scope = {
+        "evidence_status": "sufficient",
+        "verdict": "invalid",
+        "confidence": 0.8,
+        "reason": "The chair is materially undersized for its category.",
+        "missing_evidence": [],
+        "defects": [
+            {
+                "scope": "wrong_scope_token",
+                "target_ids": ["chair"],
+                "relation": "category-relative physical scale",
+                "reason": "The chair is materially undersized.",
+            }
+        ],
+        "evidence_request": None,
+    }
+    changed_explanation = {
+        "evidence_status": "sufficient",
+        "verdict": "invalid",
+        "confidence": 0.8,
+        "reason": "The chair blocks access to the room.",
+        "missing_evidence": [],
+        "defects": [
+            {
+                "scope": (
+                    "significant_visible_category_relative_"
+                    "scale_incoherence"
+                ),
+                "target_ids": ["chair"],
+                "relation": "circulation access",
+                "reason": "The chair blocks the doorway.",
+            }
+        ],
+        "evidence_request": None,
+    }
+    model = FakeMultimodalModel(
+        [invalid_scope, changed_explanation]
+    )
+
+    result = OpenAICompatibleVLMJudge(model).screen_scene_quality(
+        {
+            "metric": "scale_consistency",
+            "evidence_phase": "json_screen",
+            "decision_mode": "screen",
+            "target_object_ids": ["chair"],
+            "judgment_scope": {
+                "included": [
+                    (
+                        "significant_visible_category_relative_"
+                        "scale_incoherence"
+                    )
+                ]
+            },
+            "scene_summary": {
+                "scene_type": "office",
+                "objects": [
+                    {
+                        "id": "chair",
+                        "category": "chair",
+                        "size": [0.6, 0.6, 1.0],
+                    }
+                ],
+            },
+            "render_evidence": [],
+        }
+    )
+
+    assert result["verdict"] == "invalid"
+    assert result["reason"] == invalid_scope["reason"]
+    assert result["defects"] == [
+        {
+            "scope": (
+                "significant_visible_category_relative_"
+                "scale_incoherence"
+            ),
+            "target_ids": ["chair"],
+            "relation": "category-relative physical scale",
+            "reason": "The chair is materially undersized.",
+        }
+    ]
+    audit = result["request_metadata"]["response_schema_validation"]
+    assert audit["recovered"] is True
+    assert audit["semantic_preservation"][
+        "restored_natural_language_fields"
+    ] == [
+        "reason",
+        "defects[0].relation",
+        "defects[0].reason",
+    ]
+
+
+def test_canonical_schema_repair_rejects_structured_claim_change(
+    tmp_path: Path,
+) -> None:
+    image_path = tmp_path / "functional-repair.png"
+    _write_test_png(image_path)
+    initial = {
+        "evidence_status": "sufficient",
+        "verdict": "invalid",
+        "confidence": 2.0,
+        "reason": "The cabinet door cannot open.",
+        "missing_evidence": [],
+        "defects": [
+            {
+                "scope": "opening_clearance",
+                "target_ids": ["cabinet"],
+                "relation": "door opening clearance",
+                "reason": "The cabinet door is blocked.",
+            }
+        ],
+        "evidence_request": None,
+    }
+    changed_scope = {
+        **initial,
+        "confidence": 0.8,
+        "defects": [
+            {
+                "scope": "circulation",
+                "target_ids": ["cabinet"],
+                "relation": "walking clearance",
+                "reason": "The cabinet blocks circulation.",
+            }
+        ],
+    }
+    model = FakeMultimodalModel([initial, changed_scope])
+
+    with pytest.raises(ResponseSchemaRepairError) as raised:
+        OpenAICompatibleVLMJudge(model).screen_scene_quality(
+            {
+                "metric": "functional_consistency",
+                "evidence_phase": "json_screen",
+                "decision_mode": "screen",
+                "target_object_ids": ["cabinet"],
+                "judgment_scope": {
+                    "included": [
+                        "opening_clearance",
+                        "circulation",
+                    ]
+                },
+                "scene_summary": {
+                    "objects": [
+                        {"id": "cabinet", "category": "cabinet"}
+                    ]
+                },
+                "render_evidence": [str(image_path)],
+            }
+        )
+
+    assert "changed locked semantic fields" in str(raised.value)
+    assert raised.value.schema_audit["recovered"] is False
+
+
+def test_canonical_schema_repair_fails_closed_after_one_retry() -> None:
+    invalid = {
+        "evidence_status": "sufficient",
+        "verdict": "invalid",
+        "confidence": 0.8,
+        "reason": "Still outside the requested metric.",
+        "missing_evidence": [],
+        "defects": [
+            {
+                "scope": "functional_access_obstruction",
+                "target_ids": ["chair"],
+                "relation": "access",
+                "reason": "This remains outside scale consistency.",
+            }
+        ],
+        "evidence_request": None,
+    }
+    model = FakeMultimodalModel(
+        [
+            invalid,
+            invalid,
+            {
+                "evidence_status": "sufficient",
+                "verdict": "valid",
+                "confidence": 1.0,
+                "reason": "must never be called",
+                "missing_evidence": [],
+                "defects": [],
+                "evidence_request": None,
+            },
+        ]
+    )
+    judge = OpenAICompatibleVLMJudge(model)
+
+    with pytest.raises(ResponseSchemaRepairError) as raised:
+        judge.screen_scene_quality(
+            {
+                "metric": "scale_consistency",
+                "evidence_phase": "json_screen",
+                "decision_mode": "screen",
+                "target_object_ids": ["chair"],
+                "judgment_scope": {
+                    "included": [
+                        (
+                            "significant_visible_category_relative_"
+                            "scale_incoherence"
+                        )
+                    ]
+                },
+                "scene_summary": {
+                    "scene_type": "office",
+                    "objects": [
+                        {
+                            "id": "chair",
+                            "category": "chair",
+                            "size": [0.6, 0.6, 1.0],
+                        }
+                    ],
+                },
+                "render_evidence": [],
+            }
+        )
+
+    assert len(model.calls) == 2
+    assert raised.value.schema_audit["repair_retry_count"] == 1
+    assert raised.value.schema_audit["recovered"] is False
 
 
 @pytest.mark.parametrize(
@@ -350,7 +810,9 @@ def test_canonical_scene_quality_adapter_supports_functional_consistency(
     tmp_path: Path,
 ) -> None:
     image_path = tmp_path / "functional_group.png"
+    probe_path = tmp_path / "functional_probe.png"
     _write_test_png(image_path)
+    _write_test_png(probe_path)
     model = FakeMultimodalModel(
         {
             "evidence_status": "sufficient",
@@ -369,6 +831,8 @@ def test_canonical_scene_quality_adapter_supports_functional_consistency(
             "metric": "functional_consistency",
             "metric_prompt_version": L3_METRIC_PROMPT_VERSION,
             "metric_boundary_rules": list(L3_METRIC_BOUNDARY_RULES),
+            "evidence_phase": "global_discovery",
+            "decision_mode": "final",
             "judgment_scope": {
                 "included": [
                     "group_real_world_usability",
@@ -379,7 +843,40 @@ def test_canonical_scene_quality_adapter_supports_functional_consistency(
                 ]
             },
             "target_object_ids": ["chair", "desk"],
-            "render_evidence": [str(image_path)],
+            "render_evidence": [
+                str(image_path),
+                str(probe_path),
+            ],
+            "structured_context_policy": {
+                "object_fields": ["id", "category"],
+                "excluded_object_fields": [
+                    "center",
+                    "size",
+                    "rotation",
+                ],
+            },
+            "functional_probe_evidence": {
+                "schema_version": "functional_probe_judge_packet_v1",
+                "planning_role": (
+                    "visual_evidence_only_no_metric_verdict"
+                ),
+                "probe_inclusion_is_invalidity_prior": False,
+                "image_order": [
+                    {
+                        "image_index": 0,
+                        "image_alias": "image_00",
+                        "role": "scene_global",
+                    },
+                    {
+                        "image_index": 1,
+                        "image_alias": "image_01",
+                        "role": "functional_probe",
+                        "probe_kind": "functional_frontage",
+                        "target_ids": ["chair"],
+                        "presentation": "raw_rgb",
+                    },
+                ],
+            },
         }
     )
 
@@ -390,16 +887,37 @@ def test_canonical_scene_quality_adapter_supports_functional_consistency(
         ].split("\n", 1)[1]
     )
     assert context["metric"] == "functional_consistency"
-    assert "ordinary real-world function" in context["rubric"]
+    assert "ordinary real-world use" in context["rubric"]
+    assert "Complete geometric sealing is not required" in (
+        context["rubric"]
+    )
     assert context["metric_prompt_version"] == L3_METRIC_PROMPT_VERSION
     assert context["metric_boundary_rules"] == list(
         L3_METRIC_BOUNDARY_RULES
     )
+    assert "cross-group facts remain in scope" in (
+        context["phase_instruction"]
+    )
+    assert "do not summarize unseen local detail" in (
+        context["phase_instruction"]
+    )
+    assert "Additional visual evidence can be acquired" in (
+        context["phase_instruction"]
+    )
+    assert context["functional_probe_evidence"][
+        "probe_inclusion_is_invalidity_prior"
+    ] is False
+    assert context["functional_probe_evidence"]["image_order"][1][
+        "presentation"
+    ] == "raw_rgb"
+    assert context["structured_context_policy"][
+        "object_fields"
+    ] == ["id", "category"]
     assert result["request_metadata"]["metric_prompt_version"] == (
         L3_METRIC_PROMPT_VERSION
     )
     system_prompt = model.calls[0]["messages"][0]["content"]
-    assert "Semantic borderline cases are not evidence insufficiency" in (
+    assert "Semantic uncertainty is not evidence insufficiency" in (
         system_prompt
     )
     assert model.calls[0]["kwargs"]["call_type"] == (
@@ -435,6 +953,8 @@ def test_scene_quality_adapter_keeps_semantic_placement_out_of_l1(
     ).adjudicate_scene_quality(
         {
             "metric": "semantic_placement_consistency",
+            "evidence_phase": "group_local_review",
+            "decision_mode": "final",
             "judgment_scope": {
                 "included": [
                     "semantically_inappropriate_support_surface",
@@ -466,7 +986,14 @@ def test_scene_quality_adapter_keeps_semantic_placement_out_of_l1(
         ].split("\n", 1)[1]
     )
     assert "current location" in context["rubric"]
-    assert "An L1 condition alone" in context["rubric"]
+    assert "out-of-bounds geometry belong to L1" in context["rubric"]
+    assert "group-local pass" in (
+        context["phase_instruction"]
+    )
+    assert "support-surface meaning" in context["phase_instruction"]
+    assert "orientation or operability" in (
+        context["phase_instruction"]
+    )
     assert model.calls[0]["kwargs"]["call_type"] == (
         "vlm_judge.canonical.semantic_placement_consistency"
     )
@@ -535,28 +1062,170 @@ def test_canonical_scene_quality_adapter_rejects_malformed_contract(
         )
 
 
-def test_functional_semantic_preserves_structured_insufficient_compatibility(
+def test_budget_exhaustion_forced_choice_uses_context_bounded_visuals(
+    tmp_path: Path,
+) -> None:
+    image_paths = []
+    for index in range(8):
+        image_path = tmp_path / f"view-{index}.png"
+        _write_test_png(image_path)
+        image_paths.append(image_path)
+    model = FakeMultimodalModel(
+        {
+            "evidence_status": "sufficient",
+            "verdict": "valid",
+            "confidence": 0.55,
+            "reason": "No significant in-scope defect is established.",
+            "missing_evidence": [],
+            "defects": [],
+            "evidence_request": None,
+        }
+    )
+    judge = OpenAICompatibleVLMJudge(model, max_images=3)
+
+    result = judge._adjudicate_scene_quality_raw(
+        {
+            "metric": "style_consistency",
+            "judgment_scope": {
+                "included": [
+                    "significant_visible_style_incompatibility"
+                ]
+            },
+            "render_evidence": [str(path) for path in image_paths],
+            "budget_exhaustion_finalization": {
+                "required": True,
+                "trigger_stop_reason": (
+                    "max_evidence_rounds_exhausted"
+                ),
+                "previous_missing_observations": [
+                    "group_context_visible"
+                ],
+            },
+        }
+    )
+
+    assert result["verdict"] == "valid"
+    assert result["images_used"] == [
+        str(image_paths[0].resolve()),
+        str(image_paths[6].resolve()),
+        str(image_paths[7].resolve()),
+    ]
+    context = json.loads(
+        model.calls[0]["messages"][1]["content"][0]["text"].split(
+            "\n", 1
+        )[1]
+    )
+    finalization = context["budget_exhaustion_finalization"]
+    assert finalization["available_visual_count"] == 8
+    assert finalization["selected_visual_count"] == 3
+    assert finalization["dropped_visual_count"] == 5
+    assert (
+        finalization["visual_selection_policy"]
+        == "global_anchor_plus_most_recent"
+    )
+    assert finalization["configured_visual_context_limit"] == 3
+    assert "ambiguous" in model.calls[0]["messages"][0]["content"]
+    assert "forbidden" in model.calls[0]["messages"][0]["content"]
+    assert model.calls[0]["kwargs"]["call_type"].endswith(
+        ".forced_choice"
+    )
+
+
+def test_budget_exhaustion_ambiguous_response_is_repaired_to_binary(
+    tmp_path: Path,
+) -> None:
+    image_path = tmp_path / "forced-choice.png"
+    _write_test_png(image_path)
+    ambiguous = {
+        "evidence_status": "insufficient",
+        "verdict": "ambiguous",
+        "confidence": 0.2,
+        "reason": "A closer view would normally help.",
+        "missing_evidence": ["group_context_visible"],
+        "defects": [],
+        "evidence_request": {
+            "target_ids": ["scene"],
+            "missing_observations": ["group_context_visible"],
+            "view_goal": "show more context",
+            "metadata": {},
+        },
+    }
+    valid = {
+        "evidence_status": "sufficient",
+        "verdict": "valid",
+        "confidence": 0.45,
+        "reason": "The current packet does not establish a defect.",
+        "missing_evidence": [],
+        "defects": [],
+        "evidence_request": None,
+    }
+    model = FakeMultimodalModel([ambiguous, valid])
+
+    result = OpenAICompatibleVLMJudge(
+        model
+    )._adjudicate_scene_quality_raw(
+        {
+            "metric": "style_consistency",
+            "judgment_scope": {
+                "included": [
+                    "significant_visible_style_incompatibility"
+                ]
+            },
+            "render_evidence": [str(image_path)],
+            "budget_exhaustion_finalization": {
+                "required": True,
+                "trigger_stop_reason": (
+                    "max_evidence_rounds_exhausted"
+                ),
+            },
+        }
+    )
+
+    assert result["verdict"] == "valid"
+    assert len(model.calls) == 2
+    assert model.calls[1]["kwargs"]["call_type"].endswith(
+        ".forced_choice.schema_repair"
+    )
+    assert "ambiguous" in model.calls[1]["messages"][-1]["content"]
+    assert "forbidden" in model.calls[1]["messages"][-1]["content"]
+    assert result["request_metadata"]["response_schema_validation"][
+        "policy"
+    ] == "single_forced_choice_decision_retry_v1"
+
+
+def test_functional_semantic_forces_terminal_choice_after_unrepairable_evidence(
     tmp_path: Path,
 ) -> None:
     image_path = tmp_path / "functional.png"
     _write_test_png(image_path)
     model = FakeMultimodalModel(
-        {
-            "evidence_status": "insufficient",
-            "verdict": "ambiguous",
-            "confidence": 0.2,
-            "reason": "The requested work area is occluded.",
-            "missing_evidence": [],
-            "defects": [],
-            "evidence_request": {
-                "target_ids": ["scene"],
-                "missing_observations": [
-                    "group_context_visible"
-                ],
-                "view_goal": "show the requested work area",
-                "metadata": {},
+        [
+            {
+                "evidence_status": "insufficient",
+                "verdict": "ambiguous",
+                "confidence": 0.2,
+                "reason": "The requested work area is occluded.",
+                "missing_evidence": [],
+                "defects": [],
+                "evidence_request": {
+                    "target_ids": ["scene"],
+                    "missing_observations": [
+                        "group_context_visible"
+                    ],
+                    "view_goal": "show the requested work area",
+                    "metadata": {},
+                },
             },
-        }
+            {
+                "evidence_status": "sufficient",
+                "verdict": "valid",
+                "confidence": 0.4,
+                "reason": "No functional defect is established by the available packet.",
+                "missing_evidence": [],
+                "defects": [],
+                "evidence_request": None,
+            },
+        ]
     )
 
     result = OpenAICompatibleVLMJudge(model).adjudicate_functional_semantic(
@@ -575,17 +1244,18 @@ def test_functional_semantic_preserves_structured_insufficient_compatibility(
     assert context["vlm_role"] == "judge"
     assert context["decision_contract"] == "canonical_metric_v1"
     assert context["judge_method"] == "adjudicate_functional_semantic"
-    # The model-facing contract remains ambiguous; the public adapter keeps its
-    # historical vocabulary for existing Functional Semantic callers.
-    assert result["verdict"] == "insufficient_evidence"
-    assert result["canonical_verdict"] == "ambiguous"
-    assert result["response_adapter"] == (
-        "functional_semantic_insufficient_evidence_compat_v1"
-    )
-    assert result["router_state"] == "insufficient_evidence"
-    assert result["evidence_request"]["missing_observations"] == [
-        "group_context_visible"
-    ]
+    assert result["verdict"] == "valid"
+    assert result["request_metadata"]["budget_exhaustion_finalization"][
+        "ambiguity_before_forcing"
+    ] is True
+    assert result["request_metadata"]["budget_exhaustion_finalization"][
+        "previous_evidence_request"
+    ]["target_ids"] == ["scene"]
+    assert result["request_metadata"]["budget_exhaustion_finalization"][
+        "termination_kind"
+    ] == "acquisition_unavailable"
+    assert result["router_state"] == "not_suspicious"
+    assert result["evidence_request"] is None
     assert result["vlm_role"] == "judge"
     assert result["decision_contract"] == "canonical_metric_v1"
     assert result["judge_method"] == "adjudicate_functional_semantic"
@@ -849,6 +1519,7 @@ def test_internal_binary_schema_failure_gets_one_same_evidence_repair(
     }
     repaired = {
         **first,
+        "reason": "The same event remains invalid.",
         "defects": [],
     }
     model = FakeMultimodalModel([first, repaired])
@@ -859,6 +1530,7 @@ def test_internal_binary_schema_failure_gets_one_same_evidence_repair(
     )
 
     assert result["status"] == "invalid"
+    assert result["reason"] == first["reason"]
     assert result["defects"] == []
     assert len(model.calls) == 2
     assert model.calls[1]["kwargs"]["call_type"].endswith(
@@ -880,6 +1552,9 @@ def test_internal_binary_schema_failure_gets_one_same_evidence_repair(
     assert audit["attempt_count"] == 2
     assert audit["repair_retry_count"] == 1
     assert audit["recovered"] is True
+    assert audit["semantic_preservation"][
+        "restored_natural_language_fields"
+    ] == ["reason"]
     assert json.loads(audit["attempts"][0]["raw_response"]) == first
 
 

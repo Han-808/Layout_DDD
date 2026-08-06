@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import json
 from typing import Any, Callable
 
 from benchmark.models import parse_json_object
@@ -16,6 +17,35 @@ a non-empty reason; defects exactly []; and evidence_request null for valid or
 invalid, or the required structured evidence_request for need_more_evidence.
 Return JSON only."""
 
+_CANONICAL_SCHEMA_REPAIR_PROMPT = """Your previous response violated the
+canonical metric response contract. Use exactly the same visual evidence and
+structured context. This is schema repair, not a second adjudication. Preserve
+the original evidence_status, verdict, affected target IDs, evidence-request
+targets, and substantive explanation. Judge only the requested metric and use
+only the allowed defect scopes, target IDs, and Camera DSL observation tokens
+from the previous user message. Do not relabel an out-of-scope issue as an
+in-scope defect and do not change invalid to valid, valid to invalid, or either
+binary decision to ambiguous. Return one object with evidence_status sufficient
+or insufficient; verdict valid, invalid, or ambiguous; confidence in [0,1]; a
+non-empty reason;
+missing_evidence as a list; defects as a list; and evidence_request null unless
+evidence_status is insufficient. Invalid requires at least one explicit
+in-scope defect. If the original decision cannot be represented without
+changing its semantics, repeat the original decision rather than re-judging it;
+the caller will fail closed. Return JSON only."""
+
+_FORCED_CHOICE_CANONICAL_SCHEMA_REPAIR_PROMPT = """Your previous response
+violated the terminal evidence-acquisition response contract. No more evidence can
+be acquired. Use exactly the same visual evidence and structured context, then
+choose the more defensible binary conclusion. Return one JSON object with
+evidence_status="sufficient"; verdict exactly "valid" or "invalid"; confidence
+in [0,1]; a non-empty reason; missing_evidence=[]; and
+evidence_request=null. verdict="valid" requires defects=[].
+verdict="invalid" requires one or more explicit in-scope defects using only the
+allowed scopes and target IDs. "ambiguous", "insufficient", and any request for
+more evidence are forbidden. Express residual uncertainty through confidence
+and reason. Return JSON only."""
+
 
 def repair_binary_response_schema_once(
     *,
@@ -28,14 +58,108 @@ def repair_binary_response_schema_once(
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Validate once, then permit one same-evidence schema-only repair."""
 
+    return _repair_response_schema_once(
+        model=model,
+        messages=messages,
+        response_format_json=response_format_json,
+        call_type=call_type,
+        judge_label=judge_label,
+        validator=validator,
+        repair_prompt=_BINARY_SCHEMA_REPAIR_PROMPT,
+        policy="single_schema_repair_retry_v1",
+        semantic_signature=_binary_semantic_signature,
+        semantic_restore=_restore_binary_natural_language,
+    )
+
+
+def repair_canonical_response_schema_once(
+    *,
+    model: Any,
+    messages: list[dict[str, Any]],
+    response_format_json: bool,
+    call_type: str,
+    judge_label: str,
+    validator: Callable[[dict[str, Any]], dict[str, Any]],
+    force_binary_choice: bool = False,
+    allowed_scopes: tuple[str, ...] = (),
+    allowed_target_ids: tuple[str, ...] = (),
+    allowed_missing_observations: tuple[str, ...] = (),
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Permit one same-evidence repair for a canonical metric response."""
+
+    return _repair_response_schema_once(
+        model=model,
+        messages=messages,
+        response_format_json=response_format_json,
+        call_type=call_type,
+        judge_label=judge_label,
+        validator=validator,
+        repair_prompt=(
+            _FORCED_CHOICE_CANONICAL_SCHEMA_REPAIR_PROMPT
+            if force_binary_choice
+            else _canonical_schema_repair_prompt(
+                allowed_scopes=allowed_scopes,
+                allowed_target_ids=allowed_target_ids,
+                allowed_missing_observations=(
+                    allowed_missing_observations
+                ),
+            )
+        ),
+        policy=(
+            "single_forced_choice_decision_retry_v1"
+            if force_binary_choice
+            else "single_canonical_schema_repair_retry_v1"
+        ),
+        semantic_signature=(
+            None
+            if force_binary_choice
+            else lambda value: _canonical_semantic_signature(
+                value,
+                allowed_scopes=allowed_scopes,
+            )
+        ),
+        semantic_restore=(
+            None
+            if force_binary_choice
+            else _restore_canonical_natural_language
+        ),
+    )
+
+
+def _repair_response_schema_once(
+    *,
+    model: Any,
+    messages: list[dict[str, Any]],
+    response_format_json: bool,
+    call_type: str,
+    judge_label: str,
+    validator: Callable[[dict[str, Any]], dict[str, Any]],
+    repair_prompt: str,
+    policy: str,
+    semantic_signature: (
+        Callable[[dict[str, Any]], dict[str, Any]] | None
+    ),
+    semantic_restore: (
+        Callable[
+            [dict[str, Any], dict[str, Any]],
+            tuple[dict[str, Any], tuple[str, ...]],
+        ]
+        | None
+    ),
+) -> tuple[dict[str, Any], dict[str, Any]]:
     raw = model.chat_messages(
         messages,
         response_format_json=response_format_json,
         call_type=call_type,
     )
     first_metadata = dict(model.last_request_metadata)
+    initial_value: dict[str, Any] | None = None
+    locked_semantics: dict[str, Any] = {}
     try:
-        result = validator(parse_json_object(raw))
+        initial_value = parse_json_object(raw)
+        if semantic_signature is not None:
+            locked_semantics = semantic_signature(initial_value)
+        result = validator(initial_value)
     except (TypeError, ValueError, KeyError) as first_error:
         first_attempt = {
             "attempt": 1,
@@ -47,7 +171,7 @@ def repair_binary_response_schema_once(
         }
     else:
         return result, {
-            "policy": "single_schema_repair_retry_v1",
+            "policy": policy,
             "attempt_count": 1,
             "repair_retry_count": 0,
             "recovered": False,
@@ -64,7 +188,7 @@ def repair_binary_response_schema_once(
     repair_messages = [
         *deepcopy(messages),
         {"role": "assistant", "content": raw},
-        {"role": "user", "content": _BINARY_SCHEMA_REPAIR_PROMPT},
+        {"role": "user", "content": repair_prompt},
     ]
     try:
         repaired_raw = model.chat_messages(
@@ -74,7 +198,7 @@ def repair_binary_response_schema_once(
         )
     except Exception as repair_transport_error:
         audit = {
-            "policy": "single_schema_repair_retry_v1",
+            "policy": policy,
             "attempt_count": 2,
             "repair_retry_count": 1,
             "recovered": False,
@@ -98,11 +222,23 @@ def repair_binary_response_schema_once(
             schema_audit=audit,
         ) from repair_transport_error
     second_metadata = dict(model.last_request_metadata)
+    restored_fields: tuple[str, ...] = ()
     try:
-        repaired = validator(parse_json_object(repaired_raw))
+        repaired_value = parse_json_object(repaired_raw)
+        if semantic_signature is not None and locked_semantics:
+            _require_semantic_preservation(
+                before=locked_semantics,
+                after=semantic_signature(repaired_value),
+            )
+        if semantic_restore is not None and initial_value is not None:
+            repaired_value, restored_fields = semantic_restore(
+                initial_value,
+                repaired_value,
+            )
+        repaired = validator(repaired_value)
     except (TypeError, ValueError, KeyError) as second_error:
         audit = {
-            "policy": "single_schema_repair_retry_v1",
+            "policy": policy,
             "attempt_count": 2,
             "repair_retry_count": 1,
             "recovered": False,
@@ -124,10 +260,16 @@ def repair_binary_response_schema_once(
             schema_audit=audit,
         ) from second_error
     return repaired, {
-        "policy": "single_schema_repair_retry_v1",
+        "policy": policy,
         "attempt_count": 2,
         "repair_retry_count": 1,
         "recovered": True,
+        "semantic_preservation": {
+            "enforced": semantic_signature is not None,
+            "locked_fields": deepcopy(locked_semantics),
+            "changed": False,
+            "restored_natural_language_fields": list(restored_fields),
+        },
         "attempts": [
             first_attempt,
             {
@@ -139,6 +281,323 @@ def repair_binary_response_schema_once(
             },
         ],
     }
+
+
+def _canonical_semantic_signature(
+    value: dict[str, Any],
+    *,
+    allowed_scopes: tuple[str, ...] = (),
+) -> dict[str, Any]:
+    """Capture structured decisions that a schema-only retry may not change.
+
+    Free-form explanations are intentionally excluded.  A repair model may
+    paraphrase them while correcting JSON, so the caller restores the original
+    explanation text before returning the repaired response.
+    """
+
+    signature: dict[str, Any] = {}
+    evidence_status = value.get("evidence_status")
+    if evidence_status in {"sufficient", "insufficient"}:
+        signature["evidence_status"] = evidence_status
+    verdict = value.get("verdict")
+    if verdict in {"valid", "invalid", "ambiguous"}:
+        signature["verdict"] = verdict
+    if verdict == "invalid":
+        defects = value.get("defects")
+        if isinstance(defects, list):
+            signature["defect_count"] = len(defects)
+            target_sets = _defect_target_sets(defects)
+            if len(target_sets) == len(defects):
+                signature["defect_target_sets"] = target_sets
+            allowed = set(allowed_scopes)
+            scoped_claims = _defect_scopes_and_targets(
+                defects,
+                allowed_scopes=allowed,
+            )
+            if len(scoped_claims) == len(defects):
+                signature["defect_scopes_and_targets"] = scoped_claims
+    if verdict == "ambiguous" or evidence_status == "insufficient":
+        evidence_request = value.get("evidence_request")
+        if isinstance(evidence_request, dict):
+            target_ids = _normalized_text_set(
+                evidence_request.get("target_ids")
+            )
+            observations = _normalized_text_set(
+                evidence_request.get("missing_observations")
+            )
+            if target_ids:
+                signature["evidence_request_target_ids"] = target_ids
+            if observations:
+                signature["missing_observations"] = observations
+    return signature
+
+
+def _binary_semantic_signature(
+    value: dict[str, Any],
+) -> dict[str, Any]:
+    signature: dict[str, Any] = {}
+    decision = value.get("status")
+    if decision not in {"valid", "invalid", "need_more_evidence"}:
+        decision = value.get("verdict")
+    if decision in {"valid", "invalid", "need_more_evidence"}:
+        signature["decision"] = decision
+    if decision == "need_more_evidence":
+        evidence_request = value.get("evidence_request")
+        if isinstance(evidence_request, dict):
+            target_ids = _normalized_text_set(
+                evidence_request.get("target_ids")
+            )
+            observations = _normalized_text_set(
+                evidence_request.get("missing_observations")
+            )
+            if target_ids:
+                signature["evidence_request_target_ids"] = target_ids
+            if observations:
+                signature["missing_observations"] = observations
+    return signature
+
+
+def _require_semantic_preservation(
+    *,
+    before: dict[str, Any],
+    after: dict[str, Any],
+) -> None:
+    changed = {
+        key: {"before": deepcopy(expected), "after": deepcopy(after.get(key))}
+        for key, expected in before.items()
+        if after.get(key) != expected
+    }
+    if changed:
+        raise ValueError(
+            "response schema repair changed locked semantic fields: "
+            + ", ".join(sorted(changed))
+        )
+
+
+def _defect_target_sets(
+    value: Any,
+) -> tuple[tuple[str, ...], ...]:
+    if not isinstance(value, list):
+        return ()
+    return tuple(
+        sorted(
+            target_ids
+            for defect in value
+            if isinstance(defect, dict)
+            if (
+                target_ids := _normalized_text_set(
+                    defect.get("target_ids")
+                )
+            )
+        )
+    )
+
+
+def _defect_scopes_and_targets(
+    value: Any,
+    *,
+    allowed_scopes: set[str],
+) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    if not isinstance(value, list) or not allowed_scopes:
+        return ()
+    claims: list[tuple[str, tuple[str, ...]]] = []
+    for defect in value:
+        if not isinstance(defect, dict):
+            continue
+        scope = defect.get("scope")
+        target_ids = _normalized_text_set(defect.get("target_ids"))
+        if scope not in allowed_scopes or not target_ids:
+            continue
+        claims.append((str(scope), target_ids))
+    return tuple(sorted(claims))
+
+
+def _restore_canonical_natural_language(
+    initial: dict[str, Any],
+    repaired: dict[str, Any],
+) -> tuple[dict[str, Any], tuple[str, ...]]:
+    """Restore original prose after structured schema repair.
+
+    The repair response supplies corrected schema tokens, confidence, and
+    container shape.  It is not allowed to replace the original adjudication
+    explanation or defect relation with a new semantic claim.
+    """
+
+    restored = deepcopy(repaired)
+    restored_fields: list[str] = []
+    _restore_text_field(
+        initial,
+        restored,
+        "reason",
+        restored_fields=restored_fields,
+    )
+
+    if initial.get("verdict") == "invalid":
+        initial_defects = initial.get("defects")
+        repaired_defects = restored.get("defects")
+        if (
+            not isinstance(initial_defects, list)
+            or not isinstance(repaired_defects, list)
+            or len(initial_defects) != len(repaired_defects)
+        ):
+            raise ValueError(
+                "schema repair cannot preserve invalid-defect identity"
+            )
+        remaining = list(repaired_defects)
+        preserved_defects: list[dict[str, Any]] = []
+        for index, original in enumerate(initial_defects):
+            if not isinstance(original, dict):
+                raise ValueError(
+                    "schema repair cannot preserve malformed defect semantics"
+                )
+            original_targets = _normalized_text_set(
+                original.get("target_ids")
+            )
+            original_relation = _normalized_explanation(
+                original.get("relation")
+            )
+            original_reason = _normalized_explanation(
+                original.get("reason")
+            )
+            if (
+                not original_targets
+                or not original_relation
+                or not original_reason
+            ):
+                raise ValueError(
+                    "schema repair cannot invent missing defect semantics"
+                )
+            match_index = next(
+                (
+                    candidate_index
+                    for candidate_index, candidate in enumerate(remaining)
+                    if isinstance(candidate, dict)
+                    and _normalized_text_set(candidate.get("target_ids"))
+                    == original_targets
+                ),
+                None,
+            )
+            if match_index is None:
+                raise ValueError(
+                    "schema repair changed defect target identity"
+                )
+            candidate = deepcopy(remaining.pop(match_index))
+            for field_name in ("target_ids", "relation", "reason"):
+                original_value = deepcopy(original.get(field_name))
+                if candidate.get(field_name) != original_value:
+                    restored_fields.append(
+                        f"defects[{index}].{field_name}"
+                    )
+                candidate[field_name] = original_value
+            preserved_defects.append(candidate)
+        if remaining:
+            raise ValueError(
+                "schema repair added unapproved defect claims"
+            )
+        restored["defects"] = preserved_defects
+
+    evidence_request = initial.get("evidence_request")
+    repaired_request = restored.get("evidence_request")
+    if (
+        isinstance(evidence_request, dict)
+        and isinstance(repaired_request, dict)
+    ):
+        _restore_text_field(
+            evidence_request,
+            repaired_request,
+            "view_goal",
+            restored_fields=restored_fields,
+            field_path="evidence_request.view_goal",
+        )
+
+    return restored, tuple(dict.fromkeys(restored_fields))
+
+
+def _restore_binary_natural_language(
+    initial: dict[str, Any],
+    repaired: dict[str, Any],
+) -> tuple[dict[str, Any], tuple[str, ...]]:
+    restored = deepcopy(repaired)
+    restored_fields: list[str] = []
+    _restore_text_field(
+        initial,
+        restored,
+        "reason",
+        restored_fields=restored_fields,
+    )
+    evidence_request = initial.get("evidence_request")
+    repaired_request = restored.get("evidence_request")
+    if (
+        isinstance(evidence_request, dict)
+        and isinstance(repaired_request, dict)
+    ):
+        _restore_text_field(
+            evidence_request,
+            repaired_request,
+            "view_goal",
+            restored_fields=restored_fields,
+            field_path="evidence_request.view_goal",
+        )
+    return restored, tuple(dict.fromkeys(restored_fields))
+
+
+def _restore_text_field(
+    source: dict[str, Any],
+    destination: dict[str, Any],
+    field_name: str,
+    *,
+    restored_fields: list[str],
+    field_path: str | None = None,
+) -> None:
+    original = source.get(field_name)
+    if not isinstance(original, str) or not original.strip():
+        return
+    if destination.get(field_name) != original:
+        restored_fields.append(field_path or field_name)
+    destination[field_name] = original
+
+
+def _canonical_schema_repair_prompt(
+    *,
+    allowed_scopes: tuple[str, ...],
+    allowed_target_ids: tuple[str, ...],
+    allowed_missing_observations: tuple[str, ...],
+) -> str:
+    constraints = [
+        _CANONICAL_SCHEMA_REPAIR_PROMPT,
+        "Use these exact enumerated values; do not invent aliases:",
+        "allowed defect scopes: "
+        + json.dumps(list(allowed_scopes), ensure_ascii=False),
+        "allowed target IDs: "
+        + json.dumps(list(allowed_target_ids), ensure_ascii=False),
+        "allowed missing-observation tokens: "
+        + json.dumps(
+            list(allowed_missing_observations),
+            ensure_ascii=False,
+        ),
+    ]
+    return "\n".join(constraints)
+
+
+def _normalized_explanation(value: Any) -> str:
+    if not isinstance(value, str):
+        return ""
+    return " ".join(value.split())
+
+
+def _normalized_text_set(value: Any) -> tuple[str, ...]:
+    if not isinstance(value, (list, tuple)):
+        return ()
+    return tuple(
+        sorted(
+            {
+                str(item).strip()
+                for item in value
+                if isinstance(item, (str, int))
+                and str(item).strip()
+            }
+        )
+    )
 
 
 def _bounded_raw_response(value: Any) -> str:

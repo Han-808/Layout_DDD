@@ -13,6 +13,9 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any, Callable
 
+from benchmark.evaluator.scene_quality.claim_identity import (
+    claim_records,
+)
 from benchmark.evaluator.scene_quality.style_global_first import (
     suspicious_groups,
 )
@@ -91,7 +94,11 @@ def evaluate_json_screen_then_group_visual(
         )
         return base
 
-    base["json_screen"] = deepcopy(screen_adjusted)
+    screen_record = _json_screen_record(
+        screen_adjusted,
+        metric_name=metric_name,
+    )
+    base["json_screen"] = screen_record
     if (
         screen_outcome["status"] == "evaluated"
         and screen_outcome["score"] == 1.0
@@ -105,7 +112,7 @@ def evaluate_json_screen_then_group_visual(
             score=1.0,
             route="json_screen_resolved",
             router_state="not_suspicious",
-            judgement=screen_adjusted,
+            judgement=screen_record,
         )
         base["dependencies"].update(
             {
@@ -143,6 +150,15 @@ def evaluate_json_screen_then_group_visual(
         if screen_adjusted.get("evidence_status") == "insufficient"
         else "suspicious"
     )
+    routed_candidate_claims = claim_records(
+        metric_name,
+        screen_adjusted.get("defects") or [],
+        source_phase="json_screen",
+        claim_status="suspicious_candidate",
+    )
+    base["routed_candidate_claims"] = deepcopy(
+        routed_candidate_claims
+    )
     compatibility_without_grouping = not groups
     candidate_groups = groups or _compatibility_target_groups(
         object_ids,
@@ -168,7 +184,7 @@ def evaluate_json_screen_then_group_visual(
             ),
             route="json_screen_then_visual",
             router_state=router_state,
-            judgement=screen_adjusted,
+            judgement=screen_record,
         )
         return base
 
@@ -243,6 +259,19 @@ def evaluate_json_screen_then_group_visual(
         camera_evidence_provider=camera_evidence_provider,
         resolve_metric_evidence=resolve_metric_evidence,
     )
+    for packet in packets:
+        member_ids = {
+            str(item)
+            for item in packet["group"].get("object_ids") or []
+        }
+        packet["routed_candidate_claims"] = [
+            deepcopy(claim)
+            for claim in routed_candidate_claims
+            if member_ids.intersection(
+                str(item)
+                for item in claim.get("target_ids") or []
+            )
+        ]
     selected_group_ids = [
         str(group["group_id"]) for group in selected_groups
     ]
@@ -369,10 +398,58 @@ def evaluate_json_screen_then_group_visual(
     )
     result["vlm_invoked"] = True
     result["evidence_request"]["vlm_invoked"] = True
-    result["json_screen"] = deepcopy(screen_adjusted)
+    result["json_screen"] = screen_record
+    result["routed_candidate_claims"] = deepcopy(
+        routed_candidate_claims
+    )
     result["router_state"] = router_state
     result["route"] = route
     return result
+
+
+def _json_screen_record(
+    response: dict[str, Any],
+    *,
+    metric_name: str,
+) -> dict[str, Any]:
+    """Persist routing output without presenting a candidate as final invalid."""
+
+    record = deepcopy(response)
+    verdict = str(record.get("verdict") or "")
+    if verdict == "invalid":
+        candidate_defects = deepcopy(record.get("defects") or [])
+        record.update(
+            decision_role="router_only",
+            final_metric_verdict=False,
+            screen_status="suspicious_candidate",
+            screen_state="material_candidate",
+            model_response_verdict="invalid",
+            verdict="candidate",
+            candidate_defects=candidate_defects,
+            candidate_claims=claim_records(
+                metric_name,
+                candidate_defects,
+                source_phase="json_screen",
+                claim_status="suspicious_candidate",
+            ),
+            defects=[],
+        )
+        return record
+    if verdict == "valid":
+        record.update(
+            decision_role="final_metric_verdict",
+            final_metric_verdict=True,
+            screen_status="clear",
+            screen_state="clear",
+        )
+        return record
+    record.update(
+        decision_role="router_only",
+        final_metric_verdict=False,
+        screen_status="insufficient",
+        screen_state="review_required",
+    )
+    return record
 
 
 def _global_evidence_paths(

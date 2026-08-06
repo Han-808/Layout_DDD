@@ -6,7 +6,7 @@
   "type": "object",
   "additionalProperties": false,
   "default": {
-    "schema_version": "vlm_evaluation_control_v1",
+    "schema_version": "vlm_evaluation_control_v2",
     "camera_selector": {
       "backend": "existing",
       "allow_freeform_pose": false,
@@ -71,14 +71,14 @@
     },
     "require_evidence_gate_after_render": true,
     "on_non_camera_repairable_evidence": "unresolved",
-    "on_budget_exhausted": "unresolved",
+    "on_budget_exhausted": "force_choice",
     "on_selector_failure": "keep_previous_evidence",
     "on_render_failure": "unresolved"
   },
   "properties": {
     "schema_version": {
-      "const": "vlm_evaluation_control_v1",
-      "default": "vlm_evaluation_control_v1"
+      "const": "vlm_evaluation_control_v2",
+      "default": "vlm_evaluation_control_v2"
     },
     "camera_selector": {
       "type": "object",
@@ -466,8 +466,8 @@
       "default": "unresolved"
     },
     "on_budget_exhausted": {
-      "const": "unresolved",
-      "default": "unresolved"
+      "const": "force_choice",
+      "default": "force_choice"
     },
     "on_selector_failure": {
       "type": "string",

@@ -8,6 +8,7 @@ import pytest
 
 from benchmark.visual_judge import (
     ActiveVLMCameraSelector,
+    CAMERA_SELECTOR_PROMPT_VERSION,
     CameraCandidatePreviewRenderer,
     OpenAICompatibleCameraSelector,
 )
@@ -136,6 +137,15 @@ def test_production_candidate_only_transport_and_active_contract(
     assert transport.last_request_metadata["preview_aliases"] == [
         "trusted-view"
     ]
+    assert transport.last_request_metadata["prompt_version"] == (
+        CAMERA_SELECTOR_PROMPT_VERSION
+    )
+    system_prompt = model.calls[0]["messages"][0]["content"]
+    assert "Select the smallest number of views" in system_prompt
+    assert "candidate_views order" in system_prompt
+    assert "Metadata values marked null" in system_prompt
+    assert "nearest authoritative logical boundary" in system_prompt
+    assert "do not require or\ninvent a wall" in system_prompt
     user_content = model.calls[0]["messages"][1]["content"]
     assert any(item.get("type") == "image_url" for item in user_content)
 
@@ -185,6 +195,323 @@ def test_legacy_query_cov_compatibility_does_not_construct_judge(
     assert transport.last_request_metadata["selection_mode"] == (
         "legacy_query_cov"
     )
+
+
+def test_legacy_query_cov_accepts_functional_probe_metric(
+    tmp_path: Path,
+) -> None:
+    model = _Model(
+        {
+            "selected_view_ids": ["candidate_00"],
+            "action": None,
+            "reason": "usable side and outward context are visible",
+        }
+    )
+    transport = OpenAICompatibleCameraSelector(model)
+    candidate = _candidate(tmp_path / "functional-preview.png")
+
+    result = transport.select_camera_views(
+        {
+            "metric": "functional_consistency",
+            "candidates": [candidate],
+            "max_views": 1,
+            "allow_adjustment": False,
+            "allowed_actions": [],
+            "preview_role": "rgb",
+            "functional_probe": {
+                "probe_id": "functional_probe_01",
+                "kind": "functional_frontage",
+                "target_ids": ["a"],
+                "related_target_ids": [],
+                "required_observations": [
+                    "interaction_side_visible",
+                    "approach_zone_visible",
+                ],
+                "view_goal": "show the usable face and outward context",
+            },
+        }
+    )
+
+    assert result["selected_view_ids"] == ["trusted-view"]
+    outbound = model.calls[0]["messages"][1]["content"]
+    context = json.loads(outbound[0]["text"].split("\n", 1)[1])
+    assert context["metric_family"] == "functional_consistency"
+    assert context["functional_probe"]["kind"] == (
+        "functional_frontage"
+    )
+    legacy_prompt = model.calls[0]["messages"][0]["content"]
+    assert "nearest authoritative logical boundary" in legacy_prompt
+    assert "do not require or invent a" in legacy_prompt
+
+
+def test_functional_probe_planner_uses_minimal_objects_and_no_verdict(
+    tmp_path: Path,
+) -> None:
+    global_image = tmp_path / "global.png"
+    Image.new("RGB", (32, 32), (120, 130, 140)).save(
+        global_image
+    )
+    model = _Model(
+        {
+            "probe_units": [
+                {
+                    "kind": "functional_correspondence",
+                    "target_ids": ["sofa"],
+                    "related_target_ids": ["television"],
+                    "required_observations": [
+                        "target_visible",
+                        "joint_visibility",
+                        "interaction_side_visible",
+                        "front_back_disambiguated",
+                        "approach_zone_visible",
+                        "group_context_visible",
+                        "limited_local_context",
+                    ],
+                    "priority": 1,
+                    "reason": "show both usable sides together",
+                }
+            ],
+            "reason": "bounded visual evidence coverage",
+        }
+    )
+    selector = OpenAICompatibleCameraSelector(model)
+
+    result = selector.plan_functional_evidence(
+        {
+            "metric": "functional_consistency",
+            "scene_id": "scene",
+            "scene_type": "living_room",
+            "global_image_path": str(global_image),
+            "architecture_context": {
+                "source": "scene_architecture_contract",
+                "logical_boundary_enabled": True,
+                "logical_boundary_xy": [
+                    [0.0, 0.0],
+                    [5.0, 0.0],
+                    [5.0, 4.0],
+                    [0.0, 4.0],
+                ],
+                "physical_walls_rendered": False,
+                "physical_wall_ids": [],
+            },
+            "objects": [
+                {"id": "sofa", "category": "sofa"},
+                {"id": "television", "category": "television"},
+            ],
+            "max_probe_units": 4,
+        }
+    )
+
+    assert result["schema_version"] == "functional_probe_plan_v2"
+    assert result["planner_role"] == (
+        "visual_evidence_only_no_metric_verdict"
+    )
+    assert result["probe_units"][0]["probe_id"] == (
+        "functional_probe_01"
+    )
+    assert "verdict" not in result
+    assert model.calls[0]["kwargs"]["call_type"] == (
+        "vlm_camera_pose.functional_probe_plan"
+    )
+    assert model.calls[0]["kwargs"]["max_tokens"] == 3072
+    assert model.calls[0]["kwargs"]["max_tokens_source"] == (
+        "functional_probe_planner_minimum"
+    )
+    content = model.calls[0]["messages"][1]["content"]
+    text = next(
+        item["text"] for item in content if item["type"] == "text"
+    )
+    assert '"id":"sofa"' in text
+    assert '"category":"sofa"' in text
+    assert "rotation" not in text
+    assert any(item["type"] == "image_url" for item in content)
+    planner_prompt = model.calls[0]["messages"][0]["content"]
+    assert "Do not fill a quota" in planner_prompt
+    assert "unique contiguous priorities" in planner_prompt
+    assert "physical distance\n   is not a disqualifier" in planner_prompt
+    assert "different local groups" in planner_prompt
+    assert "Distance must affect camera framing" in planner_prompt
+    assert "close enough that one wider local view" not in planner_prompt
+    assert "Never merge spatially distant objects" not in planner_prompt
+    assert "logical_boundary_xy" in planner_prompt
+    assert "missing physical wall mesh" in planner_prompt
+    assert "Use these exact required_observations templates" in (
+        planner_prompt
+    )
+    outbound_context = json.loads(text.split("\n", 1)[1])
+    assert outbound_context["architecture_context"] == {
+        "source": "scene_architecture_contract",
+        "logical_boundary_enabled": True,
+        "logical_boundary_xy": [
+            [0.0, 0.0],
+            [5.0, 0.0],
+            [5.0, 4.0],
+            [0.0, 4.0],
+        ],
+        "physical_walls_rendered": False,
+        "physical_wall_ids": [],
+    }
+    assert result["request_metadata"][
+        "functional_probe_prompt_version"
+    ] == "functional_probe_planner_v4"
+    assert selector.last_request_metadata["selection_mode"] == (
+        "functional_probe_plan"
+    )
+
+
+def test_functional_probe_planner_rejects_metric_decision_authority(
+    tmp_path: Path,
+) -> None:
+    global_image = tmp_path / "global.png"
+    Image.new("RGB", (16, 16), (20, 30, 40)).save(global_image)
+    selector = OpenAICompatibleCameraSelector(
+        _Model(
+            {
+                "probe_units": [],
+                "reason": "also judged the scene",
+                "verdict": "invalid",
+            }
+        )
+    )
+
+    with pytest.raises(ValueError, match="may not return"):
+        selector.plan_functional_evidence(
+            {
+                "metric": "functional_consistency",
+                "scene_id": "scene",
+                "scene_type": "living_room",
+                "global_image_path": str(global_image),
+                "objects": [
+                    {"id": "sofa", "category": "sofa"}
+                ],
+                "max_probe_units": 4,
+            }
+        )
+
+
+def test_functional_probe_planner_may_return_no_probe_units(
+    tmp_path: Path,
+) -> None:
+    global_image = tmp_path / "global-clear.png"
+    Image.new("RGB", (16, 16), (20, 30, 40)).save(global_image)
+    selector = OpenAICompatibleCameraSelector(
+        _Model(
+            {
+                "probe_units": [],
+                "reason": (
+                    "The global image already establishes the required "
+                    "functional observations."
+                ),
+            }
+        )
+    )
+
+    result = selector.plan_functional_evidence(
+        {
+            "metric": "functional_consistency",
+            "scene_id": "scene",
+            "scene_type": "living_room",
+            "global_image_path": str(global_image),
+            "objects": [{"id": "sofa", "category": "sofa"}],
+            "max_probe_units": 4,
+        }
+    )
+
+    assert result["schema_version"] == "functional_probe_plan_v2"
+    assert result["probe_units"] == []
+
+
+def test_functional_probe_planner_accepts_boundary_aware_frontage(
+    tmp_path: Path,
+) -> None:
+    global_image = tmp_path / "global-boundary.png"
+    Image.new("RGB", (16, 16), (20, 30, 40)).save(global_image)
+    selector = OpenAICompatibleCameraSelector(
+        _Model(
+            {
+                "probe_units": [
+                    {
+                        "kind": "functional_frontage",
+                        "target_ids": ["toilet"],
+                        "related_target_ids": [],
+                        "required_observations": [
+                            "target_visible",
+                            "interaction_side_visible",
+                            "front_back_disambiguated",
+                            "approach_zone_visible",
+                            "architecture_plane_visible",
+                            "global_context_preserved",
+                            "limited_local_context",
+                        ],
+                        "priority": 1,
+                        "reason": (
+                            "show the usable side, logical boundary, and "
+                            "interior approach region together"
+                        ),
+                    }
+                ],
+                "reason": "boundary relation is not established",
+            }
+        )
+    )
+
+    result = selector.plan_functional_evidence(
+        {
+            "metric": "functional_consistency",
+            "scene_id": "scene",
+            "scene_type": "bathroom",
+            "global_image_path": str(global_image),
+            "architecture_context": {
+                "source": "scene_architecture_contract",
+                "logical_boundary_enabled": True,
+                "logical_boundary_xy": [
+                    [0.0, 0.0],
+                    [3.5, 0.0],
+                    [3.5, 3.0],
+                    [0.0, 3.0],
+                ],
+                "physical_walls_rendered": False,
+                "physical_wall_ids": [],
+            },
+            "objects": [{"id": "toilet", "category": "toilet"}],
+            "max_probe_units": 4,
+        }
+    )
+
+    observations = result["probe_units"][0][
+        "required_observations"
+    ]
+    assert "architecture_plane_visible" in observations
+    assert "global_context_preserved" in observations
+
+
+def test_functional_probe_planner_rejects_invalid_enabled_boundary(
+    tmp_path: Path,
+) -> None:
+    global_image = tmp_path / "global-invalid-boundary.png"
+    Image.new("RGB", (16, 16), (20, 30, 40)).save(global_image)
+    selector = OpenAICompatibleCameraSelector(
+        _Model({"probe_units": [], "reason": "unused"})
+    )
+
+    with pytest.raises(ValueError, match="at least three XY points"):
+        selector.plan_functional_evidence(
+            {
+                "metric": "functional_consistency",
+                "scene_id": "scene",
+                "scene_type": "bathroom",
+                "global_image_path": str(global_image),
+                "architecture_context": {
+                    "source": "scene_architecture_contract",
+                    "logical_boundary_enabled": True,
+                    "logical_boundary_xy": [[0.0, 0.0], [1.0, 0.0]],
+                    "physical_walls_rendered": False,
+                    "physical_wall_ids": [],
+                },
+                "objects": [{"id": "toilet", "category": "toilet"}],
+                "max_probe_units": 4,
+            }
+        )
 
 
 def test_production_repair_plan_transport_contract() -> None:

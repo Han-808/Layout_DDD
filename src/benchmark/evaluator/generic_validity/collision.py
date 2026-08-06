@@ -47,6 +47,16 @@ DEFAULT_COLLISION_CONFIG = {
     "tangent_plane_contact_policy": "route_vlm",
     "tangent_plane_max_thickness_m": 0.002,
     "tangent_contact_tolerance_m": 0.001,
+    # This is deliberately not a generic small-collision exemption. It only
+    # surfaces a narrow support-interface regime to the semantic Judge: a
+    # shallow overlap with a horizontal floor layer may represent compression
+    # of a compliant covering that independent rigid meshes cannot encode.
+    "shallow_surface_layer_policy": "route_vlm",
+    "shallow_surface_layer_max_thickness_m": 0.03,
+    "shallow_surface_layer_max_overlap_m": 0.0125,
+    "shallow_surface_layer_floor_tolerance_m": 0.005,
+    "shallow_surface_layer_max_thinness_ratio": 0.05,
+    "shallow_surface_layer_min_horizontal_alignment": 0.98,
     "score_mode": "invalid_pair_count_over_objects",
 }
 
@@ -145,6 +155,28 @@ def check_collision(
         "official_mode": official_mode,
         "detector_only": detector_only,
         "score_mode": str(cfg["score_mode"]),
+        "shallow_surface_layer_policy": {
+            "policy": str(cfg["shallow_surface_layer_policy"]),
+            "decision_authority": "vlm_judge",
+            "automatic_exemption": False,
+            "max_layer_thickness_m": float(
+                cfg["shallow_surface_layer_max_thickness_m"]
+            ),
+            "max_overlap_m": float(
+                cfg["shallow_surface_layer_max_overlap_m"]
+            ),
+            "floor_tolerance_m": float(
+                cfg["shallow_surface_layer_floor_tolerance_m"]
+            ),
+            "max_thinness_ratio": float(
+                cfg["shallow_surface_layer_max_thinness_ratio"]
+            ),
+            "min_horizontal_alignment": float(
+                cfg[
+                    "shallow_surface_layer_min_horizontal_alignment"
+                ]
+            ),
+        },
         "collision_count": invalid_count,
         "collision_pair_count": invalid_count,
         "collision_object_count": len(collision_object_ids),
@@ -167,6 +199,8 @@ def check_collision(
             "Candidates are proposed by a high-recall detector; selection carries no verdict prior.",
             "Only final invalid pairs count as collisions; candidate overlap alone is not penalized.",
             "Exact coplanar zero-penetration contact may be accepted directly when the frozen profile enables it.",
+            "A bounded shallow overlap at a horizontal floor-layer support interface is surfaced to the VLM as "
+            "context, never as an automatic exemption or a generic small-collision tolerance.",
             "Intended decorative attachment or assembly may be Collision-valid after VLM adjudication; relationship claims alone never auto-exempt a pair.",
             "The frozen score denominator is canonical object count.",
         ],
@@ -314,6 +348,20 @@ def _evaluate_pair(
                 }
             )
             return pair
+        shallow_layer_evidence = (
+            _shallow_surface_layer_overlap_evidence(
+                scene,
+                obj_a,
+                obj_b,
+                obb=obb,
+                mesh_evidence=mesh_evidence,
+                config=cfg,
+            )
+        )
+        if shallow_layer_evidence is not None:
+            pair["shallow_surface_layer_overlap_evidence"] = (
+                shallow_layer_evidence
+            )
 
     pair["requires_vlm"] = True
     if bool(cfg.get("detector_only")):
@@ -336,6 +384,9 @@ def _evaluate_pair(
         "diagnostics": diagnostics,
         "geometry_provenance": geometry_provenance,
         "mesh_enclosure": pair.get("mesh_enclosure_evidence"),
+        "shallow_surface_layer_overlap": pair.get(
+            "shallow_surface_layer_overlap_evidence"
+        ),
         "closest_points": mesh_evidence.get("closest_points") if isinstance(mesh_evidence, dict) else None,
         "focus_region": mesh_evidence.get("focus_region") if isinstance(mesh_evidence, dict) else None,
         "extracted_relationships_are_claims_only": True,
@@ -450,15 +501,40 @@ def _validate_collision_config(config: dict[str, Any]) -> None:
             "collision.tangent_plane_contact_policy must be "
             "'route_vlm' or 'direct_valid'"
         )
+    if config.get("shallow_surface_layer_policy") not in {
+        "disabled",
+        "route_vlm",
+    }:
+        raise ValueError(
+            "collision.shallow_surface_layer_policy must be "
+            "'disabled' or 'route_vlm'"
+        )
     for name in (
         "tangent_plane_max_thickness_m",
         "tangent_contact_tolerance_m",
+        "shallow_surface_layer_max_thickness_m",
+        "shallow_surface_layer_max_overlap_m",
+        "shallow_surface_layer_floor_tolerance_m",
+        "shallow_surface_layer_max_thinness_ratio",
     ):
         value = float(config.get(name, DEFAULT_COLLISION_CONFIG[name]))
         if not math.isfinite(value) or value < 0.0:
             raise ValueError(
                 f"collision.{name} must be a finite non-negative number"
             )
+    alignment = float(
+        config.get(
+            "shallow_surface_layer_min_horizontal_alignment",
+            DEFAULT_COLLISION_CONFIG[
+                "shallow_surface_layer_min_horizontal_alignment"
+            ],
+        )
+    )
+    if not math.isfinite(alignment) or not 0.0 <= alignment <= 1.0:
+        raise ValueError(
+            "collision.shallow_surface_layer_min_horizontal_alignment "
+            "must be a finite number in [0, 1]"
+        )
 
 
 def _is_direct_valid_zero_penetration_contact(
@@ -555,6 +631,162 @@ def _tangent_plane_contact_certificate(
             "contact_tolerance_m": tolerance,
         }
     return None
+
+
+def _shallow_surface_layer_overlap_evidence(
+    scene: dict[str, Any],
+    obj_a: Any,
+    obj_b: Any,
+    *,
+    obb: dict[str, Any],
+    mesh_evidence: dict[str, Any],
+    config: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Describe a narrow, non-verdict floor-layer contact regime.
+
+    Independent rigid meshes cannot express local compression. A load-bearing
+    object whose base remains at the substrate may therefore intersect the
+    finite thickness of a compliant floor covering. Geometry alone cannot
+    establish compliance, so this helper never returns a verdict. It only
+    records when the topology and magnitude are narrow enough for the VLM to
+    consider that semantic explanation.
+    """
+
+    if config.get("shallow_surface_layer_policy") != "route_vlm":
+        return None
+    if mesh_evidence.get("surface_intersection") is not True:
+        return None
+    intersection = mesh_evidence.get("intersection")
+    if not isinstance(intersection, dict) or not bool(
+        intersection.get("definitive")
+    ):
+        return None
+
+    maximum_overlap = float(
+        config["shallow_surface_layer_max_overlap_m"]
+    )
+    overlap = float(z_interval_overlap(obj_a, obj_b))
+    if overlap <= 0.0 or overlap > maximum_overlap:
+        return None
+
+    minimum_axis = np.asarray(
+        obb.get("minimum_overlap_axis") or [],
+        dtype=float,
+    )
+    if minimum_axis.shape != (3,) or not np.all(
+        np.isfinite(minimum_axis)
+    ):
+        return None
+    axis_norm = float(np.linalg.norm(minimum_axis))
+    if axis_norm <= 1.0e-12:
+        return None
+    gravity_alignment = abs(float(minimum_axis[2]) / axis_norm)
+    minimum_alignment = float(
+        config["shallow_surface_layer_min_horizontal_alignment"]
+    )
+    if gravity_alignment < minimum_alignment:
+        return None
+
+    floor_z = _scene_floor_z(scene)
+    floor_tolerance = float(
+        config["shallow_surface_layer_floor_tolerance_m"]
+    )
+    maximum_thickness = float(
+        config["shallow_surface_layer_max_thickness_m"]
+    )
+    maximum_ratio = float(
+        config["shallow_surface_layer_max_thinness_ratio"]
+    )
+    numerical_eps = max(
+        float(config.get("obb_sat_eps", 1.0e-6)),
+        1.0e-9,
+    )
+
+    for layer, other in ((obj_a, obj_b), (obj_b, obj_a)):
+        full_sizes = 2.0 * np.asarray(layer.half, dtype=float)
+        thin_axis = int(np.argmin(full_sizes))
+        thickness = float(full_sizes[thin_axis])
+        if thickness <= 0.0 or thickness > maximum_thickness:
+            continue
+        planar_sizes = np.delete(full_sizes, thin_axis)
+        minimum_planar_size = float(np.min(planar_sizes))
+        if minimum_planar_size <= 0.0:
+            continue
+        thinness_ratio = thickness / minimum_planar_size
+        if thinness_ratio > maximum_ratio:
+            continue
+        layer_normal = np.asarray(layer.R, dtype=float)[:, thin_axis]
+        normal_alignment = abs(float(layer_normal[2])) / max(
+            float(np.linalg.norm(layer_normal)),
+            1.0e-12,
+        )
+        if normal_alignment < minimum_alignment:
+            continue
+        if abs(float(layer.bottom_z) - floor_z) > floor_tolerance:
+            continue
+
+        # The other object may enter the finite surface layer, but it may not
+        # cross the substrate or slice through the layer from the side.
+        substrate_crossing = max(
+            floor_z - float(other.bottom_z),
+            0.0,
+        )
+        if substrate_crossing > numerical_eps:
+            continue
+        if float(other.bottom_z) > float(layer.top_z) + numerical_eps:
+            continue
+        if float(other.top_z) <= float(layer.top_z) + numerical_eps:
+            continue
+        if overlap > thickness + numerical_eps:
+            continue
+
+        return {
+            "schema_version": (
+                "bounded_shallow_surface_layer_overlap_v1"
+            ),
+            "classification": (
+                "shallow_support_interface_overlap_candidate"
+            ),
+            "layer_object_id": str(layer.id),
+            "other_object_id": str(other.id),
+            "layer_thickness_m": thickness,
+            "vertical_overlap_m": overlap,
+            "overlap_fraction_of_layer_thickness": overlap / thickness,
+            "layer_thin_axis": thin_axis,
+            "layer_thinness_ratio": thinness_ratio,
+            "layer_normal_gravity_alignment": normal_alignment,
+            "minimum_overlap_axis_gravity_alignment": (
+                gravity_alignment
+            ),
+            "floor_z_m": floor_z,
+            "layer_bottom_z_m": float(layer.bottom_z),
+            "layer_top_z_m": float(layer.top_z),
+            "other_bottom_z_m": float(other.bottom_z),
+            "substrate_crossing_m": substrate_crossing,
+            "maximum_considered_overlap_m": maximum_overlap,
+            "semantic_question": (
+                "Does the visual and category evidence support a compliant "
+                "surface layer compressing at an ordinary load/support "
+                "interface?"
+            ),
+            "decision_authority": "vlm_judge",
+            "carries_validity_prior": False,
+            "automatic_exemption": False,
+        }
+    return None
+
+
+def _scene_floor_z(scene: dict[str, Any]) -> float:
+    room = scene.get("room")
+    if isinstance(room, dict):
+        value = room.get("floor_z")
+        try:
+            floor_z = float(value)
+        except (TypeError, ValueError):
+            floor_z = 0.0
+        if math.isfinite(floor_z):
+            return floor_z
+    return 0.0
 
 
 def _geometry_base_dir(collision_geometry: dict | None) -> Path | None:

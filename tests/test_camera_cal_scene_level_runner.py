@@ -72,6 +72,19 @@ def test_route_is_explicit_and_never_falls_back_to_port_4000() -> None:
     assert "secret" not in json.dumps(runner.safe_route_manifest(route))
 
 
+def test_grouping_model_uses_dedicated_completion_budget() -> None:
+    model = runner.build_grouping_model(
+        {
+            "endpoint": "http://127.0.0.1:4010/v1",
+            "model": "gpt-5.6-sol",
+            "api_key_env": "LITELLM_MASTER_KEY",
+        }
+    )
+
+    assert runner.GROUPING_COMPLETION_MAX_TOKENS == 3192
+    assert model.max_tokens == 3192
+
+
 def test_scene_comparison_keeps_unclear_and_unresolved_explicit() -> None:
     comparison = runner.build_scene_comparison(
         case_id="N001",
@@ -94,6 +107,9 @@ def test_scene_comparison_keeps_unclear_and_unresolved_explicit() -> None:
                 "scale_consistency": {
                     "status": "evaluated",
                     "score": 0.0,
+                    "final_object_findings": [
+                        {"object_id": "floor_lamp"}
+                    ],
                     "coverage": {
                         "eligible_count": 2,
                         "resolved_count": 2,
@@ -117,8 +133,74 @@ def test_scene_comparison_keeps_unclear_and_unresolved_explicit() -> None:
     assert scale["model"]["prediction"] == "invalid"
     assert scale["included_in_accuracy"] is False
     assert scale["matches"] is None
+    assert scale["anomaly_level"] == {
+        "scope": "anomaly_object_attribution",
+        "included_in_accuracy": False,
+        "human_object_ids": ["chair"],
+        "model_object_ids": ["floor_lamp"],
+        "true_positive_object_ids": [],
+        "false_negative_object_ids": ["chair"],
+        "false_positive_object_ids": ["floor_lamp"],
+        "precision": None,
+        "recall": None,
+        "exact_match": None,
+        "covered_any_human_anomaly": None,
+        "exclusion_reason": "human_annotation_unclear",
+    }
     assert style["model"]["prediction"] == "unresolved"
     assert style["included_in_accuracy"] is False
+
+
+def test_scene_match_does_not_hide_anomaly_object_attribution_failure():
+    comparison = runner.build_scene_comparison(
+        case_id="N020",
+        annotation={
+            "metrics": {
+                "functional_consistency": {
+                    "anomaly": True,
+                    "unclear": False,
+                    "affected_object_ids": [
+                        "lounge_sofa",
+                        "bookshelf_01",
+                        "bookshelf_02",
+                        "display_cabinet",
+                    ],
+                }
+            }
+        },
+        scene_quality_report={
+            "metrics": {
+                "functional_consistency": {
+                    "status": "evaluated",
+                    "score": 0.0,
+                    "final_object_findings": [
+                        {"object_id": "coffee_machine"},
+                        {"object_id": "side_table"},
+                    ],
+                }
+            }
+        },
+        metrics=("functional_consistency",),
+    )
+
+    metric = comparison["metrics"]["functional_consistency"]
+    assert metric["matches"] is True
+    assert metric["anomaly_level"]["exact_match"] is False
+    assert metric["anomaly_level"][
+        "false_negative_object_ids"
+    ] == [
+        "lounge_sofa",
+        "bookshelf_01",
+        "bookshelf_02",
+        "display_cabinet",
+    ]
+    assert metric["anomaly_level"][
+        "false_positive_object_ids"
+    ] == ["coffee_machine", "side_table"]
+    assert comparison["comparison_scopes"] == [
+        "scene_level_metric_verdict",
+        "anomaly_object_attribution",
+    ]
 
 
 def test_case_resume_requires_exact_fingerprint_and_complete_outputs(
@@ -310,11 +392,32 @@ def test_run_case_keeps_l1_scene_provider_separate_from_l3_group_provider(
     )
 
     assert record["status"] == "complete"
-    assert len(created_providers) == 2
-    assert created_providers[0] is captured["p0b_local_view_provider"]
-    assert created_providers[1] is captured["l3_initial_evidence_provider"]
+    assert len(created_providers) == 3
+    assert (
+        created_providers[0]
+        is captured["p0b_local_view_provider"]._provider
+    )
+    assert (
+        created_providers[1]
+        is captured["l3_initial_evidence_provider"]._provider
+    )
+    assert (
+        created_providers[2]
+        is captured["functional_probe_evidence_provider"]._provider
+    )
     assert created_providers[0].kwargs["out_dir"].name == "l1_camera"
     assert created_providers[1].kwargs["out_dir"].name == "l3_initial_camera"
+    assert created_providers[2].kwargs["out_dir"].name == (
+        "l3_functional_probes"
+    )
+    assert created_providers[2].kwargs["mode"] == "query_cov"
+    assert created_providers[2].kwargs["max_views"] == 1
+    assert created_providers[2].kwargs["max_steps"] == 0
+    assert created_providers[2].kwargs["candidate_count"] == 6
+    assert (
+        captured["functional_evidence_planner"]
+        is created_providers[2].kwargs["selector"]
+    )
     assert captured["scene_request"]["instruction"] == ""
     assert captured["evaluation_profile"][L2]["enabled"] is False
     assert captured["p0b_official_mode"] is False
@@ -328,6 +431,174 @@ def test_run_case_keeps_l1_scene_provider_separate_from_l3_group_provider(
     )
     assert diagnostics["engineering_failure_count"] == 0
     assert diagnostics["l3_diagnostics_completed"] is True
+    assert record["api_usage"]["api_calls_number"] == 0
+    assert (
+        runner.read_json(
+            output_root / "cases" / "N001" / "api_usage.json"
+        )["token_usage_coverage"]
+        == "not_applicable"
+    )
+
+
+def test_api_tracker_persists_progress_calls_and_reported_tokens(
+    tmp_path: Path,
+) -> None:
+    progress = runner.ProgressReporter(
+        tmp_path / "progress.jsonl",
+        terminal=False,
+    )
+    tracker = runner.APICallTracker(
+        case_id="N001",
+        calls_path=tmp_path / "api_calls.jsonl",
+        usage_path=tmp_path / "api_usage.json",
+        progress=progress,
+    )
+
+    class FakeModel:
+        model_id = "fake-model"
+        endpoint = "http://127.0.0.1:4010/v1"
+
+        def __init__(self) -> None:
+            self.last_request_metadata: dict[str, Any] = {}
+
+        def chat_messages(
+            self,
+            messages: list[dict[str, Any]],
+            **kwargs: Any,
+        ) -> str:
+            self.last_request_metadata = {
+                "endpoint": self.endpoint,
+                "model": self.model_id,
+                "message_count": len(messages),
+                "image_count": 0,
+                "prompt_chars": 12,
+                "finish_reason": "stop",
+                "usage": {
+                    "prompt_tokens": 10,
+                    "completion_tokens": 4,
+                    "total_tokens": 14,
+                    "prompt_tokens_details": {
+                        "cached_tokens": 2,
+                    },
+                    "completion_tokens_details": {
+                        "reasoning_tokens": 1,
+                    },
+                },
+            }
+            return json.dumps(
+                {
+                    "ok": True,
+                    "call_type": kwargs.get("call_type"),
+                }
+            )
+
+    observed = tracker.observe_model(FakeModel(), role="judge")
+    result = observed.chat_messages(
+        [{"role": "user", "content": "hello"}],
+        call_type="vlm_judge.canonical.style_consistency",
+    )
+
+    assert json.loads(result)["ok"] is True
+    usage = runner.read_json(tmp_path / "api_usage.json")
+    assert usage["api_calls_number"] == 1
+    assert usage["token_usage_coverage"] == "complete"
+    assert usage["tokens_usage"] == {
+        "prompt_tokens": 10,
+        "completion_tokens": 4,
+        "total_tokens": 14,
+        "cached_prompt_tokens": 2,
+        "reasoning_tokens": 1,
+    }
+    assert usage["by_role"]["judge"]["api_calls_number"] == 1
+    calls = runner.read_api_call_records(
+        tmp_path / "api_calls.jsonl"
+    )
+    assert calls[0]["call_type"] == (
+        "vlm_judge.canonical.style_consistency"
+    )
+    events = [
+        json.loads(line)["event"]
+        for line in (tmp_path / "progress.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    assert events == ["api_call_started", "api_call_completed"]
+
+
+def test_api_usage_marks_missing_endpoint_usage_without_estimating() -> None:
+    summary = runner.api_usage_summary(
+        [
+            {
+                "role": "grouping",
+                "call_type": "vlm_grouping.partition",
+                "status": "complete",
+                "tokens_usage": None,
+            }
+        ]
+    )
+
+    assert summary["api_calls_number"] == 1
+    assert summary["token_usage_coverage"] == "unavailable"
+    assert summary["tokens_usage"] is None
+    assert summary["token_usage_estimated"] is False
+
+
+def test_api_usage_separates_functional_discovery_surface_selector_and_judge(
+) -> None:
+    records = [
+        {
+            "role": "camera_selector",
+            "call_type": (
+                "vlm_camera_pose.functional_discovery.affordance"
+            ),
+            "status": "complete",
+            "tokens_usage": None,
+        },
+        {
+            "role": "camera_selector",
+            "call_type": (
+                "vlm_camera_pose.functional_discovery.relations"
+            ),
+            "status": "complete",
+            "tokens_usage": None,
+        },
+        {
+            "role": "camera_selector",
+            "call_type": "vlm_camera_pose.usable_surface_decode",
+            "status": "complete",
+            "tokens_usage": None,
+        },
+        {
+            "role": "camera_selector",
+            "call_type": "vlm_camera_pose.query_cov",
+            "status": "complete",
+            "tokens_usage": None,
+        },
+        {
+            "role": "camera_selector",
+            "call_type": "camera_selector_candidate_only",
+            "status": "complete",
+            "tokens_usage": None,
+        },
+        {
+            "role": "judge",
+            "call_type": "vlm_judge.canonical.functional_consistency",
+            "status": "complete",
+            "tokens_usage": None,
+        },
+    ]
+
+    summary = runner.api_usage_summary(records)
+
+    assert summary["operation_calls"] == {
+        "functional_discovery": 2,
+        "functional_affordance": 1,
+        "functional_relation": 1,
+        "placement_discovery": 0,
+        "usable_surface_decoder": 1,
+        "camera_selector": 2,
+        "judge": 1,
+    }
 
 
 def test_l1_schema_failure_marks_scene_unresolved_but_keeps_l3_diagnostic(

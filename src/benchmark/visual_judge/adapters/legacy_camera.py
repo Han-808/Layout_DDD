@@ -1222,6 +1222,13 @@ class _ExistingProviderCameraSelector:
         max_selector_calls = _provider_max_selector_calls(
             self.provider
         )
+        full_artifacts_per_view = (
+            _provider_full_artifacts_per_selected_view(
+                self.provider,
+                metric=request.metric,
+                request=request,
+            )
+        )
         return CameraSelectionResult(
             selected_view_ids=(_EXISTING_PROVIDER_CANDIDATE_ID,),
             selected_views=(deepcopy(candidate),),
@@ -1241,6 +1248,9 @@ class _ExistingProviderCameraSelector:
                 "selection_kind": "legacy_composite_backend_acquisition",
                 "max_internal_camera_actions": max_actions,
                 "max_internal_selector_calls": max_selector_calls,
+                "full_artifacts_per_selected_view": (
+                    full_artifacts_per_view
+                ),
             },
         )
 
@@ -1248,6 +1258,47 @@ class _ExistingProviderCameraSelector:
 def _provider_policy(provider: Any) -> dict[str, Any] | None:
     value = getattr(provider, "policy_config", None)
     return deepcopy(value) if isinstance(value, dict) else None
+
+
+def _provider_full_artifacts_per_selected_view(
+    provider: Any,
+    *,
+    metric: str,
+    request: CameraSelectionRequest,
+) -> int:
+    estimate = getattr(
+        provider,
+        "max_full_artifacts_for_controller_request",
+        None,
+    )
+    if callable(estimate):
+        value = estimate(
+            {
+                "task": request.task,
+                "metric": request.metric,
+                "camera_constraints": deepcopy(request.constraints),
+                "budget": deepcopy(request.budget),
+                "context": deepcopy(request.context),
+            }
+        )
+    elif str(metric) == "functional_consistency":
+        value = getattr(
+            provider,
+            "functional_probe_full_artifacts_per_selected_view",
+            1,
+        )
+    else:
+        value = 1
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int)
+        or value < 1
+    ):
+        raise ValueError(
+            "provider functional full-artifact reservation must be a "
+            "positive integer"
+        )
+    return value
 
 
 def _provider_max_actions(provider: Any) -> int:
@@ -1504,6 +1555,20 @@ def _provider_observed_usage(
         raise RuntimeError(
             "camera provider last_call_usage.evidence_refs must be a list "
             "of non-empty strings"
+        )
+    acquired_artifact_paths = usage.get(
+        "acquired_artifact_paths"
+    )
+    if acquired_artifact_paths is not None and (
+        not isinstance(acquired_artifact_paths, list)
+        or not all(
+            isinstance(item, str) and item.strip()
+            for item in acquired_artifact_paths
+        )
+    ):
+        raise RuntimeError(
+            "camera provider last_call_usage.acquired_artifact_paths "
+            "must be a list of non-empty strings"
         )
     packet_refs = set(_packet_evidence_refs(packet))
     if refs and packet_refs and not (set(refs) & packet_refs):

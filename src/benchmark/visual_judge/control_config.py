@@ -10,7 +10,7 @@ from benchmark.visual_judge.camera_ranking import (
 )
 
 
-VLM_EVALUATION_CONTROL_VERSION = "vlm_evaluation_control_v1"
+VLM_EVALUATION_CONTROL_VERSION = "vlm_evaluation_control_v2"
 
 DEFAULT_VLM_EVALUATION_CONTROL: dict[str, Any] = {
     "schema_version": VLM_EVALUATION_CONTROL_VERSION,
@@ -71,14 +71,14 @@ DEFAULT_VLM_EVALUATION_CONTROL: dict[str, Any] = {
     },
     "require_evidence_gate_after_render": True,
     "on_non_camera_repairable_evidence": "unresolved",
-    "on_budget_exhausted": "unresolved",
+    "on_budget_exhausted": "force_choice",
     "on_selector_failure": "keep_previous_evidence",
     "on_render_failure": "unresolved",
 }
 
 _POLICY_VALUES = {
     "on_non_camera_repairable_evidence": {"unresolved"},
-    "on_budget_exhausted": {"unresolved"},
+    "on_budget_exhausted": {"force_choice"},
     "on_selector_failure": {"keep_previous_evidence", "unresolved"},
     "on_render_failure": {"unresolved"},
 }
@@ -325,18 +325,11 @@ def resolve_vlm_evaluation_control(
                 sources["budgets.max_selector_calls"] = (
                     "existing_camera_provider"
                 )
+    # Judge packet capacity and acquisition capacity are independent. The
+    # former constrains one request; it must not silently shrink the shared
+    # Controller image ledger across groups or repair episodes.
     if judge_max_images is not None:
-        capacity = _positive_int(judge_max_images, "judge max_images")
-        requested_total = _positive_int(
-            effective["budgets"]["max_total_images"],
-            "max_total_images",
-        )
-        effective["budgets"]["max_total_images"] = min(
-            requested_total,
-            capacity,
-        )
-        if capacity < requested_total:
-            sources["budgets.max_total_images"] = "judge_capacity"
+        _positive_int(judge_max_images, "judge max_images")
     _mirror_effective_budgets_to_acquisition(effective, sources)
 
     _validate_resolved(effective)

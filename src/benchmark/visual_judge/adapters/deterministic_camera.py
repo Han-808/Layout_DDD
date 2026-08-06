@@ -970,10 +970,11 @@ def _candidate_bank_rejection_reasons(
 ) -> list[str]:
     """Reject only poses that cannot enter the trusted technical bank.
 
-    Visibility, joint-visibility, and coverage estimates are required, but a
-    negative estimate is a selection/constraint outcome rather than an
-    invalid camera pose. Keeping those validated poses lets a later trusted
-    repair plan relax a real conflict without inventing new geometry.
+    This boundary validates camera geometry, not evidence sufficiency. Proxy
+    framing, visibility, joint visibility, and coverage remain audited
+    features for the deterministic/VLM selectors and the post-render Judge.
+    Treating an unresolved proxy as an invalid pose used to empty the bank
+    before the Controller could execute its deterministic-to-VLM cascade.
     """
 
     candidate_id = str(candidate.get("id") or "")
@@ -986,12 +987,6 @@ def _candidate_bank_rejection_reasons(
         reasons.append("geometry_feasibility_unverified")
     elif features.get("geometry_feasibility") is False:
         reasons.append("geometry_infeasible")
-    framing = candidate.get("proxy_framing")
-    if (
-        isinstance(framing, dict)
-        and framing.get("proxy_bounds_fit") is False
-    ):
-        reasons.append("target_proxy_out_of_frame")
     family = _view_family(candidate)
     if (
         constraints.forbidden_view_families
@@ -1004,15 +999,6 @@ def _candidate_bank_rejection_reasons(
         and family not in constraints.preferred_view_families
     ):
         reasons.append("required_view_family_missing")
-    if features.get("target_visibility_estimate") is None:
-        reasons.append("target_visibility_unverified")
-    if features.get("projected_coverage_estimate") is None:
-        reasons.append("projected_coverage_unverified")
-    if (
-        constraints.require_joint_visibility
-        and features.get("joint_visibility_estimate") is None
-    ):
-        reasons.append("joint_visibility_unverified")
     return list(dict.fromkeys(reasons))
 
 

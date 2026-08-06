@@ -149,33 +149,31 @@ l3_scene_quality:
         camera_scope: global
         camera_mode: global_oblique
         selector: deterministic
-        image_budget: 2
+        image_budget: 1
         presentation: raw
         image_order: null
         include_global_context: true
         camera_pose_mode: null
       evidence_plan:
-        evidence_strategy: global_screen_then_local
+        evidence_strategy: global_discovery_then_group_local
         global_policy:
           view_family: canonical_high_oblique_pair_v1
-          image_budget: 2
+          image_budget: 1
           top_down: false
-          perspective_diversity_required: true
+          perspective_diversity_required: false
           preserve_boundary_cues: true
         local_policy:
-          camera_scope: object_local
+          camera_scope: group_local
           grouping_policy_id: vlm_visual_evidence_scope_v2
-          image_budget: 4
-          trigger_states:
-            - suspicious
-            - insufficient_evidence
-        router_options:
-          global_screen_then_local:
-            router: vlm_global_screen
-            trigger_states:
-              - suspicious
-              - insufficient_evidence
-            executes_router: false
+          image_budget: 1
+          global_context_image_budget: 1
+          max_packet_images: 2
+          image_order:
+            - global_context
+            - group_local
+          minimum_group_members: 2
+          force_for_eligible_groups: true
+        router_options: null
         text_context:
           - original_prompt
           - parsed_prompt_requirements

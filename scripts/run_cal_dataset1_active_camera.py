@@ -48,6 +48,9 @@ from benchmark.visual_judge.evidence_sufficiency import (
 from benchmark.visual_judge.openai_compatible import (
     build_openai_compatible_vlm_judge,
 )
+from benchmark.visual_judge.openai_camera_selector import (
+    build_openai_compatible_camera_selector,
+)
 from benchmark.visual_judge.p0b import build_p0b_local_evidence_request
 from benchmark.visual_judge.render_views import CameraEvidenceProvider
 from benchmark.visual_judge.visual_config import (
@@ -550,7 +553,7 @@ def _prepare(
     selector_config: dict[str, Any] | None,
 ) -> None:
     selector = (
-        build_openai_compatible_vlm_judge(selector_config)
+        build_openai_compatible_camera_selector(selector_config)
         if set(args.arm) & SELECTOR_ARMS and selector_config is not None
         else None
     )

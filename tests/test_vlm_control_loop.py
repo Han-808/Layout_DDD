@@ -304,6 +304,12 @@ def test_same_pose_render_bundle_counts_as_one_view_per_round():
                     "pair_id": "repair-view",
                     "path": "repair-contour.png",
                     "role": "metric_local_contour",
+                    "pose": {
+                        "id": "repair-view",
+                        "location": [1.0, 1.0, 1.0],
+                        "target": [0.0, 0.0, 0.0],
+                        "lens_mm": 45.0,
+                    },
                 },
             ],
             "merge_policy": "replace",
@@ -368,6 +374,137 @@ def test_trusted_view_id_representation_bundle_counts_as_one_camera_view():
     assert result.audit["total_images_acquired"] == 4
 
 
+def test_metric_acquisition_ledger_deduplicates_reused_global_artifact():
+    calls: list[str] = []
+    gate = _Gate(
+        [
+            _gate_result(ready=True),
+            _gate_result(ready=True),
+            _gate_result(ready=True),
+        ],
+        calls,
+    )
+    judge = _Judge(
+        [_valid_result(), _need_more_result(), _valid_result()],
+        calls,
+    )
+    selector = _Selector(_selection(), calls)
+    renderer = _Renderer(
+        {
+            "visual_evidence": ["repair-local.png"],
+            "merge_policy": "append",
+        },
+        calls,
+    )
+    controller = VLMEvaluationController(
+        judge=judge,
+        camera_selector=selector,
+        evidence_gate=gate,
+        renderer=renderer,
+    )
+
+    first = controller.run(
+        _judge_request(evidence=("global.png",)),
+        candidate_views=({"id": "view-1"},),
+        allowed_actions=("orbit",),
+    )
+    second = controller.run(
+        _judge_request(evidence=("global.png",)),
+        candidate_views=({"id": "view-1"},),
+        allowed_actions=("orbit",),
+        initial_acquisition_ledger=first.audit[
+            "camera_acquisition"
+        ]["ledger"],
+    )
+
+    assert first.audit["total_images_acquired"] == 1
+    assert second.status == "valid"
+    ledger = second.audit["camera_acquisition"]["ledger"]
+    assert ledger["total_images_acquired"] == 2
+    assert ledger["artifact_ids"] == [
+        "path:global.png",
+        "path:repair-local.png",
+    ]
+    assert ledger["evidence_rounds"] == 1
+    assert ledger["selector_calls"] == 1
+
+
+def test_metric_acquisition_ledger_accepts_legacy_bare_path_identity():
+    result, calls, _, _, selector, renderer = _run(
+        gate_results=[_gate_result(ready=True)],
+        judge_results=[_valid_result()],
+        evidence=("global.png",),
+    )
+    controller = VLMEvaluationController(
+        judge=_Judge([_valid_result()], calls),
+        camera_selector=selector,
+        evidence_gate=_Gate([_gate_result(ready=True)], calls),
+        renderer=renderer,
+    )
+
+    resumed = controller.run(
+        _judge_request(evidence=("global.png",)),
+        initial_acquisition_ledger={
+            "schema_version": "metric_camera_acquisition_ledger_v1",
+            "artifact_ids": ["global.png"],
+            "total_images_acquired": 1,
+            "evidence_rounds": 0,
+            "selector_calls": 0,
+            "camera_actions": 0,
+            "deterministic_rounds": 0,
+            "vlm_rounds": 0,
+        },
+    )
+
+    assert result.status == "valid"
+    assert resumed.status == "valid"
+    assert resumed.audit["total_images_acquired"] == 1
+
+
+def test_acquisition_ledger_counts_each_same_pose_representation():
+    result, _, _, _, _, _ = _run(
+        gate_results=[
+            _gate_result(ready=True),
+            _gate_result(ready=True),
+        ],
+        judge_results=[_need_more_result(), _valid_result()],
+        render_result={
+            "visual_evidence": [
+                {
+                    "view_id": "view-1",
+                    "path": "repair-view-rgb.png",
+                    "role": "metric_local_rgb",
+                },
+                {
+                    "view_id": "view-1",
+                    "path": "repair-view-overlay.png",
+                    "role": "metric_local_overlay",
+                },
+            ],
+            "merge_policy": "append",
+        },
+        control=resolve_vlm_evaluation_control(
+            {
+                "budgets": {
+                    "max_views_per_round": 1,
+                    "max_total_images": 6,
+                }
+            }
+        ),
+    )
+
+    render_event = next(
+        item
+        for item in result.audit["trace"]
+        if item["stage"] == "render"
+    )
+    assert render_event["rendered_view_count"] == 1
+    assert result.audit["total_images_acquired"] == 3
+    assert len(
+        result.audit["camera_acquisition"]["ledger"]["artifact_ids"]
+    ) == 3
+
+
 def test_non_camera_repairable_failure_never_calls_judge():
     result, calls, _, judge, selector, renderer = _run(
         gate_results=[_gate_result(ready=False)],
@@ -403,36 +540,72 @@ def test_judge_need_more_evidence_runs_full_next_round():
     assert selector.requests[0].evidence_round == 1
 
 
-def test_zero_evidence_round_budget_stops_before_selector():
+def test_zero_evidence_round_budget_forces_choice_before_selector():
     control = resolve_vlm_evaluation_control(
         {"budgets": {"max_evidence_rounds": 0}}
     )
     result, calls, _, judge, selector, _ = _run(
         gate_results=[_gate_result(ready=True)],
-        judge_results=[_need_more_result()],
+        judge_results=[_need_more_result(), _valid_result()],
         control=control,
     )
 
-    assert result.stop_reason == "max_evidence_rounds_exhausted"
-    assert calls == ["gate", "judge"]
-    assert len(judge.requests) == 1
+    assert result.status == "valid"
+    assert (
+        result.stop_reason
+        == "max_evidence_rounds_exhausted_forced_choice"
+    )
+    assert calls == ["gate", "judge", "judge"]
+    assert len(judge.requests) == 2
+    finalization = judge.requests[-1].context[
+        "budget_exhaustion_finalization"
+    ]
+    assert finalization["required"] is True
+    assert (
+        finalization["trigger_stop_reason"]
+        == "max_evidence_rounds_exhausted"
+    )
+    assert finalization["available_visual_count"] == 1
     assert not selector.requests
 
 
-def test_image_budget_stops_need_more_loop_without_rejudging():
+def test_image_budget_forces_choice_without_another_camera_round():
     control = resolve_vlm_evaluation_control(
         {"budgets": {"max_total_images": 1}}
     )
     result, calls, _, judge, selector, _ = _run(
         gate_results=[_gate_result(ready=True)],
-        judge_results=[_need_more_result()],
+        judge_results=[_need_more_result(), _valid_result()],
         control=control,
     )
 
-    assert result.stop_reason == "max_total_images_exhausted"
-    assert calls == ["gate", "judge"]
-    assert len(judge.requests) == 1
+    assert result.status == "valid"
+    assert (
+        result.stop_reason
+        == "max_total_images_exhausted_forced_choice"
+    )
+    assert calls == ["gate", "judge", "judge"]
+    assert len(judge.requests) == 2
     assert not selector.requests
+
+
+def test_budget_exhaustion_rejects_a_second_need_more_response():
+    control = resolve_vlm_evaluation_control(
+        {"budgets": {"max_evidence_rounds": 0}}
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="terminal budget-exhaustion Judge",
+    ):
+        _run(
+            gate_results=[_gate_result(ready=True)],
+            judge_results=[
+                _need_more_result(),
+                _need_more_result(),
+            ],
+            control=control,
+        )
 
 
 def test_selector_call_budget_prevents_infinite_need_more_loop():
@@ -449,11 +622,19 @@ def test_selector_call_budget_prevents_infinite_need_more_loop():
             _gate_result(ready=True),
             _gate_result(ready=True),
         ],
-        judge_results=[_need_more_result(), _need_more_result()],
+        judge_results=[
+            _need_more_result(),
+            _need_more_result(),
+            _valid_result(),
+        ],
         control=control,
     )
 
-    assert result.stop_reason == "max_selector_calls_exhausted"
+    assert result.status == "valid"
+    assert (
+        result.stop_reason
+        == "max_selector_calls_exhausted_forced_choice"
+    )
     assert calls == [
         "gate",
         "judge",
@@ -461,8 +642,9 @@ def test_selector_call_budget_prevents_infinite_need_more_loop():
         "render",
         "gate",
         "judge",
+        "judge",
     ]
-    assert len(judge.requests) == 2
+    assert len(judge.requests) == 3
     assert len(selector.requests) == 1
 
 
@@ -472,19 +654,23 @@ def test_camera_action_budget_is_checked_before_render():
     )
     result, calls, _, _, _, renderer = _run(
         gate_results=[_gate_result(ready=True)],
-        judge_results=[_need_more_result()],
+        judge_results=[_need_more_result(), _valid_result()],
         selector_result=_selection(
             action={"type": "orbit", "view_id": "view-1"}
         ),
         control=control,
     )
 
-    assert result.stop_reason == "max_camera_actions_exhausted"
-    assert calls == ["gate", "judge", "selector"]
+    assert result.status == "valid"
+    assert (
+        result.stop_reason
+        == "max_camera_actions_exhausted_forced_choice"
+    )
+    assert calls == ["gate", "judge", "selector", "judge"]
     assert not renderer.requests
 
 
-def test_rendered_packet_over_image_budget_is_gated_before_stopping():
+def test_rendered_packet_over_image_budget_is_rejected_before_rejudging():
     control = resolve_vlm_evaluation_control(
         {"budgets": {"max_total_images": 1}}
     )
@@ -493,7 +679,7 @@ def test_rendered_packet_over_image_budget_is_gated_before_stopping():
             _gate_result(ready=True),
             _gate_result(ready=True),
         ],
-        judge_results=[_need_more_result()],
+        judge_results=[_need_more_result(), _valid_result()],
         evidence=(),
         render_result={
             "visual_evidence": ["one.png", "two.png"],
@@ -502,10 +688,29 @@ def test_rendered_packet_over_image_budget_is_gated_before_stopping():
         control=control,
     )
 
-    assert result.stop_reason == "max_total_images_exhausted"
-    assert calls == ["gate", "judge", "selector", "render", "gate"]
-    assert len(gate.requests) == 2
-    assert len(judge.requests) == 1
+    assert result.status == "valid"
+    assert (
+        result.stop_reason
+        == "max_total_images_exhausted_forced_choice"
+    )
+    assert calls == [
+        "gate",
+        "judge",
+        "selector",
+        "render",
+        "judge",
+    ]
+    assert len(gate.requests) == 1
+    assert len(judge.requests) == 2
+    assert list(judge.requests[-1].visual_evidence) == []
+    assert result.audit["total_images_acquired"] == 2
+    render_event = next(
+        item
+        for item in result.audit["trace"]
+        if item["stage"] == "render"
+    )
+    assert render_event["status"] == "rejected_budget_overrun"
+    assert render_event["accepted_for_judging"] is False
 
 
 def test_selector_failure_keeps_previous_evidence_and_does_not_rejudge():
@@ -555,7 +760,11 @@ def test_replace_mode_still_consumes_cumulative_image_budget():
             _gate_result(ready=True),
             _gate_result(ready=True),
         ],
-        judge_results=[_need_more_result(), _need_more_result()],
+        judge_results=[
+            _need_more_result(),
+            _need_more_result(),
+            _valid_result(),
+        ],
         render_result={
             "visual_evidence": ["replacement.png"],
             "merge_policy": "replace",
@@ -563,7 +772,11 @@ def test_replace_mode_still_consumes_cumulative_image_budget():
         control=control,
     )
 
-    assert result.stop_reason == "max_total_images_exhausted"
+    assert result.status == "valid"
+    assert (
+        result.stop_reason
+        == "max_total_images_exhausted_forced_choice"
+    )
     assert calls == [
         "gate",
         "judge",
@@ -571,11 +784,12 @@ def test_replace_mode_still_consumes_cumulative_image_budget():
         "render",
         "gate",
         "judge",
+        "judge",
     ]
     assert len(result.visual_evidence) == 1
     assert result.audit["current_packet_image_count"] == 1
     assert result.audit["total_images_acquired"] == 2
-    assert len(judge.requests) == 2
+    assert len(judge.requests) == 3
     assert len(selector.requests) == 1
 
 
@@ -2526,6 +2740,336 @@ def test_controlled_public_metric_need_more_runs_provider_gate_and_judge(
     )
 
 
+def test_existing_provider_keeps_complete_pose_bundle_within_image_budget(
+    tmp_path,
+) -> None:
+    paths = {
+        name: tmp_path / f"{name}.png"
+        for name in (
+            "initial_rgb",
+            "initial_contour",
+            "repair_1_rgb",
+            "repair_1_contour",
+            "repair_2_rgb",
+            "repair_2_contour",
+        )
+    }
+    for path in paths.values():
+        _write_nonblank_png(path)
+
+    class _Judge:
+        vlm_control_enabled = True
+
+        def __init__(self) -> None:
+            self.requests = []
+
+        def adjudicate_scene_quality(self, request):
+            self.requests.append(request)
+            if len(self.requests) == 1:
+                return {
+                    "evidence_status": "insufficient",
+                    "verdict": "ambiguous",
+                    "confidence": 0.4,
+                    "reason": "A reverse contact view is required.",
+                    "missing_evidence": ["contact_surface_visible"],
+                    "defects": [],
+                }
+            return {
+                "evidence_status": "sufficient",
+                "verdict": "valid",
+                "confidence": 0.9,
+                "reason": "The added complete pose bundle resolves contact.",
+                "missing_evidence": [],
+                "defects": [],
+            }
+
+    def item(name, pair_id, role, *, pose=False):
+        result = {
+            "path": str(paths[name]),
+            "view_id": pair_id,
+            "pair_id": pair_id,
+            "role": role,
+        }
+        if pose:
+            result["pose"] = {
+                "id": pair_id,
+                "location": [1.0, 1.0, 1.0],
+                "target": [0.0, 0.0, 0.0],
+                "lens_mm": 45.0,
+            }
+        return result
+
+    provider_packet = [
+        item("repair_1_rgb", "repair_1", "collision_rgb"),
+        item("repair_2_rgb", "repair_2", "collision_rgb"),
+        item(
+            "repair_1_contour",
+            "repair_1",
+            "metric_local_contour",
+            pose=True,
+        ),
+        item(
+            "repair_2_contour",
+            "repair_2",
+            "metric_local_contour",
+            pose=True,
+        ),
+    ]
+    provider_calls = []
+
+    def provider(request):
+        provider_calls.append(request)
+        return provider_packet
+
+    judge = _Judge()
+    control = resolve_vlm_evaluation_control(
+        {
+            "camera_acquisition": {
+                "total": {"max_total_images": 6},
+            },
+            "budgets": {"max_total_images": 6},
+        }
+    )
+    wrapper = ControlledVLMJudge(
+        judge,
+        control=control,
+        camera_provider=provider,
+    )
+
+    result = wrapper.adjudicate_scene_quality(
+        {
+            "category": "scene_quality_interfaces",
+            "metric": "functional_consistency",
+            "scene_summary": {"scene_id": "scene-1"},
+            "target_object_ids": ["a", "b"],
+            "render_evidence": [
+                item("initial_rgb", "initial", "collision_rgb"),
+                item(
+                    "initial_contour",
+                    "initial",
+                    "metric_local_contour",
+                    pose=True,
+                ),
+            ],
+            "judgment_scope": {
+                "included": ["functional_access_and_interaction"]
+            },
+        }
+    )
+
+    assert result["verdict"] == "valid"
+    assert len(provider_calls) == 1
+    assert len(judge.requests) == 2
+    assert judge.requests[1]["render_evidence"] == [
+        str(paths["initial_rgb"]),
+        str(paths["initial_contour"]),
+        str(paths["repair_1_rgb"]),
+        str(paths["repair_2_rgb"]),
+        str(paths["repair_1_contour"]),
+        str(paths["repair_2_contour"]),
+    ]
+    audit = wrapper.audit_records[0]["audit"]
+    assert audit["total_images_acquired"] == 6
+    render_event = next(
+        item
+        for item in audit["trace"]
+        if item["stage"] == "render"
+    )
+    assert render_event["rendered_view_count"] == 2
+    budget_audit = render_event["result"]["provenance"][
+        "provider_evidence_budget"
+    ]
+    assert budget_audit["trimmed"] is False
+    assert budget_audit["provider_evidence_count"] == 4
+    assert budget_audit["returned_evidence_count"] == 4
+
+
+def test_functional_composite_reservation_blocks_generic_focus_overrun(
+    tmp_path,
+) -> None:
+    initial = tmp_path / "initial.png"
+    _write_nonblank_png(initial)
+
+    class _Provider:
+        def __init__(self) -> None:
+            self.calls = 0
+            self.reservation_requests = []
+            self.last_call_usage = None
+
+        def max_full_artifacts_for_controller_request(self, request):
+            self.reservation_requests.append(deepcopy(request))
+            # Generic functional focus: one global plus one raw/highlight
+            # local pair.
+            return 3
+
+        def provide_scene_quality_evidence(self, request):
+            self.calls += 1
+            raise AssertionError(
+                "provider must not render after reservation exceeds budget"
+            )
+
+    class _Judge:
+        vlm_control_enabled = True
+
+        def __init__(self) -> None:
+            self.requests = []
+
+        def adjudicate_scene_quality(self, request):
+            self.requests.append(request)
+            if len(self.requests) == 1:
+                return {
+                    "evidence_status": "insufficient",
+                    "verdict": "ambiguous",
+                    "confidence": 0.3,
+                    "reason": "the usable side is not established",
+                    "missing_evidence": [
+                        "interaction_side_visible"
+                    ],
+                    "defects": [],
+                }
+            return {
+                "evidence_status": "sufficient",
+                "verdict": "valid",
+                "confidence": 0.6,
+                "reason": "forced terminal choice from current evidence",
+                "missing_evidence": [],
+                "defects": [],
+            }
+
+    provider = _Provider()
+    judge = _Judge()
+    wrapper = ControlledVLMJudge(
+        judge,
+        control=resolve_vlm_evaluation_control(
+            {"budgets": {"max_total_images": 2}}
+        ),
+        camera_provider=provider,
+    )
+
+    result = wrapper.adjudicate_scene_quality(
+        {
+            "metric": "functional_consistency",
+            "scene_summary": {"scene_id": "scene"},
+            "target_object_ids": ["cabinet"],
+            "render_evidence": [str(initial)],
+            "judgment_scope": {
+                "included": ["functional_access_and_interaction"]
+            },
+        }
+    )
+
+    assert result["verdict"] == "valid"
+    assert provider.calls == 0
+    assert len(provider.reservation_requests) == 1
+    assert len(judge.requests) == 2
+    audit = wrapper.audit_records[0]["audit"]
+    assert audit["total_images_acquired"] == 1
+    assert (
+        wrapper.audit_records[0]["stop_reason"]
+        == "max_total_images_exhausted_forced_choice"
+    )
+
+
+def test_functional_controller_counts_provider_only_identity_artifact(
+    tmp_path,
+) -> None:
+    initial = tmp_path / "initial.png"
+    repair = tmp_path / "repair.png"
+    identity = tmp_path / "repair_identity.png"
+    for path in (initial, repair, identity):
+        _write_nonblank_png(path)
+
+    class _Provider:
+        def __init__(self) -> None:
+            self.calls = 0
+            self.last_call_usage = None
+
+        def max_full_artifacts_for_controller_request(self, request):
+            del request
+            return 2
+
+        def provide_scene_quality_evidence(self, request):
+            self.calls += 1
+            self.last_call_usage = {
+                "call_id": f"functional-{self.calls}",
+                "metric": request["metric"],
+                "cache_hit": False,
+                "evidence_refs": [str(repair)],
+                "acquired_artifact_paths": [
+                    str(repair),
+                    str(identity),
+                ],
+                "manifest_path": None,
+                "selector_calls": 0,
+                "camera_actions": 0,
+            }
+            return [str(repair)]
+
+    class _Judge:
+        vlm_control_enabled = True
+
+        def __init__(self) -> None:
+            self.requests = []
+
+        def adjudicate_scene_quality(self, request):
+            self.requests.append(request)
+            if len(self.requests) == 1:
+                return {
+                    "evidence_status": "insufficient",
+                    "verdict": "ambiguous",
+                    "confidence": 0.3,
+                    "reason": "the usable side is not established",
+                    "missing_evidence": [
+                        "interaction_side_visible"
+                    ],
+                    "defects": [],
+                }
+            return {
+                "evidence_status": "sufficient",
+                "verdict": "valid",
+                "confidence": 0.9,
+                "reason": "the repair view establishes the usable side",
+                "missing_evidence": [],
+                "defects": [],
+            }
+
+    provider = _Provider()
+    judge = _Judge()
+    wrapper = ControlledVLMJudge(
+        judge,
+        control=resolve_vlm_evaluation_control(
+            {"budgets": {"max_total_images": 3}}
+        ),
+        camera_provider=provider,
+    )
+
+    result = wrapper.adjudicate_scene_quality(
+        {
+            "metric": "functional_consistency",
+            "scene_summary": {"scene_id": "scene"},
+            "target_object_ids": ["cabinet"],
+            "render_evidence": [str(initial)],
+            "judgment_scope": {
+                "included": ["functional_access_and_interaction"]
+            },
+        }
+    )
+
+    assert result["verdict"] == "valid"
+    assert provider.calls == 1
+    assert judge.requests[1]["render_evidence"] == [
+        str(initial),
+        str(repair),
+    ]
+    audit = wrapper.audit_records[0]["audit"]
+    assert audit["total_images_acquired"] == 3
+    artifact_ids = audit["camera_acquisition"]["ledger"][
+        "artifact_ids"
+    ]
+    assert f"path:{identity}" in artifact_ids
+    assert str(identity) not in judge.requests[1]["render_evidence"]
+
+
 def test_controlled_group_repair_passes_scope_geometry_to_legacy_provider(
     tmp_path,
 ) -> None:
@@ -3132,7 +3676,7 @@ def test_controlled_provider_rejects_unbound_explicit_vlm_backend(
     assert judge.calls == 0
 
 
-def test_controlled_initial_provider_usage_is_charged_before_binary_judge(
+def test_controlled_initial_provider_overrun_is_not_forced_without_need_more(
     tmp_path,
 ):
     evidence = tmp_path / "initial.png"
@@ -3167,11 +3711,9 @@ def test_controlled_initial_provider_usage_is_charged_before_binary_judge(
 
         def adjudicate_p0b(self, request):
             self.calls += 1
-            return {
-                "verdict": "valid",
-                "confidence": 1.0,
-                "reason": "must not be called",
-            }
+            raise AssertionError(
+                "initial engineering overrun must not force a verdict"
+            )
 
     judge = _Judge()
     wrapper = ControlledVLMJudge(
@@ -3188,7 +3730,7 @@ def test_controlled_initial_provider_usage_is_charged_before_binary_judge(
         camera_provider=provider,
     )
 
-    with pytest.raises(EvidenceControlUnresolvedError) as exc:
+    with pytest.raises(EvidenceControlUnresolvedError):
         wrapper.adjudicate_p0b(
             {
                 "metric": "collision",
@@ -3197,8 +3739,11 @@ def test_controlled_initial_provider_usage_is_charged_before_binary_judge(
             }
         )
 
-    assert exc.value.result.stop_reason == "max_selector_calls_exhausted"
     assert judge.calls == 0
+    assert (
+        wrapper.audit_records[0]["stop_reason"]
+        == "max_selector_calls_exhausted"
+    )
     audit = wrapper.audit_records[0]["audit"]
     assert audit["selector_calls_used"] == 2
     assert audit["camera_actions_used"] == 1

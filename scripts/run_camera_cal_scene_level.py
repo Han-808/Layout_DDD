@@ -60,16 +60,28 @@ from benchmark.visual_judge import (  # noqa: E402
 from benchmark.visual_judge.l3_prompts import (  # noqa: E402
     L3_METRIC_PROMPT_VERSION,
 )
+from benchmark.visual_judge.functional_discovery import (  # noqa: E402
+    FUNCTIONAL_AFFORDANCE_SCHEMA_VERSION,
+    FUNCTIONAL_DISCOVERY_SCHEMA_VERSION,
+    FUNCTIONAL_RELATION_SCHEMA_VERSION,
+)
+from benchmark.visual_judge.placement_discovery import (  # noqa: E402
+    PLACEMENT_DISCOVERY_SCHEMA_VERSION,
+)
 from benchmark.visual_judge.contracts import (  # noqa: E402
     response_schema_audit_from_exception,
 )
 
 
-RUNNER_SCHEMA_VERSION = "camera_cal_scene_level_runner_v2"
+RUNNER_SCHEMA_VERSION = "camera_cal_scene_level_runner_v4"
 PLAN_SCHEMA_VERSION = "camera_cal_scene_level_plan_v1"
-CASE_SCHEMA_VERSION = "camera_cal_scene_level_case_v1"
+CASE_SCHEMA_VERSION = "camera_cal_scene_level_case_v3"
 COMPARISON_SCHEMA_VERSION = "camera_cal_scene_comparison_v1"
-SUMMARY_SCHEMA_VERSION = "camera_cal_scene_level_summary_v1"
+SUMMARY_SCHEMA_VERSION = "camera_cal_scene_level_summary_v2"
+PROGRESS_SCHEMA_VERSION = "camera_cal_scene_level_progress_v1"
+API_CALL_SCHEMA_VERSION = "camera_cal_api_call_v1"
+API_USAGE_SCHEMA_VERSION = "camera_cal_api_usage_v1"
+GROUPING_COMPLETION_MAX_TOKENS = 3192
 L1_BINARY_FAILURE_POLICY = {
     "p0b_official_mode": False,
     "on_engineering_failure": "scene_unresolved_continue_l3_diagnostics",
@@ -110,9 +122,369 @@ EXPERIMENTAL_L3_METRICS = (
     "functional_consistency",
     "semantic_placement_consistency",
 )
+FUNCTIONAL_PROBE_IMPLEMENTATION_FILES = (
+    "src/benchmark/evaluator/scene_quality/functional_acquisition.py",
+    "src/benchmark/evaluator/scene_quality/functional_boundary_evidence.py",
+    "src/benchmark/evaluator/scene_quality/functional_geometry.py",
+    "src/benchmark/evaluator/scene_quality/functional_probe.py",
+    "src/benchmark/evaluator/scene_quality/global_group_first.py",
+    "src/benchmark/rendering/camera_pose.py",
+    "src/benchmark/visual_judge/functional_discovery.py",
+    "src/benchmark/visual_judge/functional_evidence.py",
+    "src/benchmark/visual_judge/openai_camera_selector.py",
+    "src/benchmark/visual_judge/openai_compatible.py",
+    "src/benchmark/visual_judge/placement_discovery.py",
+    "src/benchmark/visual_judge/render_views.py",
+    "src/benchmark/visual_judge/usable_surface.py",
+)
 
 _CASE_ID_PATTERN = re.compile(r"N\d{3}")
 _ENV_NAME_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+_TOKEN_FIELDS = (
+    "prompt_tokens",
+    "completion_tokens",
+    "total_tokens",
+    "cached_prompt_tokens",
+    "reasoning_tokens",
+)
+
+
+class ProgressReporter:
+    """Persist concise progress events and optionally mirror them to stdout."""
+
+    def __init__(self, path: Path, *, terminal: bool = True) -> None:
+        self.path = path.expanduser().resolve()
+        self.terminal = bool(terminal)
+        self._lock = threading.Lock()
+
+    def emit(
+        self,
+        event: str,
+        *,
+        case_id: str | None = None,
+        **details: Any,
+    ) -> dict[str, Any]:
+        record = {
+            "schema_version": PROGRESS_SCHEMA_VERSION,
+            "timestamp": utc_now(),
+            "event": str(event),
+            "case_id": str(case_id) if case_id else None,
+            "details": deepcopy(details),
+        }
+        encoded = json.dumps(record, ensure_ascii=False)
+        with self._lock:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            with self.path.open("a", encoding="utf-8") as stream:
+                stream.write(encoded + "\n")
+            if self.terminal:
+                print(_format_progress_record(record), flush=True)
+        return record
+
+
+class APICallTracker:
+    """Record actual logical chat-completions calls and reported token usage."""
+
+    def __init__(
+        self,
+        *,
+        case_id: str,
+        calls_path: Path,
+        usage_path: Path,
+        progress: ProgressReporter,
+    ) -> None:
+        self.case_id = str(case_id)
+        self.calls_path = calls_path.expanduser().resolve()
+        self.usage_path = usage_path.expanduser().resolve()
+        self.progress = progress
+        self._lock = threading.Lock()
+        self._records = read_api_call_records(self.calls_path)
+        self._next_call_number = len(self._records) + 1
+        atomic_write_json(self.usage_path, api_usage_summary(self._records))
+
+    def observe_model(self, model: Any, *, role: str) -> Any:
+        if not callable(getattr(model, "chat_messages", None)):
+            return model
+        return _ObservedChatModel(model, role=role, tracker=self)
+
+    def begin_call(
+        self,
+        *,
+        role: str,
+        call_type: str,
+        messages: Any,
+    ) -> tuple[int, str, float]:
+        with self._lock:
+            call_number = self._next_call_number
+            self._next_call_number += 1
+        call_id = f"{self.case_id}-{call_number:05d}"
+        self.progress.emit(
+            "api_call_started",
+            case_id=self.case_id,
+            api_call_number=call_number,
+            api_call_id=call_id,
+            role=role,
+            call_type=call_type,
+            image_count=_message_image_count(messages),
+        )
+        return call_number, call_id, time.monotonic()
+
+    def finish_call(
+        self,
+        *,
+        call_number: int,
+        call_id: str,
+        role: str,
+        call_type: str,
+        started: float,
+        request_metadata: dict[str, Any],
+        error: Exception | None,
+    ) -> dict[str, Any]:
+        duration = max(0.0, time.monotonic() - started)
+        usage = _normalized_token_usage(request_metadata.get("usage"))
+        record = {
+            "schema_version": API_CALL_SCHEMA_VERSION,
+            "api_call_number": int(call_number),
+            "api_call_id": str(call_id),
+            "case_id": self.case_id,
+            "role": str(role),
+            "call_type": str(call_type),
+            "status": "failed" if error is not None else "complete",
+            "completed_at": utc_now(),
+            "duration_seconds": duration,
+            "model": request_metadata.get("model"),
+            "endpoint": request_metadata.get("endpoint"),
+            "message_count": _nonnegative_int_or_none(
+                request_metadata.get("message_count")
+            ),
+            "image_count": _nonnegative_int_or_none(
+                request_metadata.get("image_count")
+            ),
+            "prompt_chars": _nonnegative_int_or_none(
+                request_metadata.get("prompt_chars")
+            ),
+            "finish_reason": request_metadata.get("finish_reason"),
+            "tokens_usage": usage,
+            "error_type": type(error).__name__ if error is not None else None,
+            "error": _bounded_error(error) if error is not None else None,
+        }
+        with self._lock:
+            self._records.append(record)
+            self.calls_path.parent.mkdir(parents=True, exist_ok=True)
+            with self.calls_path.open("a", encoding="utf-8") as stream:
+                stream.write(json.dumps(record, ensure_ascii=False) + "\n")
+            cumulative = api_usage_summary(self._records)
+            atomic_write_json(self.usage_path, cumulative)
+        self.progress.emit(
+            (
+                "api_call_failed"
+                if error is not None
+                else "api_call_completed"
+            ),
+            case_id=self.case_id,
+            api_call_number=call_number,
+            api_call_id=call_id,
+            role=role,
+            call_type=call_type,
+            duration_seconds=round(duration, 3),
+            tokens_usage=usage,
+            cumulative_api_calls=cumulative["api_calls_number"],
+            cumulative_tokens_usage=cumulative["tokens_usage"],
+            error_type=record["error_type"],
+        )
+        return record
+
+    def summary(self) -> dict[str, Any]:
+        with self._lock:
+            return api_usage_summary(self._records)
+
+
+class _ObservedChatModel:
+    def __init__(
+        self,
+        model: Any,
+        *,
+        role: str,
+        tracker: APICallTracker,
+    ) -> None:
+        self._model = model
+        self._role = str(role)
+        self._tracker = tracker
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._model, name)
+
+    def chat_messages(
+        self,
+        messages: list[dict[str, Any]],
+        **kwargs: Any,
+    ) -> str:
+        call_type = str(kwargs.get("call_type") or "chat")
+        call_number, call_id, started = self._tracker.begin_call(
+            role=self._role,
+            call_type=call_type,
+            messages=messages,
+        )
+        try:
+            result = self._model.chat_messages(messages, **kwargs)
+        except Exception as exc:
+            self._tracker.finish_call(
+                call_number=call_number,
+                call_id=call_id,
+                role=self._role,
+                call_type=call_type,
+                started=started,
+                request_metadata=_safe_request_metadata(self._model),
+                error=exc,
+            )
+            raise
+        self._tracker.finish_call(
+            call_number=call_number,
+            call_id=call_id,
+            role=self._role,
+            call_type=call_type,
+            started=started,
+            request_metadata=_safe_request_metadata(self._model),
+            error=None,
+        )
+        return result
+
+
+class _ObservedEvidenceProvider:
+    def __init__(
+        self,
+        provider: Any,
+        *,
+        phase: str,
+        case_id: str,
+        progress: ProgressReporter,
+    ) -> None:
+        self._provider = provider
+        self._phase = str(phase)
+        self._case_id = str(case_id)
+        self._progress = progress
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._provider, name)
+
+    def __call__(self, request: dict[str, Any]) -> Any:
+        return self._invoke(request)
+
+    def provide_scene_quality_evidence(
+        self,
+        request: dict[str, Any],
+    ) -> Any:
+        return self._invoke(request)
+
+    def _invoke(self, request: dict[str, Any]) -> Any:
+        metric, group_id = _request_scope(request)
+        started = time.monotonic()
+        self._progress.emit(
+            "evidence_render_started",
+            case_id=self._case_id,
+            phase=self._phase,
+            metric=metric,
+            group_id=group_id,
+        )
+        try:
+            result = self._provider(request)
+        except Exception as exc:
+            self._progress.emit(
+                "evidence_render_failed",
+                case_id=self._case_id,
+                phase=self._phase,
+                metric=metric,
+                group_id=group_id,
+                duration_seconds=round(
+                    max(0.0, time.monotonic() - started),
+                    3,
+                ),
+                error_type=type(exc).__name__,
+            )
+            raise
+        usage = getattr(self._provider, "last_call_usage", None)
+        usage = usage if isinstance(usage, dict) else {}
+        self._progress.emit(
+            "evidence_render_completed",
+            case_id=self._case_id,
+            phase=self._phase,
+            metric=metric,
+            group_id=group_id,
+            duration_seconds=round(
+                max(0.0, time.monotonic() - started),
+                3,
+            ),
+            evidence_count=_evidence_count(result),
+            cache_hit=usage.get("cache_hit"),
+            internal_selector_calls=usage.get("selector_calls"),
+            camera_actions=usage.get("camera_actions"),
+        )
+        return result
+
+
+class _ObservedRenderer:
+    def __init__(
+        self,
+        renderer: Any,
+        *,
+        phase: str,
+        case_id: str,
+        progress: ProgressReporter,
+    ) -> None:
+        self._renderer = renderer
+        self._phase = str(phase)
+        self._case_id = str(case_id)
+        self._progress = progress
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._renderer, name)
+
+    def render(self, request: Any) -> Any:
+        metric = str(getattr(request, "metric", "") or "unknown")
+        context = getattr(request, "context", None)
+        context = context if isinstance(context, dict) else {}
+        group_scope = context.get("group_scope")
+        group_id = (
+            str(group_scope.get("group_id") or "scene")
+            if isinstance(group_scope, dict)
+            else "scene"
+        )
+        started = time.monotonic()
+        self._progress.emit(
+            "repair_render_started",
+            case_id=self._case_id,
+            phase=self._phase,
+            metric=metric,
+            group_id=group_id,
+        )
+        try:
+            result = self._renderer.render(request)
+        except Exception as exc:
+            self._progress.emit(
+                "repair_render_failed",
+                case_id=self._case_id,
+                phase=self._phase,
+                metric=metric,
+                group_id=group_id,
+                duration_seconds=round(
+                    max(0.0, time.monotonic() - started),
+                    3,
+                ),
+                error_type=type(exc).__name__,
+            )
+            raise
+        self._progress.emit(
+            "repair_render_completed",
+            case_id=self._case_id,
+            phase=self._phase,
+            metric=metric,
+            group_id=group_id,
+            duration_seconds=round(
+                max(0.0, time.monotonic() - started),
+                3,
+            ),
+            evidence_count=_evidence_count(result),
+        )
+        return result
 
 
 def main() -> None:
@@ -135,6 +507,11 @@ def main() -> None:
     if not blender_bin.is_file():
         raise FileNotFoundError(f"Blender executable does not exist: {blender_bin}")
 
+    output_root.mkdir(parents=True, exist_ok=True)
+    progress = ProgressReporter(
+        output_root / "progress.jsonl",
+        terminal=args.terminal_progress,
+    )
     renderer_config = renderer_config_from_args(args, blender_bin=blender_bin)
     control = resolved_control()
     experiment = build_experiment_plan(
@@ -150,7 +527,6 @@ def main() -> None:
         resume=args.resume,
         continue_on_error=args.continue_on_error,
     )
-    output_root.mkdir(parents=True, exist_ok=True)
     atomic_write_json(output_root / "experiment_plan.json", experiment)
 
     started = time.monotonic()
@@ -167,8 +543,17 @@ def main() -> None:
         "layers_executed": [L1, L3],
         "layers_not_executed": [L2, L4],
         "cases": [],
+        "progress_path": str(progress.path),
+        "api_usage": api_usage_summary([]),
     }
     atomic_write_json(output_root / "run_manifest.json", run_manifest)
+    progress.emit(
+        "run_started",
+        case_count=len(cases),
+        metrics=list(metrics),
+        max_workers=args.max_workers,
+        output_root=str(output_root),
+    )
 
     case_kwargs = {
         "dataset_root": dataset_root,
@@ -179,12 +564,15 @@ def main() -> None:
         "renderer_config": renderer_config,
         "control_config": control.to_dict(),
         "resume": args.resume,
+        "progress": progress,
     }
     if args.max_workers == 1:
         for index, case in enumerate(cases, start=1):
-            print(
-                f"[{index:03d}/{len(cases):03d}] {case['case_id']} starting",
-                flush=True,
+            progress.emit(
+                "case_started",
+                case_id=str(case["case_id"]),
+                case_index=index,
+                case_count=len(cases),
             )
             try:
                 record = run_case(case=case, **case_kwargs)
@@ -196,21 +584,37 @@ def main() -> None:
                 )
                 failures.append(failure)
                 run_records.append(failure)
-                print(
-                    f"[{index:03d}/{len(cases):03d}] "
-                    f"{case['case_id']} FAILED {failure['error_type']}",
-                    flush=True,
+                progress.emit(
+                    "case_failed",
+                    case_id=str(case["case_id"]),
+                    case_index=index,
+                    case_count=len(cases),
+                    error_type=failure["error_type"],
                 )
                 if not args.continue_on_error:
                     break
             else:
                 run_records.append(record)
-                print(
-                    f"[{index:03d}/{len(cases):03d}] "
-                    f"{case['case_id']} {record['status']}",
-                    flush=True,
+                progress.emit(
+                    "case_completed",
+                    case_id=str(case["case_id"]),
+                    case_index=index,
+                    case_count=len(cases),
+                    status=record["status"],
+                    elapsed_seconds=round(
+                        float(record.get("elapsed_seconds") or 0.0),
+                        3,
+                    ),
+                    api_usage=record.get("api_usage"),
                 )
     else:
+        for index, case in enumerate(cases, start=1):
+            progress.emit(
+                "case_queued",
+                case_id=str(case["case_id"]),
+                case_index=index,
+                case_count=len(cases),
+            )
         with ThreadPoolExecutor(max_workers=args.max_workers) as executor:
             future_to_case: dict[Future[dict[str, Any]], dict[str, Any]] = {
                 executor.submit(run_case, case=case, **case_kwargs): case
@@ -231,10 +635,12 @@ def main() -> None:
                     )
                     failures.append(failure)
                     run_records.append(failure)
-                    print(
-                        f"[{completed:03d}/{len(cases):03d}] "
-                        f"{case['case_id']} FAILED {failure['error_type']}",
-                        flush=True,
+                    progress.emit(
+                        "case_failed",
+                        case_id=str(case["case_id"]),
+                        completed_count=completed,
+                        case_count=len(cases),
+                        error_type=failure["error_type"],
                     )
                     if not args.continue_on_error:
                         for pending in future_to_case:
@@ -242,10 +648,17 @@ def main() -> None:
                         break
                 else:
                     run_records.append(record)
-                    print(
-                        f"[{completed:03d}/{len(cases):03d}] "
-                        f"{case['case_id']} {record['status']}",
-                        flush=True,
+                    progress.emit(
+                        "case_completed",
+                        case_id=str(case["case_id"]),
+                        completed_count=completed,
+                        case_count=len(cases),
+                        status=record["status"],
+                        elapsed_seconds=round(
+                            float(record.get("elapsed_seconds") or 0.0),
+                            3,
+                        ),
+                        api_usage=record.get("api_usage"),
                     )
 
     ordered_records = sorted(
@@ -265,8 +678,16 @@ def main() -> None:
         elapsed_seconds=elapsed,
         cases=ordered_records,
         summary_path=str((output_root / "summary.json").resolve()),
+        api_usage=deepcopy(summary["api_usage"]),
     )
     atomic_write_json(output_root / "run_manifest.json", run_manifest)
+    progress.emit(
+        "run_completed",
+        status=run_manifest["status"],
+        elapsed_seconds=round(elapsed, 3),
+        totals=summary["totals"],
+        api_usage=summary["api_usage"],
+    )
     print(json.dumps(summary["totals"], indent=2), flush=True)
     if failures:
         raise SystemExit(1)
@@ -305,6 +726,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--max-cases", type=positive_int, default=None)
     parser.add_argument("--max-workers", type=positive_int, default=1)
+    parser.add_argument(
+        "--terminal-progress",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Mirror progress.jsonl events to stdout. Persistent progress "
+            "events are always written."
+        ),
+    )
     parser.add_argument(
         "--resume",
         action=argparse.BooleanOptionalAction,
@@ -603,6 +1033,64 @@ def build_experiment_plan(
                 "enabled": True,
                 "metrics": list(metrics),
                 "scope": "metric_policy_then_scene_level_aggregation",
+                "functional_global_probe_policy": {
+                    "enabled_when_metric_selected": (
+                        "functional_consistency" in metrics
+                    ),
+                    "planner_input": (
+                        "one_global_image_plus_id_category_groups_boundary"
+                    ),
+                    "discovery_schema_version": (
+                        FUNCTIONAL_DISCOVERY_SCHEMA_VERSION
+                    ),
+                    "affordance_schema_version": (
+                        FUNCTIONAL_AFFORDANCE_SCHEMA_VERSION
+                    ),
+                    "relation_schema_version": (
+                        FUNCTIONAL_RELATION_SCHEMA_VERSION
+                    ),
+                    "discovery_outputs": [
+                        "directed_surface_targets",
+                        "within_group_correspondences",
+                        "cross_group_correspondences",
+                        "approach_clearance_targets",
+                        "boundary_sensitive_targets",
+                        "unusual_unconfirmed",
+                    ],
+                    "unusual_confirmation_scope": "group_local",
+                    "usable_surface_decoder": {
+                        "trusted_side_ids": [
+                            "local_pos_x",
+                            "local_neg_x",
+                            "local_pos_y",
+                            "local_neg_y",
+                        ],
+                        "decode_scope": (
+                            "directed_or_uncertain_clearance_targets_"
+                            "before_probe_budget"
+                        ),
+                        "freeform_pose": False,
+                    },
+                    "probe_kinds": [
+                        "functional_frontage",
+                        "functional_correspondence",
+                        "approach_clearance",
+                    ],
+                    "max_probe_units": 4,
+                    "candidate_count_by_probe_kind": {
+                        "functional_frontage": 4,
+                        "functional_correspondence": 4,
+                        "approach_clearance": 4,
+                    },
+                    "selected_raw_views_per_unit": 1,
+                    "preferred_lens_mm": 32.0,
+                    "elevation_range_degrees": [8.0, 16.0],
+                    "source_scene_modified": False,
+                    "judge_presentation": "raw_rgb_only",
+                },
+                "placement_discovery_schema_version": (
+                    PLACEMENT_DISCOVERY_SCHEMA_VERSION
+                ),
             },
             L4: {"enabled": False},
         },
@@ -613,6 +1101,22 @@ def build_experiment_plan(
         },
         "renderer": deepcopy(renderer_config),
         "control": deepcopy(control),
+        "observability": {
+            "terminal_progress_default": True,
+            "progress_jsonl": str(
+                (output_root / "progress.jsonl").resolve()
+            ),
+            "case_api_calls_jsonl": "cases/<case_id>/api_calls.jsonl",
+            "case_api_usage_json": "cases/<case_id>/api_usage.json",
+            "api_call_definition": (
+                "one logical OpenAI-compatible chat-completions invocation; "
+                "transport retries inside that invocation are not counted "
+                "separately"
+            ),
+            "token_usage_source": (
+                "endpoint response usage fields only; never estimated"
+            ),
+        },
         "max_workers": max_workers,
         "resume": resume,
         "continue_on_error": continue_on_error,
@@ -632,9 +1136,14 @@ def run_case(
     renderer_config: dict[str, Any],
     control_config: dict[str, Any],
     resume: bool,
+    progress: ProgressReporter | None = None,
 ) -> dict[str, Any]:
     del dataset_root
     case_id = str(case["case_id"])
+    progress = progress or ProgressReporter(
+        output_root / "progress.jsonl",
+        terminal=False,
+    )
     source_root = Path(str(case["case_root"])).resolve()
     case_manifest = read_json(source_root / "case_manifest.json")
     paths = case_paths(source_root, case_manifest)
@@ -660,6 +1169,18 @@ def run_case(
             expected_fingerprint=fingerprint,
             case_out=case_out,
         ):
+            api_calls_path = case_out / "api_calls.jsonl"
+            api_usage = api_usage_summary(
+                read_api_call_records(api_calls_path)
+            )
+            progress.emit(
+                "case_resumed",
+                case_id=case_id,
+                elapsed_seconds=float(
+                    existing.get("elapsed_seconds") or 0.0
+                ),
+                api_usage=api_usage,
+            )
             return {
                 "case_id": case_id,
                 "status": "resumed",
@@ -690,6 +1211,11 @@ def run_case(
                 "control_manifest_path": str(
                     (case_out / "control_manifest.json").resolve()
                 ),
+                "api_calls_path": str(api_calls_path.resolve()),
+                "api_usage_path": str(
+                    (case_out / "api_usage.json").resolve()
+                ),
+                "api_usage": api_usage,
             }
         if resume:
             raise RuntimeError(
@@ -701,6 +1227,12 @@ def run_case(
         )
 
     case_out.mkdir(parents=True, exist_ok=True)
+    api_tracker = APICallTracker(
+        case_id=case_id,
+        calls_path=case_out / "api_calls.jsonl",
+        usage_path=case_out / "api_usage.json",
+        progress=progress,
+    )
     started = time.monotonic()
     case_run_manifest = {
         "schema_version": CASE_SCHEMA_VERSION,
@@ -718,8 +1250,17 @@ def run_case(
         "l1_binary_failure_policy": deepcopy(
             L1_BINARY_FAILURE_POLICY
         ),
+        "progress_path": str(progress.path),
+        "api_calls_path": str(api_tracker.calls_path),
+        "api_usage_path": str(api_tracker.usage_path),
+        "api_usage": api_tracker.summary(),
     }
     atomic_write_json(existing_manifest_path, case_run_manifest)
+    progress.emit(
+        "case_setup_started",
+        case_id=case_id,
+        selected_l3_metrics=list(metrics),
+    )
 
     collision_geometry = load_collision_geometry_manifest(
         paths["collision_geometry"]
@@ -741,75 +1282,169 @@ def run_case(
 
     judge_config = model_config(route, role="judge")
     selector_config = model_config(route, role="camera-selector")
-    grouping_model = build_grouping_model(route)
-    raw_judge = build_openai_compatible_vlm_judge(judge_config)
-    vlm_selector = build_openai_compatible_camera_selector(selector_config)
-    renderer = BlenderRenderer(**renderer_config)
-    l1_provider = CameraEvidenceProvider(
-        renderer=renderer,
-        blend_file=paths["blend"],
-        out_dir=case_out / "l1_camera",
-        mode="auto",
-        selector=None,
-        max_views=2,
-        max_steps=1,
-        candidate_count=6,
-        collision_overlay=True,
-        collision_contour=True,
-        collision_geometry=collision_geometry,
+    grouping_model = api_tracker.observe_model(
+        build_grouping_model(route),
+        role="grouping",
     )
-    l3_provider = CameraEvidenceProvider(
-        renderer=renderer,
-        blend_file=paths["blend"],
-        out_dir=case_out / "l3_initial_camera",
-        mode="visibility_ranked",
-        selector=None,
-        max_views=2,
-        max_steps=1,
-        candidate_count=6,
-        collision_overlay=False,
-        collision_contour=False,
-        collision_geometry=collision_geometry,
-        active_repair=False,
+    raw_judge = build_openai_compatible_vlm_judge(judge_config)
+    if callable(
+        getattr(getattr(raw_judge, "model", None), "chat_messages", None)
+    ):
+        raw_judge.model = api_tracker.observe_model(
+            raw_judge.model,
+            role="judge",
+        )
+    vlm_selector = build_openai_compatible_camera_selector(selector_config)
+    if callable(
+        getattr(getattr(vlm_selector, "model", None), "chat_messages", None)
+    ):
+        vlm_selector.model = api_tracker.observe_model(
+            vlm_selector.model,
+            role="camera_selector",
+        )
+    renderer = BlenderRenderer(**renderer_config)
+    l1_provider = _ObservedEvidenceProvider(
+        CameraEvidenceProvider(
+            renderer=renderer,
+            blend_file=paths["blend"],
+            out_dir=case_out / "l1_camera",
+            mode="auto",
+            selector=None,
+            max_views=2,
+            max_steps=1,
+            candidate_count=6,
+            collision_overlay=True,
+            collision_contour=True,
+            collision_geometry=collision_geometry,
+        ),
+        phase="l1_initial_evidence",
+        case_id=case_id,
+        progress=progress,
+    )
+    l3_provider = _ObservedEvidenceProvider(
+        CameraEvidenceProvider(
+            renderer=renderer,
+            blend_file=paths["blend"],
+            out_dir=case_out / "l3_initial_camera",
+            mode="visibility_ranked",
+            selector=None,
+            max_views=2,
+            max_steps=1,
+            candidate_count=6,
+            collision_overlay=False,
+            collision_contour=False,
+            collision_geometry=collision_geometry,
+            active_repair=False,
+        ),
+        phase="l3_initial_evidence",
+        case_id=case_id,
+        progress=progress,
+    )
+    functional_probe_provider = _ObservedEvidenceProvider(
+        CameraEvidenceProvider(
+            renderer=renderer,
+            blend_file=paths["blend"],
+            out_dir=case_out / "l3_functional_probes",
+            mode="query_cov",
+            selector=vlm_selector,
+            max_views=1,
+            max_steps=0,
+            candidate_count=6,
+            collision_overlay=False,
+            collision_contour=False,
+            collision_geometry=collision_geometry,
+            active_repair=False,
+            usable_surface_cache_dir=(
+                output_root / "_usable_surface_cache"
+            ),
+        ),
+        phase="l3_functional_probe",
+        case_id=case_id,
+        progress=progress,
     )
     deterministic_selector = DeterministicLocalCameraSelector(
         candidate_policy=l3_provider.candidate_policy
     )
-    evidence_renderer = CameraViewEvidenceRenderer(
-        renderer=renderer,
-        blend_file=paths["blend"],
-        out_dir=case_out / "repair_camera",
+    evidence_renderer = _ObservedRenderer(
+        CameraViewEvidenceRenderer(
+            renderer=renderer,
+            blend_file=paths["blend"],
+            out_dir=case_out / "repair_camera",
+        ),
+        phase="final_evidence",
+        case_id=case_id,
+        progress=progress,
     )
-    preview_renderer = CameraCandidatePreviewRenderer(
-        renderer=renderer,
-        blend_file=paths["blend"],
-        out_dir=case_out / "repair_camera",
+    preview_renderer = _ObservedRenderer(
+        CameraCandidatePreviewRenderer(
+            renderer=renderer,
+            blend_file=paths["blend"],
+            out_dir=case_out / "repair_camera",
+        ),
+        phase="candidate_preview",
+        case_id=case_id,
+        progress=progress,
     )
 
-    report = run_evaluate(
-        scene=scene,
-        out=case_out / "evaluation_report.json",
-        scene_request=promptless_scene_request(scene, case),
-        collision_geometry=collision_geometry,
-        render_evidence=overview_evidence,
-        grouping_visual_evidence=grouping_evidence,
-        grouping_identity_legend=identity_legend,
-        vlm_judge=raw_judge,
-        grouping_model=grouping_model,
-        evaluation_profile=promptless_l1_l3_profile(),
-        p0b_official_mode=L1_BINARY_FAILURE_POLICY["p0b_official_mode"],
-        p0b_local_view_provider=l1_provider,
-        l3_initial_evidence_provider=l3_provider,
-        camera_selector=vlm_selector,
-        deterministic_camera_selector=deterministic_selector,
-        vlm_camera_selector=vlm_selector,
-        evidence_renderer=evidence_renderer,
-        candidate_preview_renderer=preview_renderer,
-        scene_quality_config=scene_quality_config(metrics),
-        asset_policy=camera_cal_asset_policy(),
-        specification_contract=None,
-        authorized_deviations=[],
-        vlm_evaluation_control=control_config,
+    progress.emit(
+        "evaluation_started",
+        case_id=case_id,
+        layers=[L1, L3],
+        metrics=list(metrics),
+    )
+    try:
+        report = run_evaluate(
+            scene=scene,
+            out=case_out / "evaluation_report.json",
+            scene_request=promptless_scene_request(scene, case),
+            collision_geometry=collision_geometry,
+            render_evidence=overview_evidence,
+            grouping_visual_evidence=grouping_evidence,
+            grouping_identity_legend=identity_legend,
+            vlm_judge=raw_judge,
+            grouping_model=grouping_model,
+            evaluation_profile=promptless_l1_l3_profile(),
+            p0b_official_mode=L1_BINARY_FAILURE_POLICY["p0b_official_mode"],
+            p0b_local_view_provider=l1_provider,
+            l3_initial_evidence_provider=l3_provider,
+            functional_evidence_planner=vlm_selector,
+            functional_probe_evidence_provider=(
+                functional_probe_provider
+            ),
+            camera_selector=vlm_selector,
+            deterministic_camera_selector=deterministic_selector,
+            vlm_camera_selector=vlm_selector,
+            evidence_renderer=evidence_renderer,
+            candidate_preview_renderer=preview_renderer,
+            scene_quality_config=scene_quality_config(metrics),
+            asset_policy=camera_cal_asset_policy(),
+            specification_contract=None,
+            authorized_deviations=[],
+            vlm_evaluation_control=control_config,
+        )
+    except Exception as exc:
+        api_usage = api_tracker.summary()
+        atomic_write_json(api_tracker.usage_path, api_usage)
+        progress.emit(
+            "evaluation_failed",
+            case_id=case_id,
+            duration_seconds=round(
+                max(0.0, time.monotonic() - started),
+                3,
+            ),
+            error_type=type(exc).__name__,
+            api_usage=api_usage,
+        )
+        raise
+    api_usage = api_tracker.summary()
+    progress.emit(
+        "evaluation_completed",
+        case_id=case_id,
+        duration_seconds=round(
+            max(0.0, time.monotonic() - started),
+            3,
+        ),
+        api_usage=api_usage,
     )
     grouping_report = deepcopy(report["reports"]["object_grouping"])
     l1_report = deepcopy(report["layer_reports"][L1])
@@ -879,6 +1514,7 @@ def run_case(
         l1_engineering_failure=bool(l1_failures),
         l1_engineering_failure_count=len(l1_failures),
         binary_response_schema_validation=schema_validation,
+        api_usage=api_usage,
         paths={
             "evaluation_report": str(
                 (case_out / "evaluation_report.json").resolve()
@@ -897,6 +1533,8 @@ def run_case(
             "control_manifest": str(
                 (case_out / "control_manifest.json").resolve()
             ),
+            "api_calls": str(api_tracker.calls_path),
+            "api_usage": str(api_tracker.usage_path),
         },
     )
     atomic_write_json(existing_manifest_path, case_run_manifest)
@@ -922,6 +1560,9 @@ def run_case(
         "control_manifest_path": str(
             (case_out / "control_manifest.json").resolve()
         ),
+        "api_calls_path": str(api_tracker.calls_path),
+        "api_usage_path": str(api_tracker.usage_path),
+        "api_usage": api_usage,
     }
 
 
@@ -941,7 +1582,7 @@ def model_config(route: dict[str, Any], *, role: str) -> dict[str, Any]:
         "retry_backoff_seconds": 1.0,
         "max_images": max_images,
         "max_preview_images": max_images,
-        "max_context_chars": 30000,
+        "max_context_chars": 120000,
         "require_api_key": True,
     }
 
@@ -953,7 +1594,7 @@ def build_grouping_model(route: dict[str, Any]) -> OpenAICompatibleModel:
         model_id=str(route["model"]),
         api_key_env=str(route["api_key_env"]),
         temperature=0.0,
-        max_tokens=2048,
+        max_tokens=GROUPING_COMPLETION_MAX_TOKENS,
         timeout_seconds=3000,
         response_format_json=False,
         max_retries=1,
@@ -1105,6 +1746,10 @@ def case_input_fingerprint(
             "source_prompt_used": False,
             "l3_metric_prompt_version": L3_METRIC_PROMPT_VERSION,
             "l3_prompt_source_sha256": file_sha256(prompt_path),
+            "functional_probe_implementation_sha256": {
+                relative: file_sha256(PROJECT_ROOT / relative)
+                for relative in FUNCTIONAL_PROBE_IMPLEMENTATION_FILES
+            },
             "profile": promptless_l1_l3_profile(),
             "scene_quality_config": scene_quality_config(metrics),
             "asset_policy": camera_cal_asset_policy(),
@@ -1170,14 +1815,23 @@ def build_scene_comparison(
         unclear = human.get("unclear") is True
         evaluated = predicted in {"valid", "invalid"}
         included = bool(not unclear and expected in {"valid", "invalid"} and evaluated)
+        human_object_ids = _ordered_object_ids(
+            human.get("affected_object_ids")
+        )
+        model_object_ids = _model_anomaly_object_ids(model)
+        anomaly_level = _anomaly_object_comparison(
+            expected=expected,
+            predicted=predicted,
+            unclear=unclear,
+            human_object_ids=human_object_ids,
+            model_object_ids=model_object_ids,
+        )
         comparisons[metric] = {
             "human": {
                 "expected": expected,
                 "anomaly": human.get("anomaly"),
                 "unclear": unclear,
-                "affected_object_ids": list(
-                    human.get("affected_object_ids") or []
-                ),
+                "affected_object_ids": list(human_object_ids),
                 "issue": human.get("issue"),
             },
             "model": {
@@ -1196,16 +1850,22 @@ def build_scene_comparison(
                     else None
                 ),
                 "judge_call_count": model.get("judge_call_count"),
+                "anomaly_object_ids": list(model_object_ids),
                 "group_results": deepcopy(model.get("group_results") or []),
             },
             "included_in_accuracy": included,
             "matches": predicted == expected if included else None,
+            "anomaly_level": anomaly_level,
         }
     return {
         "schema_version": COMPARISON_SCHEMA_VERSION,
         "case_id": case_id,
         "source_prompt_used": False,
         "comparison_scope": "scene_level_metric_verdict",
+        "comparison_scopes": [
+            "scene_level_metric_verdict",
+            "anomaly_object_attribution",
+        ],
         "metrics": comparisons,
     }
 
@@ -1219,6 +1879,119 @@ def metric_prediction(report: dict[str, Any]) -> str:
     if score == 0.0:
         return "invalid"
     return "unresolved"
+
+
+def _model_anomaly_object_ids(
+    report: dict[str, Any],
+) -> tuple[str, ...]:
+    findings = report.get("final_object_findings")
+    if isinstance(findings, list):
+        values = [
+            item.get("object_id")
+            for item in findings
+            if isinstance(item, dict)
+        ]
+        normalized = _ordered_object_ids(values)
+        if normalized:
+            return normalized
+    claims = report.get("final_defect_claims")
+    if not isinstance(claims, list):
+        judgement = report.get("judgement")
+        judgement = judgement if isinstance(judgement, dict) else {}
+        claims = judgement.get("defects")
+    return _ordered_object_ids(
+        target_id
+        for claim in claims or []
+        if isinstance(claim, dict)
+        for target_id in claim.get("target_ids") or []
+    )
+
+
+def _ordered_object_ids(value: Any) -> tuple[str, ...]:
+    if isinstance(value, str):
+        values: Any = [value]
+    else:
+        values = value
+    if not isinstance(values, (list, tuple, set)) and not hasattr(
+        values,
+        "__iter__",
+    ):
+        return ()
+    return tuple(
+        dict.fromkeys(
+            str(item).strip()
+            for item in values
+            if isinstance(item, (str, int))
+            and str(item).strip()
+        )
+    )
+
+
+def _anomaly_object_comparison(
+    *,
+    expected: str,
+    predicted: str,
+    unclear: bool,
+    human_object_ids: tuple[str, ...],
+    model_object_ids: tuple[str, ...],
+) -> dict[str, Any]:
+    human_set = set(human_object_ids)
+    model_set = set(model_object_ids)
+    included = bool(
+        not unclear
+        and expected == "invalid"
+        and predicted in {"valid", "invalid"}
+        and bool(human_set)
+    )
+    true_positive = tuple(
+        item for item in human_object_ids if item in model_set
+    )
+    false_negative = tuple(
+        item for item in human_object_ids if item not in model_set
+    )
+    false_positive = tuple(
+        item for item in model_object_ids if item not in human_set
+    )
+    precision = (
+        len(true_positive) / len(model_set)
+        if included and model_set
+        else None
+    )
+    recall = (
+        len(true_positive) / len(human_set)
+        if included and human_set
+        else None
+    )
+    return {
+        "scope": "anomaly_object_attribution",
+        "included_in_accuracy": included,
+        "human_object_ids": list(human_object_ids),
+        "model_object_ids": list(model_object_ids),
+        "true_positive_object_ids": list(true_positive),
+        "false_negative_object_ids": list(false_negative),
+        "false_positive_object_ids": list(false_positive),
+        "precision": precision,
+        "recall": recall,
+        "exact_match": (
+            human_set == model_set if included else None
+        ),
+        "covered_any_human_anomaly": (
+            bool(true_positive)
+            if included and human_set
+            else None
+        ),
+        "exclusion_reason": (
+            None
+            if included
+            else "human_annotation_unclear"
+            if unclear
+            else "human_anomaly_missing_object_ids"
+            if expected == "invalid" and not human_set
+            else "no_human_anomaly_scope"
+            if expected == "valid"
+            else "scene_or_model_unresolved"
+        ),
+    }
 
 
 def collect_l1_engineering_failures(
@@ -1338,6 +2111,12 @@ def record_case_failure(
     case_id = str(case["case_id"])
     case_out = output_root / "cases" / case_id
     case_out.mkdir(parents=True, exist_ok=True)
+    api_calls_path = case_out / "api_calls.jsonl"
+    api_usage_path = case_out / "api_usage.json"
+    api_usage = api_usage_summary(
+        read_api_call_records(api_calls_path)
+    )
+    atomic_write_json(api_usage_path, api_usage)
     failure = {
         "schema_version": CASE_SCHEMA_VERSION,
         "case_id": case_id,
@@ -1345,6 +2124,9 @@ def record_case_failure(
         "error_type": type(error).__name__,
         "error": str(error),
         "failed_at": utc_now(),
+        "api_calls_path": str(api_calls_path.resolve()),
+        "api_usage_path": str(api_usage_path.resolve()),
+        "api_usage": api_usage,
     }
     schema_audit = response_schema_audit_from_exception(error)
     if schema_audit is not None:
@@ -1359,6 +2141,9 @@ def record_case_failure(
             final_decision_status="unresolved",
             error_type=failure["error_type"],
             error=failure["error"],
+            api_usage=api_usage,
+            api_calls_path=str(api_calls_path.resolve()),
+            api_usage_path=str(api_usage_path.resolve()),
         )
         if schema_audit is not None:
             manifest["binary_response_schema_validation"] = schema_audit
@@ -1387,8 +2172,14 @@ def build_summary(
     binary_schema_repair_failures = 0
     total_judge_calls = 0
     total_selector_calls = 0
+    all_api_call_records: list[dict[str, Any]] = []
     latencies: list[float] = []
     for record in case_records:
+        api_calls_path = record.get("api_calls_path")
+        if isinstance(api_calls_path, str) and api_calls_path:
+            all_api_call_records.extend(
+                read_api_call_records(Path(api_calls_path))
+            )
         if record.get("status") not in {"complete", "resumed"}:
             for summary in metric_summaries.values():
                 summary["case_failures"] += 1
@@ -1463,6 +2254,27 @@ def build_summary(
                     summary["correct"] += 1
                 else:
                     summary["incorrect"] += 1
+            anomaly_level = item.get("anomaly_level")
+            anomaly_level = (
+                anomaly_level
+                if isinstance(anomaly_level, dict)
+                else {}
+            )
+            if anomaly_level.get("included_in_accuracy") is True:
+                summary["anomaly_object_cases"] += 1
+                if anomaly_level.get("exact_match") is True:
+                    summary["anomaly_object_exact_correct"] += 1
+                else:
+                    summary["anomaly_object_exact_incorrect"] += 1
+                summary["anomaly_object_true_positive"] += len(
+                    anomaly_level.get("true_positive_object_ids") or []
+                )
+                summary["anomaly_object_false_negative"] += len(
+                    anomaly_level.get("false_negative_object_ids") or []
+                )
+                summary["anomaly_object_false_positive"] += len(
+                    anomaly_level.get("false_positive_object_ids") or []
+                )
             metric_report = report_metrics.get(metric)
             metric_report = (
                 metric_report if isinstance(metric_report, dict) else {}
@@ -1490,9 +2302,57 @@ def build_summary(
         summary["accuracy"] = (
             summary["correct"] / denominator if denominator else None
         )
+        object_denominator = (
+            summary["anomaly_object_exact_correct"]
+            + summary["anomaly_object_exact_incorrect"]
+        )
+        summary["anomaly_object_exact_accuracy"] = (
+            summary["anomaly_object_exact_correct"]
+            / object_denominator
+            if object_denominator
+            else None
+        )
+        object_precision_denominator = (
+            summary["anomaly_object_true_positive"]
+            + summary["anomaly_object_false_positive"]
+        )
+        object_recall_denominator = (
+            summary["anomaly_object_true_positive"]
+            + summary["anomaly_object_false_negative"]
+        )
+        summary["anomaly_object_precision"] = (
+            summary["anomaly_object_true_positive"]
+            / object_precision_denominator
+            if object_precision_denominator
+            else None
+        )
+        summary["anomaly_object_recall"] = (
+            summary["anomaly_object_true_positive"]
+            / object_recall_denominator
+            if object_recall_denominator
+            else None
+        )
+        precision = summary["anomaly_object_precision"]
+        recall = summary["anomaly_object_recall"]
+        summary["anomaly_object_f1"] = (
+            (
+                2.0 * precision * recall / (precision + recall)
+                if precision + recall > 0.0
+                else 0.0
+            )
+            if isinstance(precision, float)
+            and isinstance(recall, float)
+            else None
+        )
         total_judge_calls += summary["judge_calls"]
         total_selector_calls += summary["vlm_selector_calls"]
         summary["grouping_failures"] = grouping_failures
+    api_usage = api_usage_summary(all_api_call_records)
+    operation_calls = (
+        api_usage.get("operation_calls")
+        if isinstance(api_usage.get("operation_calls"), dict)
+        else {}
+    )
     return {
         "schema_version": SUMMARY_SCHEMA_VERSION,
         "status": (
@@ -1503,6 +2363,10 @@ def build_summary(
             else "failed"
         ),
         "source_prompt_used": False,
+        "comparison_scopes": [
+            "scene_level_metric_verdict",
+            "anomaly_object_attribution",
+        ],
         "elapsed_seconds": elapsed_seconds,
         "average_case_latency_seconds": (
             sum(latencies) / len(latencies) if latencies else None
@@ -1531,7 +2395,31 @@ def build_summary(
             ),
             "judge_calls": total_judge_calls,
             "vlm_camera_selector_calls": total_selector_calls,
+            "functional_discovery_calls": int(
+                operation_calls.get("functional_discovery") or 0
+            ),
+            "functional_affordance_calls": int(
+                operation_calls.get("functional_affordance") or 0
+            ),
+            "functional_relation_calls": int(
+                operation_calls.get("functional_relation") or 0
+            ),
+            "placement_discovery_calls": int(
+                operation_calls.get("placement_discovery") or 0
+            ),
+            "usable_surface_decoder_calls": int(
+                operation_calls.get("usable_surface_decoder") or 0
+            ),
+            "vlm_camera_selector_api_calls": int(
+                operation_calls.get("camera_selector") or 0
+            ),
+            "judge_api_calls": int(
+                operation_calls.get("judge") or 0
+            ),
+            "api_calls_number": api_usage["api_calls_number"],
+            "tokens_usage": deepcopy(api_usage["tokens_usage"]),
         },
+        "api_usage": api_usage,
         "metrics": metric_summaries,
     }
 
@@ -1545,6 +2433,17 @@ def empty_metric_summary(*, total: int) -> dict[str, Any]:
         "correct": 0,
         "incorrect": 0,
         "accuracy": None,
+        "accuracy_scope": "scene_level_metric_verdict",
+        "anomaly_object_cases": 0,
+        "anomaly_object_exact_correct": 0,
+        "anomaly_object_exact_incorrect": 0,
+        "anomaly_object_exact_accuracy": None,
+        "anomaly_object_true_positive": 0,
+        "anomaly_object_false_negative": 0,
+        "anomaly_object_false_positive": 0,
+        "anomaly_object_precision": None,
+        "anomaly_object_recall": None,
+        "anomaly_object_f1": None,
         "predicted_distribution": {"valid": 0, "invalid": 0},
         "human_distribution": {"valid": 0, "invalid": 0},
         "grouping_failures": 0,
@@ -1645,6 +2544,356 @@ def metric_failure_counts(metric_report: dict[str, Any]) -> dict[str, int]:
         "camera_render_failures": camera_failures,
         "judge_failures": judge_failures,
     }
+
+
+def read_api_call_records(path: Path) -> list[dict[str, Any]]:
+    if not path.is_file():
+        return []
+    records: list[dict[str, Any]] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            value = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, dict):
+            records.append(value)
+    return records
+
+
+def api_usage_summary(
+    records: list[dict[str, Any]],
+) -> dict[str, Any]:
+    safe_records = [
+        item for item in records if isinstance(item, dict)
+    ]
+    overall = _api_usage_bucket(safe_records)
+    roles = sorted(
+        {
+            str(item.get("role") or "unknown")
+            for item in safe_records
+        }
+    )
+    call_types = sorted(
+        {
+            str(item.get("call_type") or "chat")
+            for item in safe_records
+        }
+    )
+    functional_affordance_type = (
+        "vlm_camera_pose.functional_discovery.affordance"
+    )
+    functional_relation_type = (
+        "vlm_camera_pose.functional_discovery.relations"
+    )
+    placement_discovery_type = (
+        "vlm_camera_pose.placement_discovery"
+    )
+    usable_surface_type = "vlm_camera_pose.usable_surface_decode"
+    camera_selector_types = {
+        call_type
+        for call_type in call_types
+        if call_type.startswith("camera_selector_")
+        or call_type
+        in {
+            "vlm_camera_pose.active_fallback",
+            "vlm_camera_pose.query_cov",
+        }
+    }
+    return {
+        "schema_version": API_USAGE_SCHEMA_VERSION,
+        "api_call_definition": (
+            "logical OpenAI-compatible chat-completions invocation"
+        ),
+        "transport_retries_counted_separately": False,
+        "token_usage_source": "endpoint_response_usage",
+        "token_usage_estimated": False,
+        "operation_calls": {
+            "functional_discovery": sum(
+                str(item.get("call_type") or "chat")
+                in {
+                    functional_affordance_type,
+                    functional_relation_type,
+                }
+                for item in safe_records
+            ),
+            "functional_affordance": sum(
+                str(item.get("call_type") or "chat")
+                == functional_affordance_type
+                for item in safe_records
+            ),
+            "functional_relation": sum(
+                str(item.get("call_type") or "chat")
+                == functional_relation_type
+                for item in safe_records
+            ),
+            "placement_discovery": sum(
+                str(item.get("call_type") or "chat")
+                == placement_discovery_type
+                for item in safe_records
+            ),
+            "usable_surface_decoder": sum(
+                str(item.get("call_type") or "chat")
+                == usable_surface_type
+                for item in safe_records
+            ),
+            "camera_selector": sum(
+                str(item.get("call_type") or "chat")
+                in camera_selector_types
+                for item in safe_records
+            ),
+            "judge": sum(
+                str(item.get("role") or "unknown") == "judge"
+                for item in safe_records
+            ),
+        },
+        **overall,
+        "by_role": {
+            role: _api_usage_bucket(
+                [
+                    item
+                    for item in safe_records
+                    if str(item.get("role") or "unknown") == role
+                ]
+            )
+            for role in roles
+        },
+        "by_call_type": {
+            call_type: _api_usage_bucket(
+                [
+                    item
+                    for item in safe_records
+                    if str(item.get("call_type") or "chat")
+                    == call_type
+                ]
+            )
+            for call_type in call_types
+        },
+    }
+
+
+def _api_usage_bucket(
+    records: list[dict[str, Any]],
+) -> dict[str, Any]:
+    api_calls = len(records)
+    successful = sum(
+        item.get("status") == "complete" for item in records
+    )
+    failed = sum(item.get("status") == "failed" for item in records)
+    usage_records = [
+        item["tokens_usage"]
+        for item in records
+        if isinstance(item.get("tokens_usage"), dict)
+    ]
+    token_totals: dict[str, int] = {}
+    for field in _TOKEN_FIELDS:
+        values = [
+            usage[field]
+            for usage in usage_records
+            if _nonnegative_int_or_none(usage.get(field)) is not None
+        ]
+        if values:
+            token_totals[field] = sum(int(value) for value in values)
+    if not api_calls:
+        coverage = "not_applicable"
+    elif len(usage_records) == api_calls:
+        coverage = "complete"
+    elif usage_records:
+        coverage = "partial"
+    else:
+        coverage = "unavailable"
+    return {
+        "api_calls_number": api_calls,
+        "successful_api_calls": successful,
+        "failed_api_calls": failed,
+        "token_usage_reported_calls": len(usage_records),
+        "token_usage_missing_calls": api_calls - len(usage_records),
+        "token_usage_coverage": coverage,
+        "tokens_usage": token_totals or None,
+    }
+
+
+def _normalized_token_usage(value: Any) -> dict[str, int] | None:
+    if not isinstance(value, dict):
+        return None
+    result: dict[str, int] = {}
+    aliases = {
+        "prompt_tokens": ("prompt_tokens", "input_tokens"),
+        "completion_tokens": (
+            "completion_tokens",
+            "output_tokens",
+        ),
+        "total_tokens": ("total_tokens",),
+    }
+    for target, candidates in aliases.items():
+        for source in candidates:
+            parsed = _nonnegative_int_or_none(value.get(source))
+            if parsed is not None:
+                result[target] = parsed
+                break
+    prompt_details = value.get("prompt_tokens_details")
+    if isinstance(prompt_details, dict):
+        cached = _nonnegative_int_or_none(
+            prompt_details.get("cached_tokens")
+        )
+        if cached is not None:
+            result["cached_prompt_tokens"] = cached
+    completion_details = value.get("completion_tokens_details")
+    if isinstance(completion_details, dict):
+        reasoning = _nonnegative_int_or_none(
+            completion_details.get("reasoning_tokens")
+        )
+        if reasoning is not None:
+            result["reasoning_tokens"] = reasoning
+    if (
+        "total_tokens" not in result
+        and "prompt_tokens" in result
+        and "completion_tokens" in result
+    ):
+        result["total_tokens"] = (
+            result["prompt_tokens"] + result["completion_tokens"]
+        )
+    return result or None
+
+
+def _safe_request_metadata(model: Any) -> dict[str, Any]:
+    value = getattr(model, "last_request_metadata", None)
+    if not isinstance(value, dict):
+        return {}
+    allowed = {
+        "endpoint",
+        "model",
+        "message_count",
+        "image_count",
+        "prompt_chars",
+        "finish_reason",
+        "usage",
+    }
+    return {
+        key: deepcopy(item)
+        for key, item in value.items()
+        if key in allowed
+    }
+
+
+def _message_image_count(messages: Any) -> int:
+    if not isinstance(messages, list):
+        return 0
+    total = 0
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        content = message.get("content")
+        if isinstance(content, list):
+            total += sum(
+                isinstance(item, dict)
+                and item.get("type") == "image_url"
+                for item in content
+            )
+    return total
+
+
+def _request_scope(request: Any) -> tuple[str, str]:
+    if not isinstance(request, dict):
+        return "unknown", "scene"
+    metric = str(request.get("metric") or "unknown")
+    group_scope = request.get("group_scope")
+    if isinstance(group_scope, dict) and group_scope.get("group_id"):
+        return metric, str(group_scope["group_id"])
+    object_ids = request.get("object_ids")
+    if isinstance(object_ids, list) and object_ids:
+        return metric, "+".join(str(value) for value in object_ids)
+    event = request.get("event")
+    if isinstance(event, dict):
+        event_ids = event.get("object_ids")
+        if isinstance(event_ids, list) and event_ids:
+            return metric, "+".join(str(value) for value in event_ids)
+        pair = [
+            event.get("object_a_id"),
+            event.get("object_b_id"),
+        ]
+        pair = [str(value) for value in pair if value]
+        if pair:
+            return metric, "+".join(pair)
+    return metric, "scene"
+
+
+def _evidence_count(value: Any) -> int | None:
+    if isinstance(value, (list, tuple)):
+        return len(value)
+    if isinstance(value, dict):
+        for key in (
+            "visual_evidence",
+            "render_evidence_items",
+            "render_evidence",
+            "paths",
+            "candidates",
+        ):
+            items = value.get(key)
+            if isinstance(items, (list, tuple)):
+                return len(items)
+        return None
+    for name in ("visual_evidence", "candidates"):
+        items = getattr(value, name, None)
+        if isinstance(items, (list, tuple)):
+            return len(items)
+    return None
+
+
+def _nonnegative_int_or_none(value: Any) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
+
+
+def _bounded_error(error: Exception) -> str:
+    value = str(error)
+    return value if len(value) <= 1000 else value[:997] + "..."
+
+
+def _format_progress_record(record: dict[str, Any]) -> str:
+    timestamp = str(record.get("timestamp") or "")
+    clock = timestamp[11:19] if len(timestamp) >= 19 else timestamp
+    case_id = str(record.get("case_id") or "run")
+    event = str(record.get("event") or "progress")
+    details = record.get("details")
+    details = details if isinstance(details, dict) else {}
+    preferred = (
+        "phase",
+        "metric",
+        "group_id",
+        "role",
+        "call_type",
+        "status",
+        "api_call_number",
+        "cumulative_api_calls",
+        "duration_seconds",
+        "evidence_count",
+        "error_type",
+    )
+    fragments: list[str] = []
+    for key in preferred:
+        value = details.get(key)
+        if value is not None:
+            fragments.append(f"{key}={_progress_value(value)}")
+    if isinstance(details.get("tokens_usage"), dict):
+        fragments.append(
+            "tokens="
+            + _progress_value(details["tokens_usage"])
+        )
+    suffix = " " + " ".join(fragments) if fragments else ""
+    return f"[{clock}] [{case_id}] {event}{suffix}"
+
+
+def _progress_value(value: Any) -> str:
+    if isinstance(value, (dict, list, tuple)):
+        return json.dumps(
+            value,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+    return str(value).replace("\n", " ")
 
 
 def safe_route_manifest(route: dict[str, Any]) -> dict[str, Any]:

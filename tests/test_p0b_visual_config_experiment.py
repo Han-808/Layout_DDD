@@ -1,3 +1,4 @@
+import ast
 import json
 from pathlib import Path
 
@@ -40,6 +41,24 @@ def test_visual_config_arm_set_excludes_active_camera_adjustment() -> None:
     assert "deterministic_metric_local" in VISUAL_CONFIG_ARMS
     assert "vlm_select_from_candidates" in VISUAL_CONFIG_ARMS
     assert "active_metric_local" not in VISUAL_CONFIG_ARMS
+
+
+def test_selection_arm_builds_dedicated_camera_selector_transport() -> None:
+    source = (
+        Path(__file__).resolve().parents[1]
+        / "scripts"
+        / "run_p0b_visual_config_experiment.py"
+    ).read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    called_names = {
+        node.func.id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+    }
+
+    assert "build_openai_compatible_camera_selector" in called_names
+    assert "build_openai_compatible_vlm_judge" not in called_names
 
 
 def test_presence_matrix_and_compact_budget_keep_raw_highlight_pairs(tmp_path: Path) -> None:

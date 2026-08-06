@@ -94,8 +94,11 @@ class _Renderer:
     way the browser renderer does.
     """
 
+    camera_selector_backend = "deterministic"
+
     def __init__(self, collision_geometry: dict) -> None:
         self._collision_geometry = collision_geometry
+        self._style_local_path: str | None = None
 
     def render_scene(self, *, scene_path: Path, out_dir: Path, asset_root=None) -> dict:
         destination = Path(out_dir)
@@ -107,10 +110,39 @@ class _Renderer:
             image.putpixel((0, 0), (170, 110, 50))
             image.save(frame)
             views.append({"name": name, "path": frame.as_posix()})
+        style_local = destination / "game_style_local.png"
+        image = Image.new("RGB", (2, 2), (45, 65, 85))
+        image.putpixel((0, 0), (185, 125, 65))
+        image.save(style_local)
+        self._style_local_path = style_local.as_posix()
         return {
             "backend": "fake_game_renderer",
             "views": views,
             "collision_geometry": self._collision_geometry,
+        }
+
+    def provide_scene_quality_evidence(
+        self,
+        request: dict,
+    ) -> dict:
+        if (
+            request.get("metric") != "style_consistency"
+            or request.get("evidence_scope") != "group_local"
+            or self._style_local_path is None
+        ):
+            return {
+                "status": "insufficient",
+                "reason": "unsupported_test_evidence_request",
+                "render_evidence_items": [],
+            }
+        return {
+            "status": "available",
+            "render_evidence_items": [
+                {
+                    "path": self._style_local_path,
+                    "role": "group_local",
+                }
+            ],
         }
 
 
@@ -123,6 +155,18 @@ class _Judge:
 
     def adjudicate_relation(self, request: dict) -> dict:
         return {"verdict": "valid", "confidence": 1.0, "reason": "test"}
+
+    def chat_messages(
+        self,
+        messages: list[dict],
+        **kwargs: object,
+    ) -> str:
+        return (
+            '{"object_groups":[{"object_ids":["cube_0000","cube_0001"],'
+            '"label":"arena ensemble","anchor_object_id":null,'
+            '"reason":"Both objects share one local evidence scope."}],'
+            '"reason":"Complete two-object partition."}'
+        )
 
     def adjudicate_scene_quality(self, request: dict) -> dict:
         self.scene_quality_requests.append(request)

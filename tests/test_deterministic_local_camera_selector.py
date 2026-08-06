@@ -536,6 +536,33 @@ def test_trusted_bank_keeps_valid_poses_for_real_constraint_conflict():
     }
 
 
+def test_trusted_bank_keeps_renderable_pose_with_unresolved_evidence_proxy():
+    candidate = _candidate(
+        "proxy-unresolved",
+        proxy_framing={
+            "proxy_bounds_fit": False,
+            "all_corners_in_front": True,
+        },
+    )
+    candidate.pop("visibility")
+    selector = DeterministicLocalCameraSelector()
+
+    bank = selector.build_candidate_bank(
+        _request((candidate,)),
+        constraints=_constraints(),
+    )
+
+    assert [item["id"] for item in bank.candidates] == [
+        "proxy-unresolved"
+    ]
+    trusted = bank.candidates[0]
+    assert trusted["technical_feasibility"] is True
+    assert trusted["target_visibility_estimate"] is None
+    assert trusted["joint_visibility_estimate"] is None
+    assert trusted["technical_features"]["proxy_bounds_fit"] is False
+    assert bank.rejected_candidates == ()
+
+
 def test_rejected_constraints_drive_conflict_repair_plans() -> None:
     constraints = CameraConstraintSet(
         target_ids=("a", "b"),

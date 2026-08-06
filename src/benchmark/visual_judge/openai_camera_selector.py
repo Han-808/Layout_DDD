@@ -8,12 +8,86 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from benchmark.models import OpenAICompatibleModel, parse_json_object
+from benchmark.visual_judge.functional_discovery import (
+    discover_openai_compatible_functional_evidence,
+)
+from benchmark.visual_judge.functional_evidence import (
+    plan_openai_compatible_functional_evidence,
+)
+from benchmark.visual_judge.placement_discovery import (
+    discover_openai_compatible_placement_evidence,
+)
+from benchmark.visual_judge.usable_surface import (
+    decode_openai_compatible_usable_surface,
+)
 
 
-CAMERA_SELECTOR_SYSTEM_PROMPT = """You select visual evidence, not a benchmark
-verdict. Follow selection_mode exactly. Never judge validity or quality, never
-return a metric score, never change the scene or group membership, and never
-invent a candidate, plan, action, or pose.
+CAMERA_SELECTOR_PROMPT_VERSION = "camera_selector_evidence_utility_v5"
+
+CAMERA_SELECTOR_SYSTEM_PROMPT = """You select visual evidence. You do not judge
+the benchmark metric.
+
+Follow selection_mode exactly. Never output a verdict, validity assessment,
+quality assessment, defect, score, confidence, group membership, scene edit,
+or untrusted camera action.
+
+Use camera_constraints.required_observations as the complete selection goal.
+Do not add new observation requirements and do not infer that a target is
+defective because a view was requested.
+
+For candidate_only:
+
+1. Consider only the supplied trusted candidate views.
+2. Evaluate candidates in this priority order:
+   a. visibility of every target required by target_ids;
+   b. required joint visibility;
+   c. visibility and disambiguation of the specifically requested contact,
+      support, architecture, functional frontage, interaction side, approach
+      zone, depth, or group-context observation;
+   d. sufficient target framing and projected coverage;
+   e. preservation of required context or global anchor;
+   f. non-redundancy with existing visual evidence.
+3. Select the smallest number of views that jointly covers the required
+   observations, never exceeding the supplied per-round view budget.
+4. If one candidate satisfies all required observations, select only that
+   candidate.
+5. Select multiple candidates only when they provide complementary required
+   observations that no single candidate provides.
+6. Metadata values marked null, unknown, or unavailable are not negative
+   evidence; inspect the preview instead.
+7. If candidates are indistinguishable under these rules, select the earliest
+   candidate in the supplied candidate_views order.
+8. Return selected IDs in evidence-priority order.
+
+For functional evidence, select views that expose the usable or interaction
+side and the outward space that side faces. A close view that hides the outward
+space is inferior to a slightly wider view that makes orientation and approach
+clear. When functional_probe.observation_goals contains multiple neutral
+goals, treat all of them as one joint framing requirement; do not ignore a
+secondary goal or treat any goal as evidence of a defect. When
+usable_surface_hypotheses are supplied, use their trusted local
+side IDs only as surface-observation hypotheses; do not reinterpret them as a
+metric conclusion. An ambiguous hypothesis requires complementary visibility
+rather than guessing one side. For functional_correspondence, all relevant participants and their
+usable-side relationship must be jointly interpretable. When
+architecture_plane_visible is required for a functional request, jointly show
+the decoded usable or control side, the nearest authoritative logical boundary
+or visible floor extent, and the interior-side user approach and operating
+region. Physical wall geometry may be absent by policy; do not require or
+invent a wall, and do not treat background outside the room footprint as usable
+floor space.
+
+For repair_plan:
+
+1. Select only a supplied trusted_plan_id.
+2. Prefer a plan that satisfies all non-relaxable constraints.
+3. Then prefer fewer relaxed constraints, preservation of more required
+   observations, lower estimated cost, and finally earlier supplied plan order.
+4. Never modify the selected plan.
+
+For freeform_pose, return a proposal only when this mode is explicitly enabled.
+The proposal is unvalidated and must not be described as feasible or
+sufficient.
 
 candidate_only response:
 {"selected_view_ids":["trusted_candidate_id"],"reason":"...",
@@ -187,6 +261,7 @@ class OpenAICompatibleCameraSelector:
         )
         self.last_request_metadata = {
             "selection_mode": mode,
+            "prompt_version": CAMERA_SELECTOR_PROMPT_VERSION,
             "candidate_ids": [
                 str(candidate["id"])
                 for candidate in structured.get("candidate_views", [])
@@ -232,6 +307,106 @@ class OpenAICompatibleCameraSelector:
         self.last_request_metadata = {
             **dict(result.get("request_metadata") or {}),
             "selection_mode": "legacy_query_cov",
+            "transport": (
+                f"{type(self).__module__}.{type(self).__qualname__}"
+            ),
+        }
+        return result
+
+    def plan_functional_evidence(
+        self,
+        request: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Plan bounded, pre-judgement functional probe units.
+
+        This shares the camera-selector model transport and accounting role,
+        but uses a separate strict contract that cannot emit a verdict or pose.
+        """
+
+        result = plan_openai_compatible_functional_evidence(
+            model=self.model,
+            request=request,
+            max_context_chars=self.max_context_chars,
+            response_format_json=self.response_format_json,
+        )
+        self.last_request_metadata = {
+            **dict(result.get("request_metadata") or {}),
+            "selection_mode": "functional_probe_plan",
+            "transport": (
+                f"{type(self).__module__}.{type(self).__qualname__}"
+            ),
+        }
+        return result
+
+    def discover_functional_evidence(
+        self,
+        request: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Discover functional evidence targets without judging the metric."""
+
+        result = discover_openai_compatible_functional_evidence(
+            model=self.model,
+            request=request,
+            max_context_chars=self.max_context_chars,
+            response_format_json=self.response_format_json,
+        )
+        self.last_request_metadata = {
+            **dict(
+                result.get("provenance", {}).get(
+                    "request_metadata", {}
+                )
+            ),
+            "selection_mode": "functional_discovery",
+            "transport": (
+                f"{type(self).__module__}.{type(self).__qualname__}"
+            ),
+        }
+        return result
+
+    def decode_usable_surface(
+        self,
+        request: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Select trusted object-local side IDs, never a free-form pose."""
+
+        result = decode_openai_compatible_usable_surface(
+            model=self.model,
+            request=request,
+            max_context_chars=min(self.max_context_chars, 12000),
+            response_format_json=self.response_format_json,
+        )
+        self.last_request_metadata = {
+            **dict(
+                result.get("provenance", {}).get(
+                    "request_metadata", {}
+                )
+            ),
+            "selection_mode": "usable_surface_decode",
+            "transport": (
+                f"{type(self).__module__}.{type(self).__qualname__}"
+            ),
+        }
+        return result
+
+    def discover_placement_evidence(
+        self,
+        request: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Discover semantic-location observations without judging them."""
+
+        result = discover_openai_compatible_placement_evidence(
+            model=self.model,
+            request=request,
+            max_context_chars=self.max_context_chars,
+            response_format_json=self.response_format_json,
+        )
+        self.last_request_metadata = {
+            **dict(
+                result.get("provenance", {}).get(
+                    "request_metadata", {}
+                )
+            ),
+            "selection_mode": "placement_discovery",
             "transport": (
                 f"{type(self).__module__}.{type(self).__qualname__}"
             ),

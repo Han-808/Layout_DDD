@@ -173,9 +173,7 @@ class CameraCandidatePreviewRenderer:
                 "preview_render_count": len(enriched),
                 "full_render_count": 0,
                 "wall_clock_render_seconds": duration,
-                "render_gpu_time_seconds": manifest.get(
-                    "render_gpu_time_seconds"
-                ),
+                **_optional_render_gpu_time(manifest),
                 "group_id": group_id,
                 "candidate_ids": [
                     str(candidate["id"]) for candidate in enriched
@@ -389,9 +387,7 @@ class CameraViewEvidenceRenderer:
                 ),
                 "full_render_count": len(evidence),
                 "preview_render_count": 0,
-                "render_gpu_time_seconds": manifest.get(
-                    "render_gpu_time_seconds"
-                ),
+                **_optional_render_gpu_time(manifest),
                 "wall_clock_render_seconds": duration,
                 "evidence_round": request.evidence_round,
                 "group_id": (
@@ -402,6 +398,20 @@ class CameraViewEvidenceRenderer:
                 "scene_access": "read_only",
             },
         )
+
+
+def _optional_render_gpu_time(
+    manifest: dict[str, Any],
+) -> dict[str, Any]:
+    """Omit unavailable timing instead of violating numeric provenance."""
+
+    value = manifest.get("render_gpu_time_seconds")
+    if value is None:
+        return {"render_gpu_time_source": "not_reported"}
+    return {
+        "render_gpu_time_seconds": value,
+        "render_gpu_time_source": "renderer_manifest",
+    }
 
 
 class _UnavailableEvidenceRenderer:
@@ -435,18 +445,23 @@ class _ExistingProviderEvidenceRenderer:
                 "existing provider renderer received an unrelated selection"
             )
         provider_request = _provider_request(request)
+        provider_evidence: list[Any] = []
         try:
             raw = _call_provider(
                 self.provider,
                 provider_request,
                 metric=request.judge_request.metric,
             )
-            evidence = _provider_visual_evidence(raw)
-            if not evidence:
+            provider_evidence = _provider_visual_evidence(raw)
+            if not provider_evidence:
                 raise RuntimeError(
                     "existing camera evidence provider returned no visual "
                     "evidence"
                 )
+            evidence, budget_audit = _fit_provider_evidence_to_budget(
+                provider_evidence,
+                remaining_images=request.budget.get("remaining_images"),
+            )
         except Exception as exc:
             try:
                 usage = _provider_observed_usage(
@@ -472,6 +487,12 @@ class _ExistingProviderEvidenceRenderer:
                 ) from exc
             if self.usage_consumer is not None:
                 self.usage_consumer(usage)
+            acquired_artifact_paths = (
+                _usage_acquired_artifact_paths(
+                    usage,
+                    provider_evidence,
+                )
+            )
             raise EvidenceRenderFailure(
                 f"{type(exc).__name__}: {exc}",
                 internal_selector_calls=int(
@@ -488,6 +509,12 @@ class _ExistingProviderEvidenceRenderer:
                     "provider": _qualified_name(self.provider),
                     "provider_policy": _provider_policy(self.provider),
                     "provider_usage": deepcopy(usage),
+                    "acquired_artifact_paths": (
+                        acquired_artifact_paths
+                    ),
+                    "full_render_count": len(
+                        acquired_artifact_paths
+                    ),
                     "usage_source": (
                         "existing_provider_last_call_usage"
                     ),
@@ -502,6 +529,10 @@ class _ExistingProviderEvidenceRenderer:
             self.usage_consumer(usage)
         actual_actions = int(usage.get("camera_actions", 0))
         actual_selector_calls = int(usage.get("selector_calls", 0))
+        acquired_artifact_paths = _usage_acquired_artifact_paths(
+            usage,
+            provider_evidence,
+        )
         return EvidenceRenderResult(
             visual_evidence=tuple(deepcopy(evidence)),
             merge_policy="append",
@@ -516,9 +547,34 @@ class _ExistingProviderEvidenceRenderer:
                 "internal_selector_calls": actual_selector_calls,
                 "actual_camera_actions": actual_actions,
                 "provider_usage": deepcopy(usage),
+                "acquired_artifact_paths": (
+                    acquired_artifact_paths
+                ),
+                "full_render_count": len(acquired_artifact_paths),
                 "usage_source": "existing_provider_last_call_usage",
+                "provider_evidence_budget": budget_audit,
             },
         )
+
+
+def _usage_acquired_artifact_paths(
+    usage: dict[str, Any],
+    evidence: list[Any],
+) -> list[str]:
+    values = usage.get("acquired_artifact_paths")
+    if isinstance(values, list):
+        return list(dict.fromkeys(str(item) for item in values))
+    result: list[str] = []
+    for item in evidence:
+        if isinstance(item, dict):
+            value = item.get("path") or item.get("image_path")
+        else:
+            value = item
+        if isinstance(value, (str, Path)) and str(value).strip():
+            path = str(value)
+            if path not in result:
+                result.append(path)
+    return result
 
 
 def _provider_request(request: EvidenceRenderRequest) -> dict[str, Any]:
@@ -621,6 +677,92 @@ def _provider_visual_evidence(value: Any) -> list[Any]:
     raise ValueError(
         "camera evidence provider response does not contain visual evidence"
     )
+
+
+def _fit_provider_evidence_to_budget(
+    evidence: list[Any],
+    *,
+    remaining_images: Any,
+) -> tuple[list[Any], dict[str, Any]]:
+    """Keep complete same-pose bundles within the Controller image budget."""
+
+    if (
+        isinstance(remaining_images, bool)
+        or not isinstance(remaining_images, int)
+        or remaining_images < 1
+    ):
+        if remaining_images is None:
+            return list(deepcopy(evidence)), {
+                "applied": False,
+                "reason": "remaining_images_not_supplied",
+                "provider_evidence_count": len(evidence),
+                "returned_evidence_count": len(evidence),
+            }
+        raise ValueError(
+            "existing provider remaining_images budget must be a positive "
+            "integer"
+        )
+    if len(evidence) <= remaining_images:
+        return list(deepcopy(evidence)), {
+            "applied": True,
+            "trimmed": False,
+            "remaining_images": remaining_images,
+            "provider_evidence_count": len(evidence),
+            "returned_evidence_count": len(evidence),
+        }
+
+    bundles: dict[str, list[tuple[int, Any]]] = {}
+    bundle_order: list[str] = []
+    for index, item in enumerate(evidence):
+        key = _provider_evidence_bundle_key(item, index=index)
+        if key not in bundles:
+            bundles[key] = []
+            bundle_order.append(key)
+        bundles[key].append((index, item))
+
+    selected_indices: set[int] = set()
+    selected_bundle_keys: list[str] = []
+    for key in bundle_order:
+        bundle = bundles[key]
+        if len(selected_indices) + len(bundle) > remaining_images:
+            continue
+        selected_indices.update(index for index, _ in bundle)
+        selected_bundle_keys.append(key)
+    if not selected_indices:
+        raise RuntimeError(
+            "existing provider evidence bundles do not fit the remaining "
+            "image budget"
+        )
+    selected = [
+        deepcopy(item)
+        for index, item in enumerate(evidence)
+        if index in selected_indices
+    ]
+    return selected, {
+        "applied": True,
+        "trimmed": True,
+        "remaining_images": remaining_images,
+        "provider_evidence_count": len(evidence),
+        "returned_evidence_count": len(selected),
+        "selected_bundle_keys": selected_bundle_keys,
+        "dropped_evidence_count": len(evidence) - len(selected),
+    }
+
+
+def _provider_evidence_bundle_key(item: Any, *, index: int) -> str:
+    if isinstance(item, dict):
+        pair_id = str(item.get("pair_id") or "").strip()
+        if pair_id:
+            return f"pair:{pair_id}"
+        view_id = str(item.get("view_id") or item.get("id") or "").strip()
+        if view_id:
+            return f"view:{view_id}"
+        pose = item.get("pose")
+        if isinstance(pose, dict):
+            pose_id = str(pose.get("id") or "").strip()
+            if pose_id:
+                return f"pose:{pose_id}"
+    return f"artifact:{index:04d}"
 
 
 def _coerce_evidence_renderer(value: Any) -> Any:

@@ -39,6 +39,14 @@ P0B_METRIC_RUBRICS = {
         "OBB overlap alone is insufficient for an invalid verdict. "
         "Ordinary contact or near-contact, positive separation, intended containment or assembly, wrong "
         "support, floating, sinking, and an unfollowed spatial relation are not collisions by themselves. "
+        "A shallow support-interface overlap with a thin horizontal surface layer is not automatically invalid: "
+        "independent rigid meshes may encode a compliant covering and its load-bearing object at the same substrate "
+        "height even though the real layer would compress. When structured shallow-surface-layer evidence is present, "
+        "return valid only if the images and object semantics support ordinary compression or embedding of a compliant "
+        "layer, the overlap stays within the reported bounded depth, and the other object does not cross the supporting "
+        "substrate. This is not a generic tolerance for small intersections. Return invalid for a rigid layer, lateral "
+        "or mid-body slicing, penetration beyond the bounded layer interface, substrate crossing, or visibly impossible "
+        "geometry. The structured candidate carries no valid prior. "
         "Do not judge support, prompt fidelity, object-architecture penetration, or general visual quality here."
     ),
     "object_architecture_penetration": (

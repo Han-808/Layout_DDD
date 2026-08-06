@@ -91,6 +91,19 @@ def _render_result_with_audit(
 def _validate_render_cost_provenance(
     provenance: dict[str, Any],
 ) -> None:
+    acquired = provenance.get("acquired_artifact_paths")
+    if acquired is not None and (
+        not isinstance(acquired, list)
+        or not all(
+            isinstance(item, str) and item.strip()
+            for item in acquired
+        )
+        or len(acquired) != len(set(acquired))
+    ):
+        raise ValueError(
+            "evidence renderer provenance acquired_artifact_paths must be "
+            "a unique list of non-empty strings"
+        )
     for key in ("preview_render_count", "full_render_count"):
         if key not in provenance:
             continue
@@ -171,6 +184,64 @@ def _evidence_refs(items: list[Any]) -> list[str]:
     return refs
 
 
+def _evidence_artifact_refs(items: list[Any]) -> list[str]:
+    """Return one stable identity per physical evidence representation.
+
+    ``view_id`` intentionally collapses RGB/overlay/contour artifacts when
+    counting camera poses.  The image budget has different semantics: every
+    real image counts, while a reused artifact must not be charged twice.
+    """
+
+    refs: list[str] = []
+    for index, item in enumerate(items):
+        if isinstance(item, dict):
+            raw_path = item.get("path") or item.get("image_path")
+            if raw_path is not None and str(raw_path).strip():
+                value = f"path:{Path(str(raw_path)).expanduser()}"
+            else:
+                digest = next(
+                    (
+                        str(item[key]).strip().lower()
+                        for key in (
+                            "image_sha256",
+                            "content_hash",
+                            "sha256",
+                        )
+                        if isinstance(item.get(key), str)
+                        and str(item[key]).strip()
+                    ),
+                    None,
+                )
+                if digest is not None:
+                    value = f"digest:{digest}"
+                else:
+                    view_id = str(
+                        item.get("view_id")
+                        or item.get("id")
+                        or f"evidence_{index:02d}"
+                    )
+                    representation = str(
+                        item.get("representation")
+                        or item.get("representation_type")
+                        or item.get("role")
+                        or f"artifact_{index:02d}"
+                    )
+                    value = f"view:{view_id}:representation:{representation}"
+        elif isinstance(item, (str, Path)):
+            value = f"path:{Path(str(item)).expanduser()}"
+        else:
+            value = (
+                "value:"
+                + json.dumps(
+                    _jsonable(item),
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+            )
+        refs.append(value)
+    return refs
+
+
 def _rendered_view_count(
     items: tuple[Any, ...],
     *,
@@ -186,15 +257,7 @@ def _rendered_view_count(
             role = str(item.get("role") or "")
             pair_id = item.get("pair_id")
             view_id = str(item.get("view_id") or "").strip()
-            if isinstance(pose, dict) and pose:
-                value = "pose:" + json.dumps(
-                    _jsonable(pose),
-                    sort_keys=True,
-                    separators=(",", ":"),
-                )
-            elif view_id and view_id in trusted_ids:
-                value = f"trusted_view:{view_id}"
-            elif (
+            if (
                 pair_id is not None
                 and role
                 in {
@@ -203,7 +266,18 @@ def _rendered_view_count(
                     "metric_local_contour",
                 }
             ):
+                # RGB and contour artifacts from one verified collision pose
+                # are one independent camera view even when only the contour
+                # carries the complete pose record.
                 value = f"verified_pair:{pair_id}"
+            elif isinstance(pose, dict) and pose:
+                value = "pose:" + json.dumps(
+                    _jsonable(pose),
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+            elif view_id and view_id in trusted_ids:
+                value = f"trusted_view:{view_id}"
             else:
                 # A renderer-provided view_id alone is not proof that two
                 # independent files share a camera pose.
@@ -311,6 +385,7 @@ def build_evaluation_audit(
     actions_used: int,
     rounds_used: int,
     total_images_acquired: int,
+    acquisition_ledger: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     judge_provenance = (
         deepcopy(judge_result.provenance)
@@ -340,6 +415,18 @@ def build_evaluation_audit(
         and item.get("stage") == "trusted_candidate_bank"
         and item.get("status") == "completed"
     ]
+    forced_choice_events = [
+        item
+        for item in trace
+        if isinstance(item, dict)
+        and item.get("stage") == "judge"
+        and item.get("terminal_forced_choice") is True
+    ]
+    forced_choice = (
+        forced_choice_events[-1]
+        if forced_choice_events
+        else None
+    )
     group_scope = judge_request.context.get("group_scope")
     group_scope = (
         group_scope if isinstance(group_scope, dict) else {}
@@ -390,6 +477,7 @@ def build_evaluation_audit(
                     rounds_used=rounds_used,
                     total_images_acquired=total_images_acquired,
                 ),
+                "ledger": deepcopy(acquisition_ledger),
             },
             "experiment_telemetry": telemetry_value,
             "preview_renderer_invoked": (
@@ -489,6 +577,27 @@ def build_evaluation_audit(
             "applied_failure_policy": policy_for_stop_reason(
                 control,
                 stop_reason,
+            ),
+            "terminal_forced_choice": (
+                {
+                    "applied": True,
+                    "ambiguity_before_forcing": bool(
+                        forced_choice.get(
+                            "ambiguity_before_forcing"
+                        )
+                    ),
+                    "trigger_stop_reason": forced_choice.get(
+                        "budget_trigger_stop_reason"
+                    ),
+                    "original_evidence_request": deepcopy(
+                        forced_choice.get(
+                            "original_evidence_request"
+                        )
+                    ),
+                    "final_status": final_status,
+                }
+                if forced_choice is not None
+                else {"applied": False}
             ),
             "trace": deepcopy(trace),
         }
@@ -703,6 +812,7 @@ def _evidence_recovery_outcome(
 render_result_with_audit = _render_result_with_audit
 evidence_content_identity = _evidence_content_identity
 evidence_fingerprint = _evidence_fingerprint
+evidence_artifact_refs = _evidence_artifact_refs
 evidence_refs = _evidence_refs
 jsonable = _jsonable
 rendered_evidence_refs = _rendered_evidence_refs

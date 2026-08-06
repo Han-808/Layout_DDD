@@ -727,7 +727,8 @@ class FrozenBrowserCaptureRenderer:
                 "reason": "frozen_browser_provider_supports_style_only",
                 "render_evidence_items": [],
             }
-        if request.get("evidence_scope") != "object_local":
+        evidence_scope = str(request.get("evidence_scope") or "")
+        if evidence_scope not in {"object_local", "group_local"}:
             return {
                 "status": "insufficient",
                 "reason": "unsupported_frozen_browser_evidence_scope",
@@ -798,7 +799,7 @@ class FrozenBrowserCaptureRenderer:
             "render_evidence_items": [
                 {
                     "path": item["path"],
-                    "role": "object_local",
+                    "role": evidence_scope,
                     "target_object_ids": list(
                         item.get("target_object_ids") or []
                     ),

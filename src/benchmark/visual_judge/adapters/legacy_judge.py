@@ -814,6 +814,9 @@ class ControlledVLMJudge:
             selector_context=_selector_context(request),
             gate_manifest_path=_request_manifest_path(request),
             initial_camera_usage=initial_camera_usage,
+            initial_acquisition_ledger=_request_acquisition_ledger(
+                request
+            ),
         )
         self.audit_records.append(
             {
@@ -1050,6 +1053,9 @@ class ControlledVLMJudge:
             selector_context=_selector_context(request),
             gate_manifest_path=_request_manifest_path(request),
             initial_camera_usage=initial_camera_usage,
+            initial_acquisition_ledger=_request_acquisition_ledger(
+                request
+            ),
         )
         self.audit_records.append(
             {
@@ -1424,6 +1430,19 @@ def _request_manifest_path(request: dict[str, Any]) -> str | None:
         if isinstance(value, str) and value.strip():
             return value
     return None
+
+
+def _request_acquisition_ledger(
+    request: dict[str, Any],
+) -> dict[str, Any] | None:
+    value = request.get("camera_acquisition_ledger")
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise TypeError(
+            "camera_acquisition_ledger must be a JSON object"
+        )
+    return deepcopy(value)
 
 
 def _compatibility_screen_request(request: dict[str, Any]) -> bool:

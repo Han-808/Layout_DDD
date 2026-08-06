@@ -4,7 +4,7 @@
 
 The canonical grouping algorithm is now **VLM-only**. `VLMGroupingAlgorithm`
 with policy `vlm_visual_evidence_scope_v2` and prompt version
-`vlm_grouping_prompt_v2` is the only backend used by the canonical evaluator,
+`vlm_grouping_prompt_v3` is the only backend used by the canonical evaluator,
 metric routing, and downstream camera/evidence acquisition.
 
 `topology` and `anchor` remain importable only for explicit historical replay
@@ -136,7 +136,7 @@ The response is fail-closed:
   "object_groups": [
     {
       "object_ids": ["known_object_id"],
-      "label": "short local-scope label",
+      "label": "local_scope:<anchor_object_id>",
       "anchor_object_id": null,
       "reason": "grouping cues only"
     }

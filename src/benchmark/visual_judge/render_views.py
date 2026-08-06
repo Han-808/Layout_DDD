@@ -13,14 +13,22 @@ from benchmark.rendering.camera_pose import (
     CAMERA_ACTIONS,
     DEFAULT_CAMERA_CANDIDATE_POLICY,
     DEFAULT_CAMERA_MODE_BY_METRIC,
+    FUNCTIONAL_PROBE_CANDIDATE_BUDGETS,
     apply_camera_action,
     generate_camera_pose_candidates,
     generate_global_context_poses,
+    generate_usable_surface_side_bank,
     normalize_camera_candidate_policy,
     resolve_camera_pose_mode,
     select_bbox_track_views,
     validate_camera_pose_mode,
     validate_metric_camera_modes,
+)
+from benchmark.evaluator.scene_quality.functional_geometry import (
+    build_functional_geometry_observations,
+)
+from benchmark.evaluator.scene_quality.functional_boundary_evidence import (
+    FUNCTIONAL_BOUNDARY_EVIDENCE_VERSION,
 )
 from benchmark.rendering.collision_overlay import (
     COLLISION_EVIDENCE_PACKET_VERSION,
@@ -49,10 +57,19 @@ from benchmark.visual_judge.evidence_sufficiency import (
     SUFFICIENT,
     assess_preview_selection_sufficiency,
 )
+from benchmark.visual_judge.functional_evidence import (
+    functional_probe_selector_context,
+)
 from benchmark.visual_judge.roles import (
     DecisionContract,
     VLMRole,
     vlm_audit_metadata,
+)
+from benchmark.visual_judge.usable_surface import (
+    USABLE_SURFACE_PROMPT_VERSION,
+    USABLE_SURFACE_SIDE_IDS,
+    usable_surface_cache_identity,
+    validate_usable_surface_response,
 )
 from benchmark.visual_judge.visual_config import DEFAULT_P0B_VISUAL_CONFIGS
 
@@ -75,6 +92,10 @@ _CAMERA_EVIDENCE_IMPLEMENTATION_FILES = (
     "src/benchmark/visual_judge/active_policy.py",
     "src/benchmark/visual_judge/evidence_sufficiency.py",
     "src/benchmark/visual_judge/contracts.py",
+    "src/benchmark/visual_judge/functional_evidence.py",
+    "src/benchmark/visual_judge/functional_discovery.py",
+    "src/benchmark/visual_judge/usable_surface.py",
+    "src/benchmark/visual_judge/openai_camera_selector.py",
     "src/benchmark/visual_judge/openai_compatible.py",
     "src/benchmark/visual_judge/render_views.py",
     "src/benchmark/visual_judge/roles.py",
@@ -83,6 +104,73 @@ _CAMERA_EVIDENCE_IMPLEMENTATION_FILES = (
 
 class CameraEvidenceProvider:
     """Render read-only, event-targeted local evidence for P0b adjudication."""
+
+    # A functional probe keeps one raw RGB image for the Judge and renders one
+    # same-pose identity image for deterministic target-visibility validation.
+    functional_probe_full_artifacts_per_selected_view = 2
+
+    def max_full_artifacts_for_controller_request(
+        self,
+        request: dict[str, Any],
+    ) -> int:
+        """Return a fail-closed upper bound for one composite acquisition.
+
+        The Controller selects one opaque legacy-provider acquisition token,
+        not the provider's internal poses.  Reservation therefore has to cover
+        every full-resolution artifact that this provider may create for the
+        concrete request mode, including non-Judge identity/highlight images.
+        """
+
+        if not isinstance(request, dict):
+            raise TypeError(
+                "controller camera reservation request must be a mapping"
+            )
+        metric = str(request.get("metric") or "event").strip().lower()
+        context = (
+            request.get("context")
+            if isinstance(request.get("context"), dict)
+            else {}
+        )
+        explicit = (
+            context.get("camera_evidence_request")
+            if isinstance(
+                context.get("camera_evidence_request"),
+                dict,
+            )
+            else {}
+        )
+        functional_probe = explicit.get("functional_probe")
+        if isinstance(functional_probe, dict):
+            policy = (
+                explicit.get("evidence_policy")
+                if isinstance(explicit.get("evidence_policy"), dict)
+                else {}
+            )
+            requested_views = policy.get("scoped_image_budget", 1)
+            if (
+                isinstance(requested_views, bool)
+                or not isinstance(requested_views, int)
+                or requested_views < 1
+            ):
+                requested_views = 1
+            return (
+                self.functional_probe_full_artifacts_per_selected_view
+                * min(self.max_views, requested_views)
+            )
+
+        resolved_mode = resolve_camera_pose_mode(
+            self.mode,
+            metric,
+            metric_modes=self.metric_modes,
+        )
+        if resolved_mode in FOCUS_CAMERA_MODES:
+            # Generic focus acquisition renders one highlighted global anchor
+            # plus a raw/highlight pair for every possible local pose.
+            return 1 + (2 * self.max_views)
+        if metric == "collision" and self.collision_overlay:
+            # Collision may emit a raw/diagnostic pair for every selected pose.
+            return 2 * self.max_views
+        return self.max_views
 
     def __init__(
         self,
@@ -104,6 +192,7 @@ class CameraEvidenceProvider:
         candidate_policy: str = DEFAULT_CAMERA_CANDIDATE_POLICY,
         active_repair: bool = False,
         architecture_contract: dict[str, Any] | None = None,
+        usable_surface_cache_dir: str | Path | None = None,
     ) -> None:
         self.renderer = renderer
         self.blend_file = Path(blend_file).expanduser().resolve()
@@ -127,6 +216,11 @@ class CameraEvidenceProvider:
             deepcopy(validate_architecture_contract(architecture_contract))
             if architecture_contract is not None
             else None
+        )
+        self.usable_surface_cache_dir = (
+            Path(usable_surface_cache_dir).expanduser().resolve()
+            if usable_surface_cache_dir is not None
+            else (self.out_dir / "_usable_surface_cache")
         )
         # Collision-only paired RGB + diagnostic-overlay evidence. Opt-in so OOB
         # and Support camera behavior is completely unchanged.
@@ -225,6 +319,31 @@ class CameraEvidenceProvider:
                 else []
             ),
             "active_repair": self.active_repair,
+            "usable_surface": {
+                "enabled": callable(
+                    getattr(self.selector, "decode_usable_surface", None)
+                ),
+                "prompt_version": USABLE_SURFACE_PROMPT_VERSION,
+                "trusted_side_preview_count": 4,
+                "side_preview_feasibility": (
+                    "prefer_in_room_else_unbounded_preview_only"
+                ),
+                "final_evidence_pose_validation": "unchanged",
+                "cache_dir": str(self.usable_surface_cache_dir),
+                "scene_access": "read_only",
+            },
+            "functional_boundary_evidence": {
+                "schema_version": FUNCTIONAL_BOUNDARY_EVIDENCE_VERSION,
+                "eligible_directionality": [
+                    "directed",
+                    "uncertain",
+                ],
+                "requires_non_none_clearance": True,
+                "requires_logical_boundary": True,
+                "geometry_backend": "deterministic_rotated_obb_ray",
+                "decision_authority": "none",
+                "scene_access": "read_only",
+            },
             "active_corrective_proposal_version": (
                 ACTIVE_CORRECTIVE_PROPOSAL_VERSION
                 if self.active_repair
@@ -243,6 +362,133 @@ class CameraEvidenceProvider:
             "global_context_source": "metric_highlighted_global_when_required",
             "highlighted_global_pose_policy": self.highlighted_global_pose_policy,
         }
+
+    def provide_functional_boundary_evidence(
+        self,
+        request: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Decode usable sides and compute boundary clearance without a verdict."""
+
+        if not isinstance(request, dict):
+            raise TypeError(
+                "functional boundary evidence request must be a mapping"
+            )
+        if str(request.get("metric") or "") != "functional_consistency":
+            raise ValueError(
+                "functional boundary evidence only supports "
+                "functional_consistency"
+            )
+        scene = request.get("scene")
+        raw_targets = request.get("surface_targets")
+        if not isinstance(scene, dict):
+            raise ValueError(
+                "functional boundary evidence requires canonical scene data"
+            )
+        if not isinstance(raw_targets, list) or any(
+            not isinstance(item, dict) for item in raw_targets
+        ):
+            raise ValueError(
+                "functional boundary evidence requires surface_targets"
+            )
+        surface_targets = list(deepcopy(raw_targets))
+        target_ids = [
+            str(item.get("target_id") or "").strip()
+            for item in surface_targets
+        ]
+        if (
+            not target_ids
+            or any(not item for item in target_ids)
+            or len(target_ids) != len(set(target_ids))
+        ):
+            raise ValueError(
+                "functional boundary evidence targets must be unique"
+            )
+        probe = {
+            "probe_id": "functional_boundary_prepass",
+            "kind": "approach_clearance",
+            "target_ids": target_ids,
+            "related_target_ids": [],
+            "required_observations": [
+                "interaction_side_visible",
+                "approach_zone_visible",
+                "architecture_plane_visible",
+            ],
+            "surface_targets": surface_targets,
+            "view_goal": (
+                "Establish usable-side-relative logical-boundary clearance."
+            ),
+        }
+        keyed_request = {
+            "category": "functional_boundary_evidence_request",
+            "metric": "functional_consistency",
+            "scene": deepcopy(scene),
+            "functional_probe": probe,
+        }
+        event_dir = (
+            self.out_dir
+            / "_functional_boundary_evidence"
+            / _event_key(keyed_request)
+        )
+        manifest_path = (
+            event_dir / "functional_boundary_evidence_manifest.json"
+        )
+        event_dir.mkdir(parents=True, exist_ok=True)
+        self._begin_call_usage(
+            metric="functional_consistency",
+            manifest_path=manifest_path,
+        )
+        hypotheses, decoder_audit = (
+            self._resolve_usable_surface_hypotheses(
+                keyed_request,
+                event_dir=event_dir,
+            )
+        )
+        resolved_probe = {
+            **probe,
+            "usable_surface_hypotheses": hypotheses,
+        }
+        geometry = build_functional_geometry_observations(
+            scene,
+            resolved_probe,
+        )
+        status = (
+            "complete"
+            if len(hypotheses) == len(surface_targets)
+            else "partial"
+            if hypotheses
+            else "failed"
+        )
+        result = {
+            "schema_version": FUNCTIONAL_BOUNDARY_EVIDENCE_VERSION,
+            "status": status,
+            "decision_authority": "none",
+            "scene_access": "read_only",
+            "surface_targets": surface_targets,
+            "usable_surface_hypotheses": hypotheses,
+            "functional_geometry": geometry,
+            "decoder_audit": decoder_audit,
+            "provenance": {
+                "backend": type(self).__name__,
+                "manifest_path": str(manifest_path),
+                "source_blend": str(self.blend_file),
+                "source_blend_sha256": self.source_blend_sha256,
+                "surface_source": (
+                    "vlm_trusted_side_decode_or_cache"
+                ),
+                "geometry_source": "deterministic",
+                "physical_wall_render_required": False,
+            },
+        }
+        _write_json(manifest_path, result)
+        self._finish_call_usage(
+            [],
+            cache_hit=(
+                bool(surface_targets)
+                and int(decoder_audit.get("decoder_calls") or 0) == 0
+                and len(hypotheses) == len(surface_targets)
+            ),
+        )
+        return result
 
     def __call__(self, request: dict[str, Any]) -> list[Any]:
         if not isinstance(request, dict):
@@ -311,11 +557,61 @@ class CameraEvidenceProvider:
                 },
             )
             return self._finish_call_usage([], cache_hit=False)
+        if isinstance(keyed_request.get("functional_probe"), dict):
+            hypotheses, surface_audit = (
+                self._resolve_usable_surface_hypotheses(
+                    keyed_request,
+                    event_dir=event_dir,
+                )
+            )
+            keyed_request["functional_probe"] = {
+                **deepcopy(keyed_request["functional_probe"]),
+                "usable_surface_hypotheses": hypotheses,
+                "usable_surface_decoding": surface_audit,
+            }
+            geometry_observations = build_functional_geometry_observations(
+                keyed_request.get("scene") or {},
+                keyed_request["functional_probe"],
+            )
+            keyed_request["functional_probe"][
+                "functional_geometry"
+            ] = geometry_observations
+            if self.last_call_usage is not None:
+                self.last_call_usage["usable_surface"] = deepcopy(
+                    surface_audit
+                )
+                self.last_call_usage["functional_geometry"] = deepcopy(
+                    geometry_observations
+                )
+        effective_candidate_count = _effective_candidate_count(
+            keyed_request,
+            configured_max=self.candidate_count,
+        )
         candidates = generate_camera_pose_candidates(
             keyed_request,
-            max_candidates=self.candidate_count,
+            max_candidates=effective_candidate_count,
             policy=self.candidate_policy,
         )
+        if self.last_call_usage is not None:
+            functional_pool_count = max(
+                (
+                    int(
+                        candidate.get(
+                            "functional_probe_candidate_pool_count",
+                            len(candidates),
+                        )
+                    )
+                    for candidate in candidates
+                    if isinstance(candidate, dict)
+                ),
+                default=len(candidates),
+            )
+            self.last_call_usage.update(
+                candidate_count_configured=self.candidate_count,
+                candidate_count_requested=effective_candidate_count,
+                candidate_count_generated=len(candidates),
+                candidate_pool_count=functional_pool_count,
+            )
         _write_json(event_dir / "pose_candidates.json", candidates)
 
         if collision_overlay:
@@ -325,6 +621,20 @@ class CameraEvidenceProvider:
                     candidates,
                     event_dir,
                     resolved_mode=resolved_mode,
+                ),
+                cache_hit=False,
+            )
+
+        if isinstance(request.get("functional_probe"), dict):
+            return self._finish_call_usage(
+                self._functional_probe_raw_evidence(
+                    keyed_request,
+                    candidates,
+                    event_dir,
+                    resolved_mode=resolved_mode,
+                    requested_candidate_count=(
+                        effective_candidate_count
+                    ),
                 ),
                 cache_hit=False,
             )
@@ -419,6 +729,13 @@ class CameraEvidenceProvider:
         if self.last_call_usage is not None:
             self.last_call_usage["cache_hit"] = bool(cache_hit)
             self.last_call_usage["evidence_refs"] = _usage_evidence_refs(evidence)
+            manifest_artifacts = _manifest_acquired_artifact_paths(
+                self.last_call_usage.get("manifest_path")
+            )
+            if manifest_artifacts:
+                self.last_call_usage["acquired_artifact_paths"] = (
+                    manifest_artifacts
+                )
             if cache_hit:
                 # The manifest describes the generation call. A cached read does
                 # not re-execute its historical selector calls or camera actions.
@@ -456,6 +773,7 @@ class CameraEvidenceProvider:
         event_dir: Path,
         *,
         overlay_spec: dict[str, Any] | None = None,
+        require_visible_targets: bool = False,
     ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         current = [deepcopy(item) for item in candidates]
         if (
@@ -505,6 +823,10 @@ class CameraEvidenceProvider:
                     )
                     preview_role = "highlighted_focus"
                 except Exception as exc:
+                    if require_visible_targets:
+                        raise RuntimeError(
+                            "required target-identity preview failed"
+                        ) from exc
                     preview_degradation = f"focus_preview_failed: {type(exc).__name__}: {exc}"
                     preview_manifest = self.renderer.render_camera_views(
                         blend_file=self.blend_file,
@@ -546,6 +868,39 @@ class CameraEvidenceProvider:
                     latest_visibility_by_id,
                     overlay_spec,
                 )
+                if require_visible_targets:
+                    eligible_ids = {
+                        candidate_id
+                        for candidate_id, visibility in (
+                            latest_visibility_by_id.items()
+                        )
+                        if _visibility_covers_required_targets(
+                            visibility,
+                            overlay_spec,
+                        )
+                    }
+                    current = [
+                        item
+                        for item in current
+                        if str(item.get("id")) in eligible_ids
+                    ]
+                    preview_by_id = {
+                        candidate_id: path
+                        for candidate_id, path in preview_by_id.items()
+                        if candidate_id in eligible_ids
+                    }
+                    latest_visibility_by_id = {
+                        candidate_id: visibility
+                        for candidate_id, visibility in (
+                            latest_visibility_by_id.items()
+                        )
+                        if candidate_id in eligible_ids
+                    }
+                    if not current:
+                        raise RuntimeError(
+                            "no_feasible_candidate: all previews failed "
+                            "required target visibility"
+                        )
             selector_request = {
                 "mode": "query_cov",
                 "selection_phase": request.get("_camera_selection_phase"),
@@ -574,6 +929,9 @@ class CameraEvidenceProvider:
                 "preview_degradation": preview_degradation,
                 "preview_visibility_warning": preview_visibility_warning,
                 "color_legend": overlay_spec.get("legend") if overlay_spec is not None else None,
+                "functional_probe": functional_probe_selector_context(
+                    request.get("functional_probe")
+                ),
                 **vlm_audit_metadata(
                     VLMRole.VLM_CAMERA_SELECTOR,
                     decision_contract=DecisionContract.CAMERA_SELECTION,
@@ -1588,6 +1946,658 @@ class CameraEvidenceProvider:
         _write_json(event_dir / "camera_evidence_manifest.json", manifest)
         return items
 
+    def _functional_probe_raw_evidence(
+        self,
+        request: dict[str, Any],
+        candidates: list[dict[str, Any]],
+        event_dir: Path,
+        *,
+        resolved_mode: str,
+        requested_candidate_count: int,
+    ) -> list[dict[str, Any]]:
+        """Select with previews, then send only unmodified final RGB onward."""
+
+        if not candidates:
+            if self.last_call_usage is not None:
+                self.last_call_usage.update(
+                    selection_outcome="no_feasible_candidate",
+                    candidate_rejections=[
+                        {
+                            "reason_code": (
+                                "geometry_framing_or_surface_half_space"
+                            )
+                        }
+                    ],
+                )
+            raise RuntimeError(
+                "no_feasible_candidate: functional candidate bank is empty"
+            )
+        spec = self._build_focus_spec(request)
+        for target in spec.get("targets") or []:
+            if isinstance(target, dict):
+                target["required_for_visibility"] = True
+        _write_json(event_dir / "functional_focus_spec.json", spec)
+        if resolved_mode == "query_cov":
+            selected, selection_log = self._query_cov_selection(
+                request,
+                candidates,
+                event_dir,
+                overlay_spec=spec,
+                require_visible_targets=True,
+            )
+        else:
+            (
+                selected,
+                selection_log,
+                _,
+                _,
+            ) = self._rank_by_focus_visibility(
+                request,
+                candidates,
+                event_dir,
+                spec,
+                resolved_mode=resolved_mode,
+            )
+        if not selected:
+            raise RuntimeError(
+                "no_feasible_candidate: no functional preview survived"
+            )
+        policy = (
+            request.get("evidence_policy")
+            if isinstance(request.get("evidence_policy"), dict)
+            else {}
+        )
+        requested_final_views = policy.get("scoped_image_budget", 1)
+        if (
+            isinstance(requested_final_views, bool)
+            or not isinstance(requested_final_views, int)
+            or requested_final_views < 1
+        ):
+            requested_final_views = 1
+        selector_selected_ids = [
+            str(item.get("id") or "") for item in selected
+        ]
+        selected = selected[:requested_final_views]
+        selection_log["selector_selected_view_ids"] = selector_selected_ids
+        selection_log["selected_view_ids"] = [
+            str(item.get("id") or "") for item in selected
+        ]
+        selection_log["final_view_limit"] = requested_final_views
+        final_manifest = self.renderer.render_camera_views(
+            blend_file=self.blend_file,
+            out_dir=event_dir / "final",
+            camera_views=selected,
+            preview=False,
+        )
+        final_identity_manifest = self._render_overlay_views(
+            request=request,
+            out_dir=event_dir / "final_identity_audit",
+            camera_views=selected,
+            overlay_spec=spec,
+            preview=False,
+        )
+        final_identity_by_id = _views_by_id(final_identity_manifest)
+        selected_by_id = {
+            str(item.get("id")): item for item in selected
+        }
+        final_visibility: dict[str, dict[str, Any]] = {}
+        for view_id, path in final_identity_by_id.items():
+            final_visibility[view_id] = measure_focus_visibility(
+                path,
+                targets=[
+                    target
+                    for target in spec.get("targets") or []
+                    if isinstance(target, dict)
+                ],
+                **_focus_visibility_options(spec),
+            )
+        eligible_final_ids = {
+            view_id
+            for view_id, visibility in final_visibility.items()
+            if _visibility_covers_required_targets(visibility, spec)
+        }
+        rendered_rgb_paths = [
+            str(view["path"])
+            for view in final_manifest.get("views") or []
+            if isinstance(view, dict) and view.get("path")
+        ]
+        acquired_artifact_paths = list(
+            dict.fromkeys(
+                [
+                    *rendered_rgb_paths,
+                    *[
+                        str(path)
+                        for path in final_identity_by_id.values()
+                        if str(path).strip()
+                    ],
+                ]
+            )
+        )
+        if self.last_call_usage is not None:
+            self.last_call_usage["acquired_artifact_paths"] = list(
+                acquired_artifact_paths
+            )
+            self.last_call_usage[
+                "non_judge_validation_artifact_paths"
+            ] = list(final_identity_by_id.values())
+        items: list[dict[str, Any]] = []
+        for view in final_manifest.get("views") or []:
+            if not isinstance(view, dict) or not view.get("path"):
+                continue
+            view_id = str(view.get("id") or "")
+            if view_id not in eligible_final_ids:
+                continue
+            items.append(
+                {
+                    "path": str(view["path"]),
+                    "role": "functional_probe_rgb",
+                    "evidence_style": "raw",
+                    "image_transform": "none",
+                    "view_id": view_id,
+                    "pose": deepcopy(
+                        selected_by_id.get(view_id)
+                        or view.get("pose")
+                        or {}
+                    ),
+                    "functional_probe": functional_probe_selector_context(
+                        request.get("functional_probe")
+                    ),
+                    "identity_visibility": deepcopy(
+                        final_visibility.get(view_id) or {}
+                    ),
+                }
+            )
+        if not items:
+            if self.last_call_usage is not None:
+                self.last_call_usage.update(
+                    selection_outcome="selected_but_post_render_insufficient",
+                    post_render_reason="required_target_visibility_lost",
+                )
+            raise RuntimeError(
+                "post_render_insufficient: functional final render lost a "
+                "required target"
+            )
+        if self.last_call_usage is not None:
+            self.last_call_usage["preview_render_count"] = int(
+                self.last_call_usage.get("preview_render_count") or 0
+            ) + sum(
+                len(step.get("candidate_ids") or [])
+                for step in selection_log.get("steps") or []
+                if isinstance(step, dict)
+            )
+            self.last_call_usage["final_render_count"] = (
+                len(items) + len(final_identity_by_id)
+            )
+            self.last_call_usage["selection_outcome"] = "selected"
+            self.last_call_usage["candidate_rejections"] = [
+                {
+                    "candidate_id": str(candidate.get("id") or ""),
+                    "reason_codes": [
+                        item.get("reason_code")
+                        for item in (
+                            candidate.get(
+                                "usable_surface_observability", {}
+                            ).get("rejections")
+                            or []
+                        )
+                    ],
+                }
+                for candidate in candidates
+                if isinstance(candidate, dict)
+                and (
+                    candidate.get(
+                        "usable_surface_observability", {}
+                    ).get("rejections")
+                )
+            ]
+        manifest = {
+            "policy": self.policy_config,
+            "resolved_mode": resolved_mode,
+            "event_key": event_dir.name,
+            "role": "functional_probe_evidence",
+            "functional_probe": deepcopy(
+                request.get("functional_probe")
+            ),
+            "candidate_budget": {
+                "configured_max": self.candidate_count,
+                "requested": int(requested_candidate_count),
+                "generated": len(candidates),
+                "pool_generated": max(
+                    (
+                        int(
+                            candidate.get(
+                                "functional_probe_candidate_pool_count",
+                                len(candidates),
+                            )
+                        )
+                        for candidate in candidates
+                        if isinstance(candidate, dict)
+                    ),
+                    default=len(candidates),
+                ),
+                "shortlist_policy": (
+                    candidates[0].get(
+                        "functional_probe_shortlist_policy"
+                    )
+                    if candidates
+                    else None
+                ),
+            },
+            "selection": selection_log,
+            "final_identity_visibility": final_visibility,
+            "final_identity_audit_paths": list(
+                final_identity_by_id.values()
+            ),
+            "acquired_artifact_paths": list(acquired_artifact_paths),
+            "acquired_artifacts": _freeze_evidence_paths(
+                [Path(path) for path in acquired_artifact_paths]
+            ),
+            "selected_poses": selected,
+            "render_manifest": str(
+                event_dir / "final" / "camera_render_manifest.json"
+            ),
+            "judge_presentation": "raw_rgb_only",
+            "source_scene_pixels_modified": False,
+            "render_evidence": [item["path"] for item in items],
+            "render_evidence_artifacts": _freeze_evidence_items(items),
+            "render_evidence_items": items,
+        }
+        _write_json(
+            event_dir / "camera_evidence_manifest.json",
+            manifest,
+        )
+        return items
+
+    def _resolve_usable_surface_hypotheses(
+        self,
+        request: dict[str, Any],
+        *,
+        event_dir: Path,
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        """Decode trusted local side IDs before final camera generation."""
+
+        probe = (
+            request.get("functional_probe")
+            if isinstance(request.get("functional_probe"), dict)
+            else {}
+        )
+        raw_targets = probe.get("surface_targets")
+        targets = (
+            [item for item in raw_targets if isinstance(item, dict)]
+            if isinstance(raw_targets, list)
+            else []
+        )
+        audit: dict[str, Any] = {
+            "schema_version": "usable_surface_acquisition_v2",
+            "status": "not_requested" if not targets else "running",
+            "decoder_calls": 0,
+            "cache_hits": 0,
+            "precomputed_hypotheses": 0,
+            "preview_render_count": 0,
+            "hypotheses": [],
+            "banks": [],
+            "failures": [],
+            "scene_access": "read_only",
+        }
+        if not targets:
+            return [], audit
+        decode = getattr(self.selector, "decode_usable_surface", None)
+        if not callable(decode):
+            audit.update(
+                status="not_configured",
+                reason="usable_surface_decoder_not_configured",
+            )
+            return [], audit
+        scene = request.get("scene")
+        if not isinstance(scene, dict):
+            audit.update(
+                status="failed",
+                reason="usable_surface_scene_unavailable",
+            )
+            return [], audit
+        objects = {
+            str(item.get("id")): item
+            for item in scene.get("objects") or []
+            if isinstance(item, dict) and item.get("id")
+        }
+        self.usable_surface_cache_dir.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+        hypotheses: list[dict[str, Any]] = []
+        for target in targets:
+            target_id = str(target.get("target_id") or "").strip()
+            roles = [
+                str(item)
+                for item in target.get("surface_roles") or []
+                if str(item).strip()
+            ]
+            object_record = objects.get(target_id)
+            if object_record is None or not roles:
+                audit["failures"].append(
+                    {
+                        "target_id": target_id,
+                        "reason": "surface_target_invalid",
+                    }
+                )
+                continue
+            identity = usable_surface_cache_identity(object_record)
+            role_cache_key = _canonical_json_sha256(
+                {
+                    **identity,
+                    "surface_roles": sorted(roles),
+                }
+            )
+            cache_path = (
+                self.usable_surface_cache_dir
+                / f"{role_cache_key}.json"
+            )
+            cached = _read_json_object(cache_path)
+            decoded: dict[str, Any] | None = None
+            cache_hit = False
+            precomputed = target.get("precomputed_hypothesis")
+            if isinstance(precomputed, dict):
+                precomputed_available = set(
+                    str(item)
+                    for item in (
+                        precomputed.get("available_side_ids")
+                        or (
+                            precomputed.get("provenance") or {}
+                        ).get("trusted_side_ids")
+                        or []
+                    )
+                    if str(item)
+                )
+                precomputed_complete = bool(
+                    precomputed.get(
+                        "bank_complete",
+                        (
+                            precomputed.get("provenance") or {}
+                        ).get("bank_complete", False),
+                    )
+                )
+                validated = validate_usable_surface_response(
+                    {
+                        key: deepcopy(precomputed.get(key))
+                        for key in ("status", "surfaces", "reason")
+                    },
+                    allowed_surface_roles=set(roles),
+                    available_side_ids=precomputed_available,
+                    bank_complete=precomputed_complete,
+                )
+                decoded = {
+                    **validated,
+                    "schema_version": precomputed.get(
+                        "schema_version"
+                    ),
+                    "target_id": target_id,
+                    "bank_complete": precomputed_complete,
+                    "available_side_ids": sorted(
+                        precomputed_available
+                    ),
+                    "decision_authority": "none",
+                    "provenance": {
+                        **deepcopy(
+                            precomputed.get("provenance") or {}
+                        ),
+                        "reuse_source": (
+                            "functional_boundary_evidence_prepass"
+                        ),
+                    },
+                }
+                audit["precomputed_hypotheses"] += 1
+            if decoded is None and isinstance(cached, dict):
+                raw_result = cached.get("result")
+                if (
+                    isinstance(raw_result, dict)
+                    and raw_result.get("bank_complete", True) is True
+                ):
+                    try:
+                        cached_available = set(
+                            raw_result.get("available_side_ids")
+                            or USABLE_SURFACE_SIDE_IDS
+                        )
+                        validated = validate_usable_surface_response(
+                            {
+                                key: deepcopy(raw_result.get(key))
+                                for key in ("status", "surfaces", "reason")
+                            },
+                            allowed_surface_roles=set(roles),
+                            available_side_ids=cached_available,
+                            bank_complete=True,
+                        )
+                    except (TypeError, ValueError):
+                        validated = None
+                    if validated is not None:
+                        decoded = {
+                            **validated,
+                            "schema_version": raw_result.get(
+                                "schema_version"
+                            ),
+                            "target_id": target_id,
+                            "bank_complete": True,
+                            "available_side_ids": sorted(
+                                cached_available
+                            ),
+                            "decision_authority": "none",
+                            "provenance": deepcopy(
+                                raw_result.get("provenance") or {}
+                            ),
+                        }
+                        audit["cache_hits"] += 1
+                        cache_hit = True
+            preview_records: list[dict[str, Any]] = []
+            if decoded is None:
+                try:
+                    side_bank = generate_usable_surface_side_bank(
+                        scene,
+                        target_id=target_id,
+                    )
+                    preview_dir = (
+                        event_dir
+                        / "usable_surface_previews"
+                        / _slug(target_id)
+                    )
+                    preview_manifest = self.renderer.render_camera_views(
+                        blend_file=self.blend_file,
+                        out_dir=preview_dir,
+                        camera_views=side_bank,
+                        preview=True,
+                    )
+                    paths_by_id = _views_by_id(preview_manifest)
+                    identity_spec = build_focus_overlay_spec(
+                        scene=scene,
+                        metric="functional_consistency",
+                        object_ids=[target_id],
+                        detector_evidence={},
+                        architecture_element=None,
+                        geometry_manifest=None,
+                        geometry_base_dir=None,
+                    )
+                    for identity_target in (
+                        identity_spec.get("targets") or []
+                    ):
+                        if isinstance(identity_target, dict):
+                            identity_target[
+                                "required_for_visibility"
+                            ] = True
+                    identity_manifest = self._render_overlay_views(
+                        request=request,
+                        out_dir=preview_dir / "identity_audit",
+                        camera_views=side_bank,
+                        overlay_spec=identity_spec,
+                        preview=True,
+                    )
+                    identity_by_id = _views_by_id(identity_manifest)
+                    identity_visibility = {
+                        candidate_id: measure_focus_visibility(
+                            path,
+                            targets=[
+                                item
+                                for item in (
+                                    identity_spec.get("targets") or []
+                                )
+                                if isinstance(item, dict)
+                            ],
+                            **_focus_visibility_options(identity_spec),
+                        )
+                        for candidate_id, path in identity_by_id.items()
+                    }
+                    visible_side_ids = {
+                        candidate_id
+                        for candidate_id, visibility in (
+                            identity_visibility.items()
+                        )
+                        if _visibility_covers_required_targets(
+                            visibility,
+                            identity_spec,
+                        )
+                    }
+                    preview_records = [
+                        {
+                            "side_id": str(candidate["id"]),
+                            "image_path": paths_by_id.get(
+                                str(candidate["id"])
+                            ),
+                            "pose": deepcopy(candidate),
+                        }
+                        for candidate in side_bank
+                        if paths_by_id.get(str(candidate["id"]))
+                        and str(candidate["id"]) in visible_side_ids
+                    ]
+                    audit["preview_render_count"] += (
+                        len(paths_by_id) + len(identity_by_id)
+                    )
+                    available_side_ids = [
+                        str(item["side_id"]) for item in preview_records
+                    ]
+                    bank_complete = set(available_side_ids) == set(
+                        USABLE_SURFACE_SIDE_IDS
+                    )
+                    audit["banks"].append(
+                        {
+                            "target_id": target_id,
+                            "requested_side_ids": list(
+                                USABLE_SURFACE_SIDE_IDS
+                            ),
+                            "generated_side_ids": [
+                                str(item.get("id")) for item in side_bank
+                            ],
+                            "available_side_ids": available_side_ids,
+                            "missing_side_ids": [
+                                side_id
+                                for side_id in USABLE_SURFACE_SIDE_IDS
+                                if side_id not in available_side_ids
+                            ],
+                            "identity_visibility": deepcopy(
+                                identity_visibility
+                            ),
+                            "bank_complete": bank_complete,
+                        }
+                    )
+                    category = str(
+                        object_record.get("category")
+                        or object_record.get("retrieval_category")
+                        or ""
+                    )
+                    if not preview_records:
+                        decoded = {
+                            "status": "surface_unavailable",
+                            "surfaces": [],
+                            "reason": (
+                                "No trusted local-side preview survived "
+                                "technical generation and rendering."
+                            ),
+                            "bank_complete": False,
+                            "available_side_ids": [],
+                            "schema_version": "usable_surface_decode_v2",
+                            "target_id": target_id,
+                            "decision_authority": "none",
+                            "provenance": {
+                                "backend": "deterministic_adapter",
+                                "decoder_called": False,
+                            },
+                        }
+                    else:
+                        audit["decoder_calls"] += 1
+                        raw_decoded = decode(
+                            {
+                                "scene_id": scene.get("scene_id"),
+                                "target_id": target_id,
+                                "target_category": category,
+                                "surface_roles": roles,
+                                "previews": preview_records,
+                            }
+                        )
+                        validated = validate_usable_surface_response(
+                            {
+                                key: deepcopy(raw_decoded.get(key))
+                                for key in ("status", "surfaces", "reason")
+                            },
+                            allowed_surface_roles=set(roles),
+                            available_side_ids=set(available_side_ids),
+                            bank_complete=bank_complete,
+                        )
+                        decoded = {
+                            **validated,
+                            "schema_version": raw_decoded.get(
+                                "schema_version"
+                            ),
+                            "target_id": target_id,
+                            "bank_complete": bank_complete,
+                            "available_side_ids": list(
+                                available_side_ids
+                            ),
+                            "decision_authority": "none",
+                            "provenance": deepcopy(
+                                raw_decoded.get("provenance") or {}
+                            ),
+                        }
+                        if bank_complete:
+                            _atomic_write_json(
+                                cache_path,
+                                {
+                                    "schema_version": (
+                                        "usable_surface_cache_record_v2"
+                                    ),
+                                    "cache_identity": {
+                                        **identity,
+                                        "surface_roles": sorted(roles),
+                                    },
+                                    "result": deepcopy(decoded),
+                                },
+                            )
+                except Exception as exc:
+                    audit["failures"].append(
+                        {
+                            "target_id": target_id,
+                            "reason": "usable_surface_decode_failed",
+                            "error_type": type(exc).__name__,
+                            "error": str(exc),
+                        }
+                    )
+                    continue
+            hypothesis = {
+                **deepcopy(decoded),
+                "cache_key": role_cache_key,
+                "cache_hit": cache_hit,
+                "requested_surface_roles": list(roles),
+            }
+            hypotheses.append(hypothesis)
+        audit["hypotheses"] = deepcopy(hypotheses)
+        audit["status"] = (
+            "complete"
+            if len(hypotheses) == len(targets)
+            else "partial"
+            if hypotheses
+            else "failed"
+        )
+        if self.last_call_usage is not None:
+            self.last_call_usage["preview_render_count"] = int(
+                self.last_call_usage.get("preview_render_count") or 0
+            ) + int(audit["preview_render_count"])
+        return hypotheses, audit
+
     def _render_final_focus_evidence(
         self,
         *,
@@ -2397,6 +3407,41 @@ def _require_visible_selector_targets(
     )
 
 
+def _visibility_covers_required_targets(
+    visibility: dict[str, Any],
+    overlay_spec: dict[str, Any],
+    *,
+    min_visible_fraction: float = 0.001,
+) -> bool:
+    targets = [
+        target
+        for target in overlay_spec.get("targets", [])
+        if isinstance(target, dict)
+    ]
+    required_ids = [
+        str(target.get("id"))
+        for target in targets
+        if target.get("required_for_visibility")
+        and target.get("id") is not None
+    ]
+    if not required_ids:
+        required_ids = [str(targets[0].get("id"))] if targets else []
+    fractions = (
+        visibility.get("target_pixel_fractions")
+        if isinstance(visibility, dict)
+        else None
+    )
+    return bool(
+        required_ids
+        and isinstance(fractions, dict)
+        and all(
+            float(fractions.get(object_id) or 0.0)
+            >= min_visible_fraction
+            for object_id in required_ids
+        )
+    )
+
+
 def _selector_preview_visibility_warning(
     visibility_by_id: dict[str, dict[str, Any]],
     overlay_spec: dict[str, Any],
@@ -2445,6 +3490,21 @@ def _views_by_id(manifest: dict[str, Any]) -> dict[str, str]:
         if isinstance(item, dict) and item.get("id") and item.get("path"):
             result[str(item["id"])] = str(item["path"])
     return result
+
+
+def _effective_candidate_count(
+    request: dict[str, Any],
+    *,
+    configured_max: int,
+) -> int:
+    probe = request.get("functional_probe")
+    if not isinstance(probe, dict):
+        return int(configured_max)
+    kind = str(probe.get("kind") or "").strip()
+    probe_budget = FUNCTIONAL_PROBE_CANDIDATE_BUDGETS.get(kind)
+    if probe_budget is None:
+        return int(configured_max)
+    return max(1, min(int(configured_max), int(probe_budget)))
 
 
 def _event_key(request: dict[str, Any]) -> str:
@@ -2598,6 +3658,31 @@ def _slug(value: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]+", "_", value).strip("._") or "item"
 
 
+def _read_json_object(path: Path) -> dict[str, Any] | None:
+    if not path.is_file():
+        return None
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def _atomic_write_json(path: Path, value: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    temporary.write_text(
+        json.dumps(
+            value,
+            indent=2,
+            ensure_ascii=True,
+            default=str,
+        ),
+        encoding="utf-8",
+    )
+    temporary.replace(path)
+
+
 def _write_json(path: Path, value: Any) -> None:
     path.write_text(json.dumps(value, indent=2, ensure_ascii=True, default=str), encoding="utf-8")
 
@@ -2639,8 +3724,10 @@ def _evidence_view_id(item: dict[str, Any]) -> str:
 def _cached_artifacts_valid(
     manifest: dict[str, Any],
     paths: list[Path],
+    *,
+    record_key: str = "render_evidence_artifacts",
 ) -> bool:
-    artifacts = manifest.get("render_evidence_artifacts")
+    artifacts = manifest.get(record_key)
     if not isinstance(artifacts, list) or len(artifacts) != len(paths):
         return False
     for index, (record, path) in enumerate(zip(artifacts, paths)):
@@ -2667,6 +3754,36 @@ def _cached_paths(path: Path) -> list[Path] | None:
         return None
     paths = [Path(str(value)) for value in values]
     return paths if _cached_artifacts_valid(manifest, paths) else None
+
+
+def _manifest_acquired_artifact_paths(value: Any) -> list[str]:
+    raw = str(value or "").strip()
+    if not raw:
+        return []
+    path = Path(raw).expanduser()
+    if not path.is_file():
+        return []
+    try:
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    if not isinstance(manifest, dict):
+        return []
+    values = manifest.get("acquired_artifact_paths")
+    if not isinstance(values, list):
+        values = [
+            *list(manifest.get("render_evidence") or []),
+            *list(manifest.get("final_identity_audit_paths") or []),
+        ]
+    return list(
+        dict.fromkeys(
+            str(item)
+            for item in values
+            if isinstance(item, (str, Path))
+            and str(item).strip()
+            and Path(str(item)).expanduser().is_file()
+        )
+    )
 
 
 def _cached_items(
@@ -2696,4 +3813,17 @@ def _cached_items(
         if not isinstance(item, dict) or not item.get("path") or not Path(str(item["path"])).is_file():
             return None
         paths.append(Path(str(item["path"])))
-    return items if _cached_artifacts_valid(manifest, paths) else None
+    if not _cached_artifacts_valid(manifest, paths):
+        return None
+    acquired_values = manifest.get("acquired_artifact_paths")
+    if acquired_values is not None:
+        if not isinstance(acquired_values, list) or not acquired_values:
+            return None
+        acquired_paths = [Path(str(value)) for value in acquired_values]
+        if not _cached_artifacts_valid(
+            manifest,
+            acquired_paths,
+            record_key="acquired_artifacts",
+        ):
+            return None
+    return items

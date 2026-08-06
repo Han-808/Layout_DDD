@@ -30,6 +30,7 @@ if str(WORKER_DIR) not in sys.path:
 from blender_worker import (
     CANONICAL_ID_PROPERTY,
     _configure_render,
+    _ensure_camera_evidence_lighting,
     _source_architecture_contract,
 )
 
@@ -55,6 +56,7 @@ def main() -> None:
         cycles_samples=args.cycles_samples,
         cycles_denoising=args.cycles_denoising,
     )
+    lighting = _ensure_camera_evidence_lighting(poses)
     degradations = _apply_overlay(overlay_spec)
     role = str(overlay_spec.get("role") or "collision_pair_overlay")
     views = [_render_pose(pose, out_dir, index, role=role) for index, pose in enumerate(poses)]
@@ -64,9 +66,12 @@ def main() -> None:
         "backend": "blender_read_only_focus_overlay_v1",
         "source_blend": str(Path(bpy.data.filepath).resolve()) if bpy.data.filepath else None,
         "source_scene_saved": False,
-        "scene_mutation_scope": "ephemeral_overlay_camera_material_wireframe_marker_only",
+        "scene_mutation_scope": (
+            "ephemeral_overlay_camera_material_wireframe_marker_and_benchmark_lighting_only"
+        ),
         "render_engine": args.render_engine,
         "render_config": render_config,
+        "lighting": lighting,
         "role": role,
         "metric": overlay_spec.get("metric"),
         "target_ids": [target.get("id") for target in targets],

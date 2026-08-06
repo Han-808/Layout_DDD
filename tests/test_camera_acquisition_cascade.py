@@ -22,6 +22,9 @@ from benchmark.visual_judge.interfaces import (
     EvidenceGateResult,
     JudgeRequest,
 )
+from benchmark.visual_judge.interfaces.camera import (
+    TrustedCameraCandidateBank,
+)
 from benchmark.visual_judge.orchestration.controller import (
     VLMEvaluationController,
 )
@@ -330,7 +333,7 @@ def test_vlm_selector_dispatch_without_model_inference_is_counted_separately():
         }
     )
     controller = VLMEvaluationController(
-        judge=_Judge([_need_more()], calls),
+        judge=_Judge([_need_more(), _valid()], calls),
         renderer=_Renderer([], calls),
         vlm_camera_selector=raw,
         evidence_gate=_Gate([_gate(ready=True)], calls),
@@ -339,7 +342,10 @@ def test_vlm_selector_dispatch_without_model_inference_is_counted_separately():
 
     result = controller.run(_request(), candidate_views=())
 
-    assert result.stop_reason == "vlm_no_feasible_candidate"
+    assert result.stop_reason == (
+        "vlm_no_feasible_candidate_forced_choice"
+    )
+    assert result.status == "valid"
     assert raw.calls == 0
     telemetry = result.audit["experiment_telemetry"]
     assert telemetry["vlm_selector_dispatches"] == 1
@@ -618,6 +624,92 @@ def test_no_feasible_candidate_escalates_without_extra_gate() -> None:
     ]
     assert escalations[0]["reason"] == "no_feasible_candidate"
     assert escalations[0]["attempted_candidate_ids"] == ["det-view"]
+
+
+def test_empty_trusted_bank_reaches_cascade_then_forced_choice() -> None:
+    calls: list[str] = []
+
+    class EmptyBank:
+        def build(self, request, *, constraints):
+            del request, constraints
+            return TrustedCameraCandidateBank(
+                candidates=(),
+                rejected_candidates=(
+                    {
+                        "candidate_id": "candidate-a",
+                        "reason_codes": ["geometry_infeasible"],
+                    },
+                ),
+                backend="test_empty_bank",
+                provenance={"candidate_count": 1},
+            )
+
+    controller = VLMEvaluationController(
+        judge=_Judge([_need_more(), _valid()], calls),
+        renderer=_Renderer([], calls),
+        deterministic_camera_selector=_Selector(
+            "deterministic",
+            [
+                {
+                    "outcome": "no_feasible_candidate",
+                    "attempted_candidate_ids": [],
+                    "rejected_candidates": [],
+                    "reason_codes": ["no_feasible_candidate"],
+                    "reason": "the technical bank is empty",
+                }
+            ],
+            calls,
+        ),
+        vlm_camera_selector=_Selector(
+            "vlm",
+            [
+                {
+                    "outcome": "no_feasible_candidate",
+                    "attempted_candidate_ids": [],
+                    "rejected_candidates": [],
+                    "reason_codes": ["no_trusted_repair_plan"],
+                    "reason": "there is no trusted VLM acquisition option",
+                }
+            ],
+            calls,
+        ),
+        candidate_bank_builder=EmptyBank(),
+        evidence_gate=_Gate([_gate(ready=True)], calls),
+        control=_control("deterministic_then_vlm"),
+    )
+
+    result = controller.run(_request())
+
+    assert result.status == "valid"
+    assert result.stop_reason == (
+        "vlm_no_feasible_candidate_forced_choice"
+    )
+    assert calls == [
+        "gate",
+        "judge",
+        "deterministic",
+        "vlm",
+        "judge",
+    ]
+    escalation = next(
+        event
+        for event in result.audit["trace"]
+        if event.get("stage") == "camera_escalation"
+    )
+    assert escalation["from_stage"] == "deterministic"
+    assert escalation["to_stage"] == "vlm"
+    assert result.audit["terminal_forced_choice"] == {
+        "applied": True,
+        "ambiguity_before_forcing": True,
+        "trigger_stop_reason": "vlm_no_feasible_candidate",
+        "original_evidence_request": {
+            "target_ids": ["a", "b"],
+            "missing_observations": ["contact_surface_visible"],
+            "view_goal": "show the contact surface",
+            "metadata": {},
+        },
+        "final_status": "valid",
+    }
 
 
 def test_deterministic_constraint_conflict_has_explicit_escalation_reason():
@@ -1069,19 +1161,29 @@ def test_nonfinite_render_cost_is_structured_render_failure() -> None:
     )
 
 
-def test_repeated_judge_request_reports_budget_exhaustion() -> None:
+def test_repeated_judge_request_forces_choice_at_round_budget() -> None:
     result, calls, _, vlm, _ = _run(
         policy="deterministic_then_vlm",
         gates=[_gate(ready=True), _gate(ready=True)],
-        judge_results=[_need_more(), _need_more()],
+        judge_results=[_need_more(), _need_more(), _valid()],
         deterministic_results=[_selected("det-view")],
         render_results=[_rendered("det")],
         total_overrides={"max_evidence_rounds": 1},
     )
 
-    assert result.stop_reason == "max_evidence_rounds_exhausted"
+    assert result.status == "valid"
+    assert (
+        result.stop_reason
+        == "max_evidence_rounds_exhausted_forced_choice"
+    )
     assert calls == [
-        "gate", "judge", "deterministic", "render", "gate", "judge"
+        "gate",
+        "judge",
+        "deterministic",
+        "render",
+        "gate",
+        "judge",
+        "judge",
     ]
     assert not vlm.requests
 
@@ -1092,6 +1194,7 @@ def test_unsubstantiated_conflict_reason_does_not_forge_conflict_escalation():
     result, _, _, _, _ = _run(
         policy="deterministic_then_vlm",
         gates=[_gate(ready=True)],
+        judge_results=[_need_more(), _valid()],
         deterministic_results=[deterministic],
         vlm_results=[_no_feasible()],
     )
@@ -1782,6 +1885,7 @@ def test_vlm_stage_failure_does_not_return_to_deterministic() -> None:
     result, calls, deterministic, vlm, _ = _run(
         policy="deterministic_then_vlm",
         gates=[_gate(ready=True)],
+        judge_results=[_need_more(), _valid()],
         deterministic_results=[_no_feasible()],
         vlm_results=[
             {
@@ -1799,27 +1903,50 @@ def test_vlm_stage_failure_does_not_return_to_deterministic() -> None:
         ],
     )
 
-    assert result.stop_reason == "vlm_no_feasible_candidate"
-    assert calls == ["gate", "judge", "deterministic", "vlm"]
+    assert result.stop_reason == (
+        "vlm_no_feasible_candidate_forced_choice"
+    )
+    assert result.status == "valid"
+    assert calls == [
+        "gate",
+        "judge",
+        "deterministic",
+        "vlm",
+        "judge",
+    ]
     assert len(deterministic.requests) == len(vlm.requests) == 1
+    forced = result.audit["terminal_forced_choice"]
+    assert forced["applied"] is True
+    assert forced["ambiguity_before_forcing"] is True
+    assert forced["trigger_stop_reason"] == (
+        "vlm_no_feasible_candidate"
+    )
+    assert forced["original_evidence_request"]["target_ids"] == [
+        "a",
+        "b",
+    ]
 
 
 def test_total_selector_budget_is_shared_across_judge_requests() -> None:
     result, calls, deterministic, _, _ = _run(
         policy="deterministic_only",
         gates=[_gate(ready=True), _gate(ready=True)],
-        judge_results=[_need_more(), _need_more()],
+        judge_results=[_need_more(), _need_more(), _valid()],
         deterministic_results=[_selected("det-view")],
         render_results=[_rendered("det")],
         total_overrides={"max_selector_calls": 1},
     )
 
-    assert result.stop_reason == "max_selector_calls_exhausted"
+    assert result.status == "valid"
+    assert (
+        result.stop_reason
+        == "max_selector_calls_exhausted_forced_choice"
+    )
     assert len(deterministic.requests) == 1
     telemetry = result.audit["experiment_telemetry"]
     assert telemetry["deterministic_selector_calls"] == 1
     assert telemetry["vlm_selector_calls"] == 0
-    assert telemetry["judge_calls"] == 2
+    assert telemetry["judge_calls"] == 3
     assert calls.count("render") == 1
 
 

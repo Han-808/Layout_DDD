@@ -12,6 +12,8 @@ import pytest
 
 from benchmark.evaluator.generic_validity.collision import (
     CollisionEvaluationError,
+    DEFAULT_COLLISION_CONFIG,
+    _shallow_surface_layer_overlap_evidence,
     _tangent_plane_contact_certificate,
     check_collision,
 )
@@ -287,6 +289,192 @@ def test_thin_plane_slicing_object_never_receives_tangent_certificate() -> None:
     )
 
     assert certificate is None
+
+
+def test_shallow_floor_layer_overlap_is_context_not_an_exemption() -> None:
+    layer = normalize_object(
+        _obj(
+            "surface_layer",
+            [1.5, 1.5, 0.005],
+            [2.0, 2.0, 0.01],
+            category="surface covering",
+        )
+    )
+    load = normalize_object(
+        _obj(
+            "load",
+            [1.5, 1.5, 0.5],
+            [1.0, 1.0, 1.0],
+            category="furniture",
+        )
+    )
+    evidence = _shallow_surface_layer_overlap_evidence(
+        _scene([]),
+        layer,
+        load,
+        obb=obb_sat_test(layer, load),
+        mesh_evidence={
+            "surface_intersection": True,
+            "intersection": {"definitive": True},
+        },
+        config=dict(DEFAULT_COLLISION_CONFIG),
+    )
+
+    assert evidence is not None
+    assert evidence["layer_object_id"] == "surface_layer"
+    assert evidence["vertical_overlap_m"] == pytest.approx(0.01)
+    assert evidence["substrate_crossing_m"] == pytest.approx(0.0)
+    assert evidence["decision_authority"] == "vlm_judge"
+    assert evidence["carries_validity_prior"] is False
+    assert evidence["automatic_exemption"] is False
+    policy = check_collision(_scene([_obj("only", [1, 1, 0.5], [1, 1, 1])]))[
+        "shallow_surface_layer_policy"
+    ]
+    assert policy["max_overlap_m"] == pytest.approx(0.0125)
+    assert policy["automatic_exemption"] is False
+
+
+def test_shallow_floor_layer_context_reaches_collision_judge(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    import benchmark.evaluator.generic_validity.collision as collision_module
+
+    layer_center = [1.5, 1.5, 0.005]
+    layer_size = [2.0, 2.0, 0.01]
+    load_center = [1.5, 1.5, 0.5]
+    load_size = [1.0, 1.0, 1.0]
+    _box_mesh(tmp_path / "layer.ply", layer_center, layer_size)
+    _box_mesh(tmp_path / "load.ply", load_center, load_size)
+    geometry = _geometry_manifest(
+        tmp_path,
+        {
+            "layer": {
+                "representation": TRIANGLE_MESH_REPRESENTATION,
+                "geometry_path": "layer.ply",
+                "transform_baked": True,
+                "geometry_source": "test",
+                "complete": True,
+            },
+            "load": {
+                "representation": TRIANGLE_MESH_REPRESENTATION,
+                "geometry_path": "load.ply",
+                "transform_baked": True,
+                "geometry_source": "test",
+                "complete": True,
+            },
+        },
+    )
+    monkeypatch.setattr(
+        collision_module,
+        "evaluate_mesh_pair",
+        lambda *args, **kwargs: {
+            "status": "evaluated",
+            "mesh_state": "surface_intersection",
+            "mesh_reliable_for_separation": False,
+            "surface_intersection": True,
+            "intersection": {
+                "intersects": True,
+                "definitive": True,
+            },
+            "closest_points": None,
+            "focus_region": None,
+        },
+    )
+
+    class CapturingJudge(_Judge):
+        def __init__(self) -> None:
+            super().__init__("valid")
+            self.requests: list[dict] = []
+
+        def adjudicate_p0b(self, request: dict) -> dict:
+            self.requests.append(request)
+            return super().adjudicate_p0b(request)
+
+    judge = CapturingJudge()
+    report = check_collision(
+        _scene(
+            [
+                _obj("layer", layer_center, layer_size),
+                _obj("load", load_center, load_size),
+            ]
+        ),
+        collision_geometry=geometry,
+        vlm_judge=judge,
+    )
+
+    pair = report["pairs"][0]
+    context = pair["shallow_surface_layer_overlap_evidence"]
+    assert pair["route"] == "vlm_adjudicated"
+    assert context["vertical_overlap_m"] == pytest.approx(0.01)
+    assert (
+        judge.requests[0]["detector_evidence"][
+            "shallow_surface_layer_overlap"
+        ]
+        == context
+    )
+
+
+@pytest.mark.parametrize(
+    ("layer_center", "layer_size", "load_center", "load_size"),
+    [
+        # Overlap exceeds the bounded shallow-contact depth.
+        (
+            [1.5, 1.5, 0.01],
+            [2.0, 2.0, 0.02],
+            [1.5, 1.5, 0.5],
+            [1.0, 1.0, 1.0],
+        ),
+        # A vertical thin plane is not a horizontal support layer.
+        (
+            [1.5, 1.5, 0.5],
+            [0.01, 2.0, 1.0],
+            [1.5, 1.5, 0.5],
+            [1.0, 1.0, 1.0],
+        ),
+        # A horizontal plane through the middle of an object is not floor contact.
+        (
+            [1.5, 1.5, 0.5],
+            [2.0, 2.0, 0.01],
+            [1.5, 1.5, 0.5],
+            [1.0, 1.0, 1.0],
+        ),
+        # The other object crosses below the supporting substrate.
+        (
+            [1.5, 1.5, 0.005],
+            [2.0, 2.0, 0.01],
+            [1.5, 1.5, 0.495],
+            [1.0, 1.0, 1.0],
+        ),
+    ],
+)
+def test_shallow_floor_layer_context_does_not_generalize_to_other_collisions(
+    layer_center,
+    layer_size,
+    load_center,
+    load_size,
+) -> None:
+    layer = normalize_object(
+        _obj("layer", layer_center, layer_size)
+    )
+    load = normalize_object(
+        _obj("load", load_center, load_size)
+    )
+
+    assert (
+        _shallow_surface_layer_overlap_evidence(
+            _scene([]),
+            layer,
+            load,
+            obb=obb_sat_test(layer, load),
+            mesh_evidence={
+                "surface_intersection": True,
+                "intersection": {"definitive": True},
+            },
+            config=dict(DEFAULT_COLLISION_CONFIG),
+        )
+        is None
+    )
 
 
 # 4. OBB overlap without mesh calls VLM exactly once
@@ -922,6 +1110,16 @@ def test_glb_scene_graph_transforms_are_baked(monkeypatch: pytest.MonkeyPatch, t
         ({"obb_sat_eps": -1.0}, "obb_sat_eps"),
         ({"mesh_enclosure_eps_m": float("inf")}, "mesh_enclosure_eps_m"),
         ({"separation_threshold_m": float("nan")}, "separation_threshold_m"),
+        (
+            {
+                "shallow_surface_layer_min_horizontal_alignment": 1.1
+            },
+            "min_horizontal_alignment",
+        ),
+        (
+            {"shallow_surface_layer_policy": "direct_valid"},
+            "shallow_surface_layer_policy",
+        ),
         ({"score_mode": "unknown"}, "score_mode"),
         ({"official_mode": True, "detector_only": True}, "mutually exclusive"),
     ],

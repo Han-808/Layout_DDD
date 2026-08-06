@@ -204,6 +204,8 @@ def test_collision_rubric_conveys_no_label_prior_and_obb_insufficient() -> None:
     assert "no verdict prior" in lowered
     assert "obb overlap alone is insufficient" in lowered
     assert "actual unintended physical surface interpenetration" in lowered
+    assert "not a generic tolerance for small intersections" in lowered
+    assert "compliant layer" in lowered
     # No deterministic invalid prior: the rubric never instructs invalid on overlap.
     assert "return invalid only when" in lowered
 

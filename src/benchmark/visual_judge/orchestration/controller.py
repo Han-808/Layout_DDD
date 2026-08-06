@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass, replace
-from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -49,6 +48,7 @@ from benchmark.visual_judge.adapters.deterministic_camera import (
 )
 from benchmark.visual_judge.orchestration.audit import (
     build_evaluation_audit as _build_evaluation_audit,
+    evidence_artifact_refs as _evidence_artifact_refs,
     evidence_fingerprint as _evidence_fingerprint,
     evidence_refs as _evidence_refs,
     jsonable as _jsonable,
@@ -57,6 +57,7 @@ from benchmark.visual_judge.orchestration.audit import (
 )
 from benchmark.visual_judge.orchestration.budget import (
     budget_stop_reason as _budget_stop_reason,
+    normalize_acquisition_ledger as _normalize_acquisition_ledger,
     normalize_camera_usage as _normalize_camera_usage,
     usage_overrun_stop_reason as _usage_overrun_stop_reason,
 )
@@ -284,6 +285,7 @@ class VLMEvaluationController:
         gate_manifest_path: str | None = None,
         control_manifest_path: str | Path | None = None,
         initial_camera_usage: dict[str, Any] | None = None,
+        initial_acquisition_ledger: dict[str, Any] | None = None,
     ) -> VLMEvaluationResult:
         judge_request = JudgeRequest.from_value(request)
         goal = deepcopy(evidence_goal or {})
@@ -297,12 +299,51 @@ class VLMEvaluationController:
 
         trace: list[dict[str, Any]] = []
         evidence = list(deepcopy(judge_request.visual_evidence))
-        total_images_acquired = len(evidence)
         manifest_path = gate_manifest_path
         initial_usage = _normalize_camera_usage(initial_camera_usage)
-        selector_calls = initial_usage["selector_calls"]
-        actions_used = initial_usage["camera_actions"]
-        rounds_used = 0
+        initial_ledger = _normalize_acquisition_ledger(
+            initial_acquisition_ledger
+        )
+        acquired_artifact_ids = set(initial_ledger["artifact_ids"])
+        total_images_acquired = int(
+            initial_ledger["total_images_acquired"]
+        )
+
+        def register_artifacts(items: list[Any] | tuple[Any, ...]) -> int:
+            nonlocal total_images_acquired
+            added = 0
+            for artifact_id in _evidence_artifact_refs(list(items)):
+                # Ledgers written before artifact-scoped accounting stored
+                # bare evidence refs.  Accept that additive legacy spelling
+                # without charging the same path again.
+                legacy_alias = (
+                    artifact_id.removeprefix("path:")
+                    if artifact_id.startswith("path:")
+                    else None
+                )
+                if (
+                    artifact_id in acquired_artifact_ids
+                    or (
+                        legacy_alias is not None
+                        and legacy_alias in acquired_artifact_ids
+                    )
+                ):
+                    continue
+                acquired_artifact_ids.add(artifact_id)
+                total_images_acquired += 1
+                added += 1
+            return added
+
+        register_artifacts(evidence)
+        selector_calls = (
+            int(initial_ledger["selector_calls"])
+            + initial_usage["selector_calls"]
+        )
+        actions_used = (
+            int(initial_ledger["camera_actions"])
+            + initial_usage["camera_actions"]
+        )
+        rounds_used = int(initial_ledger["evidence_rounds"])
         judged_fingerprints: set[str] = set()
         last_judge: JudgeResult | None = None
         pending_request: EvidenceRequest | None = None
@@ -315,7 +356,14 @@ class VLMEvaluationController:
         relation_type = _request_relation_type(judge_request)
         camera_constraints: CameraConstraintSet | None = None
         acquisition_state = CameraAcquisitionState.create(
-            self.effective_camera_acquisition_policy
+            self.effective_camera_acquisition_policy,
+            total_rounds_used=rounds_used,
+            total_deterministic_rounds_used=int(
+                initial_ledger["deterministic_rounds"]
+            ),
+            total_vlm_rounds_used=int(
+                initial_ledger["vlm_rounds"]
+            ),
         )
         telemetry = CameraExperimentTelemetry(
             policy=self.effective_camera_acquisition_policy
@@ -324,12 +372,21 @@ class VLMEvaluationController:
             renderer=self.renderer,
             control=self.control,
         )
-        finish = partial(
-            self._finish,
-            judge_request=judge_request,
-            acquisition_state=acquisition_state,
-            telemetry=telemetry,
-        )
+        def finish(**kwargs: Any) -> VLMEvaluationResult:
+            return self._finish(
+                **kwargs,
+                acquisition_ledger=_current_acquisition_ledger(
+                    artifact_ids=acquired_artifact_ids,
+                    total_images_acquired=total_images_acquired,
+                    rounds_used=rounds_used,
+                    selector_calls=selector_calls,
+                    actions_used=actions_used,
+                    state=acquisition_state,
+                ),
+                judge_request=judge_request,
+                acquisition_state=acquisition_state,
+                telemetry=telemetry,
+            )
 
         def unresolved(
             *,
@@ -343,6 +400,84 @@ class VLMEvaluationController:
                 evidence=evidence,
                 judge_result=last_judge,
                 evidence_request=pending_request,
+                trace=trace,
+                selector_calls=selector_calls,
+                actions_used=actions_used,
+                rounds_used=rounds_used,
+                total_images_acquired=total_images_acquired,
+                control_manifest_path=control_manifest_path,
+            )
+
+        def force_terminal_choice(
+            *,
+            trigger_stop_reason: str,
+        ) -> VLMEvaluationResult:
+            nonlocal last_judge
+            if (
+                last_judge is None
+                or last_judge.status != "need_more_evidence"
+                or pending_request is None
+            ):
+                raise ValueError(
+                    "terminal forced choice requires an actual prior "
+                    "need_more_evidence response"
+                )
+            ambiguity_before_forcing = bool(
+                last_judge.status == "need_more_evidence"
+            )
+            original_evidence_request = (
+                pending_request.to_dict()
+                if pending_request is not None
+                else None
+            )
+            final_request = _terminal_forced_choice_judge_request(
+                judge_request,
+                evidence=evidence,
+                previous_request=pending_request,
+                trigger_stop_reason=trigger_stop_reason,
+            )
+            raw_judge = self.judge.judge(final_request)
+            last_judge = JudgeResult.from_value(raw_judge)
+            telemetry.record_judge(
+                evidence_round=rounds_used,
+                episode_index=acquisition_state.episode_index,
+                status=last_judge.status,
+            )
+            trace.append(
+                {
+                    "stage": "judge",
+                    "evidence_round": rounds_used,
+                    "result": last_judge.to_dict(),
+                    "images_used": _evidence_refs(evidence),
+                    "terminal_forced_choice": True,
+                    "ambiguity_before_forcing": (
+                        ambiguity_before_forcing
+                    ),
+                    "original_evidence_request": (
+                        original_evidence_request
+                    ),
+                    "budget_trigger_stop_reason": trigger_stop_reason,
+                    "visual_evidence_policy": (
+                        "all_available_then_judge_context_bounded"
+                    ),
+                }
+            )
+            if last_judge.status not in {"valid", "invalid"}:
+                raise ValueError(
+                    "terminal budget-exhaustion Judge must return valid or "
+                    "invalid; need_more_evidence is forbidden"
+                )
+            return finish(
+                status=last_judge.status,
+                confidence=last_judge.confidence,
+                reason=last_judge.reason,
+                defects=last_judge.defects,
+                stop_reason=(
+                    f"{trigger_stop_reason}_forced_choice"
+                ),
+                evidence=evidence,
+                judge_result=last_judge,
+                evidence_request=None,
                 trace=trace,
                 selector_calls=selector_calls,
                 actions_used=actions_used,
@@ -380,6 +515,15 @@ class VLMEvaluationController:
             )
 
             if total_images_acquired > self.control.max_total_images:
+                if (
+                    gate_result.ready
+                    and last_judge is not None
+                    and last_judge.status == "need_more_evidence"
+                    and pending_request is not None
+                ):
+                    return force_terminal_choice(
+                        trigger_stop_reason="max_total_images_exhausted",
+                    )
                 return unresolved(
                     reason="visual evidence exceeds the resolved image budget",
                     stop_reason="max_total_images_exhausted",
@@ -391,6 +535,15 @@ class VLMEvaluationController:
                 camera_actions=actions_used,
             )
             if usage_overrun is not None:
+                if (
+                    gate_result.ready
+                    and last_judge is not None
+                    and last_judge.status == "need_more_evidence"
+                    and pending_request is not None
+                ):
+                    return force_terminal_choice(
+                        trigger_stop_reason=usage_overrun,
+                    )
                 return unresolved(
                     reason=(
                         "observed camera usage exceeds the resolved control "
@@ -589,9 +742,8 @@ class VLMEvaluationController:
                 total_images_acquired=total_images_acquired,
             )
             if budget_stop is not None:
-                return unresolved(
-                    reason="visual evidence budget exhausted before another repair",
-                    stop_reason=budget_stop,
+                return force_terminal_choice(
+                    trigger_stop_reason=budget_stop,
                 )
 
             if camera_constraints is None:
@@ -696,14 +848,6 @@ class VLMEvaluationController:
                         "provenance": deepcopy(bank.provenance),
                     }
                 )
-                if not candidates:
-                    return unresolved(
-                        reason=(
-                            "trusted technical candidate bank contains no "
-                            "feasible camera pose"
-                        ),
-                        stop_reason="no_feasible_candidate",
-                    )
             active_observations = (
                 set(camera_constraints.required_observations)
                 | set(camera_constraints.preserved_observations)
@@ -733,9 +877,8 @@ class VLMEvaluationController:
                     state=acquisition_state,
                 )
                 if stage_stop is not None:
-                    return unresolved(
-                        reason="camera acquisition stage budget exhausted",
-                        stop_reason=stage_stop,
+                    return force_terminal_choice(
+                        trigger_stop_reason=stage_stop,
                     )
                 repair_plans = _repair_plans_for_vlm(
                     constraints=camera_constraints,
@@ -973,9 +1116,8 @@ class VLMEvaluationController:
                     continue
                 if acquisition_state.stage == "vlm":
                     acquisition_state.mark_vlm_failed(selection.outcome)
-                return unresolved(
-                    reason=selection.reason,
-                    stop_reason=(
+                return force_terminal_choice(
+                    trigger_stop_reason=(
                         "vlm_no_feasible_candidate"
                         if acquisition_state.stage == "vlm"
                         else "no_feasible_candidate"
@@ -998,9 +1140,10 @@ class VLMEvaluationController:
             selector_calls += render_execution.selector_calls
             actions_used += render_execution.camera_actions
             if render_execution.failure_kind == "budget_exhausted":
-                return unresolved(
-                    reason=str(render_execution.reason),
-                    stop_reason=str(render_execution.stop_reason),
+                return force_terminal_choice(
+                    trigger_stop_reason=str(
+                        render_execution.stop_reason
+                    ),
                 )
             if render_execution.failure_kind == "render_failure":
                 rejected_evidence = list(
@@ -1031,6 +1174,14 @@ class VLMEvaluationController:
                 failure_provenance = (
                     render_execution.failure_provenance or {}
                 )
+                failure_artifacts = (
+                    _acquired_artifacts_from_provenance(
+                        failure_provenance,
+                        fallback=rejected_evidence,
+                    )
+                )
+                if failure_artifacts:
+                    register_artifacts(failure_artifacts)
                 telemetry.record_render_failure(
                     stage=acquisition_state.stage,
                     preview_count=_render_count(
@@ -1051,7 +1202,6 @@ class VLMEvaluationController:
                     error=str(render_execution.error),
                 )
                 if rejected_evidence:
-                    total_images_acquired += len(rejected_evidence)
                     rejected_gate = self._check_gate(
                         request=judge_request,
                         visual_evidence=rejected_evidence,
@@ -1093,6 +1243,62 @@ class VLMEvaluationController:
             rendered_view_count = (
                 render_execution.rendered_view_count
             )
+            rendered_artifacts = _acquired_artifacts_from_provenance(
+                rendered.provenance,
+                fallback=list(rendered.visual_evidence),
+            )
+            register_artifacts(rendered_artifacts)
+            if total_images_acquired > self.control.max_total_images:
+                rounds_used += 1
+                acquisition_state.record_render_round()
+                manifest_path = rendered.manifest_path
+                trace.append(
+                    {
+                        "stage": "render",
+                        "selection_stage": (
+                            acquisition_state.last_render_stage
+                        ),
+                        "evidence_round": rounds_used,
+                        "status": "rejected_budget_overrun",
+                        "result": rendered.to_dict(),
+                        "rendered_view_count": rendered_view_count,
+                        "acquired_artifact_count": len(
+                            rendered_artifacts
+                        ),
+                        "total_images_acquired": (
+                            total_images_acquired
+                        ),
+                        "max_total_images": (
+                            self.control.max_total_images
+                        ),
+                        "accepted_for_judging": False,
+                    }
+                )
+                telemetry.record_render(
+                    stage=str(
+                        acquisition_state.last_render_stage
+                    ),
+                    preview_count=_render_count(
+                        rendered.provenance,
+                        "preview_render_count",
+                        default=0,
+                    ),
+                    full_count=_render_count(
+                        rendered.provenance,
+                        "full_render_count",
+                        default=len(rendered_artifacts),
+                    ),
+                    gpu_time_seconds=_render_duration(
+                        rendered.provenance
+                    ),
+                    evidence_round=rounds_used,
+                    episode_index=acquisition_state.episode_index,
+                )
+                return force_terminal_choice(
+                    trigger_stop_reason=(
+                        "max_total_images_exhausted"
+                    ),
+                )
             evidence = _merge_evidence(
                 evidence,
                 rendered,
@@ -1101,7 +1307,6 @@ class VLMEvaluationController:
                 ),
             )
             current_fingerprint = _evidence_fingerprint(evidence)
-            total_images_acquired += len(rendered.visual_evidence)
             rounds_used += 1
             acquisition_state.record_render_round()
             manifest_path = rendered.manifest_path
@@ -1291,6 +1496,7 @@ class VLMEvaluationController:
         actions_used: int,
         rounds_used: int,
         total_images_acquired: int,
+        acquisition_ledger: dict[str, Any],
         control_manifest_path: str | Path | None,
         judge_request: JudgeRequest,
         acquisition_state: CameraAcquisitionState,
@@ -1323,6 +1529,7 @@ class VLMEvaluationController:
             actions_used=actions_used,
             rounds_used=rounds_used,
             total_images_acquired=total_images_acquired,
+            acquisition_ledger=acquisition_ledger,
         )
         written_path: str | None = None
         if control_manifest_path is not None:
@@ -1341,6 +1548,99 @@ class VLMEvaluationController:
             audit=audit,
             manifest_path=written_path,
         )
+
+
+def _terminal_forced_choice_judge_request(
+    request: JudgeRequest,
+    *,
+    evidence: list[Any],
+    previous_request: EvidenceRequest | None,
+    trigger_stop_reason: str,
+) -> JudgeRequest:
+    stop_reason = str(trigger_stop_reason or "").strip()
+    if not stop_reason:
+        raise ValueError(
+            "budget-exhaustion finalization requires a stop reason"
+        )
+    context = deepcopy(request.context)
+    # Keep the established additive request key for compatibility. The
+    # trigger reason distinguishes budget exhaustion from an exhausted camera
+    # acquisition path such as no_feasible_candidate.
+    context["budget_exhaustion_finalization"] = {
+        "required": True,
+        "trigger_stop_reason": stop_reason,
+        "ambiguity_before_forcing": previous_request is not None,
+        "visual_evidence_policy": (
+            "all_available_then_judge_context_bounded"
+        ),
+        "available_visual_count": len(evidence),
+        "previous_missing_observations": (
+            list(previous_request.missing_observations)
+            if previous_request is not None
+            else []
+        ),
+        "previous_evidence_request": (
+            previous_request.to_dict()
+            if previous_request is not None
+            else None
+        ),
+    }
+    return JudgeRequest(
+        task=request.task,
+        metric=request.metric,
+        claim_or_event=deepcopy(request.claim_or_event),
+        scene_context=deepcopy(request.scene_context),
+        deterministic_evidence=deepcopy(
+            request.deterministic_evidence
+        ),
+        visual_evidence=tuple(deepcopy(evidence)),
+        rubric=deepcopy(request.rubric),
+        context=context,
+    )
+
+
+def _acquired_artifacts_from_provenance(
+    provenance: dict[str, Any] | None,
+    *,
+    fallback: list[Any],
+) -> list[Any]:
+    if isinstance(provenance, dict):
+        values = provenance.get("acquired_artifact_paths")
+        if not isinstance(values, list):
+            provider_usage = provenance.get("provider_usage")
+            values = (
+                provider_usage.get("acquired_artifact_paths")
+                if isinstance(provider_usage, dict)
+                else None
+            )
+        if isinstance(values, list) and values:
+            return list(deepcopy(values))
+    return list(deepcopy(fallback))
+
+
+def _current_acquisition_ledger(
+    *,
+    artifact_ids: set[str],
+    total_images_acquired: int,
+    rounds_used: int,
+    selector_calls: int,
+    actions_used: int,
+    state: CameraAcquisitionState,
+) -> dict[str, Any]:
+    """Serialize the shared metric-level budget state for a later run."""
+
+    return {
+        "schema_version": "metric_camera_acquisition_ledger_v1",
+        "artifact_ids": sorted(artifact_ids),
+        "total_images_acquired": int(total_images_acquired),
+        "evidence_rounds": int(rounds_used),
+        "selector_calls": int(selector_calls),
+        "camera_actions": int(actions_used),
+        "deterministic_rounds": int(
+            state.total_deterministic_rounds_used
+        ),
+        "vlm_rounds": int(state.total_vlm_rounds_used),
+    }
 
 
 def _protected_group_targets(

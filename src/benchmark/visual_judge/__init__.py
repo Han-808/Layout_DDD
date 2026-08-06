@@ -63,6 +63,18 @@ from benchmark.visual_judge.evidence_sufficiency import (
     assess_preview_selection_sufficiency,
     assess_visual_evidence_sufficiency,
 )
+from benchmark.visual_judge.functional_evidence import (
+    FUNCTIONAL_PROBE_KINDS,
+    FUNCTIONAL_PROBE_MAX_UNITS,
+    FUNCTIONAL_PROBE_PLANNER_PROMPT_VERSION,
+    FUNCTIONAL_PROBE_PLAN_VERSION,
+)
+from benchmark.visual_judge.functional_discovery import (
+    FUNCTIONAL_DISCOVERY_PROMPT_VERSION,
+    FUNCTIONAL_DISCOVERY_SCHEMA_VERSION,
+    FUNCTIONAL_SURFACE_ROLES,
+    FunctionalDiscoveryResult,
+)
 from benchmark.visual_judge.evaluator import evaluate_vlm_category
 from benchmark.visual_judge.interfaces import (
     CameraSelectionRequest,
@@ -88,12 +100,18 @@ from benchmark.visual_judge.openai_compatible import (
     build_openai_compatible_vlm_judge,
 )
 from benchmark.visual_judge.openai_camera_selector import (
+    CAMERA_SELECTOR_PROMPT_VERSION,
     OpenAICompatibleCameraSelector,
     build_openai_compatible_camera_selector,
 )
 from benchmark.visual_judge.p0b import LocalViewProvider, adjudicate_p0b_event
 from benchmark.visual_judge.render_views import CameraEvidenceProvider
 from benchmark.visual_judge.roles import DecisionContract, VLMRole
+from benchmark.visual_judge.usable_surface import (
+    USABLE_SURFACE_PROMPT_VERSION,
+    USABLE_SURFACE_SCHEMA_VERSION,
+    USABLE_SURFACE_SIDE_IDS,
+)
 from benchmark.visual_judge.runtime import (
     ControlledVLMJudge,
     EvidenceControlUnresolvedError,
@@ -141,6 +159,14 @@ __all__ = [
     "ExistingCameraSelectorAdapter",
     "ExistingEvidenceRendererAdapter",
     "ExistingJudgeAdapter",
+    "FUNCTIONAL_PROBE_KINDS",
+    "FUNCTIONAL_PROBE_MAX_UNITS",
+    "FUNCTIONAL_PROBE_PLANNER_PROMPT_VERSION",
+    "FUNCTIONAL_PROBE_PLAN_VERSION",
+    "FUNCTIONAL_DISCOVERY_PROMPT_VERSION",
+    "FUNCTIONAL_DISCOVERY_SCHEMA_VERSION",
+    "FUNCTIONAL_SURFACE_ROLES",
+    "FunctionalDiscoveryResult",
     "HybridCameraSelector",
     "InsufficientVisualEvidenceError",
     "Judge",
@@ -150,6 +176,7 @@ __all__ = [
     "MetricAcquisitionPlanningRequest",
     "MetricSpecificAcquisitionPlanner",
     "OpenAICompatibleVLMJudge",
+    "CAMERA_SELECTOR_PROMPT_VERSION",
     "OpenAICompatibleCameraSelector",
     "TrustedCameraCandidateBank",
     "VLMCameraSelector",
@@ -159,6 +186,9 @@ __all__ = [
     "VLMEvaluationController",
     "VLMEvaluationResult",
     "VLMRole",
+    "USABLE_SURFACE_PROMPT_VERSION",
+    "USABLE_SURFACE_SCHEMA_VERSION",
+    "USABLE_SURFACE_SIDE_IDS",
     "adjudicate_p0b_event",
     "assess_preview_selection_sufficiency",
     "assess_visual_evidence_sufficiency",

@@ -86,6 +86,7 @@ def validate_canonical_metric_response(
             "canonical metric valid verdict cannot retain defect records"
         )
     allowed = set(allowed_scopes)
+    allowed_targets = set(allowed_target_ids)
     for defect in defects:
         if not isinstance(defect, dict):
             raise ValueError(
@@ -115,6 +116,13 @@ def validate_canonical_metric_response(
             raise ValueError(
                 "canonical metric defects must identify non-empty target_ids"
             )
+        if allowed_targets:
+            outside_targets = sorted(set(target_ids) - allowed_targets)
+            if outside_targets:
+                raise ValueError(
+                    "canonical metric defect target_ids are outside the "
+                    f"requested evidence scope: {outside_targets}"
+                )
         if not str(defect.get("relation") or "").strip():
             raise ValueError(
                 "canonical metric defects must identify the defective relation"
@@ -150,7 +158,7 @@ def validate_canonical_metric_response(
             _validate_canonical_evidence_request(
                 evidence_request,
                 allowed_missing_observations=allowed_observations,
-                allowed_target_ids=set(allowed_target_ids),
+                allowed_target_ids=allowed_targets,
             )
             requested_missing = evidence_request[
                 "missing_observations"

@@ -23,7 +23,9 @@ from typing import Any
 
 from benchmark.rendering import BlenderRenderer
 from benchmark.rendering.camera_pose import generate_camera_pose_candidates
-from benchmark.visual_judge.openai_compatible import build_openai_compatible_vlm_judge
+from benchmark.visual_judge.openai_camera_selector import (
+    build_openai_compatible_camera_selector,
+)
 from benchmark.visual_judge.p0b import build_p0b_local_evidence_request
 from benchmark.visual_judge.render_views import (
     CameraEvidenceProvider,
@@ -440,9 +442,13 @@ def select_candidates(args: argparse.Namespace) -> int:
         if packet.get("preparation_error"):
             raise RuntimeError(str(packet["preparation_error"]))
         _validate_candidate_packet(packet, path)
-        judge = build_openai_compatible_vlm_judge(deepcopy(config))
+        selector = build_openai_compatible_camera_selector(
+            deepcopy(config)
+        )
         call_started = time.time()
-        decision = judge.select_camera_views(deepcopy(packet["selector_request"]))
+        decision = selector.select_camera_views(
+            deepcopy(packet["selector_request"])
+        )
         elapsed = time.time() - call_started
         if decision.get("action") is not None:
             raise ValueError("selection-only arm returned a forbidden camera action")

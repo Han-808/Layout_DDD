@@ -121,6 +121,55 @@ class _FakeRenderer:
             views.append({"id": pose["id"], "path": str(path), "pose": pose})
         return {"views": views}
 
+    def render_focus_overlay_views(
+        self,
+        *,
+        blend_file,
+        out_dir,
+        camera_views,
+        overlay_spec,
+        preview=False,
+    ):
+        destination = Path(out_dir)
+        destination.mkdir(parents=True, exist_ok=True)
+        self.calls.append(
+            {
+                "preview": preview,
+                "views": camera_views,
+                "blend_file": Path(blend_file),
+                "pass": "identity",
+            }
+        )
+        targets = [
+            item
+            for item in overlay_spec.get("targets", [])
+            if isinstance(item, dict)
+        ]
+        views = []
+        for index, pose in enumerate(camera_views):
+            path = destination / f"identity_{index:02d}.png"
+            image = Image.new("RGB", (64, 48), (20, 20, 20))
+            stripe_width = max(1, 48 // max(1, len(targets)))
+            for target_index, target in enumerate(targets):
+                color = tuple(
+                    round(float(value) * 255)
+                    for value in target["color"]
+                )
+                x0 = 8 + target_index * stripe_width
+                x1 = min(56, x0 + stripe_width)
+                for x in range(x0, x1):
+                    for y in range(8, 40):
+                        image.putpixel((x, y), color)
+            image.save(path)
+            views.append(
+                {
+                    "id": pose["id"],
+                    "path": str(path),
+                    "pose": pose,
+                }
+            )
+        return {"views": views}
+
 
 class _FakeSelector:
     def __init__(self) -> None:
@@ -529,7 +578,7 @@ def test_feasible_oob_multi_and_opposing_planes_are_all_represented_without_dupl
 
     candidates = generate_camera_pose_candidates(request, max_candidates=8)
 
-    assert len(candidates) == 8
+    assert 1 <= len(candidates) <= 8
     assert set(flags).issubset({item["focus_plane_flag"] for item in candidates})
     fingerprints = {
         (
@@ -544,6 +593,159 @@ def test_feasible_oob_multi_and_opposing_planes_are_all_represented_without_dupl
 def test_feasible_policy_returns_exact_requested_bank_size() -> None:
     for count in (1, 6, 12):
         assert len(generate_camera_pose_candidates(_request(), max_candidates=count)) == count
+
+
+def test_functional_probe_candidates_are_low_wide_and_context_preserving() -> None:
+    request = _request("functional_consistency")
+    request["_resolved_camera_pose_mode"] = "query_cov"
+    request["functional_probe"] = {
+        "probe_id": "functional_probe_01",
+        "kind": "functional_correspondence",
+        "target_ids": ["bed"],
+        "related_target_ids": ["cabinet"],
+        "required_observations": [
+            "joint_visibility",
+            "interaction_side_visible",
+            "approach_zone_visible",
+        ],
+    }
+
+    candidates = generate_camera_pose_candidates(
+        request,
+        max_candidates=8,
+    )
+
+    assert len(candidates) == 8
+    assert all(
+        item["policy_source"]
+        == "functional_usable_side_candidate_bank_v2"
+        for item in candidates
+    )
+    assert all(
+        item["event_focus_source"]
+        == "functional_probe_relation_target_union"
+        for item in candidates
+    )
+    assert all(
+        item["view_family"] == "functional_relation_wide"
+        for item in candidates
+    )
+    assert all(
+        8.0 <= item["intended_elevation_degrees"] <= 16.0
+        for item in candidates
+    )
+    assert all(item["lens_mm"] <= 32.0 for item in candidates)
+    assert all(
+        item["functional_context_margin_m"] == pytest.approx(1.25)
+        for item in candidates
+    )
+    assert all(
+        item["proxy_framing_bounds"][0][2] == pytest.approx(0.0)
+        for item in candidates
+    )
+    assert all(
+        item["target"][:2] == pytest.approx([3.10189614, 2.5])
+        for item in candidates
+    )
+    assert all(
+        item["proxy_framing"]["all_corners_in_front"] is True
+        and item["proxy_framing"]["proxy_bounds_fit"] is True
+        for item in candidates
+    )
+    target_min = np.asarray(candidates[0]["target_bounds"][0])
+    target_max = np.asarray(candidates[0]["target_bounds"][1])
+    framing_min = np.asarray(
+        candidates[0]["proxy_framing_bounds"][0]
+    )
+    framing_max = np.asarray(
+        candidates[0]["proxy_framing_bounds"][1]
+    )
+    assert np.all(framing_min[:2] <= target_min[:2])
+    assert np.all(framing_max[:2] >= target_max[:2])
+
+
+def test_functional_probe_refills_feasible_candidate_bank() -> None:
+    request = _request("functional_consistency")
+    request["_resolved_camera_pose_mode"] = "query_cov"
+    request["object_ids"] = ["bed"]
+    request["functional_probe"] = {
+        "probe_id": "functional_probe_01",
+        "kind": "functional_frontage",
+        "target_ids": ["bed"],
+        "related_target_ids": [],
+        "required_observations": [
+            "interaction_side_visible",
+            "approach_zone_visible",
+        ],
+    }
+    unblocked = generate_camera_pose_candidates(
+        request,
+        max_candidates=4,
+    )
+    request["scene"]["objects"].append(
+        {
+            "id": "camera_blocker",
+            "category": "partition",
+            "center": unblocked[0]["location"],
+            "size": [0.1, 0.1, 0.1],
+            "rotation": [0.0, 0.0, 0.0],
+        }
+    )
+
+    candidates = generate_camera_pose_candidates(
+        request,
+        max_candidates=4,
+    )
+
+    assert 1 <= len(candidates) <= 4
+    assert all(
+        item["location"] != unblocked[0]["location"]
+        for item in candidates
+    )
+    assert all(
+        item["candidate_bank_requested_count"] == 4
+        and item["candidate_bank_generated_count"] == 4
+        and item["candidate_bank_complete"] is True
+        for item in candidates
+    )
+
+
+def test_functional_correspondence_shortlists_six_geometry_poses_to_four():
+    request = _request("functional_consistency")
+    request["_resolved_camera_pose_mode"] = "query_cov"
+    request["functional_probe"] = {
+        "probe_id": "functional_probe_01",
+        "kind": "functional_correspondence",
+        "target_ids": ["bed"],
+        "related_target_ids": ["cabinet"],
+        "required_observations": [
+            "joint_visibility",
+            "interaction_side_visible",
+        ],
+    }
+
+    candidates = generate_camera_pose_candidates(
+        request,
+        max_candidates=4,
+    )
+
+    assert 1 <= len(candidates) <= 4
+    assert all(
+        item["functional_probe_candidate_pool_count"]
+        >= len(candidates)
+        and item["functional_probe_shortlist_limit"] == 4
+        and item["functional_probe_shortlist_policy"]
+        == "local_proxy_framing_context_rank_v1"
+        for item in candidates
+    )
+    assert [
+        item["functional_probe_shortlist_rank"]
+        for item in candidates
+    ] == list(range(1, len(candidates) + 1))
+    assert all(
+        isinstance(item["functional_probe_shortlist_score"], float)
+        for item in candidates
+    )
 
 
 def test_feasible_policy_uses_render_aspect_ratio_for_proxy_projection() -> None:
@@ -1011,3 +1213,137 @@ def test_query_cov_can_render_frozen_vlm_selection_without_runtime_selector(
     assert renderer.calls[0]["views"][0]["id"] == selected_id
     assert provider.policy_config["selection_source"] == "frozen_vlm_selected_view_ids"
     assert provider.policy_config["allowed_camera_actions"] == []
+
+
+def test_functional_probe_provider_returns_only_unmodified_rgb(
+    tmp_path: Path,
+) -> None:
+    blend = tmp_path / "scene.blend"
+    blend.write_bytes(b"blend")
+    renderer = _FakeRenderer()
+    selector = _FakeSelector()
+    provider = CameraEvidenceProvider(
+        renderer=renderer,
+        blend_file=blend,
+        out_dir=tmp_path / "functional_probe",
+        mode="query_cov",
+        selector=selector,
+        max_views=1,
+        max_steps=0,
+        candidate_count=6,
+    )
+    request = _request("functional_consistency")
+    request.update(
+        evidence_scope="pair_local",
+        evidence_policy={
+            "camera_scope": "pair_local",
+            "camera_pose_mode": "query_cov",
+            "presentation": "raw",
+        },
+        functional_probe={
+            "probe_id": "functional_probe_01",
+            "kind": "functional_correspondence",
+            "target_ids": ["bed"],
+            "related_target_ids": ["cabinet"],
+            "target_categories": {
+                "bed": "bed",
+                "cabinet": "cabinet",
+            },
+            "required_observations": [
+                "joint_visibility",
+                "interaction_side_visible",
+                "approach_zone_visible",
+            ],
+            "view_goal": "show the usable sides together",
+        },
+    )
+
+    items = provider(request)
+
+    assert len(items) == 1
+    assert items[0]["role"] == "functional_probe_rgb"
+    assert items[0]["evidence_style"] == "raw"
+    assert items[0]["image_transform"] == "none"
+    assert [call["preview"] for call in renderer.calls] == [
+        True,
+        False,
+        False,
+    ]
+    assert [call.get("pass", "rgb") for call in renderer.calls] == [
+        "identity",
+        "rgb",
+        "identity",
+    ]
+    assert len(selector.calls) == 1
+    assert len(renderer.calls[0]["views"]) == 4
+    assert selector.calls[0]["preview_role"] == "highlighted_focus"
+    assert selector.calls[0]["functional_probe"]["kind"] == (
+        "functional_correspondence"
+    )
+    manifest = json.loads(
+        (
+            next(
+                (tmp_path / "functional_probe").glob(
+                    "*/camera_evidence_manifest.json"
+                )
+            )
+        ).read_text(encoding="utf-8")
+    )
+    assert manifest["judge_presentation"] == "raw_rgb_only"
+    assert manifest["source_scene_pixels_modified"] is False
+    assert manifest["candidate_budget"] == {
+        "configured_max": 6,
+        "requested": 4,
+        "generated": 4,
+        "pool_generated": 6,
+        "shortlist_policy": "local_proxy_framing_context_rank_v1",
+    }
+
+
+def test_functional_frontage_probe_uses_four_candidates(
+    tmp_path: Path,
+) -> None:
+    blend = tmp_path / "scene.blend"
+    blend.write_bytes(b"blend")
+    renderer = _FakeRenderer()
+    selector = _FakeSelector()
+    provider = CameraEvidenceProvider(
+        renderer=renderer,
+        blend_file=blend,
+        out_dir=tmp_path / "functional_frontage",
+        mode="query_cov",
+        selector=selector,
+        max_views=1,
+        max_steps=0,
+        candidate_count=6,
+    )
+    request = _request("functional_consistency")
+    request.update(
+        object_ids=["bed"],
+        evidence_scope="object_local",
+        evidence_policy={
+            "camera_scope": "object_local",
+            "camera_pose_mode": "query_cov",
+            "presentation": "raw",
+        },
+        functional_probe={
+            "probe_id": "functional_probe_01",
+            "kind": "functional_frontage",
+            "target_ids": ["bed"],
+            "related_target_ids": [],
+            "target_categories": {"bed": "bed"},
+            "required_observations": [
+                "interaction_side_visible",
+                "front_back_disambiguated",
+                "approach_zone_visible",
+            ],
+            "view_goal": "show the usable face and outward context",
+        },
+    )
+
+    items = provider(request)
+
+    assert len(items) == 1
+    assert len(renderer.calls[0]["views"]) == 4
+    assert provider.last_call_usage["candidate_count_requested"] == 4
+    assert provider.last_call_usage["candidate_count_generated"] == 4

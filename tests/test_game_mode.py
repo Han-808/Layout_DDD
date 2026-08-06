@@ -127,6 +127,18 @@ class _Page:
 
 
 class _Judge:
+    def chat_messages(
+        self,
+        messages: list[dict],
+        **kwargs: object,
+    ) -> str:
+        return (
+            '{"object_groups":[{"object_ids":["cube_0000","cube_0001"],'
+            '"label":"arena ensemble","anchor_object_id":null,'
+            '"reason":"Both visible objects share one local evidence scope."}],'
+            '"reason":"Complete two-object partition."}'
+        )
+
     def adjudicate_p0b(self, request: dict) -> dict:
         return {"verdict": "valid", "confidence": 1.0, "reason": "test"}
 
@@ -141,30 +153,12 @@ class _Judge:
         }
 
 
-class _TwoStageStyleJudge(_Judge):
+class _TrackingStyleJudge(_Judge):
     def __init__(self) -> None:
         self.style_requests: list[dict] = []
 
     def adjudicate_scene_quality(self, request: dict) -> dict:
         self.style_requests.append(request)
-        if len(self.style_requests) == 1:
-            return {
-                "evidence_status": "sufficient",
-                "verdict": "invalid",
-                "confidence": 0.8,
-                "reason": "One crate may use an inconsistent rendering style.",
-                "missing_evidence": [],
-                "defects": [
-                    {
-                        "scope": "significant_visible_style_incompatibility",
-                        "target_ids": ["cube_0000"],
-                        "relation": "rendering_style_outlier",
-                        "reason": (
-                            "One crate may use an inconsistent rendering style."
-                        ),
-                    }
-                ],
-            }
         return super().adjudicate_scene_quality(request)
 
 
@@ -280,7 +274,7 @@ def test_game_mode_captures_once_then_runs_the_canonical_evaluator(
     )
 
 
-def test_game_mode_style_suspicion_consumes_frozen_local_bank(
+def test_game_mode_style_mandatory_group_review_consumes_frozen_local_bank(
     tmp_path: Path,
 ) -> None:
     game_root = tmp_path / "game"
@@ -298,7 +292,7 @@ def test_game_mode_style_suspicion_consumes_frozen_local_bank(
         page_factory=lambda renderer: page,
         controlled_camera=mode.renderer_kwargs["controlled_camera"],
     )
-    judge = _TwoStageStyleJudge()
+    judge = _TrackingStyleJudge()
 
     result = run_game_mode(
         game_mode_config=MODE_PATH,
@@ -314,13 +308,13 @@ def test_game_mode_style_suspicion_consumes_frozen_local_bank(
         "l3_scene_quality"
     ]["metrics"]["style_consistency"]
     assert style["status"] == "evaluated"
-    assert style["route"] == "global_screen_then_local"
+    assert style["route"] == "global_discovery_then_forced_group_local"
     assert style["judge_call_count"] == 2
     assert style["evidence_request"]["provider_invoked"] is True
-    assert len(style["local_evidence_paths"]) == 4
+    assert len(style["local_evidence_paths"]) == 1
     assert [request["evidence_phase"] for request in judge.style_requests] == [
-        "global_screen",
-        "local_confirmation",
+        "global_discovery",
+        "group_local_review",
     ]
     assert page.enter_count == 1
 

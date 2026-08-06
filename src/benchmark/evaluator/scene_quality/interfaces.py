@@ -49,11 +49,11 @@ from benchmark.evaluator.scene_quality.group_scoped import (
     group_packet_audit as _group_packet_audit,
     resolve_group_evidence_packets as _resolve_group_evidence_packets,
 )
+from benchmark.evaluator.scene_quality.global_group_first import (
+    evaluate_global_discovery_then_group_local as _evaluate_global_discovery_then_group_local,
+)
 from benchmark.evaluator.scene_quality.json_screen_first import (
     evaluate_json_screen_then_group_visual as _evaluate_json_screen_then_group_visual,
-)
-from benchmark.evaluator.scene_quality.style_global_first import (
-    evaluate_style_global_then_group_local as _evaluate_style_global_then_group_local,
 )
 from benchmark.evaluator.evidence_contract import (
     EVIDENCE_STRATEGIES,
@@ -83,7 +83,7 @@ from benchmark.visual_judge.l3_prompts import (
 )
 
 
-SCENE_QUALITY_INTERFACE_VERSION = "scene_quality_v3"
+SCENE_QUALITY_INTERFACE_VERSION = "scene_quality_v6"
 
 # Canonical L3 output namespace.
 SCENE_QUALITY_INTERFACE_NAMESPACE = "l3_scene_quality"
@@ -152,9 +152,14 @@ JUDGMENT_SCOPE_BY_METRIC = {
     },
     "functional_consistency": {
         "included": [
+            "scene_real_world_usability",
             "group_real_world_usability",
+            "facing_and_interaction_direction",
             "interaction_side_accessibility",
             "opening_clearance",
+            "reachability",
+            "circulation",
+            "functional_support_contact",
             "orientation_for_use",
             "ensemble_operability",
         ],
@@ -172,6 +177,7 @@ JUDGMENT_SCOPE_BY_METRIC = {
             "semantically_inappropriate_support_surface",
             "implausible_placement_height",
             "semantically_inappropriate_scene_zone",
+            "implausible_cross_group_context",
             "implausible_local_context",
         ],
         "excluded": [
@@ -231,7 +237,7 @@ DEFAULT_SCENE_QUALITY_INTERFACE_CONFIG: dict[str, Any] = {
             "weight": 1.0 / 3.0,
             "evidence_policy": {
                 "camera_scope": "global",
-                "camera_mode": "global_top",
+                "camera_mode": "global_oblique",
                 "selector": "deterministic",
                 "image_budget": 1,
                 "presentation": "raw",
@@ -240,35 +246,29 @@ DEFAULT_SCENE_QUALITY_INTERFACE_CONFIG: dict[str, Any] = {
                 "camera_pose_mode": None,
             },
             "evidence_plan": {
-                "evidence_strategy": "global_screen_then_local",
+                "evidence_strategy": (
+                    "global_discovery_then_group_local"
+                ),
                 "global_policy": {
-                    "view_family": "global_top",
+                    "view_family": "canonical_overview_perspective",
                     "image_budget": 1,
-                    "top_down": True,
+                    "top_down": False,
+                    "perspective_diversity_required": False,
                 },
                 "local_policy": {
                     "camera_scope": "group_local",
                     "grouping_policy_id": GROUPING_POLICY_ID,
                     "image_budget": 1,
-                    "max_packet_images": 3,
+                    "global_context_image_budget": 1,
+                    "max_packet_images": 2,
                     "image_order": [
                         "global_context",
                         "group_local",
                     ],
-                    "trigger_states": [
-                        "suspicious",
-                        "insufficient_evidence",
-                    ],
+                    "minimum_group_members": 2,
+                    "force_for_eligible_groups": True,
                 },
-                "router_options": {
-                    "global_screen_then_local": {
-                        "router": "vlm_global_screen",
-                        "trigger_states": [
-                            "suspicious",
-                            "insufficient_evidence",
-                        ],
-                    },
-                },
+                "router_options": None,
                 "text_context": [
                     "original_prompt",
                     "parsed_prompt_requirements",
@@ -392,28 +392,77 @@ DEFAULT_SCENE_QUALITY_INTERFACE_CONFIG: dict[str, Any] = {
             # frozen canonical aggregate below.
             "weight": 1.0,
             "evidence_policy": {
-                "camera_scope": "group_local",
-                "camera_mode": "metric_local",
+                "camera_scope": "global",
+                "camera_mode": "global_oblique",
                 "selector": "deterministic",
-                "image_budget": 3,
-                "global_image_budget": 1,
-                "scoped_image_budget": 1,
+                "image_budget": 1,
                 "presentation": "raw",
-                "image_order": ["global_context", "group_local"],
+                "image_order": None,
                 "include_global_context": True,
                 "camera_pose_mode": None,
             },
             "evidence_plan": {
-                "evidence_strategy": "global_and_local",
+                "evidence_strategy": (
+                    "global_discovery_then_group_local"
+                ),
                 "global_policy": {
-                    "view_family": "global_perspective",
+                    "view_family": "canonical_overview_perspective",
                     "image_budget": 1,
                     "top_down": False,
+                    "perspective_diversity_required": False,
                 },
                 "local_policy": {
                     "camera_scope": "group_local",
                     "grouping_policy_id": GROUPING_POLICY_ID,
                     "image_budget": 1,
+                    "global_context_image_budget": 1,
+                    "max_packet_images": 2,
+                    "image_order": [
+                        "global_context",
+                        "group_local",
+                    ],
+                    "minimum_group_members": 2,
+                    "force_for_eligible_groups": True,
+                },
+                "prejudgement_probe_policy": {
+                    "enabled": True,
+                    "discovery": {
+                        "backend": "vlm",
+                        "decision_authority": "none",
+                        "complete_object_coverage_required": True,
+                        "group_normalization": "deterministic",
+                        "unusual_confirmation_scope": "group_local",
+                    },
+                    "usable_surface": {
+                        "backend": "vlm_trusted_side_ids",
+                        "trusted_side_ids": [
+                            "local_pos_x",
+                            "local_neg_x",
+                            "local_pos_y",
+                            "local_neg_y",
+                        ],
+                        "decode_scope": (
+                            "directed_or_uncertain_clearance_targets_"
+                            "before_probe_budget"
+                        ),
+                        "fallback": "existing_geometry_local_camera",
+                        "scene_access": "read_only",
+                    },
+                    "planner_input": (
+                        "one_global_image_plus_id_category_groups_boundary"
+                    ),
+                    "max_probe_units": 4,
+                    "candidate_count_by_probe_kind": {
+                        "functional_frontage": 4,
+                        "functional_correspondence": 4,
+                        "approach_clearance": 4,
+                    },
+                    "selected_views_per_unit": 1,
+                    "preferred_lens_mm": 32.0,
+                    "elevation_range_degrees": [8.0, 16.0],
+                    "context_margin_m": 1.25,
+                    "judge_presentation": "raw_rgb_only",
+                    "decision_authority": "none",
                 },
                 "router_options": None,
                 "text_context": [
@@ -434,28 +483,37 @@ DEFAULT_SCENE_QUALITY_INTERFACE_CONFIG: dict[str, Any] = {
             "included_in_canonical_aggregate": False,
             "weight": 1.0,
             "evidence_policy": {
-                "camera_scope": "group_local",
-                "camera_mode": "metric_local",
+                "camera_scope": "global",
+                "camera_mode": "global_oblique",
                 "selector": "deterministic",
-                "image_budget": 3,
-                "global_image_budget": 1,
-                "scoped_image_budget": 1,
+                "image_budget": 1,
                 "presentation": "raw",
-                "image_order": ["global_context", "group_local"],
+                "image_order": None,
                 "include_global_context": True,
                 "camera_pose_mode": None,
             },
             "evidence_plan": {
-                "evidence_strategy": "global_and_local",
+                "evidence_strategy": (
+                    "global_discovery_then_group_local"
+                ),
                 "global_policy": {
-                    "view_family": "global_perspective",
+                    "view_family": "canonical_overview_perspective",
                     "image_budget": 1,
                     "top_down": False,
+                    "perspective_diversity_required": False,
                 },
                 "local_policy": {
                     "camera_scope": "group_local",
                     "grouping_policy_id": GROUPING_POLICY_ID,
                     "image_budget": 1,
+                    "global_context_image_budget": 1,
+                    "max_packet_images": 2,
+                    "image_order": [
+                        "global_context",
+                        "group_local",
+                    ],
+                    "minimum_group_members": 2,
+                    "force_for_eligible_groups": True,
                 },
                 "router_options": None,
                 "text_context": [
@@ -581,6 +639,8 @@ def evaluate_scene_quality_interfaces(
     object_grouping_report: dict[str, Any] | list[dict[str, Any]] | None = None,
     render_evidence: list[str] | dict[str, Any] | None = None,
     camera_evidence_provider: Any = None,
+    functional_evidence_planner: Any = None,
+    functional_probe_evidence_provider: Any = None,
     vlm_judge: Any = None,
     authorized_deviations: Any = None,
     metric_applicability: dict[str, Any] | None = None,
@@ -656,6 +716,10 @@ def evaluate_scene_quality_interfaces(
             ),
             render_evidence=render_evidence,
             camera_evidence_provider=camera_evidence_provider,
+            functional_evidence_planner=functional_evidence_planner,
+            functional_probe_evidence_provider=(
+                functional_probe_evidence_provider
+            ),
             vlm_judge=vlm_judge,
             prompt=prompt,
             visual_style_spec=visual_style_spec,
@@ -857,6 +921,8 @@ def _evaluate_metric(
     grouping_report: dict[str, Any] | None,
     render_evidence: list[str] | dict[str, Any] | None,
     camera_evidence_provider: Any,
+    functional_evidence_planner: Any,
+    functional_probe_evidence_provider: Any,
     vlm_judge: Any,
     prompt: str | None,
     visual_style_spec: dict[str, Any] | None,
@@ -874,6 +940,22 @@ def _evaluate_metric(
         in {"scale_consistency", "object_pairing_consistency"}
         and evidence_plan.get("evidence_strategy")
         == "json_screen_then_visual"
+    )
+    global_discovery_then_group_local = bool(
+        metric_name
+        in {
+            "style_consistency",
+            "functional_consistency",
+            "semantic_placement_consistency",
+        }
+        and evidence_plan.get("evidence_strategy")
+        in {
+            "global_discovery_then_group_local",
+            # Compatibility input only: the old conditional style router is
+            # normalized onto the mandatory global/local evaluator so no
+            # active global-local metric can retain short-circuit behavior.
+            "global_screen_then_local",
+        }
     )
     declared_scope = str(policy["camera_scope"])
     # Existing direct callers can still adjudicate a scale packet without
@@ -907,7 +989,13 @@ def _evaluate_metric(
             scene_ids = set(object_ids)
             minimum_members = (
                 2
-                if metric_name == "object_pairing_consistency"
+                if metric_name
+                in {
+                    "object_pairing_consistency",
+                    "style_consistency",
+                    "functional_consistency",
+                    "semantic_placement_consistency",
+                }
                 else 1
             )
             for group in groups:
@@ -1183,14 +1271,10 @@ def _evaluate_metric(
         base.update(status="unresolved", reason=unavailable_reason)
         return base
 
-    if (
-        metric_name == "style_consistency"
-        and isinstance(metric_config.get("evidence_plan"), dict)
-        and metric_config["evidence_plan"].get("evidence_strategy")
-        == "global_screen_then_local"
-    ):
-        return _evaluate_style_global_then_group_local(
+    if global_discovery_then_group_local:
+        return _evaluate_global_discovery_then_group_local(
             base=base,
+            metric_name=metric_name,
             metric_config=metric_config,
             scene=scene,
             object_ids=object_ids,
@@ -1199,6 +1283,10 @@ def _evaluate_metric(
             global_evidence=resolved_evidence,
             render_evidence=render_evidence,
             camera_evidence_provider=camera_evidence_provider,
+            functional_evidence_planner=functional_evidence_planner,
+            functional_probe_evidence_provider=(
+                functional_probe_evidence_provider
+            ),
             vlm_judge=vlm_judge,
             prompt=prompt,
             visual_style_spec=visual_style_spec,
@@ -1778,9 +1866,25 @@ def _judge_request(
     evidence_phase: str = "final",
     decision_mode: str = "final",
     group_scope: GroupCameraScope | None = None,
+    routed_screen_claims: list[dict[str, Any]] | None = None,
+    functional_probe_evidence: dict[str, Any] | None = None,
+    placement_discovery: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    functional_visual_context = bool(
+        metric_name == "functional_consistency"
+        and evidence_phase
+        in {
+            "global_discovery",
+            "group_local_review",
+            "initial_visual",
+        }
+    )
     objects = [
-        _compact_object(item)
+        (
+            _compact_functional_object(item)
+            if functional_visual_context
+            else _compact_object(item)
+        )
         for item in scene.get("objects", [])
         if isinstance(item, dict)
         and (
@@ -1789,10 +1893,35 @@ def _judge_request(
         )
     ]
     selected_groups = [
-        deepcopy(group)
+        (
+            {
+                "group_id": str(group.get("group_id") or ""),
+                "object_ids": [
+                    str(item)
+                    for item in group.get("object_ids") or []
+                    if str(item).strip()
+                ],
+            }
+            if functional_visual_context
+            else deepcopy(group)
+        )
         for group in groups or []
         if not selected_group_ids or str(group.get("group_id")) in set(selected_group_ids)
     ]
+    allowed_defect_target_ids = list(
+        dict.fromkeys(
+            str(item)
+            for item in (
+                selected_object_ids
+                or [
+                    object_record.get("id")
+                    for object_record in scene.get("objects") or []
+                    if isinstance(object_record, dict)
+                ]
+            )
+            if str(item).strip()
+        )
+    )
     request = {
         "category": SCENE_QUALITY_INTERFACE_NAMESPACE,
         "metric": metric_name,
@@ -1822,6 +1951,52 @@ def _judge_request(
         "target_object_ids": list(selected_object_ids),
         "target_group_ids": list(selected_group_ids),
         "object_groups": selected_groups,
+        "functional_probe_evidence": deepcopy(
+            functional_probe_evidence
+        ),
+        "placement_discovery": deepcopy(placement_discovery),
+        "structured_context_policy": (
+            {
+                "object_fields": ["id", "category"],
+                "group_fields": ["group_id", "object_ids"],
+                "excluded_object_fields": [
+                    "center",
+                    "size",
+                    "rotation",
+                    "description",
+                ],
+                "reason": (
+                    "functional visual grounding must not be replaced by "
+                    "transform or grouping-prose shortcuts"
+                ),
+            }
+            if functional_visual_context
+            else None
+        ),
+        "defect_attribution": (
+            {
+                "unit": "object",
+                "target_ids_semantics": (
+                    "exact affected objects only; never the whole evidence "
+                    "group as shorthand"
+                ),
+                "cross_phase_deduplication_key": [
+                    "metric",
+                    "object_id",
+                ],
+                "cross_metric_deduplication": False,
+            }
+            if metric_name
+            in {
+                "style_consistency",
+                "functional_consistency",
+                "semantic_placement_consistency",
+            }
+            else None
+        ),
+        "routed_screen_claims": deepcopy(
+            routed_screen_claims or []
+        ),
         "authorized_deviations": deepcopy(authorized_deviations),
         "visual_style_spec": (
             deepcopy(visual_style_spec)
@@ -1834,12 +2009,24 @@ def _judge_request(
             "verdict": ["valid", "invalid", "ambiguous"],
             "invalid_requires_significant_metric_scoped_defect": True,
             "insufficient_requires_ambiguous": True,
+            "allowed_target_ids": allowed_defect_target_ids,
+            "defect_attribution_unit": (
+                "object"
+                if metric_name
+                in {
+                    "style_consistency",
+                    "functional_consistency",
+                    "semantic_placement_consistency",
+                }
+                else "claim"
+            ),
             "defects": {
                 "required_when_invalid": True,
                 "fields": ["scope", "target_ids", "relation", "reason"],
                 "allowed_scopes": list(
                     JUDGMENT_SCOPE_BY_METRIC[metric_name]["included"]
                 ),
+                "allowed_target_ids": allowed_defect_target_ids,
             },
         },
         **vlm_audit_metadata(
@@ -1851,7 +2038,14 @@ def _judge_request(
     if group_scope is not None:
         scope_value = group_scope.to_dict()
         request["scene_summary"]["group_scope"] = deepcopy(
-            scope_value
+            {
+                "group_id": scope_value.get("group_id"),
+                "member_ids": deepcopy(
+                    scope_value.get("member_ids") or []
+                ),
+            }
+            if functional_visual_context
+            else scope_value
         )
         request.update(
             {
@@ -1886,6 +2080,18 @@ def _compact_object(value: dict[str, Any]) -> dict[str, Any]:
         "center": deepcopy(value.get("center")),
         "size": deepcopy(value.get("size") or proxy.get("bbox_size")),
         "rotation": deepcopy(value.get("rotation")),
+    }
+
+
+def _compact_functional_object(
+    value: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "id": value.get("id"),
+        "category": (
+            value.get("category")
+            or value.get("retrieval_category")
+        ),
     }
 
 

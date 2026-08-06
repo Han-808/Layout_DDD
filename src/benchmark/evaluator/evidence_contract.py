@@ -54,6 +54,7 @@ GROUPING_ROLE = "evidence_partition_not_metric_verdict"
 EVIDENCE_STRATEGIES = (
     "global_only",
     "global_screen_then_local",
+    "global_discovery_then_group_local",
     "json_screen_then_visual",
     "script_screen_then_local",
     "global_and_local",
@@ -66,6 +67,7 @@ ROUTER_STATES = (
     "not_suspicious",
     "suspicious",
     "insufficient_evidence",
+    "confirmed_invalid",
     "failed",
 )
 
@@ -284,7 +286,11 @@ def validate_local_policy(policy: Any, *, where: str = "local_policy") -> dict[s
         raise EvidenceContractError(
             f"{where}.include_global_context must be boolean"
         )
-    for budget_name in ("image_budget", "max_packet_images"):
+    for budget_name in (
+        "image_budget",
+        "global_context_image_budget",
+        "max_packet_images",
+    ):
         if budget_name not in policy:
             continue
         budget = policy[budget_name]
@@ -296,6 +302,23 @@ def validate_local_policy(policy: Any, *, where: str = "local_policy") -> dict[s
             raise EvidenceContractError(
                 f"{where}.{budget_name} must be a positive integer"
             )
+    if "minimum_group_members" in policy:
+        minimum_members = policy["minimum_group_members"]
+        if (
+            isinstance(minimum_members, bool)
+            or not isinstance(minimum_members, int)
+            or minimum_members < 1
+        ):
+            raise EvidenceContractError(
+                f"{where}.minimum_group_members must be a positive integer"
+            )
+    if (
+        "force_for_eligible_groups" in policy
+        and not isinstance(policy["force_for_eligible_groups"], bool)
+    ):
+        raise EvidenceContractError(
+            f"{where}.force_for_eligible_groups must be boolean"
+        )
     return policy
 
 

@@ -8,109 +8,225 @@ semantics.
 from __future__ import annotations
 
 
-L3_METRIC_PROMPT_VERSION = "l3_metric_evidence_routing_v3"
+L3_METRIC_PROMPT_VERSION = "l3_evidence_discovery_routing_v15"
 
 L3_METRIC_BOUNDARY_RULES = (
     "Additional visual evidence can be acquired.",
-    "Evidence insufficiency and semantic uncertainty are different. Return "
-    "insufficient evidence only when another visual observation could "
-    "materially resolve the decision. If the evidence is adequate but no "
-    "clear significant in-scope defect is established, return valid.",
-    "Object pairing concerns object identity and semantic role independently "
-    "of precise transform. If an object would remain inappropriate after "
-    "relocation to a reasonable position in the same scene, the defect belongs "
-    "to object_pairing_consistency.",
-    "Semantic placement assumes that the object identity belongs in the scene. "
-    "It concerns whether the current support surface, height, scene zone, or "
-    "local location is contextually appropriate. An unusual location that does "
-    "not materially prevent use is not by itself a functional defect.",
-    "Functional consistency concerns actual usability. It is invalid only when "
-    "the current orientation, access, clearance, or ensemble arrangement makes "
-    "ordinary operation impossible or materially unusable. An unusual but "
-    "usable location is not a functional defect.",
-    "Scale consistency concerns physical dimensions. An apparent size "
-    "difference that disappears after accounting for perspective, camera "
-    "distance, or legitimate size variation is not a scale defect. Size alone "
-    "is not a style defect.",
-    "Style consistency concerns visible design language. A difference caused "
-    "only by category, physical size, position, orientation, or function is not "
-    "a style defect.",
+    "Judge the current authored scene. Ordinary articulation or handling "
+    "intrinsic to use is allowed; rearranging the scene to repair orientation, "
+    "access, category, scale, or placement is not.",
+    "Evidence insufficiency means that a named observable fact is missing and "
+    "a different view could materially resolve it. Semantic uncertainty, "
+    "subjective preference, and proximity to a normative threshold are not "
+    "evidence insufficiency. If the evidence is adequate but no clear "
+    "significant in-scope defect is established, return valid.",
+    "Object pairing owns object identity and semantic role. If the same object "
+    "would remain inappropriate after relocation to any reasonable location "
+    "in the same scene, it is an object-pairing defect.",
+    "Semantic placement assumes the identity belongs in the scene. It owns the "
+    "current support surface, height, scene zone, and contextual location when "
+    "relocation alone would remove the anomaly.",
+    "Functional consistency owns ordinary usability in the current "
+    "arrangement. It includes usable-side orientation, user access, operating "
+    "clearance, interaction direction, and cross-object correspondence. Do "
+    "not repair a functional failure by imagining that authored scene objects "
+    "are first moved or rotated.",
+    "For functional consistency, an enabled authoritative logical room "
+    "boundary limits usable floor, standing, approach, and operating space. "
+    "Physical wall meshes may be absent by rendering policy: do not penalize "
+    "a missing wall or invent one, but do not treat space outside the logical "
+    "boundary as available.",
+    "Structured functional boundary evidence combines a VLM-decoded trusted "
+    "object-local usable-side hypothesis with deterministic scene geometry. "
+    "Use its nearest-boundary distance, outward-ray boundary distance, and "
+    "inside-boundary approach samples as measurements only. They do not by "
+    "themselves establish a defect or define a universal clearance threshold.",
+    "Scale consistency owns physical dimensions. Perspective, image-space "
+    "size, and camera distance do not establish a scale defect.",
+    "Style consistency owns visible design language. Category, physical size, "
+    "position, orientation, and function alone do not establish a style "
+    "defect.",
     "Collision, penetration, support, floating, and out-of-bounds conditions "
     "are owned by L1. An L1 defect alone must not produce an L3 defect. The same "
     "arrangement may also fail an L3 metric only when that L3 criterion "
     "independently fails.",
-    "The metrics are not required to be mutually exclusive. A scene may fail "
-    "multiple metrics when each metric's independent criterion fails. Do not "
-    "duplicate one underlying observation across metrics unless each requested "
-    "criterion independently fails.",
+    "Metrics may overlap only when each independent criterion fails. Do not "
+    "translate one observation into several metric defects without applying "
+    "each metric's separate threshold.",
+    "Style, functional, and semantic-placement defects use object-level "
+    "attribution because each of those metrics independently judges global "
+    "and group-local visual scopes. For those metrics, each defect's "
+    "target_ids must contain only the "
+    "exact object or objects whose own functional or placement state is "
+    "defective; never list an entire evidence group as shorthand. Another "
+    "object may be named in relation or reason as context without being marked "
+    "defective. Within one metric, global and local observations of the same "
+    "target object form one penalty unit. This deduplication never crosses "
+    "metric boundaries.",
+    "A discovery record, routed candidate, functional probe, placement "
+    "candidate, or decoded usable-side hypothesis identifies what to inspect; "
+    "none is evidence that a defect exists. An incomplete acquisition ledger "
+    "also does not override a verdict: request another observable fact only "
+    "when that fact is necessary to apply this metric.",
+    "Exclude a rendering or materialization artifact only when supplied "
+    "structured provenance explicitly identifies it as benchmark-owned "
+    "degradation. Do not infer that exemption from appearance alone.",
 )
 
 L3_METRIC_RUBRICS = {
     "scale_consistency": (
-        "Judge only whether each target object's physical scale is plausibly "
-        "consistent with its object identity, nearby reference objects, and "
-        "the scene or group context. Return invalid only when an object is "
-        "clearly and materially too large or too small for a plausible "
-        "real-world instance of its category. Account for perspective, camera "
-        "distance, legitimate product or subtype variation, and explicitly "
-        "authorized nonstandard scale. Apparent image size alone is not "
-        "physical-scale evidence. Do not judge object membership, style, "
-        "position, orientation, functionality, collision, support, or general "
-        "scene quality. If reliable relative-scale context is not visible, "
-        "request additional evidence."
+        "Judge only physical scale. Use structured physical dimensions as the "
+        "primary scale evidence and rendered images to verify object identity, "
+        "nearby reference context, and perspective. Return invalid only when "
+        "all of the following hold: the target is materially too large or too "
+        "small for a plausible real-world instance of its identified category; "
+        "the mismatch remains after allowing legitimate product, subtype, and "
+        "authorized nonstandard-size variation; and the mismatch cannot be "
+        "explained by camera distance, perspective, or image-space appearance. "
+        "A rare but plausible size variant is valid. Apparent image size alone "
+        "is not physical-scale evidence. Do not judge object membership, style, "
+        "placement, orientation, usability, collision, support, or general "
+        "scene quality. Request visual evidence only when object identity or "
+        "relative-scale context is not observable and another view could "
+        "resolve it."
     ),
     "style_consistency": (
-        "Judge only whether the visible design language of the target objects "
-        "is coherent with the scene or local ensemble. Relevant properties may "
-        "include form language, design era, materials, surface treatment, "
-        "ornamentation, visual complexity, and representation style. Return "
-        "invalid only when an object is a clear and material visual-style "
-        "outlier. Allow normal within-style variation, coherent mixed styles, "
-        "and differences that amount only to subjective preference. Evaluate "
-        "style independently of object category, scale, position, orientation, "
-        "functionality, collision, support, and prompt completeness."
+        "Judge only visible design language. First determine whether the scene "
+        "contains one coherent visual language or multiple coherent visual "
+        "languages; do not assume that every scene must have a single style. "
+        "For each candidate outlier, identify the visible attributes that "
+        "differ, such as form language, design era, materials, surface "
+        "treatment, ornamentation, visual complexity, palette, or authored "
+        "representation language. Compare the object with relevant "
+        "scene-global and local ensemble context, then determine whether the "
+        "difference is normal within-style variation, a coherent secondary "
+        "style, or merely subjective preference. Return invalid only when a "
+        "specific object remains a clear and material visual-language outlier "
+        "after those alternatives are considered. A difference in category, "
+        "size, position, orientation, function, or color alone without a "
+        "broader design-language conflict is insufficient. Do not judge "
+        "functionality, collision, support, prompt completeness, or general "
+        "scene quality."
     ),
     "object_pairing_consistency": (
-        "Judge only whether each target object's category and semantic role "
-        "plausibly belong in the supplied scene and local group context. The "
-        "supplied group is a visual-evidence scope, not compatibility ground "
-        "truth. Evaluate each supplied target against both the broader scene "
-        "type and the local ensemble. Apply the relocation counterfactual: if "
-        "the object were moved to a reasonable location within the same scene "
-        "without changing its identity, would its category or role still be "
-        "clearly inappropriate? Return invalid only when the incompatibility "
-        "remains. Do not judge the current support surface, zone, height, "
-        "distance, orientation, access, clearance, scale, style, collision, or "
-        "physical support."
+        "Judge only whether an object's identity and semantic role belong in "
+        "this scene and local ensemble, independently of its current "
+        "transform. Apply the relocation test: hold identity, category, scale, "
+        "and style fixed, then imagine relocating the object to a reasonable "
+        "location in the same scene. If at least one ordinary location would "
+        "make its role contextually plausible, the object pairing is valid. "
+        "Return invalid only when its category or semantic role would remain "
+        "clearly inappropriate regardless of reasonable relocation. The "
+        "supplied group is evidence scope, not compatibility ground truth. Do "
+        "not judge current support surface, zone, height, distance, "
+        "orientation, access, clearance, scale, style, collision, or physical "
+        "support."
     ),
     "functional_consistency": (
-        "Judge only whether the target object or local ensemble can perform its "
-        "ordinary real-world function in its current arrangement. Consider "
-        "whether the required interaction side is accessible, the functional "
-        "orientation is usable, necessary opening or operating clearance "
-        "exists, and participating objects can operate together as an "
-        "ensemble. Return invalid only when the current arrangement makes "
-        "ordinary use impossible or materially unusable. A merely "
-        "unconventional or suboptimal arrangement is valid when ordinary use "
-        "remains feasible. Evaluate functionality independently of category "
-        "membership, semantic location alone, style, scale, prompt fidelity, "
-        "and unrelated exact spatial relations. An L1 condition may support a "
-        "functional defect only when ordinary usability independently fails."
+        "Judge only whether ordinary real-world use is feasible in the current "
+        "authored arrangement. For every functional claim, first identify the "
+        "object's ordinary operation and its usable, opening, display, seating, "
+        "control, or interaction side from visible geometry and affordances. "
+        "Do not infer a usable side solely from category, transform metadata, "
+        "or the surface facing the camera. Next identify the minimum conditions "
+        "for ordinary use: an accessible usable side, a plausible user approach "
+        "zone, sufficient operating clearance, and any required interaction "
+        "orientation with related objects. Evaluate those conditions in the "
+        "current arrangement. When the canonical scene declares an enabled "
+        "logical room boundary, treat it as the hard limit of usable floor, "
+        "standing, approach, and operating space. Physical wall geometry may "
+        "be absent by policy: do not penalize the missing wall or infer one, "
+        "but space outside the logical boundary is not available for ordinary "
+        "use. Ordinary articulation or handling intrinsic to use is allowed; "
+        "do not assume that authored scene objects are first relocated, "
+        "rotated, resized, or removed. Return invalid when at least one "
+        "necessary condition is materially unavailable: the usable side faces "
+        "outside the usable room footprint or another inaccessible region, a "
+        "normal user approach zone is "
+        "unavailable, required operating clearance is materially blocked, or "
+        "related objects have incompatible interaction orientation for their "
+        "ordinary joint use. Complete geometric sealing is not required. A "
+        "layout may be materially unusable even when a narrow or awkward "
+        "theoretical interaction remains. Conversely, unconventional or "
+        "suboptimal placement is valid when ordinary use remains readily "
+        "feasible without repairing the authored layout. Cross-group "
+        "functional relations remain in scope for the scene-global pass. "
+        "Attribute each defect only to the object or objects whose ordinary use "
+        "fails. If the usable side, nearest enabled logical boundary, "
+        "interior-side approach zone, or joint interaction orientation is not "
+        "visually determinable, request the corresponding additional "
+        "observation. Occlusion introduced only by the diagnostic camera "
+        "position is not evidence that the ordinary user-facing view is "
+        "blocked in the authored scene. Do not judge identity membership, "
+        "semantic "
+        "location alone, style, scale, prompt fidelity, or L1 geometry by "
+        "itself."
     ),
     "semantic_placement_consistency": (
-        "Judge only whether the current location of each target object is "
-        "semantically plausible, assuming that the object category belongs in "
-        "the scene. Relevant properties include the semantic suitability of "
-        "its support surface, placement height, scene zone, and immediate local "
-        "context. Apply the relocation counterfactual: if the same object were "
-        "moved to an ordinary nearby location without changing its identity, "
-        "scale, style, or intended function, would the anomaly disappear? "
-        "Return invalid only when it would and the current location "
-        "independently fails semantic appropriateness. Do not judge collision, "
-        "penetration, out-of-bounds geometry, floating, physical support, "
-        "category "
-        "compatibility, scale, style, functional orientation, access, "
-        "clearance, operability, or prompt fidelity. An L1 condition alone is "
-        "not a semantic-placement defect."
+        "Judge only semantic location, assuming that the object identity "
+        "belongs in the scene and could perform its intended function when "
+        "suitably placed. Evaluate the current support surface, placement "
+        "height, scene zone, adjacency to context-setting objects, and "
+        "immediate local context. Apply the relocation-only test: hold "
+        "identity, scale, style, intended function, and ordinary usable "
+        "orientation fixed, then ask whether moving the same object to an "
+        "ordinary location in the same scene would remove the anomaly. Return "
+        "invalid only when relocation alone would resolve the issue and the "
+        "current location is materially inappropriate for the object's "
+        "contextual role. An unconventional but contextually plausible "
+        "location is valid. Orientation, facing direction, access, opening "
+        "clearance, and operability belong to functional consistency. Category "
+        "incompatibility belongs to object pairing. Collision, penetration, "
+        "floating, support, and out-of-bounds geometry belong to L1. Attribute "
+        "every defect to the exact misplaced object IDs rather than to the "
+        "whole inspected group."
     ),
+}
+
+
+L3_METRIC_PHASE_PROMPTS = {
+    "style_consistency": {
+        "global_discovery": (
+            "Establish the scene-wide visual language or coherent mixture, "
+            "then localize only material object-level outliers. A weak or "
+            "uncertain difference is a local-confirmation need, not a defect. "
+            "Do not infer fine detail absent from the overview."
+        ),
+        "group_local_review": (
+            "Compare the supplied members' visible form and material details "
+            "with the global style context. Report only exact members that "
+            "remain material outliers; do not mark the group as shorthand."
+        ),
+    },
+    "functional_consistency": {
+        "global_discovery": (
+            "Use the global anchor to inspect direct-use relations, directed "
+            "affordances, and boundary-relative approach. Later probe images "
+            "resolve only their named neutral observation goals. A decoded "
+            "side is a hypothesis, not a conclusion. If a necessary side, "
+            "relation, or boundary-relative approach remains unobservable, "
+            "request that exact observation; otherwise apply the rubric."
+        ),
+        "group_local_review": (
+            "Inspect the supplied group's usable sides, approach regions, and "
+            "within-group direct-use relations. Use the global image only as "
+            "architecture and zone context. Do not make an incomplete "
+            "cross-group claim or treat a surface hypothesis as established "
+            "fact; request a missing necessary observation."
+        ),
+    },
+    "semantic_placement_consistency": {
+        "global_discovery": (
+            "Inspect scene zones, architecture, circulation, and contextual "
+            "anchors. A placement-discovery subject is the only potential "
+            "defect owner; its context IDs only frame the observation. Leave "
+            "fine local support, height, and adjacency to local review."
+        ),
+        "group_local_review": (
+            "Inspect each routed subject's support-surface meaning, height, "
+            "zone, and immediate adjacency. Context IDs are evidence context, "
+            "not defect owners. Do not convert orientation or operability into "
+            "placement defects."
+        ),
+    },
 }

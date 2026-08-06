@@ -208,6 +208,7 @@ def test_additive_partial_config_overrides_only_explicit_fields() -> None:
     assert resolved.max_evidence_rounds == 1
     assert resolved.max_total_images == 4
     assert resolved.max_views_per_round == 2
+    assert resolved.on_budget_exhausted == "force_choice"
     assert resolved.on_selector_failure == "unresolved"
     assert resolved.sources["camera_selector.backend"] == "config"
     assert resolved.sources["budgets.max_total_images"] == "config"
@@ -403,15 +404,15 @@ def test_existing_backend_falls_back_to_deterministic_without_selector() -> None
     assert resolved.requested["camera_selector"]["backend"] == "existing"
 
 
-def test_judge_max_images_caps_effective_total_without_rewriting_request() -> None:
+def test_judge_packet_limit_does_not_rewrite_acquisition_total() -> None:
     resolved = resolve_vlm_evaluation_control(
         {"budgets": {"max_total_images": 6}},
         judge_max_images=4,
     )
 
-    assert resolved.max_total_images == 4
+    assert resolved.max_total_images == 6
     assert resolved.requested["budgets"]["max_total_images"] == 6
-    assert resolved.sources["budgets.max_total_images"] == "judge_capacity"
+    assert resolved.sources["budgets.max_total_images"] == "config"
 
 
 def test_manifest_records_requested_effective_and_sources() -> None:
@@ -442,7 +443,7 @@ def test_manifest_records_requested_effective_and_sources() -> None:
     assert manifest["effective"]["budgets"] == {
         "max_evidence_rounds": 1,
         "max_views_per_round": 3,
-        "max_total_images": 5,
+        "max_total_images": 6,
         "max_camera_actions": 2,
         "max_selector_calls": 3,
     }
@@ -452,7 +453,7 @@ def test_manifest_records_requested_effective_and_sources() -> None:
         manifest["sources"]["budgets.max_views_per_round"]
         == "existing_camera_provider"
     )
-    assert manifest["sources"]["budgets.max_total_images"] == "judge_capacity"
+    assert manifest["sources"]["budgets.max_total_images"] == "config"
     assert (
         manifest["sources"]["judge.allow_need_more_evidence"]
         == "dependency_injection"
@@ -472,6 +473,7 @@ def test_manifest_records_requested_effective_and_sources() -> None:
         {"budgets": {"max_views_per_round": 0}},
         {"budgets": {"max_total_images": True}},
         {"on_budget_exhausted": "raise"},
+        {"on_budget_exhausted": "unresolved"},
     ],
 )
 def test_schema_rejects_values_the_resolver_does_not_support(

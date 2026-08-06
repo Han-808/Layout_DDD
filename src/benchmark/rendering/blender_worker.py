@@ -953,6 +953,147 @@ def _add_lighting(boundary: list[list[float]], room_height: float) -> None:
     bpy.context.collection.objects.link(sun)
 
 
+def _ensure_camera_evidence_lighting(camera_views: list[dict] | None = None) -> dict:
+    """Provide the same ephemeral benchmark lighting used by global renders.
+
+    Trusted prepared blends intentionally contain no persistent cameras or
+    lights. Read-only camera workers therefore need to recreate the benchmark
+    lighting in memory before rendering; otherwise Eevee/Cycles evidence is
+    illuminated only by the sanitized world and is severely underexposed.
+    Existing render-enabled lights are preserved to avoid double-lighting
+    legacy/non-prepared scenes.
+    """
+
+    existing = sorted(
+        obj.name
+        for obj in bpy.data.objects
+        if obj.type == "LIGHT" and not obj.hide_render
+    )
+    if existing:
+        return {
+            "policy": "preserve_existing_scene_lighting_v1",
+            "geometry_source": "existing_scene_lights",
+            "existing_light_names": existing,
+            "added_light_names": [],
+            "ephemeral": False,
+        }
+
+    boundary, room_height, geometry_source = _camera_evidence_lighting_geometry(
+        camera_views or []
+    )
+    before = {obj.name for obj in bpy.data.objects if obj.type == "LIGHT"}
+    _add_lighting(boundary, room_height)
+    added = sorted(
+        obj.name
+        for obj in bpy.data.objects
+        if obj.type == "LIGHT" and obj.name not in before
+    )
+    return {
+        "policy": "ephemeral_benchmark_lighting_v1",
+        "geometry_source": geometry_source,
+        "existing_light_names": [],
+        "added_light_names": added,
+        "ephemeral": True,
+        "boundary": boundary,
+        "room_height": room_height,
+    }
+
+
+def _camera_evidence_lighting_geometry(
+    camera_views: list[dict],
+) -> tuple[list[list[float]], float, str]:
+    scene = bpy.context.scene
+    raw_boundary = scene.get("benchmark_request_boundary")
+    raw_height = scene.get("benchmark_scene_height")
+    try:
+        boundary = json.loads(str(raw_boundary))
+        room_height = float(raw_height)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        boundary = None
+        room_height = 0.0
+    if (
+        isinstance(boundary, list)
+        and len(boundary) >= 3
+        and all(
+            isinstance(point, list)
+            and len(point) == 2
+            and all(
+                isinstance(component, (int, float))
+                and math.isfinite(float(component))
+                for component in point
+            )
+            for point in boundary
+        )
+        and math.isfinite(room_height)
+        and room_height > 0.0
+    ):
+        return (
+            [[float(component) for component in point] for point in boundary],
+            room_height,
+            "scene_provenance",
+        )
+
+    for pose in camera_views:
+        if not isinstance(pose, dict):
+            continue
+        room_bounds = pose.get("room_bounds")
+        if (
+            not isinstance(room_bounds, list)
+            or len(room_bounds) != 6
+        ):
+            continue
+        try:
+            xmin, xmax, ymin, ymax, zmin, zmax = (
+                float(value) for value in room_bounds
+            )
+        except (TypeError, ValueError):
+            continue
+        if not all(
+            math.isfinite(value)
+            for value in (xmin, xmax, ymin, ymax, zmin, zmax)
+        ):
+            continue
+        if xmax <= xmin or ymax <= ymin or zmax <= zmin:
+            continue
+        return (
+            [
+                [xmin, ymin],
+                [xmax, ymin],
+                [xmax, ymax],
+                [xmin, ymax],
+            ],
+            zmax,
+            "camera_room_bounds",
+        )
+
+    meshes = [
+        obj
+        for obj in bpy.context.scene.objects
+        if obj.type == "MESH" and not obj.hide_render
+    ]
+    if meshes:
+        minimum, maximum = _world_bounds(meshes)
+        xmin, ymin = float(minimum.x), float(minimum.y)
+        xmax, ymax = float(maximum.x), float(maximum.y)
+        if xmax > xmin and ymax > ymin:
+            return (
+                [
+                    [xmin, ymin],
+                    [xmax, ymin],
+                    [xmax, ymax],
+                    [xmin, ymax],
+                ],
+                max(2.8, float(maximum.z)),
+                "renderable_mesh_bounds_fallback",
+            )
+
+    return (
+        [[0.0, 0.0], [5.0, 0.0], [5.0, 5.0], [0.0, 5.0]],
+        2.8,
+        "default_room_fallback",
+    )
+
+
 def _render_views(
     boundary: list[list[float]],
     room_height: float,

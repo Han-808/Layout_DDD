@@ -301,13 +301,13 @@ def test_vlm_backend_uses_partition_prompt_and_visual_context(
     assert call["kwargs"]["call_type"] == "vlm_grouping.partition"
     system = call["messages"][0]["content"]
     assert "not a benchmark metric" in system
-    assert "verdict, score, confidence" in system
-    assert "make groups look more plausible" in system
-    assert "A group is a downstream visual-evidence scope." in system
-    assert (
-        "Do not merge spatially distant zones merely because their objects "
-        "have related semantic roles."
-    ) in system
+    assert "verdicts, scores, confidence" in system
+    assert "make the partition appear more plausible" in system
+    assert "smallest local scope" in system
+    assert "Do not chain weak proximity links" in system
+    assert "lower supplied source_index" in system
+    assert 'Set label exactly to "local_scope:<anchor_object_id>"' in system
+    assert result.provenance["prompt_version"] == "vlm_grouping_prompt_v3"
     content = call["messages"][1]["content"]
     assert content[1]["type"] == "image_url"
     assert content[1]["image_url"]["url"].startswith(

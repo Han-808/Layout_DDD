@@ -20,7 +20,11 @@ if str(WORKER_DIR) not in sys.path:
     sys.path.insert(0, str(WORKER_DIR))
 
 from blender_collision_overlay_worker import _apply_overlay, _overlay_targets, _render_pose
-from blender_worker import _configure_render, _source_architecture_contract
+from blender_worker import (
+    _configure_render,
+    _ensure_camera_evidence_lighting,
+    _source_architecture_contract,
+)
 
 
 def main() -> None:
@@ -48,6 +52,7 @@ def main() -> None:
         cycles_samples=args.cycles_samples,
         cycles_denoising=args.cycles_denoising,
     )
+    lighting = _ensure_camera_evidence_lighting(local_views + global_views)
     rgb_views = [
         _render_pose(pose, out_dir, index, role="metric_rgb", filename_prefix="rgb")
         for index, pose in enumerate(local_views)
@@ -75,9 +80,12 @@ def main() -> None:
         "backend": "blender_read_only_focus_bundle_v1",
         "source_blend": str(Path(bpy.data.filepath).resolve()) if bpy.data.filepath else None,
         "source_scene_saved": False,
-        "scene_mutation_scope": "ephemeral_camera_material_wireframe_marker_only",
+        "scene_mutation_scope": (
+            "ephemeral_camera_material_wireframe_marker_and_benchmark_lighting_only"
+        ),
         "render_engine": args.render_engine,
         "render_config": render_config,
+        "lighting": lighting,
         "metric": overlay_spec.get("metric"),
         "target_ids": [target.get("id") for target in targets],
         "legend": overlay_spec.get("legend"),

@@ -26,7 +26,7 @@ def _scene() -> dict:
 def test_shim_names_delegate_to_scene_quality() -> None:
     # Namespace and metric set now reflect the canonical Scene Quality layer.
     assert VISUAL_QUALITY_INTERFACE_NAMESPACE == "l3_scene_quality"
-    assert VISUAL_QUALITY_INTERFACE_VERSION == "scene_quality_v1"
+    assert VISUAL_QUALITY_INTERFACE_VERSION == "scene_quality_v6"
     assert VISUAL_QUALITY_INTERFACE_METRICS == (
         "style_consistency",
         "scale_consistency",
@@ -37,11 +37,13 @@ def test_shim_names_delegate_to_scene_quality() -> None:
 
 def test_shim_resolve_and_evaluate_work() -> None:
     resolved = resolve_visual_quality_config()
-    assert resolved["metrics"]["style_consistency"]["evidence_policy"]["camera_mode"] == "global_top"
+    assert resolved["metrics"]["style_consistency"]["evidence_policy"][
+        "camera_mode"
+    ] == "global_oblique"
 
     report = evaluate_visual_quality_interfaces(_scene(), config={"enabled": True})
     assert report["category"] == "l3_scene_quality"
-    assert report["interface_version"] == "scene_quality_v1"
+    assert report["interface_version"] == "scene_quality_v6"
     assert report["status"] == "unresolved"
     assert report["score"] is None
     assert report["affects_score"] is True

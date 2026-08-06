@@ -79,6 +79,21 @@ CAMERA_SENSOR_WIDTH_MM = 36.0
 CAMERA_SENSOR_FIT = "HORIZONTAL"
 CAMERA_MIN_LENS_MM = 24.0
 CAMERA_FRAME_MARGIN_NDC = 0.85
+FUNCTIONAL_PROBE_CANDIDATE_BUDGETS = {
+    "functional_frontage": 4,
+    "functional_correspondence": 4,
+    "approach_clearance": 4,
+}
+FUNCTIONAL_CORRESPONDENCE_POOL_SIZE = 6
+USABLE_SURFACE_PREVIEW_DISTANCE_SCALES = (1.0, 1.35, 0.7)
+USABLE_SURFACE_PREVIEW_LATERAL_OFFSETS_M = (0.0, 0.25, -0.25, 0.5, -0.5)
+USABLE_SURFACE_PREVIEW_HEIGHT_OFFSETS_M = (0.0, 0.25, -0.25, 0.5)
+USABLE_SURFACE_LOCAL_AXES = {
+    "local_pos_x": (1.0, 0.0, 0.0),
+    "local_neg_x": (-1.0, 0.0, 0.0),
+    "local_pos_y": (0.0, 1.0, 0.0),
+    "local_neg_y": (0.0, -1.0, 0.0),
+}
 
 
 @dataclass(frozen=True)
@@ -210,6 +225,220 @@ def generate_camera_pose_candidates(
     )
 
 
+def generate_usable_surface_side_bank(
+    scene: dict[str, Any],
+    *,
+    target_id: str,
+) -> list[dict[str, Any]]:
+    """Render-facing, deterministic previews of the four object-local sides."""
+
+    if not isinstance(scene, dict):
+        raise TypeError("usable-surface side bank requires a scene")
+    object_id = str(target_id or "").strip()
+    objects = _target_objects(scene, [object_id])
+    if len(objects) != 1:
+        raise ValueError(
+            f"usable-surface target {object_id!r} is unavailable"
+        )
+    obj = objects[0]
+    room = _room_bounds(scene)
+    bounds = _object_bounds(obj)
+    extent = np.maximum(bounds[1] - bounds[0], 0.1)
+    target = np.asarray(obj.center, dtype=float).copy()
+    target[2] = float(
+        np.clip(
+            target[2],
+            room[4] + 0.25,
+            max(room[4] + 0.25, room[5] - 0.25),
+        )
+    )
+    desired_distance = max(
+        1.0,
+        min(4.0, float(max(extent[0], extent[1], extent[2])) * 2.2),
+    )
+    framing_bounds = _functional_probe_framing_bounds(
+        bounds,
+        room=room,
+        context_margin_m=0.45,
+    )
+    scene_objects = _target_objects(scene, [])
+    result: list[dict[str, Any]] = []
+    for side_id, raw_axis in USABLE_SURFACE_LOCAL_AXES.items():
+        local_axis = np.asarray(raw_axis, dtype=float)
+        world_axis = np.asarray(obj.R @ local_axis, dtype=float)
+        world_axis[2] = 0.0
+        norm = float(np.linalg.norm(world_axis))
+        if norm <= 1.0e-9:
+            # Non-upright object transforms can make one intrinsic side
+            # vertical.  That side is unavailable for a horizontal approach
+            # preview; the independent remaining sides stay valid.
+            continue
+        world_axis /= norm
+        azimuth = math.degrees(
+            math.atan2(float(world_axis[1]), float(world_axis[0]))
+        ) % 360.0
+        elevation = 10.0
+        direction = _direction_from_angles(azimuth, elevation)
+        placement = _place_on_feasible_ray(
+            target=target,
+            direction=direction,
+            desired_distance=desired_distance,
+            room=room,
+        )
+        resolved = _repair_usable_surface_preview_location(
+            target=target,
+            direction=direction,
+            desired_distance=desired_distance,
+            room=room,
+            scene_objects=scene_objects,
+            initial_placement=placement,
+        )
+        if resolved is None:
+            # A failed intrinsic side is audited by its absence. Other trusted
+            # sides remain usable; one blocked ray no longer discards the bank.
+            continue
+        location, feasibility = resolved
+        actual_azimuth, actual_elevation, measured_distance = (
+            _pose_angles(location, target)
+        )
+        lens, framing = _fit_proxy_framing_lens(
+            location=location,
+            target=target,
+            bounds=framing_bounds,
+            preferred_lens_mm=45.0,
+            aspect_ratio=16.0 / 9.0,
+        )
+        result.append(
+            {
+                "id": side_id,
+                "name": side_id,
+                "camera_type": "PERSP",
+                "location": _vector_list(location),
+                "target": _vector_list(target),
+                "lens_mm": float(lens),
+                "sensor_width_mm": CAMERA_SENSOR_WIDTH_MM,
+                "sensor_fit": CAMERA_SENSOR_FIT,
+                "clip_start_m": 0.02,
+                "clip_end_m": max(100.0, room[5] * 10.0),
+                "azimuth_degrees": actual_azimuth,
+                "elevation_degrees": actual_elevation,
+                "distance_m": measured_distance,
+                "target_object_ids": [object_id],
+                "target_bounds": [
+                    _vector_list(bounds[0]),
+                    _vector_list(bounds[1]),
+                ],
+                "proxy_framing_bounds": [
+                    _vector_list(framing_bounds[0]),
+                    _vector_list(framing_bounds[1]),
+                ],
+                "policy_source": "usable_surface_local_side_bank_v1",
+                "candidate_policy": "local",
+                "technical_feasibility": True,
+                "local_side_id": side_id,
+                "local_outward_axis": list(raw_axis),
+                "world_outward_axis": _vector_list(world_axis),
+                "feasibility": feasibility,
+                "proxy_framing": framing,
+            }
+        )
+    return result
+
+
+def _repair_usable_surface_preview_location(
+    *,
+    target: np.ndarray,
+    direction: np.ndarray,
+    desired_distance: float,
+    room: tuple[float, float, float, float, float, float],
+    scene_objects: list[_CameraObject],
+    initial_placement: tuple[np.ndarray, float, dict[str, Any]] | None,
+) -> tuple[np.ndarray, dict[str, Any]] | None:
+    """Resolve one intrinsic preview independently with bounded repairs."""
+
+    direction = np.asarray(direction, dtype=float)
+    direction /= max(float(np.linalg.norm(direction)), 1.0e-12)
+    lateral = np.asarray([-direction[1], direction[0], 0.0], dtype=float)
+    lateral_norm = float(np.linalg.norm(lateral))
+    if lateral_norm > 1.0e-12:
+        lateral /= lateral_norm
+    candidates: list[tuple[np.ndarray, dict[str, Any]]] = []
+    if initial_placement is not None:
+        location, _, feasibility = initial_placement
+        candidates.append(
+            (
+                np.asarray(location, dtype=float),
+                {
+                    **deepcopy(feasibility),
+                    "room_feasible": True,
+                    "preview_only": True,
+                    "repair": "none",
+                },
+            )
+        )
+    for distance_scale in USABLE_SURFACE_PREVIEW_DISTANCE_SCALES:
+        for lateral_offset in USABLE_SURFACE_PREVIEW_LATERAL_OFFSETS_M:
+            for height_offset in USABLE_SURFACE_PREVIEW_HEIGHT_OFFSETS_M:
+                location = (
+                    np.asarray(target, dtype=float)
+                    + direction * float(desired_distance) * distance_scale
+                    + lateral * lateral_offset
+                    + np.asarray([0.0, 0.0, height_offset])
+                )
+                lower, upper = _room_interior_bounds(room)
+                room_feasible = bool(
+                    np.all(location >= lower) and np.all(location <= upper)
+                )
+                candidates.append(
+                    (
+                        location,
+                        {
+                            "method": "intrinsic_side_preview_bounded_repair_v1",
+                            "ray_preserved": lateral_offset == 0.0,
+                            "room_feasible": room_feasible,
+                            "preview_only": True,
+                            "repair": {
+                                "distance_scale": distance_scale,
+                                "lateral_offset_m": lateral_offset,
+                                "height_offset_m": height_offset,
+                            },
+                        },
+                    )
+                )
+    feasible = [
+        (location, provenance)
+        for location, provenance in candidates
+        if not any(
+            _point_inside_object_obb(
+                location,
+                candidate,
+                clearance_m=0.03,
+            )
+            for candidate in scene_objects
+        )
+    ]
+    if not feasible:
+        return None
+    # Prefer in-room, ray-preserving, least-moved previews. Unbounded previews
+    # are permitted only because they are decoder inputs, never Judge evidence.
+    feasible.sort(
+        key=lambda item: (
+            not bool(item[1].get("room_feasible")),
+            not bool(item[1].get("ray_preserved")),
+            float(
+                np.linalg.norm(
+                    np.asarray(item[0], dtype=float)
+                    - (
+                        np.asarray(target, dtype=float)
+                        + direction * float(desired_distance)
+                    )
+                )
+            ),
+        )
+    )
+    return feasible[0]
+
+
 def _generate_legacy_camera_pose_candidates(
     request: dict[str, Any],
     *,
@@ -227,6 +456,7 @@ def _generate_legacy_camera_pose_candidates(
     if not isinstance(scene, dict):
         raise ValueError("camera evidence request requires a canonical scene")
     count = max(1, min(12, int(max_candidates)))
+    generation_target_count = count
     room = _room_bounds(scene)
     target_object_ids = _object_id_list(request.get("object_ids"))
     objects = _legacy_target_objects(scene, target_object_ids)
@@ -336,6 +566,12 @@ def _generate_feasible_camera_pose_candidates(
         "support_contact_plane",
         "query_cov",
     }
+    functional_probe = (
+        request.get("functional_probe")
+        if metric == "functional_consistency"
+        and isinstance(request.get("functional_probe"), dict)
+        else None
+    )
 
     # _target_objects preserves request order.  Support requests put the
     # subject first and candidate supporting objects afterwards, so this is now
@@ -354,6 +590,7 @@ def _generate_feasible_camera_pose_candidates(
     event_focus_radius_m: float | None = None
     axis_source: str | None = None
     render_aspect_ratio = _render_aspect_ratio(request)
+    generation_target_count = count
     if support_contact_policy:
         support_focus = _support_contact_focus(request, framing_objects, target_bounds, room)
         target = np.asarray(support_focus["target"], dtype=float)
@@ -374,6 +611,101 @@ def _generate_feasible_camera_pose_candidates(
         )
         policy_source = "support_contact_plane_candidate_bank_v2"
         event_focus_source = str(support_focus.get("source") or "support_contact_focus")
+    elif functional_probe is not None:
+        primary_ids = set(
+            [
+                *_object_id_list(functional_probe.get("target_ids")),
+                *_object_id_list(
+                    functional_probe.get("related_target_ids")
+                ),
+            ]
+        )
+        primary_objects = [
+            item for item in objects if item.id in primary_ids
+        ]
+        primary_bounds = (
+            _union_bounds(primary_objects)
+            if primary_objects
+            else target_bounds
+        )
+        group_member_ids = _object_id_list(
+            functional_probe.get("group_member_ids")
+        )
+        group_objects = (
+            _target_objects(scene, group_member_ids)
+            if group_member_ids
+            else []
+        )
+        group_context_bounds = (
+            _union_bounds(group_objects)
+            if group_objects
+            else target_bounds
+        )
+        functional_context_bounds = (
+            np.minimum(target_bounds[0], group_context_bounds[0]),
+            np.maximum(target_bounds[1], group_context_bounds[1]),
+        )
+        target = (
+            np.asarray(primary_bounds[0], dtype=float)
+            + np.asarray(primary_bounds[1], dtype=float)
+        ) / 2.0
+        target[2] = float(
+            np.clip(
+                target[2],
+                room[4] + 0.35,
+                max(room[4] + 0.35, room[5] - 0.35),
+            )
+        )
+        functional_framing_bounds = _functional_probe_framing_bounds(
+            primary_bounds,
+            room=room,
+            context_margin_m=0.0,
+        )
+        functional_wide_framing_bounds = (
+            _functional_probe_framing_bounds(
+                functional_context_bounds,
+                room=room,
+                context_margin_m=0.35,
+            )
+            if group_objects
+            else None
+        )
+        horizontal_span = float(
+            max(
+                functional_framing_bounds[1][0]
+                - functional_framing_bounds[0][0],
+                functional_framing_bounds[1][1]
+                - functional_framing_bounds[0][1],
+                0.1,
+            )
+        )
+        desired_distance = max(1.5, min(6.0, horizontal_span * 1.35))
+        base_lens = 32.0
+        generation_target_count = (
+            max(count, FUNCTIONAL_CORRESPONDENCE_POOL_SIZE)
+            if str(functional_probe.get("kind") or "")
+            == "functional_correspondence"
+            and count <= FUNCTIONAL_CORRESPONDENCE_POOL_SIZE
+            else count
+        )
+        preferred_azimuths = _functional_preferred_azimuths(
+            functional_probe,
+            objects=objects,
+        )
+        specifications = _functional_probe_specifications(
+            target=target,
+            framing_bounds=functional_framing_bounds,
+            wider_framing_bounds=functional_wide_framing_bounds,
+            probe_kind=str(
+                functional_probe.get("kind")
+                or "functional_frontage"
+            ),
+            desired_distance=desired_distance,
+            count=generation_target_count,
+            preferred_azimuths=preferred_azimuths,
+        )
+        policy_source = "functional_usable_side_candidate_bank_v2"
+        event_focus_source = "functional_probe_relation_target_union"
     elif metric in {"oob", "object_architecture_penetration"}:
         desired_distance = max(1.2, float(max(extent)) * 2.2)
         base_lens = 52.0 if float(max(extent)) < 2.5 else 45.0
@@ -414,6 +746,11 @@ def _generate_feasible_camera_pose_candidates(
         )
         policy_source = "metric_aware_feasible_candidate_bank_v2"
 
+    functional_surface_side_ids = (
+        _functional_surface_side_ids(functional_probe)
+        if functional_probe is not None
+        else []
+    )
     candidates: list[dict[str, Any]] = []
     for specification in specifications:
         candidate_target = np.asarray(specification["target"], dtype=float)
@@ -477,6 +814,26 @@ def _generate_feasible_camera_pose_candidates(
                     preferred_lens_mm=base_lens,
                     aspect_ratio=render_aspect_ratio,
                 )
+        if functional_probe is not None and (
+            framing.get("all_corners_in_front") is not True
+            or framing.get("proxy_bounds_fit") is not True
+        ):
+            continue
+        surface_coverage = (
+            _functional_surface_observability(
+                functional_probe,
+                objects=objects,
+                camera_location=location,
+            )
+            if functional_probe is not None
+            else {
+                "eligible": True,
+                "covered_hypotheses": [],
+                "required_target_ids": [],
+            }
+        )
+        if surface_coverage["eligible"] is not True:
+            continue
         framing["validation_status"] = (
             "fits_proxy_bounds"
             if framing.get("proxy_bounds_fit")
@@ -512,6 +869,48 @@ def _generate_feasible_camera_pose_candidates(
             "candidate_policy": "local",
             "event_focus_source": event_focus_source,
             "focus_kind": str(specification.get("focus_kind") or "event"),
+            "view_family": str(
+                specification.get("view_family") or "metric_local"
+            ),
+            **(
+                {
+                    "functional_probe_kind": str(
+                        functional_probe.get("kind")
+                        or "functional_frontage"
+                    ),
+                    "functional_probe_id": str(
+                        functional_probe.get("probe_id") or ""
+                    ),
+                    "functional_context_margin_m": 1.25,
+                    "functional_group_id": (
+                        str(functional_probe.get("group_id"))
+                        if functional_probe.get("group_id")
+                        else None
+                    ),
+                    "functional_group_member_ids": list(
+                        _object_id_list(
+                            functional_probe.get("group_member_ids")
+                        )
+                    ),
+                    "functional_specific_target_bounds": [
+                        _vector_list(target_bounds[0]),
+                        _vector_list(target_bounds[1]),
+                    ],
+                    "functional_group_context_bounds": [
+                        _vector_list(functional_context_bounds[0]),
+                        _vector_list(functional_context_bounds[1]),
+                    ],
+                    "usable_surface_informed": bool(
+                        functional_surface_side_ids
+                    ),
+                    "usable_surface_side_ids": list(
+                        functional_surface_side_ids
+                    ),
+                    "usable_surface_observability": surface_coverage,
+                }
+                if functional_probe is not None
+                else {}
+            ),
             **(
                 {"event_focus_radius_m": event_focus_radius_m}
                 if event_focus_radius_m is not None
@@ -534,15 +933,126 @@ def _generate_feasible_camera_pose_candidates(
         if _duplicates_existing_pose(candidate, candidates):
             continue
         candidates.append(candidate)
-        if len(candidates) == count:
+        if len(candidates) == generation_target_count:
             break
 
+    if functional_probe is not None and candidates:
+        pool_generated_count = len(candidates)
+        candidates = _shortlist_functional_probe_candidates(
+            candidates,
+            limit=count,
+        )
+        generated_count = len(candidates)
+        for candidate in candidates:
+            candidate.update(
+                candidate_bank_requested_count=count,
+                candidate_bank_generated_count=generated_count,
+                candidate_bank_complete=generated_count == count,
+                functional_probe_candidate_pool_count=(
+                    pool_generated_count
+                ),
+                functional_probe_shortlist_limit=count,
+                functional_probe_shortlist_policy=(
+                    "local_proxy_framing_context_rank_v1"
+                ),
+            )
+    if functional_probe is not None:
+        return candidates
     if len(candidates) != count:
         raise ValueError(
             "feasible camera candidate generation could not satisfy the exact "
             f"bank size: requested={count}, generated={len(candidates)}, metric={metric}"
         )
     return candidates
+
+
+def _shortlist_functional_probe_candidates(
+    candidates: list[dict[str, Any]],
+    *,
+    limit: int,
+) -> list[dict[str, Any]]:
+    """Keep the best technically framed local probes before preview render.
+
+    The six-way correspondence pool is cheap geometry. Only this deterministic
+    four-view shortlist is rendered for the VLM selector. The score uses the
+    existing local pose solver's proxy framing and feasible-ray diagnostics;
+    it never estimates metric validity or claims that evidence is sufficient.
+    """
+
+    ranked: list[tuple[float, str, dict[str, Any]]] = []
+    for candidate in candidates:
+        framing = candidate.get("proxy_framing")
+        framing = framing if isinstance(framing, dict) else {}
+        feasibility = candidate.get("feasibility")
+        feasibility = (
+            feasibility if isinstance(feasibility, dict) else {}
+        )
+        max_abs_values = [
+            float(value)
+            for value in (
+                framing.get("max_abs_ndc_x"),
+                framing.get("max_abs_ndc_y"),
+            )
+            if isinstance(value, (int, float))
+            and math.isfinite(float(value))
+        ]
+        max_abs_ndc = max(max_abs_values, default=math.inf)
+        framing_quality = (
+            1.0 / (1.0 + max(0.0, max_abs_ndc - CAMERA_FRAME_MARGIN_NDC))
+            if math.isfinite(max_abs_ndc)
+            else 0.0
+        )
+        actual_distance = _finite_float(
+            feasibility.get("actual_distance_m"),
+            fallback=float(candidate.get("distance_m") or 0.0),
+        )
+        intended_distance = max(
+            1.0e-6,
+            _finite_float(
+                candidate.get("intended_distance_m"),
+                fallback=actual_distance,
+            ),
+        )
+        context_distance_ratio = min(
+            1.0,
+            max(0.0, actual_distance / intended_distance),
+        )
+        score = (
+            (8.0 if framing.get("proxy_bounds_fit") is True else 0.0)
+            + (
+                4.0
+                if framing.get("all_corners_in_front") is True
+                else 0.0
+            )
+            + 3.0 * framing_quality
+            + 2.0 * context_distance_ratio
+            + (
+                0.5
+                if feasibility.get("distance_truncated") is False
+                else 0.0
+            )
+        )
+        ranked.append(
+            (
+                -score,
+                str(candidate.get("id") or ""),
+                deepcopy(candidate),
+            )
+        )
+    ranked.sort(key=lambda item: (item[0], item[1]))
+    selected = ranked[: max(1, int(limit))]
+    result: list[dict[str, Any]] = []
+    for rank, (negative_score, _, candidate) in enumerate(
+        selected,
+        start=1,
+    ):
+        candidate["functional_probe_shortlist_rank"] = rank
+        candidate["functional_probe_shortlist_score"] = round(
+            -negative_score,
+            8,
+        )
+        result.append(candidate)
+    return result
 
 
 def _collision_event_focus(
@@ -839,6 +1349,283 @@ def _expanded_angle_specifications(
             }
         )
     return result
+
+
+def _functional_probe_framing_bounds(
+    bounds: tuple[np.ndarray, np.ndarray],
+    *,
+    room: tuple[float, float, float, float, float, float],
+    context_margin_m: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Frame the target plus a bounded floor-level approach neighborhood."""
+
+    margin = max(0.0, min(1.5, float(context_margin_m)))
+    room_lower = np.array(
+        [room[0], room[2], room[4]],
+        dtype=float,
+    )
+    room_upper = np.array(
+        [room[1], room[3], room[5]],
+        dtype=float,
+    )
+    lower = np.asarray(bounds[0], dtype=float).copy()
+    upper = np.asarray(bounds[1], dtype=float).copy()
+    lower[:2] -= margin
+    upper[:2] += margin
+    # The approach zone is floor space, so preserve the target silhouette
+    # while explicitly including the floor beneath the wider neighborhood.
+    lower[2] = room[4]
+    upper[2] += min(0.4, max(0.15, float(upper[2] - lower[2]) * 0.1))
+    lower = np.maximum(lower, room_lower)
+    upper = np.minimum(upper, room_upper)
+    return lower, upper
+
+
+def _functional_probe_specifications(
+    *,
+    target: np.ndarray,
+    framing_bounds: tuple[np.ndarray, np.ndarray],
+    wider_framing_bounds: tuple[np.ndarray, np.ndarray] | None = None,
+    probe_kind: str,
+    desired_distance: float,
+    count: int,
+    preferred_azimuths: list[float] | None = None,
+) -> list[dict[str, Any]]:
+    """Create low/interaction-height wide candidates around a probe unit."""
+
+    elevations = (8.0, 12.0, 16.0, 10.0)
+    family = (
+        "functional_relation_wide"
+        if probe_kind == "functional_correspondence"
+        else "functional_frontage_probe"
+    )
+    requested = max(1, count)
+    azimuths: list[float] = []
+
+    def add_azimuth(value: float) -> None:
+        normalized = float(value) % 360.0
+        if all(
+            abs(
+                ((normalized - existing + 180.0) % 360.0)
+                - 180.0
+            )
+            >= 8.0
+            for existing in azimuths
+        ):
+            azimuths.append(normalized)
+
+    # Preserve one exact candidate for every independently supplied
+    # correspondence/surface hypothesis before spending the remaining bank on
+    # obliques.  This prevents the first hypothesis from consuming all four
+    # trusted candidate slots.
+    preferred = [float(raw) % 360.0 for raw in preferred_azimuths or []]
+    for raw in preferred:
+        add_azimuth(raw)
+    for raw in preferred:
+        base = float(raw) % 360.0
+        for candidate in (base + 24.0, base - 24.0):
+            add_azimuth(candidate)
+    # Geometry feasibility and strict proxy framing may reject a large part
+    # of the orbit in a small room. Generate a bounded refill pool, while the
+    # caller still returns at most ``requested`` valid candidates.
+    for raw in range(0, 360, 45):
+        add_azimuth(float(raw))
+    specifications: list[dict[str, Any]] = []
+    specification_budget = max(requested * 4, len(azimuths))
+    orbit_variants = [
+        (azimuth, elevations[variant % len(elevations)])
+        for variant in range(len(elevations))
+        for azimuth in azimuths
+    ]
+    for index, (azimuth, elevation) in enumerate(
+        orbit_variants[:specification_budget]
+    ):
+        candidate_bounds = (
+            wider_framing_bounds
+            if wider_framing_bounds is not None
+            and specification_budget > 1
+            and index == specification_budget - 1
+            else framing_bounds
+        )
+        specifications.append(
+            {
+                "target": _vector_list(target),
+                "framing_bounds": [
+                    _vector_list(candidate_bounds[0]),
+                    _vector_list(candidate_bounds[1]),
+                ],
+                "focus_kind": probe_kind,
+                "view_family": family,
+                "azimuth_degrees": azimuth,
+                "elevation_degrees": elevation,
+                "distance_m": float(desired_distance),
+                "label": (
+                    f"{probe_kind.replace('functional_', '')}_"
+                    f"{int(round(azimuth)) % 360:03d}"
+                ),
+                "context_scope": (
+                    "owning_group_wide"
+                    if candidate_bounds is wider_framing_bounds
+                    else "relation_targets"
+                ),
+            }
+        )
+    return specifications
+
+
+def _functional_surface_side_ids(
+    probe: dict[str, Any],
+) -> list[str]:
+    return list(
+        dict.fromkeys(
+            str(surface.get("side_id"))
+            for hypothesis in probe.get("usable_surface_hypotheses") or []
+            if isinstance(hypothesis, dict)
+            and str(hypothesis.get("status") or "")
+            != "no_directed_surface"
+            for surface in hypothesis.get("surfaces") or []
+            if isinstance(surface, dict) and surface.get("side_id")
+        )
+    )
+
+
+def _functional_preferred_azimuths(
+    probe: dict[str, Any],
+    *,
+    objects: list[_CameraObject],
+) -> list[float]:
+    """Map trusted local-side IDs to world camera azimuths."""
+
+    by_id = {item.id: item for item in objects}
+    result: list[float] = []
+    if (
+        str(probe.get("kind") or "") == "functional_correspondence"
+        and len(objects) >= 2
+    ):
+        relation = np.asarray(objects[1].center - objects[0].center)
+        relation[2] = 0.0
+        if float(np.linalg.norm(relation)) > 1.0e-9:
+            relation_azimuth = math.degrees(
+                math.atan2(float(relation[1]), float(relation[0]))
+            )
+            # Side-on views expose mutual facing and the intervening region.
+            result.extend(
+                [
+                    (relation_azimuth + 90.0) % 360.0,
+                    (relation_azimuth - 90.0) % 360.0,
+                ]
+            )
+    for hypothesis in probe.get("usable_surface_hypotheses") or []:
+        if (
+            not isinstance(hypothesis, dict)
+            or str(hypothesis.get("status") or "")
+            == "no_directed_surface"
+        ):
+            continue
+        obj = by_id.get(str(hypothesis.get("target_id") or ""))
+        if obj is None:
+            continue
+        for surface in hypothesis.get("surfaces") or []:
+            if not isinstance(surface, dict):
+                continue
+            raw_axis = USABLE_SURFACE_LOCAL_AXES.get(
+                str(surface.get("side_id") or "")
+            )
+            if raw_axis is None:
+                continue
+            world_axis = obj.R @ np.asarray(raw_axis, dtype=float)
+            world_axis[2] = 0.0
+            if float(np.linalg.norm(world_axis)) <= 1.0e-9:
+                continue
+            result.append(
+                math.degrees(
+                    math.atan2(
+                        float(world_axis[1]),
+                        float(world_axis[0]),
+                    )
+                )
+                % 360.0
+            )
+    return list(dict.fromkeys(round(value, 8) for value in result))
+
+
+def _functional_surface_observability(
+    probe: dict[str, Any],
+    *,
+    objects: list[_CameraObject],
+    camera_location: np.ndarray,
+) -> dict[str, Any]:
+    """Check trusted usable-side half-spaces without semantic inference."""
+
+    by_id = {item.id: item for item in objects}
+    required: list[str] = []
+    covered: list[dict[str, Any]] = []
+    rejected: list[dict[str, Any]] = []
+    for hypothesis in probe.get("usable_surface_hypotheses") or []:
+        if not isinstance(hypothesis, dict):
+            continue
+        target_id = str(hypothesis.get("target_id") or "")
+        obj = by_id.get(target_id)
+        surfaces = [
+            item
+            for item in hypothesis.get("surfaces") or []
+            if isinstance(item, dict)
+        ]
+        if obj is None or not surfaces:
+            continue
+        required.append(target_id)
+        camera_delta = np.asarray(camera_location, dtype=float) - obj.center
+        camera_delta[2] = 0.0
+        delta_norm = float(np.linalg.norm(camera_delta))
+        if delta_norm <= 1.0e-12:
+            rejected.append(
+                {
+                    "target_id": target_id,
+                    "reason_code": "camera_at_target_center",
+                }
+            )
+            continue
+        camera_delta /= delta_norm
+        target_covered: list[dict[str, Any]] = []
+        for surface in surfaces:
+            side_id = str(surface.get("side_id") or "")
+            local_axis = USABLE_SURFACE_LOCAL_AXES.get(side_id)
+            if local_axis is None:
+                continue
+            world_axis = obj.R @ np.asarray(local_axis, dtype=float)
+            world_axis[2] = 0.0
+            axis_norm = float(np.linalg.norm(world_axis))
+            if axis_norm <= 1.0e-12:
+                continue
+            world_axis /= axis_norm
+            signed_alignment = float(np.dot(camera_delta, world_axis))
+            if signed_alignment >= -1.0e-9:
+                target_covered.append(
+                    {
+                        "target_id": target_id,
+                        "side_id": side_id,
+                        "signed_outward_alignment": signed_alignment,
+                    }
+                )
+        if target_covered:
+            covered.extend(target_covered)
+        else:
+            rejected.append(
+                {
+                    "target_id": target_id,
+                    "reason_code": "outside_usable_side_half_space",
+                    "available_side_ids": [
+                        str(item.get("side_id") or "") for item in surfaces
+                    ],
+                }
+            )
+    return {
+        "eligible": not rejected,
+        "required_target_ids": list(dict.fromkeys(required)),
+        "covered_hypotheses": covered,
+        "rejections": rejected,
+        "rule": "camera_in_outward_half_space_v1",
+    }
 
 
 def _direction_from_angles(azimuth_degrees: float, elevation_degrees: float) -> np.ndarray:

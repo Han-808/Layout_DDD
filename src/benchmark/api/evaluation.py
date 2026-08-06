@@ -150,6 +150,8 @@ def _run_canonical_evaluate(
     p0b_official_mode: bool = False,
     p0b_local_view_provider: object | None = None,
     l3_initial_evidence_provider: object | None = None,
+    functional_evidence_planner: object | None = None,
+    functional_probe_evidence_provider: object | None = None,
     camera_selector: object | None = None,
     deterministic_camera_selector: object | None = None,
     vlm_camera_selector: object | None = None,
@@ -425,6 +427,10 @@ def _run_canonical_evaluate(
             if l3_initial_evidence_provider is not None
             else p0b_local_view_provider
         ),
+        functional_evidence_planner=functional_evidence_planner,
+        functional_probe_evidence_provider=(
+            functional_probe_evidence_provider
+        ),
         authorized_deviations=resolved_authorized_deviations,
         metric_applicability=scene_quality_applicability(resolved_asset_policy),
         visual_style_spec=resolved_visual_style_spec,
@@ -578,6 +584,8 @@ def _run_legacy_game_evaluate(
     support_enabled: bool | None = None,
     p0b_official_mode: bool = False,
     p0b_local_view_provider: object | None = None,
+    functional_evidence_planner: object | None = None,
+    functional_probe_evidence_provider: object | None = None,
     camera_selector: object | None = None,
     deterministic_camera_selector: object | None = None,
     vlm_camera_selector: object | None = None,
@@ -597,7 +605,11 @@ def _run_legacy_game_evaluate(
     | VLMEvaluationControl
     | None = None,
 ) -> dict:
-    del grouping_model
+    del (
+        grouping_model,
+        functional_evidence_planner,
+        functional_probe_evidence_provider,
+    )
     if not eval_oor and not eval_oar and not eval_generic_validity:
         eval_generic_validity = True
     normalized_scene = normalize_scene(scene, asset_csv=asset_csv, asset_root=asset_root, enrich_assets=enrich_assets)

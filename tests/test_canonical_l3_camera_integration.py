@@ -12,6 +12,13 @@ from benchmark.visual_judge.adapters.legacy_renderer import (
 from benchmark.visual_judge.interfaces.camera import (
     CameraSelectionResult,
 )
+from benchmark.visual_judge.interfaces.evidence import (
+    EvidenceRenderRequest,
+)
+from benchmark.visual_judge.interfaces.judge import JudgeRequest
+from benchmark.visual_judge.orchestration.camera_acquisition import (
+    render_duration,
+)
 
 
 def _image(path: Path, color: tuple[int, int, int]) -> str:
@@ -182,8 +189,9 @@ class _VLMSelector:
 
 
 class _ExistingRenderer:
-    def __init__(self) -> None:
+    def __init__(self, *, report_gpu_time: bool = True) -> None:
         self.calls: list[dict] = []
+        self.report_gpu_time = bool(report_gpu_time)
 
     def render_camera_views(
         self,
@@ -213,7 +221,62 @@ class _ExistingRenderer:
                     "pose": deepcopy(pose),
                 }
             )
-        return {"views": views, "render_gpu_time_seconds": 0.01}
+        result = {"views": views}
+        if self.report_gpu_time:
+            result["render_gpu_time_seconds"] = 0.01
+        return result
+
+
+def test_camera_renderer_omits_unreported_gpu_time_provenance(
+    tmp_path: Path,
+) -> None:
+    blend_path = tmp_path / "scene.blend"
+    blend_path.write_bytes(b"blend")
+    renderer = CameraViewEvidenceRenderer(
+        renderer=_ExistingRenderer(report_gpu_time=False),
+        blend_file=blend_path,
+        out_dir=tmp_path / "controller_renders",
+    )
+    pose = {
+        "id": "group_view",
+        "location": [1.0, 1.0, 1.0],
+        "target": [0.0, 0.0, 0.0],
+        "lens_mm": 45.0,
+    }
+    rendered = renderer.render(
+        EvidenceRenderRequest(
+            judge_request=JudgeRequest(
+                task="l3_scene_quality",
+                metric="functional_consistency",
+                claim_or_event={},
+                scene_context={},
+                deterministic_evidence={},
+                visual_evidence=(),
+                rubric={},
+                context={"target_object_ids": ["a", "b"]},
+            ),
+            selection=CameraSelectionResult(
+                selected_view_ids=("group_view",),
+                selected_views=(pose,),
+                backend="deterministic",
+                evidence_round=1,
+            ),
+            evidence_goal={"target_ids": ["a", "b"]},
+            previous_visual_evidence=(),
+            evidence_round=1,
+            budget={"max_views_per_round": 1},
+            context={
+                "group_scope": {
+                    "group_id": "group_001",
+                    "member_ids": ["a", "b"],
+                }
+            },
+        )
+    )
+
+    assert "render_gpu_time_seconds" not in rendered.provenance
+    assert rendered.provenance["render_gpu_time_source"] == "not_reported"
+    assert render_duration(rendered.provenance) == 0.0
 
 
 def test_canonical_l3_group_judge_repair_reaches_vlm_and_renders(

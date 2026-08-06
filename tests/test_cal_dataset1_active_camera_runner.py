@@ -126,6 +126,68 @@ def test_selector_candidate_bank_cannot_be_silently_truncated() -> None:
         )
 
 
+def test_prepare_builds_camera_selector_transport_not_metric_judge(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    selector_config = {
+        "endpoint": "https://selector.example.test/v1",
+        "model": "selector-model",
+    }
+    sentinel_selector = object()
+    builder_calls: list[dict] = []
+
+    def fake_camera_builder(config):
+        builder_calls.append(config)
+        return sentinel_selector
+
+    def reject_judge_builder(_config):
+        raise AssertionError(
+            "_prepare must not build a metric Judge for camera selection"
+        )
+
+    monkeypatch.setattr(
+        MODULE,
+        "build_openai_compatible_camera_selector",
+        fake_camera_builder,
+    )
+    monkeypatch.setattr(
+        MODULE,
+        "build_openai_compatible_vlm_judge",
+        reject_judge_builder,
+    )
+    monkeypatch.setattr(
+        MODULE,
+        "BlenderRenderer",
+        lambda **_kwargs: object(),
+    )
+    args = SimpleNamespace(
+        arm=["static_vlm_topk"],
+        blender_bin="/unused/blender",
+        blender_timeout_seconds=10,
+        render_width=64,
+        render_height=64,
+        render_engine="BLENDER_WORKBENCH",
+        cycles_device="CPU",
+        cycles_samples=1,
+        cycles_denoising=False,
+        preview_render_engine="BLENDER_WORKBENCH",
+        preview_width=32,
+        preview_height=32,
+        preview_cycles_samples=1,
+        continue_on_error=False,
+    )
+
+    MODULE._prepare(
+        args=args,
+        out_dir=tmp_path,
+        cases=[],
+        selector_config=selector_config,
+    )
+
+    assert builder_calls == [selector_config]
+
+
 def test_unconditional_arm_uses_explicit_non_verdict_repair_control(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
