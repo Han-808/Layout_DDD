@@ -65,6 +65,7 @@ from benchmark.visual_judge.evidence_sufficiency import (
 )
 from benchmark.visual_judge.functional_evidence import (
     FUNCTIONAL_PROBE_KINDS,
+    FUNCTIONAL_PROBE_DEFAULT_UNITS,
     FUNCTIONAL_PROBE_MAX_UNITS,
     FUNCTIONAL_PROBE_PLANNER_PROMPT_VERSION,
     FUNCTIONAL_PROBE_PLAN_VERSION,
@@ -72,6 +73,7 @@ from benchmark.visual_judge.functional_evidence import (
 from benchmark.visual_judge.functional_discovery import (
     FUNCTIONAL_DISCOVERY_PROMPT_VERSION,
     FUNCTIONAL_DISCOVERY_SCHEMA_VERSION,
+    FUNCTIONAL_RELATION_PREDICATES,
     FUNCTIONAL_SURFACE_ROLES,
     FunctionalDiscoveryResult,
 )
@@ -108,9 +110,14 @@ from benchmark.visual_judge.p0b import LocalViewProvider, adjudicate_p0b_event
 from benchmark.visual_judge.render_views import CameraEvidenceProvider
 from benchmark.visual_judge.roles import DecisionContract, VLMRole
 from benchmark.visual_judge.usable_surface import (
+    DEFAULT_USABLE_SURFACE_DETECTOR_BACKEND,
+    USABLE_SURFACE_DETECTOR_INTERFACE_VERSION,
     USABLE_SURFACE_PROMPT_VERSION,
     USABLE_SURFACE_SCHEMA_VERSION,
     USABLE_SURFACE_SIDE_IDS,
+    UsableSurfaceDetector,
+    VLMTrustedSideUsableSurfaceDetector,
+    build_usable_surface_detector,
 )
 from benchmark.visual_judge.runtime import (
     ControlledVLMJudge,
@@ -137,6 +144,7 @@ __all__ = [
     "ControlledVLMJudge",
     "DEFAULT_P0B_VISUAL_CONFIGS",
     "DEFAULT_DETERMINISTIC_CAMERA_RANKING",
+    "DEFAULT_USABLE_SURFACE_DETECTOR_BACKEND",
     "DETERMINISTIC_SUPPORTED_OBSERVATIONS",
     "SEMANTIC_SELECTION_OBSERVATIONS",
     "DEFAULT_VLM_EVALUATION_CONTROL",
@@ -160,11 +168,13 @@ __all__ = [
     "ExistingEvidenceRendererAdapter",
     "ExistingJudgeAdapter",
     "FUNCTIONAL_PROBE_KINDS",
+    "FUNCTIONAL_PROBE_DEFAULT_UNITS",
     "FUNCTIONAL_PROBE_MAX_UNITS",
     "FUNCTIONAL_PROBE_PLANNER_PROMPT_VERSION",
     "FUNCTIONAL_PROBE_PLAN_VERSION",
     "FUNCTIONAL_DISCOVERY_PROMPT_VERSION",
     "FUNCTIONAL_DISCOVERY_SCHEMA_VERSION",
+    "FUNCTIONAL_RELATION_PREDICATES",
     "FUNCTIONAL_SURFACE_ROLES",
     "FunctionalDiscoveryResult",
     "HybridCameraSelector",
@@ -189,6 +199,9 @@ __all__ = [
     "USABLE_SURFACE_PROMPT_VERSION",
     "USABLE_SURFACE_SCHEMA_VERSION",
     "USABLE_SURFACE_SIDE_IDS",
+    "USABLE_SURFACE_DETECTOR_INTERFACE_VERSION",
+    "UsableSurfaceDetector",
+    "VLMTrustedSideUsableSurfaceDetector",
     "adjudicate_p0b_event",
     "assess_preview_selection_sufficiency",
     "assess_visual_evidence_sufficiency",
@@ -197,6 +210,7 @@ __all__ = [
     "build_camera_selector",
     "build_openai_compatible_vlm_judge",
     "build_openai_compatible_camera_selector",
+    "build_usable_surface_detector",
     "evaluate_vlm_category",
     "generate_corrective_camera_proposals",
     "resolve_vlm_evaluation_control",

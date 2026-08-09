@@ -1,4 +1,11 @@
-"""Acquire usable-side-relative boundary facts without metric judgement."""
+"""Acquire usable-side direction facts without metric judgement.
+
+The historical module name is retained for compatibility.  The prepass now
+serves every directed object: it localizes the usable side and builds a
+deterministic world-direction descriptor for camera/check routing.  Logical
+boundary measurements remain optional clearance evidence and never become a
+metric verdict.
+"""
 
 from __future__ import annotations
 
@@ -14,7 +21,7 @@ from benchmark.visual_judge.usable_surface import (
 
 
 FUNCTIONAL_BOUNDARY_EVIDENCE_VERSION = (
-    "functional_boundary_evidence_v1"
+    "functional_boundary_evidence_v3"
 )
 _FORBIDDEN_DECISION_FIELDS = frozenset(
     {
@@ -37,17 +44,18 @@ def acquire_functional_boundary_evidence(
     discovery: dict[str, Any],
     architecture_context: dict[str, Any],
 ) -> dict[str, Any]:
-    """Decode eligible usable sides, then obtain deterministic room facts."""
+    """Decode every directed usable side, then obtain routing geometry."""
 
-    targets = qualifying_boundary_surface_targets(
-        discovery,
-        architecture_context=architecture_context,
-    )
+    targets = qualifying_direction_surface_targets(discovery)
     audit: dict[str, Any] = {
         "schema_version": FUNCTIONAL_BOUNDARY_EVIDENCE_VERSION,
         "status": "not_applicable",
         "decision_authority": "none",
         "scene_access": "read_only",
+        "purpose": (
+            "usable_side_localization_and_direction_routing_descriptor"
+        ),
+        "direction_descriptor_role": "routing_only",
         "logical_boundary_enabled": bool(
             architecture_context.get("logical_boundary_enabled")
         ),
@@ -63,13 +71,10 @@ def acquire_functional_boundary_evidence(
         "preview_render_count": 0,
         "provider_invoked": False,
     }
-    if not audit["logical_boundary_enabled"]:
-        audit["reason"] = "logical_boundary_unavailable"
-        return audit
     if not targets:
         audit.update(
             status="complete_no_targets",
-            reason="no_directional_clearance_target",
+            reason="no_directed_surface_target",
         )
         return audit
     call = getattr(
@@ -126,12 +131,63 @@ def acquire_functional_boundary_evidence(
     return audit
 
 
+def qualifying_direction_surface_targets(
+    discovery: dict[str, Any],
+) -> tuple[dict[str, Any], ...]:
+    """Select every directed object with a declared usable-surface role."""
+
+    result: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in discovery.get("directed_surface_targets") or []:
+        if not isinstance(item, dict):
+            continue
+        target_id = str(item.get("target_id") or "").strip()
+        directionality = str(
+            item.get("directionality") or "directed"
+        ).strip()
+        need_clearance = item.get("need_clearance")
+        if not isinstance(need_clearance, bool):
+            raise ValueError(
+                "directed surface target need_clearance must be a boolean; "
+                f"target_id={target_id!r}"
+            )
+        roles = list(
+            dict.fromkeys(
+                str(role).strip()
+                for role in item.get("surface_roles") or []
+                if str(role).strip()
+            )
+        )
+        if (
+            not target_id
+            or target_id in seen
+            or directionality != "directed"
+            or not roles
+        ):
+            continue
+        seen.add(target_id)
+        result.append(
+            {
+                "target_id": target_id,
+                "directionality": "directed",
+                "surface_roles": roles,
+                "need_clearance": need_clearance,
+            }
+        )
+    return tuple(result)
+
+
 def qualifying_boundary_surface_targets(
     discovery: dict[str, Any],
     *,
     architecture_context: dict[str, Any],
 ) -> tuple[dict[str, Any], ...]:
-    """Select all direction-bearing objects whose use requires free space."""
+    """Compatibility selector for the former clearance-only prepass.
+
+    New orchestration should use :func:`qualifying_direction_surface_targets`.
+    This narrower helper remains stable for callers that explicitly ask which
+    directed objects also require logical-boundary clearance measurements.
+    """
 
     if not bool(architecture_context.get("logical_boundary_enabled")):
         return ()
@@ -144,9 +200,12 @@ def qualifying_boundary_surface_targets(
         directionality = str(
             item.get("directionality") or "directed"
         ).strip()
-        clearance_need = str(
-            item.get("clearance_need") or "none"
-        ).strip()
+        need_clearance = item.get("need_clearance")
+        if not isinstance(need_clearance, bool):
+            raise ValueError(
+                "directed surface target need_clearance must be a boolean; "
+                f"target_id={target_id!r}"
+            )
         roles = list(
             dict.fromkeys(
                 str(role).strip()
@@ -157,8 +216,8 @@ def qualifying_boundary_surface_targets(
         if (
             not target_id
             or target_id in seen
-            or directionality not in {"directed", "uncertain"}
-            or clearance_need == "none"
+            or directionality != "directed"
+            or not need_clearance
             or not roles
         ):
             continue
@@ -168,7 +227,7 @@ def qualifying_boundary_surface_targets(
                 "target_id": target_id,
                 "directionality": directionality,
                 "surface_roles": roles,
-                "clearance_need": clearance_need,
+                "need_clearance": True,
             }
         )
     return tuple(result)
@@ -231,9 +290,11 @@ def boundary_evidence_for_targets(
         "scene_access": "read_only",
         "measurement_semantics": (
             "VLM-decoded trusted local-side hypotheses plus deterministic "
-            "scene geometry; measurements are evidence, not a universal "
-            "validity threshold."
+            "scene geometry. Direction descriptors are routing-only; optional "
+            "clearance measurements are evidence, not a universal validity "
+            "threshold."
         ),
+        "direction_descriptor_role": "routing_only",
         "requested_surface_targets": requested,
         "usable_surface_hypotheses": hypotheses,
         "functional_geometry": {
@@ -285,24 +346,45 @@ def _compact_surface_hypothesis(
 def _compact_boundary_observation(
     value: dict[str, Any],
 ) -> dict[str, Any]:
+    # World vectors and exact object transforms are intentionally retained in
+    # the audit artifact but withheld from the Judge-facing compact packet.
+    # They route the camera; they must not become a structured shortcut for the
+    # architecture-orientation verdict.
     allowed = (
         "target_id",
         "status",
         "surface_role",
         "side_id",
-        "world_outward_direction",
-        "object_center_xy",
-        "frontage_origin_xy",
-        "frontage_support_extent_m",
-        "nearest_boundary_distance_m",
-        "outward_ray_boundary_distance_m",
-        "approach_samples",
+        "descriptor_kind",
+        "routing_only",
+        "architecture_orientation_applicable",
+        "clearance_applicable",
     )
-    return {
+    result = {
         key: deepcopy(value.get(key))
         for key in allowed
         if key in value
     }
+    clearance_applicable = value.get("clearance_applicable")
+    if clearance_applicable is None:
+        clearance_applicable = any(
+            key in value
+            for key in (
+                "nearest_boundary_distance_m",
+                "outward_ray_boundary_distance_m",
+                "approach_samples",
+            )
+        )
+        result["clearance_applicable"] = bool(clearance_applicable)
+    if clearance_applicable is True:
+        for key in (
+            "nearest_boundary_distance_m",
+            "outward_ray_boundary_distance_m",
+            "approach_samples",
+        ):
+            if key in value:
+                result[key] = deepcopy(value.get(key))
+    return result
 
 
 def validate_functional_boundary_evidence_response(
@@ -358,8 +440,8 @@ def validate_functional_boundary_evidence_response(
             != list(requested.get("surface_roles") or [])
             or str(item.get("directionality") or "")
             != str(requested.get("directionality") or "")
-            or str(item.get("clearance_need") or "")
-            != str(requested.get("clearance_need") or "")
+            or item.get("need_clearance")
+            is not requested.get("need_clearance")
         ):
             raise ValueError(
                 "functional boundary evidence may not alter the requested "

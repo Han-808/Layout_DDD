@@ -42,6 +42,14 @@ from benchmark.evaluator.profile import (  # noqa: E402
     L3,
     L4,
 )
+from benchmark.evaluator.scene_quality.functional_ownership import (  # noqa: E402
+    CROSS_METRIC_OWNERSHIP_AUDIT_VERSION,
+    FUNCTIONAL_OWNERSHIP_LEDGER_VERSION,
+)
+from benchmark.evaluator.scene_quality.placement_checks import (  # noqa: E402
+    PLACEMENT_CHECK_LEDGER_VERSION,
+    PLACEMENT_CHECK_RESULT_VERSION,
+)
 from benchmark.models import OpenAICompatibleModel  # noqa: E402
 from benchmark.rendering import (  # noqa: E402
     CYCLES_DEVICES,
@@ -71,17 +79,23 @@ from benchmark.visual_judge.placement_discovery import (  # noqa: E402
 from benchmark.visual_judge.contracts import (  # noqa: E402
     response_schema_audit_from_exception,
 )
+from benchmark.visual_judge.graphs import (  # noqa: E402
+    AUDIT_GRAPH_EXPORT_VERSION,
+    export_case_audit_graphs,
+)
 
 
-RUNNER_SCHEMA_VERSION = "camera_cal_scene_level_runner_v4"
+RUNNER_SCHEMA_VERSION = "camera_cal_scene_level_runner_v7"
 PLAN_SCHEMA_VERSION = "camera_cal_scene_level_plan_v1"
-CASE_SCHEMA_VERSION = "camera_cal_scene_level_case_v3"
+CASE_SCHEMA_VERSION = "camera_cal_scene_level_case_v5"
 COMPARISON_SCHEMA_VERSION = "camera_cal_scene_comparison_v1"
 SUMMARY_SCHEMA_VERSION = "camera_cal_scene_level_summary_v2"
 PROGRESS_SCHEMA_VERSION = "camera_cal_scene_level_progress_v1"
 API_CALL_SCHEMA_VERSION = "camera_cal_api_call_v1"
 API_USAGE_SCHEMA_VERSION = "camera_cal_api_usage_v1"
 GROUPING_COMPLETION_MAX_TOKENS = 3192
+JUDGE_COMPLETION_MAX_TOKENS = 8192
+CAMERA_SELECTOR_COMPLETION_MAX_TOKENS = 2048
 L1_BINARY_FAILURE_POLICY = {
     "p0b_official_mode": False,
     "on_engineering_failure": "scene_unresolved_continue_l3_diagnostics",
@@ -113,28 +127,35 @@ ANNOTATED_L3_METRICS = (
     "functional_consistency",
     "semantic_placement_consistency",
 )
-CANONICAL_L3_METRICS = (
-    "scale_consistency",
-    "object_pairing_consistency",
-    "style_consistency",
-)
-EXPERIMENTAL_L3_METRICS = (
-    "functional_consistency",
-    "semantic_placement_consistency",
-)
+CANONICAL_L3_METRICS = ANNOTATED_L3_METRICS
+# Empty compatibility export: all annotated L3 metrics are benchmark metrics.
+EXPERIMENTAL_L3_METRICS: tuple[str, ...] = ()
 FUNCTIONAL_PROBE_IMPLEMENTATION_FILES = (
     "src/benchmark/evaluator/scene_quality/functional_acquisition.py",
     "src/benchmark/evaluator/scene_quality/functional_boundary_evidence.py",
+    "src/benchmark/evaluator/scene_quality/cross_group_relations.py",
     "src/benchmark/evaluator/scene_quality/functional_geometry.py",
+    "src/benchmark/evaluator/scene_quality/functional_checks.py",
+    "src/benchmark/evaluator/scene_quality/functional_ownership.py",
     "src/benchmark/evaluator/scene_quality/functional_probe.py",
     "src/benchmark/evaluator/scene_quality/global_group_first.py",
+    "src/benchmark/evaluator/scene_quality/group_scoped.py",
+    "src/benchmark/evaluator/scene_quality/interfaces.py",
+    "src/benchmark/evaluator/scene_quality/placement_checks.py",
     "src/benchmark/rendering/camera_pose.py",
     "src/benchmark/visual_judge/functional_discovery.py",
+    "src/benchmark/visual_judge/functional_discovery_contract.py",
+    "src/benchmark/visual_judge/functional_discovery_validation.py",
     "src/benchmark/visual_judge/functional_evidence.py",
     "src/benchmark/visual_judge/openai_camera_selector.py",
     "src/benchmark/visual_judge/openai_compatible.py",
+    "src/benchmark/visual_judge/orchestration/controller.py",
     "src/benchmark/visual_judge/placement_discovery.py",
+    "src/benchmark/visual_judge/graphs/evaluation.py",
+    "src/benchmark/visual_judge/graphs/evaluation_projection.py",
+    "src/benchmark/visual_judge/graphs/exporter.py",
     "src/benchmark/visual_judge/render_views.py",
+    "src/benchmark/visual_judge/response_repair.py",
     "src/benchmark/visual_judge/usable_surface.py",
 )
 
@@ -526,6 +547,7 @@ def main() -> None:
         max_workers=args.max_workers,
         resume=args.resume,
         continue_on_error=args.continue_on_error,
+        export_audit_graphs=args.export_audit_graphs,
     )
     atomic_write_json(output_root / "experiment_plan.json", experiment)
 
@@ -564,6 +586,7 @@ def main() -> None:
         "renderer_config": renderer_config,
         "control_config": control.to_dict(),
         "resume": args.resume,
+        "export_audit_graphs": args.export_audit_graphs,
         "progress": progress,
     }
     if args.max_workers == 1:
@@ -744,6 +767,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--continue-on-error",
         action=argparse.BooleanOptionalAction,
         default=False,
+    )
+    parser.add_argument(
+        "--export-audit-graphs",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Post-hoc export RelationCandidateGraph and "
+            "EvaluationQueryGraph artifacts. Disabled by default and never "
+            "used by evaluation or scoring."
+        ),
     )
     parser.add_argument(
         "--blender-bin",
@@ -970,24 +1003,24 @@ def resolved_control() -> Any:
                     "max_selected_views": 2,
                 },
                 "total": {
-                    "max_evidence_rounds": 2,
-                    "max_total_images": 6,
-                    "max_selector_calls": 3,
-                    "max_camera_actions": 2,
+                    "max_evidence_rounds": 3,
+                    "max_total_images": 8,
+                    "max_selector_calls": 4,
+                    "max_camera_actions": 3,
                 },
             },
             "budgets": {
-                "max_evidence_rounds": 2,
+                "max_evidence_rounds": 3,
                 "max_views_per_round": 2,
-                "max_total_images": 6,
-                "max_selector_calls": 3,
-                "max_camera_actions": 2,
+                "max_total_images": 8,
+                "max_selector_calls": 4,
+                "max_camera_actions": 3,
             },
         },
         existing_max_views=2,
         existing_max_steps=1,
         existing_selector_available=True,
-        judge_max_images=5,
+        judge_max_images=8,
     )
 
 
@@ -1004,6 +1037,7 @@ def build_experiment_plan(
     max_workers: int,
     resume: bool,
     continue_on_error: bool,
+    export_audit_graphs: bool = False,
 ) -> dict[str, Any]:
     return {
         "schema_version": PLAN_SCHEMA_VERSION,
@@ -1014,6 +1048,12 @@ def build_experiment_plan(
         "source_cases_read_only": True,
         "source_prompt_used": False,
         "prompt_policy": "metric_rubrics_only_no_generation_prompt",
+        "audit_graph_export": {
+            "enabled": bool(export_audit_graphs),
+            "schema_version": AUDIT_GRAPH_EXPORT_VERSION,
+            "projection_mode": "posthoc_read_only",
+            "decision_authority": "none",
+        },
         "l3_metric_prompt_version": L3_METRIC_PROMPT_VERSION,
         "layers": {
             L1: {
@@ -1076,7 +1116,7 @@ def build_experiment_plan(
                         "functional_correspondence",
                         "approach_clearance",
                     ],
-                    "max_probe_units": 4,
+                    "max_probe_units": 6,
                     "candidate_count_by_probe_kind": {
                         "functional_frontage": 4,
                         "functional_correspondence": 4,
@@ -1090,6 +1130,18 @@ def build_experiment_plan(
                 },
                 "placement_discovery_schema_version": (
                     PLACEMENT_DISCOVERY_SCHEMA_VERSION
+                ),
+                "placement_check_ledger_schema_version": (
+                    PLACEMENT_CHECK_LEDGER_VERSION
+                ),
+                "placement_check_result_schema_version": (
+                    PLACEMENT_CHECK_RESULT_VERSION
+                ),
+                "functional_ownership_ledger_schema_version": (
+                    FUNCTIONAL_OWNERSHIP_LEDGER_VERSION
+                ),
+                "cross_metric_ownership_audit_schema_version": (
+                    CROSS_METRIC_OWNERSHIP_AUDIT_VERSION
                 ),
             },
             L4: {"enabled": False},
@@ -1136,6 +1188,7 @@ def run_case(
     renderer_config: dict[str, Any],
     control_config: dict[str, Any],
     resume: bool,
+    export_audit_graphs: bool = False,
     progress: ProgressReporter | None = None,
 ) -> dict[str, Any]:
     del dataset_root
@@ -1169,6 +1222,16 @@ def run_case(
             expected_fingerprint=fingerprint,
             case_out=case_out,
         ):
+            audit_graph_export = _maybe_export_audit_graphs(
+                enabled=export_audit_graphs,
+                case_id=case_id,
+                case_out=case_out,
+                grouping_report=read_json(case_out / "grouping.json"),
+                scene_quality_report=read_json(
+                    case_out / "scene_quality_report.json"
+                ),
+                progress=progress,
+            )
             api_calls_path = case_out / "api_calls.jsonl"
             api_usage = api_usage_summary(
                 read_api_call_records(api_calls_path)
@@ -1216,6 +1279,7 @@ def run_case(
                     (case_out / "api_usage.json").resolve()
                 ),
                 "api_usage": api_usage,
+                "audit_graph_export": audit_graph_export,
             }
         if resume:
             raise RuntimeError(
@@ -1254,6 +1318,11 @@ def run_case(
         "api_calls_path": str(api_tracker.calls_path),
         "api_usage_path": str(api_tracker.usage_path),
         "api_usage": api_tracker.summary(),
+        "audit_graph_export": {
+            "enabled": bool(export_audit_graphs),
+            "status": "pending" if export_audit_graphs else "disabled",
+            "decision_authority": "none",
+        },
     }
     atomic_write_json(existing_manifest_path, case_run_manifest)
     progress.emit(
@@ -1503,6 +1572,14 @@ def run_case(
     atomic_write_json(case_out / "scene_quality_report.json", l3_report)
     atomic_write_json(case_out / "scene_comparison.json", comparison)
     atomic_write_json(case_out / "control_manifest.json", control_manifest)
+    audit_graph_export = _maybe_export_audit_graphs(
+        enabled=export_audit_graphs,
+        case_id=case_id,
+        case_out=case_out,
+        grouping_report=grouping_report,
+        scene_quality_report=l3_report,
+        progress=progress,
+    )
     case_run_manifest.update(
         status="complete",
         completed_at=utc_now(),
@@ -1515,6 +1592,7 @@ def run_case(
         l1_engineering_failure_count=len(l1_failures),
         binary_response_schema_validation=schema_validation,
         api_usage=api_usage,
+        audit_graph_export=audit_graph_export,
         paths={
             "evaluation_report": str(
                 (case_out / "evaluation_report.json").resolve()
@@ -1535,6 +1613,11 @@ def run_case(
             ),
             "api_calls": str(api_tracker.calls_path),
             "api_usage": str(api_tracker.usage_path),
+            "audit_graph_manifest": (
+                str((case_out / "audit_graphs" / "manifest.json").resolve())
+                if export_audit_graphs
+                else None
+            ),
         },
     )
     atomic_write_json(existing_manifest_path, case_run_manifest)
@@ -1563,11 +1646,74 @@ def run_case(
         "api_calls_path": str(api_tracker.calls_path),
         "api_usage_path": str(api_tracker.usage_path),
         "api_usage": api_usage,
+        "audit_graph_export": audit_graph_export,
+    }
+
+
+def _maybe_export_audit_graphs(
+    *,
+    enabled: bool,
+    case_id: str,
+    case_out: Path,
+    grouping_report: dict[str, Any],
+    scene_quality_report: dict[str, Any],
+    progress: ProgressReporter | None = None,
+) -> dict[str, Any]:
+    if not enabled:
+        return {
+            "enabled": False,
+            "status": "disabled",
+            "decision_authority": "none",
+        }
+    result = export_case_audit_graphs(
+        case_id=case_id,
+        grouping_report=grouping_report,
+        scene_quality_report=scene_quality_report,
+        output_dir=case_out / "audit_graphs",
+    )
+    if progress is not None:
+        progress.emit(
+            "audit_graph_export_completed",
+            case_id=case_id,
+            status=result["status"],
+            relation_candidate_count=(
+                (result.get("relation_candidate_graph") or {}).get(
+                    "candidate_count"
+                )
+            ),
+            evaluation_query_graph_count=len(
+                result.get("evaluation_query_graphs") or []
+            ),
+            decision_authority="none",
+        )
+    return {
+        "enabled": True,
+        "status": result["status"],
+        "schema_version": result["schema_version"],
+        "decision_authority": "none",
+        "manifest_path": str(
+            (case_out / "audit_graphs" / "manifest.json").resolve()
+        ),
+        "relation_candidate_count": (
+            (result.get("relation_candidate_graph") or {}).get(
+                "candidate_count"
+            )
+        ),
+        "evaluation_query_graph_count": len(
+            result.get("evaluation_query_graphs") or []
+        ),
+        "error_type": result.get("error_type"),
+        "error": result.get("error"),
     }
 
 
 def model_config(route: dict[str, Any], *, role: str) -> dict[str, Any]:
-    max_images = 8 if role == "camera-selector" else 5
+    max_images = 8
+    completion_tokens = (
+        JUDGE_COMPLETION_MAX_TOKENS
+        if role == "judge"
+        else CAMERA_SELECTOR_COMPLETION_MAX_TOKENS
+    )
     return {
         "name": f"camera-cal-{role}",
         "endpoint": route["endpoint"],
@@ -1575,7 +1721,7 @@ def model_config(route: dict[str, Any], *, role: str) -> dict[str, Any]:
         "api_key_env": route["api_key_env"],
         "temperature": 0.0,
         "send_temperature": False,
-        "max_tokens": 2048,
+        "max_tokens": completion_tokens,
         "timeout_seconds": 3000,
         "response_format_json": False,
         "max_retries": 1,
@@ -1742,6 +1888,11 @@ def case_input_fingerprint(
             ),
             "grouping_config": grouping_config,
             "model_route": safe_route_manifest(route),
+            "model_completion_budgets": {
+                "grouping": GROUPING_COMPLETION_MAX_TOKENS,
+                "judge": JUDGE_COMPLETION_MAX_TOKENS,
+                "camera_selector": CAMERA_SELECTOR_COMPLETION_MAX_TOKENS,
+            },
             "selected_l3_metrics": list(metrics),
             "source_prompt_used": False,
             "l3_metric_prompt_version": L3_METRIC_PROMPT_VERSION,
@@ -2601,6 +2752,17 @@ def api_usage_summary(
             "vlm_camera_pose.query_cov",
         }
     }
+
+    def _matches_call_family(
+        item: dict[str, Any],
+        base_call_type: str,
+    ) -> bool:
+        actual = str(item.get("call_type") or "chat")
+        return (
+            actual == base_call_type
+            or actual.startswith(base_call_type + ".schema_repair")
+        )
+
     return {
         "schema_version": API_USAGE_SCHEMA_VERSION,
         "api_call_definition": (
@@ -2611,21 +2773,16 @@ def api_usage_summary(
         "token_usage_estimated": False,
         "operation_calls": {
             "functional_discovery": sum(
-                str(item.get("call_type") or "chat")
-                in {
-                    functional_affordance_type,
-                    functional_relation_type,
-                }
+                _matches_call_family(item, functional_affordance_type)
+                or _matches_call_family(item, functional_relation_type)
                 for item in safe_records
             ),
             "functional_affordance": sum(
-                str(item.get("call_type") or "chat")
-                == functional_affordance_type
+                _matches_call_family(item, functional_affordance_type)
                 for item in safe_records
             ),
             "functional_relation": sum(
-                str(item.get("call_type") or "chat")
-                == functional_relation_type
+                _matches_call_family(item, functional_relation_type)
                 for item in safe_records
             ),
             "placement_discovery": sum(

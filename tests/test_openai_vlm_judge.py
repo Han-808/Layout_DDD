@@ -10,7 +10,10 @@ import pytest
 from PIL import Image, PngImagePlugin
 
 from benchmark.visual_judge import OpenAICompatibleVLMJudge, build_openai_compatible_vlm_judge, evaluate_vlm_category
-from benchmark.visual_judge.openai_compatible import _selector_candidate_order_key
+from benchmark.visual_judge.openai_compatible import (
+    _select_judge_visual_paths,
+    _selector_candidate_order_key,
+)
 from benchmark.visual_judge.contracts import ResponseSchemaRepairError
 from benchmark.visual_judge.l3_prompts import (
     L3_METRIC_BOUNDARY_RULES,
@@ -38,6 +41,21 @@ class FakeMultimodalModel:
             "call_type": kwargs.get("call_type"),
         }
         return json.dumps(self.responses[index])
+
+
+def test_ordinary_rejudge_keeps_global_anchor_and_latest_repair_views() -> None:
+    paths = [Path(f"/tmp/image_{index}.png") for index in range(8)]
+
+    selected, audit = _select_judge_visual_paths(
+        paths,
+        max_images=3,
+        forced_choice=False,
+    )
+
+    assert selected == [paths[0], paths[6], paths[7]]
+    assert audit["visual_selection_policy"] == (
+        "global_anchor_plus_most_recent"
+    )
 
 
 def _request(image_path: Path) -> dict:
@@ -888,17 +906,20 @@ def test_canonical_scene_quality_adapter_supports_functional_consistency(
     )
     assert context["metric"] == "functional_consistency"
     assert "ordinary real-world use" in context["rubric"]
-    assert "Complete geometric sealing is not required" in (
+    assert "Establish usable sides from visible geometry" in (
         context["rubric"]
     )
     assert context["metric_prompt_version"] == L3_METRIC_PROMPT_VERSION
     assert context["metric_boundary_rules"] == list(
         L3_METRIC_BOUNDARY_RULES
     )
-    assert "cross-group facts remain in scope" in (
+    assert "overall scene-level functional pass" in (
         context["phase_instruction"]
     )
-    assert "do not summarize unseen local detail" in (
+    assert "owned by later isolated cross-group episodes" in (
+        context["phase_instruction"]
+    )
+    assert "Later phases still run" in (
         context["phase_instruction"]
     )
     assert "Additional visual evidence can be acquired" in (
@@ -925,6 +946,389 @@ def test_canonical_scene_quality_adapter_supports_functional_consistency(
     )
 
 
+def test_functional_required_check_is_repaired_and_preserved(
+    tmp_path: Path,
+) -> None:
+    image_path = tmp_path / "functional_check.png"
+    _write_test_png(image_path)
+    required_check = {
+        "check_id": "functional_check_001",
+        "check_type": "usable_side_access",
+        "owner_stage": "group_local",
+        "target_ids": ["bookshelf"],
+        "group_ids": ["storage"],
+        "owning_group_id": "storage",
+        "relation": "usable_side_access",
+        "required_observations": [
+            "interaction_side_visible",
+            "approach_zone_visible",
+        ],
+        "surface_roles": ["access_side"],
+        "decision_authority": "none",
+    }
+    base_response = {
+        "evidence_status": "sufficient",
+        "verdict": "valid",
+        "confidence": 0.8,
+        "reason": "The shelf frontage is accessible.",
+        "missing_evidence": [],
+        "defects": [],
+        "evidence_request": None,
+    }
+    repaired_response = {
+        **base_response,
+        "functional_check_results": [
+            {
+                "check_id": "functional_check_001",
+                "target_ids": ["bookshelf"],
+                "observation_status": "observed",
+                "conclusion": "valid",
+                "reason": "The access face and approach region are visible.",
+            }
+        ],
+    }
+    model = FakeMultimodalModel([base_response, repaired_response])
+
+    result = OpenAICompatibleVLMJudge(
+        model
+    ).adjudicate_scene_quality(
+        {
+            "metric": "functional_consistency",
+            "metric_prompt_version": L3_METRIC_PROMPT_VERSION,
+            "metric_boundary_rules": list(L3_METRIC_BOUNDARY_RULES),
+            "evidence_phase": "group_local_review",
+            "decision_mode": "final",
+            "judgment_scope": {
+                "included": ["interaction_side_accessibility"]
+            },
+            "target_object_ids": ["bookshelf"],
+            "render_evidence": [str(image_path)],
+            "required_functional_checks": [required_check],
+            "functional_probe_evidence": {
+                "required_checks": [required_check],
+            },
+        }
+    )
+
+    assert result["functional_check_results"] == (
+        repaired_response["functional_check_results"]
+    )
+    assert len(model.calls) == 2
+    context = json.loads(
+        model.calls[0]["messages"][1]["content"][0]["text"].split("\n", 1)[1]
+    )
+    assert context["required_functional_checks"] == [
+        {
+            key: value
+            for key, value in required_check.items()
+            if key != "decision_authority"
+        }
+    ]
+    assert "required_checks" not in context[
+        "functional_probe_evidence"
+    ]
+    assert context["functional_probe_evidence"][
+        "required_checks_reference"
+    ] == "required_functional_checks"
+    assert model.calls[1]["kwargs"]["call_type"].endswith(
+        ".schema_repair"
+    )
+
+
+def test_functional_typed_defect_canonicalizes_ambiguous_envelope(
+    tmp_path: Path,
+) -> None:
+    image_path = tmp_path / "functional_invalid_envelope.png"
+    _write_test_png(image_path)
+    required_check = {
+        "check_id": "functional_check_direction",
+        "check_type": "architecture_orientation",
+        "owner_stage": "group_local",
+        "target_ids": ["bookshelf"],
+        "group_ids": ["storage"],
+        "owning_group_id": "storage",
+        "relation": "architecture_orientation",
+        "required_observations": [
+            "interaction_side_visible",
+            "global_context_preserved",
+        ],
+    }
+    invalid_row = {
+        "check_id": required_check["check_id"],
+        "target_ids": ["bookshelf"],
+        "observation_status": "observed",
+        "conclusion": "invalid",
+        "reason": "The usable side faces inaccessible boundary space.",
+    }
+    defect = {
+        "scope": "interaction_side_accessibility",
+        "target_ids": ["bookshelf"],
+        "relation": "architecture_orientation",
+        "reason": "The usable side is not oriented to accessible interior.",
+        "check_refs": [required_check["check_id"]],
+    }
+    initial = {
+        "evidence_status": "sufficient",
+        "verdict": "ambiguous",
+        "confidence": 0.8,
+        "reason": "The typed check is invalid.",
+        "missing_evidence": [],
+        "defects": [defect],
+        "evidence_request": None,
+        "functional_check_results": [invalid_row],
+    }
+    model = FakeMultimodalModel([initial])
+
+    result = OpenAICompatibleVLMJudge(model).adjudicate_scene_quality(
+        {
+            "metric": "functional_consistency",
+            "metric_prompt_version": L3_METRIC_PROMPT_VERSION,
+            "metric_boundary_rules": list(L3_METRIC_BOUNDARY_RULES),
+            "evidence_phase": "group_local_review",
+            "decision_mode": "final",
+            "judgment_scope": {
+                "included": ["interaction_side_accessibility"]
+            },
+            "target_object_ids": ["bookshelf"],
+            "render_evidence": [str(image_path)],
+            "required_functional_checks": [required_check],
+        }
+    )
+
+    assert result["verdict"] == "invalid"
+    assert result["functional_check_results"] == [invalid_row]
+    audit = result["request_metadata"]["response_schema_validation"]
+    assert audit["recovered"] is False
+    assert len(model.calls) == 1
+
+
+def test_placement_check_id_canonicalizes_redundant_relation(
+    tmp_path: Path,
+) -> None:
+    image_path = tmp_path / "placement_relation_repair.png"
+    _write_test_png(image_path)
+    check = {
+        "check_id": "placement_check_zone",
+        "check_type": "scene_zone",
+        "subject_id": "phone",
+        "context_ids": [],
+        "owner_stage": "scene_global",
+        "owning_group_id": "group-1",
+        "group_ids": ["group-1"],
+        "required_observations": [
+            "target_visible",
+            "global_context_preserved",
+            "architecture_plane_visible",
+        ],
+        "observation_goals": ["Observe the subject's room zone."],
+        "origin": "placement_discovery",
+        "acquisition_status": "current_packet",
+    }
+    row = {
+        "check_id": check["check_id"],
+        "subject_id": "phone",
+        "context_ids": [],
+        "observation_status": "observed",
+        "conclusion": "invalid",
+        "reason": "The subject occupies an implausible room zone.",
+    }
+    initial_defect = {
+        "scope": "semantically_inappropriate_scene_zone",
+        "target_ids": ["phone"],
+        "relation": "implausible location",
+        "reason": "The subject occupies an implausible room zone.",
+        "severity": "material_contextual_mismatch",
+        "check_id": check["check_id"],
+        "placement_check_type": "scene_zone",
+    }
+    base = {
+        "evidence_status": "sufficient",
+        "verdict": "invalid",
+        "confidence": 0.8,
+        "reason": "The typed scene-zone check fails.",
+        "missing_evidence": [],
+        "evidence_request": None,
+        "placement_check_results": [row],
+    }
+    model = FakeMultimodalModel(
+        [{**base, "defects": [initial_defect]}]
+    )
+
+    result = OpenAICompatibleVLMJudge(model).adjudicate_scene_quality(
+        {
+            "metric": "semantic_placement_consistency",
+            "evidence_phase": "global_discovery",
+            "decision_mode": "final",
+            "judgment_scope": {
+                "included": ["semantically_inappropriate_scene_zone"]
+            },
+            "target_object_ids": ["phone"],
+            "scene_summary": {
+                "scene_type": "living_room",
+                "objects": [{"id": "phone", "category": "telephone"}],
+            },
+            "object_groups": [
+                {"group_id": "group-1", "object_ids": ["phone"]}
+            ],
+            "required_placement_checks": [check],
+            "render_evidence": [str(image_path)],
+        }
+    )
+
+    assert result["verdict"] == "invalid"
+    assert result["defects"][0]["relation"] == "scene_zone"
+    assert result["request_metadata"]["response_schema_validation"][
+        "recovered"
+    ] is False
+    assert len(model.calls) == 1
+
+
+def test_functional_schema_repair_may_add_only_omitted_check_rows(
+    tmp_path: Path,
+) -> None:
+    image_path = tmp_path / "functional_check_partial.png"
+    _write_test_png(image_path)
+    required_checks = [
+        {
+            "check_id": "functional_check_001",
+            "check_type": "usable_side_access",
+            "owner_stage": "group_local",
+            "target_ids": ["bookshelf"],
+            "group_ids": ["storage"],
+            "owning_group_id": "storage",
+            "relation": "usable_side_access",
+            "required_observations": ["interaction_side_visible"],
+        },
+        {
+            "check_id": "functional_check_002",
+            "check_type": "architecture_clearance",
+            "owner_stage": "group_local",
+            "target_ids": ["bookshelf"],
+            "group_ids": ["storage"],
+            "owning_group_id": "storage",
+            "relation": "architecture_clearance",
+            "required_observations": ["architecture_plane_visible"],
+        },
+    ]
+    first_row = {
+        "check_id": "functional_check_001",
+        "target_ids": ["bookshelf"],
+        "observation_status": "observed",
+        "conclusion": "valid",
+        "reason": "The frontage is visible and accessible.",
+    }
+    second_row = {
+        "check_id": "functional_check_002",
+        "target_ids": ["bookshelf"],
+        "observation_status": "observed",
+        "conclusion": "valid",
+        "reason": "The frontage has usable separation from the wall.",
+    }
+    base_response = {
+        "evidence_status": "sufficient",
+        "verdict": "valid",
+        "confidence": 0.8,
+        "reason": "The bookshelf is usable.",
+        "missing_evidence": [],
+        "defects": [],
+        "evidence_request": None,
+    }
+    initial_response = {
+        **base_response,
+        "functional_check_results": [first_row],
+    }
+    repaired_response = {
+        **base_response,
+        "functional_check_results": [first_row, second_row],
+    }
+    model = FakeMultimodalModel(
+        [initial_response, repaired_response]
+    )
+
+    result = OpenAICompatibleVLMJudge(
+        model
+    ).adjudicate_scene_quality(
+        {
+            "metric": "functional_consistency",
+            "metric_prompt_version": L3_METRIC_PROMPT_VERSION,
+            "metric_boundary_rules": list(L3_METRIC_BOUNDARY_RULES),
+            "evidence_phase": "group_local_review",
+            "decision_mode": "final",
+            "judgment_scope": {
+                "included": ["interaction_side_accessibility"]
+            },
+            "target_object_ids": ["bookshelf"],
+            "render_evidence": [str(image_path)],
+            "required_functional_checks": required_checks,
+            "functional_probe_evidence": {
+                "required_checks": required_checks,
+            },
+        }
+    )
+
+    assert result["functional_check_results"] == [
+        first_row,
+        second_row,
+    ]
+    assert len(model.calls) == 2
+
+
+def test_required_functional_checks_fail_closed_before_context_truncation(
+    tmp_path: Path,
+) -> None:
+    image_path = tmp_path / "functional_check_context_budget.png"
+    _write_test_png(image_path)
+    model = FakeMultimodalModel(
+        {
+            "evidence_status": "sufficient",
+            "verdict": "valid",
+            "confidence": 0.8,
+            "reason": "must not be called",
+            "missing_evidence": [],
+            "defects": [],
+            "evidence_request": None,
+        }
+    )
+    required_check = {
+        "check_id": "functional_check_001",
+        "check_type": "usable_side_access",
+        "owner_stage": "group_local",
+        "target_ids": ["bookshelf"],
+        "relation": "usable_side_access",
+        "required_observations": ["interaction_side_visible"],
+        "observation_goals": ["x" * 20_000],
+    }
+
+    with pytest.raises(ValueError, match="context budget"):
+        OpenAICompatibleVLMJudge(
+            model,
+            max_context_chars=1_000,
+        ).adjudicate_scene_quality(
+            {
+                "metric": "functional_consistency",
+                "metric_prompt_version": L3_METRIC_PROMPT_VERSION,
+                "metric_boundary_rules": list(
+                    L3_METRIC_BOUNDARY_RULES
+                ),
+                "evidence_phase": "group_local_review",
+                "decision_mode": "final",
+                "judgment_scope": {
+                    "included": [
+                        "interaction_side_accessibility"
+                    ]
+                },
+                "target_object_ids": ["bookshelf"],
+                "render_evidence": [str(image_path)],
+                "required_functional_checks": [required_check],
+                "functional_probe_evidence": {
+                    "required_checks": [required_check],
+                },
+            }
+        )
+
+    assert model.calls == []
+
+
 def test_scene_quality_adapter_keeps_semantic_placement_out_of_l1(
     tmp_path: Path,
 ) -> None:
@@ -937,16 +1341,36 @@ def test_scene_quality_adapter_keeps_semantic_placement_out_of_l1(
             "confidence": 0.9,
             "reason": "The phone is implausibly placed on the floor.",
             "missing_evidence": [],
-            "defects": [
-                {
-                    "scope": "semantically_inappropriate_support_surface",
-                    "target_ids": ["phone"],
-                    "relation": "phone_on_floor",
-                    "reason": "The floor is not a plausible semantic surface.",
-                }
-            ],
-        }
-    )
+                "defects": [
+                    {
+                        "scope": "semantically_inappropriate_support_surface",
+                        "target_ids": ["phone"],
+                        "relation": "support_and_height",
+                        "reason": "The floor is not a plausible semantic surface.",
+                        "severity": "clear_semantic_misplacement",
+                        "check_id": "phone_support_proposal",
+                    }
+                ],
+                "judge_originated_placement_results": [
+                    {
+                        "proposal_id": "phone_support_proposal",
+                        "subject_id": "phone",
+                        "context_ids": [],
+                        "check_type": "support_and_height",
+                        "observation_goal": (
+                            "Inspect the phone's semantic support surface "
+                            "and placement height."
+                        ),
+                        "observation_status": "observed",
+                        "conclusion": "invalid",
+                        "reason": (
+                            "The floor is not a plausible semantic surface."
+                        ),
+                        "severity": "clear_semantic_misplacement",
+                    }
+                ],
+            }
+        )
 
     result = OpenAICompatibleVLMJudge(
         model
@@ -997,6 +1421,84 @@ def test_scene_quality_adapter_keeps_semantic_placement_out_of_l1(
     assert model.calls[0]["kwargs"]["call_type"] == (
         "vlm_judge.canonical.semantic_placement_consistency"
     )
+
+
+def test_global_placement_prompt_defers_group_local_discovery_miss(
+    tmp_path: Path,
+) -> None:
+    image_path = tmp_path / "placement_global.png"
+    _write_test_png(image_path)
+    model = FakeMultimodalModel(
+        {
+            "evidence_status": "sufficient",
+            "verdict": "valid",
+            "confidence": 0.9,
+            "reason": "No scene-global placement defect is present.",
+            "missing_evidence": [],
+            "defects": [],
+        }
+    )
+    deferred = {
+        "check_id": "placement_check:phone-support",
+        "check_type": "support_and_height",
+        "subject_id": "phone",
+        "context_ids": [],
+        "owner_stage": "group_local",
+        "owning_group_id": "group-1",
+        "group_ids": ["group-1"],
+        "required_observations": [
+            "target_visible",
+            "contact_surface_visible",
+            "group_context_visible",
+        ],
+        "observation_goals": ["Inspect semantic support and height."],
+        "origin": "judge_originated_evidence_request",
+        "acquisition_status": "pending",
+    }
+
+    result = OpenAICompatibleVLMJudge(
+        model
+    ).adjudicate_scene_quality(
+        {
+            "metric": "semantic_placement_consistency",
+            "evidence_phase": "global_discovery",
+            "decision_mode": "final",
+            "judgment_scope": {
+                "included": [
+                    "semantically_inappropriate_support_surface",
+                    "implausible_placement_height",
+                    "semantically_inappropriate_scene_zone",
+                    "implausible_local_context",
+                ],
+                "excluded": ["collision", "physical_support"],
+            },
+            "scene_summary": {
+                "scene_type": "living_room",
+                "objects": [
+                    {"id": "phone", "category": "telephone"},
+                    {"id": "side_table", "category": "side_table"},
+                ],
+            },
+            "object_groups": [
+                {
+                    "group_id": "group-1",
+                    "object_ids": ["phone", "side_table"],
+                }
+            ],
+            "required_placement_checks": [],
+            "deferred_placement_checks": [deferred],
+            "render_evidence": [str(image_path)],
+        }
+    )
+
+    assert result["verdict"] == "valid"
+    context = json.loads(
+        model.calls[0]["messages"][1]["content"][0]["text"].split(
+            "\n", 1
+        )[1]
+    )
+    assert context["deferred_placement_checks"] == [deferred]
+    assert "later group-local stage" in context["phase_instruction"]
 
 
 @pytest.mark.parametrize(
@@ -1357,6 +1859,8 @@ def test_judge_builder_supports_mnet_and_remote_api_config() -> None:
     assert local.model.api_key_env is None
     assert remote.model.api_key_env == "REMOTE_API_KEY"
     assert remote.model.endpoint == "https://api.example.com/v1"
+    assert local.model.max_tokens == 8192
+    assert remote.model.max_tokens == 8192
 
 
 def test_relation_judge_is_binary_and_receives_prompt_claim_and_image(tmp_path: Path) -> None:

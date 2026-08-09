@@ -220,9 +220,9 @@ def test_old_or_empty_config_missing_new_fields_remains_valid() -> None:
         _validate(patch)
         resolved = resolve_vlm_evaluation_control(patch)
         assert resolved.schema_version == VLM_EVALUATION_CONTROL_VERSION
-        assert resolved.max_evidence_rounds == 2
+        assert resolved.max_evidence_rounds == 3
         assert resolved.max_views_per_round == 2
-        assert resolved.max_total_images == 6
+        assert resolved.max_total_images == 8
         assert resolved.evidence_gate_allow_path_only_compatibility is False
 
 
@@ -345,11 +345,11 @@ def test_existing_backend_inherits_provider_view_and_action_limits() -> None:
         == "existing_camera_provider"
     )
     assert resolved.requested["budgets"] == {
-        "max_evidence_rounds": 2,
+        "max_evidence_rounds": 3,
         "max_views_per_round": 2,
-        "max_total_images": 6,
-        "max_camera_actions": 2,
-        "max_selector_calls": 3,
+        "max_total_images": 8,
+        "max_camera_actions": 3,
+        "max_selector_calls": 4,
     }
 
 
@@ -361,8 +361,8 @@ def test_non_existing_backend_does_not_inherit_provider_limits() -> None:
     )
 
     assert resolved.max_views_per_round == 2
-    assert resolved.max_camera_actions == 2
-    assert resolved.max_selector_calls == 3
+    assert resolved.max_camera_actions == 3
+    assert resolved.max_selector_calls == 4
 
 
 def test_explicit_budget_overrides_take_precedence_over_existing_provider() -> None:

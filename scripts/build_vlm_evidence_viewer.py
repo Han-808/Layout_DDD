@@ -24,6 +24,9 @@ from benchmark.visual_judge.l3_prompts import (  # noqa: E402
     L3_METRIC_PROMPT_VERSION,
     L3_METRIC_RUBRICS,
 )
+from benchmark.visual_judge.functional_discovery_contract import (  # noqa: E402
+    normalized_functional_relation_predicates,
+)
 
 GROUP_COLORS = (
     "#d1242f",
@@ -73,6 +76,30 @@ def read_json(path: Path) -> dict[str, Any]:
 
 def optional_json(path: Path) -> dict[str, Any]:
     return read_json(path) if path.is_file() else {}
+
+
+def optional_jsonl(path: Path) -> list[dict[str, Any]]:
+    if not path.is_file():
+        return []
+    records: list[dict[str, Any]] = []
+    for line_number, line in enumerate(
+        path.read_text(encoding="utf-8").splitlines(),
+        start=1,
+    ):
+        if not line.strip():
+            continue
+        try:
+            value = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"invalid JSONL record at {path}:{line_number}"
+            ) from exc
+        if not isinstance(value, dict):
+            raise ValueError(
+                f"expected a JSON object at {path}:{line_number}"
+            )
+        records.append(value)
+    return records
 
 
 def file_sha256(path: Path) -> str:
@@ -349,12 +376,22 @@ def evidence_packet_audit(
 
     if (
         metric not in OBJECT_LEVEL_ATTRIBUTION_METRICS
-        or phase not in {"global_discovery", "group_local_review"}
+        or phase
+        not in {
+            "global_discovery",
+            "cross_group_relation_review",
+            "group_local_review",
+        }
     ):
         return None
     expected_roles = (
         ["angled_global"]
         if phase == "global_discovery"
+        else [
+            "angled_global_context",
+            "cross_group_relation_local",
+        ]
+        if phase == "cross_group_relation_review"
         else ["angled_global_context", "group_local"]
     )
     actual_roles: list[str] = []
@@ -369,6 +406,8 @@ def evidence_packet_audit(
             role = "angled_global"
         elif index == 0:
             role = "angled_global_context"
+        elif phase == "cross_group_relation_review":
+            role = "cross_group_relation_local"
         else:
             role = "group_local"
         actual_roles.append(role)
@@ -454,6 +493,33 @@ def object_level_finding_summary(
                 phase = (
                     "group_local_review:"
                     + str(group.get("group_id") or "unknown")
+                )
+                observations.extend(
+                    (phase, defect)
+                    for defect in judgement.get("defects") or []
+                    if isinstance(defect, dict)
+                )
+            relation_results = metric_report.get(
+                "cross_group_relation_results"
+            )
+            relation_results = (
+                relation_results
+                if isinstance(relation_results, list)
+                else []
+            )
+            for relation in relation_results:
+                if not isinstance(relation, dict):
+                    continue
+                judgement = relation.get("judgement")
+                if (
+                    not isinstance(judgement, dict)
+                    or relation.get("status") != "evaluated"
+                    or relation.get("score") != 0.0
+                ):
+                    continue
+                phase = (
+                    "cross_group_relation_review:"
+                    + str(relation.get("relation_id") or "unknown")
                 )
                 observations.extend(
                     (phase, defect)
@@ -1026,6 +1092,674 @@ def render_grouping_output(
     """
 
 
+def _functional_discovery_call_records(
+    api_calls: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    for item in api_calls:
+        call_type = str(item.get("call_type") or "")
+        if not (
+            "functional_discovery" in call_type
+            or "usable_surface" in call_type
+        ):
+            continue
+        usage = item.get("tokens_usage")
+        usage = usage if isinstance(usage, dict) else {}
+        records.append(
+            {
+                "api_call_number": item.get("api_call_number"),
+                "role": str(item.get("role") or "unknown"),
+                "call_type": call_type,
+                "status": str(item.get("status") or "unknown"),
+                "image_count": item.get("image_count"),
+                "total_tokens": usage.get("total_tokens"),
+                "error_type": item.get("error_type"),
+                "error": item.get("error"),
+            }
+        )
+    return records
+
+
+def functional_evidence_audit(
+    *,
+    grouping: dict[str, Any],
+    report: dict[str, Any],
+    api_calls: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    metrics = report.get("metrics")
+    metrics = metrics if isinstance(metrics, dict) else {}
+    metric = metrics.get("functional_consistency")
+    if not isinstance(metric, dict):
+        return None
+
+    evidence = metric.get("functional_prejudgement_evidence")
+    evidence = evidence if isinstance(evidence, dict) else {}
+    acquisition = metric.get("functional_probe_acquisition")
+    acquisition = acquisition if isinstance(acquisition, dict) else {}
+    runtime_audit = evidence.get("runtime_audit")
+    runtime_audit = (
+        runtime_audit if isinstance(runtime_audit, dict) else acquisition
+    )
+    discovery = evidence.get("functional_discovery")
+    if not isinstance(discovery, dict):
+        discovery = metric.get("functional_discovery")
+    discovery = discovery if isinstance(discovery, dict) else {}
+
+    groups = grouping.get("object_groups")
+    groups = (
+        [item for item in groups if isinstance(item, dict)]
+        if isinstance(groups, list)
+        else []
+    )
+    object_to_group: dict[str, str] = {}
+    group_scopes: list[dict[str, Any]] = []
+    for group in groups:
+        group_id = str(group.get("group_id") or "unknown")
+        object_ids = [
+            str(value)
+            for value in group.get("object_ids") or []
+        ]
+        for object_id in object_ids:
+            object_to_group[object_id] = group_id
+        group_scopes.append(
+            {
+                "group_id": group_id,
+                "label": str(group.get("label") or "—"),
+                "anchor_object_id": str(
+                    group.get("anchor_object_id") or "—"
+                ),
+                "object_ids": object_ids,
+                "reason": str(group.get("reason") or ""),
+            }
+        )
+
+    directed_targets = discovery.get("directed_surface_targets")
+    directed_targets = (
+        [item for item in directed_targets if isinstance(item, dict)]
+        if isinstance(directed_targets, list)
+        else []
+    )
+    affordance_ledger = discovery.get("object_affordance_ledger")
+    affordance_ledger = (
+        [item for item in affordance_ledger if isinstance(item, dict)]
+        if isinstance(affordance_ledger, list)
+        else []
+    )
+    usable_surfaces = evidence.get("usable_surface_hypotheses")
+    if not isinstance(usable_surfaces, list):
+        usable_surfaces = acquisition.get("usable_surface_hypotheses")
+    usable_surfaces = (
+        [item for item in usable_surfaces if isinstance(item, dict)]
+        if isinstance(usable_surfaces, list)
+        else []
+    )
+
+    surface_objects: dict[str, dict[str, Any]] = {}
+    for item in affordance_ledger:
+        object_id = str(item.get("object_id") or "")
+        if object_id:
+            surface_objects.setdefault(object_id, {})["affordance"] = item
+    for item in directed_targets:
+        object_id = str(
+            item.get("target_id") or item.get("object_id") or ""
+        )
+        if object_id:
+            surface_objects.setdefault(object_id, {})["target"] = item
+    for item in usable_surfaces:
+        object_id = str(item.get("target_id") or "")
+        if object_id:
+            surface_objects.setdefault(object_id, {})["decoded"] = item
+
+    surface_records: list[dict[str, Any]] = []
+    for object_id in sorted(surface_objects):
+        values = surface_objects[object_id]
+        affordance = values.get("affordance")
+        affordance = affordance if isinstance(affordance, dict) else {}
+        target = values.get("target")
+        target = target if isinstance(target, dict) else {}
+        decoded = values.get("decoded")
+        decoded = decoded if isinstance(decoded, dict) else {}
+        surfaces = decoded.get("surfaces")
+        surfaces = (
+            [item for item in surfaces if isinstance(item, dict)]
+            if isinstance(surfaces, list)
+            else []
+        )
+        surface_roles = (
+            affordance.get("surface_roles")
+            or target.get("surface_roles")
+            or target.get("requested_surface_roles")
+            or decoded.get("requested_surface_roles")
+            or []
+        )
+        decoded_sides = [
+            " · ".join(
+                part
+                for part in (
+                    str(surface.get("surface_role") or ""),
+                    str(surface.get("side_id") or ""),
+                )
+                if part
+            )
+            for surface in surfaces
+        ]
+        need_clearance = affordance.get("need_clearance")
+        if not isinstance(need_clearance, bool):
+            legacy_clearance = str(
+                affordance.get("clearance_need") or ""
+            ).strip()
+            need_clearance = (
+                legacy_clearance != "none"
+                if legacy_clearance
+                else None
+            )
+        surface_records.append(
+            {
+                "object_id": object_id,
+                "group_id": object_to_group.get(object_id, "—"),
+                "directionality": affordance.get("directionality"),
+                "surface_roles": [str(value) for value in surface_roles],
+                "need_clearance": need_clearance,
+                "decode_status": decoded.get("status"),
+                "decoded_sides": decoded_sides,
+                "reason": str(
+                    decoded.get("reason")
+                    or target.get("observation_goal")
+                    or affordance.get("observation_goal")
+                    or ""
+                ),
+            }
+        )
+
+    functional_relations: list[dict[str, Any]] = []
+    rejected_functional_relations: list[dict[str, Any]] = []
+    for key, scope in (
+        ("within_group_correspondences", "within_group"),
+        ("cross_group_correspondences", "cross_group"),
+    ):
+        values = discovery.get(key)
+        values = values if isinstance(values, list) else []
+        for item in values:
+            if not isinstance(item, dict):
+                continue
+            try:
+                predicates = normalized_functional_relation_predicates(item)
+            except ValueError:
+                predicates = (str(item.get("predicate") or ""),)
+            for predicate in predicates:
+                target_ids = [
+                    str(value) for value in item.get("target_ids") or []
+                ]
+                record = {
+                    "source": "functional_discovery",
+                    "scope": str(item.get("scope") or scope),
+                    "target_ids": target_ids,
+                    "group_ids": [
+                        str(value)
+                        for value in item.get("group_ids") or []
+                    ],
+                    "predicate": predicate,
+                    "observation_kinds": (
+                        [predicate] if predicate else []
+                    ),
+                    "observation_goal": str(
+                        item.get("observation_goal") or ""
+                    ),
+                    "atomicity": (
+                        "atomic_pair"
+                        if len(target_ids) == 2
+                        else f"legacy_non_atomic_{len(target_ids)}_objects"
+                    ),
+                }
+                if len(target_ids) == 2:
+                    functional_relations.append(record)
+                else:
+                    rejected_functional_relations.append(
+                        {
+                            **record,
+                            "rejection_reason": (
+                                "current functional relation contract requires "
+                                "exactly two object IDs"
+                            ),
+                        }
+                    )
+    grouping_context_relations = grouping.get("cross_group_relations")
+    grouping_context_relations = (
+        grouping_context_relations
+        if isinstance(grouping_context_relations, list)
+        else []
+    )
+    grouping_relation_records: list[dict[str, Any]] = []
+    for item in grouping_context_relations:
+        if not isinstance(item, dict):
+            continue
+        grouping_relation_records.append(
+            {
+                "source": "grouping",
+                "scope": str(item.get("scope") or "cross_group"),
+                "target_ids": [
+                    str(value)
+                    for value in (
+                        item.get("target_ids")
+                        or item.get("object_ids")
+                        or []
+                    )
+                ],
+                "group_ids": [
+                    str(value)
+                    for value in item.get("group_ids") or []
+                ],
+                "predicate": str(item.get("predicate") or ""),
+                "observation_kinds": [
+                    str(value)
+                    for value in item.get("observation_kinds") or []
+                ],
+                "observation_goal": str(
+                    item.get("observation_goal")
+                    or item.get("reason")
+                    or ""
+                ),
+                "atomicity": "grouping_context_not_judge_check",
+            }
+        )
+
+    status = str(
+        evidence.get("status")
+        or runtime_audit.get("status")
+        or (
+            "complete"
+            if discovery
+            else "not_persisted"
+        )
+    )
+    reason = str(
+        runtime_audit.get("reason")
+        or runtime_audit.get("error")
+        or discovery.get("reason")
+        or ""
+    )
+    calls = _functional_discovery_call_records(api_calls)
+    provenance = discovery.get("provenance")
+    provenance = provenance if isinstance(provenance, dict) else {}
+    relation_input_contract = provenance.get(
+        "relation_input_contract"
+    )
+    relation_input_contract = (
+        deepcopy(relation_input_contract)
+        if isinstance(relation_input_contract, dict)
+        else {}
+    )
+    if discovery and not relation_input_contract:
+        source_identity = evidence.get("source_identity")
+        source_identity = (
+            source_identity if isinstance(source_identity, dict) else {}
+        )
+        visual_evidence = []
+        for role, key in (
+            ("scene_global", "global_image_path"),
+            ("global_identity_overlay", "identity_image_path"),
+        ):
+            path = str(source_identity.get(key) or "").strip()
+            if path:
+                visual_evidence.append({"role": role, "path": path})
+        relation_call = next(
+            (
+                item
+                for item in calls
+                if item.get("call_type")
+                == "vlm_camera_pose.functional_discovery.relations"
+            ),
+            {},
+        )
+        relation_input_contract = {
+            "status": "legacy_inferred_from_persisted_audit",
+            "relation_schema_version": provenance.get(
+                "relation_schema_version"
+            ),
+            "visual_evidence": visual_evidence,
+            "visual_evidence_roles": [
+                item["role"] for item in visual_evidence
+            ],
+            "image_count": relation_call.get("image_count"),
+            "structured_context_fields": [
+                "scene_id",
+                "scene_type",
+                "object_list",
+                "identity_grounding",
+                "affordance_prior",
+            ],
+            "structured_context": None,
+            "structured_context_status": (
+                "field_names_inferred_but_exact_json_not_persisted"
+            ),
+            "trusted_group_partition_status": (
+                "not_delivered_by_legacy_relation_contract"
+            ),
+        }
+    elif relation_input_contract:
+        relation_input_contract.setdefault("status", "persisted_exact")
+    completed_calls = sum(
+        1 for item in calls if item.get("status") == "complete"
+    )
+    fail_closed = bool(
+        status == "failed"
+        and completed_calls
+        and not discovery
+        and not surface_records
+        and not functional_relations
+    )
+    return {
+        "status": status,
+        "reason": reason,
+        "error_type": runtime_audit.get("error_type"),
+        "error": runtime_audit.get("error"),
+        "decision_authority": str(
+            evidence.get("decision_authority") or "none"
+        ),
+        "fail_closed": fail_closed,
+        "group_scopes": group_scopes,
+        "surface_records": surface_records,
+        "relation_records": functional_relations,
+        "rejected_relation_records": rejected_functional_relations,
+        "grouping_relation_records": grouping_relation_records,
+        "relation_input_contract": relation_input_contract,
+        "discovery_calls": calls,
+        "completed_discovery_calls": completed_calls,
+        "discovery": deepcopy(discovery),
+    }
+
+
+def render_functional_evidence_audit(
+    *,
+    grouping: dict[str, Any],
+    report: dict[str, Any],
+    api_calls: list[dict[str, Any]],
+    resolver: EvidenceURLResolver | None = None,
+) -> str:
+    audit = functional_evidence_audit(
+        grouping=grouping,
+        report=report,
+        api_calls=api_calls,
+    )
+    if audit is None:
+        return ""
+
+    group_rows = []
+    for group in audit["group_scopes"]:
+        members = ", ".join(group["object_ids"]) or "—"
+        group_rows.append(
+            "<tr>"
+            f"<td><code>{html.escape(group['group_id'])}</code></td>"
+            f"<td>{html.escape(group['label'])}</td>"
+            f"<td>{html.escape(members)}</td>"
+            f"<td><code>{html.escape(group['anchor_object_id'])}</code></td>"
+            f"<td>{html.escape(group['reason'])}</td>"
+            "</tr>"
+        )
+
+    surface_rows = []
+    for item in audit["surface_records"]:
+        roles = ", ".join(item["surface_roles"]) or "—"
+        decoded = ", ".join(item["decoded_sides"]) or "—"
+        need_clearance = item["need_clearance"]
+        clearance_label = (
+            "yes"
+            if need_clearance is True
+            else "no"
+            if need_clearance is False
+            else "—"
+        )
+        surface_rows.append(
+            "<tr>"
+            f"<td><code>{html.escape(item['object_id'])}</code></td>"
+            f"<td><code>{html.escape(item['group_id'])}</code></td>"
+            f"<td>{html.escape(str(item['directionality'] or '—'))}</td>"
+            f"<td>{html.escape(roles)}</td>"
+            f"<td>{clearance_label}</td>"
+            f"<td>{html.escape(decoded)}</td>"
+            f"<td>{html.escape(str(item['decode_status'] or '—'))}</td>"
+            "</tr>"
+        )
+    if not surface_rows:
+        surface_rows.append(
+            '<tr><td colspan="7" class="audit-empty">'
+            "No accepted usable-side target or decoded surface was persisted."
+            "</td></tr>"
+        )
+
+    relation_rows = []
+    for item in audit["relation_records"]:
+        targets = " ↔ ".join(item["target_ids"]) or "—"
+        groups = ", ".join(item["group_ids"]) or "—"
+        predicate = (
+            str(item.get("predicate") or "").strip()
+            or ", ".join(item["observation_kinds"])
+            or "—"
+        )
+        relation_rows.append(
+            "<tr>"
+            f"<td>{html.escape(item['source'])}</td>"
+            f"<td>{html.escape(item['scope'])}</td>"
+            f"<td>{html.escape(targets)}</td>"
+            f"<td>{html.escape(groups)}</td>"
+            f"<td>{html.escape(predicate)}</td>"
+            f"<td>{html.escape(str(item.get('atomicity') or '—'))}</td>"
+            f"<td>{html.escape(item['observation_goal'])}</td>"
+            "</tr>"
+        )
+    if not relation_rows:
+        relation_rows.append(
+            '<tr><td colspan="7" class="audit-empty">'
+            "No accepted structured within-group or cross-group functional "
+            "relation was persisted."
+            "</td></tr>"
+        )
+
+    rejected_relation_rows = []
+    for item in audit["rejected_relation_records"]:
+        targets = " ↔ ".join(item["target_ids"]) or "—"
+        rejected_relation_rows.append(
+            "<tr>"
+            f"<td>{html.escape(item['scope'])}</td>"
+            f"<td>{html.escape(targets)}</td>"
+            f"<td>{html.escape(str(item.get('predicate') or '—'))}</td>"
+            f"<td>{html.escape(str(item.get('atomicity') or '—'))}</td>"
+            f"<td>{html.escape(item['rejection_reason'])}</td>"
+            "</tr>"
+        )
+    rejected_relation_html = (
+        f"""
+        <details class="functional-audit-block functional-evidence-audit-failed">
+          <summary>Rejected legacy non-atomic relation records · {len(rejected_relation_rows)}</summary>
+          <p class="audit-empty">Shown for historical audit only; these records do not enter required checks, evidence acquisition, or Judge episodes.</p>
+          <table>
+            <thead><tr><th>Scope</th><th>Objects</th><th>Predicate</th><th>Contract</th><th>Rejection</th></tr></thead>
+            <tbody>{''.join(rejected_relation_rows)}</tbody>
+          </table>
+        </details>
+        """
+        if rejected_relation_rows
+        else ""
+    )
+
+    grouping_relation_rows = []
+    for item in audit["grouping_relation_records"]:
+        targets = " ↔ ".join(item["target_ids"]) or "—"
+        groups = ", ".join(item["group_ids"]) or "—"
+        predicate = (
+            str(item.get("predicate") or "").strip()
+            or ", ".join(item["observation_kinds"])
+            or "—"
+        )
+        grouping_relation_rows.append(
+            "<tr>"
+            f"<td>{html.escape(item['scope'])}</td>"
+            f"<td>{html.escape(targets)}</td>"
+            f"<td>{html.escape(groups)}</td>"
+            f"<td>{html.escape(predicate)}</td>"
+            f"<td>{html.escape(item['observation_goal'])}</td>"
+            "</tr>"
+        )
+    if not grouping_relation_rows:
+        grouping_relation_rows.append(
+            '<tr><td colspan="5" class="audit-empty">'
+            "No grouping-level contextual relation was persisted."
+            "</td></tr>"
+        )
+
+    relation_input = audit.get("relation_input_contract")
+    relation_input = (
+        relation_input if isinstance(relation_input, dict) else {}
+    )
+    relation_input_images = []
+    for item in relation_input.get("visual_evidence") or []:
+        if not isinstance(item, dict):
+            continue
+        role = html.escape(str(item.get("role") or "visual evidence"))
+        path = str(item.get("path") or "").strip()
+        if not path:
+            continue
+        rendered = (
+            render_image(path, resolver)
+            if resolver is not None
+            else f"<code>{html.escape(path)}</code>"
+        )
+        relation_input_images.append(
+            f'<div class="relation-input-visual"><strong>{role}</strong>'
+            f"{rendered}</div>"
+        )
+    relation_input_images_html = "".join(relation_input_images) or (
+        '<p class="audit-empty">No exact relation-discovery image path was '
+        "persisted.</p>"
+    )
+    relation_input_html = (
+        f"""
+        <details class="functional-audit-block" open>
+          <summary>Relation discovery inputs · visual evidence + compact JSON</summary>
+          <div class="relation-input-images">{relation_input_images_html}</div>
+          <pre>{json_block(relation_input)}</pre>
+        </details>
+        """
+        if relation_input
+        else ""
+    )
+
+    call_rows = []
+    for item in audit["discovery_calls"]:
+        tokens = item.get("total_tokens")
+        token_text = str(tokens) if isinstance(tokens, int) else "—"
+        call_rows.append(
+            "<tr>"
+            f"<td>{html.escape(str(item.get('api_call_number') or '—'))}</td>"
+            f"<td>{html.escape(item['call_type'])}</td>"
+            f"<td>{html.escape(item['role'])}</td>"
+            f"<td>{html.escape(item['status'])}</td>"
+            f"<td>{html.escape(str(item.get('image_count') or 0))}</td>"
+            f"<td>{html.escape(token_text)}</td>"
+            "</tr>"
+        )
+    if not call_rows:
+        call_rows.append(
+            '<tr><td colspan="6" class="audit-empty">'
+            "No functional discovery API-call record was persisted."
+            "</td></tr>"
+        )
+
+    status_note = ""
+    if audit["fail_closed"]:
+        status_note = (
+            "The affordance/relation calls completed, but strict validation "
+            "rejected the composed discovery result. Therefore zero "
+            "usable-side hypotheses and zero functional relations were "
+            "forwarded to evidence acquisition or the Judge."
+        )
+    elif audit["status"] == "complete":
+        status_note = (
+            "The records below were accepted as audit-only evidence targets; "
+            "they do not carry a metric verdict."
+        )
+    else:
+        status_note = (
+            "Only persisted, validated discovery records are shown. Missing "
+            "records are not reconstructed by the viewer."
+        )
+    failed_class = (
+        " functional-evidence-audit-failed"
+        if audit["status"] == "failed"
+        else ""
+    )
+    error_text = str(audit.get("error") or audit.get("reason") or "")
+    return f"""
+      <section class="functional-evidence-audit{failed_class}">
+        <div class="functional-evidence-heading">
+          <div>
+            <div class="eyebrow">Pre-judgement evidence structure</div>
+            <h3>Usable-side and object–group relationship audit</h3>
+          </div>
+          <span class="audit-only-badge">audit only · no decision authority</span>
+        </div>
+        <div class="functional-evidence-summary">
+          <div><strong>Discovery status</strong><span>{html.escape(audit['status'])}</span></div>
+          <div><strong>Discovery API calls</strong><span>{len(audit['discovery_calls'])}</span></div>
+          <div><strong>Accepted usable sides</strong><span>{len(audit['surface_records'])}</span></div>
+          <div><strong>Accepted relations</strong><span>{len(audit['relation_records'])}</span></div>
+          <div><strong>Rejected legacy relations</strong><span>{len(audit['rejected_relation_records'])}</span></div>
+          <div><strong>Grouping context</strong><span>{len(audit['grouping_relation_records'])}</span></div>
+        </div>
+        <div class="functional-evidence-status">
+          <strong>{html.escape(status_note)}</strong>
+          <p>{html.escape(error_text)}</p>
+        </div>
+        <details class="functional-audit-block" open>
+          <summary>Object ↔ grouping scope</summary>
+          <table>
+            <thead><tr><th>Group</th><th>Label</th><th>Objects</th><th>Anchor</th><th>Scope / relationship basis</th></tr></thead>
+            <tbody>{''.join(group_rows)}</tbody>
+          </table>
+        </details>
+        <details class="functional-audit-block">
+          <summary>Grouping contextual relations · not Functional required checks</summary>
+          <p class="audit-empty">These rows explain grouping context only. They are not relation-discovery outputs, required checks, or Judge episodes.</p>
+          <table>
+            <thead><tr><th>Scope</th><th>Objects</th><th>Groups</th><th>Context type</th><th>Grouping rationale</th></tr></thead>
+            <tbody>{''.join(grouping_relation_rows)}</tbody>
+          </table>
+        </details>
+        <details class="functional-audit-block" open>
+          <summary>Usable-side recognition</summary>
+          <table>
+            <thead><tr><th>Object</th><th>Group</th><th>Directionality</th><th>Requested roles</th><th>Needs clearance</th><th>Decoded side</th><th>Status</th></tr></thead>
+            <tbody>{''.join(surface_rows)}</tbody>
+          </table>
+        </details>
+        <details class="functional-audit-block" open>
+          <summary>Functional relationship candidates</summary>
+          <table>
+            <thead><tr><th>Source</th><th>Scope</th><th>Objects</th><th>Groups</th><th>Predicate</th><th>Contract</th><th>Evidence goal</th></tr></thead>
+            <tbody>{''.join(relation_rows)}</tbody>
+          </table>
+        </details>
+        {rejected_relation_html}
+        {relation_input_html}
+        <details class="functional-audit-block">
+          <summary>Discovery API calls and validation</summary>
+          <table>
+            <thead><tr><th>#</th><th>Call type</th><th>Role</th><th>Status</th><th>Images</th><th>Tokens</th></tr></thead>
+            <tbody>{''.join(call_rows)}</tbody>
+          </table>
+          <pre>{json_block({
+              "status": audit["status"],
+              "reason": audit["reason"],
+              "error_type": audit["error_type"],
+              "error": audit["error"],
+              "fail_closed": audit["fail_closed"],
+              "decision_authority": audit["decision_authority"],
+          })}</pre>
+        </details>
+      </section>
+    """
+
+
 def l1_calls(report: dict[str, Any]) -> list[dict[str, Any]]:
     metrics = report.get("metrics")
     metrics = metrics if isinstance(metrics, dict) else {}
@@ -1148,9 +1882,24 @@ def l3_calls(report: dict[str, Any]) -> list[dict[str, Any]]:
     for metric, metric_report in metrics.items():
         if not isinstance(metric_report, dict):
             continue
+        metric_budget = metric_report.get("combined_evidence_budget")
+        metric_budget = (
+            metric_budget if isinstance(metric_budget, dict) else None
+        )
         group_results = metric_report.get("group_results")
         group_results = (
             group_results if isinstance(group_results, list) else []
+        )
+        relation_results = metric_report.get(
+            "cross_group_relation_results"
+        )
+        relation_stage_present = bool(
+            "cross_group_relation_results" in metric_report
+            or "cross_group_relations"
+            in str(metric_report.get("route") or "")
+        )
+        relation_results = (
+            relation_results if isinstance(relation_results, list) else []
         )
         candidates: list[
             tuple[str, list[str], dict[str, Any], str, int]
@@ -1198,8 +1947,29 @@ def l3_calls(report: dict[str, Any]) -> list[dict[str, Any]]:
                     1,
                 )
             )
+        for index, relation in enumerate(relation_results):
+            if not isinstance(relation, dict):
+                continue
+            members = relation.get("target_ids")
+            members = (
+                [str(value) for value in members]
+                if isinstance(members, list)
+                else []
+            )
+            candidates.append(
+                (
+                    str(
+                        relation.get("relation_id")
+                        or f"cross_group_relation_{index + 1:03d}"
+                    ),
+                    members,
+                    relation,
+                    "cross_group_relation_review",
+                    2,
+                )
+            )
         for index, group in enumerate(group_results):
-            if not isinstance(group, dict) or group.get("vlm_invoked") is not True:
+            if not isinstance(group, dict):
                 continue
             members = group.get("member_ids")
             members = (
@@ -1213,7 +1983,14 @@ def l3_calls(report: dict[str, Any]) -> list[dict[str, Any]]:
                     members,
                     group,
                     "group_local_review",
-                    2,
+                    (
+                        3
+                        if (
+                            str(metric) == "functional_consistency"
+                            and relation_stage_present
+                        )
+                        else 2
+                    ),
                 )
             )
         global_judgement = metric_report.get("judgement")
@@ -1281,9 +2058,79 @@ def l3_calls(report: dict[str, Any]) -> list[dict[str, Any]]:
                 images=images,
                 run_prompt_version=run_prompt_version,
             )
+            resolution = item.get("evidence_resolution")
+            resolution = (
+                resolution if isinstance(resolution, dict) else {}
+            )
+            resolution_budget = resolution.get("acquisition_budget")
+            resolution_budget = (
+                resolution_budget
+                if isinstance(resolution_budget, dict)
+                else None
+            )
+            episode = item.get("camera_acquisition_episode")
+            episode = episode if isinstance(episode, dict) else None
+            budget_details = (
+                {
+                    "metric_contract": deepcopy(metric_budget),
+                    "episode": deepcopy(episode),
+                    "resolution_budget": deepcopy(resolution_budget),
+                    "judge_facing_image_count": len(images),
+                }
+                if any(
+                    value is not None
+                    for value in (
+                        metric_budget,
+                        episode,
+                        resolution_budget,
+                    )
+                )
+                else None
+            )
+            judge_invoked = (
+                item.get("vlm_invoked") is not False
+                if phase
+                in {
+                    "cross_group_relation_review",
+                    "group_local_review",
+                }
+                else True
+            )
             displayed_prompt_version = (
                 run_prompt_version or "not persisted"
             )
+            if judge_invoked:
+                acquisition = acquisition_timeline(
+                    control_audit=control_audit,
+                    fallback_images=images,
+                    final_result=(
+                        compact_result(judgement)
+                        or {
+                            "status": item.get("status"),
+                            "score": item.get("score"),
+                            "reason": item.get("reason"),
+                        }
+                    ),
+                )
+            else:
+                acquisition = {
+                    "trace_source": "judge_not_invoked",
+                    "steps": [],
+                    "summary": {
+                        "judge_calls": 0,
+                        "judge_request_count": 0,
+                        "selector_calls": 0,
+                        "evidence_rounds": 0,
+                        "completed_renders": 0,
+                        "added_image_count": 0,
+                        "packet_change_events": 0,
+                        "rejudged": False,
+                        "additional_evidence": False,
+                        "stop_reason": str(
+                            item.get("reason") or "judge_not_invoked"
+                        ),
+                    },
+                }
             calls.append(
                 {
                     "id": f"l3-{metric}-{index:03d}",
@@ -1294,6 +2141,7 @@ def l3_calls(report: dict[str, Any]) -> list[dict[str, Any]]:
                     "phase": phase,
                     "workflow_step": workflow_step,
                     "status": str(item.get("status") or "unknown"),
+                    "judge_invoked": judge_invoked,
                     "verdict": verdict,
                     "score": item.get("score"),
                     "confidence": judgement.get("confidence"),
@@ -1333,21 +2181,761 @@ def l3_calls(report: dict[str, Any]) -> list[dict[str, Any]]:
                         "score": item.get("score"),
                         "reason": item.get("reason"),
                     },
-                    "acquisition": acquisition_timeline(
-                        control_audit=control_audit,
-                        fallback_images=images,
-                        final_result=(
-                            compact_result(judgement)
-                            or {
-                                "status": item.get("status"),
-                                "score": item.get("score"),
-                                "reason": item.get("reason"),
-                            }
-                        ),
+                    "routing_details": (
+                        {
+                            "vlm_invoked": item.get("vlm_invoked"),
+                            "evidence_resolution": deepcopy(
+                                resolution
+                            ),
+                            "camera_acquisition_episode": deepcopy(
+                                episode
+                            ),
+                            "camera_target_ids": deepcopy(
+                                item.get("camera_target_ids")
+                            ),
+                            "relation_id": item.get("relation_id"),
+                            "judge_episode": item.get("judge_episode"),
+                            "pair_specific_evidence_available": item.get(
+                                "pair_specific_evidence_available"
+                            ),
+                            "acquisition_status": item.get(
+                                "acquisition_status"
+                            ),
+                            "acquisition_error": deepcopy(
+                                item.get("acquisition_error")
+                            ),
+                            "target_ids": deepcopy(
+                                item.get("target_ids")
+                            ),
+                            "group_ids": deepcopy(
+                                item.get("group_ids")
+                            ),
+                            "observation_kinds": deepcopy(
+                                item.get("observation_kinds")
+                            ),
+                            "relation_predicates": deepcopy(
+                                item.get("relation_predicates")
+                            ),
+                            "observation_goals": deepcopy(
+                                item.get("observation_goals")
+                            ),
+                            "routed_candidate_claims": deepcopy(
+                                item.get("routed_candidate_claims")
+                            ),
+                            "claim_correspondence": deepcopy(
+                                item.get("claim_correspondence")
+                            ),
+                            "scene_claim_correspondence": deepcopy(
+                                item.get("scene_claim_correspondence")
+                            ),
+                            "functional_probe_evidence": deepcopy(
+                                item.get("functional_probe_evidence")
+                            ),
+                            "placement_discovery": deepcopy(
+                                item.get("placement_discovery")
+                            ),
+                        }
+                        if phase
+                        in {
+                            "cross_group_relation_review",
+                            "group_local_review",
+                        }
+                        else None
                     ),
+                    "budget_details": budget_details,
+                    "acquisition": acquisition,
                 }
             )
     return calls
+
+
+def l3_pipeline_summary(report: dict[str, Any]) -> list[dict[str, Any]]:
+    """Summarize persisted routing without inventing missing Judge calls."""
+
+    metrics = report.get("metrics")
+    metrics = metrics if isinstance(metrics, dict) else {}
+    summaries: list[dict[str, Any]] = []
+    for metric, metric_report in metrics.items():
+        if not isinstance(metric_report, dict):
+            continue
+        global_record = metric_report.get("global_discovery")
+        global_record = (
+            global_record if isinstance(global_record, dict) else {}
+        )
+        groups = metric_report.get("group_results")
+        groups = (
+            [item for item in groups if isinstance(item, dict)]
+            if isinstance(groups, list)
+            else []
+        )
+        relations = metric_report.get("cross_group_relation_results")
+        relations = (
+            [item for item in relations if isinstance(item, dict)]
+            if isinstance(relations, list)
+            else []
+        )
+        group_filter = metric_report.get("group_filter")
+        group_filter = (
+            group_filter if isinstance(group_filter, dict) else {}
+        )
+        skipped = group_filter.get("skipped_groups")
+        skipped = skipped if isinstance(skipped, list) else []
+        resolved = sum(
+            1
+            for item in groups
+            if item.get("status") == "evaluated"
+        )
+        unresolved = sum(
+            1
+            for item in groups
+            if item.get("status") == "unresolved"
+        )
+        invoked = sum(
+            1
+            for item in groups
+            if item.get("vlm_invoked") is True
+        )
+        resolved_relations = sum(
+            1
+            for item in relations
+            if item.get("status") == "evaluated"
+        )
+        unresolved_relations = sum(
+            1
+            for item in relations
+            if item.get("status") != "evaluated"
+        )
+        route = str(metric_report.get("route") or "scene_global")
+        relation_stage_present = bool(
+            "cross_group_relation_results" in metric_report
+            or "cross_group_relations" in route
+        )
+        discovery: dict[str, Any] | None = None
+        if metric == "functional_consistency":
+            functional = metric_report.get(
+                "functional_prejudgement_evidence"
+            )
+            functional = functional if isinstance(functional, dict) else {}
+            runtime_audit = functional.get("runtime_audit")
+            runtime_audit = (
+                runtime_audit if isinstance(runtime_audit, dict) else {}
+            )
+            budget = functional.get("budget_usage")
+            budget = budget if isinstance(budget, dict) else {}
+            discovery = {
+                "label": "Usable-side / relation evidence discovery",
+                "status": str(
+                    functional.get("status")
+                    or runtime_audit.get("status")
+                    or "not persisted"
+                ),
+                "reason": str(
+                    runtime_audit.get("reason")
+                    or runtime_audit.get("error")
+                    or ""
+                ),
+                "planned": budget.get("scheduled_probe_count"),
+                "rendered": len(
+                    functional.get("selected_judge_probe_paths") or []
+                ),
+                "budget": budget.get("max_probe_units"),
+                "details": deepcopy(functional),
+            }
+        elif metric == "semantic_placement_consistency":
+            placement = metric_report.get("placement_discovery")
+            placement = placement if isinstance(placement, dict) else {}
+            candidates = placement.get("candidates")
+            candidates = candidates if isinstance(candidates, list) else []
+            discovery = {
+                "label": "Placement observation discovery",
+                "status": (
+                    "complete" if placement else "not persisted"
+                ),
+                "reason": str(placement.get("reason") or ""),
+                "planned": len(candidates),
+                "rendered": None,
+                "budget": None,
+                "details": deepcopy(placement),
+            }
+        summaries.append(
+            {
+                "metric": str(metric),
+                "route": route,
+                "status": str(metric_report.get("status") or "unknown"),
+                "score": metric_report.get("score"),
+                "reason": str(metric_report.get("reason") or ""),
+                "global_status": str(
+                    global_record.get("global_status")
+                    or global_record.get("evidence_status")
+                    or (
+                        "recorded"
+                        if global_record
+                        else "not applicable"
+                    )
+                ),
+                "global_verdict": str(
+                    global_record.get("verdict")
+                    or (
+                        metric_report.get("judgement") or {}
+                    ).get("verdict")
+                    or "—"
+                ),
+                "eligible_groups": len(groups),
+                "resolved_groups": resolved,
+                "unresolved_groups": unresolved,
+                "invoked_groups": invoked,
+                "scheduled_relations": len(relations),
+                "invoked_relation_episodes": sum(
+                    1
+                    for relation in relations
+                    if relation.get("vlm_invoked") is not False
+                ),
+                "skipped_relation_episodes": sum(
+                    1
+                    for relation in relations
+                    if relation.get("vlm_invoked") is False
+                ),
+                "resolved_relations": resolved_relations,
+                "unresolved_relations": unresolved_relations,
+                "relation_stage_present": relation_stage_present,
+                "skipped_groups": len(skipped),
+                "discovery": discovery,
+                "budget": metric_budget_summary(metric_report),
+                "check_chain": metric_check_chain_summary(
+                    str(metric),
+                    metric_report,
+                ),
+            }
+        )
+    return summaries
+
+
+def metric_check_chain_summary(
+    metric: str,
+    metric_report: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Expose persisted typed obligations without interpreting the verdict."""
+
+    if metric == "functional_consistency":
+        ledger_key = "functional_check_ledger"
+        coverage_key = "functional_check_coverage"
+        label = "Functional typed-check chain"
+    elif metric == "semantic_placement_consistency":
+        ledger_key = "placement_check_ledger"
+        coverage_key = "placement_check_coverage"
+        label = "Placement typed-check chain"
+    else:
+        return None
+    ledger = metric_report.get(ledger_key)
+    if not isinstance(ledger, dict):
+        return None
+    raw_checks = ledger.get("checks")
+    raw_checks = raw_checks if isinstance(raw_checks, list) else []
+    checks: list[dict[str, Any]] = []
+    for raw in raw_checks:
+        if not isinstance(raw, dict):
+            continue
+        checks.append(
+            {
+                "check_id": str(raw.get("check_id") or ""),
+                "check_type": str(
+                    raw.get("check_type")
+                    or raw.get("predicate")
+                    or "unknown"
+                ),
+                "owner_stage": str(
+                    raw.get("owner_stage") or "not persisted"
+                ),
+                "owning_group_id": (
+                    str(raw.get("owning_group_id"))
+                    if raw.get("owning_group_id")
+                    else None
+                ),
+                "subject_id": (
+                    str(raw.get("subject_id"))
+                    if raw.get("subject_id")
+                    else None
+                ),
+                "target_ids": [
+                    str(value)
+                    for value in raw.get("target_ids") or []
+                ],
+                "context_ids": [
+                    str(value)
+                    for value in raw.get("context_ids") or []
+                ],
+                "origin": str(raw.get("origin") or "discovery"),
+                "lifecycle_status": str(
+                    raw.get("lifecycle_status") or "unknown"
+                ),
+                "observation_status": (
+                    str(raw.get("observation_status"))
+                    if raw.get("observation_status")
+                    else None
+                ),
+                "conclusion": (
+                    str(raw.get("check_conclusion"))
+                    if raw.get("check_conclusion")
+                    else None
+                ),
+                "judge_result_ref": (
+                    str(raw.get("judge_result_ref"))
+                    if raw.get("judge_result_ref")
+                    else None
+                ),
+                "function_event_ref": (
+                    str(raw.get("function_event_ref"))
+                    if raw.get("function_event_ref")
+                    else None
+                ),
+            }
+        )
+    ownership = metric_report.get("functional_ownership_ledger")
+    ownership = ownership if isinstance(ownership, dict) else {}
+    events = [
+        deepcopy(item)
+        for item in ownership.get("events") or []
+        if isinstance(item, dict)
+    ]
+    coverage = metric_report.get(coverage_key)
+    coverage = coverage if isinstance(coverage, dict) else {}
+    cross_metric = metric_report.get("cross_metric_ownership_audit")
+    cross_metric = (
+        cross_metric if isinstance(cross_metric, dict) else None
+    )
+    return {
+        "label": label,
+        "ledger_key": ledger_key,
+        "checks": checks,
+        "coverage": deepcopy(coverage),
+        "ownership_events": events,
+        "cross_metric_ownership_audit": deepcopy(cross_metric),
+        "raw_ledger": deepcopy(ledger),
+    }
+
+
+def render_metric_check_chain(
+    value: dict[str, Any] | None,
+) -> str:
+    if not isinstance(value, dict):
+        return ""
+    checks = value.get("checks")
+    checks = checks if isinstance(checks, list) else []
+    coverage = value.get("coverage")
+    coverage = coverage if isinstance(coverage, dict) else {}
+    events = value.get("ownership_events")
+    events = events if isinstance(events, list) else []
+    rows: list[str] = []
+    for check in checks:
+        if not isinstance(check, dict):
+            continue
+        subject = (
+            str(check.get("subject_id"))
+            if check.get("subject_id")
+            else ", ".join(check.get("target_ids") or [])
+        )
+        context = ", ".join(check.get("context_ids") or []) or "—"
+        route = str(check.get("owner_stage") or "unknown")
+        if check.get("owning_group_id"):
+            route += f" · {check['owning_group_id']}"
+        conclusion = str(
+            check.get("conclusion")
+            or check.get("lifecycle_status")
+            or "pending"
+        )
+        rows.append(
+            "<tr>"
+            f"<td><code>{html.escape(str(check.get('check_type') or ''))}</code>"
+            f"<small>{html.escape(str(check.get('check_id') or ''))}</small></td>"
+            f"<td>{html.escape(subject or '—')}</td>"
+            f"<td>{html.escape(context)}</td>"
+            f"<td>{html.escape(route)}</td>"
+            f"<td><strong>{html.escape(conclusion)}</strong>"
+            f"<small>{html.escape(str(check.get('observation_status') or ''))}</small></td>"
+            "</tr>"
+        )
+    if not rows:
+        rows.append(
+            '<tr><td colspan="5" class="muted">No typed check was persisted.</td></tr>'
+        )
+    resolved = coverage.get("resolved_check_count")
+    required = coverage.get("required_check_count")
+    coverage_text = (
+        f"{resolved}/{required} resolved"
+        if isinstance(resolved, int) and isinstance(required, int)
+        else f"{len(checks)} persisted check(s)"
+    )
+    status = (
+        "complete"
+        if coverage.get("complete") is True
+        else "incomplete"
+        if coverage
+        else "coverage not persisted"
+    )
+    event_rows = []
+    for event in events:
+        event_rows.append(
+            "<li>"
+            f"<code>{html.escape(str(event.get('event_id') or ''))}</code>"
+            " · affected "
+            f"{html.escape(', '.join(str(item) for item in event.get('affected_object_ids') or []) or '—')}"
+            " · causal "
+            f"{html.escape(', '.join(str(item) for item in event.get('causal_object_ids') or []) or '—')}"
+            " · scored to "
+            f"{html.escape(', '.join(str(item) for item in event.get('scoring_target_ids') or []) or '—')}"
+            "</li>"
+        )
+    ownership_html = (
+        "<details><summary>"
+        f"Functional causal ownership · {len(events)} event(s)"
+        "</summary><ul class=\"ownership-events\">"
+        + "".join(event_rows)
+        + "</ul></details>"
+        if events
+        else ""
+    )
+    return f"""
+      <section class="metric-check-chain">
+        <div class="metric-check-chain-heading">
+          <div>
+            <strong>{html.escape(str(value.get('label') or 'Typed-check chain'))}</strong>
+            <span>{html.escape(coverage_text)} · {html.escape(status)}</span>
+          </div>
+          <span class="audit-only-badge">routing → evidence → Judge → result</span>
+        </div>
+        <div class="metric-check-table-wrap">
+          <table class="metric-check-table">
+            <thead>
+              <tr><th>Check</th><th>Subject / targets</th><th>Context</th><th>Route</th><th>Result</th></tr>
+            </thead>
+            <tbody>{''.join(rows)}</tbody>
+          </table>
+        </div>
+        {ownership_html}
+        <details>
+          <summary>Typed ledger and cross-metric ownership audit</summary>
+          <pre>{json_block({
+              'ledger': value.get('raw_ledger') or {},
+              'coverage': coverage,
+              'cross_metric_ownership_audit': (
+                  value.get('cross_metric_ownership_audit')
+              ),
+          })}</pre>
+        </details>
+      </section>
+    """
+
+
+def metric_budget_summary(
+    metric_report: dict[str, Any],
+) -> dict[str, Any] | None:
+    budget = metric_report.get("combined_evidence_budget")
+    if not isinstance(budget, dict):
+        return None
+    ledger = budget.get("camera_acquisition_ledger")
+    ledger = ledger if isinstance(ledger, dict) else {}
+    accounting = str(budget.get("accounting") or "not_persisted")
+    aggregate_is_authority = budget.get(
+        "metric_aggregate_is_budget_authority"
+    )
+    if not isinstance(aggregate_is_authority, bool):
+        aggregate_is_authority = (
+            accounting == "existing_shared_metric_camera_ledger"
+        )
+    return {
+        "accounting": accounting,
+        "scope": str(
+            budget.get("budget_enforcement_scope")
+            or (
+                "metric"
+                if aggregate_is_authority
+                else "not_persisted"
+            )
+        ),
+        "max_images_per_judge_episode": budget.get(
+            "max_images_per_judge_episode"
+        ),
+        "metric_artifact_count": ledger.get("total_images_acquired"),
+        "metric_aggregate_is_budget_authority": aggregate_is_authority,
+    }
+
+
+def render_l3_pipeline_summary(report: dict[str, Any]) -> str:
+    summaries = l3_pipeline_summary(report)
+    if not summaries:
+        return ""
+    rows: list[str] = []
+    for item in summaries:
+        route = str(item["route"])
+        has_local = "group" in route
+        local_text = (
+            f"{item['resolved_groups']} resolved · "
+            f"{item['unresolved_groups']} unresolved · "
+            f"{item['skipped_groups']} skipped"
+            if has_local
+            else "not required"
+        )
+        discovery = item.get("discovery")
+        discovery_html = ""
+        if isinstance(discovery, dict):
+            counts = []
+            if isinstance(discovery.get("planned"), int):
+                counts.append(f"{discovery['planned']} candidate(s)")
+            if isinstance(discovery.get("rendered"), int):
+                counts.append(f"{discovery['rendered']} rendered")
+            if isinstance(discovery.get("budget"), int):
+                counts.append(f"budget {discovery['budget']}")
+            count_text = " · ".join(counts) or "no count persisted"
+            discovery_html = f"""
+              <div class="pipeline-discovery">
+                <strong>{html.escape(str(discovery['label']))}</strong>
+                <span class="pipeline-status">{html.escape(str(discovery['status']))}</span>
+                <span>{html.escape(count_text)}</span>
+                <p>{html.escape(str(discovery.get('reason') or ''))}</p>
+                <details>
+                  <summary>Discovery record</summary>
+                  <pre>{json_block(discovery.get("details") or {})}</pre>
+                </details>
+              </div>
+            """
+        budget = item.get("budget")
+        budget_html = ""
+        if isinstance(budget, dict):
+            max_images = budget.get("max_images_per_judge_episode")
+            metric_artifacts = budget.get("metric_artifact_count")
+            aggregate_is_authority = (
+                budget.get("metric_aggregate_is_budget_authority") is True
+            )
+            if aggregate_is_authority:
+                budget_label = "Historical metric-wide budget"
+                budget_note = (
+                    f"{metric_artifacts} acquired artifact(s)"
+                    if isinstance(metric_artifacts, int)
+                    else "artifact count not persisted"
+                )
+            else:
+                budget_label = "Per-Judge episode budget"
+                budget_note_parts = []
+                if isinstance(max_images, int):
+                    budget_note_parts.append(
+                        f"up to {max_images} Judge-facing image(s)"
+                    )
+                if isinstance(metric_artifacts, int):
+                    budget_note_parts.append(
+                        f"{metric_artifacts} metric artifact(s), audit only"
+                    )
+                budget_note = (
+                    " · ".join(budget_note_parts)
+                    or "counts not persisted"
+                )
+            budget_html = f"""
+              <div class="pipeline-budget">
+                <strong>{html.escape(budget_label)}</strong>
+                <span>{html.escape(budget_note)}</span>
+              </div>
+            """
+        check_chain_html = render_metric_check_chain(
+            item.get("check_chain")
+        )
+        score = item.get("score")
+        score_text = (
+            f"{float(score):.2f}"
+            if isinstance(score, (int, float))
+            else "—"
+        )
+        has_relation_stage = (
+            str(item["metric"]) == "functional_consistency"
+            and item.get("relation_stage_present") is True
+        )
+        relation_stage_html = (
+            f"""
+                <span class="pipeline-arrow">→</span>
+                <div>
+                  <strong>2 · Cross-group relations</strong>
+                  <span>
+                    {int(item['resolved_relations'])} resolved ·
+                    {int(item['unresolved_relations'])} unresolved
+                  </span>
+                  <small>
+                    {int(item['scheduled_relations'])} relation obligation(s) ·
+                    {int(item.get('invoked_relation_episodes') or 0)} isolated Judge episode(s) ·
+                    {int(item.get('skipped_relation_episodes') or 0)} not started
+                  </small>
+                </div>
+            """
+            if has_relation_stage
+            else ""
+        )
+        local_step = 3 if has_relation_stage else 2
+        rows.append(
+            f"""
+            <article class="pipeline-metric">
+              <div class="pipeline-metric-heading">
+                <div>
+                  <strong>{html.escape(str(item['metric']))}</strong>
+                  <code>{html.escape(route)}</code>
+                </div>
+                <span class="pipeline-final pipeline-final-{html.escape(str(item['status']))}">
+                  {html.escape(str(item['status']))} · score {score_text}
+                </span>
+              </div>
+              {discovery_html}
+              {budget_html}
+              {check_chain_html}
+              <div class="pipeline-stages{' pipeline-stages-functional' if has_relation_stage else ''}">
+                <div>
+                  <strong>1 · Global</strong>
+                  <span>{html.escape(str(item['global_verdict']))}</span>
+                  <small>{html.escape(str(item['global_status']))}</small>
+                </div>
+                {relation_stage_html}
+                <span class="pipeline-arrow">→</span>
+                <div>
+                  <strong>{local_step} · Group-local</strong>
+                  <span>{html.escape(local_text)}</span>
+                  <small>{int(item['invoked_groups'])} Judge call scope(s)</small>
+                </div>
+              </div>
+              <p class="pipeline-reason">{html.escape(str(item['reason']))}</p>
+            </article>
+            """
+        )
+    return f"""
+      <section class="pipeline-summary">
+        <div class="pipeline-summary-heading">
+          <div>
+            <div class="eyebrow">Persisted workflow</div>
+            <h3>L3 global → local routing</h3>
+          </div>
+          <p>
+            Includes unresolved group scopes where the Judge was never invoked.
+          </p>
+        </div>
+        <div class="pipeline-grid">{''.join(rows)}</div>
+      </section>
+    """
+
+
+def render_audit_graphs(case_dir: Path) -> str:
+    """Render optional graph artifacts without treating them as decisions."""
+
+    graph_root = case_dir / "audit_graphs"
+    manifest = optional_json(graph_root / "manifest.json")
+    if not manifest:
+        return ""
+    status = str(manifest.get("status") or "unknown")
+    if status != "complete":
+        return f"""
+          <section class="audit-graphs audit-graphs-failed">
+            <div class="eyebrow">Optional post-hoc projection</div>
+            <h3>Evaluation audit graphs</h3>
+            <p>
+              Export {html.escape(status)} ·
+              {html.escape(str(manifest.get("error") or "no graph emitted"))}
+            </p>
+            <p class="muted">
+              This export failure does not change the metric result.
+            </p>
+          </section>
+        """
+
+    relation_record = manifest.get("relation_candidate_graph")
+    relation_record = (
+        relation_record if isinstance(relation_record, dict) else {}
+    )
+    relation_graph = _graph_json(
+        graph_root,
+        relation_record.get("path"),
+    )
+    candidates = relation_graph.get("candidates")
+    candidates = candidates if isinstance(candidates, list) else []
+    source_counts: dict[str, int] = {}
+    scope_counts: dict[str, int] = {}
+    state_counts: dict[str, int] = {}
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        scope = str(candidate.get("scope") or "unknown")
+        state = str(candidate.get("state") or "candidate")
+        scope_counts[scope] = scope_counts.get(scope, 0) + 1
+        state_counts[state] = state_counts.get(state, 0) + 1
+        for source in candidate.get("sources") or []:
+            if not isinstance(source, dict):
+                continue
+            kind = str(source.get("source_kind") or "unknown")
+            source_counts[kind] = source_counts.get(kind, 0) + 1
+
+    query_records = manifest.get("evaluation_query_graphs")
+    query_records = (
+        query_records if isinstance(query_records, list) else []
+    )
+    metric_counts: dict[str, int] = {}
+    node_count = 0
+    edge_count = 0
+    typed_check_count = 0
+    check_result_count = 0
+    ownership_event_count = 0
+    for record in query_records:
+        if not isinstance(record, dict):
+            continue
+        metric = str(record.get("metric") or "unknown")
+        metric_counts[metric] = metric_counts.get(metric, 0) + 1
+        node_count += int(record.get("node_count") or 0)
+        edge_count += int(record.get("edge_count") or 0)
+        node_kinds = record.get("node_kind_counts")
+        node_kinds = node_kinds if isinstance(node_kinds, dict) else {}
+        typed_check_count += int(node_kinds.get("typed_check") or 0)
+        check_result_count += int(node_kinds.get("check_result") or 0)
+        ownership_event_count += int(
+            node_kinds.get("ownership_event") or 0
+        )
+
+    def counts(value: dict[str, int]) -> str:
+        return " · ".join(
+            f"{key} {value[key]}" for key in sorted(value)
+        ) or "none"
+
+    return f"""
+      <section class="audit-graphs">
+        <div class="audit-graphs-heading">
+          <div>
+            <div class="eyebrow">Optional post-hoc projection</div>
+            <h3>Evaluation audit graphs</h3>
+          </div>
+          <span class="audit-only-badge">audit only · no decision authority</span>
+        </div>
+        <div class="audit-graph-stats">
+          <div><strong>{len(candidates)}</strong><span>relation candidates</span></div>
+          <div><strong>{len(query_records)}</strong><span>query graphs</span></div>
+          <div><strong>{node_count}</strong><span>typed nodes</span></div>
+          <div><strong>{edge_count}</strong><span>typed edges</span></div>
+          <div><strong>{typed_check_count}</strong><span>typed checks</span></div>
+          <div><strong>{check_result_count}</strong><span>check results</span></div>
+          <div><strong>{ownership_event_count}</strong><span>ownership events</span></div>
+        </div>
+        <div class="audit-graph-breakdown">
+          <p><strong>Candidate sources</strong> {html.escape(counts(source_counts))}</p>
+          <p><strong>Scopes</strong> {html.escape(counts(scope_counts))}</p>
+          <p><strong>Lifecycle</strong> {html.escape(counts(state_counts))}</p>
+          <p><strong>Query metrics</strong> {html.escape(counts(metric_counts))}</p>
+        </div>
+        <details>
+          <summary>Graph export manifest</summary>
+          <pre>{json_block(manifest)}</pre>
+        </details>
+      </section>
+    """
+
+
+def _graph_json(root: Path, relative_path: Any) -> dict[str, Any]:
+    if not isinstance(relative_path, str) or not relative_path.strip():
+        return {}
+    candidate = (root / relative_path).resolve()
+    try:
+        candidate.relative_to(root.resolve())
+    except ValueError:
+        return {}
+    return optional_json(candidate)
 
 
 def render_phase_routes(calls: list[dict[str, Any]]) -> str:
@@ -1369,8 +2957,35 @@ def render_phase_routes(calls: list[dict[str, Any]]) -> str:
             for call in metric_calls
             if call.get("phase") == "group_local_review"
         ]
+        relation_calls = [
+            call
+            for call in metric_calls
+            if call.get("phase") == "cross_group_relation_review"
+        ]
         if not global_calls or not local_calls:
             continue
+        has_relation_stage = bool(
+            metric == "functional_consistency"
+            and (
+                relation_calls
+                or any(
+                    call.get("workflow_step") == 3
+                    for call in local_calls
+                )
+            )
+        )
+        relation_route = (
+            f"""
+              <span class="phase-arrow">→</span>
+              <span class="phase-node phase-node-relation">
+                2 · Cross-group relation review ·
+                {len(relation_calls)} relation(s)
+              </span>
+            """
+            if has_relation_stage
+            else ""
+        )
+        local_step = 3 if has_relation_stage else 2
         routes.append(
             f"""
             <div class="phase-route">
@@ -1378,9 +2993,10 @@ def render_phase_routes(calls: list[dict[str, Any]]) -> str:
               <span class="phase-node phase-node-global">
                 1 · Global discovery
               </span>
+              {relation_route}
               <span class="phase-arrow">→</span>
               <span class="phase-node phase-node-local">
-                2 · Group-local review · {len(local_calls)} group(s)
+                {local_step} · Group-local review · {len(local_calls)} group(s)
               </span>
             </div>
             """
@@ -1401,6 +3017,7 @@ def aggregate_usage(calls: list[dict[str, Any]]) -> dict[str, Any]:
         role_calls = [
             call
             for call in calls
+            if call.get("judge_invoked") is not False
             if (
                 role == "judge"
                 and call.get("layer") in {"L1", "L3"}
@@ -1653,6 +3270,11 @@ def render_acquisition_timeline(
 
 
 def acquisition_overview(calls: list[dict[str, Any]]) -> dict[str, Any]:
+    calls = [
+        call
+        for call in calls
+        if call.get("judge_invoked") is not False
+    ]
     decision_rows: list[dict[str, Any]] = []
     totals = {
         "decisions": len(calls),
@@ -1803,6 +3425,96 @@ def render_evidence_packet_audit(
     """
 
 
+def render_judge_episode_budget(call: dict[str, Any]) -> str:
+    details = call.get("budget_details")
+    if not isinstance(details, dict):
+        return ""
+    contract = details.get("metric_contract")
+    contract = contract if isinstance(contract, dict) else {}
+    episode = details.get("episode")
+    episode = episode if isinstance(episode, dict) else {}
+    resolution = details.get("resolution_budget")
+    resolution = resolution if isinstance(resolution, dict) else {}
+    metric_ledger = contract.get("camera_acquisition_ledger")
+    metric_ledger = (
+        metric_ledger if isinstance(metric_ledger, dict) else {}
+    )
+    before = episode.get("ledger_before_judge")
+    before = before if isinstance(before, dict) else {}
+    after = episode.get("ledger_after_judge")
+    after = after if isinstance(after, dict) else {}
+
+    accounting = str(contract.get("accounting") or "")
+    aggregate_authority = contract.get(
+        "metric_aggregate_is_budget_authority"
+    )
+    if not isinstance(aggregate_authority, bool):
+        aggregate_authority = (
+            accounting == "existing_shared_metric_camera_ledger"
+        )
+    max_images = resolution.get("max_total_images")
+    if not isinstance(max_images, int):
+        max_images = contract.get("max_images_per_judge_episode")
+    initial_count = resolution.get("initial_judge_evidence_count")
+    if not isinstance(initial_count, int):
+        initial_count = before.get("total_images_acquired")
+    if not isinstance(initial_count, int):
+        initial_count = details.get("judge_facing_image_count")
+    after_count = after.get("total_images_acquired")
+    metric_count = resolution.get("metric_artifact_count_after")
+    if not isinstance(metric_count, int):
+        metric_count = metric_ledger.get("total_images_acquired")
+
+    if aggregate_authority:
+        heading = "Historical metric-wide evidence budget"
+        scope_text = "shared across the metric"
+        authority_note = "The metric aggregate was the budget authority."
+    else:
+        heading = "Judge episode evidence budget"
+        scope_text = str(
+            resolution.get("scope")
+            or episode.get("scope")
+            or contract.get("budget_enforcement_scope")
+            or "judge_episode"
+        ).replace("_", " ")
+        authority_note = (
+            "Metric artifact count is telemetry only; it does not block the "
+            "next group."
+        )
+
+    def count_text(value: Any, *, fallback: str = "—") -> str:
+        return str(value) if isinstance(value, int) else fallback
+
+    initial_text = count_text(initial_count)
+    if isinstance(max_images, int):
+        initial_text += f" / {max_images}"
+    after_text = count_text(after_count, fallback=initial_text)
+    if isinstance(max_images, int):
+        after_text = after_text.split(" / ", 1)[0] + f" / {max_images}"
+    metric_text = count_text(metric_count)
+    return f"""
+      <div class="judge-budget">
+        <div>
+          <strong>{html.escape(heading)}</strong>
+          <span>{html.escape(scope_text)}</span>
+        </div>
+        <div>
+          <strong>Initial Judge packet</strong>
+          <span>{html.escape(initial_text)}</span>
+        </div>
+        <div>
+          <strong>After evidence loop</strong>
+          <span>{html.escape(after_text)}</span>
+        </div>
+        <div>
+          <strong>Metric artifacts</strong>
+          <span>{html.escape(metric_text)}</span>
+        </div>
+        <p>{html.escape(authority_note)}</p>
+      </div>
+    """
+
+
 def render_call(
     call: dict[str, Any],
     resolver: EvidenceURLResolver,
@@ -1813,6 +3525,7 @@ def render_call(
     phase = str(call.get("phase") or "")
     phase_labels = {
         "global_discovery": "Global discovery",
+        "cross_group_relation_review": "Cross-group relation review",
         "group_local_review": "Group-local review",
         "scene_global": "Scene-global judgement",
     }
@@ -1834,6 +3547,7 @@ def render_call(
         phase
         if phase in {
             "global_discovery",
+            "cross_group_relation_review",
             "group_local_review",
             "scene_global",
         }
@@ -1868,23 +3582,29 @@ def render_call(
     acquisition_summary = (
         acquisition_summary if isinstance(acquisition_summary, dict) else {}
     )
-    acquisition_kind = (
-        "extra"
-        if acquisition_summary.get("additional_evidence") is True
-        else "direct"
-        if acquisition.get("trace_source") != "reconstructed"
-        else "untraced"
-    )
-    acquisition_badge = (
-        f"+{int(acquisition_summary.get('added_image_count') or 0)} evidence"
-        if acquisition_kind == "extra"
-        else "direct evidence"
-        if acquisition_kind == "direct"
-        else "trace reconstructed"
-    )
+    judge_invoked = call.get("judge_invoked") is not False
+    if not judge_invoked:
+        acquisition_kind = "not-invoked"
+        acquisition_badge = "Judge not invoked"
+    else:
+        acquisition_kind = (
+            "extra"
+            if acquisition_summary.get("additional_evidence") is True
+            else "direct"
+            if acquisition.get("trace_source") != "reconstructed"
+            else "untraced"
+        )
+        acquisition_badge = (
+            f"+{int(acquisition_summary.get('added_image_count') or 0)} evidence"
+            if acquisition_kind == "extra"
+            else "direct evidence"
+            if acquisition_kind == "direct"
+            else "trace reconstructed"
+        )
     packet_audit = render_evidence_packet_audit(
         call.get("evidence_packet_audit")
     )
+    judge_budget = render_judge_episode_budget(call)
     images = "".join(
         render_image(path, resolver)
         for path in call.get("images") or []
@@ -1903,6 +3623,27 @@ def render_call(
         """
         if isinstance(context, dict)
         else ""
+    )
+    routing_details = call.get("routing_details")
+    routing_details_html = (
+        f"""
+        <details>
+          <summary>Routing / unresolved scope</summary>
+          <pre>{json_block(routing_details)}</pre>
+        </details>
+        """
+        if isinstance(routing_details, dict)
+        else ""
+    )
+    acquisition_html = (
+        render_acquisition_timeline(acquisition, resolver)
+        if judge_invoked
+        else f"""
+          <div class="judge-not-invoked">
+            <strong>Judge was not invoked for this required scope.</strong>
+            <span>{html.escape(str(call.get("reason") or "No reason persisted."))}</span>
+          </div>
+        """
     )
     search = html.escape(
         " ".join(
@@ -1945,7 +3686,8 @@ def render_call(
         </div>
         <p class="reason">{reason}</p>
         {packet_audit}
-        {render_acquisition_timeline(acquisition, resolver)}
+        {judge_budget}
+        {acquisition_html}
         <div class="image-grid">{images}</div>
         <div class="details-row">
           <details>
@@ -1961,6 +3703,7 @@ def render_call(
             <summary>Request metadata</summary>
             <pre>{json_block(metadata or {})}</pre>
           </details>
+          {routing_details_html}
           {context_details}
         </div>
       </article>
@@ -2121,8 +3864,11 @@ def build_viewer(
         serve_root=serve_root,
         bundle_dir=bundle_dir,
     )
-    case_dirs = sorted(
-        path for path in (run_root / "cases").iterdir() if path.is_dir()
+    cases_root = run_root / "cases"
+    case_dirs = (
+        sorted(path for path in cases_root.iterdir() if path.is_dir())
+        if cases_root.is_dir()
+        else []
     )
     all_sections: list[str] = []
     all_calls: list[dict[str, Any]] = []
@@ -2133,6 +3879,7 @@ def build_viewer(
         l1_report = optional_json(case_dir / "l1_report.json")
         l3_report = optional_json(case_dir / "scene_quality_report.json")
         comparison = optional_json(case_dir / "scene_comparison.json")
+        api_calls = optional_jsonl(case_dir / "api_calls.jsonl")
         source_paths = source_evidence_paths(case_manifest)
         blender_command = render_blender_command(
             case_id=case_dir.name,
@@ -2147,6 +3894,12 @@ def build_viewer(
             ),
             resolver=resolver,
         )
+        functional_evidence = render_functional_evidence_audit(
+            grouping=grouping,
+            report=l3_report,
+            api_calls=api_calls,
+            resolver=resolver,
+        )
         calls: list[dict[str, Any]] = []
         calls.extend(l1_calls(l1_report))
         calls.extend(l3_calls(l3_report))
@@ -2155,6 +3908,8 @@ def build_viewer(
         all_calls.extend(calls)
         metric_names.update(str(call["metric"]) for call in calls)
         cards = "".join(render_call(call, resolver) for call in calls)
+        pipeline_summary = render_l3_pipeline_summary(l3_report)
+        audit_graphs = render_audit_graphs(case_dir)
         phase_routes = render_phase_routes(calls)
         object_findings = render_object_level_findings(l3_report)
         if not cards:
@@ -2167,6 +3922,7 @@ def build_viewer(
               data-scene="{html.escape(case_dir.name)}"{initially_hidden}>
               {blender_command}
               {grouping_output}
+              {functional_evidence}
               <section class="scene">
                 <div class="scene-title">
                   <div>
@@ -2188,6 +3944,8 @@ def build_viewer(
                   </table>
                 </details>
                 {object_findings}
+                {audit_graphs}
+                {pipeline_summary}
                 {phase_routes}
                 <div class="calls">{cards}</div>
               </section>
@@ -2220,6 +3978,18 @@ def build_viewer(
         )
         for case_dir in case_dirs
     )
+    scene_pages_html = "".join(all_sections)
+    if not scene_pages_html:
+        scene_pages_html = """
+          <section class="empty-run">
+            <h2>No scene report is available yet</h2>
+            <p>
+              This run may still be starting. Refresh this page after the
+              runner creates a case directory; the local UI runner will
+              rebuild the viewer from the latest persisted reports.
+            </p>
+          </section>
+        """
     evidence_integrity_note = (
         "The dedicated local bundle contains byte-for-byte copies of the "
         "persisted evidence images. Every copy is SHA-256 verified, and no "
@@ -2267,6 +4037,14 @@ def build_viewer(
     .notice {{
       padding: 12px 14px; border: 1px solid #d0d7de;
       border-left: 4px solid #57606a; background: white; line-height: 1.45;
+    }}
+    .empty-run {{
+      margin-top: 20px; padding: 28px; border: 1px dashed #aeb7c0;
+      background: white; text-align: center;
+    }}
+    .empty-run p {{
+      max-width: 680px; margin: 9px auto 0; color: #59636e;
+      line-height: 1.5;
     }}
     .acquisition-overview {{
       margin: 18px 0 22px; padding: 18px; border: 1px solid #aeb7c0;
@@ -2374,6 +4152,76 @@ def build_viewer(
     .group-card p {{ margin: 7px 0 0; font-size: 12px; line-height: 1.45; }}
     .group-reason {{ color: #47515c; }}
     .group-relations {{ margin-top: 11px; }}
+    .functional-evidence-audit {{
+      margin: 18px 0 22px; padding: 18px; border: 1px solid #aeb7c0;
+      border-top: 3px solid #0969da; background: white;
+    }}
+    .functional-evidence-audit-failed {{ border-top-color: #d1242f; }}
+    .functional-evidence-heading {{
+      display: flex; justify-content: space-between; align-items: start;
+      gap: 18px;
+    }}
+    .functional-evidence-heading h3 {{ margin: 4px 0 0; }}
+    .functional-evidence-summary {{
+      display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
+      margin-top: 14px; border: 1px solid #d8dee4; background: #fbfcfd;
+    }}
+    .functional-evidence-summary div {{
+      min-width: 0; padding: 10px; border-right: 1px solid #d8dee4;
+    }}
+    .functional-evidence-summary div:last-child {{ border-right: 0; }}
+    .functional-evidence-summary strong,
+    .functional-evidence-summary span {{ display: block; }}
+    .functional-evidence-summary strong {{
+      min-height: 27px; color: #59636e; font-size: 10px;
+      line-height: 1.35; text-transform: uppercase;
+    }}
+    .functional-evidence-summary span {{
+      margin-top: 3px; font-size: 18px; font-weight: 750;
+    }}
+    .functional-evidence-status {{
+      margin-top: 11px; padding: 10px 12px; border-left: 4px solid #0969da;
+      background: #ddf4ff; line-height: 1.45;
+    }}
+    .functional-evidence-audit-failed .functional-evidence-status {{
+      border-left-color: #d1242f; background: #ffebe9;
+    }}
+    .functional-evidence-status strong {{ font-size: 12px; }}
+    .functional-evidence-status p {{
+      margin: 5px 0 0; color: #47515c; font-size: 11px;
+    }}
+    .functional-audit-block {{
+      margin-top: 11px; border: 1px solid #d8dee4; background: #fbfcfd;
+    }}
+    .functional-audit-block > summary {{
+      padding: 9px 11px; background: #f6f8fa; font-size: 12px;
+      font-weight: 700; cursor: pointer;
+    }}
+    .functional-audit-block table {{
+      margin: 0; border: 0; border-top: 1px solid #d8dee4;
+      table-layout: fixed;
+    }}
+    .functional-audit-block th,
+    .functional-audit-block td {{
+      padding: 7px 8px; vertical-align: top; overflow-wrap: anywhere;
+      font-size: 10px; line-height: 1.4;
+    }}
+    .functional-audit-block pre {{
+      margin: 10px; max-height: 280px; overflow: auto;
+    }}
+    .relation-input-images {{
+      display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px; padding: 10px;
+    }}
+    .relation-input-visual > strong {{
+      display: block; margin-bottom: 6px; font-size: 10px;
+      text-transform: uppercase; color: #59636e;
+    }}
+    .relation-input-visual figure {{ margin: 0; }}
+    .audit-empty {{
+      padding: 12px !important; color: #59636e; text-align: center;
+      font-style: italic;
+    }}
     .toolbar {{
       display: flex; gap: 10px;
       padding: 12px 0; background: #f6f7f8;
@@ -2467,6 +4315,139 @@ def build_viewer(
       vertical-align: top; overflow-wrap: anywhere; font-size: 11px;
     }}
     .empty-finding {{ color: #59636e; }}
+    .pipeline-summary {{
+      margin: 12px 0; padding: 14px; border: 1px solid #b6c2cf;
+      border-left: 4px solid #57606a; background: white;
+    }}
+    .pipeline-summary-heading {{
+      display: flex; justify-content: space-between; gap: 18px;
+      align-items: start;
+    }}
+    .pipeline-summary-heading h3 {{ margin: 3px 0 0; }}
+    .pipeline-summary-heading p {{
+      max-width: 480px; margin: 0; color: #59636e; font-size: 12px;
+    }}
+    .pipeline-grid {{
+      display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 9px; margin-top: 12px;
+    }}
+    .pipeline-metric {{
+      padding: 11px; border: 1px solid #d8dee4; background: #fbfcfd;
+    }}
+    .pipeline-metric-heading {{
+      display: flex; justify-content: space-between; align-items: start;
+      gap: 12px;
+    }}
+    .pipeline-metric-heading strong,
+    .pipeline-metric-heading code {{ display: block; }}
+    .pipeline-metric-heading code {{
+      margin-top: 3px; color: #59636e; font-size: 10px;
+    }}
+    .pipeline-final {{
+      padding: 3px 6px; border: 1px solid #d0d7de; border-radius: 3px;
+      background: white; font-size: 10px; font-weight: 700;
+      white-space: nowrap;
+    }}
+    .pipeline-final-evaluated {{ color: #1a7f37; }}
+    .pipeline-final-unresolved {{ color: #9a6700; }}
+    .pipeline-discovery {{
+      margin-top: 9px; padding: 8px; border-left: 3px solid #bf8700;
+      background: #fff8c5; font-size: 11px;
+    }}
+    .pipeline-discovery > strong,
+    .pipeline-discovery > span {{ display: block; }}
+    .pipeline-discovery .pipeline-status {{
+      float: right; margin-top: -15px; font-weight: 700;
+    }}
+    .pipeline-discovery p {{
+      clear: both; margin: 6px 0; color: #47515c; line-height: 1.4;
+    }}
+    .pipeline-budget {{
+      display: flex; justify-content: space-between; gap: 10px;
+      margin-top: 9px; padding: 7px 8px; border: 1px solid #d8dee4;
+      background: white; font-size: 10px;
+    }}
+    .pipeline-budget span {{ color: #59636e; text-align: right; }}
+    .metric-check-chain {{
+      margin-top: 9px; padding: 8px; border: 1px solid #b6c2cf;
+      border-left: 3px solid #0969da; background: white;
+    }}
+    .metric-check-chain-heading {{
+      display: flex; justify-content: space-between; gap: 10px;
+      align-items: start; margin-bottom: 7px;
+    }}
+    .metric-check-chain-heading strong,
+    .metric-check-chain-heading span {{ display: block; }}
+    .metric-check-chain-heading span {{
+      margin-top: 2px; color: #59636e; font-size: 10px;
+    }}
+    .metric-check-chain-heading .audit-only-badge {{
+      margin-top: 0; color: #0550ae;
+    }}
+    .metric-check-table-wrap {{ overflow-x: auto; }}
+    .metric-check-table {{ font-size: 10px; }}
+    .metric-check-table th,
+    .metric-check-table td {{ padding: 5px 6px; vertical-align: top; }}
+    .metric-check-table code,
+    .metric-check-table small {{ display: block; }}
+    .metric-check-table small {{
+      max-width: 190px; margin-top: 2px; color: #59636e;
+      overflow-wrap: anywhere;
+    }}
+    .ownership-events {{ margin: 5px 0 0; padding-left: 18px; }}
+    .ownership-events li {{ margin: 4px 0; font-size: 10px; }}
+    .pipeline-stages {{
+      display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+      gap: 7px; align-items: center; margin-top: 9px;
+    }}
+    .pipeline-stages-functional {{
+      grid-template-columns:
+        minmax(0, 1fr) auto minmax(0, 1fr) auto minmax(0, 1fr);
+    }}
+    .pipeline-stages > div {{
+      min-height: 58px; padding: 7px; border: 1px solid #d0d7de;
+      background: white;
+    }}
+    .pipeline-stages strong,
+    .pipeline-stages span,
+    .pipeline-stages small {{ display: block; }}
+    .pipeline-stages span {{ margin-top: 3px; font-size: 11px; }}
+    .pipeline-stages small {{ margin-top: 2px; color: #59636e; }}
+    .pipeline-arrow {{ color: #59636e; font-weight: 800; }}
+    .pipeline-reason {{
+      margin: 8px 0 0; color: #59636e; font-size: 11px;
+    }}
+    .audit-graphs {{
+      margin: 12px 0; padding: 14px; border: 1px solid #b6c2cf;
+      border-left: 4px solid #0969da; background: white;
+    }}
+    .audit-graphs-failed {{ border-left-color: #bf8700; }}
+    .audit-graphs h3 {{ margin: 3px 0 0; }}
+    .audit-graphs-heading {{
+      display: flex; justify-content: space-between; gap: 18px;
+      align-items: start;
+    }}
+    .audit-only-badge {{
+      padding: 4px 7px; border: 1px solid #54aeff; border-radius: 3px;
+      color: #0550ae; background: #ddf4ff; font-size: 10px;
+      font-weight: 700;
+    }}
+    .audit-graph-stats {{
+      display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 8px; margin-top: 12px;
+    }}
+    .audit-graph-stats > div {{
+      padding: 9px; border: 1px solid #d8dee4; background: #fbfcfd;
+    }}
+    .audit-graph-stats strong,
+    .audit-graph-stats span {{ display: block; }}
+    .audit-graph-stats strong {{ font-size: 20px; }}
+    .audit-graph-stats span {{ color: #59636e; font-size: 10px; }}
+    .audit-graph-breakdown {{
+      display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 5px 16px; margin-top: 9px;
+    }}
+    .audit-graph-breakdown p {{ margin: 0; font-size: 11px; }}
     .phase-routes {{
       margin: 12px 0; padding: 12px 14px; border: 1px solid #b6c2cf;
       border-left: 4px solid #8250df; background: white;
@@ -2481,6 +4462,7 @@ def build_viewer(
       font-size: 11px; font-weight: 700;
     }}
     .phase-node-global {{ background: #f4edff; color: #6639ba; }}
+    .phase-node-relation {{ background: #fff8c5; color: #7d4e00; }}
     .phase-node-local {{ background: #ddf4ff; color: #0550ae; }}
     .phase-arrow {{ color: #59636e; font-weight: 800; }}
     table {{ width: 100%; border-collapse: collapse; background: white; }}
@@ -2491,6 +4473,9 @@ def build_viewer(
       border-radius: 5px; background: white;
     }}
     .call-phase-global_discovery {{ border-left: 4px solid #8250df; }}
+    .call-phase-cross_group_relation_review {{
+      border-left: 4px solid #bf8700;
+    }}
     .call-phase-group_local_review {{ border-left: 4px solid #0969da; }}
     .phase-pill {{
       display: inline-block; margin-left: 7px; padding: 2px 5px;
@@ -2509,6 +4494,16 @@ def build_viewer(
     .acquisition-extra {{
       border-color: #54aeff; background: #ddf4ff; color: #0550ae;
     }}
+    .acquisition-not-invoked {{
+      border-color: #d4a72c; background: #fff8c5; color: #7d4e00;
+    }}
+    .judge-not-invoked {{
+      display: flex; gap: 8px; align-items: baseline; margin: 12px 0;
+      padding: 9px 10px; border: 1px solid #d4a72c;
+      border-left: 4px solid #bf8700; background: #fff8c5;
+      font-size: 11px;
+    }}
+    .judge-not-invoked span {{ color: #6e4c00; }}
     .verdict {{
       color: #1f2328 !important; font-size: 14px !important; font-weight: 750;
       text-transform: uppercase;
@@ -2542,6 +4537,23 @@ def build_viewer(
     .packet-historical {{ border-left: 4px solid #bf8700; }}
     .packet-current_run_custom_or_mismatch {{ border-left: 4px solid #cf222e; }}
     .packet-unversioned {{ border-left: 4px solid #8c959f; }}
+    .judge-budget {{
+      display: grid;
+      grid-template-columns: minmax(170px, 1.3fr) repeat(3, minmax(110px, .7fr));
+      margin: 12px 0; border: 1px solid #b6c2cf;
+      border-left: 4px solid #57606a; background: #fbfcfd;
+    }}
+    .judge-budget > div {{ padding: 9px 10px; border-right: 1px solid #d8dee4; }}
+    .judge-budget > div:nth-child(4) {{ border-right: 0; }}
+    .judge-budget strong, .judge-budget span {{ display: block; }}
+    .judge-budget strong {{
+      color: #59636e; font-size: 10px; text-transform: uppercase;
+    }}
+    .judge-budget span {{ margin-top: 4px; font-size: 11px; }}
+    .judge-budget p {{
+      grid-column: 1 / -1; margin: 0; padding: 7px 10px;
+      border-top: 1px solid #d8dee4; color: #59636e; font-size: 10px;
+    }}
     .evidence-flow {{
       margin: 14px 0; padding: 0; border: 1px solid #d0d7de;
       border-left: 4px solid #8c959f; background: #fbfcfd;
@@ -2663,6 +4675,17 @@ def build_viewer(
       .acquisition-summary {{ grid-template-columns: repeat(2, 1fr); }}
       .acquisition-summary div {{ border-bottom: 1px solid #d8dee4; }}
       .grouping-visual {{ grid-template-columns: 1fr; }}
+      .functional-evidence-heading {{ display: block; }}
+      .functional-evidence-heading .audit-only-badge {{
+        display: inline-block; margin-top: 10px;
+      }}
+      .functional-evidence-summary {{ grid-template-columns: 1fr 1fr; }}
+      .functional-evidence-summary div:nth-child(2) {{
+        border-right: 0;
+      }}
+      .functional-evidence-summary div:nth-child(-n+2) {{
+        border-bottom: 1px solid #d8dee4;
+      }}
       .group-grid {{ grid-template-columns: 1fr; }}
       .scene-nav {{ align-items: start; }}
       .scene-buttons {{ flex: 1; }}
@@ -2675,6 +4698,9 @@ def build_viewer(
       .packet-audit > div {{
         border-right: 0; border-bottom: 1px solid #d8dee4;
       }}
+      .judge-budget {{ grid-template-columns: 1fr 1fr; }}
+      .judge-budget > div {{ border-bottom: 1px solid #d8dee4; }}
+      .judge-budget p {{ grid-column: 1 / -1; }}
       .evidence-flow > summary {{ display: block; }}
       .flow-stats {{ display: block; margin-top: 5px; text-align: left; }}
       .timeline-images {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }}
@@ -2731,7 +4757,7 @@ def build_viewer(
         </select>
       </div>
     </div>
-    {''.join(all_sections)}
+    {scene_pages_html}
   </main>
   <script>
     const search = document.getElementById("search");
@@ -2776,7 +4802,12 @@ def build_viewer(
     }}
 
     function showScene(index, updateHash = true) {{
-      if (!scenePages.length) return;
+      if (!scenePages.length) {{
+        previousScene.disabled = true;
+        nextScene.disabled = true;
+        sceneCounter.textContent = "0 / 0";
+        return;
+      }}
       currentSceneIndex = Math.max(
         0,
         Math.min(index, scenePages.length - 1)

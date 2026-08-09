@@ -268,6 +268,7 @@ def _validate_legacy_judge_contract(
                 _canonical_allowed_missing_observations(request)
             ),
             allowed_target_ids=_canonical_allowed_target_ids(request),
+            **_canonical_defect_field_contract(request),
         )
         return normalized
     binary_labels = {
@@ -409,6 +410,7 @@ def _validate_native_judge_contract(
                 _canonical_allowed_missing_observations(request)
             ),
             allowed_target_ids=_canonical_allowed_target_ids(request),
+            **_canonical_defect_field_contract(request),
         )
         return normalized
     if decision_contract in {
@@ -441,6 +443,31 @@ def _canonical_allowed_scopes(request: JudgeRequest) -> tuple[str, ...]:
                 if isinstance(value, str) and value.strip()
             )
     return ()
+
+
+def _canonical_defect_field_contract(
+    request: JudgeRequest,
+) -> dict[str, Any]:
+    response_contract = request.context.get("response_contract")
+    if not isinstance(response_contract, dict):
+        return {}
+    defects = response_contract.get("defects")
+    if not isinstance(defects, dict):
+        return {}
+    fields = tuple(
+        str(value)
+        for value in defects.get("fields") or ()
+        if isinstance(value, str) and value.strip()
+    )
+    allowed_values = defects.get("allowed_field_values")
+    return {
+        "required_defect_fields": fields,
+        "allowed_defect_field_values": (
+            deepcopy(allowed_values)
+            if isinstance(allowed_values, dict)
+            else {}
+        ),
+    }
 
 
 def _canonical_allowed_missing_observations(
@@ -1063,25 +1090,43 @@ class ControlledVLMJudge:
                 "metric": core_request.metric,
                 "status": result.status,
                 "stop_reason": result.stop_reason,
+                "budget_exhaustion_forced_choice": deepcopy(
+                    result.audit.get(
+                        "budget_exhaustion_forced_choice",
+                        {"applied": False},
+                    )
+                ),
                 "audit": deepcopy(result.audit),
             }
         )
         if result.status in {"valid", "invalid"} and responses:
             if decision_contract.value in _BINARY_CONTRACTS:
-                return _binary_compatibility_response(
-                    responses[-1],
-                    method_name=method_name,
-                    decision_contract=decision_contract,
+                return _with_forced_choice_audit(
+                    _binary_compatibility_response(
+                        responses[-1],
+                        method_name=method_name,
+                        decision_contract=decision_contract,
+                    ),
+                    result,
                 )
-            return deepcopy(responses[-1])
+            return _with_forced_choice_audit(
+                deepcopy(responses[-1]),
+                result,
+            )
         if responses and decision_contract.value not in _BINARY_CONTRACTS:
-            return deepcopy(responses[-1])
+            return _with_forced_choice_audit(
+                deepcopy(responses[-1]),
+                result,
+            )
         if decision_contract.value in _BINARY_CONTRACTS:
             raise EvidenceControlUnresolvedError(result)
-        return _canonical_unresolved_response(
-            request,
-            method_name=method_name,
-            result=result,
+        return _with_forced_choice_audit(
+            _canonical_unresolved_response(
+                request,
+                method_name=method_name,
+                result=result,
+            ),
+            result,
         )
 
     def _consume_provider_usage(
@@ -1292,6 +1337,20 @@ def _evidence_goal(
         camera_repairable
     )
     return result
+
+
+def _with_forced_choice_audit(
+    response: dict[str, Any],
+    result: VLMEvaluationResult,
+) -> dict[str, Any]:
+    value = deepcopy(response)
+    value["budget_exhaustion_forced_choice"] = deepcopy(
+        result.audit.get(
+            "budget_exhaustion_forced_choice",
+            {"applied": False},
+        )
+    )
+    return value
 
 
 def _binary_compatibility_response(

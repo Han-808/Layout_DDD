@@ -115,6 +115,12 @@ class VLMEvaluationResult:
             )
 
     def to_dict(self) -> dict[str, Any]:
+        forced_choice = deepcopy(
+            self.audit.get(
+                "budget_exhaustion_forced_choice",
+                {"applied": False},
+            )
+        )
         return _jsonable({
             "status": self.status,
             "confidence": self.confidence,
@@ -133,6 +139,7 @@ class VLMEvaluationResult:
                 else None
             ),
             "audit": deepcopy(self.audit),
+            "budget_exhaustion_forced_choice": forced_choice,
             "manifest_path": self.manifest_path,
         })
 
@@ -425,11 +432,14 @@ class VLMEvaluationController:
             ambiguity_before_forcing = bool(
                 last_judge.status == "need_more_evidence"
             )
+            pre_force_judge_status = last_judge.status
+            pre_force_reason = last_judge.reason
             original_evidence_request = (
                 pending_request.to_dict()
                 if pending_request is not None
                 else None
             )
+            evidence_artifacts_at_forcing = _evidence_refs(evidence)
             final_request = _terminal_forced_choice_judge_request(
                 judge_request,
                 evidence=evidence,
@@ -453,10 +463,23 @@ class VLMEvaluationController:
                     "ambiguity_before_forcing": (
                         ambiguity_before_forcing
                     ),
+                    "pre_force_judge_status": (
+                        pre_force_judge_status
+                    ),
+                    "pre_force_reason": pre_force_reason,
+                    "pre_force_evidence_request": (
+                        original_evidence_request
+                    ),
                     "original_evidence_request": (
                         original_evidence_request
                     ),
+                    "available_image_count": len(evidence),
+                    "evidence_artifacts_at_forcing": (
+                        evidence_artifacts_at_forcing
+                    ),
                     "budget_trigger_stop_reason": trigger_stop_reason,
+                    "final_forced_verdict": last_judge.status,
+                    "final_forced_confidence": last_judge.confidence,
                     "visual_evidence_policy": (
                         "all_available_then_judge_context_bounded"
                     ),
@@ -571,6 +594,9 @@ class VLMEvaluationController:
                 current_request = judge_request.with_visual_evidence(evidence)
                 raw_judge = self.judge.judge(current_request)
                 last_judge = JudgeResult.from_value(raw_judge)
+                raw_judge_response = deepcopy(
+                    getattr(self.judge, "last_raw_response", None)
+                )
                 telemetry.record_judge(
                     evidence_round=rounds_used,
                     episode_index=acquisition_state.episode_index,
@@ -611,13 +637,43 @@ class VLMEvaluationController:
                     raise ValueError(
                         "Judge need_more_evidence requires evidence_request"
                     )
+                (
+                    judge_request,
+                    registered_placement_check,
+                ) = _register_pending_placement_check(
+                    judge_request,
+                    raw_response=raw_judge_response,
+                    evidence_request=pending_request,
+                )
+                if registered_placement_check is not None:
+                    trace.append(
+                        {
+                            "stage": "placement_check_lifecycle",
+                            "evidence_round": rounds_used,
+                            "status": str(
+                                registered_placement_check.get(
+                                    "handoff_status"
+                                )
+                                or "evidence_requested"
+                            ),
+                            "check": deepcopy(
+                                registered_placement_check
+                            ),
+                            "decision_authority": "none",
+                        }
+                    )
                 protected_group_targets = _protected_group_targets(
                     judge_request
                 )
                 if protected_group_targets:
+                    allowed_group_targets = (
+                        _allowed_group_evidence_targets(
+                            judge_request
+                        )
+                    )
                     outside_scope = sorted(
                         set(pending_request.target_ids)
-                        - set(protected_group_targets)
+                        - set(allowed_group_targets)
                     )
                     if outside_scope:
                         trace.append(
@@ -634,6 +690,10 @@ class VLMEvaluationController:
                                 ),
                                 "group_scope_target_ids": list(
                                     protected_group_targets
+                                ),
+                                "allowed_external_target_ids": sorted(
+                                    set(allowed_group_targets)
+                                    - set(protected_group_targets)
                                 ),
                             }
                         )
@@ -1627,7 +1687,7 @@ def _current_acquisition_ledger(
     actions_used: int,
     state: CameraAcquisitionState,
 ) -> dict[str, Any]:
-    """Serialize the shared metric-level budget state for a later run."""
+    """Serialize this Controller episode's budget state for its caller."""
 
     return {
         "schema_version": "metric_camera_acquisition_ledger_v1",
@@ -1660,4 +1720,223 @@ def _protected_group_targets(
             for value in values
             if isinstance(value, (str, int)) and str(value).strip()
         )
+    )
+
+
+def _allowed_group_evidence_targets(
+    request: JudgeRequest,
+) -> tuple[str, ...]:
+    group_members = _protected_group_targets(request)
+    external = request.context.get(
+        "allowed_external_evidence_target_ids"
+    )
+    external_ids = (
+        [
+            str(value)
+            for value in external
+            if isinstance(value, (str, int)) and str(value).strip()
+        ]
+        if isinstance(external, list)
+        else []
+    )
+    return tuple(dict.fromkeys((*group_members, *external_ids)))
+
+
+def _register_pending_placement_check(
+    request: JudgeRequest,
+    *,
+    raw_response: Any,
+    evidence_request: EvidenceRequest,
+) -> tuple[JudgeRequest, dict[str, Any] | None]:
+    """Promote a typed placement proposal into the next immutable request."""
+
+    if request.metric != "semantic_placement_consistency":
+        return request, None
+    metadata = evidence_request.metadata
+    proposal = (
+        metadata.get("placement_check_proposal")
+        if isinstance(metadata, dict)
+        else None
+    )
+    if proposal is None and isinstance(raw_response, dict):
+        response_request = raw_response.get("evidence_request")
+        response_metadata = (
+            response_request.get("metadata")
+            if isinstance(response_request, dict)
+            and isinstance(response_request.get("metadata"), dict)
+            else {}
+        )
+        proposal = response_metadata.get(
+            "placement_check_proposal"
+        )
+    if proposal is None:
+        return request, None
+    from benchmark.evaluator.scene_quality.placement_checks import (
+        build_pending_placement_check,
+    )
+
+    context = deepcopy(request.context)
+    group_scope = context.get("group_scope")
+    group_members = (
+        {
+            str(item)
+            for item in group_scope.get("member_ids") or []
+            if str(item).strip()
+        }
+        if isinstance(group_scope, dict)
+        else set()
+    )
+    if group_members:
+        known_ids = group_members
+    else:
+        known_ids = {
+            str(item.get("id") or item.get("object_id"))
+            for item in request.scene_context.get("objects") or []
+            if isinstance(item, dict)
+            and (item.get("id") or item.get("object_id"))
+        }
+    if not known_ids:
+        raise ValueError(
+            "placement proposal cannot be registered without trusted "
+            "object identities"
+        )
+    proposal_subject = (
+        str(proposal.get("subject_id") or "")
+        if isinstance(proposal, dict)
+        else ""
+    )
+    if proposal_subject not in set(evidence_request.target_ids):
+        raise ValueError(
+            "placement proposal subject must be included in the evidence "
+            "request target IDs"
+        )
+    groups = context.get("object_groups")
+    groups = groups if isinstance(groups, list) else []
+    check = build_pending_placement_check(
+        proposal,
+        known_ids=known_ids,
+        groups=groups,
+        source_ref=(
+            f"controller_evidence_request_round:"
+            f"{context.get('evidence_phase') or 'unknown'}"
+        ),
+    )
+    phase = str(context.get("evidence_phase") or "")
+    expected_owner = (
+        "scene_global"
+        if phase == "global_discovery"
+        else "group_local"
+        if phase in {"group_local_review", "initial_visual"}
+        else None
+    )
+    owner_stage = str(check.get("owner_stage") or "")
+    deferred_to_group = bool(
+        expected_owner == "scene_global"
+        and owner_stage == "group_local"
+    )
+    if (
+        expected_owner is not None
+        and owner_stage != expected_owner
+        and not deferred_to_group
+    ):
+        raise ValueError(
+            "placement evidence-request proposal is routed to the wrong "
+            f"Judge stage: expected {expected_owner!r}"
+        )
+    collection_key = (
+        "deferred_placement_checks"
+        if deferred_to_group
+        else "required_placement_checks"
+    )
+    required = [
+        deepcopy(item)
+        for item in context.get(collection_key) or []
+        if isinstance(item, dict)
+    ]
+    by_id = {
+        str(item.get("check_id") or ""): item
+        for item in required
+    }
+    prior = by_id.get(str(check["check_id"]))
+    if prior is not None:
+        identity_fields = (
+            "check_type",
+            "subject_id",
+            "owner_stage",
+            "owning_group_id",
+        )
+        if any(
+            prior.get(key) != check.get(key) for key in identity_fields
+        ) or sorted(prior.get("context_ids") or []) != sorted(
+            check.get("context_ids") or []
+        ):
+            raise ValueError(
+                "placement proposal collides with an existing check identity"
+            )
+        registered = prior
+    else:
+        if deferred_to_group:
+            check["handoff_status"] = "deferred_to_group_local"
+            check["handoff_from_stage"] = "scene_global"
+        required.append(deepcopy(check))
+        registered = check
+    context[collection_key] = required
+    if deferred_to_group:
+        return (
+            JudgeRequest(
+                task=request.task,
+                metric=request.metric,
+                claim_or_event=deepcopy(request.claim_or_event),
+                scene_context=deepcopy(request.scene_context),
+                deterministic_evidence=deepcopy(
+                    request.deterministic_evidence
+                ),
+                visual_evidence=tuple(
+                    deepcopy(request.visual_evidence)
+                ),
+                rubric=deepcopy(request.rubric),
+                context=context,
+            ),
+            deepcopy(registered),
+        )
+    response_contract = (
+        deepcopy(context.get("response_contract"))
+        if isinstance(context.get("response_contract"), dict)
+        else {}
+    )
+    placement_contract = (
+        deepcopy(response_contract.get("placement_check_results"))
+        if isinstance(
+            response_contract.get("placement_check_results"),
+            dict,
+        )
+        else {}
+    )
+    placement_contract.update(
+        required=True,
+        exact_check_ids=[
+            str(item.get("check_id") or "")
+            for item in required
+        ],
+    )
+    response_contract["placement_check_results"] = (
+        placement_contract
+    )
+    context["response_contract"] = response_contract
+    return (
+        JudgeRequest(
+            task=request.task,
+            metric=request.metric,
+            claim_or_event=deepcopy(request.claim_or_event),
+            scene_context=deepcopy(request.scene_context),
+            deterministic_evidence=deepcopy(
+                request.deterministic_evidence
+            ),
+            visual_evidence=tuple(
+                deepcopy(request.visual_evidence)
+            ),
+            rubric=deepcopy(request.rubric),
+            context=context,
+        ),
+        deepcopy(registered),
     )

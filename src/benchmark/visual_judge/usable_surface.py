@@ -9,17 +9,30 @@ import math
 from copy import deepcopy
 from io import BytesIO
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
 from benchmark.models import OpenAICompatibleModel, parse_json_object
 from benchmark.visual_judge.functional_discovery import (
     FUNCTIONAL_SURFACE_ROLES,
+)
+from benchmark.visual_judge.roles import (
+    DecisionContract,
+    VLMRole,
+    vlm_audit_metadata,
 )
 
 
 USABLE_SURFACE_SCHEMA_VERSION = "usable_surface_decode_v2"
 USABLE_SURFACE_PROMPT_VERSION = "usable_surface_decoder_v2"
 USABLE_SURFACE_MAX_TOKENS = 1200
+USABLE_SURFACE_DETECTOR_INTERFACE_VERSION = (
+    "usable_surface_detector_v1"
+)
+USABLE_SURFACE_EVIDENCE_LOOP_VERSION = (
+    "usable_surface_evidence_loop_v1"
+)
+USABLE_SURFACE_MAX_EVIDENCE_ROUNDS = 2
+DEFAULT_USABLE_SURFACE_DETECTOR_BACKEND = "vlm_trusted_side_ids"
 USABLE_SURFACE_SIDE_IDS = (
     "local_pos_x",
     "local_neg_x",
@@ -34,6 +47,16 @@ USABLE_SURFACE_STATUSES = frozenset(
         "insufficient_comparison",
         "surface_unavailable",
     }
+)
+USABLE_SURFACE_PENDING_STATUSES = frozenset(
+    {
+        "ambiguous",
+        "insufficient_comparison",
+        "surface_unavailable",
+    }
+)
+USABLE_SURFACE_TERMINAL_STATUSES = (
+    USABLE_SURFACE_STATUSES - USABLE_SURFACE_PENDING_STATUSES
 )
 
 _TOP_LEVEL_FIELDS = frozenset({"status", "surfaces", "reason"})
@@ -106,6 +129,132 @@ Return no other fields. Never return a verdict, defect, score, pose, vector,
 camera action, scene edit, or claim that evidence is sufficient."""
 
 
+@runtime_checkable
+class UsableSurfaceDetector(Protocol):
+    """Decision-free detector over a trusted object-local side bank."""
+
+    implementation_id: str
+    version: str
+
+    def detect(self, request: dict[str, Any]) -> dict[str, Any]:
+        ...
+
+    def manifest(self) -> dict[str, Any]:
+        ...
+
+
+class VLMTrustedSideUsableSurfaceDetector:
+    """Default adapter around the existing trusted-side VLM decoder."""
+
+    implementation_id = DEFAULT_USABLE_SURFACE_DETECTOR_BACKEND
+    version = USABLE_SURFACE_PROMPT_VERSION
+
+    def __init__(
+        self,
+        decoder: Any,
+        *,
+        configuration: dict[str, Any] | None = None,
+    ) -> None:
+        call = getattr(decoder, "decode_usable_surface", None)
+        if not callable(call):
+            raise TypeError(
+                "vlm_trusted_side_ids requires "
+                "decode_usable_surface(request)"
+            )
+        self.decoder = decoder
+        self.configuration = deepcopy(configuration or {})
+
+    def detect(self, request: dict[str, Any]) -> dict[str, Any]:
+        normalized = validate_usable_surface_request(request)
+        raw = self.decoder.decode_usable_surface(
+            {
+                "scene_id": normalized.get("scene_id"),
+                "target_id": normalized["target_id"],
+                "target_category": normalized["target_category"],
+                "surface_roles": list(normalized["surface_roles"]),
+                "previews": list(deepcopy(normalized["previews"])),
+            }
+        )
+        if not isinstance(raw, dict):
+            raise ValueError(
+                "usable-surface detector result must be a JSON object"
+            )
+        validated = validate_usable_surface_response(
+            {
+                key: deepcopy(raw.get(key))
+                for key in ("status", "surfaces", "reason")
+            },
+            allowed_surface_roles=set(normalized["surface_roles"]),
+            available_side_ids=set(normalized["available_side_ids"]),
+            bank_complete=normalized["bank_complete"],
+        )
+        return {
+            **validated,
+            "schema_version": raw.get(
+                "schema_version", USABLE_SURFACE_SCHEMA_VERSION
+            ),
+            "target_id": normalized["target_id"],
+            "detector_implementation_id": self.implementation_id,
+            "detector_version": self.version,
+            "decision_authority": "none",
+            "provenance": {
+                **deepcopy(raw.get("provenance") or {}),
+                "detector_interface_version": (
+                    USABLE_SURFACE_DETECTOR_INTERFACE_VERSION
+                ),
+                "detector_implementation_id": self.implementation_id,
+                "detector_version": self.version,
+            },
+        }
+
+    def manifest(self) -> dict[str, Any]:
+        model = getattr(self.decoder, "model", None)
+        return {
+            **vlm_audit_metadata(
+                VLMRole.USABLE_SURFACE_DECODER,
+                decision_contract=DecisionContract.USABLE_SURFACE_DECODE,
+                judge_method="decode_usable_surface",
+            ),
+            "interface_version": (
+                USABLE_SURFACE_DETECTOR_INTERFACE_VERSION
+            ),
+            "implementation_id": self.implementation_id,
+            "version": self.version,
+            "configuration": deepcopy(self.configuration),
+            "model": (
+                str(getattr(model, "model_id", ""))
+                if model is not None
+                else None
+            ),
+            "endpoint": (
+                str(getattr(model, "endpoint", ""))
+                if model is not None
+                else None
+            ),
+            "decision_authority": "none",
+        }
+
+
+def build_usable_surface_detector(
+    *,
+    backend: str = DEFAULT_USABLE_SURFACE_DETECTOR_BACKEND,
+    decoder: Any = None,
+    configuration: dict[str, Any] | None = None,
+) -> UsableSurfaceDetector:
+    """Resolve one detector backend without an implicit fallback."""
+
+    resolved = str(backend or "").strip()
+    if resolved != DEFAULT_USABLE_SURFACE_DETECTOR_BACKEND:
+        raise ValueError(
+            "unsupported usable-surface detector backend: "
+            f"{resolved!r}"
+        )
+    return VLMTrustedSideUsableSurfaceDetector(
+        decoder,
+        configuration=configuration,
+    )
+
+
 def decode_openai_compatible_usable_surface(
     *,
     model: OpenAICompatibleModel,
@@ -116,7 +265,13 @@ def decode_openai_compatible_usable_surface(
     """Decode one target's local usable side from a trusted preview subset."""
 
     normalized = validate_usable_surface_request(request)
+    audit = vlm_audit_metadata(
+        VLMRole.USABLE_SURFACE_DECODER,
+        decision_contract=DecisionContract.USABLE_SURFACE_DECODE,
+        judge_method="decode_usable_surface",
+    )
     context = {
+        **audit,
         "role": "usable_surface_decoder",
         "decision_authority": "none",
         "scene_access": "read_only",
@@ -212,12 +367,14 @@ def decode_openai_compatible_usable_surface(
         "target_id": normalized["target_id"],
         "decision_authority": "none",
         "provenance": {
+            **audit,
             "prompt_version": USABLE_SURFACE_PROMPT_VERSION,
             "backend": "openai_compatible",
             "trusted_side_ids": list(normalized["available_side_ids"]),
             "bank_complete": normalized["bank_complete"],
             "request_metadata": {
                 **dict(getattr(model, "last_request_metadata", {})),
+                **audit,
                 "usable_surface_prompt_version": (
                     USABLE_SURFACE_PROMPT_VERSION
                 ),
@@ -279,6 +436,36 @@ def validate_usable_surface_request(value: Any) -> dict[str, Any]:
     available_side_ids = [
         side_id for side_id in USABLE_SURFACE_SIDE_IDS if side_id in by_id
     ]
+    declared_available = value.get("available_side_ids")
+    if declared_available is not None and list(declared_available) != (
+        available_side_ids
+    ):
+        raise ValueError(
+            "usable-surface available_side_ids must match trusted previews"
+        )
+    bank_complete = len(available_side_ids) == len(
+        USABLE_SURFACE_SIDE_IDS
+    )
+    if (
+        value.get("bank_complete") is not None
+        and bool(value.get("bank_complete")) != bank_complete
+    ):
+        raise ValueError(
+            "usable-surface bank_complete must match trusted previews"
+        )
+    read_only_provenance = value.get("read_only_provenance")
+    if (
+        read_only_provenance is not None
+        and (
+            not isinstance(read_only_provenance, dict)
+            or read_only_provenance.get("scene_access")
+            != "read_only"
+        )
+    ):
+        raise ValueError(
+            "usable-surface read_only_provenance must declare "
+            "scene_access=read_only"
+        )
     return {
         "scene_id": (
             str(value["scene_id"])
@@ -289,10 +476,11 @@ def validate_usable_surface_request(value: Any) -> dict[str, Any]:
         "target_category": category,
         "surface_roles": roles,
         "available_side_ids": available_side_ids,
-        "bank_complete": len(available_side_ids) == len(
-            USABLE_SURFACE_SIDE_IDS
-        ),
+        "bank_complete": bank_complete,
         "previews": [by_id[side_id] for side_id in available_side_ids],
+        "read_only_provenance": deepcopy(
+            read_only_provenance or {"scene_access": "read_only"}
+        ),
     }
 
 
@@ -419,7 +607,11 @@ def validate_usable_surface_response(
 
 def usable_surface_cache_identity(
     object_record: dict[str, Any],
-) -> dict[str, str]:
+    *,
+    requested_surface_roles: list[str] | tuple[str, ...] | None = None,
+    trusted_preview_identity: dict[str, Any] | None = None,
+    detector_manifest: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Return a rotation-independent content identity for one asset surface."""
 
     asset_ref = (
@@ -518,10 +710,69 @@ def usable_surface_cache_identity(
         "geometry_hash": geometry_hash,
         "appearance_hash": appearance_hash,
         "prompt_version": USABLE_SURFACE_PROMPT_VERSION,
+        "requested_surface_roles": (
+            sorted(
+                {
+                    str(item)
+                    for item in requested_surface_roles or []
+                    if str(item).strip()
+                }
+            )
+            if requested_surface_roles is not None
+            else None
+        ),
+        "trusted_preview_identity": deepcopy(
+            trusted_preview_identity
+        ),
+        "detector": (
+            _detector_cache_manifest(detector_manifest)
+            if detector_manifest is not None
+            else None
+        ),
     }
     return {
         **payload,
         "cache_key": _canonical_json_sha256(payload),
+    }
+
+
+def trusted_side_preview_cache_identity(
+    *,
+    preview_render_config: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Describe the deterministic side bank without rendering it.
+
+    The identity is deliberately asset-local: it excludes world translation
+    and rotation while covering the trusted side IDs, side-bank policy, and
+    preview-render configuration.
+    """
+
+    return {
+        "policy": "usable_surface_bounded_comparison_loop_v1",
+        "primary_bank": "usable_surface_local_side_bank_v1",
+        "deterministic_fallback_bank": (
+            "usable_surface_elevated_detail_repair_v1"
+        ),
+        "max_evidence_rounds": USABLE_SURFACE_MAX_EVIDENCE_ROUNDS,
+        "trusted_side_ids": list(USABLE_SURFACE_SIDE_IDS),
+        "preview_render_config": deepcopy(
+            preview_render_config or {}
+        ),
+    }
+
+
+def _detector_cache_manifest(
+    value: dict[str, Any] | None,
+) -> dict[str, Any]:
+    source = value if isinstance(value, dict) else {}
+    return {
+        "implementation_id": str(
+            source.get("implementation_id") or ""
+        ),
+        "version": str(source.get("version") or ""),
+        "configuration": deepcopy(source.get("configuration") or {}),
+        "model": source.get("model"),
+        "endpoint": source.get("endpoint"),
     }
 
 

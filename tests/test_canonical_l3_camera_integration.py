@@ -348,6 +348,7 @@ def test_canonical_l3_group_judge_repair_reaches_vlm_and_renders(
                 "object_pairing_consistency": {"enabled": False},
                 "style_consistency": {"enabled": False},
                 "functional_consistency": {"enabled": False},
+                "semantic_placement_consistency": {"enabled": False},
             }
         },
         vlm_evaluation_control={

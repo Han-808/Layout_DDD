@@ -857,6 +857,7 @@ def test_scene_harness_executes_group_l3_deterministic_to_vlm_cascade(
                 "object_pairing_consistency": {"enabled": False},
                 "style_consistency": {"enabled": False},
                 "functional_consistency": {"enabled": False},
+                "semantic_placement_consistency": {"enabled": False},
             }
         },
         asset_policy={

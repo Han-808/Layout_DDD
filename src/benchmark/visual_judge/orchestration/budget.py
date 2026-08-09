@@ -127,7 +127,7 @@ def _normalize_camera_usage(
 def _normalize_acquisition_ledger(
     value: dict[str, Any] | None,
 ) -> dict[str, Any]:
-    """Validate additive metric-level usage carried across Controller runs."""
+    """Validate additive usage for the caller-defined budget scope."""
 
     if value is None:
         return {
@@ -186,7 +186,7 @@ def _extend_acquisition_ledger(
     *,
     artifact_ids: list[str] | tuple[str, ...],
 ) -> dict[str, Any]:
-    """Register already-created images without resetting shared counters."""
+    """Register already-created images without resetting scope counters."""
 
     normalized = _normalize_acquisition_ledger(value)
     result = {
@@ -207,6 +207,32 @@ def _extend_acquisition_ledger(
         int(result["total_images_acquired"]) + added
     )
     return result
+
+
+def _merge_acquisition_ledger_delta(
+    aggregate: dict[str, Any] | None,
+    *,
+    episode_before: dict[str, Any] | None,
+    episode_after: dict[str, Any],
+) -> dict[str, Any]:
+    """Merge one independently budgeted Judge episode into audit totals."""
+
+    before = _normalize_acquisition_ledger(episode_before)
+    after = _normalize_acquisition_ledger(episode_after)
+    merged = _extend_acquisition_ledger(
+        aggregate,
+        artifact_ids=after["artifact_ids"],
+    )
+    for key in (
+        "evidence_rounds",
+        "selector_calls",
+        "camera_actions",
+        "deterministic_rounds",
+        "vlm_rounds",
+    ):
+        delta = max(0, int(after[key]) - int(before[key]))
+        merged[key] = int(merged.get(key) or 0) + delta
+    return merged
 
 
 def _usage_overrun_stop_reason(
@@ -251,5 +277,6 @@ rendered_internal_selector_calls = _rendered_internal_selector_calls
 normalize_camera_usage = _normalize_camera_usage
 normalize_acquisition_ledger = _normalize_acquisition_ledger
 extend_acquisition_ledger = _extend_acquisition_ledger
+merge_acquisition_ledger_delta = _merge_acquisition_ledger_delta
 usage_overrun_stop_reason = _usage_overrun_stop_reason
 budget_stop_reason = _budget_stop_reason

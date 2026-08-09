@@ -1,0 +1,95 @@
+profile_version: canonical_scene_evaluation_v2
+status: frozen
+
+layer_weights:
+  l1_physical_plausibility: 0.35
+  l2_specification_fidelity: 0.25
+  l3_scene_quality: 0.40
+  l4_downstream_task_functionality: 0.0
+
+l0_structural_validity:
+  enabled: true
+  scoring: false
+  checks:
+    - schema
+    - normalization
+    - coordinate_and_unit_consistency
+    - required_input_coverage
+
+l1_physical_plausibility:
+  enabled: true
+  backend: deterministic_evidence_plus_conditional_vlm
+  metrics:
+    collision:
+      enabled: true
+      weight: 0.3333333333333333
+    oob:
+      enabled: true
+      weight: 0.3333333333333333
+    support:
+      enabled: true
+      weight: 0.3333333333333333
+    navigability:
+      enabled: false
+      weight: 0.0
+    accessibility:
+      enabled: false
+      weight: 0.0
+  never_vlm_metrics:
+    - navigability
+    - accessibility
+  metric_config: {}
+
+l2_specification_fidelity:
+  enabled: true
+  activation: specification_contract
+  metrics:
+    oor:
+      enabled: true
+      weight: 0.3333333333333333
+    oar:
+      enabled: true
+      weight: 0.3333333333333333
+    functional_semantic_fidelity:
+      enabled: true
+      weight: 0.3333333333333333
+      global_components:
+        - room_scene_type
+        - visual_functional_intent
+        - required_functional_areas
+      local_component: local_functionality
+      local_activation: prompt_specified_only
+      required_area_local_fallback: global_suspicious_or_insufficient
+
+l3_scene_quality:
+  enabled: true
+  metrics:
+    scale_consistency:
+      enabled: true
+      weight: 0.2
+    object_pairing_consistency:
+      enabled: true
+      weight: 0.2
+      requires:
+        - object_grouping_report
+      scope: group_member_category_and_role_compatibility_only
+    style_consistency:
+      enabled: true
+      weight: 0.2
+    functional_consistency:
+      enabled: true
+      weight: 0.2
+      requires:
+        - object_grouping_report
+      scope: ordinary_static_visual_usability
+    semantic_placement_consistency:
+      enabled: true
+      weight: 0.2
+      requires:
+        - object_grouping_report
+      scope: semantic_location_plausibility_only
+
+l4_downstream_task_functionality:
+  enabled: false
+  implemented: false
+  metrics: {}

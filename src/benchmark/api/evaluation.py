@@ -69,7 +69,9 @@ from benchmark.evaluator.profile import (
 )
 from benchmark.evaluator.generic_validity.mesh_geometry import load_collision_geometry_manifest
 from benchmark.grouping import (
+    TOPOLOGY_GROUPING_POLICY_ID,
     VLM_GROUPING_POLICY_ID,
+    grouping_fallback_route,
     group_scene,
     prepare_grouping_evidence,
 )
@@ -152,6 +154,7 @@ def _run_canonical_evaluate(
     l3_initial_evidence_provider: object | None = None,
     functional_evidence_planner: object | None = None,
     functional_probe_evidence_provider: object | None = None,
+    functional_prejudgement_evidence_source: object | None = None,
     camera_selector: object | None = None,
     deterministic_camera_selector: object | None = None,
     vlm_camera_selector: object | None = None,
@@ -173,8 +176,9 @@ def _run_canonical_evaluate(
     """Run the canonical L0--L4 evaluator.
 
     Fine/coarse granularity and asset policy are orthogonal metadata. L2 is
-    activated only by frozen claims; L3 always uses its three canonical metric
-    boundaries. Legacy Category-2 and holistic Visual Quality code is not called.
+    activated only by frozen claims; L3 uses the five frozen scene-quality
+    metric boundaries. Legacy Category-2 and holistic Visual Quality code is
+    not called.
     """
 
     if spatial_fidelity_ontology is not None:
@@ -253,6 +257,7 @@ def _run_canonical_evaluate(
         ),
     )
     overview_render_evidence = _overview_render_evidence(l3_render_evidence)
+    discovery_identity_overlay = grouping_evidence.identity_overlay()
     evaluation_plan = build_evaluation_plan(
         prompt_granularity=prompt_granularity,
         render_evidence_count=_render_evidence_count(l3_render_evidence),
@@ -431,6 +436,19 @@ def _run_canonical_evaluate(
         functional_probe_evidence_provider=(
             functional_probe_evidence_provider
         ),
+        functional_prejudgement_evidence_source=(
+            functional_prejudgement_evidence_source
+        ),
+        discovery_identity_image_path=(
+            str(discovery_identity_overlay["path"])
+            if isinstance(discovery_identity_overlay, dict)
+            else None
+        ),
+        discovery_identity_legend=(
+            deepcopy(grouping_evidence.identity_legend)
+            if isinstance(discovery_identity_overlay, dict)
+            else None
+        ),
         authorized_deviations=resolved_authorized_deviations,
         metric_applicability=scene_quality_applicability(resolved_asset_policy),
         visual_style_spec=resolved_visual_style_spec,
@@ -552,7 +570,7 @@ def _run_canonical_evaluate(
             "L0 is a non-scoring structural gate.",
             "L1 contains five frozen metrics; navigability and accessibility are disabled by default.",
             "L2 contains only OOR, OAR, and functional semantic fidelity.",
-            "L3 contains only scale, object pairing, and style consistency.",
+            "L3 contains scale, object pairing, style, functional consistency, and semantic placement consistency.",
             "L4 is deferred until downstream task types are frozen.",
         ],
     }
@@ -586,6 +604,7 @@ def _run_legacy_game_evaluate(
     p0b_local_view_provider: object | None = None,
     functional_evidence_planner: object | None = None,
     functional_probe_evidence_provider: object | None = None,
+    functional_prejudgement_evidence_source: object | None = None,
     camera_selector: object | None = None,
     deterministic_camera_selector: object | None = None,
     vlm_camera_selector: object | None = None,
@@ -609,6 +628,7 @@ def _run_legacy_game_evaluate(
         grouping_model,
         functional_evidence_planner,
         functional_probe_evidence_provider,
+        functional_prejudgement_evidence_source,
     )
     if not eval_oor and not eval_oar and not eval_generic_validity:
         eval_generic_validity = True
@@ -1136,8 +1156,9 @@ def main() -> None:
         default=None,
         help=(
             "Optional frozen object-grouping report. When omitted, the canonical "
-            "VLM visual-evidence grouping backend runs; if no grouping model is "
-            "available, grouping-dependent metrics remain unresolved."
+            "VLM visual-evidence grouping backend runs first; a validated "
+            "deterministic topology fallback is used only when that primary "
+            "backend is unavailable or fails."
         ),
     )
     parser.add_argument(
@@ -1204,7 +1225,7 @@ def main() -> None:
             PROJECT_ROOT
             / "configs"
             / "evaluation"
-            / "metric_profile_canonical_v1.yaml"
+            / "metric_profile_canonical_v2.yaml"
         ),
     )
     args = parser.parse_args()
@@ -2223,20 +2244,6 @@ def _resolve_object_grouping_report(
         if grouping_config_path.exists()
         else {}
     )
-    if model is None:
-        return {
-            "status": "unavailable",
-            "source": "canonical_runtime_default",
-            "grouping_backend": "vlm",
-            "grouping_policy_id": VLM_GROUPING_POLICY_ID,
-            "reason": "vlm_grouping_model_not_configured",
-            "fallback_used": False,
-            "provenance": {
-                "grouping_input_protocol": deepcopy(
-                    grouping_input_protocol or {}
-                )
-            },
-        }
     grouping_case = deepcopy(request)
     if "room" not in grouping_case and isinstance(scene.get("room"), dict):
         grouping_case["room"] = deepcopy(scene["room"])
@@ -2265,7 +2272,7 @@ def _resolve_object_grouping_report(
             "source": "canonical_runtime_default",
             "grouping_backend": "vlm",
             "grouping_policy_id": VLM_GROUPING_POLICY_ID,
-            "reason": "vlm_grouping_failed",
+            "reason": "grouping_primary_and_fallback_failed",
             "error": f"{type(exc).__name__}: {exc}",
             "fallback_used": False,
             "provenance": {
@@ -2276,13 +2283,16 @@ def _resolve_object_grouping_report(
         }
     result["status"] = "complete"
     result["source"] = "canonical_runtime_default"
-    result["fallback_used"] = False
     provenance = result.get("provenance")
     if not isinstance(provenance, dict):
         provenance = {}
         result["provenance"] = provenance
     provenance["grouping_input_protocol"] = deepcopy(
         grouping_input_protocol or {}
+    )
+    fallback_route = grouping_fallback_route(result)
+    result["fallback_used"] = (
+        fallback_route.get("fallback_used") is True
     )
     return result
 
@@ -2327,13 +2337,18 @@ def _validate_caller_grouping_report(
         }
     )
     problems: list[str] = []
+    validated_fallback = _is_valid_grouping_fallback_report(result)
     if result.get("status") != "complete":
         problems.append("status_must_be_complete")
-    if result.get("grouping_backend") != "vlm":
+    if (
+        result.get("grouping_backend") != "vlm"
+        and not validated_fallback
+    ):
         problems.append("grouping_backend_must_be_vlm")
     if (
         result.get("grouping_policy_id")
         != VLM_GROUPING_POLICY_ID
+        and not validated_fallback
     ):
         problems.append(
             "grouping_policy_id_must_be_"
@@ -2407,8 +2422,35 @@ def _validate_caller_grouping_report(
     return result, problems
 
 
+def _is_valid_grouping_fallback_report(
+    result: dict[str, Any],
+) -> bool:
+    if result.get("fallback_used") is not True:
+        return False
+    if result.get("grouping_backend") != "topology":
+        return False
+    if (
+        result.get("grouping_policy_id")
+        != TOPOLOGY_GROUPING_POLICY_ID
+    ):
+        return False
+    route = grouping_fallback_route(result)
+    return (
+        route.get("primary_backend") == "vlm"
+        and route.get("primary_policy_id")
+        == VLM_GROUPING_POLICY_ID
+        and route.get("primary_outcome") == "failed"
+        and route.get("fallback_enabled") is True
+        and route.get("fallback_used") is True
+        and route.get("fallback_backend") == "topology"
+        and route.get("fallback_policy_id")
+        == TOPOLOGY_GROUPING_POLICY_ID
+        and isinstance(route.get("primary_failure"), dict)
+    )
+
+
 def _grouping_chat_model(value: object | None) -> object | None:
-    """Resolve the chat client without treating a deterministic path as fallback."""
+    """Resolve the VLM primary client; fallback policy is handled separately."""
 
     candidates = [value]
     if value is not None:

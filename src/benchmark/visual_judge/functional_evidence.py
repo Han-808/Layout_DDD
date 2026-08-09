@@ -18,6 +18,11 @@ from pathlib import Path
 from typing import Any
 
 from benchmark.models import OpenAICompatibleModel, parse_json_object
+from benchmark.visual_judge.roles import (
+    DecisionContract,
+    VLMRole,
+    vlm_audit_metadata,
+)
 
 
 FUNCTIONAL_PROBE_PLAN_VERSION = "functional_probe_plan_v2"
@@ -30,7 +35,8 @@ FUNCTIONAL_PROBE_KINDS = (
     "functional_correspondence",
     "approach_clearance",
 )
-FUNCTIONAL_PROBE_MAX_UNITS = 4
+FUNCTIONAL_PROBE_DEFAULT_UNITS = 6
+FUNCTIONAL_PROBE_MAX_UNITS = 8
 
 _OBSERVATIONS_BY_KIND = {
     "functional_frontage": frozenset(
@@ -239,7 +245,13 @@ def plan_openai_compatible_functional_evidence(
 
     normalized = validate_functional_probe_planning_request(request)
     global_path = Path(normalized["global_image_path"]).expanduser()
+    audit = vlm_audit_metadata(
+        VLMRole.FUNCTIONAL_EVIDENCE_PLANNER,
+        decision_contract=DecisionContract.FUNCTIONAL_PROBE_PLAN,
+        judge_method="plan_functional_evidence",
+    )
     context = {
+        **audit,
         "role": "functional_evidence_planner",
         "prompt_version": FUNCTIONAL_PROBE_PLANNER_PROMPT_VERSION,
         "metric": "functional_consistency",
@@ -330,6 +342,7 @@ def plan_openai_compatible_functional_evidence(
         "request_metadata": deepcopy(
             {
                 **dict(getattr(model, "last_request_metadata", {})),
+                **audit,
                 "functional_probe_prompt_version": (
                     FUNCTIONAL_PROBE_PLANNER_PROMPT_VERSION
                 ),
@@ -389,7 +402,10 @@ def validate_functional_probe_planning_request(
             )
         seen.add(object_id)
         objects.append({"id": object_id, "category": category})
-    max_units = value.get("max_probe_units", FUNCTIONAL_PROBE_MAX_UNITS)
+    max_units = value.get(
+        "max_probe_units",
+        FUNCTIONAL_PROBE_DEFAULT_UNITS,
+    )
     if (
         isinstance(max_units, bool)
         or not isinstance(max_units, int)

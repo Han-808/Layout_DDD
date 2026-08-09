@@ -664,6 +664,71 @@ def test_functional_probe_candidates_are_low_wide_and_context_preserving() -> No
     assert np.all(framing_max[:2] >= target_max[:2])
 
 
+def test_cross_group_functional_probe_uses_global_context_when_local_pair_cannot_fit() -> None:
+    request = _request("functional_consistency")
+    request["_resolved_camera_pose_mode"] = "query_cov"
+    request["scene"] = {
+        "scene_id": "cross_room_relation",
+        "boundary": [[0, 0], [7, 0], [7, 6], [0, 6]],
+        "scene_height": 3.0,
+        "objects": [
+            {
+                "id": "sectional_sofa",
+                "category": "sofa",
+                "center": [3.5, 4.5, 0.42],
+                "size": [3.807188, 3.008588, 0.844084],
+                "rotation": [0.0, 0.0, 180.0],
+            },
+            {
+                "id": "television",
+                "category": "television",
+                "center": [3.5, 0.7, 0.97],
+                "size": [1.3621, 0.119728, 0.788418],
+                "rotation": [0.0, 0.0, 0.0],
+            },
+        ],
+    }
+    request["object_ids"] = ["sectional_sofa", "television"]
+    request["functional_probe"] = {
+        "probe_id": "functional_probe_01",
+        "kind": "functional_correspondence",
+        "target_ids": ["sectional_sofa"],
+        "related_target_ids": ["television"],
+        "route_scope": "cross_group",
+        "surface_targets": [],
+        "required_observations": [
+            "joint_visibility",
+            "interaction_side_visible",
+        ],
+    }
+
+    candidates = generate_camera_pose_candidates(
+        request,
+        max_candidates=4,
+    )
+
+    assert [item["camera_type"] for item in candidates] == [
+        "PERSP",
+        "ORTHO",
+    ]
+    assert all(
+        item["policy_source"]
+        == "functional_cross_group_global_context_fallback_v1"
+        for item in candidates
+    )
+    assert all(
+        item["view_family"] == "functional_relation_global_context"
+        and item["fallback_reason"]
+        == "room_interior_joint_framing_infeasible"
+        for item in candidates
+    )
+    assert all(
+        item["target_object_ids"]
+        == ["sectional_sofa", "television"]
+        for item in candidates
+    )
+
+
 def test_functional_probe_refills_feasible_candidate_bank() -> None:
     request = _request("functional_consistency")
     request["_resolved_camera_pose_mode"] = "query_cov"

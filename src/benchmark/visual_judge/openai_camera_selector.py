@@ -17,12 +17,17 @@ from benchmark.visual_judge.functional_evidence import (
 from benchmark.visual_judge.placement_discovery import (
     discover_openai_compatible_placement_evidence,
 )
+from benchmark.visual_judge.roles import (
+    DecisionContract,
+    VLMRole,
+    vlm_audit_metadata,
+)
 from benchmark.visual_judge.usable_surface import (
     decode_openai_compatible_usable_surface,
 )
 
 
-CAMERA_SELECTOR_PROMPT_VERSION = "camera_selector_evidence_utility_v5"
+CAMERA_SELECTOR_PROMPT_VERSION = "camera_selector_atomic_relations_v6"
 
 CAMERA_SELECTOR_SYSTEM_PROMPT = """You select visual evidence. You do not judge
 the benchmark metric.
@@ -68,8 +73,12 @@ secondary goal or treat any goal as evidence of a defect. When
 usable_surface_hypotheses are supplied, use their trusted local
 side IDs only as surface-observation hypotheses; do not reinterpret them as a
 metric conclusion. An ambiguous hypothesis requires complementary visibility
-rather than guessing one side. For functional_correspondence, all relevant participants and their
-usable-side relationship must be jointly interpretable. When
+rather than guessing one side. For functional_correspondence, all relevant
+participants must be jointly interpretable. When relation_predicates includes
+directional_correspondence, expose the relevant functional sides and their
+relative directions. When it contains only relative_use_geometry, expose the
+relative position, reach, contact, or connection region without inventing a
+usable-side requirement. When
 architecture_plane_visible is required for a functional request, jointly show
 the decoded usable or control side, the nearest authoritative logical boundary
 or visible floor extent, and the interior-side user approach and operating
@@ -184,6 +193,12 @@ class OpenAICompatibleCameraSelector:
                 "repair_plan, or freeform_pose"
             )
         structured = _validated_payload(payload, mode=mode)
+        audit = vlm_audit_metadata(
+            VLMRole.VLM_CAMERA_SELECTOR,
+            decision_contract=DecisionContract.CAMERA_SELECTION,
+            judge_method="select",
+        )
+        structured.update(audit)
         content: list[dict[str, Any]] = [
             {
                 "type": "text",
@@ -259,7 +274,12 @@ class OpenAICompatibleCameraSelector:
             mode=mode,
             payload=structured,
         )
+        response["provenance"] = {
+            **deepcopy(response.get("provenance") or {}),
+            **audit,
+        }
         self.last_request_metadata = {
+            **audit,
             "selection_mode": mode,
             "prompt_version": CAMERA_SELECTOR_PROMPT_VERSION,
             "candidate_ids": [
@@ -319,8 +339,9 @@ class OpenAICompatibleCameraSelector:
     ) -> dict[str, Any]:
         """Plan bounded, pre-judgement functional probe units.
 
-        This shares the camera-selector model transport and accounting role,
-        but uses a separate strict contract that cannot emit a verdict or pose.
+        This shares the camera-selector model transport, but has its own
+        explicit VLM role and a strict contract that cannot emit a verdict or
+        pose.
         """
 
         result = plan_openai_compatible_functional_evidence(

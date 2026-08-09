@@ -8,6 +8,10 @@ import json
 import re
 from typing import Any, Iterable
 
+from benchmark.evaluator.scene_quality.placement_severity import (
+    placement_severity_rank,
+)
+
 
 OBJECT_LEVEL_ATTRIBUTION_METRICS = frozenset(
     {
@@ -44,13 +48,19 @@ def claim_record(
             separators=(",", ":"),
         ).encode("utf-8")
     ).hexdigest()[:16]
-    return {
+    record = {
         "claim_id": f"l3_claim_{digest}",
         **payload,
         "reason": str(defect.get("reason") or "").strip(),
         "source_phase": str(source_phase),
         "claim_status": str(claim_status),
     }
+    if (
+        metric_name == "semantic_placement_consistency"
+        and placement_severity_rank(defect.get("severity"))
+    ):
+        record["severity"] = str(defect["severity"])
+    return record
 
 
 def claim_records(
@@ -89,14 +99,25 @@ def deduplicate_defects(
     """Drop exact duplicate final defects by canonical claim identity."""
 
     retained: list[dict[str, Any]] = []
-    seen: set[tuple[str, str, tuple[str, ...], str]] = set()
+    retained_index: dict[
+        tuple[str, str, tuple[str, ...], str],
+        int,
+    ] = {}
     for defect in defects:
         if not isinstance(defect, dict):
             continue
         key = canonical_claim_key(metric_name, defect)
-        if key in seen:
+        if key in retained_index:
+            if (
+                metric_name == "semantic_placement_consistency"
+                and placement_severity_rank(defect.get("severity"))
+                > placement_severity_rank(
+                    retained[retained_index[key]].get("severity")
+                )
+            ):
+                retained[retained_index[key]] = deepcopy(defect)
             continue
-        seen.add(key)
+        retained_index[key] = len(retained)
         retained.append(deepcopy(defect))
     return retained
 
@@ -130,6 +151,11 @@ def object_level_finding_records(
             "relation": _normalize_token(raw_defect.get("relation")),
             "reason": str(raw_defect.get("reason") or "").strip(),
         }
+        if (
+            metric_name == "semantic_placement_consistency"
+            and placement_severity_rank(raw_defect.get("severity"))
+        ):
+            observation["severity"] = str(raw_defect["severity"])
         for object_id in target_ids:
             key = (_normalize_token(metric_name), object_id)
             finding = findings.get(key)
@@ -176,6 +202,19 @@ def object_level_finding_records(
                 for phase in finding["source_phases"]
             )
         )
+        if metric_name == "semantic_placement_consistency":
+            severity_values = [
+                str(observation.get("severity") or "")
+                for observation in finding["observations"]
+                if placement_severity_rank(
+                    observation.get("severity")
+                )
+            ]
+            finding["highest_severity"] = max(
+                severity_values,
+                key=placement_severity_rank,
+                default="none",
+            )
     return records
 
 

@@ -11,19 +11,31 @@ from pathlib import Path
 from typing import Any
 
 from benchmark.models import OpenAICompatibleModel, parse_json_object
+from benchmark.visual_judge.roles import (
+    DecisionContract,
+    VLMRole,
+    vlm_audit_metadata,
+)
+from benchmark.visual_judge.identity_evidence import (
+    validate_identity_evidence,
+)
 
 
-PLACEMENT_DISCOVERY_SCHEMA_VERSION = "placement_discovery_v1"
-PLACEMENT_DISCOVERY_PROMPT_VERSION = "placement_discovery_v1"
+PLACEMENT_DISCOVERY_SCHEMA_VERSION = "placement_discovery_v2"
+PLACEMENT_DISCOVERY_PROMPT_VERSION = "placement_discovery_v3"
 PLACEMENT_DISCOVERY_MAX_TOKENS = 3192
 PLACEMENT_OBSERVATION_KINDS = frozenset(
     {
-        "support_surface",
-        "placement_height",
+        "support_and_height",
         "scene_zone",
-        "adjacency_context",
+        "contextual_anchor",
     }
 )
+_LEGACY_PLACEMENT_OBSERVATION_KINDS = {
+    "support_surface": "support_and_height",
+    "placement_height": "support_and_height",
+    "adjacency_context": "contextual_anchor",
+}
 _FORBIDDEN_FIELDS = frozenset(
     {
         "verdict",
@@ -44,17 +56,30 @@ _FORBIDDEN_FIELDS = frozenset(
 )
 
 
-PLACEMENT_DISCOVERY_SYSTEM_PROMPT = """Identify only visual observations
+PLACEMENT_DISCOVERY_SYSTEM_PROMPT = """Identify sparse typed visual checks
 needed to evaluate semantic location, assuming each object's identity belongs
-in the scene. Name exactly one subject_id per candidate; optional context_ids
-only explain the surrounding support, zone, or adjacency and are not defect
-owners. Route a subject when support-surface meaning, placement height, scene
-zone, or immediate adjacency/context requires closer confirmation.
+in the scene. This is routing, not exhaustive object classification: copying a
+default check onto every object is forbidden. considered_object_ids provides
+complete inspection coverage even when candidates is empty. Name exactly one
+subject_id per candidate. Optional context_ids provide non-owning visual
+context and never become defect owners.
 
-Do not route orientation, facing, access, opening clearance, or operability;
-those are functional. Do not route collision, penetration, floating, support
-failure, or out-of-bounds geometry; those are structural. Do not route identity
-membership, style, or scale.
+Use only:
+- support_and_height: whether the subject is on a semantically appropriate
+  supporting surface and at a plausible placement height;
+- scene_zone: whether the subject occupies a plausible room region;
+- contextual_anchor: a non-operational positional association, such as an
+  object being meaningfully anchored to another scene element.
+
+Emit a candidate only for a concrete location question visible in this scene.
+Write observation_goal as a neutral question about what must be observed; do
+not state or imply that the current arrangement already passes or fails.
+
+Do not route orientation, facing, approach, opening, operation, reachability,
+or action-required correspondence; those are functional. Do not route
+collision, penetration, floating, physical support failure, or out-of-bounds
+geometry; those are structural. Do not route identity membership, style, or
+scale. Discovery proposes checks only and never decides them.
 
 Copy every object ID exactly once in considered_object_ids. Return exactly:
 {"considered_object_ids":["id"],
@@ -75,7 +100,13 @@ def discover_openai_compatible_placement_evidence(
     response_format_json: bool | None = None,
 ) -> dict[str, Any]:
     normalized = validate_placement_discovery_request(request)
+    audit = vlm_audit_metadata(
+        VLMRole.PLACEMENT_DISCOVERY,
+        decision_contract=DecisionContract.PLACEMENT_DISCOVERY,
+        judge_method="discover_placement_evidence",
+    )
     context = {
+        **audit,
         "role": "placement_discovery",
         "metric": "semantic_placement_consistency",
         "decision_authority": "none",
@@ -85,6 +116,11 @@ def discover_openai_compatible_placement_evidence(
         "scene_id": normalized.get("scene_id"),
         "scene_type": normalized.get("scene_type"),
         "object_list": deepcopy(normalized["objects"]),
+        "identity_grounding": {
+            "status": normalized["identity_grounding"],
+            "image_role": "global_identity_overlay",
+            "legend": deepcopy(normalized["identity_legend"]),
+        },
         "allowed_observation_kinds": sorted(
             PLACEMENT_OBSERVATION_KINDS
         ),
@@ -114,6 +150,17 @@ def discover_openai_compatible_placement_evidence(
             },
         },
     ]
+    if normalized["identity_image_path"] is not None:
+        content.append(
+            {
+                "type": "image_url",
+                "image_url": {
+                    "url": _image_data_url(
+                        Path(normalized["identity_image_path"])
+                    )
+                },
+            }
+        )
     started = time.perf_counter()
     raw = model.chat_messages(
         [
@@ -148,11 +195,13 @@ def discover_openai_compatible_placement_evidence(
         "schema_version": PLACEMENT_DISCOVERY_SCHEMA_VERSION,
         "decision_authority": "none",
         "provenance": {
+            **audit,
             "prompt_version": PLACEMENT_DISCOVERY_PROMPT_VERSION,
             "schema_version": PLACEMENT_DISCOVERY_SCHEMA_VERSION,
             "backend": "openai_compatible",
             "request_metadata": {
                 **dict(getattr(model, "last_request_metadata", {})),
+                **audit,
                 "latency_seconds": round(
                     time.perf_counter() - started,
                     6,
@@ -198,11 +247,20 @@ def validate_placement_discovery_request(value: Any) -> dict[str, Any]:
             )
         seen.add(object_id)
         normalized_objects.append({"id": object_id, "category": category})
+    identity = validate_identity_evidence(
+        image_path=value.get("identity_image_path"),
+        legend=value.get("identity_legend"),
+        expected_object_ids=(
+            item["id"] for item in normalized_objects
+        ),
+        label="placement discovery",
+    )
     return {
         "scene_id": value.get("scene_id"),
         "scene_type": value.get("scene_type"),
         "global_image_path": str(image_path),
         "objects": normalized_objects,
+        **identity,
     }
 
 
@@ -265,24 +323,35 @@ def validate_placement_discovery_response(
             raise ValueError(
                 "placement subject cannot appear in its own context"
             )
-        kind = str(item.get("observation_kind") or "").strip()
+        raw_kind = str(item.get("observation_kind") or "").strip()
+        kind = _LEGACY_PLACEMENT_OBSERVATION_KINDS.get(
+            raw_kind,
+            raw_kind,
+        )
         if kind not in PLACEMENT_OBSERVATION_KINDS:
             raise ValueError("placement observation_kind is unsupported")
         identity = (subject_id, tuple(sorted(context_ids)), kind)
         if identity in identities:
             raise ValueError("placement discovery contains a duplicate")
         identities.add(identity)
-        goal = str(item.get("observation_goal") or "").strip()
-        if not goal:
+        source_goal = str(item.get("observation_goal") or "").strip()
+        if not source_goal:
             raise ValueError(
                 "placement candidate observation_goal must be non-empty"
             )
+        goal = _neutral_placement_observation_goal(kind)
         normalized.append(
             {
                 "subject_id": subject_id,
                 "context_ids": context_ids,
                 "observation_kind": kind,
-                "observation_goal": goal[:1000],
+                "observation_goal": goal,
+                "source_observation_goal": source_goal[:1000],
+                **(
+                    {"legacy_observation_kind": raw_kind}
+                    if raw_kind != kind
+                    else {}
+                ),
             }
         )
     reason = str(value.get("reason") or "").strip()
@@ -292,7 +361,27 @@ def validate_placement_discovery_response(
         "considered_object_ids": considered,
         "candidates": normalized,
         "reason": reason[:1000],
+        "observation_goal_policy": (
+            "deterministic_neutral_routing_question_v1"
+        ),
     }
+
+
+def _neutral_placement_observation_goal(kind: str) -> str:
+    return {
+        "support_and_height": (
+            "Observe the subject's supporting surface and placement height "
+            "without assuming semantic plausibility."
+        ),
+        "scene_zone": (
+            "Observe the subject's room zone and architectural context "
+            "without assuming semantic plausibility."
+        ),
+        "contextual_anchor": (
+            "Observe the subject's non-operational positional relationship "
+            "to the listed context objects without assuming plausibility."
+        ),
+    }[kind]
 
 
 def placement_groups_to_confirm(

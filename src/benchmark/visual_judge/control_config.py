@@ -40,10 +40,10 @@ DEFAULT_VLM_EVALUATION_CONTROL: dict[str, Any] = {
         # These mirror the existing budgets. The resolver keeps both paths
         # synchronized so old configuration patches remain authoritative.
         "total": {
-            "max_evidence_rounds": 2,
-            "max_total_images": 6,
-            "max_selector_calls": 3,
-            "max_camera_actions": 2,
+            "max_evidence_rounds": 3,
+            "max_total_images": 8,
+            "max_selector_calls": 4,
+            "max_camera_actions": 3,
         },
         "escalation": {
             "on_no_feasible_candidate": True,
@@ -63,11 +63,11 @@ DEFAULT_VLM_EVALUATION_CONTROL: dict[str, Any] = {
         "allow_need_more_evidence": True,
     },
     "budgets": {
-        "max_evidence_rounds": 2,
+        "max_evidence_rounds": 3,
         "max_views_per_round": 2,
-        "max_total_images": 6,
-        "max_camera_actions": 2,
-        "max_selector_calls": 3,
+        "max_total_images": 8,
+        "max_camera_actions": 3,
+        "max_selector_calls": 4,
     },
     "require_evidence_gate_after_render": True,
     "on_non_camera_repairable_evidence": "unresolved",

@@ -1,13 +1,13 @@
-"""Canonical L3 Scene Quality evaluation.
+"""L3 Scene Quality evaluation.
 
 L3 Scene Quality reframes the former narrow "Visual Quality" layer into two
 subfamilies:
 
 - **L3a Semantic Coherence** — ``scale_consistency`` and
   ``object_pairing_consistency``;
-- **L3b Perceptual Visual Quality** — ``style_consistency``.
-- **L3c Functional Validity** — optional ``functional_consistency``;
-- **L3d Semantic Placement** — optional
+- **L3b Perceptual Visual Quality** — ``style_consistency``;
+- **L3c Functional Validity** — ``functional_consistency``;
+- **L3d Semantic Placement** —
   ``semantic_placement_consistency``.
 
 ``object_pairing_consistency`` is evaluated only after the configured grouping
@@ -32,7 +32,7 @@ are removed before scoring. Exemptions never disable an entire metric.
 
 from __future__ import annotations
 
-import math
+import json
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
@@ -43,6 +43,44 @@ from benchmark.evaluator.scene_quality.authorized_deviations import (
     deviations_for_metric,
     validate_authorized_deviations,
 )
+from benchmark.evaluator.scene_quality.config import (
+    SceneQualityInterfaceConfigError,
+    _as_object,
+    _deep_merge,
+    _normalize_layer,
+    _validate_evidence_policy,
+    _validate_metric_flags,
+    _validate_top_level,
+    resolve_scene_quality_config,
+)
+from benchmark.evaluator.scene_quality.definitions import (
+    CAMERA_MODES,
+    CAMERA_SCOPES,
+    DEFAULT_SCENE_QUALITY_INTERFACE_CONFIG,
+    EVIDENCE_SELECTORS,
+    EXPERIMENTAL_NON_SCORING,
+    EXPERIMENTAL_SCENE_QUALITY_METRICS,
+    FUNCTIONAL_VALIDITY,
+    FUNCTIONAL_VALIDITY_METRICS,
+    IMAGE_ORDER_TOKENS,
+    JUDGMENT_SCOPE_BY_METRIC,
+    METRIC_RUBRICS,
+    PERCEPTUAL_VISUAL_QUALITY,
+    PERCEPTUAL_VISUAL_QUALITY_METRICS,
+    PRESENTATIONS,
+    SCENE_QUALITY_INTERFACE_METRICS,
+    SCENE_QUALITY_INTERFACE_NAMESPACE,
+    SCENE_QUALITY_INTERFACE_VERSION,
+    SEMANTIC_COHERENCE,
+    SEMANTIC_COHERENCE_METRICS,
+    SEMANTIC_PLACEMENT,
+    SEMANTIC_PLACEMENT_METRICS,
+    SUBFAMILY_BY_METRIC,
+    SUPPORTED_SCENE_QUALITY_METRICS,
+    _GROUP_SCOPES,
+    _RETIRED_CONFIG_NAMESPACES,
+    _RETIRED_METRIC_NAMES,
+)
 from benchmark.evaluator.scene_quality.group_scoped import (
     evaluate_group_scoped_judgements as _evaluate_group_scoped_judgements,
     group_evidence_resolution_summary as _group_evidence_resolution_summary,
@@ -52,21 +90,31 @@ from benchmark.evaluator.scene_quality.group_scoped import (
 from benchmark.evaluator.scene_quality.global_group_first import (
     evaluate_global_discovery_then_group_local as _evaluate_global_discovery_then_group_local,
 )
+from benchmark.evaluator.scene_quality.functional_prejudgement import (
+    validate_functional_prejudgement_evidence_config,
+)
+from benchmark.evaluator.scene_quality.functional_ownership import (
+    validate_functional_ownership_ledger,
+)
+from benchmark.evaluator.scene_quality.placement_severity import (
+    PLACEMENT_SEVERITY_LEVELS,
+    validate_placement_defect_severity,
+)
 from benchmark.evaluator.scene_quality.json_screen_first import (
     evaluate_json_screen_then_group_visual as _evaluate_json_screen_then_group_visual,
+)
+from benchmark.evaluator.scene_quality.style_global_first import (
+    evaluate_style_global_then_group_local as _evaluate_style_global_then_group_local,
 )
 from benchmark.evaluator.evidence_contract import (
     EVIDENCE_STRATEGIES,
     FINAL_VLM_CONTEXT_CONTRACT,
-    GROUPING_POLICY_ID,
     LOCAL_TRIGGERS,
     ROUTER_STATES,
     ROUTER_TRIGGER_STATES,
     canonical_hierarchy,
     grouping_policy_provenance,
-    validate_evidence_plan,
 )
-from benchmark.rendering.camera_pose import CAMERA_POSE_MODES
 from benchmark.visual_judge.roles import (
     DecisionContract,
     VLMRole,
@@ -79,557 +127,7 @@ from benchmark.visual_judge.group_scope import (
 from benchmark.visual_judge.l3_prompts import (
     L3_METRIC_BOUNDARY_RULES,
     L3_METRIC_PROMPT_VERSION,
-    L3_METRIC_RUBRICS,
 )
-
-
-SCENE_QUALITY_INTERFACE_VERSION = "scene_quality_v6"
-
-# Canonical L3 output namespace.
-SCENE_QUALITY_INTERFACE_NAMESPACE = "l3_scene_quality"
-_RETIRED_CONFIG_NAMESPACES = ("scene_quality_interfaces", "visual_quality_interfaces")
-_RETIRED_METRIC_NAMES = ("object_coexistence_consistency",)
-
-# Subfamilies of L3 Scene Quality.
-SEMANTIC_COHERENCE = "semantic_coherence"
-PERCEPTUAL_VISUAL_QUALITY = "perceptual_visual_quality"
-FUNCTIONAL_VALIDITY = "functional_validity"
-SEMANTIC_PLACEMENT = "semantic_placement"
-EXPERIMENTAL_NON_SCORING = "experimental_non_scoring"
-SEMANTIC_COHERENCE_METRICS = ("scale_consistency", "object_pairing_consistency")
-PERCEPTUAL_VISUAL_QUALITY_METRICS = ("style_consistency",)
-FUNCTIONAL_VALIDITY_METRICS = ("functional_consistency",)
-SEMANTIC_PLACEMENT_METRICS = ("semantic_placement_consistency",)
-# The frozen profile and aggregate keep the original three L3 metrics. Functional
-# and semantic-placement consistency are additive, explicitly enabled diagnostic
-# interfaces until the benchmark hierarchy assigns them aggregate ownership.
-SCENE_QUALITY_INTERFACE_METRICS = (
-    "style_consistency",
-    "scale_consistency",
-    "object_pairing_consistency",
-)
-SUPPORTED_SCENE_QUALITY_METRICS = (
-    *SCENE_QUALITY_INTERFACE_METRICS,
-    "functional_consistency",
-    "semantic_placement_consistency",
-)
-EXPERIMENTAL_SCENE_QUALITY_METRICS = (
-    "functional_consistency",
-    "semantic_placement_consistency",
-)
-SUBFAMILY_BY_METRIC = {
-    "style_consistency": PERCEPTUAL_VISUAL_QUALITY,
-    "scale_consistency": SEMANTIC_COHERENCE,
-    "object_pairing_consistency": SEMANTIC_COHERENCE,
-    "functional_consistency": FUNCTIONAL_VALIDITY,
-    "semantic_placement_consistency": SEMANTIC_PLACEMENT,
-}
-JUDGMENT_SCOPE_BY_METRIC = {
-    "style_consistency": {
-        "included": ["significant_visible_style_incompatibility"],
-        "excluded": ["minor_variation", "subjective_preference"],
-    },
-    "scale_consistency": {
-        "included": ["significant_visible_category_relative_scale_incoherence"],
-        "excluded": ["ordinary_product_size_variation", "minor_ratio_difference"],
-    },
-    "object_pairing_consistency": {
-        "included": [
-            "scene_member_category_compatibility",
-            "scene_member_role_compatibility",
-            "group_member_category_compatibility",
-            "group_member_role_compatibility",
-        ],
-        "excluded": [
-            "position",
-            "distance",
-            "angle",
-            "orientation",
-            "access",
-            "functional_arrangement",
-        ],
-        "prerequisite": "object_grouping_report",
-    },
-    "functional_consistency": {
-        "included": [
-            "scene_real_world_usability",
-            "group_real_world_usability",
-            "facing_and_interaction_direction",
-            "interaction_side_accessibility",
-            "opening_clearance",
-            "reachability",
-            "circulation",
-            "functional_support_contact",
-            "orientation_for_use",
-            "ensemble_operability",
-        ],
-        "excluded": [
-            "prompt_fidelity",
-            "category_pairing",
-            "style",
-            "scale",
-            "exact_relation_fidelity",
-        ],
-        "prerequisite": "object_grouping_report",
-    },
-    "semantic_placement_consistency": {
-        "included": [
-            "semantically_inappropriate_support_surface",
-            "implausible_placement_height",
-            "semantically_inappropriate_scene_zone",
-            "implausible_cross_group_context",
-            "implausible_local_context",
-        ],
-        "excluded": [
-            "collision",
-            "penetration",
-            "out_of_bounds",
-            "physical_support",
-            "contact_stability",
-            "prompt_fidelity",
-            "category_pairing",
-            "style",
-            "scale",
-            "orientation_for_use",
-            "accessibility",
-            "opening_clearance",
-            "ensemble_operability",
-            "exact_relation_fidelity",
-        ],
-        "prerequisite": "object_grouping_report",
-    },
-}
-
-METRIC_RUBRICS = L3_METRIC_RUBRICS
-
-# Camera-policy vocabularies. Reuse the repository's evidence vocabulary rather
-# than inventing a parallel abstraction. ``camera_pose_mode`` (optional) bridges
-# to the renderer via the existing ``CAMERA_POSE_MODES`` enum without hardcoding
-# any pose here.
-CAMERA_SCOPES = ("global", "object_local", "group_local", "pair_local")
-CAMERA_MODES = ("global_top", "global_oblique", "metric_local")
-EVIDENCE_SELECTORS = ("deterministic", "vlm_selector")
-PRESENTATIONS = ("raw", "highlight")
-IMAGE_ORDER_TOKENS = (
-    "global_context",
-    "global_top",
-    "global_oblique",
-    "metric_local",
-    "object_local",
-    "group_local",
-    "pair_local",
-)
-
-# Local scopes whose evidence request is scoped to one or more object groups.
-_GROUP_SCOPES = ("group_local", "pair_local")
-
-# Recommended initial per-metric default policies. Defaults only; every field is
-# overridable through the layered config resolution below.
-DEFAULT_SCENE_QUALITY_INTERFACE_CONFIG: dict[str, Any] = {
-    "enabled": True,
-    "implemented": True,
-    "version": SCENE_QUALITY_INTERFACE_VERSION,
-    "evidence_policy_defaults": {},
-    "metrics": {
-        "style_consistency": {
-            "enabled": True,
-            "implemented": True,
-            "weight": 1.0 / 3.0,
-            "evidence_policy": {
-                "camera_scope": "global",
-                "camera_mode": "global_oblique",
-                "selector": "deterministic",
-                "image_budget": 1,
-                "presentation": "raw",
-                "image_order": None,
-                "include_global_context": True,
-                "camera_pose_mode": None,
-            },
-            "evidence_plan": {
-                "evidence_strategy": (
-                    "global_discovery_then_group_local"
-                ),
-                "global_policy": {
-                    "view_family": "canonical_overview_perspective",
-                    "image_budget": 1,
-                    "top_down": False,
-                    "perspective_diversity_required": False,
-                },
-                "local_policy": {
-                    "camera_scope": "group_local",
-                    "grouping_policy_id": GROUPING_POLICY_ID,
-                    "image_budget": 1,
-                    "global_context_image_budget": 1,
-                    "max_packet_images": 2,
-                    "image_order": [
-                        "global_context",
-                        "group_local",
-                    ],
-                    "minimum_group_members": 2,
-                    "force_for_eligible_groups": True,
-                },
-                "router_options": None,
-                "text_context": [
-                    "original_prompt",
-                    "parsed_prompt_requirements",
-                    "authorized_deviations",
-                    "asset_policy",
-                ],
-            },
-        },
-        "scale_consistency": {
-            "enabled": True,
-            "implemented": True,
-            "weight": 1.0 / 3.0,
-            "evidence_policy": {
-                "camera_scope": "group_local",
-                "camera_mode": "metric_local",
-                "selector": "deterministic",
-                "image_budget": 3,
-                "global_image_budget": 1,
-                "scoped_image_budget": 1,
-                "presentation": "raw",
-                "image_order": ["global_context", "group_local"],
-                "include_global_context": True,
-                "camera_pose_mode": None,
-            },
-            "evidence_plan": {
-                "evidence_strategy": "json_screen_then_visual",
-                "global_policy": {
-                    "view_family": "global_perspective",
-                    "image_budget": 1,
-                    "top_down": False,
-                },
-                "local_policy": {
-                    "camera_scope": "group_local",
-                    "grouping_policy_id": GROUPING_POLICY_ID,
-                    "image_budget": 1,
-                    "max_packet_images": 3,
-                    "trigger_states": [
-                        "suspicious",
-                        "insufficient_evidence",
-                    ],
-                },
-                "router_options": {
-                    "json_screen_then_visual": {
-                        "router": "vlm_json_screen",
-                        "trigger_states": [
-                            "suspicious",
-                            "insufficient_evidence",
-                        ],
-                    },
-                },
-                "text_context": [
-                    "original_prompt",
-                    "parsed_prompt_requirements",
-                    "authorized_deviations",
-                    "asset_policy",
-                    "object_grouping_report",
-                ],
-            },
-        },
-        "object_pairing_consistency": {
-            "enabled": True,
-            "implemented": True,
-            "weight": 1.0 / 3.0,
-            "evidence_policy": {
-                "camera_scope": "group_local",
-                "camera_mode": "metric_local",
-                "selector": "deterministic",
-                "image_budget": 3,
-                "global_image_budget": 1,
-                "scoped_image_budget": 1,
-                "presentation": "raw",
-                "image_order": ["global_context", "group_local"],
-                "include_global_context": True,
-                "camera_pose_mode": None,
-            },
-            "evidence_plan": {
-                "evidence_strategy": "json_screen_then_visual",
-                "global_policy": {
-                    "view_family": "wall_occlusion_aware_room_perspective",
-                    "image_budget": 1,
-                    "top_down": False,
-                },
-                "local_policy": {
-                    "camera_scope": "group_local",
-                    "grouping_policy_id": GROUPING_POLICY_ID,
-                    "image_budget": 1,
-                    "max_packet_images": 3,
-                    "trigger_states": [
-                        "suspicious",
-                        "insufficient_evidence",
-                    ],
-                },
-                "router_options": {
-                    "json_screen_then_visual": {
-                        "router": "vlm_json_screen",
-                        "trigger_states": [
-                            "suspicious",
-                            "insufficient_evidence",
-                        ],
-                    },
-                },
-                "text_context": [
-                    "original_prompt",
-                    "parsed_prompt_requirements",
-                    "authorized_deviations",
-                    "asset_policy",
-                    "object_grouping_report",
-                ],
-            },
-        },
-        # Additive experimental metric. It is implemented and can be enabled
-        # explicitly without changing the frozen three-metric L3 weights.
-        "functional_consistency": {
-            "enabled": False,
-            "implemented": True,
-            "metric_status": EXPERIMENTAL_NON_SCORING,
-            "activation_policy": "explicit_config_only",
-            "included_in_canonical_aggregate": False,
-            # A positive local weight lets explicit diagnostic runs execute.
-            # The evaluator still excludes this optional interface from the
-            # frozen canonical aggregate below.
-            "weight": 1.0,
-            "evidence_policy": {
-                "camera_scope": "global",
-                "camera_mode": "global_oblique",
-                "selector": "deterministic",
-                "image_budget": 1,
-                "presentation": "raw",
-                "image_order": None,
-                "include_global_context": True,
-                "camera_pose_mode": None,
-            },
-            "evidence_plan": {
-                "evidence_strategy": (
-                    "global_discovery_then_group_local"
-                ),
-                "global_policy": {
-                    "view_family": "canonical_overview_perspective",
-                    "image_budget": 1,
-                    "top_down": False,
-                    "perspective_diversity_required": False,
-                },
-                "local_policy": {
-                    "camera_scope": "group_local",
-                    "grouping_policy_id": GROUPING_POLICY_ID,
-                    "image_budget": 1,
-                    "global_context_image_budget": 1,
-                    "max_packet_images": 2,
-                    "image_order": [
-                        "global_context",
-                        "group_local",
-                    ],
-                    "minimum_group_members": 2,
-                    "force_for_eligible_groups": True,
-                },
-                "prejudgement_probe_policy": {
-                    "enabled": True,
-                    "discovery": {
-                        "backend": "vlm",
-                        "decision_authority": "none",
-                        "complete_object_coverage_required": True,
-                        "group_normalization": "deterministic",
-                        "unusual_confirmation_scope": "group_local",
-                    },
-                    "usable_surface": {
-                        "backend": "vlm_trusted_side_ids",
-                        "trusted_side_ids": [
-                            "local_pos_x",
-                            "local_neg_x",
-                            "local_pos_y",
-                            "local_neg_y",
-                        ],
-                        "decode_scope": (
-                            "directed_or_uncertain_clearance_targets_"
-                            "before_probe_budget"
-                        ),
-                        "fallback": "existing_geometry_local_camera",
-                        "scene_access": "read_only",
-                    },
-                    "planner_input": (
-                        "one_global_image_plus_id_category_groups_boundary"
-                    ),
-                    "max_probe_units": 4,
-                    "candidate_count_by_probe_kind": {
-                        "functional_frontage": 4,
-                        "functional_correspondence": 4,
-                        "approach_clearance": 4,
-                    },
-                    "selected_views_per_unit": 1,
-                    "preferred_lens_mm": 32.0,
-                    "elevation_range_degrees": [8.0, 16.0],
-                    "context_margin_m": 1.25,
-                    "judge_presentation": "raw_rgb_only",
-                    "decision_authority": "none",
-                },
-                "router_options": None,
-                "text_context": [
-                    "original_prompt",
-                    "authorized_deviations",
-                    "asset_policy",
-                    "object_grouping_report",
-                ],
-            },
-        },
-        # Additive experimental metric. This concerns semantic location only;
-        # L1 remains the sole owner of collision and physical support.
-        "semantic_placement_consistency": {
-            "enabled": False,
-            "implemented": True,
-            "metric_status": EXPERIMENTAL_NON_SCORING,
-            "activation_policy": "explicit_config_only",
-            "included_in_canonical_aggregate": False,
-            "weight": 1.0,
-            "evidence_policy": {
-                "camera_scope": "global",
-                "camera_mode": "global_oblique",
-                "selector": "deterministic",
-                "image_budget": 1,
-                "presentation": "raw",
-                "image_order": None,
-                "include_global_context": True,
-                "camera_pose_mode": None,
-            },
-            "evidence_plan": {
-                "evidence_strategy": (
-                    "global_discovery_then_group_local"
-                ),
-                "global_policy": {
-                    "view_family": "canonical_overview_perspective",
-                    "image_budget": 1,
-                    "top_down": False,
-                    "perspective_diversity_required": False,
-                },
-                "local_policy": {
-                    "camera_scope": "group_local",
-                    "grouping_policy_id": GROUPING_POLICY_ID,
-                    "image_budget": 1,
-                    "global_context_image_budget": 1,
-                    "max_packet_images": 2,
-                    "image_order": [
-                        "global_context",
-                        "group_local",
-                    ],
-                    "minimum_group_members": 2,
-                    "force_for_eligible_groups": True,
-                },
-                "router_options": None,
-                "text_context": [
-                    "original_prompt",
-                    "authorized_deviations",
-                    "asset_policy",
-                    "object_grouping_report",
-                ],
-            },
-        },
-    },
-}
-
-
-class SceneQualityInterfaceConfigError(ValueError):
-    """Raised when a Scene Quality interface configuration is malformed."""
-
-
-def resolve_scene_quality_config(
-    config: dict[str, Any] | None = None,
-    *,
-    profile: dict[str, Any] | None = None,
-    run_overrides: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    """Resolve the layered Scene Quality interface configuration.
-
-    Precedence, lowest to highest: built-in defaults, canonical downstream
-    profile override (``profile['l3_scene_quality']``), explicit canonical
-    config, and per-run override. Retired namespace and metric aliases are
-    rejected rather than silently normalized, so canonical configuration has
-    one unambiguous input vocabulary. Unknown, future-compatible fields are
-    preserved while every known field is validated.
-    """
-
-    layers: list[dict[str, Any]] = []
-    if isinstance(profile, dict):
-        retired_namespaces = sorted(set(profile) & set(_RETIRED_CONFIG_NAMESPACES))
-        if retired_namespaces:
-            raise SceneQualityInterfaceConfigError(
-                "retired L3 profile namespaces are not accepted by the canonical "
-                f"resolver: {retired_namespaces}; use {SCENE_QUALITY_INTERFACE_NAMESPACE!r}"
-            )
-        profile_section = profile.get(SCENE_QUALITY_INTERFACE_NAMESPACE)
-        if profile_section is not None:
-            layers.append(_normalize_layer(profile_section, "profile override"))
-    if config is not None:
-        layers.append(_normalize_layer(config, "config override"))
-    if run_overrides is not None:
-        layers.append(_normalize_layer(run_overrides, "run override"))
-
-    resolved = deepcopy(DEFAULT_SCENE_QUALITY_INTERFACE_CONFIG)
-    for layer in layers:
-        resolved = _deep_merge(resolved, layer)
-
-    # The global evidence-policy override sits between the built-in per-metric
-    # defaults (lowest) and an explicit per-metric override (highest), so it is
-    # accumulated separately rather than collapsed into the built-in defaults.
-    global_defaults: dict[str, Any] = {}
-    explicit_metric_policies: dict[str, dict[str, Any]] = {
-        name: {} for name in SUPPORTED_SCENE_QUALITY_METRICS
-    }
-    for layer in layers:
-        layer_defaults = layer.get("evidence_policy_defaults")
-        if layer_defaults is not None:
-            global_defaults = _deep_merge(
-                global_defaults, _as_object(layer_defaults, "evidence_policy_defaults")
-            )
-        layer_metrics = layer.get("metrics")
-        if layer_metrics is not None:
-            layer_metrics = _as_object(layer_metrics, "metrics")
-            for name in SUPPORTED_SCENE_QUALITY_METRICS:
-                metric_patch = layer_metrics.get(name)
-                if isinstance(metric_patch, dict) and metric_patch.get("evidence_policy") is not None:
-                    explicit_metric_policies[name] = _deep_merge(
-                        explicit_metric_policies[name],
-                        _as_object(metric_patch["evidence_policy"], f"metrics.{name}.evidence_policy"),
-                    )
-
-    _validate_top_level(resolved)
-    if not isinstance(resolved.get("evidence_policy_defaults"), dict):
-        raise SceneQualityInterfaceConfigError(
-            "l3_scene_quality.evidence_policy_defaults must be a JSON object"
-        )
-    metrics = resolved.get("metrics")
-    if not isinstance(metrics, dict):
-        raise SceneQualityInterfaceConfigError(
-            "l3_scene_quality.metrics must be a JSON object"
-        )
-    for metric_name in SUPPORTED_SCENE_QUALITY_METRICS:
-        metric_config = metrics.get(metric_name)
-        if not isinstance(metric_config, dict):
-            raise SceneQualityInterfaceConfigError(
-                f"l3_scene_quality.metrics.{metric_name} must be a JSON object"
-            )
-        _validate_metric_flags(metric_name, metric_config)
-        if metric_name in EXPERIMENTAL_SCENE_QUALITY_METRICS:
-            metric_config.update(
-                {
-                    "metric_status": EXPERIMENTAL_NON_SCORING,
-                    "activation_policy": "explicit_config_only",
-                    "included_in_canonical_aggregate": False,
-                }
-            )
-        built_in = DEFAULT_SCENE_QUALITY_INTERFACE_CONFIG["metrics"][metric_name]["evidence_policy"]
-        policy = _deep_merge(deepcopy(built_in), global_defaults)
-        policy = _deep_merge(policy, explicit_metric_policies[metric_name])
-        metric_config["evidence_policy"] = _validate_evidence_policy(metric_name, policy)
-        plan = metric_config.get("evidence_plan")
-        if plan is not None:
-            try:
-                validate_evidence_plan(
-                    plan, where=f"l3_scene_quality.metrics.{metric_name}.evidence_plan"
-                )
-            except Exception as exc:  # normalize to this module's error type
-                raise SceneQualityInterfaceConfigError(str(exc)) from exc
-    return resolved
 
 
 def evaluate_scene_quality_interfaces(
@@ -641,6 +139,9 @@ def evaluate_scene_quality_interfaces(
     camera_evidence_provider: Any = None,
     functional_evidence_planner: Any = None,
     functional_probe_evidence_provider: Any = None,
+    functional_prejudgement_evidence_source: Any = None,
+    discovery_identity_image_path: str | None = None,
+    discovery_identity_legend: dict[str, str] | None = None,
     vlm_judge: Any = None,
     authorized_deviations: Any = None,
     metric_applicability: dict[str, Any] | None = None,
@@ -649,7 +150,7 @@ def evaluate_scene_quality_interfaces(
     prompt: str | None = None,
     visual_style_spec: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Evaluate the three canonical L3 metrics from prepared visual evidence.
+    """Evaluate the five benchmark L3 metrics from prepared visual evidence.
 
     Rendering, camera selection, object grouping, and applicability remain
     external responsibilities. This function may call the injected evidence
@@ -697,11 +198,16 @@ def evaluate_scene_quality_interfaces(
                 f"{retired_evidence_keys}; use canonical metric names"
             )
     top_enabled = bool(resolved["enabled"])
+    functional_prejudgement_config = (
+        validate_functional_prejudgement_evidence_config(
+            resolved.get("functional_prejudgement_evidence")
+        )
+    )
 
     metric_reports: dict[str, dict[str, Any]] = {}
     for metric_name in SUPPORTED_SCENE_QUALITY_METRICS:
         metric_config = resolved["metrics"][metric_name]
-        metric_reports[metric_name] = _evaluate_metric(
+        metric_report = _evaluate_metric(
             metric_name=metric_name,
             metric_config=metric_config,
             top_enabled=top_enabled,
@@ -720,6 +226,16 @@ def evaluate_scene_quality_interfaces(
             functional_probe_evidence_provider=(
                 functional_probe_evidence_provider
             ),
+            functional_prejudgement_evidence_source=(
+                functional_prejudgement_evidence_source
+            ),
+            functional_prejudgement_evidence_config=(
+                functional_prejudgement_config
+            ),
+            discovery_identity_image_path=(
+                discovery_identity_image_path
+            ),
+            discovery_identity_legend=discovery_identity_legend,
             vlm_judge=vlm_judge,
             prompt=prompt,
             visual_style_spec=visual_style_spec,
@@ -737,7 +253,10 @@ def evaluate_scene_quality_interfaces(
                     "reason": "metric_applicability_not_declared",
                 }
             ),
+            prior_metric_reports=metric_reports,
         )
+        _attach_metric_forced_choice_audit(metric_report)
+        metric_reports[metric_name] = metric_report
 
     active = [entry for entry in metric_reports.values() if entry["affects_score"]]
     resolved_entries = [
@@ -816,19 +335,9 @@ def evaluate_scene_quality_interfaces(
         },
         "active_metrics": active_metric_names,
         "resolved_metrics": resolved_metric_names,
-        "experimental_metrics": {
-            metric_name: {
-                "status": EXPERIMENTAL_NON_SCORING,
-                "enabled": bool(
-                    resolved["metrics"][
-                        metric_name
-                    ]["enabled"]
-                ),
-                "activation_policy": "explicit_config_only",
-                "included_in_canonical_aggregate": False,
-            }
-            for metric_name in EXPERIMENTAL_SCENE_QUALITY_METRICS
-        },
+        # Retained as an empty wire-compatible field. All five metrics are
+        # benchmark metrics in the v2 profile.
+        "experimental_metrics": {},
         "active_metric_signature": (
             "+".join(active_metric_names) if active_metric_names else "none"
         ),
@@ -839,6 +348,9 @@ def evaluate_scene_quality_interfaces(
             SEMANTIC_PLACEMENT: list(SEMANTIC_PLACEMENT_METRICS),
         },
         "grouping_policy": grouping_policy_provenance(),
+        "functional_prejudgement_evidence_config": deepcopy(
+            functional_prejudgement_config
+        ),
         "final_vlm_context_contract": list(FINAL_VLM_CONTEXT_CONTRACT),
         "evidence_workflow_vocabulary": {
             "evidence_strategy": list(EVIDENCE_STRATEGIES),
@@ -857,6 +369,10 @@ def evaluate_scene_quality_interfaces(
             "minor_variation_or_subjective_preference": "valid",
             "otherwise_when_evidence_sufficient": "valid",
             "self_reported_confidence": "diagnostic_uncalibrated",
+            "semantic_placement_severity": {
+                "levels": list(PLACEMENT_SEVERITY_LEVELS),
+                "metric_verdict_and_score_unchanged": True,
+            },
         },
         "authorized_deviations": deepcopy(deviations),
         "authorized_deviation_precedence": (
@@ -867,6 +383,12 @@ def evaluate_scene_quality_interfaces(
         "l2_l3_boundary": {
             "l3_canonical_semantic_coherence": list(SEMANTIC_COHERENCE_METRICS),
             "l3_canonical_perceptual_visual_quality": list(PERCEPTUAL_VISUAL_QUALITY_METRICS),
+            "l3_canonical_functional_validity": list(
+                FUNCTIONAL_VALIDITY_METRICS
+            ),
+            "l3_canonical_semantic_placement": list(
+                SEMANTIC_PLACEMENT_METRICS
+            ),
             "l3_namespace": SCENE_QUALITY_INTERFACE_NAMESPACE,
             "reuses_l2_evidence": False,
             "l2_question": "Did the scene follow the prompt?",
@@ -883,22 +405,28 @@ def evaluate_scene_quality_interfaces(
                 "arrangement"
             ),
             "semantic_placement_owner": (
-                "Optional non-scoring L3 semantic placement judges whether an "
-                "otherwise physically possible location makes sense in the "
-                "scene; L1 remains the owner of collision, OOB, and support"
+                "L3 semantic placement judges direction-independent semantic "
+                "location plausibility; L1 remains the owner of collision, "
+                "OOB, and support, while functional usability remains owned "
+                "by L3 functional consistency"
+            ),
+            "functional_placement_adjacency_boundary": (
+                "action-required adjacency belongs to functional consistency; "
+                "context-only adjacency belongs to semantic placement"
             ),
         },
         "double_count_guard": {
             "affects_aggregate_score": bool(active),
             "reason": (
-                "Scale, grouped Object Pairing, and Style are owned and scored only "
-                "by canonical L3 Scene Quality."
+                "Scale, grouped Object Pairing, Style, Functional Consistency, "
+                "and Semantic Placement are owned and scored only by current "
+                "L3 Scene Quality."
             ),
         },
         "notes": [
-            "Semantic Coherence (scale/pairing) and Perceptual Visual Quality (style) are distinct subfamilies.",
+            "Semantic Coherence, Perceptual Visual Quality, Functional Validity, and Semantic Placement are distinct L3 subfamilies.",
             "Object pairing runs after external grouping and judges target category/role compatibility with both scene and local-group context.",
-            "Semantic placement is an opt-in non-scoring diagnostic for scene- and local-context location plausibility; it excludes collision and physical support.",
+            "Semantic placement is an active benchmark metric for scene- and local-context location plausibility; it excludes collision, physical support, and functional operability.",
             "Prompt-specified local functionality is owned by L2; explicit position/angle relations are owned by OOR/OAR.",
             "An L3 invalid verdict requires a significant, explicitly identified, visible metric-scoped defect; otherwise sufficient evidence resolves valid.",
             "Camera/evidence policies are configurable defaults resolved from a unified layered configuration.",
@@ -923,11 +451,16 @@ def _evaluate_metric(
     camera_evidence_provider: Any,
     functional_evidence_planner: Any,
     functional_probe_evidence_provider: Any,
+    functional_prejudgement_evidence_source: Any,
+    functional_prejudgement_evidence_config: dict[str, Any],
+    discovery_identity_image_path: str | None,
+    discovery_identity_legend: dict[str, str] | None,
     vlm_judge: Any,
     prompt: str | None,
     visual_style_spec: dict[str, Any] | None,
     authorized_deviations: list[dict[str, Any]],
     applicability: Any,
+    prior_metric_reports: dict[str, dict[str, Any]],
 ) -> dict[str, Any]:
     policy = deepcopy(metric_config["evidence_policy"])
     evidence_plan = (
@@ -944,17 +477,18 @@ def _evaluate_metric(
     global_discovery_then_group_local = bool(
         metric_name
         in {
-            "style_consistency",
             "functional_consistency",
             "semantic_placement_consistency",
         }
         and evidence_plan.get("evidence_strategy")
+        == "global_discovery_then_group_local"
+    )
+    style_global_screen_then_local = bool(
+        metric_name == "style_consistency"
+        and evidence_plan.get("evidence_strategy")
         in {
-            "global_discovery_then_group_local",
-            # Compatibility input only: the old conditional style router is
-            # normalized onto the mandatory global/local evaluator so no
-            # active global-local metric can retain short-circuit behavior.
             "global_screen_then_local",
+            "global_discovery_then_group_local",
         }
     )
     declared_scope = str(policy["camera_scope"])
@@ -1096,18 +630,15 @@ def _evaluate_metric(
         "metric_prompt_version": L3_METRIC_PROMPT_VERSION,
         "implemented": True,
         "enabled": enabled,
-        "metric_status": (
-            EXPERIMENTAL_NON_SCORING
-            if metric_name in EXPERIMENTAL_SCENE_QUALITY_METRICS
-            else "canonical_scoring"
+        "metric_status": str(
+            metric_config.get("metric_status") or "canonical_scoring"
         ),
-        "activation_policy": (
-            "explicit_config_only"
-            if metric_name in EXPERIMENTAL_SCENE_QUALITY_METRICS
-            else "profile_and_applicability"
+        "activation_policy": str(
+            metric_config.get("activation_policy")
+            or "profile_and_applicability"
         ),
-        "included_in_canonical_aggregate": (
-            metric_name in SCENE_QUALITY_INTERFACE_METRICS
+        "included_in_canonical_aggregate": bool(
+            metric_config.get("included_in_canonical_aggregate", True)
         ),
         "weight": float(metric_config.get("weight", 1.0)),
         "status": "unresolved",
@@ -1195,8 +726,9 @@ def _evaluate_metric(
     if applicable_state == "not_relevant":
         base.update(status="not_applicable", reason="metric_not_relevant_for_asset_policy")
         return base
-    base["affects_score"] = (
-        metric_name in SCENE_QUALITY_INTERFACE_METRICS
+    base["affects_score"] = bool(
+        base["included_in_canonical_aggregate"]
+        and metric_name in SCENE_QUALITY_INTERFACE_METRICS
     )
     if applicable_state == "pending":
         base.update(status="unresolved", reason="metric_applicability_pending")
@@ -1271,6 +803,35 @@ def _evaluate_metric(
         base.update(status="unresolved", reason=unavailable_reason)
         return base
 
+    if style_global_screen_then_local:
+        return _evaluate_style_global_then_group_local(
+            base=base,
+            metric_config=metric_config,
+            scene=scene,
+            object_ids=object_ids,
+            groups=groups if grouping_available else None,
+            grouping_report=grouping_report,
+            global_evidence=resolved_evidence,
+            render_evidence=render_evidence,
+            camera_evidence_provider=camera_evidence_provider,
+            vlm_judge=vlm_judge,
+            prompt=prompt,
+            visual_style_spec=visual_style_spec,
+            authorized_deviations=authorized_deviations,
+            build_judge_request=_judge_request,
+            call_judge=_call_scene_quality_judge,
+            apply_prompt_exemptions=_apply_prompt_exemptions,
+            normalize_judgement=_normalize_judgement,
+            resolve_group_evidence_packets=(
+                _resolve_group_evidence_packets
+            ),
+            resolve_metric_evidence=_resolve_metric_evidence,
+            group_packet_audit=_group_packet_audit,
+            evaluate_group_scoped_judgements=(
+                _evaluate_group_scoped_judgements
+            ),
+        )
+
     if global_discovery_then_group_local:
         return _evaluate_global_discovery_then_group_local(
             base=base,
@@ -1287,6 +848,16 @@ def _evaluate_metric(
             functional_probe_evidence_provider=(
                 functional_probe_evidence_provider
             ),
+            functional_prejudgement_evidence_source=(
+                functional_prejudgement_evidence_source
+            ),
+            functional_prejudgement_evidence_config=(
+                functional_prejudgement_evidence_config
+            ),
+            discovery_identity_image_path=(
+                discovery_identity_image_path
+            ),
+            discovery_identity_legend=discovery_identity_legend,
             vlm_judge=vlm_judge,
             prompt=prompt,
             visual_style_spec=visual_style_spec,
@@ -1302,6 +873,12 @@ def _evaluate_metric(
             group_packet_audit=_group_packet_audit,
             evaluate_group_scoped_judgements=(
                 _evaluate_group_scoped_judgements
+            ),
+            functional_ownership_ledger=(
+                _resolved_functional_ownership_for_placement(
+                    prior_metric_reports,
+                    object_ids=object_ids,
+                )
             ),
         )
 
@@ -1368,6 +945,73 @@ def _evaluate_metric(
             "complete": True,
         }
     return base
+
+
+def _resolved_functional_ownership_for_placement(
+    prior_metric_reports: dict[str, dict[str, Any]],
+    *,
+    object_ids: list[str],
+) -> dict[str, Any] | None:
+    """Expose ownership only after the whole Function metric is final."""
+
+    report = prior_metric_reports.get("functional_consistency")
+    if not isinstance(report, dict) or report.get("status") != "evaluated":
+        return None
+    ledger = report.get("functional_ownership_ledger")
+    if not isinstance(ledger, dict):
+        return None
+    return validate_functional_ownership_ledger(
+        ledger,
+        known_object_ids=object_ids,
+    )
+
+
+def _attach_metric_forced_choice_audit(
+    report: dict[str, Any],
+) -> None:
+    """Expose forced binary conclusions without parsing free-form reasons."""
+
+    events: list[dict[str, Any]] = []
+
+    def visit(value: Any) -> None:
+        if isinstance(value, dict):
+            for key, item in value.items():
+                if (
+                    key == "budget_exhaustion_forced_choice"
+                    and isinstance(item, dict)
+                    and item.get("applied") is True
+                ):
+                    events.append(deepcopy(item))
+                    continue
+                visit(item)
+        elif isinstance(value, list):
+            for item in value:
+                visit(item)
+
+    visit(report)
+    unique: list[dict[str, Any]] = []
+    fingerprints: set[str] = set()
+    for event in events:
+        fingerprint = json.dumps(
+            event,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        )
+        if fingerprint in fingerprints:
+            continue
+        fingerprints.add(fingerprint)
+        unique.append(event)
+    if not unique:
+        report["budget_exhaustion_forced_choice"] = {
+            "applied": False
+        }
+        return
+    report["budget_exhaustion_forced_choice"] = {
+        **deepcopy(unique[-1]),
+        "occurrence_count": len(unique),
+        "events": unique,
+    }
 
 
 def _dependency_state(
@@ -1869,12 +1513,15 @@ def _judge_request(
     routed_screen_claims: list[dict[str, Any]] | None = None,
     functional_probe_evidence: dict[str, Any] | None = None,
     placement_discovery: dict[str, Any] | None = None,
+    required_placement_checks: list[dict[str, Any]] | None = None,
+    functional_ownership_ledger: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     functional_visual_context = bool(
         metric_name == "functional_consistency"
         and evidence_phase
         in {
             "global_discovery",
+            "cross_group_relation_review",
             "group_local_review",
             "initial_visual",
         }
@@ -1908,11 +1555,40 @@ def _judge_request(
         for group in groups or []
         if not selected_group_ids or str(group.get("group_id")) in set(selected_group_ids)
     ]
+    required_functional_checks = (
+        (
+            functional_probe_evidence.get("required_checks")
+            if isinstance(functional_probe_evidence, dict)
+            else None
+        )
+        or []
+    )
+    placement_checks = [
+        deepcopy(item)
+        for item in required_placement_checks or []
+        if isinstance(item, dict)
+    ]
+    allow_scene_wide_functional_ownership = bool(
+        metric_name == "functional_consistency"
+        and any(
+            item.get("check_type") == "clearance"
+            for item in required_functional_checks
+            if isinstance(item, dict)
+        )
+    )
     allowed_defect_target_ids = list(
         dict.fromkeys(
             str(item)
             for item in (
-                selected_object_ids
+                (
+                    [
+                        object_record.get("id")
+                        for object_record in scene.get("objects") or []
+                        if isinstance(object_record, dict)
+                    ]
+                    if allow_scene_wide_functional_ownership
+                    else selected_object_ids
+                )
                 or [
                     object_record.get("id")
                     for object_record in scene.get("objects") or []
@@ -1955,6 +1631,10 @@ def _judge_request(
             functional_probe_evidence
         ),
         "placement_discovery": deepcopy(placement_discovery),
+        "required_placement_checks": placement_checks,
+        "functional_ownership_ledger": deepcopy(
+            functional_ownership_ledger
+        ),
         "structured_context_policy": (
             {
                 "object_fields": ["id", "category"],
@@ -1977,7 +1657,10 @@ def _judge_request(
             {
                 "unit": "object",
                 "target_ids_semantics": (
-                    "exact affected objects only; never the whole evidence "
+                    "exact scoring owner objects only; for Functional "
+                    "clearance this is the validated causal blocker or the "
+                    "affected object for self-layout, and for Placement this "
+                    "is the typed check subject; never use the whole evidence "
                     "group as shorthand"
                 ),
                 "cross_phase_deduplication_key": [
@@ -2035,6 +1718,127 @@ def _judge_request(
             judge_method="adjudicate_scene_quality",
         ),
     }
+    if (
+        metric_name == "functional_consistency"
+        and required_functional_checks
+    ):
+        request["required_functional_checks"] = deepcopy(
+            required_functional_checks
+        )
+        request["response_contract"]["functional_check_results"] = {
+            "required": True,
+            "exact_check_ids": [
+                str(item.get("check_id") or "")
+                for item in required_functional_checks
+                if isinstance(item, dict)
+            ],
+            "fields": [
+                "check_id",
+                "target_ids",
+                "observation_status",
+                "conclusion",
+                "reason",
+            ],
+            "conditional_invalid_clearance_fields": [
+                "affected_object_ids",
+                "cause_kind",
+                "causal_object_ids",
+                "scoring_target_ids",
+            ],
+            "observation_status": [
+                "observed",
+                "inferred_under_budget",
+                "missing",
+            ],
+            "conclusion": ["valid", "invalid", "unresolved"],
+            "invalid_defect_linkage": {
+                "field": "check_refs",
+                "coverage": "every_invalid_check_exactly_once",
+                "multiple_refs_allowed_only_for_one_physical_defect": True,
+            },
+        }
+    if metric_name == "semantic_placement_consistency":
+        request["response_contract"]["defects"]["fields"].extend(
+            [
+                "check_id",
+                "placement_check_type",
+                "severity",
+            ]
+        )
+        request["response_contract"]["defects"][
+            "allowed_field_values"
+        ] = {
+            "severity": list(PLACEMENT_SEVERITY_LEVELS),
+        }
+        request["placement_severity_policy"] = {
+            "schema_version": "semantic_placement_severity_v1",
+            "levels": list(PLACEMENT_SEVERITY_LEVELS),
+            "metric_verdict_unchanged": True,
+        }
+        request["placement_check_policy"] = {
+            "schema_version": "placement_check_results_v1",
+            "allowed_check_types": [
+                "support_and_height",
+                "scene_zone",
+                "contextual_anchor",
+            ],
+            "discovery_is_routing_prior_only": True,
+            "baseline_judge_may_register_discovery_miss": True,
+            "defect_owner": "subject_id_only",
+            "context_ids_are_non_owning": True,
+            "function_exclusion_requires_exact_event_ref": True,
+        }
+        request["response_contract"]["placement_check_results"] = {
+            "required": bool(placement_checks),
+            "exact_check_ids": [
+                str(item.get("check_id") or "")
+                for item in placement_checks
+            ],
+            "fields": [
+                "check_id",
+                "subject_id",
+                "context_ids",
+                "observation_status",
+                "conclusion",
+                "reason",
+            ],
+            "observation_status": [
+                "observed",
+                "inferred_under_budget",
+                "missing",
+            ],
+            "conclusion": [
+                "valid",
+                "invalid",
+                "excluded_function_owned",
+                "unresolved",
+            ],
+        }
+        request["response_contract"][
+            "judge_originated_placement_results"
+        ] = {
+            "purpose": "strictly_typed_discovery_miss_recovery",
+            "same_call_resolution_requires_current_evidence": True,
+            "insufficient_evidence_requires": (
+                "evidence_request.metadata.placement_check_proposal"
+            ),
+        }
+    if allow_scene_wide_functional_ownership:
+        request["allowed_external_evidence_target_ids"] = list(
+            allowed_defect_target_ids
+        )
+        request["causal_object_catalog"] = [
+            {
+                "id": str(item.get("id") or ""),
+                "category": str(
+                    item.get("category")
+                    or item.get("retrieval_category")
+                    or "unknown"
+                ),
+            }
+            for item in scene.get("objects") or []
+            if isinstance(item, dict) and item.get("id")
+        ]
     if group_scope is not None:
         scope_value = group_scope.to_dict()
         request["scene_summary"]["group_scope"] = deepcopy(
@@ -2163,6 +1967,68 @@ def _apply_prompt_exemptions(
         adjusted["prompt_authorized_defects"] = exempted
     if out_of_scope:
         adjusted["out_of_scope_defects"] = out_of_scope
+    removed_defects = [*exempted, *out_of_scope]
+    if removed_defects:
+        functional_rows = adjusted.get("functional_check_results")
+        if isinstance(functional_rows, list):
+            removed_check_refs = {
+                str(check_ref)
+                for defect in removed_defects
+                if isinstance(defect, dict)
+                for check_ref in defect.get("check_refs") or []
+                if str(check_ref).strip()
+            }
+            legacy_removed_target_sets = {
+                tuple(
+                    sorted(
+                        str(item)
+                        for item in defect.get("target_ids") or []
+                    )
+                )
+                for defect in removed_defects
+                if isinstance(defect, dict)
+                and not defect.get("check_refs")
+            }
+            for row in functional_rows:
+                if not isinstance(row, dict) or row.get(
+                    "conclusion"
+                ) != "invalid":
+                    continue
+                check_id = str(row.get("check_id") or "")
+                legacy_match = any(
+                    removed_targets
+                    and set(removed_targets)
+                    <= {
+                        str(item)
+                        for item in row.get("target_ids") or []
+                    }
+                    for removed_targets in legacy_removed_target_sets
+                )
+                if check_id in removed_check_refs or legacy_match:
+                    row["conclusion"] = "valid"
+                    row["reason"] = (
+                        "The observed condition is covered by an authorized "
+                        "deviation or excluded metric scope."
+                    )
+        placement_rows = adjusted.get("placement_check_results")
+        if isinstance(placement_rows, list):
+            removed_check_ids = {
+                str(defect.get("check_id"))
+                for defect in removed_defects
+                if isinstance(defect, dict) and defect.get("check_id")
+            }
+            for row in placement_rows:
+                if (
+                    isinstance(row, dict)
+                    and str(row.get("check_id") or "")
+                    in removed_check_ids
+                    and row.get("conclusion") == "invalid"
+                ):
+                    row["conclusion"] = "valid"
+                    row["reason"] = (
+                        "The observed condition is covered by an authorized "
+                        "deviation or excluded metric scope."
+                    )
     if (
         adjusted.get("verdict") == "invalid"
         and not retained
@@ -2296,6 +2162,8 @@ def _normalize_judgement(
                         "scene-quality VLM defect scope is outside the canonical "
                         f"{metric_name} boundary"
                     )
+                if metric_name == "semantic_placement_consistency":
+                    validate_placement_defect_severity(defect)
         return {
             "status": "evaluated",
             "score": 1.0 if verdict == "valid" else 0.0,
@@ -2304,121 +2172,6 @@ def _normalize_judgement(
     raise ValueError(
         "scene-quality VLM verdict must be valid, invalid, or ambiguous"
     )
-
-
-def _validate_top_level(config: dict[str, Any]) -> None:
-    for flag in ("enabled", "implemented"):
-        if not isinstance(config.get(flag), bool):
-            raise SceneQualityInterfaceConfigError(
-                f"l3_scene_quality.{flag} must be boolean"
-            )
-    if config.get("implemented") is not True:
-        raise SceneQualityInterfaceConfigError(
-            "canonical l3_scene_quality implemented must remain true"
-        )
-    version = config.get("version")
-    if not isinstance(version, str) or not version.strip():
-        raise SceneQualityInterfaceConfigError(
-            "l3_scene_quality.version must be a non-empty string"
-        )
-
-
-def _validate_metric_flags(metric_name: str, metric_config: dict[str, Any]) -> None:
-    for flag in ("enabled", "implemented"):
-        if not isinstance(metric_config.get(flag), bool):
-            raise SceneQualityInterfaceConfigError(
-                f"l3_scene_quality.metrics.{metric_name}.{flag} must be boolean"
-            )
-    if metric_config.get("implemented") is not True:
-        raise SceneQualityInterfaceConfigError(
-            f"canonical l3_scene_quality metric {metric_name} implemented must remain true"
-        )
-    weight = metric_config.get("weight", 1.0)
-    if (
-        isinstance(weight, bool)
-        or not isinstance(weight, (int, float))
-        or not math.isfinite(float(weight))
-        or float(weight) < 0.0
-    ):
-        raise SceneQualityInterfaceConfigError(
-            f"l3_scene_quality.metrics.{metric_name}.weight must be non-negative"
-        )
-
-
-def _validate_evidence_policy(metric_name: str, policy: dict[str, Any]) -> dict[str, Any]:
-    if not isinstance(policy, dict):
-        raise SceneQualityInterfaceConfigError(
-            f"l3_scene_quality.metrics.{metric_name}.evidence_policy must be a JSON object"
-        )
-    scope = policy.get("camera_scope")
-    if scope not in CAMERA_SCOPES:
-        raise SceneQualityInterfaceConfigError(
-            f"{metric_name}.evidence_policy.camera_scope must be one of {list(CAMERA_SCOPES)}, got {scope!r}"
-        )
-    mode = policy.get("camera_mode")
-    if mode not in CAMERA_MODES:
-        raise SceneQualityInterfaceConfigError(
-            f"{metric_name}.evidence_policy.camera_mode must be one of {list(CAMERA_MODES)}, got {mode!r}"
-        )
-    selector = policy.get("selector")
-    if selector not in EVIDENCE_SELECTORS:
-        raise SceneQualityInterfaceConfigError(
-            f"{metric_name}.evidence_policy.selector must be one of {list(EVIDENCE_SELECTORS)}, got {selector!r}"
-        )
-    presentation = policy.get("presentation")
-    if presentation not in PRESENTATIONS:
-        raise SceneQualityInterfaceConfigError(
-            f"{metric_name}.evidence_policy.presentation must be one of {list(PRESENTATIONS)}, got {presentation!r}"
-        )
-    budget = policy.get("image_budget")
-    if isinstance(budget, bool) or not isinstance(budget, int) or budget < 1:
-        raise SceneQualityInterfaceConfigError(
-            f"{metric_name}.evidence_policy.image_budget must be a positive integer, got {budget!r}"
-        )
-    for quota_name in (
-        "global_image_budget",
-        "scoped_image_budget",
-    ):
-        quota = policy.get(quota_name)
-        if quota is None:
-            continue
-        if (
-            isinstance(quota, bool)
-            or not isinstance(quota, int)
-            or quota < 0
-        ):
-            raise SceneQualityInterfaceConfigError(
-                f"{metric_name}.evidence_policy.{quota_name} "
-                "must be a non-negative integer"
-            )
-        if quota > budget:
-            raise SceneQualityInterfaceConfigError(
-                f"{metric_name}.evidence_policy.{quota_name} "
-                "cannot exceed image_budget"
-            )
-    if not isinstance(policy.get("include_global_context"), bool):
-        raise SceneQualityInterfaceConfigError(
-            f"{metric_name}.evidence_policy.include_global_context must be boolean"
-        )
-    image_order = policy.get("image_order")
-    if image_order is not None:
-        if not isinstance(image_order, list) or not image_order:
-            raise SceneQualityInterfaceConfigError(
-                f"{metric_name}.evidence_policy.image_order must be null or a non-empty list"
-            )
-        for token in image_order:
-            if token not in IMAGE_ORDER_TOKENS:
-                raise SceneQualityInterfaceConfigError(
-                    f"{metric_name}.evidence_policy.image_order token {token!r} must be one of "
-                    f"{list(IMAGE_ORDER_TOKENS)}"
-                )
-    camera_pose_mode = policy.get("camera_pose_mode")
-    if camera_pose_mode is not None and camera_pose_mode not in CAMERA_POSE_MODES:
-        raise SceneQualityInterfaceConfigError(
-            f"{metric_name}.evidence_policy.camera_pose_mode must be null or one of "
-            f"{list(CAMERA_POSE_MODES)}, got {camera_pose_mode!r}"
-        )
-    return policy
 
 
 def _scene_object_ids(scene: dict[str, Any]) -> list[str]:
@@ -2518,49 +2271,5 @@ def _normalize_groups(
     return normalized
 
 
-def _normalize_layer(layer: Any, label: str) -> dict[str, Any]:
-    """Copy one canonical config layer and reject retired surface names."""
-
-    obj = _as_object(layer, label)
-    retired_namespaces = sorted(set(obj) & set(_RETIRED_CONFIG_NAMESPACES))
-    if retired_namespaces:
-        raise SceneQualityInterfaceConfigError(
-            "retired L3 config namespaces are not accepted: "
-            f"{retired_namespaces}; pass the canonical config directly"
-        )
-    result = deepcopy(obj)
-    metrics = result.get("metrics")
-    if isinstance(metrics, dict):
-        retired_metrics = sorted(set(metrics) & set(_RETIRED_METRIC_NAMES))
-        if retired_metrics:
-            raise SceneQualityInterfaceConfigError(
-                "retired L3 metric names are not accepted: "
-                f"{retired_metrics}; use 'object_pairing_consistency'"
-            )
-    return result
-
-
 def _plan_uses_grouping(plan: dict[str, Any] | None) -> bool:
     return bool(isinstance(plan, dict) and isinstance(plan.get("local_policy"), dict))
-
-
-def _as_object(value: Any, label: str) -> dict[str, Any]:
-    if not isinstance(value, dict):
-        raise SceneQualityInterfaceConfigError(
-            f"l3_scene_quality {label} must be a JSON object"
-        )
-    return value
-
-
-def _deep_merge(base: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
-    if not isinstance(patch, dict):
-        raise SceneQualityInterfaceConfigError(
-            "l3_scene_quality config patch must be a JSON object"
-        )
-    result = deepcopy(base)
-    for key, value in patch.items():
-        if isinstance(value, dict) and isinstance(result.get(key), dict):
-            result[key] = _deep_merge(result[key], value)
-        else:
-            result[key] = deepcopy(value)
-    return result

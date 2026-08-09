@@ -8,7 +8,8 @@ from benchmark.evaluator.evidence_contract import canonical_hierarchy
 from benchmark.nl_scene.converter import COARSE_GRAINED, FINE_GRAINED, PROMPT_GRANULARITIES
 
 
-CANONICAL_PROFILE_VERSION = "canonical_scene_evaluation_v1"
+CANONICAL_PROFILE_VERSION = "canonical_scene_evaluation_v2"
+PREVIOUS_CANONICAL_PROFILE_VERSION = "canonical_scene_evaluation_v1"
 
 # Kept only so the checked-in Game profile can remain byte-for-byte unchanged.
 # Non-game legacy profiles are rejected and never enter the active scene
@@ -34,7 +35,18 @@ SCORING_LAYERS = (L1, L2, L3, L4)
 
 L1_METRICS = ("collision", "oob", "support", "navigability", "accessibility")
 L2_METRICS = ("oor", "oar", "functional_semantic_fidelity")
-L3_METRICS = ("scale_consistency", "object_pairing_consistency", "style_consistency")
+PREVIOUS_L3_METRICS = (
+    "scale_consistency",
+    "object_pairing_consistency",
+    "style_consistency",
+)
+L3_METRICS = (
+    "scale_consistency",
+    "object_pairing_consistency",
+    "style_consistency",
+    "functional_consistency",
+    "semantic_placement_consistency",
+)
 
 PROTOCOL_OWNED_METRIC_KEYS = {"enabled", "official_mode", "detector_only"}
 
@@ -94,14 +106,26 @@ DEFAULT_EVALUATION_PROFILE: dict[str, Any] = {
     L3: {
         "enabled": True,
         "metrics": {
-            "scale_consistency": {"enabled": True, "weight": 1.0 / 3.0},
+            "scale_consistency": {"enabled": True, "weight": 1.0 / 5.0},
             "object_pairing_consistency": {
                 "enabled": True,
-                "weight": 1.0 / 3.0,
+                "weight": 1.0 / 5.0,
                 "requires": ["object_grouping_report"],
                 "scope": "group_member_category_and_role_compatibility_only",
             },
-            "style_consistency": {"enabled": True, "weight": 1.0 / 3.0},
+            "style_consistency": {"enabled": True, "weight": 1.0 / 5.0},
+            "functional_consistency": {
+                "enabled": True,
+                "weight": 1.0 / 5.0,
+                "requires": ["object_grouping_report"],
+                "scope": "ordinary_static_visual_usability",
+            },
+            "semantic_placement_consistency": {
+                "enabled": True,
+                "weight": 1.0 / 5.0,
+                "requires": ["object_grouping_report"],
+                "scope": "semantic_location_plausibility_only",
+            },
         },
     },
     L4: {
@@ -145,6 +169,12 @@ def is_legacy_game_profile(value: Any) -> bool:
 def resolve_evaluation_profile(value: dict[str, Any] | None = None) -> dict[str, Any]:
     if is_legacy_game_profile(value):
         return _validate_legacy_game_profile(deepcopy(value))
+    if (
+        isinstance(value, dict)
+        and value.get("profile_version")
+        == PREVIOUS_CANONICAL_PROFILE_VERSION
+    ):
+        return _validate_previous_canonical_profile(deepcopy(value))
     if isinstance(value, dict) and (
         value.get("profile_version") == LEGACY_PROFILE_VERSION
         or any(
@@ -201,6 +231,57 @@ def resolve_evaluation_profile(value: dict[str, Any] | None = None) -> dict[str,
     if profile[L2].get("activation") != "specification_contract":
         raise ValueError(f"{L2}.activation must be 'specification_contract'")
     _validate_metric_layer(profile[L3], L3, L3_METRICS)
+    _validate_l4(profile[L4])
+    return profile
+
+
+def _validate_previous_canonical_profile(
+    profile: dict[str, Any],
+) -> dict[str, Any]:
+    """Read the frozen three-metric v1 profile without changing its meaning."""
+
+    if profile.get("status") != "frozen":
+        raise ValueError("canonical evaluation profile status must be 'frozen'")
+    layer_weights = profile.get("layer_weights")
+    if not isinstance(layer_weights, dict) or set(layer_weights) != set(
+        SCORING_LAYERS
+    ):
+        raise ValueError(
+            f"layer_weights must contain exactly {list(SCORING_LAYERS)}"
+        )
+    _validate_weight_mapping(
+        layer_weights,
+        "layer_weights",
+        require_sum=1.0,
+    )
+    expected = {
+        "profile_version",
+        "status",
+        "layer_weights",
+        *CANONICAL_LAYERS,
+    }
+    if set(profile) != expected:
+        raise ValueError(
+            "previous canonical evaluation profile must retain its exact "
+            "top-level v1 shape"
+        )
+    _validate_l0(profile[L0])
+    _validate_metric_layer(profile[L1], L1, L1_METRICS)
+    _validate_structural_metric_config(
+        profile[L1].get("metric_config"),
+        set(L1_METRICS),
+        prefix=f"{L1}.metric_config",
+    )
+    _validate_metric_layer(profile[L2], L2, L2_METRICS)
+    if profile[L2].get("activation") != "specification_contract":
+        raise ValueError(
+            f"{L2}.activation must be 'specification_contract'"
+        )
+    _validate_metric_layer(
+        profile[L3],
+        L3,
+        PREVIOUS_L3_METRICS,
+    )
     _validate_l4(profile[L4])
     return profile
 

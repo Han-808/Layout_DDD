@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from copy import deepcopy
 from typing import Any
 
@@ -56,6 +56,10 @@ def validate_canonical_metric_response(
     allowed_scopes: Iterable[str] = (),
     allowed_missing_observations: Iterable[str] = (),
     allowed_target_ids: Iterable[str] = (),
+    required_defect_fields: Iterable[str] = (),
+    allowed_defect_field_values: (
+        Mapping[str, Iterable[str]] | None
+    ) = None,
 ) -> dict[str, Any]:
     """Validate the strict canonical metric verdict contract."""
 
@@ -87,6 +91,20 @@ def validate_canonical_metric_response(
         )
     allowed = set(allowed_scopes)
     allowed_targets = set(allowed_target_ids)
+    required_fields = {
+        str(field).strip()
+        for field in required_defect_fields
+        if str(field).strip()
+    }
+    field_values = {
+        str(field): {
+            str(item)
+            for item in values
+        }
+        for field, values in (
+            allowed_defect_field_values or {}
+        ).items()
+    }
     for defect in defects:
         if not isinstance(defect, dict):
             raise ValueError(
@@ -127,6 +145,29 @@ def validate_canonical_metric_response(
             raise ValueError(
                 "canonical metric defects must identify the defective relation"
             )
+        missing_fields = sorted(
+            field
+            for field in required_fields
+            if field not in defect
+            or (
+                isinstance(defect.get(field), str)
+                and not str(defect.get(field) or "").strip()
+            )
+            or defect.get(field) is None
+        )
+        if missing_fields:
+            raise ValueError(
+                "canonical metric defects are missing required fields: "
+                f"{missing_fields}"
+            )
+        for field, allowed_values in field_values.items():
+            if field not in defect:
+                continue
+            if str(defect[field]) not in allowed_values:
+                raise ValueError(
+                    f"canonical metric defect {field} must be one of "
+                    f"{sorted(allowed_values)}, got {defect[field]!r}"
+                )
     missing_evidence = result.get("missing_evidence")
     if not isinstance(missing_evidence, list):
         raise ValueError("canonical metric missing_evidence must be a JSON list")

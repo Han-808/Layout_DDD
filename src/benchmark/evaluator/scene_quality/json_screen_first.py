@@ -70,6 +70,12 @@ def evaluate_json_screen_then_group_visual(
     base["evidence_request"]["evidence_phase"] = "json_screen"
     base["vlm_invoked"] = True
     base["judge_call_count"] = 1
+    audit_records = getattr(vlm_judge, "audit_records", None)
+    audit_start = (
+        len(audit_records)
+        if isinstance(audit_records, list)
+        else None
+    )
     try:
         screen_raw = call_judge(vlm_judge, screen_request)
         screen_adjusted = apply_prompt_exemptions(
@@ -92,8 +98,18 @@ def evaluate_json_screen_then_group_visual(
                 "error": str(exc),
             },
         )
+        _attach_json_screen_audit(
+            base,
+            audit_records=audit_records,
+            audit_start=audit_start,
+        )
         return base
 
+    _attach_json_screen_audit(
+        base,
+        audit_records=audit_records,
+        audit_start=audit_start,
+    )
     screen_record = _json_screen_record(
         screen_adjusted,
         metric_name=metric_name,
@@ -405,6 +421,25 @@ def evaluate_json_screen_then_group_visual(
     result["router_state"] = router_state
     result["route"] = route
     return result
+
+
+def _attach_json_screen_audit(
+    report: dict[str, Any],
+    *,
+    audit_records: Any,
+    audit_start: int | None,
+) -> None:
+    """Persist the already-produced audit without affecting routing."""
+
+    if (
+        audit_start is not None
+        and isinstance(audit_records, list)
+        and len(audit_records) > audit_start
+        and isinstance(audit_records[-1], dict)
+    ):
+        report["json_screen_camera_control_audit"] = deepcopy(
+            audit_records[-1]
+        )
 
 
 def _json_screen_record(

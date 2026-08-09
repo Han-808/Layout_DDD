@@ -222,7 +222,7 @@ class GroupingResult:
         )
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        result = {
             "object_groups": [
                 group.to_dict() for group in self.object_groups
             ],
@@ -240,6 +240,12 @@ class GroupingResult:
             "object_catalog": list(deepcopy(self.object_catalog)),
             "provenance": deepcopy(self.provenance),
         }
+        fallback = self.provenance.get("grouping_fallback")
+        if isinstance(fallback, dict):
+            result["fallback_used"] = (
+                fallback.get("fallback_used") is True
+            )
+        return result
 
 
 @runtime_checkable

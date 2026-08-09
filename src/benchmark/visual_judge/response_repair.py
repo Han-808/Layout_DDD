@@ -19,20 +19,33 @@ Return JSON only."""
 
 _CANONICAL_SCHEMA_REPAIR_PROMPT = """Your previous response violated the
 canonical metric response contract. Use exactly the same visual evidence and
-structured context. This is schema repair, not a second adjudication. Preserve
-the original evidence_status, verdict, affected target IDs, evidence-request
-targets, and substantive explanation. Judge only the requested metric and use
-only the allowed defect scopes, target IDs, and Camera DSL observation tokens
-from the previous user message. Do not relabel an out-of-scope issue as an
-in-scope defect and do not change invalid to valid, valid to invalid, or either
-binary decision to ambiguous. Return one object with evidence_status sufficient
-or insufficient; verdict valid, invalid, or ambiguous; confidence in [0,1]; a
-non-empty reason;
+structured context. This is contract reconciliation, not a second
+adjudication. Preserve coherent typed check conclusions, defect target IDs,
+evidence-request targets, and substantive explanations. If the response
+envelope contradicts its explicit typed rows, reconcile only the envelope: a
+typed invalid row with its explicit defect requires verdict=invalid even when
+other rows remain unresolved; verdict=valid requires every required row to
+resolve without a defect; insufficient evidence requires verdict=ambiguous;
+sufficient evidence must clear missing_evidence and evidence_request. Judge only the requested metric
+and use only the allowed defect scopes, target IDs,
+and Camera DSL observation tokens from the previous user message. Do not
+relabel an out-of-scope issue or invent a new defect. Return one object with
+evidence_status sufficient or insufficient; verdict valid, invalid, or
+ambiguous; confidence in [0,1]; a non-empty reason;
 missing_evidence as a list; defects as a list; and evidence_request null unless
-evidence_status is insufficient. Invalid requires at least one explicit
+evidence_status is insufficient. If the original request requires
+functional_check_results or placement_check_results, include every exact
+required check ID once and preserve its target/subject/context IDs, observation
+status, and conclusion. Every invalid required Functional check must appear in
+exactly one defect.check_refs list; one physical defect may reference multiple
+invalid checks. Preserve the semantics of judge-originated Placement
+checks, but assign unique proposal IDs and canonical typed check IDs when the
+original identifiers collide. Preserve exact Function ownership references and
+required causal attribution fields for an invalid clearance check. Invalid
+requires at least one explicit
 in-scope defect. If the original decision cannot be represented without
-changing its semantics, repeat the original decision rather than re-judging it;
-the caller will fail closed. Return JSON only."""
+changing typed conclusions or defect identity, the caller will fail closed.
+Return JSON only."""
 
 _FORCED_CHOICE_CANONICAL_SCHEMA_REPAIR_PROMPT = """Your previous response
 violated the terminal evidence-acquisition response contract. No more evidence can
@@ -41,6 +54,13 @@ choose the more defensible binary conclusion. Return one JSON object with
 evidence_status="sufficient"; verdict exactly "valid" or "invalid"; confidence
 in [0,1]; a non-empty reason; missing_evidence=[]; and
 evidence_request=null. verdict="valid" requires defects=[].
+If functional_check_results or placement_check_results are required, include
+every exact check ID once.
+Every invalid required Functional check must appear in exactly one
+defect.check_refs list; one physical defect may reference multiple checks.
+Use inferred_under_budget when the remaining views support only the required
+terminal choice; do not omit a check. An invalid clearance check must retain
+affected, causal, and scoring object IDs plus cause_kind.
 verdict="invalid" requires one or more explicit in-scope defects using only the
 allowed scopes and target IDs. "ambiguous", "insufficient", and any request for
 more evidence are forbidden. Express residual uncertainty through confidence
@@ -297,12 +317,37 @@ def _canonical_semantic_signature(
 
     signature: dict[str, Any] = {}
     evidence_status = value.get("evidence_status")
-    if evidence_status in {"sufficient", "insufficient"}:
+    semantic_invalid = _has_explicit_typed_invalid_defect(value)
+    missing_evidence = value.get("missing_evidence")
+    evidence_request = value.get("evidence_request")
+    evidence_envelope_conflict = bool(
+        (
+            evidence_status == "insufficient"
+            and semantic_invalid
+        )
+        or (
+            evidence_status == "sufficient"
+            and (
+                bool(missing_evidence)
+                or isinstance(evidence_request, dict)
+            )
+        )
+    )
+    if (
+        evidence_status in {"sufficient", "insufficient"}
+        and not evidence_envelope_conflict
+    ):
         signature["evidence_status"] = evidence_status
     verdict = value.get("verdict")
-    if verdict in {"valid", "invalid", "ambiguous"}:
+    verdict_envelope_conflict = bool(
+        semantic_invalid and verdict != "invalid"
+    )
+    if (
+        verdict in {"valid", "invalid", "ambiguous"}
+        and not verdict_envelope_conflict
+    ):
         signature["verdict"] = verdict
-    if verdict == "invalid":
+    if verdict == "invalid" or semantic_invalid:
         defects = value.get("defects")
         if isinstance(defects, list):
             signature["defect_count"] = len(defects)
@@ -316,8 +361,13 @@ def _canonical_semantic_signature(
             )
             if len(scoped_claims) == len(defects):
                 signature["defect_scopes_and_targets"] = scoped_claims
-    if verdict == "ambiguous" or evidence_status == "insufficient":
-        evidence_request = value.get("evidence_request")
+            linked_claims = _defect_check_ref_claims(defects)
+            if linked_claims:
+                signature["defect_check_refs"] = linked_claims
+    if (
+        (verdict == "ambiguous" or evidence_status == "insufficient")
+        and not semantic_invalid
+    ):
         if isinstance(evidence_request, dict):
             target_ids = _normalized_text_set(
                 evidence_request.get("target_ids")
@@ -329,7 +379,98 @@ def _canonical_semantic_signature(
                 signature["evidence_request_target_ids"] = target_ids
             if observations:
                 signature["missing_observations"] = observations
+    functional_rows = value.get("functional_check_results")
+    if isinstance(functional_rows, list) and all(
+        isinstance(item, dict) for item in functional_rows
+    ):
+        signature["functional_check_results"] = sorted(
+            (
+                str(item.get("check_id") or ""),
+                tuple(
+                    sorted(
+                        str(target_id)
+                        for target_id in item.get("target_ids") or []
+                    )
+                ),
+                str(item.get("observation_status") or ""),
+                str(item.get("conclusion") or ""),
+                tuple(
+                    sorted(
+                        str(target_id)
+                        for target_id in item.get(
+                            "affected_object_ids"
+                        )
+                        or []
+                    )
+                ),
+                str(item.get("cause_kind") or ""),
+                tuple(
+                    sorted(
+                        str(target_id)
+                        for target_id in item.get(
+                            "causal_object_ids"
+                        )
+                        or []
+                    )
+                ),
+                tuple(
+                    sorted(
+                        str(target_id)
+                        for target_id in item.get(
+                            "scoring_target_ids"
+                        )
+                        or []
+                    )
+                ),
+            )
+            for item in functional_rows
+        )
+    placement_rows = value.get("placement_check_results")
+    if isinstance(placement_rows, list) and all(
+        isinstance(item, dict) for item in placement_rows
+    ):
+        signature["placement_check_results"] = sorted(
+            (
+                str(item.get("check_id") or ""),
+                str(item.get("subject_id") or ""),
+                tuple(
+                    sorted(
+                        str(context_id)
+                        for context_id in item.get("context_ids") or []
+                    )
+                ),
+                str(item.get("observation_status") or ""),
+                str(item.get("conclusion") or ""),
+                str(item.get("function_event_ref") or ""),
+                bool(item.get("same_physical_event") is True),
+            )
+            for item in placement_rows
+        )
     return signature
+
+
+def _has_explicit_typed_invalid_defect(value: dict[str, Any]) -> bool:
+    """Return whether typed rows already establish one explicit defect.
+
+    This does not infer a decision from prose.  It only recognizes a schema
+    envelope that contradicts an already emitted invalid typed row plus an
+    explicit defect record, allowing the repair retry to reconcile the outer
+    verdict without re-adjudicating the scene.
+    """
+
+    defects = value.get("defects")
+    if not isinstance(defects, list) or not any(
+        isinstance(item, dict) for item in defects
+    ):
+        return False
+    return any(
+        isinstance(row, dict) and row.get("conclusion") == "invalid"
+        for field in (
+            "functional_check_results",
+            "placement_check_results",
+        )
+        for row in (value.get(field) or [])
+    )
 
 
 def _binary_semantic_signature(
@@ -362,11 +503,29 @@ def _require_semantic_preservation(
     before: dict[str, Any],
     after: dict[str, Any],
 ) -> None:
-    changed = {
-        key: {"before": deepcopy(expected), "after": deepcopy(after.get(key))}
-        for key, expected in before.items()
-        if after.get(key) != expected
-    }
+    changed: dict[str, Any] = {}
+    for key, expected in before.items():
+        actual = after.get(key)
+        if key in {
+            "functional_check_results",
+            "placement_check_results",
+        }:
+            # A schema retry may add omitted required rows, but every
+            # structured check claim already made by the first response must
+            # remain byte-for-byte equivalent at the semantic tuple level.
+            if not isinstance(actual, list) or any(
+                row not in actual for row in expected
+            ):
+                changed[key] = {
+                    "before": deepcopy(expected),
+                    "after": deepcopy(actual),
+                }
+            continue
+        if actual != expected:
+            changed[key] = {
+                "before": deepcopy(expected),
+                "after": deepcopy(actual),
+            }
     if changed:
         raise ValueError(
             "response schema repair changed locked semantic fields: "
@@ -412,6 +571,24 @@ def _defect_scopes_and_targets(
     return tuple(sorted(claims))
 
 
+def _defect_check_ref_claims(
+    value: Any,
+) -> tuple[tuple[tuple[str, ...], tuple[str, ...]], ...]:
+    """Lock explicit typed-check linkage while allowing repair to add it."""
+
+    if not isinstance(value, list):
+        return ()
+    claims: list[tuple[tuple[str, ...], tuple[str, ...]]] = []
+    for defect in value:
+        if not isinstance(defect, dict):
+            continue
+        check_refs = _normalized_text_set(defect.get("check_refs"))
+        target_ids = _normalized_text_set(defect.get("target_ids"))
+        if check_refs and target_ids:
+            claims.append((target_ids, check_refs))
+    return tuple(sorted(claims))
+
+
 def _restore_canonical_natural_language(
     initial: dict[str, Any],
     repaired: dict[str, Any],
@@ -432,7 +609,10 @@ def _restore_canonical_natural_language(
         restored_fields=restored_fields,
     )
 
-    if initial.get("verdict") == "invalid":
+    if (
+        initial.get("verdict") == "invalid"
+        or _has_explicit_typed_invalid_defect(initial)
+    ):
         initial_defects = initial.get("defects")
         repaired_defects = restored.get("defects")
         if (
@@ -467,6 +647,10 @@ def _restore_canonical_natural_language(
                 raise ValueError(
                     "schema repair cannot invent missing defect semantics"
                 )
+            original_check_id = str(original.get("check_id") or "")
+            original_check_refs = _normalized_text_set(
+                original.get("check_refs")
+            )
             match_index = next(
                 (
                     candidate_index
@@ -474,6 +658,18 @@ def _restore_canonical_natural_language(
                     if isinstance(candidate, dict)
                     and _normalized_text_set(candidate.get("target_ids"))
                     == original_targets
+                    and (
+                        not original_check_id
+                        or str(candidate.get("check_id") or "")
+                        == original_check_id
+                    )
+                    and (
+                        not original_check_refs
+                        or _normalized_text_set(
+                            candidate.get("check_refs")
+                        )
+                        == original_check_refs
+                    )
                 ),
                 None,
             )
@@ -482,7 +678,19 @@ def _restore_canonical_natural_language(
                     "schema repair changed defect target identity"
                 )
             candidate = deepcopy(remaining.pop(match_index))
-            for field_name in ("target_ids", "relation", "reason"):
+            is_placement_response = isinstance(
+                initial.get("placement_check_results"),
+                list,
+            ) or isinstance(
+                initial.get("judge_originated_placement_results"),
+                list,
+            )
+            fields_to_restore = (
+                ("target_ids", "reason")
+                if is_placement_response
+                else ("target_ids", "relation", "reason")
+            )
+            for field_name in fields_to_restore:
                 original_value = deepcopy(original.get(field_name))
                 if candidate.get(field_name) != original_value:
                     restored_fields.append(

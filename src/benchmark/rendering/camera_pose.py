@@ -232,6 +232,51 @@ def generate_usable_surface_side_bank(
 ) -> list[dict[str, Any]]:
     """Render-facing, deterministic previews of the four object-local sides."""
 
+    return _generate_usable_surface_side_bank(
+        scene,
+        target_id=target_id,
+        elevation_degrees=10.0,
+        distance_scale=1.0,
+        context_margin_m=0.45,
+        preferred_lens_mm=45.0,
+        policy_source="usable_surface_local_side_bank_v1",
+    )
+
+
+def generate_usable_surface_side_repair_bank(
+    scene: dict[str, Any],
+    *,
+    target_id: str,
+) -> list[dict[str, Any]]:
+    """Return one bounded deterministic comparison bank after ambiguity.
+
+    The repair bank preserves the same four trusted object-local side IDs and
+    camera rays.  A higher elevation and tighter context expose top, seat,
+    opening, control, and back geometry that a low side-on preview can hide.
+    It remains visual evidence only and never infers a usable side or verdict.
+    """
+
+    return _generate_usable_surface_side_bank(
+        scene,
+        target_id=target_id,
+        elevation_degrees=24.0,
+        distance_scale=1.0,
+        context_margin_m=0.30,
+        preferred_lens_mm=52.0,
+        policy_source="usable_surface_elevated_detail_repair_v1",
+    )
+
+
+def _generate_usable_surface_side_bank(
+    scene: dict[str, Any],
+    *,
+    target_id: str,
+    elevation_degrees: float,
+    distance_scale: float,
+    context_margin_m: float,
+    preferred_lens_mm: float,
+    policy_source: str,
+) -> list[dict[str, Any]]:
     if not isinstance(scene, dict):
         raise TypeError("usable-surface side bank requires a scene")
     object_id = str(target_id or "").strip()
@@ -255,11 +300,11 @@ def generate_usable_surface_side_bank(
     desired_distance = max(
         1.0,
         min(4.0, float(max(extent[0], extent[1], extent[2])) * 2.2),
-    )
+    ) * max(0.5, float(distance_scale))
     framing_bounds = _functional_probe_framing_bounds(
         bounds,
         room=room,
-        context_margin_m=0.45,
+        context_margin_m=context_margin_m,
     )
     scene_objects = _target_objects(scene, [])
     result: list[dict[str, Any]] = []
@@ -277,7 +322,7 @@ def generate_usable_surface_side_bank(
         azimuth = math.degrees(
             math.atan2(float(world_axis[1]), float(world_axis[0]))
         ) % 360.0
-        elevation = 10.0
+        elevation = float(elevation_degrees)
         direction = _direction_from_angles(azimuth, elevation)
         placement = _place_on_feasible_ray(
             target=target,
@@ -305,7 +350,7 @@ def generate_usable_surface_side_bank(
             location=location,
             target=target,
             bounds=framing_bounds,
-            preferred_lens_mm=45.0,
+            preferred_lens_mm=preferred_lens_mm,
             aspect_ratio=16.0 / 9.0,
         )
         result.append(
@@ -332,7 +377,7 @@ def generate_usable_surface_side_bank(
                     _vector_list(framing_bounds[0]),
                     _vector_list(framing_bounds[1]),
                 ],
-                "policy_source": "usable_surface_local_side_bank_v1",
+                "policy_source": policy_source,
                 "candidate_policy": "local",
                 "technical_feasibility": True,
                 "local_side_id": side_id,
@@ -956,6 +1001,21 @@ def _generate_feasible_camera_pose_candidates(
                     "local_proxy_framing_context_rank_v1"
                 ),
             )
+    if (
+        functional_probe is not None
+        and not candidates
+        and str(functional_probe.get("route_scope") or "")
+        == "cross_group"
+        and str(functional_probe.get("kind") or "")
+        == "functional_correspondence"
+    ):
+        candidates = _functional_cross_group_context_fallback_candidates(
+            scene=scene,
+            functional_probe=functional_probe,
+            target_object_ids=target_object_ids,
+            target_bounds=target_bounds,
+            requested_count=count,
+        )
     if functional_probe is not None:
         return candidates
     if len(candidates) != count:
@@ -963,6 +1023,96 @@ def _generate_feasible_camera_pose_candidates(
             "feasible camera candidate generation could not satisfy the exact "
             f"bank size: requested={count}, generated={len(candidates)}, metric={metric}"
         )
+    return candidates
+
+
+def _functional_cross_group_context_fallback_candidates(
+    *,
+    scene: dict[str, Any],
+    functional_probe: dict[str, Any],
+    target_object_ids: list[str],
+    target_bounds: tuple[np.ndarray, np.ndarray],
+    requested_count: int,
+) -> list[dict[str, Any]]:
+    """Use frozen global poses when no room-interior pair framing is feasible.
+
+    Cross-group relations can span most of the room. In that case an interior
+    perspective camera may be unable to fit both target bounds even at the
+    widest allowed lens. The benchmark already owns two deterministic global
+    context poses for exactly this bounded scene-scale observation. Reusing
+    those poses keeps the scene read-only and lets the normal identity-preview
+    check reject a pose if either relation endpoint is actually invisible.
+    """
+
+    ordered = sorted(
+        generate_global_context_poses(scene),
+        key=lambda item: (
+            0 if str(item.get("id")) == "global_perspective" else 1,
+            str(item.get("id") or ""),
+        ),
+    )
+    limit = max(1, min(int(requested_count), len(ordered)))
+    candidates: list[dict[str, Any]] = []
+    for index, pose in enumerate(ordered[:limit]):
+        source_id = str(pose.get("id") or f"global_{index:02d}")
+        candidate = {
+            **deepcopy(pose),
+            "id": (
+                f"functional_consistency_{index:02d}_"
+                f"cross_group_{source_id}"
+            ),
+            "name": f"functional_cross_group_{source_id}",
+            "target_object_ids": list(target_object_ids),
+            "target_bounds": [
+                _vector_list(target_bounds[0]),
+                _vector_list(target_bounds[1]),
+            ],
+            "proxy_framing_bounds": [
+                _vector_list(target_bounds[0]),
+                _vector_list(target_bounds[1]),
+            ],
+            "policy_source": (
+                "functional_cross_group_global_context_fallback_v1"
+            ),
+            "candidate_policy": "legacy",
+            "event_focus_source": (
+                "functional_cross_group_relation_global_context"
+            ),
+            "focus_kind": "cross_group_relation_context",
+            "view_family": "functional_relation_global_context",
+            "functional_probe_kind": "functional_correspondence",
+            "functional_probe_id": str(
+                functional_probe.get("probe_id") or ""
+            ),
+            "functional_group_id": None,
+            "functional_group_member_ids": [],
+            "usable_surface_informed": bool(
+                _functional_surface_side_ids(functional_probe)
+            ),
+            "usable_surface_side_ids": list(
+                _functional_surface_side_ids(functional_probe)
+            ),
+            "usable_surface_observability": {
+                "eligible": True,
+                "covered_hypotheses": [],
+                "required_target_ids": list(target_object_ids),
+                "fallback_reason": (
+                    "room_interior_joint_framing_infeasible"
+                ),
+            },
+            "candidate_bank_requested_count": int(requested_count),
+            "candidate_bank_generated_count": limit,
+            "candidate_bank_complete": limit == int(requested_count),
+            "functional_probe_candidate_pool_count": len(ordered),
+            "functional_probe_shortlist_limit": int(requested_count),
+            "functional_probe_shortlist_policy": (
+                "frozen_global_context_after_local_infeasible_v1"
+            ),
+            "functional_probe_shortlist_rank": index + 1,
+            "functional_probe_shortlist_score": float(limit - index),
+            "fallback_reason": "room_interior_joint_framing_infeasible",
+        }
+        candidates.append(candidate)
     return candidates
 
 

@@ -159,6 +159,25 @@ class _TrackingStyleJudge(_Judge):
 
     def adjudicate_scene_quality(self, request: dict) -> dict:
         self.style_requests.append(request)
+        if len(self.style_requests) == 1:
+            return {
+                "evidence_status": "insufficient",
+                "verdict": "ambiguous",
+                "confidence": 0.5,
+                "reason": "local style confirmation is required",
+                "missing_evidence": ["group_context_visible"],
+                "defects": [],
+                "evidence_request": {
+                    "target_ids": ["cube_0000"],
+                    "missing_observations": [
+                        "group_context_visible"
+                    ],
+                    "view_goal": (
+                        "show the possible style outlier in its ensemble"
+                    ),
+                    "metadata": {},
+                },
+            }
         return super().adjudicate_scene_quality(request)
 
 
@@ -274,7 +293,7 @@ def test_game_mode_captures_once_then_runs_the_canonical_evaluator(
     )
 
 
-def test_game_mode_style_mandatory_group_review_consumes_frozen_local_bank(
+def test_game_mode_conditional_style_review_consumes_frozen_local_bank(
     tmp_path: Path,
 ) -> None:
     game_root = tmp_path / "game"
@@ -308,13 +327,13 @@ def test_game_mode_style_mandatory_group_review_consumes_frozen_local_bank(
         "l3_scene_quality"
     ]["metrics"]["style_consistency"]
     assert style["status"] == "evaluated"
-    assert style["route"] == "global_discovery_then_forced_group_local"
+    assert style["route"] == "global_screen_then_group_local"
     assert style["judge_call_count"] == 2
     assert style["evidence_request"]["provider_invoked"] is True
     assert len(style["local_evidence_paths"]) == 1
     assert [request["evidence_phase"] for request in judge.style_requests] == [
-        "global_discovery",
-        "group_local_review",
+        "global_screen",
+        "local_confirmation",
     ]
     assert page.enter_count == 1
 

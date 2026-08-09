@@ -439,6 +439,12 @@ def build_evaluation_audit(
             or []
         ),
     )
+    evidence_sufficiency_loop = _evidence_sufficiency_loop_summary(
+        trace,
+        final_status=final_status,
+        stop_reason=stop_reason,
+        rounds_used=rounds_used,
+    )
     return _jsonable(
         {
             "schema_version": schema_version,
@@ -458,6 +464,11 @@ def build_evaluation_audit(
                     else None
                 ),
             },
+            # Immutable source snapshot for optional post-hoc audit graph
+            # projection.  It is descriptive only: the controller has already
+            # completed this request, and no consumer of this field can alter
+            # the Judge result or scoring path.
+            "judge_request": judge_request.to_dict(),
             "control": control.manifest(),
             "camera_acquisition": {
                 "requested_policy": control.camera_acquisition_policy,
@@ -553,6 +564,7 @@ def build_evaluation_audit(
             "model": judge_provenance.get("model"),
             "endpoint": judge_provenance.get("endpoint"),
             "judge_provenance": judge_provenance,
+            "evidence_sufficiency_loop": evidence_sufficiency_loop,
             "rounds_used": rounds_used,
             "selector_calls_used": selector_calls,
             "camera_actions_used": actions_used,
@@ -599,9 +611,128 @@ def build_evaluation_audit(
                 if forced_choice is not None
                 else {"applied": False}
             ),
+            "budget_exhaustion_forced_choice": (
+                {
+                    "applied": True,
+                    "trigger": forced_choice.get(
+                        "budget_trigger_stop_reason"
+                    ),
+                    "ambiguity_before_forcing": bool(
+                        forced_choice.get(
+                            "ambiguity_before_forcing"
+                        )
+                    ),
+                    "pre_force_judge_status": forced_choice.get(
+                        "pre_force_judge_status"
+                    ),
+                    "pre_force_evidence_request": deepcopy(
+                        forced_choice.get(
+                            "pre_force_evidence_request"
+                        )
+                    ),
+                    "pre_force_reason": forced_choice.get(
+                        "pre_force_reason"
+                    ),
+                    "available_image_count": int(
+                        forced_choice.get(
+                            "available_image_count"
+                        )
+                        or 0
+                    ),
+                    "final_verdict": forced_choice.get(
+                        "final_forced_verdict",
+                        final_status,
+                    ),
+                    "final_confidence": forced_choice.get(
+                        "final_forced_confidence",
+                        final_confidence,
+                    ),
+                    "evidence_artifacts": deepcopy(
+                        forced_choice.get(
+                            "evidence_artifacts_at_forcing"
+                        )
+                        or []
+                    ),
+                }
+                if forced_choice is not None
+                else {"applied": False}
+            ),
             "trace": deepcopy(trace),
         }
     )
+
+
+def _evidence_sufficiency_loop_summary(
+    trace: list[dict[str, Any]],
+    *,
+    final_status: str,
+    stop_reason: str,
+    rounds_used: int,
+) -> dict[str, Any]:
+    """Project the controller-wide Judge/evidence loop for audit only."""
+
+    judge_events = [
+        item
+        for item in trace
+        if isinstance(item, dict)
+        and item.get("stage") == "judge"
+        and isinstance(item.get("result"), dict)
+    ]
+    judge_statuses = [
+        str(item["result"].get("status") or "")
+        for item in judge_events
+    ]
+    planner_events = [
+        item
+        for item in trace
+        if isinstance(item, dict)
+        and item.get("stage") == "acquisition_planner"
+    ]
+    render_events = [
+        item
+        for item in trace
+        if isinstance(item, dict)
+        and item.get("stage") == "render"
+        and item.get("status") == "completed"
+    ]
+    selector_stages = list(
+        dict.fromkeys(
+            str(item.get("selection_stage") or "")
+            for item in trace
+            if isinstance(item, dict)
+            and item.get("stage") == "camera_selector"
+            and str(item.get("selection_stage") or "").strip()
+        )
+    )
+    need_more_count = sum(
+        status == "need_more_evidence" for status in judge_statuses
+    )
+    return {
+        "schema_version": "evidence_sufficiency_loop_v1",
+        "scope": "all_controller_mediated_judge_stages",
+        "state": (
+            "not_required"
+            if need_more_count == 0
+            else "resolved"
+            if final_status in {"valid", "invalid"}
+            else "pending"
+        ),
+        "judge_status_sequence": judge_statuses,
+        "judge_call_count": len(judge_events),
+        "need_more_evidence_count": need_more_count,
+        "acquisition_episode_count": len(planner_events),
+        "completed_render_round_count": len(render_events),
+        "rounds_used": int(rounds_used),
+        "selector_stages_used": selector_stages,
+        "fallback_order": [
+            "deterministic_camera_selection",
+            "vlm_semantic_camera_selection",
+            "all_available_context_bounded_visuals_forced_choice",
+        ],
+        "final_status": final_status,
+        "stop_reason": stop_reason,
+        "decision_authority": "judge_only",
+    }
 
 
 def record_selector_failure(

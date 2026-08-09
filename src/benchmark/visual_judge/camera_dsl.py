@@ -205,7 +205,11 @@ METRIC_CAMERA_REQUIREMENTS: dict[str, MetricCameraRequirement] = {
             "limited_local_context",
             "global_context_preserved",
         ),
-        extra=("contact_surface_visible", "joint_visibility"),
+        extra=(
+            "contact_surface_visible",
+            "joint_visibility",
+            "architecture_plane_visible",
+        ),
     ),
     "scale_consistency": _requirement(
         ("target_visible",),

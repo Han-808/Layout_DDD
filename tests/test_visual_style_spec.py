@@ -110,6 +110,8 @@ def _style_only_config() -> dict:
         "metrics": {
             "scale_consistency": {"enabled": False},
             "object_pairing_consistency": {"enabled": False},
+            "functional_consistency": {"enabled": False},
+            "semantic_placement_consistency": {"enabled": False},
         }
     }
 

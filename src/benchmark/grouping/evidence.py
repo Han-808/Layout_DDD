@@ -29,6 +29,17 @@ class GroupingEvidencePacket:
             "image_count": len(self.visual_evidence),
         }
 
+    def identity_overlay(self) -> dict[str, Any] | None:
+        """Return the trusted identity-map record used for discovery grounding."""
+
+        for item in self.visual_evidence:
+            if (
+                item.get("role") == "global_identity_overlay"
+                and item.get("representation") == "identity_map"
+            ):
+                return deepcopy(item)
+        return None
+
 
 def prepare_grouping_evidence(
     value: Any,

@@ -229,11 +229,229 @@ def test_ready_evidence_calls_judge_without_camera():
     assert not renderer.requests
 
 
-def test_vlm_role_enum_has_only_judge_and_optional_vlm_selector():
+def test_controller_registers_pending_typed_placement_check() -> None:
+    calls = []
+    gate = _Gate(
+        [_gate_result(ready=True), _gate_result(ready=True)],
+        calls,
+    )
+    proposal = {
+        "proposal_id": "support-a",
+        "subject_id": "a",
+        "context_ids": [],
+        "check_type": "support_and_height",
+        "observation_goal": "Inspect a's support surface and height.",
+    }
+    judge = _Judge(
+        [
+            {
+                "status": "need_more_evidence",
+                "confidence": 0.45,
+                "reason": "The contact surface is not visible.",
+                "defects": [],
+                "evidence_request": {
+                    "target_ids": ["a"],
+                    "missing_observations": [
+                        "contact_surface_visible"
+                    ],
+                    "view_goal": "Show a and its contact surface.",
+                    "metadata": {
+                        "placement_check_proposal": proposal,
+                    },
+                },
+            },
+            _valid_result(),
+        ],
+        calls,
+    )
+    selector = _Selector(_selection(), calls)
+    renderer = _Renderer(
+        {
+            "visual_evidence": ["repair.png"],
+            "merge_policy": "append",
+        },
+        calls,
+    )
+    controller = VLMEvaluationController(
+        judge=judge,
+        camera_selector=selector,
+        evidence_gate=gate,
+        renderer=renderer,
+    )
+    request = JudgeRequest(
+        task="scene_quality",
+        metric="semantic_placement_consistency",
+        claim_or_event={"claim_id": "placement-group-a"},
+        scene_context={
+            "scene_id": "scene-1",
+            "objects": [{"id": "a"}, {"id": "b"}],
+        },
+        deterministic_evidence={"read_only": True},
+        visual_evidence=("initial.png",),
+        rubric={"scope": "semantic_placement_consistency"},
+        context={
+            "evidence_phase": "group_local_review",
+            "group_scope": {
+                "group_id": "group-1",
+                "member_ids": ["a", "b"],
+            },
+            "object_groups": [
+                {
+                    "group_id": "group-1",
+                    "object_ids": ["a", "b"],
+                }
+            ],
+            "required_placement_checks": [],
+            "response_contract": {},
+        },
+    )
+
+    result = controller.run(
+        request,
+        candidate_views=({"id": "view-1"},),
+        allowed_actions=("orbit",),
+    )
+
+    assert result.status == "valid"
+    assert len(judge.requests) == 2
+    registered = judge.requests[1].context[
+        "required_placement_checks"
+    ]
+    assert len(registered) == 1
+    assert registered[0]["check_type"] == "support_and_height"
+    assert registered[0]["subject_id"] == "a"
+    assert registered[0]["owner_stage"] == "group_local"
+    assert judge.requests[1].context["response_contract"][
+        "placement_check_results"
+    ]["exact_check_ids"] == [registered[0]["check_id"]]
+    lifecycle = [
+        event
+        for event in result.audit["trace"]
+        if event["stage"] == "placement_check_lifecycle"
+    ]
+    assert len(lifecycle) == 1
+    assert lifecycle[0]["status"] == "evidence_requested"
+    assert lifecycle[0]["check"]["check_id"] == registered[0]["check_id"]
+
+
+def test_global_controller_defers_local_placement_check_to_group_stage() -> None:
+    calls = []
+    gate = _Gate(
+        [_gate_result(ready=True), _gate_result(ready=True)],
+        calls,
+    )
+    proposal = {
+        "proposal_id": "support-global-miss",
+        "subject_id": "a",
+        "context_ids": [],
+        "check_type": "support_and_height",
+        "observation_goal": "Inspect a's support surface and height.",
+    }
+    judge = _Judge(
+        [
+            {
+                "status": "need_more_evidence",
+                "confidence": 0.45,
+                "reason": "A local support check was discovered.",
+                "defects": [],
+                "evidence_request": {
+                    "target_ids": ["a"],
+                    "missing_observations": [
+                        "contact_surface_visible"
+                    ],
+                    "view_goal": "Show a and its contact surface.",
+                    "metadata": {
+                        "placement_check_proposal": proposal,
+                    },
+                },
+            },
+            _valid_result(),
+        ],
+        calls,
+    )
+    controller = VLMEvaluationController(
+        judge=judge,
+        camera_selector=_Selector(_selection(), calls),
+        evidence_gate=gate,
+        renderer=_Renderer(
+            {
+                "visual_evidence": ["repair.png"],
+                "merge_policy": "append",
+            },
+            calls,
+        ),
+    )
+    request = JudgeRequest(
+        task="scene_quality",
+        metric="semantic_placement_consistency",
+        claim_or_event={"claim_id": "placement-global"},
+        scene_context={
+            "scene_id": "scene-1",
+            "objects": [{"id": "a"}, {"id": "b"}],
+        },
+        deterministic_evidence={"read_only": True},
+        visual_evidence=("initial.png",),
+        rubric={"scope": "semantic_placement_consistency"},
+        context={
+            "evidence_phase": "global_discovery",
+            "object_groups": [
+                {
+                    "group_id": "group-1",
+                    "object_ids": ["a", "b"],
+                }
+            ],
+            "required_placement_checks": [],
+            "response_contract": {},
+        },
+    )
+
+    result = controller.run(
+        request,
+        candidate_views=({"id": "view-1"},),
+        allowed_actions=("orbit",),
+    )
+
+    assert result.status == "valid"
+    assert len(judge.requests) == 2
+    second_context = judge.requests[1].context
+    assert second_context["required_placement_checks"] == []
+    deferred = second_context["deferred_placement_checks"]
+    assert len(deferred) == 1
+    assert deferred[0]["owner_stage"] == "group_local"
+    assert deferred[0]["handoff_status"] == "deferred_to_group_local"
+    assert "placement_check_results" not in second_context[
+        "response_contract"
+    ]
+    assert result.audit["judge_request"]["context"][
+        "deferred_placement_checks"
+    ] == deferred
+    lifecycle = [
+        event
+        for event in result.audit["trace"]
+        if event["stage"] == "placement_check_lifecycle"
+    ]
+    assert lifecycle[0]["status"] == "deferred_to_group_local"
+
+
+def test_vlm_role_enum_covers_every_model_backed_evaluation_call():
     assert {role.value for role in VLMRole} == {
         "judge",
         "vlm_camera_selector",
+        "vlm_grouping",
+        "functional_affordance_discovery",
+        "functional_relation_discovery",
+        "functional_evidence_planner",
+        "placement_discovery",
+        "usable_surface_decoder",
     }
+    assert {
+        DecisionContract.GROUPING_PARTITION.value,
+        DecisionContract.FUNCTIONAL_AFFORDANCE_DISCOVERY.value,
+        DecisionContract.FUNCTIONAL_RELATION_DISCOVERY.value,
+        DecisionContract.FUNCTIONAL_PROBE_PLAN.value,
+        DecisionContract.PLACEMENT_DISCOVERY.value,
+        DecisionContract.USABLE_SURFACE_DECODE.value,
+    } <= {contract.value for contract in DecisionContract}
 
 
 def test_judge_requested_camera_repair_runs_selector_render_gate_judge():
@@ -538,6 +756,16 @@ def test_judge_need_more_evidence_runs_full_next_round():
         == "show the support contact region"
     )
     assert selector.requests[0].evidence_round == 1
+    evidence_loop = result.audit["evidence_sufficiency_loop"]
+    assert evidence_loop["scope"] == "all_controller_mediated_judge_stages"
+    assert evidence_loop["state"] == "resolved"
+    assert evidence_loop["judge_status_sequence"] == [
+        "need_more_evidence",
+        "valid",
+    ]
+    assert evidence_loop["acquisition_episode_count"] == 1
+    assert evidence_loop["completed_render_round_count"] == 1
+    assert evidence_loop["decision_authority"] == "judge_only"
 
 
 def test_zero_evidence_round_budget_forces_choice_before_selector():
@@ -567,6 +795,14 @@ def test_zero_evidence_round_budget_forces_choice_before_selector():
     )
     assert finalization["available_visual_count"] == 1
     assert not selector.requests
+    forced = result.audit["budget_exhaustion_forced_choice"]
+    assert forced["applied"] is True
+    assert forced["trigger"] == "max_evidence_rounds_exhausted"
+    assert forced["pre_force_judge_status"] == "need_more_evidence"
+    assert forced["pre_force_evidence_request"][
+        "target_ids"
+    ] == ["a", "b"]
+    assert forced["final_verdict"] == "valid"
 
 
 def test_image_budget_forces_choice_without_another_camera_round():
@@ -1444,6 +1680,7 @@ def test_controller_accepts_an_already_built_hybrid_selector():
 
     assert result.status == "valid"
     assert calls == ["gate", "judge"]
+    assert result.audit["judge_request"] == _judge_request().to_dict()
 
 
 def test_focused_module_layout_preserves_compatibility_imports():
@@ -2626,6 +2863,7 @@ def test_controlled_public_metric_method_uses_gate_and_exact_legacy_result(
         "reason": "style is coherent",
         "missing_evidence": [],
         "defects": [],
+        "budget_exhaustion_forced_choice": {"applied": False},
     }
 
     actual = wrapper.adjudicate_scene_quality(

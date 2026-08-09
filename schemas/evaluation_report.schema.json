@@ -13,6 +13,252 @@
       "minimum": 0,
       "maximum": 1
     },
+    "budgetExhaustionForcedChoice": {
+      "type": "object",
+      "required": ["applied"],
+      "properties": {
+        "applied": {"type": "boolean"},
+        "trigger": {"type": ["string", "null"]},
+        "ambiguity_before_forcing": {"type": "boolean"},
+        "pre_force_judge_status": {
+          "type": ["string", "null"]
+        },
+        "pre_force_evidence_request": {
+          "type": ["object", "null"]
+        },
+        "pre_force_reason": {"type": ["string", "null"]},
+        "available_image_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "final_verdict": {
+          "enum": ["valid", "invalid", null]
+        },
+        "final_confidence": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "maximum": 1
+        },
+        "evidence_artifacts": {
+          "type": "array"
+        },
+        "occurrence_count": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "events": {
+          "type": "array",
+          "items": {"type": "object"}
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {"applied": {"const": true}},
+            "required": ["applied"]
+          },
+          "then": {
+            "required": [
+              "trigger",
+              "ambiguity_before_forcing",
+              "pre_force_judge_status",
+              "pre_force_evidence_request",
+              "pre_force_reason",
+              "available_image_count",
+              "final_verdict",
+              "final_confidence",
+              "evidence_artifacts"
+            ]
+          }
+        }
+      ]
+    },
+    "l3MetricAudit": {
+      "type": "object",
+      "properties": {
+        "budget_exhaustion_forced_choice": {
+          "$ref": "#/$defs/budgetExhaustionForcedChoice"
+        },
+        "functional_ownership_ledger": {
+          "$ref": "#/$defs/functionalOwnershipLedger"
+        },
+        "placement_check_ledger": {
+          "$ref": "#/$defs/placementCheckLedger"
+        },
+        "placement_check_coverage": {
+          "$ref": "#/$defs/typedCheckCoverage"
+        },
+        "cross_metric_ownership_audit": {
+          "$ref": "#/$defs/crossMetricOwnershipAudit"
+        }
+      }
+    },
+    "functionalOwnershipLedger": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "source_metric",
+        "events",
+        "event_count",
+        "decision_authority",
+        "projection_mode"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "functional_ownership_ledger_v1"
+        },
+        "source_metric": {
+          "const": "functional_consistency"
+        },
+        "events": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "event_id",
+              "affected_object_ids",
+              "cause_kind",
+              "causal_object_ids",
+              "scoring_target_ids",
+              "decision_ref",
+              "lifecycle_status",
+              "decision_authority"
+            ],
+            "properties": {
+              "event_id": {"type": "string", "minLength": 1},
+              "affected_object_ids": {
+                "type": "array",
+                "items": {"type": "string", "minLength": 1},
+                "minItems": 1,
+                "uniqueItems": true
+              },
+              "cause_kind": {
+                "enum": ["external_object", "self_layout"]
+              },
+              "causal_object_ids": {
+                "type": "array",
+                "items": {"type": "string", "minLength": 1},
+                "minItems": 1,
+                "uniqueItems": true
+              },
+              "scoring_target_ids": {
+                "type": "array",
+                "items": {"type": "string", "minLength": 1},
+                "minItems": 1,
+                "uniqueItems": true
+              },
+              "decision_ref": {"type": "string", "minLength": 1},
+              "lifecycle_status": {"const": "final"},
+              "decision_authority": {"const": "none"}
+            }
+          }
+        },
+        "event_count": {"type": "integer", "minimum": 0},
+        "decision_authority": {"const": "none"},
+        "projection_mode": {"const": "posthoc_read_only"}
+      }
+    },
+    "placementCheckLedger": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "checks",
+        "accepted_check_count",
+        "decision_authority"
+      ],
+      "properties": {
+        "schema_version": {"const": "placement_check_ledger_v1"},
+        "checks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "check_id",
+              "check_type",
+              "subject_id",
+              "context_ids",
+              "owner_stage"
+            ],
+            "properties": {
+              "check_id": {"type": "string", "minLength": 1},
+              "check_type": {
+                "enum": [
+                  "support_and_height",
+                  "scene_zone",
+                  "contextual_anchor"
+                ]
+              },
+              "subject_id": {"type": "string", "minLength": 1},
+              "context_ids": {
+                "type": "array",
+                "items": {"type": "string", "minLength": 1},
+                "uniqueItems": true
+              },
+              "owner_stage": {
+                "enum": ["scene_global", "group_local"]
+              }
+            }
+          }
+        },
+        "accepted_check_count": {"type": "integer", "minimum": 0},
+        "decision_authority": {"const": "none"}
+      }
+    },
+    "typedCheckCoverage": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "required_check_count",
+        "resolved_check_ids",
+        "unresolved_check_ids",
+        "complete",
+        "decision_authority"
+      ],
+      "properties": {
+        "schema_version": {"type": "string", "minLength": 1},
+        "required_check_count": {"type": "integer", "minimum": 0},
+        "resolved_check_count": {"type": "integer", "minimum": 0},
+        "resolved_check_ids": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "uniqueItems": true
+        },
+        "unresolved_check_ids": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "uniqueItems": true
+        },
+        "complete": {"type": "boolean"},
+        "decision_authority": {"const": "none"}
+      }
+    },
+    "crossMetricOwnershipAudit": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "functional_event_count",
+        "excluded_placement_checks",
+        "independent_invalid_placement_check_ids",
+        "object_identity_alone_suppresses_placement",
+        "decision_authority"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "cross_metric_ownership_audit_v1"
+        },
+        "functional_event_count": {"type": "integer", "minimum": 0},
+        "excluded_placement_checks": {"type": "array"},
+        "independent_invalid_placement_check_ids": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "uniqueItems": true
+        },
+        "object_identity_alone_suppresses_placement": {
+          "const": false
+        },
+        "decision_authority": {"const": "none"}
+      }
+    },
     "canonicalLayerName": {
       "enum": [
         "l0_structural_validity",
@@ -60,7 +306,12 @@
         "scene_id": {"type": ["string", "null"]},
         "request_id": {"type": ["string", "null"]},
         "evaluator_version": {"const": "scene_harness_evaluator_v2"},
-        "profile_version": {"const": "canonical_scene_evaluation_v1"},
+        "profile_version": {
+          "enum": [
+            "canonical_scene_evaluation_v1",
+            "canonical_scene_evaluation_v2"
+          ]
+        },
         "workflow": {"const": "canonical_l0_l4"},
         "protocol_scope": {
           "enum": [
@@ -129,6 +380,58 @@
           },
           "then": {
             "required": ["case_bundle", "evidence_provenance"]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "profile_version": {
+                "const": "canonical_scene_evaluation_v1"
+              }
+            },
+            "required": ["profile_version"]
+          },
+          "then": {
+            "properties": {
+              "evaluation_plan": {
+                "properties": {
+                  "profile_version": {
+                    "const": "canonical_scene_evaluation_v1"
+                  }
+                }
+              },
+              "coverage": {
+                "properties": {
+                  "active_metrics_by_layer": {
+                    "$ref": "#/$defs/canonicalMetricsByLayerV1"
+                  },
+                  "resolved_metrics_by_layer": {
+                    "$ref": "#/$defs/canonicalMetricsByLayerV1"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "profile_version": {
+                "const": "canonical_scene_evaluation_v2"
+              }
+            },
+            "required": ["profile_version"]
+          },
+          "then": {
+            "properties": {
+              "evaluation_plan": {
+                "properties": {
+                  "profile_version": {
+                    "const": "canonical_scene_evaluation_v2"
+                  }
+                }
+              }
+            }
           }
         }
       ]
@@ -402,42 +705,20 @@
               "type": "object",
               "additionalProperties": false,
               "properties": {
-                "scale_consistency": {"type": "object"},
-                "object_pairing_consistency": {"type": "object"},
-                "style_consistency": {"type": "object"},
+                "scale_consistency": {
+                  "$ref": "#/$defs/l3MetricAudit"
+                },
+                "object_pairing_consistency": {
+                  "$ref": "#/$defs/l3MetricAudit"
+                },
+                "style_consistency": {
+                  "$ref": "#/$defs/l3MetricAudit"
+                },
                 "functional_consistency": {
-                  "type": "object",
-                  "properties": {
-                    "metric_status": {
-                      "const": "experimental_non_scoring"
-                    },
-                    "activation_policy": {
-                      "const": "explicit_config_only"
-                    },
-                    "included_in_canonical_aggregate": {
-                      "const": false
-                    },
-                    "affects_score": {
-                      "const": false
-                    }
-                  }
+                  "$ref": "#/$defs/l3MetricAudit"
                 },
                 "semantic_placement_consistency": {
-                  "type": "object",
-                  "properties": {
-                    "metric_status": {
-                      "const": "experimental_non_scoring"
-                    },
-                    "activation_policy": {
-                      "const": "explicit_config_only"
-                    },
-                    "included_in_canonical_aggregate": {
-                      "const": false
-                    },
-                    "affects_score": {
-                      "const": false
-                    }
-                  }
+                  "$ref": "#/$defs/l3MetricAudit"
                 }
               }
             }
@@ -620,6 +901,55 @@
             "enum": [
               "scale_consistency",
               "object_pairing_consistency",
+              "style_consistency",
+              "functional_consistency",
+              "semantic_placement_consistency"
+            ]
+          },
+          "uniqueItems": true
+        },
+        "l4_downstream_task_functionality": {
+          "type": "array",
+          "maxItems": 0
+        }
+      }
+    },
+    "canonicalMetricsByLayerV1": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "l1_physical_plausibility",
+        "l2_specification_fidelity",
+        "l3_scene_quality",
+        "l4_downstream_task_functionality"
+      ],
+      "properties": {
+        "l1_physical_plausibility": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "collision",
+              "oob",
+              "support",
+              "navigability",
+              "accessibility"
+            ]
+          },
+          "uniqueItems": true
+        },
+        "l2_specification_fidelity": {
+          "type": "array",
+          "items": {
+            "enum": ["oor", "oar", "functional_semantic_fidelity"]
+          },
+          "uniqueItems": true
+        },
+        "l3_scene_quality": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "scale_consistency",
+              "object_pairing_consistency",
               "style_consistency"
             ]
           },
@@ -664,7 +994,10 @@
       ],
       "properties": {
         "profile_version": {
-          "const": "canonical_scene_evaluation_v1"
+          "enum": [
+            "canonical_scene_evaluation_v1",
+            "canonical_scene_evaluation_v2"
+          ]
         },
         "profile_status": {"const": "frozen"},
         "workflow": {"const": "canonical_l0_l4"},

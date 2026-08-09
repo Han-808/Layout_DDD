@@ -11,7 +11,7 @@ from copy import deepcopy
 from typing import Any
 
 
-FUNCTIONAL_GEOMETRY_VERSION = "functional_geometry_v1"
+FUNCTIONAL_GEOMETRY_VERSION = "functional_geometry_v2"
 _LOCAL_SIDE_AXES = {
     "local_pos_x": (1.0, 0.0, 0.0),
     "local_neg_x": (-1.0, 0.0, 0.0),
@@ -52,7 +52,16 @@ def build_functional_geometry_observations(
     target_bounds = _union_bounds(
         [objects[item] for item in target_ids if item in objects]
     )
-    boundary = _boundary_xy(scene)
+    surface_contracts = {
+        str(item.get("target_id") or ""): item
+        for item in probe.get("surface_targets") or []
+        if isinstance(item, dict) and item.get("target_id")
+    }
+    boundary = (
+        _boundary_xy(scene)
+        if probe.get("logical_boundary_enabled", True) is not False
+        else []
+    )
     surfaces: list[dict[str, Any]] = []
     for hypothesis in probe.get("usable_surface_hypotheses") or []:
         if not isinstance(hypothesis, dict):
@@ -61,6 +70,10 @@ def build_functional_geometry_observations(
         object_record = objects.get(target_id)
         if object_record is None:
             continue
+        surface_contract = surface_contracts.get(target_id, {})
+        clearance_applicable = bool(
+            surface_contract.get("need_clearance", False)
+        )
         center = _vector3(object_record.get("center"))
         size = _vector3(object_record.get("size"))
         rotation = _vector3(object_record.get("rotation") or [0.0, 0.0, 0.0])
@@ -104,6 +117,12 @@ def build_functional_geometry_observations(
                     "status": str(hypothesis.get("status") or ""),
                     "surface_role": surface.get("surface_role"),
                     "side_id": side_id,
+                    "descriptor_kind": (
+                        "usable_side_world_direction"
+                    ),
+                    "routing_only": True,
+                    "architecture_orientation_applicable": True,
+                    "clearance_applicable": clearance_applicable,
                     "world_outward_direction": list(direction),
                     "object_center_xy": [center[0], center[1]],
                     "frontage_origin_xy": list(frontage_origin),
@@ -115,6 +134,8 @@ def build_functional_geometry_observations(
         "schema_version": FUNCTIONAL_GEOMETRY_VERSION,
         "decision_authority": "none",
         "scene_access": "read_only",
+        "descriptor_role": "camera_and_check_routing_only",
+        "metric_verdict_authority": False,
         "target_ids": target_ids,
         "target_bounds": target_bounds,
         "focus_center": (

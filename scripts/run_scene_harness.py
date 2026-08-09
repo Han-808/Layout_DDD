@@ -1087,7 +1087,7 @@ def main() -> None:
             PROJECT_ROOT
             / "configs"
             / "evaluation"
-            / "metric_profile_canonical_v1.yaml"
+            / "metric_profile_canonical_v2.yaml"
         ),
     )
     parser.add_argument(

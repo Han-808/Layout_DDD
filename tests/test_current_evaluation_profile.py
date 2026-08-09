@@ -475,6 +475,24 @@ def test_canonical_report_has_exact_l0_l4_layers_and_validates_schema(
     Draft202012Validator(schema).validate(report)
 
 
+def test_report_schema_keeps_v1_l3_active_inventory_to_three_metrics(
+    tmp_path: Path,
+) -> None:
+    report = _run_relation_case(tmp_path, "fine_grained")
+    report["profile_version"] = "canonical_scene_evaluation_v1"
+    report["evaluation_plan"]["profile_version"] = (
+        "canonical_scene_evaluation_v1"
+    )
+    schema = read_json(ROOT / "schemas" / "evaluation_report.schema.json")
+    validator = Draft202012Validator(schema)
+    validator.validate(report)
+
+    report["coverage"]["active_metrics_by_layer"][L3].append(
+        "functional_consistency"
+    )
+    assert list(validator.iter_errors(report))
+
+
 def test_runtime_applicability_may_narrow_but_not_enable_frozen_l1_metrics(
     tmp_path: Path,
 ) -> None:

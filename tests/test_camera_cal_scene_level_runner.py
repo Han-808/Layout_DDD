@@ -43,6 +43,22 @@ def test_promptless_profile_and_request_disable_l2_prompt_use() -> None:
     assert profile[L3]["enabled"] is True
 
 
+def test_audit_graph_export_is_explicitly_opt_in(tmp_path: Path) -> None:
+    default_args = runner.parse_args(
+        ["--output-root", str(tmp_path / "default")]
+    )
+    enabled_args = runner.parse_args(
+        [
+            "--output-root",
+            str(tmp_path / "enabled"),
+            "--export-audit-graphs",
+        ]
+    )
+
+    assert default_args.export_audit_graphs is False
+    assert enabled_args.export_audit_graphs is True
+
+
 def test_route_is_explicit_and_never_falls_back_to_port_4000() -> None:
     with pytest.raises(RuntimeError, match="explicit runtime model routing"):
         runner.effective_model_route({})
@@ -440,6 +456,35 @@ def test_run_case_keeps_l1_scene_provider_separate_from_l3_group_provider(
     )
 
 
+def test_runner_uses_expanded_group_judge_evidence_budget() -> None:
+    control = runner.resolved_control()
+    judge_config = runner.model_config(
+        {
+            "endpoint": "http://127.0.0.1:4010/v1",
+            "model": "test-model",
+            "api_key_env": "TEST_KEY",
+        },
+        role="judge",
+    )
+
+    assert control.max_evidence_rounds == 3
+    assert control.max_total_images == 8
+    assert control.max_camera_actions == 3
+    assert control.max_selector_calls == 4
+    assert control.max_views_per_round == 2
+    assert judge_config["max_images"] == 8
+    assert runner.JUDGE_COMPLETION_MAX_TOKENS == 8192
+    assert judge_config["max_tokens"] == 8192
+    assert runner.model_config(
+        {
+            "endpoint": "http://127.0.0.1:4010/v1",
+            "model": "test-model",
+            "api_key_env": "TEST_KEY",
+        },
+        role="camera-selector",
+    )["max_tokens"] == 2048
+
+
 def test_api_tracker_persists_progress_calls_and_reported_tokens(
     tmp_path: Path,
 ) -> None:
@@ -599,6 +644,43 @@ def test_api_usage_separates_functional_discovery_surface_selector_and_judge(
         "camera_selector": 2,
         "judge": 1,
     }
+
+
+def test_api_usage_counts_functional_schema_repair_in_call_family() -> None:
+    records = [
+        {
+            "role": "camera_selector",
+            "call_type": (
+                "vlm_camera_pose.functional_discovery.affordance"
+            ),
+            "status": "complete",
+            "tokens_usage": None,
+        },
+        {
+            "role": "camera_selector",
+            "call_type": (
+                "vlm_camera_pose.functional_discovery.affordance"
+                ".schema_repair"
+            ),
+            "status": "complete",
+            "tokens_usage": None,
+        },
+        {
+            "role": "camera_selector",
+            "call_type": (
+                "vlm_camera_pose.functional_discovery.relations"
+            ),
+            "status": "complete",
+            "tokens_usage": None,
+        },
+    ]
+
+    summary = runner.api_usage_summary(records)
+
+    assert summary["api_calls_number"] == 3
+    assert summary["operation_calls"]["functional_discovery"] == 3
+    assert summary["operation_calls"]["functional_affordance"] == 2
+    assert summary["operation_calls"]["functional_relation"] == 1
 
 
 def test_l1_schema_failure_marks_scene_unresolved_but_keeps_l3_diagnostic(

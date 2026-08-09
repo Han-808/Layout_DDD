@@ -15,15 +15,32 @@ from benchmark.evaluator.scene_quality.claim_identity import (
     deduplicate_defects,
     match_final_defects_to_routed_claims,
 )
+from benchmark.evaluator.scene_quality.functional_checks import (
+    canonicalize_typed_invalid_envelope,
+    validate_functional_check_results,
+)
+from benchmark.evaluator.scene_quality.placement_checks import (
+    canonicalize_placement_defect_linkage,
+    merge_placement_checks,
+    normalize_judge_originated_placement_results,
+    validate_placement_check_results,
+)
+from benchmark.evaluator.scene_quality.placement_severity import (
+    placement_severity_summary,
+)
 from benchmark.visual_judge.group_scope import (
     GroupCameraScope,
     build_group_camera_scope,
+)
+from benchmark.visual_judge.contracts import (
+    response_schema_audit_from_exception,
 )
 from benchmark.visual_judge.orchestration.audit import (
     evidence_artifact_refs,
 )
 from benchmark.visual_judge.orchestration.budget import (
     extend_acquisition_ledger,
+    merge_acquisition_ledger_delta,
 )
 
 
@@ -43,7 +60,7 @@ def resolve_group_evidence_packets(
     camera_target_ids_by_group: dict[str, list[str]] | None = None,
 ) -> list[dict[str, Any]]:
     packets: list[dict[str, Any]] = []
-    shared_ledger = deepcopy(initial_acquisition_ledger)
+    metric_ledger = deepcopy(initial_acquisition_ledger)
     for group in groups:
         group_id = str(group["group_id"])
         try:
@@ -105,33 +122,7 @@ def resolve_group_evidence_packets(
             group_id=group_id,
             single_group=len(groups) == 1,
         )
-        remaining = _remaining_image_budget(
-            shared_ledger,
-            max_total_images=max_total_images,
-        )
-        has_scoped_evidence = _contains_scoped_evidence(
-            group_value,
-            scope=str(policy["camera_scope"]),
-        )
         packet_policy = deepcopy(policy)
-        if remaining is not None and not has_scoped_evidence:
-            packet_policy["scoped_image_budget"] = min(
-                int(packet_policy.get("scoped_image_budget") or 0),
-                remaining,
-            )
-            packet_policy["image_budget"] = max(
-                1,
-                int(packet_policy.get("global_image_budget") or 0)
-                + int(packet_policy["scoped_image_budget"]),
-            )
-        provider_for_packet = camera_evidence_provider
-        budget_blocked_provider = bool(
-            remaining is not None
-            and remaining <= 0
-            and not has_scoped_evidence
-        )
-        if budget_blocked_provider:
-            provider_for_packet = None
         paths, resolution = resolve_metric_evidence(
             group_value,
             metric_name=metric_name,
@@ -141,38 +132,54 @@ def resolve_group_evidence_packets(
             selected_object_ids=camera_target_ids,
             selected_group_ids=[group_id],
             selected_groups=[group],
-            camera_evidence_provider=provider_for_packet,
+            camera_evidence_provider=camera_evidence_provider,
             group_scope=camera_scope,
         )
-        if budget_blocked_provider and not paths:
-            resolution.update(
-                scope_satisfied=False,
-                provider_status="not_invoked",
-                provider_reason=(
-                    "metric_acquisition_budget_exhausted_before_group_evidence"
-                ),
-            )
         artifact_paths = _resolution_artifact_paths(
             paths,
             resolution,
         )
-        ledger_before = deepcopy(shared_ledger)
-        shared_ledger = extend_acquisition_ledger(
-            shared_ledger,
+        episode_ledger_before = extend_acquisition_ledger(
+            None,
+            artifact_ids=[],
+        )
+        episode_ledger_after = extend_acquisition_ledger(
+            episode_ledger_before,
+            artifact_ids=evidence_artifact_refs(paths),
+        )
+        metric_ledger_before = deepcopy(metric_ledger)
+        metric_ledger = extend_acquisition_ledger(
+            metric_ledger,
             artifact_ids=evidence_artifact_refs(artifact_paths),
         )
         over_budget = bool(
             max_total_images is not None
             and int(
-                shared_ledger.get("total_images_acquired") or 0
+                episode_ledger_after.get("total_images_acquired") or 0
             )
             > max_total_images
         )
+        resolution["acquisition_budget"] = {
+            "scope": "group_judge_episode",
+            "counting": (
+                "judge_packet_seed_then_controller_acquired_artifacts"
+            ),
+            "max_total_images": max_total_images,
+            "initial_judge_evidence_count": int(
+                episode_ledger_after.get("total_images_acquired") or 0
+            ),
+            "acquired_artifact_count": len(
+                evidence_artifact_refs(artifact_paths)
+            ),
+            "metric_artifact_count_after": int(
+                metric_ledger.get("total_images_acquired") or 0
+            ),
+        }
         if over_budget:
             resolution.update(
                 scope_satisfied=False,
                 provider_reason=(
-                    "metric_acquisition_budget_exceeded_by_rendered_artifacts"
+                    "group_judge_episode_evidence_budget_exceeded"
                 ),
                 acquired_artifact_paths=artifact_paths,
             )
@@ -184,37 +191,22 @@ def resolve_group_evidence_packets(
                 "camera_target_ids": list(camera_target_ids),
                 "paths": paths,
                 "resolution": resolution,
-                "camera_acquisition_ledger_before": ledger_before,
+                "budget_scope": "group_judge_episode",
+                "camera_acquisition_ledger_before": (
+                    episode_ledger_before
+                ),
                 "camera_acquisition_ledger_after": deepcopy(
-                    shared_ledger
+                    episode_ledger_after
+                ),
+                "metric_camera_acquisition_ledger_before": (
+                    metric_ledger_before
+                ),
+                "metric_camera_acquisition_ledger_after": deepcopy(
+                    metric_ledger
                 ),
             }
         )
     return packets
-
-
-def _remaining_image_budget(
-    ledger: dict[str, Any] | None,
-    *,
-    max_total_images: int | None,
-) -> int | None:
-    if max_total_images is None:
-        return None
-    used = (
-        int(ledger.get("total_images_acquired") or 0)
-        if isinstance(ledger, dict)
-        else 0
-    )
-    return max(0, int(max_total_images) - used)
-
-
-def _contains_scoped_evidence(value: Any, *, scope: str) -> bool:
-    if isinstance(value, (list, tuple)):
-        return bool(value)
-    if not isinstance(value, dict):
-        return False
-    paths = value.get(scope)
-    return isinstance(paths, (list, tuple)) and bool(paths)
 
 
 def _resolution_artifact_paths(
@@ -227,7 +219,10 @@ def _resolution_artifact_paths(
         if isinstance(usage, dict)
         else None
     )
-    values = acquired if isinstance(acquired, list) else paths
+    values = [
+        *paths,
+        *(acquired if isinstance(acquired, list) else []),
+    ]
     return list(
         dict.fromkeys(
             str(item)
@@ -258,7 +253,7 @@ def evaluate_group_scoped_judgements(
     """Judge each local packet and aggregate without score averaging."""
 
     group_results: list[dict[str, Any]] = []
-    shared_ledger = deepcopy(
+    metric_ledger = deepcopy(
         base.get("camera_acquisition_ledger")
         if isinstance(base.get("camera_acquisition_ledger"), dict)
         else None
@@ -268,6 +263,27 @@ def evaluate_group_scoped_judgements(
         group_id = str(group["group_id"])
         members = [str(item) for item in group["object_ids"]]
         resolution = packet["resolution"]
+        episode_ledger_before_judge = _packet_episode_ledger(packet)
+        packet_metric_ledger = packet.get(
+            "metric_camera_acquisition_ledger_after"
+        )
+        if isinstance(packet_metric_ledger, dict):
+            metric_ledger = extend_acquisition_ledger(
+                metric_ledger,
+                artifact_ids=[
+                    str(item)
+                    for item in (
+                        packet_metric_ledger.get("artifact_ids") or []
+                    )
+                    if str(item).strip()
+                ],
+            )
+        metric_ledger = extend_acquisition_ledger(
+            metric_ledger,
+            artifact_ids=list(
+                episode_ledger_before_judge.get("artifact_ids") or []
+            ),
+        )
         record: dict[str, Any] = {
             "group_id": group_id,
             "member_ids": members,
@@ -296,10 +312,27 @@ def evaluate_group_scoped_judgements(
             "functional_probe_evidence": deepcopy(
                 packet.get("functional_probe_evidence")
             ),
+            "functional_check_resolution": None,
             "placement_discovery": deepcopy(
                 packet.get("placement_discovery")
             ),
+            "required_placement_checks": deepcopy(
+                packet.get("required_placement_checks") or []
+            ),
+            "placement_check_resolution": None,
+            "functional_ownership_ledger": deepcopy(
+                packet.get("functional_ownership_ledger")
+            ),
             "claim_correspondence": [],
+            "camera_acquisition_episode": {
+                "scope": "group_judge_episode",
+                "ledger_before_judge": deepcopy(
+                    episode_ledger_before_judge
+                ),
+                "ledger_after_judge": deepcopy(
+                    episode_ledger_before_judge
+                ),
+            },
         }
         if not resolution.get("scope_satisfied") or not packet["paths"]:
             record["reason"] = (
@@ -334,13 +367,20 @@ def evaluate_group_scoped_judgements(
             judge_request_kwargs["placement_discovery"] = record[
                 "placement_discovery"
             ]
+        if record["required_placement_checks"]:
+            judge_request_kwargs["required_placement_checks"] = deepcopy(
+                record["required_placement_checks"]
+            )
+        if record["functional_ownership_ledger"] is not None:
+            judge_request_kwargs["functional_ownership_ledger"] = deepcopy(
+                record["functional_ownership_ledger"]
+            )
         request = build_judge_request(
             **judge_request_kwargs,
         )
-        if isinstance(shared_ledger, dict):
-            request["camera_acquisition_ledger"] = deepcopy(
-                shared_ledger
-            )
+        request["camera_acquisition_ledger"] = deepcopy(
+            episode_ledger_before_judge
+        )
         record["vlm_invoked"] = True
         audit_records = getattr(vlm_judge, "audit_records", None)
         audit_start = (
@@ -355,19 +395,133 @@ def evaluate_group_scoped_judgements(
                 metric_name=metric_name,
                 authorized_deviations=authorized_deviations,
             )
+            if (
+                record.get("required_placement_checks")
+                or (
+                    record.get("functional_probe_evidence") or {}
+                ).get("required_checks")
+            ):
+                adjusted = canonicalize_typed_invalid_envelope(adjusted)
+            placement_resolution = None
+            if metric_name == "semantic_placement_consistency":
+                registered_checks = (
+                    _registered_placement_checks_from_controller_audit(
+                        audit_records,
+                        audit_start=audit_start,
+                    )
+                )
+                if registered_checks:
+                    base["placement_check_ledger"] = (
+                        merge_placement_checks(
+                            base["placement_check_ledger"],
+                            registered_checks,
+                        )
+                    )
+                adjusted, judge_originated_checks = (
+                    normalize_judge_originated_placement_results(
+                        adjusted,
+                        known_ids=set(members),
+                        groups=[group],
+                        existing_checks=list(
+                            (
+                                base.get("placement_check_ledger") or {}
+                            ).get("checks")
+                            or []
+                        ),
+                        expected_owner_stage="group_local",
+                    )
+                )
+                if judge_originated_checks:
+                    base["placement_check_ledger"] = (
+                        merge_placement_checks(
+                            base["placement_check_ledger"],
+                            judge_originated_checks,
+                        )
+                    )
+                phase_ids = {
+                    str(item.get("check_id") or "")
+                    for item in [
+                        *record["required_placement_checks"],
+                        *registered_checks,
+                        *judge_originated_checks,
+                    ]
+                    if isinstance(item, dict) and item.get("check_id")
+                }
+                phase_checks = [
+                    deepcopy(check)
+                    for check in (
+                        base.get("placement_check_ledger") or {}
+                    ).get("checks")
+                    or []
+                    if str(check.get("check_id") or "") in phase_ids
+                ]
+                adjusted = canonicalize_placement_defect_linkage(
+                    adjusted,
+                    required_checks=phase_checks,
+                )
+                placement_resolution = (
+                    validate_placement_check_results(
+                        adjusted,
+                        required_checks=phase_checks,
+                        function_events=list(
+                            (
+                                record.get(
+                                    "functional_ownership_ledger"
+                                )
+                                or {}
+                            ).get("events")
+                            or []
+                        ),
+                    )
+                )
+            required_functional_checks = (
+                (
+                    record.get("functional_probe_evidence")
+                    or {}
+                ).get("required_checks")
+                or []
+            )
+            check_resolution = (
+                validate_functional_check_results(
+                    adjusted,
+                    required_checks=[
+                        deepcopy(item)
+                        for item in required_functional_checks
+                        if isinstance(item, dict)
+                    ],
+                )
+                if metric_name == "functional_consistency"
+                and required_functional_checks
+                else None
+            )
             outcome = normalize_judgement(
                 adjusted,
                 metric_name=metric_name,
                 # A group-local Judge may only report defects on members of
                 # this immutable evidence scope.  Scene-wide validation would
                 # allow a defect from another group to leak into this result.
-                valid_object_ids=set(members),
+                valid_object_ids=(
+                    {
+                        str(item.get("id"))
+                        for item in scene.get("objects") or []
+                        if isinstance(item, dict) and item.get("id")
+                    }
+                    if metric_name == "functional_consistency"
+                    and any(
+                        isinstance(item, dict)
+                        and item.get("check_type") == "clearance"
+                        for item in required_functional_checks
+                    )
+                    else set(members)
+                ),
             )
             record.update(
                 status=outcome["status"],
                 score=outcome["score"],
                 reason=outcome["reason"],
                 judgement=adjusted,
+                functional_check_resolution=check_resolution,
+                placement_check_resolution=placement_resolution,
                 claim_correspondence=(
                     match_final_defects_to_routed_claims(
                         metric_name,
@@ -377,12 +531,18 @@ def evaluate_group_scoped_judgements(
                 ),
             )
         except Exception as exc:
+            schema_audit = response_schema_audit_from_exception(exc)
             record.update(
                 status="unresolved",
                 reason="vlm_judge_failed",
                 judgement={
                     "error_type": type(exc).__name__,
                     "error": str(exc),
+                    **(
+                        {"response_schema_audit": schema_audit}
+                        if schema_audit is not None
+                        else {}
+                    ),
                 },
             )
         if (
@@ -397,11 +557,18 @@ def evaluate_group_scoped_judgements(
                 audit_records[-1]
             )
             if next_ledger is not None:
-                shared_ledger = next_ledger
+                record["camera_acquisition_episode"][
+                    "ledger_after_judge"
+                ] = deepcopy(next_ledger)
+                metric_ledger = merge_acquisition_ledger_delta(
+                    metric_ledger,
+                    episode_before=episode_ledger_before_judge,
+                    episode_after=next_ledger,
+                )
         group_results.append(record)
 
-    if isinstance(shared_ledger, dict):
-        base["camera_acquisition_ledger"] = deepcopy(shared_ledger)
+    if isinstance(metric_ledger, dict):
+        base["camera_acquisition_ledger"] = deepcopy(metric_ledger)
     return _aggregate_group_results(
         base,
         group_results,
@@ -425,6 +592,20 @@ def _camera_acquisition_ledger_from_audit(
     )
     ledger = acquisition.get("ledger")
     return deepcopy(ledger) if isinstance(ledger, dict) else None
+
+
+def _packet_episode_ledger(
+    packet: dict[str, Any],
+) -> dict[str, Any]:
+    ledger = packet.get("camera_acquisition_ledger_after")
+    if isinstance(ledger, dict):
+        return deepcopy(ledger)
+    return extend_acquisition_ledger(
+        None,
+        artifact_ids=evidence_artifact_refs(
+            list(packet.get("paths") or [])
+        ),
+    )
 
 
 def group_evidence_resolution_summary(
@@ -491,7 +672,62 @@ def group_packet_audit(packet: dict[str, Any]) -> dict[str, Any]:
         "placement_discovery": deepcopy(
             packet.get("placement_discovery")
         ),
+        "required_placement_checks": deepcopy(
+            packet.get("required_placement_checks") or []
+        ),
+        "functional_ownership_ledger": deepcopy(
+            packet.get("functional_ownership_ledger")
+        ),
+        "budget_scope": packet.get("budget_scope"),
+        "camera_acquisition_ledger_before": deepcopy(
+            packet.get("camera_acquisition_ledger_before")
+        ),
+        "camera_acquisition_ledger_after": deepcopy(
+            packet.get("camera_acquisition_ledger_after")
+        ),
+        "metric_camera_acquisition_ledger_before": deepcopy(
+            packet.get("metric_camera_acquisition_ledger_before")
+        ),
+        "metric_camera_acquisition_ledger_after": deepcopy(
+            packet.get("metric_camera_acquisition_ledger_after")
+        ),
     }
+
+
+def _registered_placement_checks_from_controller_audit(
+    audit_records: Any,
+    *,
+    audit_start: int | None,
+) -> list[dict[str, Any]]:
+    if (
+        audit_start is None
+        or not isinstance(audit_records, list)
+        or len(audit_records) <= audit_start
+    ):
+        return []
+    latest = audit_records[-1]
+    payload = (
+        latest.get("audit")
+        if isinstance(latest, dict)
+        and isinstance(latest.get("audit"), dict)
+        else latest
+    )
+    request = (
+        payload.get("judge_request")
+        if isinstance(payload, dict)
+        and isinstance(payload.get("judge_request"), dict)
+        else {}
+    )
+    context = (
+        request.get("context")
+        if isinstance(request.get("context"), dict)
+        else {}
+    )
+    return [
+        deepcopy(item)
+        for item in context.get("required_placement_checks") or []
+        if isinstance(item, dict)
+    ]
 
 
 def _aggregate_group_results(
@@ -598,6 +834,13 @@ def _aggregate_group_results(
             or []
         ),
     )
+    placement_summary = (
+        placement_severity_summary(defects)
+        if metric_name == "semantic_placement_consistency"
+        else None
+    )
+    if placement_summary is not None:
+        base["placement_severity"] = deepcopy(placement_summary)
     base["final_defect_claims"] = claim_records(
         metric_name,
         defects,
@@ -628,6 +871,10 @@ def _aggregate_group_results(
             }
         )
         aggregate["defects"] = deepcopy(defects)
+        if placement_summary is not None:
+            aggregate["placement_severity"] = deepcopy(
+                placement_summary
+            )
         aggregate.update(
             aggregation="invalid_if_any_group_invalid",
             group_judgements=deepcopy(group_results),
@@ -663,6 +910,10 @@ def _aggregate_group_results(
                 "defects": [],
             }
         )
+        if placement_summary is not None:
+            aggregate["placement_severity"] = deepcopy(
+                placement_summary
+            )
         aggregate.update(
             aggregation="all_groups_must_resolve_valid",
             group_judgements=deepcopy(group_results),

@@ -1,17 +1,18 @@
 # Object grouping
 
-## Current decision (2026-07-31)
+## Current decision (2026-08-07)
 
-The canonical grouping algorithm is now **VLM-only**. `VLMGroupingAlgorithm`
-with policy `vlm_visual_evidence_scope_v2` and prompt version
-`vlm_grouping_prompt_v3` is the only backend used by the canonical evaluator,
-metric routing, and downstream camera/evidence acquisition.
+The active grouping primary is **VLM-based**. `VLMGroupingAlgorithm` with
+policy `vlm_visual_evidence_scope_v2` and prompt version
+`vlm_grouping_prompt_v3` supplies the partition used by the evaluator, metric
+routing, and downstream camera/evidence acquisition.
 
-`topology` and `anchor` remain importable only for explicit historical replay
-and regression comparison. They are not defaults, are not fallback paths, and
-are not part of the active experiment launcher. If the VLM is unavailable, the
-workflow reports an explicit unavailable/unresolved state rather than silently
-switching algorithms.
+If the VLM primary is unavailable or fails validation, the factory may run the
+configured deterministic `topology` fallback. This recovery is explicit and
+audited: provenance records the primary failure, effective fallback config,
+backend, policy ID, and value sources. `anchor` remains importable only for
+historical replay and is never an automatic fallback. An explicitly injected
+custom grouping algorithm also bypasses the factory fallback policy.
 
 The active 20-scene replay is configured in
 `configs/experiments/grouping_vlm20_visual_scope_v2.yaml`. It uses four seeded
@@ -75,11 +76,14 @@ group membership; a request that crosses into another group fails closed.
   as optional room context.
 - Style runs once on global evidence and renders local evidence only for
   implicated groups.
-- Functional Consistency is marked `experimental_non_scoring`: it is
-  implemented, disabled by default, enabled only through explicit config, and
-  excluded from the canonical L3 aggregate and weights. It evaluates generic
-  real-world usability; L2 `functional_semantic_fidelity` remains the owner of
-  prompt-conditioned functional requirements.
+- Functional Consistency is one of the five active L3 benchmark metrics. It
+  evaluates generic real-world usability; L2
+  `functional_semantic_fidelity` remains the owner of prompt-conditioned
+  functional requirements.
+- Semantic Placement Consistency is also an active L3 benchmark metric. It
+  evaluates direction-independent semantic location plausibility; usable-side,
+  wall-facing, clearance, and operability questions remain owned by Functional
+  Consistency.
 
 The global scene packet is reused across group requests. Local evidence cannot
 replace a required global anchor, and a global image alone cannot satisfy a
@@ -118,9 +122,9 @@ Semantic affinity is intentionally weak. Spatially local but semantically odd
 objects stay in the local scope so a downstream pairing Judge can still detect
 them. If no assignment is defensible, the object remains a singleton.
 
-Both backends remain importable only for explicit historical replay. Neither is
-selected by the canonical evaluator, the factory default, or as a fallback
-when VLM grouping is unavailable.
+Both backends remain importable for explicit historical replay. `topology` is
+also the sole supported deterministic factory fallback for a failed VLM
+primary. `anchor` is never selected automatically.
 
 ### `vlm`
 
@@ -165,6 +169,6 @@ Reference configurations:
 - deprecated replay only: `configs/grouping/anchor_object_v1.yaml`.
 
 The factory defaults to `vlm`, which requires an injected model with
-`chat_messages()`. Missing or failed VLM grouping is an explicit unavailable
-state in the canonical evaluator; it never silently falls back to topology or
-anchor. No backend is allowed to mutate the scene.
+`chat_messages()`. The checked-in active config enables the explicit topology
+fallback; callers may disable it with `grouping.fallback.enabled: false`.
+No backend is allowed to mutate the scene.

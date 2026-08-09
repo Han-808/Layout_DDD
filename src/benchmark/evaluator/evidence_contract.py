@@ -25,6 +25,8 @@ Canonical hierarchy (single source of truth for ownership labels):
     grouping algorithm; position, angle, and functional arrangement are outside
     its verdict.
   - L3b Perceptual Visual Quality: style_consistency.
+  - L3c Functional Validity: functional_consistency.
+  - L3d Semantic Placement: semantic_placement_consistency.
 
 Rules encoded here:
 
@@ -42,9 +44,9 @@ from copy import deepcopy
 from typing import Any, Iterable
 
 
-# Active grouping is a VLM-produced downstream visual-evidence partition. The
-# deterministic topology/anchor implementations remain explicit deprecated
-# replay backends but are not active defaults or silent fallbacks.
+# Active grouping is a VLM-produced downstream visual-evidence partition.
+# Topology is the explicit, audited deterministic recovery backend when that
+# VLM primary fails; anchor remains available only for deprecated replay.
 GROUPING_POLICY_ID = "vlm_visual_evidence_scope_v2"
 GROUPING_IMPLEMENTATION = "src/benchmark/grouping/vlm.py"
 GROUPING_CONFIG_PATH = "configs/grouping/vlm_visual_evidence_scope_v2.yaml"
@@ -181,6 +183,8 @@ CANONICAL_HIERARCHY: dict[str, Any] = {
         "question": "Is the scene coherent, except for prompt-authorized deviations?",
         "semantic_coherence": ["scale_consistency", "object_pairing_consistency"],
         "perceptual_visual_quality": ["style_consistency"],
+        "functional_validity": ["functional_consistency"],
+        "semantic_placement": ["semantic_placement_consistency"],
         "object_pairing_scope": "group_member_category_and_role_compatibility_only",
     },
     "l4_downstream_task_functionality": {

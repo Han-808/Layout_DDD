@@ -278,6 +278,12 @@ def test_deterministic_only_never_calls_vlm() -> None:
         "gate", "judge", "deterministic", "render", "gate", "judge"
     ]
     assert not vlm.requests
+    assert result.audit["budget_exhaustion_forced_choice"] == {
+        "applied": False
+    }
+    assert result.to_dict()["budget_exhaustion_forced_choice"] == {
+        "applied": False
+    }
 
 
 def test_vlm_only_never_calls_deterministic() -> None:
@@ -710,6 +716,22 @@ def test_empty_trusted_bank_reaches_cascade_then_forced_choice() -> None:
         },
         "final_status": "valid",
     }
+    forced = result.audit["budget_exhaustion_forced_choice"]
+    assert forced["applied"] is True
+    assert forced["trigger"] == "vlm_no_feasible_candidate"
+    assert forced["ambiguity_before_forcing"] is True
+    assert forced["pre_force_judge_status"] == "need_more_evidence"
+    assert forced["pre_force_evidence_request"][
+        "missing_observations"
+    ] == ["contact_surface_visible"]
+    assert forced["pre_force_reason"] == "the contact is hidden"
+    assert forced["available_image_count"] == 1
+    assert forced["final_verdict"] == "valid"
+    assert forced["final_confidence"] == 0.9
+    assert forced["evidence_artifacts"] == ["initial.png"]
+    assert result.to_dict()[
+        "budget_exhaustion_forced_choice"
+    ] == forced
 
 
 def test_deterministic_constraint_conflict_has_explicit_escalation_reason():

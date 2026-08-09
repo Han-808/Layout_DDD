@@ -140,6 +140,12 @@ def test_production_candidate_only_transport_and_active_contract(
     assert transport.last_request_metadata["prompt_version"] == (
         CAMERA_SELECTOR_PROMPT_VERSION
     )
+    assert transport.last_request_metadata["vlm_role"] == (
+        "vlm_camera_selector"
+    )
+    assert transport.last_request_metadata["decision_contract"] == (
+        "camera_selection_v1"
+    )
     system_prompt = model.calls[0]["messages"][0]["content"]
     assert "Select the smallest number of views" in system_prompt
     assert "candidate_views order" in system_prompt
@@ -339,6 +345,11 @@ def test_functional_probe_planner_uses_minimal_objects_and_no_verdict(
         planner_prompt
     )
     outbound_context = json.loads(text.split("\n", 1)[1])
+    assert outbound_context["vlm_role"] == "functional_evidence_planner"
+    assert (
+        outbound_context["decision_contract"]
+        == "functional_probe_plan_v2"
+    )
     assert outbound_context["architecture_context"] == {
         "source": "scene_architecture_contract",
         "logical_boundary_enabled": True,
@@ -354,6 +365,12 @@ def test_functional_probe_planner_uses_minimal_objects_and_no_verdict(
     assert result["request_metadata"][
         "functional_probe_prompt_version"
     ] == "functional_probe_planner_v4"
+    assert result["request_metadata"]["vlm_role"] == (
+        "functional_evidence_planner"
+    )
+    assert result["request_metadata"]["decision_contract"] == (
+        "functional_probe_plan_v2"
+    )
     assert selector.last_request_metadata["selection_mode"] == (
         "functional_probe_plan"
     )

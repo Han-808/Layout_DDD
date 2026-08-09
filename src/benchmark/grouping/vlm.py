@@ -21,6 +21,11 @@ from benchmark.grouping.scene import (
     normalize_grouping_scene,
 )
 from benchmark.models import parse_json_object
+from benchmark.visual_judge.roles import (
+    DecisionContract,
+    VLMRole,
+    vlm_audit_metadata,
+)
 
 
 VLM_GROUPING_POLICY_ID = "vlm_visual_evidence_scope_v2"
@@ -156,6 +161,11 @@ class VLMGroupingAlgorithm:
     def group(self, request: GroupingRequest) -> GroupingResult:
         request = GroupingRequest.from_value(request)
         scene = normalize_grouping_scene(request.scene)
+        audit = vlm_audit_metadata(
+            VLMRole.VLM_GROUPING,
+            decision_contract=DecisionContract.GROUPING_PARTITION,
+            judge_method="group",
+        )
         effective_config = _effective_vlm_config(
             _deep_merge(self._configured, request.config)
         )
@@ -168,6 +178,7 @@ class VLMGroupingAlgorithm:
                 reason="The scene has no renderable objects to partition.",
                 provenance={
                     **scene.provenance(),
+                    **audit,
                     "deterministic": False,
                     "model_calls": 0,
                     "prompt_version": VLM_GROUPING_PROMPT_VERSION,
@@ -250,6 +261,7 @@ class VLMGroupingAlgorithm:
             reason=response_reason,
             provenance={
                 **scene.provenance(),
+                **audit,
                 "deterministic": False,
                 "model_calls": 1,
                 "model": str(
@@ -261,7 +273,10 @@ class VLMGroupingAlgorithm:
                 "prompt_version": VLM_GROUPING_PROMPT_VERSION,
                 "context_mode": context_mode,
                 "images_used": [item["alias"] for item in images],
-                "request_metadata": deepcopy(request_metadata),
+                "request_metadata": {
+                    **deepcopy(request_metadata),
+                    **audit,
+                },
             },
             resolved_grouping_config=effective_config,
             object_catalog=scene.object_catalog(),
@@ -280,6 +295,11 @@ def _prompt_context(
         include_rotation=not compact,
     )
     return {
+        **vlm_audit_metadata(
+            VLMRole.VLM_GROUPING,
+            decision_contract=DecisionContract.GROUPING_PARTITION,
+            judge_method="group",
+        ),
         "grouping_contract": {
             "role": GROUPING_ROLE,
             "policy_id": VLM_GROUPING_POLICY_ID,
@@ -660,6 +680,7 @@ def _effective_vlm_config(value: dict[str, Any]) -> dict[str, Any]:
     patch.pop("backend", None)
     patch.pop("topology", None)
     patch.pop("anchor", None)
+    patch.pop("fallback", None)
     unknown = sorted(set(patch) - set(DEFAULT_VLM_GROUPING_CONFIG))
     if unknown:
         raise ValueError(f"unknown VLM grouping config fields {unknown}")

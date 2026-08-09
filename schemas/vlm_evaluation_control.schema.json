@@ -42,10 +42,10 @@
         "max_repair_plans": 3
       },
       "total": {
-        "max_evidence_rounds": 2,
-        "max_total_images": 6,
-        "max_selector_calls": 3,
-        "max_camera_actions": 2
+        "max_evidence_rounds": 3,
+        "max_total_images": 8,
+        "max_selector_calls": 4,
+        "max_camera_actions": 3
       },
       "escalation": {
         "on_no_feasible_candidate": true,
@@ -63,11 +63,11 @@
       "allow_need_more_evidence": true
     },
     "budgets": {
-      "max_evidence_rounds": 2,
+      "max_evidence_rounds": 3,
       "max_views_per_round": 2,
-      "max_total_images": 6,
-      "max_camera_actions": 2,
-      "max_selector_calls": 3
+      "max_total_images": 8,
+      "max_camera_actions": 3,
+      "max_selector_calls": 4
     },
     "require_evidence_gate_after_render": true,
     "on_non_camera_repairable_evidence": "unresolved",
@@ -156,10 +156,10 @@
           "max_repair_plans": 3
         },
         "total": {
-          "max_evidence_rounds": 2,
-          "max_total_images": 6,
-          "max_selector_calls": 3,
-          "max_camera_actions": 2
+          "max_evidence_rounds": 3,
+          "max_total_images": 8,
+          "max_selector_calls": 4,
+          "max_camera_actions": 3
         },
         "escalation": {
           "on_no_feasible_candidate": true,
@@ -325,31 +325,31 @@
           "type": "object",
           "additionalProperties": false,
           "default": {
-            "max_evidence_rounds": 2,
-            "max_total_images": 6,
-            "max_selector_calls": 3,
-            "max_camera_actions": 2
+            "max_evidence_rounds": 3,
+            "max_total_images": 8,
+            "max_selector_calls": 4,
+            "max_camera_actions": 3
           },
           "properties": {
             "max_evidence_rounds": {
               "type": "integer",
               "minimum": 0,
-              "default": 2
+              "default": 3
             },
             "max_total_images": {
               "type": "integer",
               "minimum": 1,
-              "default": 6
+              "default": 8
             },
             "max_selector_calls": {
               "type": "integer",
               "minimum": 1,
-              "default": 3
+              "default": 4
             },
             "max_camera_actions": {
               "type": "integer",
               "minimum": 0,
-              "default": 2
+              "default": 3
             }
           }
         },
@@ -423,17 +423,17 @@
       "type": "object",
       "additionalProperties": false,
       "default": {
-        "max_evidence_rounds": 2,
+        "max_evidence_rounds": 3,
         "max_views_per_round": 2,
-        "max_total_images": 6,
-        "max_camera_actions": 2,
-        "max_selector_calls": 3
+        "max_total_images": 8,
+        "max_camera_actions": 3,
+        "max_selector_calls": 4
       },
       "properties": {
         "max_evidence_rounds": {
           "type": "integer",
           "minimum": 0,
-          "default": 2
+          "default": 3
         },
         "max_views_per_round": {
           "type": "integer",
@@ -443,17 +443,17 @@
         "max_total_images": {
           "type": "integer",
           "minimum": 1,
-          "default": 6
+          "default": 8
         },
         "max_camera_actions": {
           "type": "integer",
           "minimum": 0,
-          "default": 2
+          "default": 3
         },
         "max_selector_calls": {
           "type": "integer",
           "minimum": 1,
-          "default": 3
+          "default": 4
         }
       }
     },

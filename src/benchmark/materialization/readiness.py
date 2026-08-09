@@ -22,7 +22,8 @@ L3 = "l3_scene_quality"
 L4 = "l4_downstream_task_functionality"
 SCORING_LAYERS = (L1, L2, L3, L4)
 
-CANONICAL_PROFILE_VERSION = "canonical_scene_evaluation_v1"
+CANONICAL_PROFILE_VERSION = "canonical_scene_evaluation_v2"
+PREVIOUS_CANONICAL_PROFILE_VERSION = "canonical_scene_evaluation_v1"
 CANONICAL_REPORT_VERSION = "scene_evaluation_report_v2"
 CANONICAL_EVALUATOR_VERSION = "scene_harness_evaluator_v2"
 CANONICAL_WORKFLOW = "canonical_l0_l4"
@@ -39,6 +40,8 @@ L3_METRICS = (
     "scale_consistency",
     "object_pairing_consistency",
     "style_consistency",
+    "functional_consistency",
+    "semantic_placement_consistency",
 )
 
 _DEFAULT_LAYER_WEIGHTS = {
@@ -205,6 +208,7 @@ def build_not_evaluable_evaluation_report(
     profile = deepcopy(dict(profile or {}))
     if profile and profile.get("profile_version") not in {
         None,
+        PREVIOUS_CANONICAL_PROFILE_VERSION,
         CANONICAL_PROFILE_VERSION,
     }:
         raise ValueError(
@@ -234,6 +238,9 @@ def build_not_evaluable_evaluation_report(
             "prompt_granularity must be 'fine_grained' or 'coarse_grained'"
         )
 
+    resolved_profile_version = str(
+        profile.get("profile_version") or CANONICAL_PROFILE_VERSION
+    )
     weights = _layer_weights(profile)
     enabled = _enabled_metrics(profile)
     active_metrics = _active_metrics(
@@ -251,12 +258,14 @@ def build_not_evaluable_evaluation_report(
         layer_reports=layer_reports,
         active_metrics=active_metrics,
         weights=weights,
+        profile_version=resolved_profile_version,
     )
     evaluation_plan = _evaluation_plan(
         profile=profile,
         prompt_granularity=resolved_granularity,
         weights=weights,
         active_metrics=active_metrics,
+        profile_version=resolved_profile_version,
     )
 
     supplied_case_record = (
@@ -299,7 +308,7 @@ def build_not_evaluable_evaluation_report(
         "scene_id": resolved_scene_id,
         "request_id": resolved_request_id,
         "evaluator_version": CANONICAL_EVALUATOR_VERSION,
-        "profile_version": CANONICAL_PROFILE_VERSION,
+        "profile_version": resolved_profile_version,
         "workflow": CANONICAL_WORKFLOW,
         "protocol_scope": resolved_scope,
         "official_submission": False,
@@ -569,6 +578,12 @@ def _enabled_metrics(
     profile: Mapping[str, Any],
 ) -> dict[str, dict[str, bool]]:
     result = deepcopy(_DEFAULT_ENABLED_METRICS)
+    if (
+        profile.get("profile_version")
+        == PREVIOUS_CANONICAL_PROFILE_VERSION
+    ):
+        result[L3]["functional_consistency"] = False
+        result[L3]["semantic_placement_consistency"] = False
     for layer, names in (
         (L1, L1_METRICS),
         (L2, L2_METRICS),
@@ -761,6 +776,7 @@ def _blocked_coverage(
     layer_reports: Mapping[str, Mapping[str, Any]],
     active_metrics: Mapping[str, list[str]],
     weights: Mapping[str, float],
+    profile_version: str,
 ) -> dict[str, Any]:
     active_layers = [
         layer
@@ -797,7 +813,7 @@ def _blocked_coverage(
         "per_layer_active_metric_signature": per_layer_signature,
         "layer_weight_signature": layer_weight_signature,
         "comparability_signature": (
-            f"{CANONICAL_PROFILE_VERSION}|{layer_weight_signature}|"
+            f"{profile_version}|{layer_weight_signature}|"
             f"{per_layer_signature}"
         ),
         "covered_weight": 0.0,
@@ -817,6 +833,7 @@ def _evaluation_plan(
     prompt_granularity: str,
     weights: Mapping[str, float],
     active_metrics: Mapping[str, list[str]],
+    profile_version: str,
 ) -> dict[str, Any]:
     layers: dict[str, Any] = {}
     for layer in (L0, L1, L2, L3, L4):
@@ -832,7 +849,7 @@ def _evaluation_plan(
         layers[layer]["execution_status"] = "blocked_by_submission_readiness"
         layers[layer]["active_metrics"] = list(active_metrics[layer])
     return {
-        "profile_version": CANONICAL_PROFILE_VERSION,
+        "profile_version": profile_version,
         "profile_status": "frozen",
         "workflow": CANONICAL_WORKFLOW,
         "prompt_granularity": prompt_granularity,

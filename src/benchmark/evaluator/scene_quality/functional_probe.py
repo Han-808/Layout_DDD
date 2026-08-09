@@ -17,6 +17,17 @@ from benchmark.evaluator.scene_quality.functional_boundary_evidence import (
     boundary_evidence_for_targets,
     discovery_with_boundary_hypotheses,
 )
+from benchmark.evaluator.scene_quality.functional_checks import (
+    FUNCTIONAL_CHECK_LEDGER_VERSION,
+    checks_for_group,
+    forced_group_ids_from_checks,
+    update_functional_check_evidence,
+)
+from benchmark.evaluator.scene_quality.functional_planner_adapter import (
+    FUNCTIONAL_DISCOVERY_PLANNER_MODE,
+    FunctionalEvidencePlannerAdapter,
+    LEGACY_FUNCTIONAL_PROBE_PLANNER_MODE,
+)
 from benchmark.rendering.camera_pose import (
     FUNCTIONAL_PROBE_CANDIDATE_BUDGETS,
 )
@@ -24,16 +35,17 @@ from benchmark.visual_judge.functional_discovery import (
     FUNCTIONAL_DISCOVERY_SCHEMA_VERSION,
 )
 from benchmark.visual_judge.functional_evidence import (
+    FUNCTIONAL_PROBE_DEFAULT_UNITS,
     FUNCTIONAL_PROBE_MAX_UNITS,
     FUNCTIONAL_PROBE_PLAN_VERSION,
 )
 
 
 FUNCTIONAL_PROBE_ACQUISITION_VERSION = (
-    "functional_probe_acquisition_v3"
+    "functional_probe_acquisition_v5"
 )
 FUNCTIONAL_PROBE_JUDGE_PACKET_VERSION = (
-    "functional_probe_judge_packet_v4"
+    "functional_probe_judge_packet_v6"
 )
 
 
@@ -43,9 +55,11 @@ def acquire_functional_probe_evidence(
     provider: Any,
     scene: dict[str, Any],
     global_image_path: str,
-    max_probe_units: int = FUNCTIONAL_PROBE_MAX_UNITS,
+    max_probe_units: int = FUNCTIONAL_PROBE_DEFAULT_UNITS,
     groups: list[dict[str, Any]] | None = None,
     grouping_report: dict[str, Any] | None = None,
+    identity_image_path: str | None = None,
+    identity_legend: dict[str, str] | None = None,
 ) -> tuple[list[str], dict[str, Any]]:
     """Plan and render raw probe images without issuing a metric verdict."""
 
@@ -80,17 +94,8 @@ def acquire_functional_probe_evidence(
         ),
         "source_scene_modified": False,
     }
-    discovery_call = getattr(
-        planner,
-        "discover_functional_evidence",
-        None,
-    )
-    legacy_plan_call = getattr(
-        planner,
-        "plan_functional_evidence",
-        None,
-    )
-    if not callable(discovery_call) and not callable(legacy_plan_call):
+    planner_adapter = FunctionalEvidencePlannerAdapter(planner)
+    if not planner_adapter.configured:
         audit["reason"] = "functional_evidence_planner_not_configured"
         return [], audit
     provider_call = getattr(
@@ -112,6 +117,8 @@ def acquire_functional_probe_evidence(
         "objects": minimal_objects,
         "groups": _minimal_group_list(groups),
         "max_probe_units": int(max_probe_units),
+        "identity_image_path": identity_image_path,
+        "identity_legend": deepcopy(identity_legend or {}),
     }
     audit["planner_input"] = {
         "metric": "functional_consistency",
@@ -122,6 +129,10 @@ def acquire_functional_probe_evidence(
         "objects": deepcopy(minimal_objects),
         "groups": _minimal_group_list(groups),
         "max_probe_units": int(max_probe_units),
+        "identity_grounding": {
+            "image_path": identity_image_path,
+            "legend": deepcopy(identity_legend or {}),
+        },
         "excluded_fields": [
             "center",
             "size",
@@ -130,31 +141,49 @@ def acquire_functional_probe_evidence(
             "grouping_reason",
         ],
     }
+    boundary_evidence: dict[str, Any] | None = None
+
+    def _build_plan_from_discovery(
+        discovery: Any,
+    ) -> dict[str, Any]:
+        nonlocal boundary_evidence
+        boundary_evidence = acquire_functional_boundary_evidence(
+            provider=provider,
+            scene=scene,
+            discovery=discovery,
+            architecture_context=architecture_context,
+        )
+        return build_functional_acquisition_plan(
+            discovery_with_boundary_hypotheses(
+                discovery,
+                boundary_evidence,
+            ),
+            max_probe_units=max_probe_units,
+            groups=groups,
+            scene=scene,
+        )
+
     try:
-        if callable(discovery_call):
-            discovery = discovery_call(planning_request)
-            boundary_evidence = acquire_functional_boundary_evidence(
-                provider=provider,
-                scene=scene,
-                discovery=discovery,
-                architecture_context=architecture_context,
-            )
+        planner_execution = planner_adapter.execute(
+            planning_request,
+            build_plan_from_discovery=_build_plan_from_discovery,
+        )
+        plan = planner_execution.plan
+        discovery = planner_execution.discovery
+        if (
+            planner_execution.mode
+            == FUNCTIONAL_DISCOVERY_PLANNER_MODE
+        ):
             audit["functional_boundary_evidence"] = deepcopy(
                 boundary_evidence
             )
-            plan = build_functional_acquisition_plan(
-                discovery_with_boundary_hypotheses(
-                    discovery,
-                    boundary_evidence,
-                ),
-                max_probe_units=max_probe_units,
-            )
             audit["functional_discovery"] = deepcopy(discovery)
             audit["functional_acquisition_plan"] = deepcopy(plan)
-            audit["planner_mode"] = "functional_discovery_v3"
-        else:
-            plan = legacy_plan_call(planning_request)
-            audit["planner_mode"] = "legacy_functional_probe_plan_v2"
+            if isinstance(plan, dict):
+                audit["functional_check_ledger"] = deepcopy(
+                    plan.get("functional_check_ledger")
+                )
+        audit["planner_mode"] = planner_execution.mode
     except Exception as exc:
         audit.update(
             status="failed",
@@ -162,6 +191,11 @@ def acquire_functional_probe_evidence(
             error_type=type(exc).__name__,
             error=str(exc),
         )
+        schema_audit = getattr(exc, "schema_audit", None)
+        if isinstance(schema_audit, dict):
+            audit["response_schema_validation"] = deepcopy(
+                schema_audit
+            )
         return [], audit
     units = (
         plan.get("probe_units")
@@ -169,26 +203,22 @@ def acquire_functional_probe_evidence(
         and isinstance(plan.get("probe_units"), list)
         else []
     )
-    audit["planner_request_metadata"] = deepcopy(
-        (
-            discovery.get("provenance", {}).get("request_metadata")
-            if callable(discovery_call)
-            and isinstance(discovery, dict)
-            else plan.get("request_metadata")
-            if isinstance(plan, dict)
-            else None
-        )
-    )
-    audit["planner_reason"] = (
-        str(discovery.get("reason") or "")
-        if callable(discovery_call) and isinstance(discovery, dict)
-        else str(plan.get("reason") or "")
+    backfill_units = (
+        plan.get("backfill_probe_units")
         if isinstance(plan, dict)
-        else ""
+        and isinstance(plan.get("backfill_probe_units"), list)
+        else []
     )
+    audit["planner_request_metadata"] = deepcopy(
+        planner_execution.request_metadata
+    )
+    audit["planner_reason"] = planner_execution.reason
     if isinstance(plan, dict):
         audit["group_confirmations"] = deepcopy(
             plan.get("group_confirmations") or []
+        )
+        audit["object_evidence_policy"] = deepcopy(
+            plan.get("object_evidence_policy") or {}
         )
         audit["unscheduled_discovery_items"] = deepcopy(
             plan.get("unscheduled_discovery_items") or []
@@ -201,24 +231,34 @@ def acquire_functional_probe_evidence(
         )
         audit["forced_group_ids"] = list(
             dict.fromkeys(
-                str(item.get("owning_group_id"))
-                for item in [
-                    *units,
-                    *(
-                        plan.get("unscheduled_discovery_items") or []
+                [
+                    *[
+                        str(item.get("owning_group_id"))
+                        for item in [
+                            *units,
+                            *backfill_units,
+                            *(
+                                plan.get("unscheduled_discovery_items") or []
+                            ),
+                        ]
+                        if isinstance(item, dict)
+                        and item.get("route_scope") == "group_local"
+                        and item.get("owning_group_id")
+                    ],
+                    *forced_group_ids_from_checks(
+                        plan.get("functional_check_ledger")
                     ),
                 ]
-                if isinstance(item, dict)
-                and item.get("route_scope") == "group_local"
-                and item.get("owning_group_id")
             )
         )
     audit["probe_units"] = deepcopy(units)
+    audit["backfill_probe_units"] = deepcopy(backfill_units)
     if not units:
         _attach_boundary_evidence_to_group_packets(
             audit,
             groups=groups,
         )
+        _attach_required_checks_to_group_packets(audit, groups=groups)
         _summarize_usable_surface_usage(audit)
         audit.update(
             rendered_probe_count=0,
@@ -235,6 +275,7 @@ def acquire_functional_probe_evidence(
             audit,
             groups=groups,
         )
+        _attach_required_checks_to_group_packets(audit, groups=groups)
         _summarize_usable_surface_usage(audit)
         audit.update(
             status="failed",
@@ -251,10 +292,42 @@ def acquire_functional_probe_evidence(
     }
     selected_paths: list[str] = []
     failures = 0
-    for unit in units:
+    successful_probe_count = 0
+    attempted_backfill_count = 0
+    backfill_attempt_quota: int | None = None
+    failed_discovery_items: list[dict[str, Any]] = []
+    candidate_units = [*units, *backfill_units]
+    primary_probe_target = len(units)
+    for candidate_index, unit in enumerate(candidate_units):
+        is_backfill = candidate_index >= len(units)
+        if is_backfill:
+            if backfill_attempt_quota is None:
+                backfill_attempt_quota = max(
+                    0,
+                    primary_probe_target - successful_probe_count,
+                )
+            if (
+                successful_probe_count >= primary_probe_target
+                or attempted_backfill_count >= backfill_attempt_quota
+            ):
+                break
         if not isinstance(unit, dict):
             failures += 1
             continue
+        if is_backfill:
+            attempted_backfill_count += 1
+            unit_identity = _probe_unit_identity_record(unit)
+            audit["unscheduled_discovery_items"] = [
+                item
+                for item in (
+                    audit.get("unscheduled_discovery_items") or []
+                )
+                if not (
+                    isinstance(item, dict)
+                    and item.get("acquisition_identity")
+                    == unit_identity
+                )
+            ]
         target_ids = list(
             dict.fromkeys(
                 [
@@ -277,7 +350,7 @@ def acquire_functional_probe_evidence(
         route_scope = str(
             "cross_group"
             if audit.get("planner_mode")
-            == "legacy_functional_probe_plan_v2"
+            == LEGACY_FUNCTIONAL_PROBE_PLANNER_MODE
             else unit.get("route_scope")
             or (
                 "cross_group"
@@ -330,6 +403,9 @@ def acquire_functional_probe_evidence(
                 if group_member_ids
                 else "specific_cross_group_targets"
             ),
+            "logical_boundary_enabled": bool(
+                architecture_context.get("logical_boundary_enabled")
+            ),
         }
         scene_summary_ids = set(group_member_ids or target_ids)
         provider_request = {
@@ -355,6 +431,7 @@ def acquire_functional_probe_evidence(
                 else []
             ),
             "scene": deepcopy(scene),
+            "architecture_context": deepcopy(architecture_context),
             "scene_summary": {
                 "scene_id": scene.get("scene_id"),
                 "scene_type": scene.get("scene_type"),
@@ -430,10 +507,34 @@ def acquire_functional_probe_evidence(
             "discovery_ids": deepcopy(
                 unit.get("discovery_ids") or []
             ),
+            "check_ids": deepcopy(unit.get("check_ids") or []),
             "acquisition_trigger": unit.get("acquisition_trigger"),
+            "acquisition_triggers": deepcopy(
+                unit.get("acquisition_triggers") or []
+            ),
+            "observation_goals": deepcopy(
+                unit.get("observation_goals") or []
+            ),
+            "observation_kinds": deepcopy(
+                unit.get("observation_kinds") or []
+            ),
+            "relation_predicates": deepcopy(
+                unit.get("relation_predicates") or []
+            ),
             "surface_targets": deepcopy(
                 unit.get("surface_targets") or []
             ),
+            "evidence_reuse": deepcopy(
+                unit.get("evidence_reuse") or {}
+            ),
+            "scheduling": {
+                "mode": (
+                    "deterministic_backfill"
+                    if is_backfill
+                    else "primary"
+                ),
+                "candidate_index": candidate_index,
+            },
             "camera_policy": {
                 "height_policy": "near_interaction_height",
                 "elevation_range_degrees": [8.0, 16.0],
@@ -470,6 +571,7 @@ def acquire_functional_probe_evidence(
             path = probe_paths[0]
             if path not in selected_paths:
                 selected_paths.append(path)
+            successful_probe_count += 1
             provider_usage = deepcopy(
                 getattr(provider, "last_call_usage", None)
             )
@@ -532,8 +634,49 @@ def acquire_functional_probe_evidence(
                 ),
                 provider_usage=provider_usage,
             )
+            failed_discovery_items.append(
+                {
+                    "acquisition_identity": (
+                        _probe_unit_identity_record(unit)
+                    ),
+                    "discovery_ids": deepcopy(
+                        unit.get("discovery_ids") or []
+                    ),
+                    "check_ids": deepcopy(unit.get("check_ids") or []),
+                    "target_ids": target_ids,
+                    "route_scope": route_scope,
+                    "owning_group_id": owning_group_id,
+                    "acquisition_trigger": unit.get(
+                        "acquisition_trigger"
+                    ),
+                    "observation_kinds": deepcopy(
+                        unit.get("observation_kinds") or []
+                    ),
+                    "relation_predicates": deepcopy(
+                        unit.get("relation_predicates") or []
+                    ),
+                    "observation_goal": probe["view_goal"],
+                    "reason": "probe_acquisition_failed",
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                }
+            )
         audit["probe_results"].append(result_record)
 
+    audit["failed_discovery_items"] = failed_discovery_items
+    audit["acquisition_coverage_complete"] = bool(
+        not audit.get("unscheduled_discovery_items")
+        and not failed_discovery_items
+    )
+    audit["coverage_complete"] = audit[
+        "acquisition_coverage_complete"
+    ]
+    audit["coverage_semantics"] = "artifact_acquisition_only"
+    audit["budget_exhausted"] = any(
+        isinstance(item, dict)
+        and item.get("reason") == "max_probe_units_exhausted"
+        for item in audit.get("unscheduled_discovery_items") or []
+    )
     audit["selected_raw_rgb_paths"] = list(selected_paths)
     audit["acquired_artifact_paths"] = list(
         dict.fromkeys(
@@ -600,6 +743,7 @@ def acquire_functional_probe_evidence(
         )
         observation_record = {
             "probe_id": result.get("probe_id"),
+            "check_ids": deepcopy(result.get("check_ids") or []),
             "probe_kind": result.get("kind"),
             "target_ids": deepcopy(result.get("target_ids") or []),
             "related_target_ids": deepcopy(
@@ -608,12 +752,24 @@ def acquire_functional_probe_evidence(
             "required_observations": deepcopy(
                 result.get("required_observations") or []
             ),
+            "observation_kinds": deepcopy(
+                result.get("observation_kinds") or []
+            ),
+            "relation_predicates": deepcopy(
+                result.get("relation_predicates") or []
+            ),
+            "observation_goals": deepcopy(
+                result.get("observation_goals") or []
+            ),
             "neutral_observation_goal": neutral_goal,
             "usable_surface": deepcopy(
                 result.get("usable_surface_audit")
             ),
             "functional_geometry": deepcopy(
                 result.get("functional_geometry")
+            ),
+            "evidence_reuse": deepcopy(
+                result.get("evidence_reuse") or {}
             ),
         }
         packet["observation_requests"].append(observation_record)
@@ -637,7 +793,15 @@ def acquire_functional_probe_evidence(
         for item in audit.get("unscheduled_discovery_items") or []
         if isinstance(item, dict)
     ]
-    for item in unscheduled:
+    undelivered = [
+        *unscheduled,
+        *[
+            item
+            for item in audit.get("failed_discovery_items") or []
+            if isinstance(item, dict)
+        ],
+    ]
+    for item in undelivered:
         if (
             item.get("route_scope") != "group_local"
             or not item.get("owning_group_id")
@@ -662,15 +826,37 @@ def acquire_functional_probe_evidence(
         audit,
         groups=groups,
     )
+    audit["functional_check_ledger"] = update_functional_check_evidence(
+        audit.get("functional_check_ledger")
+        or {
+            "schema_version": FUNCTIONAL_CHECK_LEDGER_VERSION,
+            "checks": [],
+            "decision_authority": "none",
+        },
+        probe_results=[
+            item
+            for item in audit.get("probe_results") or []
+            if isinstance(item, dict)
+        ],
+    )
+    _attach_required_checks_to_group_packets(audit, groups=groups)
     group_packets = audit["group_probe_packets"]
     for group_id, packet in group_packets.items():
         group_unscheduled = [
             item
-            for item in unscheduled
+            for item in undelivered
             if item.get("route_scope") == "group_local"
             and str(item.get("owning_group_id") or "") == group_id
         ]
-        packet["coverage_complete"] = not group_unscheduled
+        packet["acquisition_coverage_complete"] = not group_unscheduled
+        packet["observation_complete"] = False
+        packet["coverage_complete"] = bool(
+            packet["acquisition_coverage_complete"]
+            and not packet.get("required_checks")
+        )
+        packet["coverage_semantics"] = (
+            "acquisition_and_required_check_resolution"
+        )
         packet["undelivered_observation_goals"] = [
             str(item.get("observation_goal") or "")
             for item in group_unscheduled
@@ -686,7 +872,14 @@ def acquire_functional_probe_evidence(
         )
         packet["budget_state"] = {
             "max_probe_units": audit.get("max_probe_units"),
-            "budget_exhausted": bool(group_unscheduled),
+            "budget_exhausted": any(
+                item.get("reason") == "max_probe_units_exhausted"
+                for item in group_unscheduled
+            ),
+            "acquisition_failed": any(
+                item.get("reason") == "probe_acquisition_failed"
+                for item in group_unscheduled
+            ),
         }
     audit["group_evidence_paths"] = group_paths
     audit["group_probe_packets"] = group_packets
@@ -694,12 +887,18 @@ def acquire_functional_probe_evidence(
     audit["rendered_probe_count"] = len(selected_paths)
     audit["failed_probe_count"] = failures
     audit["planned_probe_count"] = len(units)
+    audit["attempted_probe_count"] = len(audit["probe_results"])
+    audit["attempted_backfill_count"] = attempted_backfill_count
+    audit["backfill_attempt_quota"] = int(
+        backfill_attempt_quota or 0
+    )
+    audit["successful_probe_count"] = successful_probe_count
     audit["status"] = (
         "complete"
         if (
             selected_paths
             and failures == 0
-            and not audit.get("budget_exhausted")
+            and audit.get("coverage_complete")
         )
         else "partial"
         if selected_paths
@@ -708,10 +907,12 @@ def acquire_functional_probe_evidence(
     audit["reason"] = (
         None
         if audit["status"] == "complete"
+        else "functional_probe_failures_and_budget_exhaustion"
+        if failures and audit.get("budget_exhausted")
+        else "one_or_more_functional_probes_failed"
+        if failures
         else "functional_acquisition_budget_exhausted"
         if audit.get("budget_exhausted")
-        else "one_or_more_functional_probes_failed"
-        if audit["status"] == "partial"
         else "no_functional_probe_evidence_available"
     )
     return selected_paths, audit
@@ -750,6 +951,7 @@ def functional_probe_judge_packet(
                 "image_alias": f"image_{offset:02d}",
                 "role": "functional_probe",
                 "probe_id": result.get("probe_id"),
+                "check_ids": deepcopy(result.get("check_ids") or []),
                 "probe_kind": result.get("kind"),
                 "target_ids": deepcopy(
                     result.get("target_ids") or []
@@ -759,6 +961,15 @@ def functional_probe_judge_packet(
                 ),
                 "required_observations": deepcopy(
                     result.get("required_observations") or []
+                ),
+                "observation_kinds": deepcopy(
+                    result.get("observation_kinds") or []
+                ),
+                "relation_predicates": deepcopy(
+                    result.get("relation_predicates") or []
+                ),
+                "observation_goals": deepcopy(
+                    result.get("observation_goals") or []
                 ),
                 "neutral_observation_goal": str(
                     result.get("view_goal")
@@ -770,6 +981,9 @@ def functional_probe_judge_packet(
                 ),
                 "functional_geometry": deepcopy(
                     result.get("functional_geometry")
+                ),
+                "evidence_reuse": deepcopy(
+                    result.get("evidence_reuse") or {}
                 ),
                 "presentation": "raw_rgb",
             }
@@ -790,6 +1004,84 @@ def functional_probe_judge_packet(
         or []
         if isinstance(item, dict) and item.get("target_id")
     }
+    undelivered_cross_group = [
+        item
+        for item in [
+            *(
+                acquisition_audit.get("unscheduled_discovery_items")
+                or []
+            ),
+            *(
+                acquisition_audit.get("failed_discovery_items")
+                or []
+            ),
+        ]
+        if isinstance(item, dict)
+        and item.get("route_scope") == "cross_group"
+    ]
+    relation_observation_requests = [
+        {
+            "probe_id": result.get("probe_id"),
+            "check_ids": deepcopy(result.get("check_ids") or []),
+            "discovery_ids": deepcopy(
+                result.get("discovery_ids") or []
+            ),
+            "scope": "cross_group",
+            "target_ids": list(
+                dict.fromkeys(
+                    [
+                        *[
+                            str(item)
+                            for item in result.get("target_ids") or []
+                        ],
+                        *[
+                            str(item)
+                            for item in (
+                                result.get("related_target_ids") or []
+                            )
+                        ],
+                    ]
+                )
+            ),
+            "observation_kinds": deepcopy(
+                result.get("observation_kinds") or []
+            ),
+            "relation_predicates": deepcopy(
+                result.get("relation_predicates") or []
+            ),
+            "observation_goals": deepcopy(
+                result.get("observation_goals")
+                or [result.get("view_goal")]
+            ),
+            "evidence_image_aliases": [
+                str(item.get("image_alias"))
+                for item in image_roles
+                if item.get("probe_id") == result.get("probe_id")
+            ],
+            "instructional_role": "relation_to_inspect",
+            "evidence_reuse": deepcopy(
+                result.get("evidence_reuse") or {}
+            ),
+            "decision_authority": "none",
+        }
+        for result in acquisition_audit.get("probe_results") or []
+        if isinstance(result, dict)
+        and result.get("status") == "available"
+        and result.get("route_scope") == "cross_group"
+        and result.get("kind") == "functional_correspondence"
+    ]
+    required_checks = [
+        deepcopy(check)
+        for check in (
+            (
+                acquisition_audit.get("functional_check_ledger")
+                or {}
+            ).get("checks")
+            or []
+        )
+        if isinstance(check, dict)
+        and check.get("owner_stage") == "cross_group_relation"
+    ]
     return {
         "schema_version": FUNCTIONAL_PROBE_JUDGE_PACKET_VERSION,
         "planning_role": "visual_evidence_only_no_metric_verdict",
@@ -818,35 +1110,33 @@ def functional_probe_judge_packet(
                 },
             }
         ),
+        "relation_observation_requests": (
+            relation_observation_requests
+        ),
+        "required_checks": required_checks,
+        "required_check_ids": [
+            str(check.get("check_id") or "")
+            for check in required_checks
+        ],
+        "required_check_count": len(required_checks),
         "image_order": image_roles,
-        "coverage_complete": not any(
-            isinstance(item, dict)
-            and item.get("route_scope") == "cross_group"
-            for item in (
-                acquisition_audit.get("unscheduled_discovery_items")
-                or []
-            )
+        "acquisition_coverage_complete": not undelivered_cross_group,
+        "observation_complete": False,
+        "coverage_complete": bool(
+            not undelivered_cross_group and not required_checks
+        ),
+        "coverage_semantics": (
+            "acquisition_and_required_check_resolution"
         ),
         "undelivered_observation_goals": [
             str(item.get("observation_goal") or "")
-            for item in (
-                acquisition_audit.get("unscheduled_discovery_items") or []
-            )
-            if isinstance(item, dict)
-            and item.get("route_scope") == "cross_group"
-            and str(item.get("observation_goal") or "").strip()
+            for item in undelivered_cross_group
+            if str(item.get("observation_goal") or "").strip()
         ],
         "undelivered_target_ids": list(
             dict.fromkeys(
                 str(target_id)
-                for item in (
-                    acquisition_audit.get(
-                        "unscheduled_discovery_items"
-                    )
-                    or []
-                )
-                if isinstance(item, dict)
-                and item.get("route_scope") == "cross_group"
+                for item in undelivered_cross_group
                 for target_id in item.get("target_ids") or []
                 if str(target_id).strip()
             )
@@ -861,20 +1151,396 @@ def functional_probe_judge_packet(
             ),
             "budget_exhausted": bool(
                 any(
-                    isinstance(item, dict)
-                    and item.get("route_scope") == "cross_group"
-                    and item.get("reason") == "max_probe_units_exhausted"
-                    for item in (
-                        acquisition_audit.get(
-                            "unscheduled_discovery_items"
-                        )
-                        or []
-                    )
+                    item.get("reason") == "max_probe_units_exhausted"
+                    for item in undelivered_cross_group
+                )
+            ),
+            "acquisition_failed": bool(
+                any(
+                    item.get("reason") == "probe_acquisition_failed"
+                    for item in undelivered_cross_group
                 )
             ),
         },
         "source_scene_pixels_modified": False,
     }
+
+
+def functional_relation_judge_packet(
+    *,
+    global_paths: list[str],
+    probe_result: dict[str, Any],
+    required_checks: list[dict[str, Any]] | None = None,
+    required_check: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build one packet for atomic checks sharing a cross-group target set.
+
+    The caller starts the isolated Judge episode only after pair-specific
+    evidence is available. The packet still records acquisition state so a
+    missing artifact remains explicit in schedule/audit data instead of being
+    silently treated as sufficient global evidence.
+    """
+
+    if probe_result.get("route_scope") != "cross_group":
+        raise ValueError(
+            "functional relation Judge packet requires cross_group scope"
+        )
+    if probe_result.get("kind") != "functional_correspondence":
+        raise ValueError(
+            "functional relation Judge packet requires a correspondence"
+        )
+    probe_paths = [
+        str(path)
+        for path in probe_result.get("evidence_paths") or []
+        if str(path).strip()
+    ]
+    pair_specific_available = (
+        probe_result.get("status") == "available"
+        and bool(probe_paths)
+    )
+    if required_checks is not None and required_check is not None:
+        raise ValueError(
+            "supply required_checks or required_check, not both"
+        )
+    normalized_required_checks = (
+        [
+            deepcopy(check)
+            for check in required_checks
+            if isinstance(check, dict)
+        ]
+        if required_checks is not None
+        else [deepcopy(required_check)]
+        if isinstance(required_check, dict)
+        else []
+    )
+    if required_checks is not None and len(normalized_required_checks) != len(
+        required_checks
+    ):
+        raise TypeError("required_checks must contain JSON objects")
+    if probe_result.get("status") == "available" and not probe_paths:
+        raise ValueError(
+            "functional relation Judge packet requires pair-specific evidence"
+        )
+    target_ids = list(
+        dict.fromkeys(
+            [
+                *[
+                    str(item)
+                    for item in probe_result.get("target_ids") or []
+                ],
+                *[
+                    str(item)
+                    for item in (
+                        probe_result.get("related_target_ids") or []
+                    )
+                ],
+            ]
+        )
+    )
+    if pair_specific_available:
+        packet = functional_probe_judge_packet(
+            global_paths=global_paths,
+            probe_paths=probe_paths,
+            acquisition_audit={
+                "probe_results": [deepcopy(probe_result)],
+                "unscheduled_discovery_items": [],
+                "failed_discovery_items": [],
+                "functional_check_ledger": {
+                    "schema_version": FUNCTIONAL_CHECK_LEDGER_VERSION,
+                    "checks": normalized_required_checks,
+                    "decision_authority": "none",
+                },
+                "max_probe_units": 1,
+                "planned_probe_count": 1,
+                "rendered_probe_count": 1,
+            },
+        )
+    else:
+        image_roles = [
+            {
+                "image_index": index,
+                "image_alias": f"image_{index:02d}",
+                "role": "scene_global_relation_fallback",
+            }
+            for index, _ in enumerate(global_paths)
+        ]
+        packet = {
+            "schema_version": FUNCTIONAL_PROBE_JUDGE_PACKET_VERSION,
+            "planning_role": "visual_evidence_only_no_metric_verdict",
+            "probe_inclusion_is_invalidity_prior": False,
+            "boundary_clearance_evidence": {
+                "schema_version": FUNCTIONAL_BOUNDARY_EVIDENCE_VERSION,
+                "status": "not_applicable",
+                "decision_authority": "none",
+                "scene_access": "read_only",
+                "requested_surface_targets": [],
+                "usable_surface_hypotheses": [],
+                "functional_geometry": {
+                    "surface_observations": [],
+                    "observation_status": "unavailable",
+                    "decision_authority": "none",
+                    "scene_access": "read_only",
+                },
+            },
+            "relation_observation_requests": [
+                {
+                    "probe_id": probe_result.get("probe_id"),
+                    "check_ids": [
+                        str(check.get("check_id") or "")
+                        for check in normalized_required_checks
+                    ],
+                    "discovery_ids": deepcopy(
+                        probe_result.get("discovery_ids") or []
+                    ),
+                    "scope": "cross_group",
+                    "target_ids": target_ids,
+                    "observation_kinds": deepcopy(
+                        probe_result.get("observation_kinds") or []
+                    ),
+                    "relation_predicates": deepcopy(
+                        probe_result.get("relation_predicates") or []
+                    ),
+                    "observation_goals": deepcopy(
+                        probe_result.get("observation_goals")
+                        or [probe_result.get("view_goal")]
+                    ),
+                    "evidence_image_aliases": [
+                        item["image_alias"] for item in image_roles
+                    ],
+                    "instructional_role": "relation_to_inspect",
+                    "decision_authority": "none",
+                    "pair_specific_evidence_available": False,
+                }
+            ],
+            "image_order": image_roles,
+            "required_checks": normalized_required_checks,
+            "required_check_ids": [
+                str(check.get("check_id") or "")
+                for check in normalized_required_checks
+            ],
+            "required_check_count": len(normalized_required_checks),
+            "coverage_complete": False,
+            "acquisition_coverage_complete": False,
+            "observation_complete": False,
+            "coverage_semantics": (
+                "acquisition_and_required_check_resolution"
+            ),
+            "undelivered_observation_goals": deepcopy(
+                probe_result.get("observation_goals")
+                or [probe_result.get("view_goal")]
+            ),
+            "undelivered_target_ids": target_ids,
+            "budget_state": {
+                "max_probe_units": 1,
+                "planned_probe_count": 1,
+                "rendered_probe_count": 0,
+                "budget_exhausted": (
+                    probe_result.get("status") == "not_scheduled"
+                ),
+                "acquisition_failed": (
+                    probe_result.get("status") != "not_scheduled"
+                ),
+            },
+            "source_scene_pixels_modified": False,
+        }
+    packet.update(
+        episode_scope="single_cross_group_relation_target_set",
+        relation_id=str(
+            (probe_result.get("discovery_ids") or [None])[0]
+            or probe_result.get("probe_id")
+            or ""
+        ),
+        relation_predicates=deepcopy(
+            probe_result.get("relation_predicates") or []
+        ),
+        probe_id=probe_result.get("probe_id"),
+        allowed_defect_target_ids=target_ids,
+        defect_target_policy="non_empty_subset_offending_objects_only",
+        pair_specific_evidence_available=pair_specific_available,
+        artifact_rendered=pair_specific_available,
+        view_coverage_complete=False,
+        observation_complete=False,
+        machine_observation_complete=(
+            _machine_observation_complete(
+                probe_result,
+                target_ids=target_ids,
+            )
+        ),
+        acquisition_status=str(
+            probe_result.get("status") or "failed"
+        ),
+        acquisition_error=(
+            {
+                "error_type": probe_result.get("error_type"),
+                "error": probe_result.get("error"),
+            }
+            if not pair_specific_available
+            else None
+        ),
+        decision_authority="none",
+    )
+    return packet
+
+
+def _machine_observation_complete(
+    probe_result: dict[str, Any],
+    *,
+    target_ids: list[str],
+) -> bool | None:
+    """Report decoder coverage separately from rendered-artifact availability."""
+
+    requested_surface_ids = {
+        str(item.get("target_id") or "")
+        for item in probe_result.get("surface_targets") or []
+        if isinstance(item, dict) and item.get("target_id")
+    }
+    if not requested_surface_ids:
+        return None
+    usable_surface = (
+        probe_result.get("usable_surface_audit")
+        if isinstance(probe_result.get("usable_surface_audit"), dict)
+        else {}
+    )
+    functional_geometry = (
+        probe_result.get("functional_geometry")
+        if isinstance(probe_result.get("functional_geometry"), dict)
+        else {}
+    )
+    observed_ids = {
+        str(item.get("target_id") or "")
+        for item in [
+            *(usable_surface.get("hypotheses") or []),
+            *(functional_geometry.get("surface_observations") or []),
+        ]
+        if isinstance(item, dict) and item.get("target_id")
+    }
+    trusted_targets = {str(item) for item in target_ids}
+    return bool(
+        requested_surface_ids
+        and requested_surface_ids <= trusted_targets
+        and requested_surface_ids <= observed_ids
+    )
+
+
+def _probe_unit_identity_record(unit: dict[str, Any]) -> list[Any]:
+    return [
+        str(unit.get("kind") or ""),
+        sorted(
+            {
+                *[
+                    str(item)
+                    for item in unit.get("target_ids") or []
+                ],
+                *[
+                    str(item)
+                    for item in unit.get("related_target_ids") or []
+                ],
+            }
+        ),
+        sorted(
+            str(item)
+            for item in unit.get("required_observations") or []
+        ),
+    ]
+
+
+def _attach_required_checks_to_group_packets(
+    audit: dict[str, Any],
+    *,
+    groups: list[dict[str, Any]] | None,
+) -> None:
+    """Route every accepted group-local obligation to its owning Judge."""
+
+    ledger = (
+        audit.get("functional_check_ledger")
+        if isinstance(audit.get("functional_check_ledger"), dict)
+        else {}
+    )
+    packets = (
+        audit.get("group_probe_packets")
+        if isinstance(audit.get("group_probe_packets"), dict)
+        else {}
+    )
+    forced_group_ids = [
+        str(item)
+        for item in audit.get("forced_group_ids") or []
+        if str(item).strip()
+    ]
+    trusted_group_ids = {
+        str(group.get("group_id") or "")
+        for group in groups or []
+        if isinstance(group, dict) and group.get("group_id")
+    }
+    for group_id in forced_group_ids_from_checks(ledger):
+        if trusted_group_ids and group_id not in trusted_group_ids:
+            raise ValueError(
+                "functional check references an unknown owning group "
+                f"{group_id!r}"
+            )
+        required_checks = checks_for_group(ledger, group_id)
+        if not required_checks:
+            continue
+        packet = packets.setdefault(
+            group_id,
+            {
+                "schema_version": FUNCTIONAL_PROBE_JUDGE_PACKET_VERSION,
+                "planning_role": (
+                    "visual_evidence_only_no_metric_verdict"
+                ),
+                "probe_inclusion_is_invalidity_prior": False,
+                "group_id": group_id,
+                "observation_requests": [],
+                "image_order": [],
+            },
+        )
+        packet["required_checks"] = required_checks
+        packet["required_check_ids"] = [
+            str(check["check_id"]) for check in required_checks
+        ]
+        packet["required_check_count"] = len(required_checks)
+        architecture_orientation_checks = [
+            check
+            for check in required_checks
+            if check.get("check_type") == "architecture_orientation"
+        ]
+        clearance_checks = [
+            check
+            for check in required_checks
+            if check.get("check_type") == "clearance"
+        ]
+        packet["architecture_orientation_policy"] = {
+            "check_ids": [
+                str(check["check_id"])
+                for check in architecture_orientation_checks
+            ],
+            "predicate": (
+                "usable_side_points_toward_plausible_accessible_interior"
+            ),
+            "deterministic_direction_descriptor": "routing_only",
+            "judge_evidence": [
+                "one_angled_global_view",
+                "same_side_conditioned_local_view",
+            ],
+            "independent_from_clearance": True,
+            "decision_authority": "judge",
+        }
+        packet["clearance_policy"] = {
+            "check_ids": [
+                str(check["check_id"]) for check in clearance_checks
+            ],
+            "predicate": (
+                "required_approach_opening_or_operation_space_is_available"
+            ),
+            "architecture_is_a_possible_blocker_not_a_separate_check": True,
+            "independent_from_architecture_orientation": True,
+            "decision_authority": "judge",
+        }
+        packet["observation_complete"] = False
+        packet["decision_authority"] = "none"
+        if group_id not in forced_group_ids:
+            forced_group_ids.append(group_id)
+    audit["group_probe_packets"] = packets
+    audit["forced_group_ids"] = forced_group_ids
 
 
 def _attach_boundary_evidence_to_group_packets(
@@ -937,18 +1603,19 @@ def _attach_boundary_evidence_to_group_packets(
         packet["observation_requests"].append(
             {
                 "probe_id": "functional_boundary_prepass",
-                "probe_kind": "usable_side_boundary_clearance",
+                "probe_kind": "usable_side_direction_prepass",
                 "target_ids": target_ids,
                 "related_target_ids": [],
                 "required_observations": [
                     "interaction_side_visible",
-                    "approach_zone_visible",
-                    "architecture_plane_visible",
+                    "front_back_disambiguated",
                 ],
                 "neutral_observation_goal": (
-                    "Consider the decoded usable-side hypothesis together "
-                    "with deterministic logical-boundary clearance facts. "
-                    "The measurements are evidence, not a validity threshold."
+                    "Use the decoded usable-side hypothesis and deterministic "
+                    "direction descriptor only to bind the correct local "
+                    "view. Judge architecture orientation from the angled "
+                    "global plus side-conditioned local visuals. Optional "
+                    "clearance measurements are evidence, not thresholds."
                 ),
                 "usable_surface": deepcopy(
                     subset.get("usable_surface_hypotheses") or []
@@ -1180,22 +1847,35 @@ def _probe_view_goal(unit: dict[str, Any]) -> str:
         return (
             "Show the object's visually decoded usable or control side together "
             "with the nearest authoritative logical room boundary or visible "
-            "floor extent and the interior-side user approach and operating "
-            "region. Physical wall geometry may be absent; do not treat image "
-            "background outside the room footprint as usable floor space."
+            "architectural constraint and the interior-side user approach and "
+            "operating region. Physical wall geometry may be absent; do not "
+            "treat rendered background beyond the logical room boundary as "
+            "accessible interior space."
         )
     if kind == "functional_correspondence":
+        predicates = {
+            str(item)
+            for item in unit.get("relation_predicates") or []
+        }
+        if predicates == {"relative_use_geometry"}:
+            return (
+                "Show all related objects together at a scale that preserves "
+                "their relative position, distance, reach, contact, or "
+                "connection region. Do not require a usable-side view unless "
+                "another supplied observation explicitly requests it."
+            )
         return (
             "From a relevant usable-side half-space, show the related objects "
             "together at near interaction height. Keep their usable faces, "
-            "mutual interaction orientation, and the outward context those "
-            "faces address visually decodable."
+            "relative directions, relative-use geometry, and the context "
+            "required by every supplied atomic predicate visually decodable."
         )
     if kind == "approach_clearance":
         return (
             "From the usable-side or approach-side half-space, keep the "
-            "object's usable face visible together with a wider floor-level "
-            "user approach or operating-clearance zone."
+            "object's usable face visible together with the wider user approach "
+            "or operating-clearance zone and its nearby architectural "
+            "constraints."
         )
     return (
         "From the usable-side half-space, show the object's functional "
