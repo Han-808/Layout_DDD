@@ -79,7 +79,11 @@ from benchmark.visual_judge.functional_evidence import (
     FUNCTIONAL_PROBE_MAX_UNITS,
 )
 from benchmark.visual_judge.orchestration.budget import (
+    extend_acquisition_ledger,
     merge_acquisition_ledger_delta,
+)
+from benchmark.visual_judge.orchestration.audit import (
+    evidence_artifact_refs,
 )
 from benchmark.visual_judge.contracts import (
     response_schema_audit_from_exception,
@@ -835,60 +839,6 @@ def evaluate_global_discovery_then_group_local(
             )
             else {}
         )
-        if group_probe_paths:
-            existing_metric = local_input.get(metric_name)
-            existing_metric = (
-                deepcopy(existing_metric)
-                if isinstance(existing_metric, dict)
-                else {}
-            )
-            for group_id, paths in group_probe_paths.items():
-                if isinstance(paths, list) and paths:
-                    existing_paths = existing_metric.get(str(group_id))
-                    existing_paths = (
-                        existing_paths
-                        if isinstance(existing_paths, list)
-                        else []
-                    )
-                    existing_metric[str(group_id)] = list(
-                        dict.fromkeys(
-                            [
-                                *[
-                                    str(path)
-                                    for path in existing_paths
-                                    if str(path).strip()
-                                ],
-                                *[
-                                    str(path)
-                                    for path in paths
-                                    if str(path).strip()
-                                ],
-                            ]
-                        )
-                    )
-            local_input[metric_name] = existing_metric
-            packet_capacity = _judge_packet_capacity(vlm_judge)
-            largest_scoped_packet = max(
-                (
-                    len(paths)
-                    for paths in existing_metric.values()
-                    if isinstance(paths, list)
-                ),
-                default=int(local_policy["scoped_image_budget"]),
-            )
-            available_scoped_slots = max(
-                0,
-                packet_capacity
-                - int(local_policy["global_image_budget"]),
-            )
-            local_policy["scoped_image_budget"] = min(
-                largest_scoped_packet,
-                available_scoped_slots,
-            )
-            local_policy["image_budget"] = (
-                int(local_policy["global_image_budget"])
-                + int(local_policy["scoped_image_budget"])
-            )
         packets = resolve_group_evidence_packets(
             local_input,
             metric_name=metric_name,
@@ -912,6 +862,12 @@ def evaluate_global_discovery_then_group_local(
                 else None
             ),
         )
+        if metric_name == "functional_consistency" and group_probe_paths:
+            packets = _append_group_owned_probe_evidence(
+                packets,
+                group_probe_paths=group_probe_paths,
+                max_packet_images=_judge_packet_capacity(vlm_judge),
+            )
         packet_ledgers = [
             packet.get("metric_camera_acquisition_ledger_after")
             for packet in packets
@@ -1923,6 +1879,115 @@ def _judge_packet_capacity(judge: Any) -> int:
     if isinstance(value, int) and not isinstance(value, bool):
         return max(1, value)
     return 6
+
+
+def _append_group_owned_probe_evidence(
+    packets: list[dict[str, Any]],
+    *,
+    group_probe_paths: dict[str, Any],
+    max_packet_images: int,
+) -> list[dict[str, Any]]:
+    """Append reusable probes after resolving baseline group-local evidence.
+
+    A functional probe is supplementary evidence for a routed check. It must
+    not satisfy the mandatory group-local scope by itself, otherwise supplying
+    a probe suppresses the normal camera provider and silently changes the
+    group review from ``global + local`` to ``global + probe``.
+    """
+
+    capacity = max(1, int(max_packet_images))
+    normalized: list[dict[str, Any]] = []
+    for original in packets:
+        packet = deepcopy(original)
+        group_id = str((packet.get("group") or {}).get("group_id") or "")
+        baseline_paths = list(
+            dict.fromkeys(
+                str(path)
+                for path in packet.get("paths") or []
+                if str(path).strip()
+            )
+        )
+        requested_paths = list(
+            dict.fromkeys(
+                str(path)
+                for path in group_probe_paths.get(group_id) or []
+                if str(path).strip()
+            )
+        )
+        available_slots = max(0, capacity - len(baseline_paths))
+        appended_paths = [
+            path for path in requested_paths if path not in baseline_paths
+        ][:available_slots]
+        omitted_paths = [
+            path
+            for path in requested_paths
+            if path not in baseline_paths and path not in appended_paths
+        ]
+        combined_paths = [*baseline_paths, *appended_paths]
+        packet["paths"] = combined_paths
+
+        resolution = (
+            packet.get("resolution")
+            if isinstance(packet.get("resolution"), dict)
+            else {}
+        )
+        baseline_scope_satisfied = bool(
+            resolution.get("scope_satisfied")
+        )
+        baseline_scoped_count = int(
+            resolution.get("scoped_evidence_count") or 0
+        )
+        resolution["functional_probe_reuse"] = {
+            "policy": "append_after_baseline_group_local_v1",
+            "baseline_group_local_preserved": bool(
+                baseline_scope_satisfied and baseline_scoped_count > 0
+            ),
+            "baseline_packet_paths": baseline_paths,
+            "requested_probe_paths": requested_paths,
+            "appended_probe_paths": appended_paths,
+            "omitted_probe_paths": omitted_paths,
+        }
+        if appended_paths:
+            resolution["source"] = (
+                f"{resolution.get('source') or 'unknown'}"
+                "_plus_functional_probe_reuse"
+            )
+            resolution["scoped_evidence_count"] = (
+                baseline_scoped_count + len(appended_paths)
+            )
+        acquisition_budget = resolution.get("acquisition_budget")
+        if isinstance(acquisition_budget, dict):
+            acquisition_budget["initial_judge_evidence_count"] = len(
+                evidence_artifact_refs(combined_paths)
+            )
+            acquisition_budget["reused_probe_artifact_count"] = len(
+                evidence_artifact_refs(appended_paths)
+            )
+            acquisition_budget["omitted_probe_artifact_count"] = len(
+                evidence_artifact_refs(omitted_paths)
+            )
+        packet["resolution"] = resolution
+        packet["camera_acquisition_ledger_after"] = (
+            extend_acquisition_ledger(
+                packet.get("camera_acquisition_ledger_after"),
+                artifact_ids=evidence_artifact_refs(appended_paths),
+            )
+        )
+        packet["metric_camera_acquisition_ledger_after"] = (
+            extend_acquisition_ledger(
+                packet.get("metric_camera_acquisition_ledger_after"),
+                artifact_ids=evidence_artifact_refs(appended_paths),
+            )
+        )
+        if isinstance(acquisition_budget, dict):
+            acquisition_budget["metric_artifact_count_after"] = int(
+                packet["metric_camera_acquisition_ledger_after"].get(
+                    "total_images_acquired"
+                )
+                or 0
+            )
+        normalized.append(packet)
+    return normalized
 
 
 def _minimum_group_members(plan: dict[str, Any]) -> int:

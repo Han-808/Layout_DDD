@@ -1739,6 +1739,7 @@ def test_functional_discovery_routes_cross_group_and_unusual_to_group(
         tmp_path,
         "global",
         "cross_group",
+        "baseline_group_local",
         "group_confirmation",
     )
     probe_calls: list[dict] = []
@@ -1851,9 +1852,14 @@ def test_functional_discovery_routes_cross_group_and_unusual_to_group(
 
     def local_provider(request: dict) -> list[dict]:
         local_calls.append(request)
-        raise AssertionError(
-            "targeted group evidence should be reused without rerender"
-        )
+        return [
+            {
+                "path": images["baseline_group_local"],
+                "role": "group_local",
+                "evidence_style": "raw",
+                "image_transform": "none",
+            }
+        ]
 
     def judge(request: dict) -> dict:
         judge_calls.append(request)
@@ -1894,7 +1900,7 @@ def test_functional_discovery_routes_cross_group_and_unusual_to_group(
     # Exact-target reuse leaves four unique probe identities even though
     # the default bounded capacity is six.
     assert len(probe_calls) == 4
-    assert local_calls == []
+    assert len(local_calls) == 2
     cross_request = next(
         request
         for request in probe_calls
@@ -1964,6 +1970,7 @@ def test_functional_discovery_routes_cross_group_and_unusual_to_group(
     )
     assert group_002_judge["render_evidence"] == [
         images["global"],
+        images["baseline_group_local"],
         images["group_confirmation"],
     ]
     observation_goals = [
@@ -1988,6 +1995,17 @@ def test_functional_discovery_routes_cross_group_and_unusual_to_group(
         "group_001": [images["group_confirmation"]],
         "group_002": [images["group_confirmation"]],
     }
+    group_002_result = next(
+        item
+        for item in metric["group_results"]
+        if item["group_id"] == "group_002"
+    )
+    assert group_002_result["evidence_resolution"][
+        "functional_probe_reuse"
+    ]["baseline_group_local_preserved"] is True
+    assert group_002_result["evidence_resolution"][
+        "functional_probe_reuse"
+    ]["appended_probe_paths"] == [images["group_confirmation"]]
     assert metric["cross_group_relation_phase"] == {
         "required": True,
         "scheduled_relation_count": 1,
@@ -2308,7 +2326,12 @@ def test_functional_discovery_forces_singleton_unusual_confirmation(
             }
         ],
     }
-    images = _images(tmp_path, "global", "confirmation")
+    images = _images(
+        tmp_path,
+        "global",
+        "baseline_group_local",
+        "confirmation",
+    )
     judge_calls: list[dict] = []
 
     class Discovery:
@@ -2352,9 +2375,14 @@ def test_functional_discovery_forces_singleton_unusual_confirmation(
         ]
 
     def local_provider(request: dict) -> list[dict]:
-        raise AssertionError(
-            "singleton confirmation must reuse targeted evidence"
-        )
+        return [
+            {
+                "path": images["baseline_group_local"],
+                "role": "group_local",
+                "evidence_style": "raw",
+                "image_transform": "none",
+            }
+        ]
 
     def judge(request: dict) -> dict:
         judge_calls.append(request)
@@ -2395,6 +2423,7 @@ def test_functional_discovery_forces_singleton_unusual_confirmation(
     assert len(judge_calls) == 2
     assert judge_calls[1]["render_evidence"] == [
         images["global"],
+        images["baseline_group_local"],
         images["confirmation"],
     ]
 

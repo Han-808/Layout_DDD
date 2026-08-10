@@ -106,7 +106,9 @@ verdict requires every listed check to resolve valid. Missing observation must
 be marked missing/unresolved and must not be silently treated as normal. For
 every invalid required check, include its exact check_id in exactly one
 defect.check_refs list. One physical defect may reference multiple invalid
-checks, but must not be duplicated merely to give each check a separate defect.
+checks only when defect.target_ids is a non-empty subset of every referenced
+check's target_ids. If invalid checks have different target scopes, emit one
+atomic defect per check instead of combining their target unions.
 Baseline defects that did not originate from a required check may omit
 check_refs. For an invalid clearance check, also return affected_object_ids,
 cause_kind
@@ -850,9 +852,16 @@ class OpenAICompatibleVLMJudge:
                 # Keep the low-level OpenAI-compatible transport importable
                 # without eagerly initializing the evaluator package.
                 from benchmark.evaluator.scene_quality.functional_checks import (
+                    canonicalize_functional_defect_check_linkage,
                     validate_functional_check_results,
                 )
 
+                normalized = canonicalize_functional_defect_check_linkage(
+                    normalized,
+                    required_checks=deepcopy(
+                        required_functional_checks
+                    ),
+                )
                 validate_functional_check_results(
                     normalized,
                     required_checks=deepcopy(

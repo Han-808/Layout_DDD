@@ -16,6 +16,7 @@ from benchmark.evaluator.scene_quality.claim_identity import (
     match_final_defects_to_routed_claims,
 )
 from benchmark.evaluator.scene_quality.functional_checks import (
+    canonicalize_functional_defect_check_linkage,
     canonicalize_typed_invalid_envelope,
     validate_functional_check_results,
 )
@@ -481,6 +482,18 @@ def evaluate_group_scoped_judgements(
                 ).get("required_checks")
                 or []
             )
+            if (
+                metric_name == "functional_consistency"
+                and required_functional_checks
+            ):
+                adjusted = canonicalize_functional_defect_check_linkage(
+                    adjusted,
+                    required_checks=[
+                        deepcopy(item)
+                        for item in required_functional_checks
+                        if isinstance(item, dict)
+                    ],
+                )
             check_resolution = (
                 validate_functional_check_results(
                     adjusted,

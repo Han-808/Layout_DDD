@@ -10,6 +10,7 @@ from benchmark.evaluator.scene_quality.functional_acquisition import (
 from benchmark.evaluator.scene_quality.functional_checks import (
     apply_functional_check_judgements,
     build_functional_check_ledger,
+    canonicalize_functional_defect_check_linkage,
     canonicalize_typed_invalid_envelope,
     checks_for_group,
     forced_group_ids_from_checks,
@@ -40,6 +41,68 @@ GROUPS = [
     {"group_id": "seating", "object_ids": ["sofa"]},
     {"group_id": "lighting", "object_ids": ["lamp"]},
 ]
+
+
+def test_multi_check_union_defect_is_split_into_atomic_linkages() -> None:
+    checks = [
+        {
+            "check_id": "functional_check_001",
+            "check_type": "within_group_correspondence",
+            "target_ids": ["armchair_01", "coffee_table"],
+        },
+        {
+            "check_id": "functional_check_002",
+            "check_type": "within_group_correspondence",
+            "target_ids": ["armchair_02", "coffee_table"],
+        },
+    ]
+    result = {
+        "verdict": "invalid",
+        "functional_check_results": [
+            {
+                "check_id": check["check_id"],
+                "target_ids": check["target_ids"],
+                "observation_status": "observed",
+                "conclusion": "invalid",
+                "reason": "The chair does not support the shared task.",
+            }
+            for check in checks
+        ],
+        "defects": [
+            {
+                "scope": "group_local",
+                "target_ids": [
+                    "armchair_01",
+                    "armchair_02",
+                    "coffee_table",
+                ],
+                "relation": "functional_correspondence",
+                "reason": "Both chair-table checks fail.",
+                "check_refs": [
+                    "functional_check_001",
+                    "functional_check_002",
+                ],
+            }
+        ],
+    }
+
+    normalized = canonicalize_functional_defect_check_linkage(
+        result,
+        required_checks=checks,
+    )
+
+    assert [item["check_refs"] for item in normalized["defects"]] == [
+        ["functional_check_001"],
+        ["functional_check_002"],
+    ]
+    assert [item["target_ids"] for item in normalized["defects"]] == [
+        ["armchair_01", "coffee_table"],
+        ["armchair_02", "coffee_table"],
+    ]
+    assert validate_functional_check_results(
+        normalized,
+        required_checks=checks,
+    )["complete"] is True
 
 
 def test_cross_group_episode_rejects_non_atomic_legacy_relation() -> None:

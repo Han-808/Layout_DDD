@@ -22,6 +22,7 @@ from benchmark.evaluator.scene_quality.claim_identity import (
     canonical_target_ids,
 )
 from benchmark.evaluator.scene_quality.functional_checks import (
+    canonicalize_functional_defect_check_linkage,
     canonicalize_typed_invalid_envelope,
     checks_for_cross_group_relation,
     functional_relation_required_observations,
@@ -677,6 +678,12 @@ def _evaluate_cross_group_relation_scopes(
                 authorized_deviations=authorized_deviations,
             )
             adjusted = canonicalize_typed_invalid_envelope(adjusted)
+            adjusted = canonicalize_functional_defect_check_linkage(
+                adjusted,
+                required_checks=deepcopy(
+                    spec.get("required_checks") or []
+                ),
+            )
             check_resolution = validate_functional_check_results(
                 adjusted,
                 required_checks=deepcopy(

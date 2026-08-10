@@ -894,6 +894,109 @@ def validate_functional_check_results(
     }
 
 
+def canonicalize_functional_defect_check_linkage(
+    result: dict[str, Any],
+    *,
+    required_checks: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Split a safe multi-check union defect into atomic check linkages.
+
+    Models sometimes describe one issue with the union of several atomic
+    check scopes. That shape is deterministic to normalize when every
+    referenced check is known, invalid, non-clearance, and intersects the
+    returned target set. Unsafe shapes remain untouched so validation still
+    fails closed.
+    """
+
+    if not isinstance(result, dict) or not required_checks:
+        return result
+    defects = result.get("defects")
+    rows = result.get("functional_check_results")
+    if not isinstance(defects, list) or not isinstance(rows, list):
+        return result
+    checks = {
+        str(check.get("check_id") or ""): check
+        for check in required_checks
+        if isinstance(check, dict) and str(check.get("check_id") or "")
+    }
+    invalid_ids = {
+        str(row.get("check_id") or "")
+        for row in rows
+        if isinstance(row, dict) and row.get("conclusion") == "invalid"
+    }
+    changed = False
+    normalized_defects: list[Any] = []
+    for defect in defects:
+        if not isinstance(defect, dict):
+            normalized_defects.append(defect)
+            continue
+        raw_refs = defect.get("check_refs")
+        refs = (
+            list(dict.fromkeys(str(item).strip() for item in raw_refs))
+            if isinstance(raw_refs, list)
+            and all(isinstance(item, str) and item.strip() for item in raw_refs)
+            else []
+        )
+        defect_target_set = {
+            str(item)
+            for item in defect.get("target_ids") or []
+            if str(item).strip()
+        }
+        referenced_checks = [checks.get(check_id) for check_id in refs]
+        safe = bool(
+            len(refs) > 1
+            and defect_target_set
+            and all(check is not None for check in referenced_checks)
+            and set(refs) <= invalid_ids
+            and all(
+                check.get("check_type") != "clearance"
+                for check in referenced_checks
+                if check is not None
+            )
+        )
+        check_target_sets = [
+            {
+                str(item)
+                for item in check.get("target_ids") or []
+                if str(item).strip()
+            }
+            for check in referenced_checks
+            if check is not None
+        ]
+        if safe:
+            safe = bool(
+                check_target_sets
+                and defect_target_set
+                <= set().union(*check_target_sets)
+                and all(
+                    defect_target_set & target_set
+                    for target_set in check_target_sets
+                )
+            )
+        if not safe or all(
+            defect_target_set <= target_set
+            for target_set in check_target_sets
+        ):
+            normalized_defects.append(deepcopy(defect))
+            continue
+        for check_id, check in zip(refs, referenced_checks):
+            assert check is not None
+            atomic = deepcopy(defect)
+            atomic["check_refs"] = [check_id]
+            atomic["target_ids"] = [
+                str(item)
+                for item in check.get("target_ids") or []
+                if str(item) in defect_target_set
+            ]
+            normalized_defects.append(atomic)
+        changed = True
+    if not changed:
+        return result
+    normalized = deepcopy(result)
+    normalized["defects"] = normalized_defects
+    return normalized
+
+
 def canonicalize_typed_invalid_envelope(
     result: dict[str, Any],
 ) -> dict[str, Any]:
