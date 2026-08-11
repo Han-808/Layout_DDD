@@ -3,6 +3,8 @@ from __future__ import annotations
 from copy import deepcopy
 import json
 from pathlib import Path
+import threading
+import time
 from types import SimpleNamespace
 from typing import Any
 
@@ -57,6 +59,109 @@ def test_audit_graph_export_is_explicitly_opt_in(tmp_path: Path) -> None:
 
     assert default_args.export_audit_graphs is False
     assert enabled_args.export_audit_graphs is True
+
+
+def test_functional_group_local_granularity_supports_both_modes(
+    tmp_path: Path,
+) -> None:
+    default_args = runner.parse_args(
+        ["--output-root", str(tmp_path / "default")]
+    )
+    batched_args = runner.parse_args(
+        [
+            "--output-root",
+            str(tmp_path / "batched"),
+            "--functional-group-local-granularity",
+            "batched",
+        ]
+    )
+    shared_args = runner.parse_args(
+        [
+            "--output-root",
+            str(tmp_path / "shared"),
+            "--functional-group-local-evidence-policy",
+            "shared_group_bank",
+        ]
+    )
+
+    assert default_args.functional_group_local_granularity == "per_check"
+    assert (
+        default_args.functional_group_local_evidence_policy
+        == "isolated_episode"
+    )
+    assert batched_args.functional_group_local_granularity == "batched"
+    assert (
+        shared_args.functional_group_local_evidence_policy
+        == "shared_group_bank"
+    )
+    assert runner.scene_quality_config(
+        ("functional_consistency",),
+        functional_group_local_granularity="per_check",
+    )["metrics"]["functional_consistency"][
+        "group_local_check_granularity"
+    ] == "per_check"
+    assert runner.scene_quality_config(
+        ("functional_consistency",),
+        functional_group_local_granularity="batched",
+    )["metrics"]["functional_consistency"][
+        "group_local_check_granularity"
+    ] == "batched"
+    shared = runner.scene_quality_config(
+        ("functional_consistency",),
+        functional_group_local_granularity="per_check",
+        functional_group_local_evidence_policy="shared_group_bank",
+    )["metrics"]["functional_consistency"]
+    assert shared["group_local_evidence_policy"] == "shared_group_bank"
+    assert shared["group_local_active_window_max_images"] == 6
+    with pytest.raises(ValueError, match="requires.*per_check"):
+        runner.scene_quality_config(
+            ("functional_consistency",),
+            functional_group_local_granularity="batched",
+            functional_group_local_evidence_policy="shared_group_bank",
+        )
+
+
+def test_parallel_fail_fast_records_running_failures_and_cancellations(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    progress = runner.ProgressReporter(
+        tmp_path / "progress.jsonl",
+        terminal=False,
+    )
+    cases = [{"case_id": f"N{index:03d}"} for index in range(1, 9)]
+    first_wave = threading.Barrier(2)
+
+    def fake_run_case(*, case: dict[str, Any], **_: Any) -> dict[str, Any]:
+        first_wave.wait(timeout=2.0)
+        if case["case_id"] != "N001":
+            time.sleep(0.1)
+        raise ValueError(f"failed:{case['case_id']}")
+
+    monkeypatch.setattr(runner, "run_case", fake_run_case)
+    records, failures = runner.run_cases_parallel(
+        cases=cases,
+        case_kwargs={},
+        output_root=tmp_path,
+        progress=progress,
+        max_workers=2,
+        continue_on_error=False,
+    )
+
+    assert {record["case_id"] for record in records} == {
+        case["case_id"] for case in cases
+    }
+    assert failures
+    assert any(record["status"] == "cancelled" for record in records)
+    assert all(record["status"] in {"failed", "cancelled"} for record in records)
+    for record in records:
+        manifest = runner.read_json(
+            tmp_path
+            / "cases"
+            / record["case_id"]
+            / "case_run_manifest.json"
+        )
+        assert manifest["status"] == record["status"]
 
 
 def test_route_is_explicit_and_never_falls_back_to_port_4000() -> None:
@@ -167,6 +272,38 @@ def test_scene_comparison_keeps_unclear_and_unresolved_explicit() -> None:
     assert style["included_in_accuracy"] is False
 
 
+def test_metric_prediction_uses_verdict_not_posthoc_burden_score() -> None:
+    assert runner.metric_prediction(
+        {
+            "status": "evaluated",
+            "score": 0.8,
+            "verdict_score": 0.0,
+            "judgement": {"verdict": "invalid"},
+        }
+    ) == "invalid"
+    assert runner.metric_prediction(
+        {
+            "status": "evaluated",
+            "score": 0.8,
+            "verdict_score": 1.0,
+            "judgement": {"verdict": "valid"},
+        }
+    ) == "valid"
+
+
+def test_metric_prediction_separates_infrastructure_failure_from_unresolved() -> None:
+    assert runner.metric_prediction(
+        {
+            "status": "failed",
+            "terminal_state": "infrastructure_failure",
+            "score": None,
+        }
+    ) == "infrastructure_failure"
+    assert runner.metric_prediction(
+        {"status": "not_applicable", "score": None}
+    ) == "unresolved"
+
+
 def test_scene_match_does_not_hide_anomaly_object_attribution_failure():
     comparison = runner.build_scene_comparison(
         case_id="N020",
@@ -216,6 +353,41 @@ def test_scene_match_does_not_hide_anomaly_object_attribution_failure():
     assert comparison["comparison_scopes"] == [
         "scene_level_metric_verdict",
         "anomaly_object_attribution",
+    ]
+
+
+def test_l3_resolution_audit_rejects_hidden_incomplete_coverage() -> None:
+    audit = runner.l3_resolution_audit(
+        {
+            "metrics": {
+                "functional_consistency": {
+                    "status": "evaluated",
+                    "coverage": {"complete": False},
+                    "functional_check_coverage": {
+                        "complete": False,
+                        "unresolved_check_ids": ["functional_check_001"],
+                    },
+                },
+                "semantic_placement_consistency": {
+                    "status": "evaluated",
+                    "coverage": {"complete": True},
+                },
+            }
+        },
+        metrics=(
+            "functional_consistency",
+            "semantic_placement_consistency",
+        ),
+    )
+
+    assert audit["status"] == "infrastructure_failure"
+    assert audit["unresolved_metrics"] == []
+    assert audit["infrastructure_failure_metrics"] == [
+        "functional_consistency"
+    ]
+    assert audit["reasons_by_metric"]["functional_consistency"] == [
+        "coverage:incomplete",
+        "functional_check_coverage:incomplete",
     ]
 
 
@@ -335,6 +507,11 @@ def test_run_case_keeps_l1_scene_provider_separate_from_l3_group_provider(
             ],
         }
         report = {
+            "benchmark_score_status": "insufficient_metric_coverage",
+            "scoring_reliability": {
+                "schema_version": "scoring_reliability_v2",
+                "terminal_state": "complete",
+            },
             "reports": {
                 "object_grouping": {
                     "status": "complete",
@@ -448,6 +625,17 @@ def test_run_case_keeps_l1_scene_provider_separate_from_l3_group_provider(
     assert diagnostics["engineering_failure_count"] == 0
     assert diagnostics["l3_diagnostics_completed"] is True
     assert record["api_usage"]["api_calls_number"] == 0
+    manifest = runner.read_json(
+        output_root / "cases" / "N001" / "case_run_manifest.json"
+    )
+    assert manifest["scoring_reliability"] == {
+        "schema_version": "scoring_reliability_v2",
+        "terminal_state": "complete",
+    }
+    assert (
+        manifest["benchmark_score_status"]
+        == "insufficient_metric_coverage"
+    )
     assert (
         runner.read_json(
             output_root / "cases" / "N001" / "api_usage.json"

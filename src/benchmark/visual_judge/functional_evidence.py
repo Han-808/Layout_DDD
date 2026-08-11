@@ -35,8 +35,14 @@ FUNCTIONAL_PROBE_KINDS = (
     "functional_correspondence",
     "approach_clearance",
 )
-FUNCTIONAL_PROBE_DEFAULT_UNITS = 6
-FUNCTIONAL_PROBE_MAX_UNITS = 8
+# Cross-group relations receive isolated Judge episodes, while object-owned
+# frontage/clearance checks reuse group-local packets.  Six units proved too
+# small even for ordinary scenes (for example, three accepted relations plus
+# several directed objects), leaving accepted required checks permanently
+# unrouted.  Keep the policy bounded, but make the default large enough for a
+# complete medium-size scene inventory.
+FUNCTIONAL_PROBE_DEFAULT_UNITS = 32
+FUNCTIONAL_PROBE_MAX_UNITS = 32
 
 _OBSERVATIONS_BY_KIND = {
     "functional_frontage": frozenset(

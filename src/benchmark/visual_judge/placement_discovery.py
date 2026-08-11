@@ -24,18 +24,13 @@ from benchmark.visual_judge.identity_evidence import (
 PLACEMENT_DISCOVERY_SCHEMA_VERSION = "placement_discovery_v2"
 PLACEMENT_DISCOVERY_PROMPT_VERSION = "placement_discovery_v3"
 PLACEMENT_DISCOVERY_MAX_TOKENS = 3192
-PLACEMENT_OBSERVATION_KINDS = frozenset(
+PLACEMENT_DISCOVERY_CHECK_TYPES = frozenset(
     {
         "support_and_height",
         "scene_zone",
         "contextual_anchor",
     }
 )
-_LEGACY_PLACEMENT_OBSERVATION_KINDS = {
-    "support_surface": "support_and_height",
-    "placement_height": "support_and_height",
-    "adjacency_context": "contextual_anchor",
-}
 _FORBIDDEN_FIELDS = frozenset(
     {
         "verdict",
@@ -84,7 +79,7 @@ scale. Discovery proposes checks only and never decides them.
 Copy every object ID exactly once in considered_object_ids. Return exactly:
 {"considered_object_ids":["id"],
 "candidates":[{"subject_id":"id","context_ids":[],
-"observation_kind":"scene_zone",
+"check_type":"scene_zone",
 "observation_goal":"neutral visual fact"}],
 "reason":"brief coverage summary"}
 
@@ -121,8 +116,8 @@ def discover_openai_compatible_placement_evidence(
             "image_role": "global_identity_overlay",
             "legend": deepcopy(normalized["identity_legend"]),
         },
-        "allowed_observation_kinds": sorted(
-            PLACEMENT_OBSERVATION_KINDS
+        "allowed_check_types": sorted(
+            PLACEMENT_DISCOVERY_CHECK_TYPES
         ),
     }
     context_text = json.dumps(
@@ -300,7 +295,7 @@ def validate_placement_discovery_response(
         unknown = set(item) - {
             "subject_id",
             "context_ids",
-            "observation_kind",
+            "check_type",
             "observation_goal",
         }
         if unknown:
@@ -323,13 +318,9 @@ def validate_placement_discovery_response(
             raise ValueError(
                 "placement subject cannot appear in its own context"
             )
-        raw_kind = str(item.get("observation_kind") or "").strip()
-        kind = _LEGACY_PLACEMENT_OBSERVATION_KINDS.get(
-            raw_kind,
-            raw_kind,
-        )
-        if kind not in PLACEMENT_OBSERVATION_KINDS:
-            raise ValueError("placement observation_kind is unsupported")
+        kind = str(item.get("check_type") or "").strip()
+        if kind not in PLACEMENT_DISCOVERY_CHECK_TYPES:
+            raise ValueError("placement check_type is unsupported")
         identity = (subject_id, tuple(sorted(context_ids)), kind)
         if identity in identities:
             raise ValueError("placement discovery contains a duplicate")
@@ -344,14 +335,9 @@ def validate_placement_discovery_response(
             {
                 "subject_id": subject_id,
                 "context_ids": context_ids,
-                "observation_kind": kind,
+                "check_type": kind,
                 "observation_goal": goal,
                 "source_observation_goal": source_goal[:1000],
-                **(
-                    {"legacy_observation_kind": raw_kind}
-                    if raw_kind != kind
-                    else {}
-                ),
             }
         )
     reason = str(value.get("reason") or "").strip()

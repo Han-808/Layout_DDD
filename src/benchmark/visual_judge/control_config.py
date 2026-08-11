@@ -79,7 +79,12 @@ DEFAULT_VLM_EVALUATION_CONTROL: dict[str, Any] = {
 _POLICY_VALUES = {
     "on_non_camera_repairable_evidence": {"unresolved"},
     "on_budget_exhausted": {"force_choice"},
-    "on_selector_failure": {"keep_previous_evidence", "unresolved"},
+    # A selector failure after a gate-ready packet uses that retained packet
+    # for one final bounded Judge choice.  ``unresolved`` used to be accepted
+    # here even though the Controller could no longer honor it, making the
+    # resolved manifest contradict runtime behavior.  Freeze the only
+    # supported policy until a genuinely different terminal contract exists.
+    "on_selector_failure": {"keep_previous_evidence"},
     "on_render_failure": {"unresolved"},
 }
 

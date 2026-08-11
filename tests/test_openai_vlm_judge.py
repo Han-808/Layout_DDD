@@ -1035,6 +1035,112 @@ def test_functional_required_check_is_repaired_and_preserved(
     )
 
 
+def test_mixed_functional_rows_repair_to_ambiguous_without_final_defects(
+    tmp_path: Path,
+) -> None:
+    image_path = tmp_path / "functional_mixed_rows.png"
+    _write_test_png(image_path)
+    invalid_check = {
+        "check_id": "functional_check_direction",
+        "check_type": "architecture_orientation",
+        "owner_stage": "group_local",
+        "target_ids": ["bookshelf"],
+        "group_ids": ["storage"],
+        "owning_group_id": "storage",
+        "relation": "architecture_orientation",
+        "required_observations": ["interaction_side_visible"],
+    }
+    unresolved_check = {
+        "check_id": "functional_check_clearance",
+        "check_type": "clearance",
+        "owner_stage": "group_local",
+        "target_ids": ["bookshelf"],
+        "group_ids": ["storage"],
+        "owning_group_id": "storage",
+        "relation": "usable_side_clearance",
+        "required_observations": ["joint_visibility"],
+    }
+    rows = [
+        {
+            "check_id": invalid_check["check_id"],
+            "target_ids": ["bookshelf"],
+            "observation_status": "observed",
+            "conclusion": "invalid",
+            "reason": "The visible interaction side faces the boundary.",
+        },
+        {
+            "check_id": unresolved_check["check_id"],
+            "target_ids": ["bookshelf"],
+            "observation_status": "missing",
+            "conclusion": "unresolved",
+            "reason": "The approach region is not visible.",
+        },
+    ]
+    initial = {
+        "evidence_status": "sufficient",
+        "verdict": "invalid",
+        "confidence": 0.8,
+        "reason": "One check is invalid while another remains hidden.",
+        "missing_evidence": [],
+        "defects": [
+            {
+                "scope": "interaction_side_accessibility",
+                "target_ids": ["bookshelf"],
+                "relation": "architecture_orientation",
+                "reason": "The visible interaction side faces the boundary.",
+                "check_refs": [invalid_check["check_id"]],
+            }
+        ],
+        "evidence_request": None,
+        "functional_check_results": rows,
+    }
+    repaired = {
+        "evidence_status": "insufficient",
+        "verdict": "ambiguous",
+        "confidence": 0.8,
+        "reason": "The clearance check still needs a visible approach region.",
+        "missing_evidence": ["joint_visibility"],
+        "defects": [],
+        "evidence_request": {
+            "target_ids": ["bookshelf"],
+            "missing_observations": ["joint_visibility"],
+            "view_goal": "show the bookshelf approach region",
+            "metadata": {},
+        },
+        "functional_check_results": rows,
+    }
+    model = FakeMultimodalModel([initial, repaired])
+
+    result = OpenAICompatibleVLMJudge(
+        model
+    )._adjudicate_scene_quality_raw(
+        {
+            "metric": "functional_consistency",
+            "metric_prompt_version": L3_METRIC_PROMPT_VERSION,
+            "metric_boundary_rules": list(L3_METRIC_BOUNDARY_RULES),
+            "evidence_phase": "group_local_review",
+            "decision_mode": "final",
+            "judgment_scope": {
+                "included": ["interaction_side_accessibility"]
+            },
+            "target_object_ids": ["bookshelf"],
+            "allowed_evidence_request_target_ids": ["bookshelf"],
+            "allowed_missing_observations": ["joint_visibility"],
+            "render_evidence": [str(image_path)],
+            "required_functional_checks": [
+                invalid_check,
+                unresolved_check,
+            ],
+        }
+    )
+
+    assert result["evidence_status"] == "insufficient"
+    assert result["verdict"] == "ambiguous"
+    assert result["defects"] == []
+    assert result["functional_check_results"] == rows
+    assert len(model.calls) == 2
+
+
 def test_functional_typed_defect_canonicalizes_ambiguous_envelope(
     tmp_path: Path,
 ) -> None:
@@ -1102,6 +1208,318 @@ def test_functional_typed_defect_canonicalizes_ambiguous_envelope(
     assert len(model.calls) == 1
 
 
+def test_clearance_attribution_canonicalizes_before_schema_repair(
+    tmp_path: Path,
+) -> None:
+    image_path = tmp_path / "clearance_attribution.png"
+    _write_test_png(image_path)
+    check = {
+        "check_id": "functional_check_clearance",
+        "check_type": "clearance",
+        "owner_stage": "group_local",
+        "target_ids": ["tv_stand"],
+        "group_ids": ["media"],
+        "owning_group_id": "media",
+        "relation": "usable_side_clearance",
+        "required_observations": [
+            "target_visible",
+            "approach_zone_visible",
+        ],
+        "allowed_causal_object_ids": ["television", "tv_stand"],
+    }
+    initial = {
+        "evidence_status": "sufficient",
+        "verdict": "invalid",
+        "confidence": 0.96,
+        "reason": "The stand's own authored pose removes its approach zone.",
+        "missing_evidence": [],
+        "defects": [
+            {
+                "scope": "opening_clearance",
+                "target_ids": ["tv_stand"],
+                "relation": "usable_side_clearance",
+                "reason": "The approach region is outside usable space.",
+                "check_refs": [check["check_id"]],
+                "affected_object_ids": ["tv_stand"],
+                "cause_kind": "self_layout",
+                "causal_object_ids": ["tv_stand"],
+                "scoring_target_ids": ["tv_stand"],
+            }
+        ],
+        "evidence_request": None,
+        "functional_check_results": [
+            {
+                "check_id": check["check_id"],
+                "target_ids": ["tv_stand"],
+                "observation_status": "observed",
+                "conclusion": "invalid",
+                "reason": "The usable-side approach region is unavailable.",
+            }
+        ],
+    }
+    model = FakeMultimodalModel([initial])
+
+    result = OpenAICompatibleVLMJudge(model).adjudicate_scene_quality(
+        {
+            "metric": "functional_consistency",
+            "metric_prompt_version": L3_METRIC_PROMPT_VERSION,
+            "metric_boundary_rules": list(L3_METRIC_BOUNDARY_RULES),
+            "evidence_phase": "group_local_review",
+            "decision_mode": "final",
+            "judgment_scope": {"included": ["opening_clearance"]},
+            "target_object_ids": ["tv_stand"],
+            "render_evidence": [str(image_path)],
+            "required_functional_checks": [check],
+        }
+    )
+
+    row = result["functional_check_results"][0]
+    assert row["affected_object_ids"] == ["tv_stand"]
+    assert row["cause_kind"] == "self_layout"
+    assert row["causal_object_ids"] == ["tv_stand"]
+    assert row["scoring_target_ids"] == ["tv_stand"]
+    assert len(model.calls) == 1
+    assert result["request_metadata"]["response_schema_validation"][
+        "repair_retry_count"
+    ] == 0
+
+
+@pytest.mark.parametrize(
+    ("affected_id", "blocker_id", "check_id"),
+    [
+        ("dartboard", "pool_table", "functional_check_013"),
+        ("pool_table", "sofa", "functional_check_016"),
+    ],
+)
+def test_external_clearance_scoring_is_derived_without_schema_retry(
+    tmp_path: Path,
+    affected_id: str,
+    blocker_id: str,
+    check_id: str,
+) -> None:
+    image_path = tmp_path / f"{affected_id}_clearance.png"
+    _write_test_png(image_path)
+    check = {
+        "check_id": check_id,
+        "check_type": "clearance",
+        "owner_stage": "group_local",
+        "target_ids": [affected_id],
+        "group_ids": [affected_id],
+        "owning_group_id": affected_id,
+        "relation": "usable_side_clearance",
+        "required_observations": [
+            "target_visible",
+            "approach_zone_visible",
+        ],
+        "allowed_causal_object_ids": [affected_id, blocker_id],
+    }
+    initial = {
+        "evidence_status": "sufficient",
+        "verdict": "invalid",
+        "confidence": 0.97,
+        "reason": f"{blocker_id} blocks ordinary use of {affected_id}.",
+        "missing_evidence": [],
+        "defects": [
+            {
+                "scope": "interaction_side_accessibility",
+                "target_ids": [affected_id],
+                "relation": "usable_side_clearance",
+                "reason": f"{blocker_id} occupies the required use zone.",
+                "check_refs": [check_id],
+            }
+        ],
+        "evidence_request": None,
+        "functional_check_results": [
+            {
+                "check_id": check_id,
+                "target_ids": [affected_id],
+                "observation_status": "observed",
+                "conclusion": "invalid",
+                "reason": f"{blocker_id} occupies the required use zone.",
+                "affected_object_ids": [affected_id],
+                "cause_kind": "external_object",
+                "causal_object_ids": [blocker_id],
+                # The real N025 responses repeated the affected object here.
+                "scoring_target_ids": [affected_id],
+            }
+        ],
+    }
+    model = FakeMultimodalModel([initial])
+
+    result = OpenAICompatibleVLMJudge(model).adjudicate_scene_quality(
+        {
+            "metric": "functional_consistency",
+            "metric_prompt_version": L3_METRIC_PROMPT_VERSION,
+            "metric_boundary_rules": list(L3_METRIC_BOUNDARY_RULES),
+            "evidence_phase": "group_local_review",
+            "decision_mode": "final",
+            "judgment_scope": {
+                "included": ["interaction_side_accessibility"]
+            },
+            "target_object_ids": [affected_id, blocker_id],
+            "group_scope": {
+                "group_id": affected_id,
+                "member_ids": [affected_id],
+            },
+            "allowed_external_evidence_target_ids": [blocker_id],
+            "response_contract": {
+                "defects": {
+                    "allowed_target_ids": [affected_id, blocker_id],
+                }
+            },
+            "render_evidence": [str(image_path)],
+            "required_functional_checks": [check],
+        }
+    )
+
+    row = result["functional_check_results"][0]
+    defect = result["defects"][0]
+    assert result["verdict"] == "invalid"
+    assert row["causal_object_ids"] == [blocker_id]
+    assert row["scoring_target_ids"] == [blocker_id]
+    assert defect["target_ids"] == [blocker_id]
+    assert defect["scoring_target_ids"] == [blocker_id]
+    assert len(model.calls) == 1
+    assert result["request_metadata"]["response_schema_validation"][
+        "repair_retry_count"
+    ] == 0
+
+
+def test_group_local_global_context_defect_is_projected_out(
+    tmp_path: Path,
+) -> None:
+    image_path = tmp_path / "group_scope.png"
+    _write_test_png(image_path)
+    model = FakeMultimodalModel(
+        [
+            {
+                "evidence_status": "sufficient",
+                "verdict": "invalid",
+                "confidence": 0.8,
+                "reason": "A visible object outside this group looks wrong.",
+                "missing_evidence": [],
+                "defects": [
+                    {
+                        "scope": "local_arrangement_usability",
+                        "target_ids": ["other_group_object"],
+                        "relation": "unrelated_visible_issue",
+                        "reason": "The unrelated object is elsewhere in the scene.",
+                    }
+                ],
+                "evidence_request": None,
+            }
+        ]
+    )
+
+    result = OpenAICompatibleVLMJudge(model).adjudicate_scene_quality(
+        {
+            "metric": "functional_consistency",
+            "evidence_phase": "group_local_review",
+            "decision_mode": "final",
+            "judgment_scope": {
+                "included": ["local_arrangement_usability"]
+            },
+            "target_object_ids": ["chair"],
+            "group_scope": {
+                "group_id": "chair_group",
+                "member_ids": ["chair"],
+            },
+            "scene_summary": {
+                "objects": [
+                    {"id": "chair", "category": "chair"},
+                    {
+                        "id": "other_group_object",
+                        "category": "table",
+                    },
+                ]
+            },
+            "render_evidence": [str(image_path)],
+        }
+    )
+
+    assert result["verdict"] == "valid"
+    assert result["defects"] == []
+    assert result["group_scope_projection"][
+        "discarded_defect_count"
+    ] == 1
+    assert len(model.calls) == 1
+
+
+def test_schema_repair_may_correct_derived_external_blocker_scoring(
+    tmp_path: Path,
+) -> None:
+    image_path = tmp_path / "pool_table_schema_repair.png"
+    _write_test_png(image_path)
+    check = {
+        "check_id": "functional_check_016",
+        "check_type": "clearance",
+        "target_ids": ["pool_table"],
+        "allowed_causal_object_ids": ["pool_table", "sofa"],
+    }
+    initial = {
+        "evidence_status": "sufficient",
+        "verdict": "invalid",
+        "confidence": 0.97,
+        "reason": "The sofa blocks ordinary pool-table use.",
+        "missing_evidence": [],
+        "defects": [
+            {
+                "scope": "wrong_scope_token",
+                "target_ids": ["pool_table"],
+                "relation": "usable_side_clearance",
+                "reason": "The sofa occupies the required use zone.",
+                "check_refs": [check["check_id"]],
+                "scoring_target_ids": ["pool_table"],
+            }
+        ],
+        "evidence_request": None,
+        "functional_check_results": [
+            {
+                "check_id": check["check_id"],
+                "target_ids": ["pool_table"],
+                "observation_status": "observed",
+                "conclusion": "invalid",
+                "reason": "The sofa occupies the required use zone.",
+                "affected_object_ids": ["pool_table"],
+                "cause_kind": "external_object",
+                "causal_object_ids": ["sofa"],
+                "scoring_target_ids": ["pool_table"],
+            }
+        ],
+    }
+    repaired = deepcopy(initial)
+    repaired["defects"][0]["scope"] = "interaction_side_accessibility"
+    repaired["defects"][0]["scoring_target_ids"] = ["sofa"]
+    repaired["functional_check_results"][0]["scoring_target_ids"] = [
+        "sofa"
+    ]
+    model = FakeMultimodalModel([initial, repaired])
+
+    result = OpenAICompatibleVLMJudge(model).adjudicate_scene_quality(
+        {
+            "metric": "functional_consistency",
+            "evidence_phase": "group_local_review",
+            "decision_mode": "final",
+            "judgment_scope": {
+                "included": ["interaction_side_accessibility"]
+            },
+            "target_object_ids": ["pool_table", "sofa"],
+            "render_evidence": [str(image_path)],
+            "required_functional_checks": [check],
+        }
+    )
+
+    assert result["verdict"] == "invalid"
+    assert result["functional_check_results"][0][
+        "scoring_target_ids"
+    ] == ["sofa"]
+    assert result["defects"][0]["target_ids"] == ["sofa"]
+    assert result["defects"][0]["scoring_target_ids"] == ["sofa"]
+    audit = result["request_metadata"]["response_schema_validation"]
+    assert audit["recovered"] is True
+    assert audit["repair_retry_count"] == 1
+
+
 def test_placement_check_id_canonicalizes_redundant_relation(
     tmp_path: Path,
 ) -> None:
@@ -1139,7 +1557,7 @@ def test_placement_check_id_canonicalizes_redundant_relation(
         "reason": "The subject occupies an implausible room zone.",
         "severity": "material_contextual_mismatch",
         "check_id": check["check_id"],
-        "placement_check_type": "scene_zone",
+        "check_type": "scene_zone",
     }
     base = {
         "evidence_status": "sufficient",

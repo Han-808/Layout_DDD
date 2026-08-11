@@ -427,6 +427,18 @@ def build_evaluation_audit(
         if forced_choice_events
         else None
     )
+    degraded_choice_events = [
+        item
+        for item in trace
+        if isinstance(item, dict)
+        and item.get("stage") == "terminal_choice_policy"
+        and item.get("outcome") == "forced_with_retained_evidence"
+    ]
+    degraded_choice = (
+        degraded_choice_events[-1]
+        if degraded_choice_events
+        else None
+    )
     group_scope = judge_request.context.get("group_scope")
     group_scope = (
         group_scope if isinstance(group_scope, dict) else {}
@@ -609,6 +621,25 @@ def build_evaluation_audit(
                     "final_status": final_status,
                 }
                 if forced_choice is not None
+                else {"applied": False}
+            ),
+            "degraded_terminal_choice": (
+                {
+                    "applied": True,
+                    "trigger_stop_reason": degraded_choice.get(
+                        "trigger_stop_reason"
+                    ),
+                    "failure_kind": degraded_choice.get("failure_kind"),
+                    "selection_stage": degraded_choice.get(
+                        "selection_stage"
+                    ),
+                    "retained_prior_evidence": True,
+                    "retained_evidence": deepcopy(
+                        degraded_choice.get("retained_evidence") or []
+                    ),
+                    "final_status": final_status,
+                }
+                if degraded_choice is not None
                 else {"applied": False}
             ),
             "budget_exhaustion_forced_choice": (

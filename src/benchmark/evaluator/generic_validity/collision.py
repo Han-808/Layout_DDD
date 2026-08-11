@@ -251,6 +251,7 @@ def _evaluate_pair(
         "affects_collision_score": False,
         "judge_result": None,
         "adjudication_error": None,
+        "scoring_geometry": _collision_scoring_geometry(obj_a, obj_b, obb),
     }
 
     enclosure_evidence = None
@@ -454,6 +455,47 @@ def _empty_collision_report(object_errors: dict[str, str]) -> dict[str, Any]:
             "vlm_adjudicated_pairs": 0,
         },
         "notes": [],
+    }
+
+
+def _collision_scoring_geometry(
+    obj_a: Any,
+    obj_b: Any,
+    obb: dict[str, Any],
+) -> dict[str, Any]:
+    """Persist the projected thicknesses needed for post-hoc severity."""
+
+    axis = obb.get("minimum_overlap_axis")
+    depth = obb.get("minimum_overlap_depth_proxy_m")
+    if not isinstance(axis, list) or len(axis) != 3:
+        return {
+            "penetration_depth_m": depth,
+            "minimum_overlap_axis": axis,
+            "projected_thickness_a_m": None,
+            "projected_thickness_b_m": None,
+        }
+    vector = np.asarray(axis, dtype=float)
+    norm = float(np.linalg.norm(vector))
+    if not math.isfinite(norm) or norm <= 1.0e-12:
+        thickness_a = thickness_b = None
+    else:
+        vector /= norm
+        thickness_a = 2.0 * sum(
+            abs(float(np.dot(np.asarray(obj_a.R)[:, index], vector)))
+            * float(np.asarray(obj_a.half)[index])
+            for index in range(3)
+        )
+        thickness_b = 2.0 * sum(
+            abs(float(np.dot(np.asarray(obj_b.R)[:, index], vector)))
+            * float(np.asarray(obj_b.half)[index])
+            for index in range(3)
+        )
+    return {
+        "penetration_depth_m": depth,
+        "minimum_overlap_axis": [float(value) for value in vector],
+        "projected_thickness_a_m": thickness_a,
+        "projected_thickness_b_m": thickness_b,
+        "thin_object_threshold_m": 0.04,
     }
 
 

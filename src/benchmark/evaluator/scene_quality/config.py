@@ -31,8 +31,8 @@ from benchmark.evaluator.scene_quality.functional_prejudgement import (
     validate_functional_prejudgement_evidence_config,
 )
 from benchmark.evaluator.scene_quality.placement_severity import (
-    CLEAR_SEMANTIC_MISPLACEMENT,
-    MATERIAL_CONTEXTUAL_MISMATCH,
+    ATYPICAL,
+    IMPLAUSIBLE,
     PLACEMENT_SEVERITY_LEVELS,
 )
 from benchmark.rendering.camera_pose import CAMERA_POSE_MODES
@@ -199,6 +199,47 @@ def _validate_metric_flags(
         )
     if metric_name == "semantic_placement_consistency":
         _validate_placement_severity_policy(metric_config)
+    if metric_name == "functional_consistency":
+        granularity = metric_config.get(
+            "group_local_check_granularity"
+        )
+        if granularity not in {"batched", "per_check"}:
+            raise SceneQualityInterfaceConfigError(
+                "functional_consistency.group_local_check_granularity "
+                "must be exactly 'batched' or 'per_check'"
+            )
+        evidence_policy = metric_config.get(
+            "group_local_evidence_policy"
+        )
+        if evidence_policy not in {
+            "isolated_episode",
+            "shared_group_bank",
+        }:
+            raise SceneQualityInterfaceConfigError(
+                "functional_consistency.group_local_evidence_policy must "
+                "be exactly 'isolated_episode' or 'shared_group_bank'"
+            )
+        if (
+            evidence_policy == "shared_group_bank"
+            and granularity != "per_check"
+        ):
+            raise SceneQualityInterfaceConfigError(
+                "functional_consistency shared_group_bank requires "
+                "group_local_check_granularity='per_check'"
+            )
+        window_max = metric_config.get(
+            "group_local_active_window_max_images"
+        )
+        if (
+            isinstance(window_max, bool)
+            or not isinstance(window_max, int)
+            or window_max < 2
+        ):
+            raise SceneQualityInterfaceConfigError(
+                "functional_consistency."
+                "group_local_active_window_max_images must be an integer "
+                ">= 2"
+            )
 
 
 def _validate_placement_severity_policy(
@@ -209,30 +250,29 @@ def _validate_placement_severity_policy(
         raise SceneQualityInterfaceConfigError(
             "semantic_placement_consistency.severity_policy must be a JSON object"
         )
-    if policy.get("schema_version") != "semantic_placement_severity_v1":
+    if policy.get("schema_version") != "object_equivalent_burden_v1":
         raise SceneQualityInterfaceConfigError(
             "semantic_placement_consistency.severity_policy.schema_version "
-            "must remain semantic_placement_severity_v1"
+            "must remain object_equivalent_burden_v1"
         )
     if policy.get("levels") != list(PLACEMENT_SEVERITY_LEVELS):
         raise SceneQualityInterfaceConfigError(
             "semantic_placement_consistency.severity_policy.levels must remain "
             f"{list(PLACEMENT_SEVERITY_LEVELS)}"
         )
-    if policy.get("strict_level") != CLEAR_SEMANTIC_MISPLACEMENT:
+    if policy.get("strict_level") != IMPLAUSIBLE:
         raise SceneQualityInterfaceConfigError(
             "semantic_placement_consistency.severity_policy.strict_level "
-            f"must remain {CLEAR_SEMANTIC_MISPLACEMENT}"
+            f"must remain {IMPLAUSIBLE}"
         )
-    if policy.get("extended_level") != MATERIAL_CONTEXTUAL_MISMATCH:
+    if policy.get("extended_level") != ATYPICAL:
         raise SceneQualityInterfaceConfigError(
             "semantic_placement_consistency.severity_policy.extended_level "
-            f"must remain {MATERIAL_CONTEXTUAL_MISMATCH}"
+            f"must remain {ATYPICAL}"
         )
-    if policy.get("affects_existing_metric_score") is not False:
+    if policy.get("affects_existing_metric_score") is not True:
         raise SceneQualityInterfaceConfigError(
-            "semantic-placement severity is additive and cannot change the "
-            "existing metric score"
+            "semantic-placement severity must control post-hoc burden scoring"
         )
 
 

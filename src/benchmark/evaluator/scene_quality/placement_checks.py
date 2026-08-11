@@ -30,12 +30,6 @@ PLACEMENT_CHECK_CONCLUSIONS = frozenset(
         "unresolved",
     }
 )
-LEGACY_PLACEMENT_CHECK_TYPE_MAP = {
-    "support_surface": "support_and_height",
-    "placement_height": "support_and_height",
-    "adjacency_context": "contextual_anchor",
-}
-
 _REQUIRED_OBSERVATIONS = {
     "support_and_height": (
         "target_visible",
@@ -62,7 +56,6 @@ _OBSERVATION_STATUSES = {
 
 def canonical_placement_check_type(value: Any) -> str:
     token = str(value or "").strip()
-    token = LEGACY_PLACEMENT_CHECK_TYPE_MAP.get(token, token)
     if token not in PLACEMENT_CHECK_TYPES:
         raise ValueError(f"unsupported placement check type {token!r}")
     return token
@@ -73,7 +66,7 @@ def build_placement_check_ledger(
     *,
     groups: list[dict[str, Any]] | None,
 ) -> dict[str, Any]:
-    """Build stable checks from a validated v1 or v2 discovery result."""
+    """Build stable checks from a validated canonical v2 discovery result."""
 
     if not isinstance(discovery, dict):
         raise TypeError("placement discovery must be a JSON object")
@@ -104,12 +97,7 @@ def build_placement_check_ledger(
             known_groups=known_groups,
         )
         record = pending.get(identity)
-        source_kind = str(
-            raw.get("legacy_observation_kind")
-            or raw.get("observation_kind")
-            or raw.get("check_type")
-            or check_type
-        )
+        source_kind = str(raw.get("check_type") or check_type)
         if record is None:
             record = {
                 "check_id": placement_check_id(
@@ -128,7 +116,7 @@ def build_placement_check_ledger(
                     _REQUIRED_OBSERVATIONS[check_type]
                 ),
                 "observation_goals": [],
-                "source_observation_kinds": [],
+                "source_check_types": [],
                 "source_discovery_refs": [],
                 "origin": "placement_discovery",
                 "lifecycle_status": "accepted",
@@ -145,9 +133,9 @@ def build_placement_check_ledger(
                 candidate["observation_goal"],
             ]
         )
-        record["source_observation_kinds"] = _stable_unique(
+        record["source_check_types"] = _stable_unique(
             [
-                *record["source_observation_kinds"],
+                *record["source_check_types"],
                 source_kind,
             ]
         )
@@ -200,10 +188,7 @@ def normalize_placement_candidate(
         raise ValueError(
             "placement subject cannot appear in its own context"
         )
-    check_type = canonical_placement_check_type(
-        value.get("check_type")
-        or value.get("observation_kind")
-    )
+    check_type = canonical_placement_check_type(value.get("check_type"))
     if check_type == "contextual_anchor" and not context_ids:
         raise ValueError(
             "contextual_anchor requires one or more context IDs"
@@ -334,6 +319,7 @@ def validate_placement_check_results(
             "placement_check_results must cover every required check exactly once"
         )
 
+    verdict = str(result.get("verdict") or "")
     defects_by_check: dict[str, list[dict[str, Any]]] = {}
     for defect in result.get("defects") or []:
         if not isinstance(defect, dict):
@@ -387,6 +373,11 @@ def validate_placement_check_results(
             )
         mapped_defects = defects_by_check.get(check_id, [])
         if conclusion == "invalid":
+            if verdict == "ambiguous" and not mapped_defects:
+                invalid.append(check_id)
+                resolved.append(check_id)
+                normalized_rows.append(deepcopy(row))
+                continue
             if len(mapped_defects) != 1:
                 raise ValueError(
                     f"invalid placement check {check_id} requires exactly one "
@@ -449,7 +440,6 @@ def validate_placement_check_results(
         )
         normalized_rows.append(normalized_row)
 
-    verdict = str(result.get("verdict") or "")
     if verdict == "valid" and (invalid or unresolved):
         raise ValueError(
             "placement valid verdict requires every required check to resolve "
@@ -459,13 +449,19 @@ def validate_placement_check_results(
         raise ValueError(
             "placement invalid verdict requires a resolved invalid check"
         )
+    if unresolved and verdict != "ambiguous":
+        raise ValueError(
+            "unresolved placement checks require an ambiguous evidence-"
+            "acquisition verdict; an early invalid cannot stop the loop"
+        )
     pending_proposal = _pending_proposal_from_result(result)
     if verdict == "ambiguous" and (
-        invalid or (not unresolved and pending_proposal is None)
+        result.get("defects")
+        or (not unresolved and pending_proposal is None)
     ):
         raise ValueError(
             "placement ambiguous verdict requires unresolved checks and cannot "
-            "retain a final invalid check"
+            "emit final defects"
         )
     return {
         "schema_version": PLACEMENT_CHECK_RESULT_VERSION,
@@ -487,7 +483,7 @@ def canonicalize_placement_defect_linkage(
 ) -> dict[str, Any]:
     """Canonicalize fields already determined by an exact typed check ID.
 
-    ``relation`` and ``placement_check_type`` carry no additional decision
+    ``relation`` and ``check_type`` carry no additional decision
     authority once a defect references a trusted check.  Normalizing these
     redundant fields avoids turning harmless wording drift into an unresolved
     Judge episode, while subject ownership and every trusted identity remain
@@ -512,7 +508,7 @@ def canonicalize_placement_defect_linkage(
         check_type = str(check.get("check_type") or "")
         if not check_type:
             continue
-        defect["placement_check_type"] = check_type
+        defect["check_type"] = check_type
         defect["relation"] = check_type
     return normalized
 
@@ -554,7 +550,6 @@ def normalize_judge_originated_placement_results(
     for item in raw_items:
         unknown = set(item) - {
             "proposal_id",
-            "check_id",
             "subject_id",
             "context_ids",
             "check_type",
@@ -621,12 +616,6 @@ def normalize_judge_originated_placement_results(
                 f"{expected_owner_stage!r} phase"
             )
         check_id = placement_check_id(*identity)
-        supplied_check_id = str(item.get("check_id") or "").strip()
-        if supplied_check_id and supplied_check_id != check_id:
-            raise ValueError(
-                "judge-originated placement result check_id does not "
-                "match its stable identity"
-            )
         check = {
             "check_id": check_id,
             "check_type": candidate["check_type"],
@@ -640,7 +629,7 @@ def normalize_judge_originated_placement_results(
                 _REQUIRED_OBSERVATIONS[candidate["check_type"]]
             ),
             "observation_goals": [candidate["observation_goal"]],
-            "source_observation_kinds": [candidate["check_type"]],
+            "source_check_types": [candidate["check_type"]],
             "source_discovery_refs": [proposal_id],
             "origin": "judge_originated",
             "lifecycle_status": "resolved",
@@ -667,7 +656,10 @@ def normalize_judge_originated_placement_results(
                 "check_id": check["check_id"],
             }
         )
-    adjusted["judge_originated_placement_results"] = adjusted_items
+    adjusted.pop("judge_originated_placement_results", None)
+    adjusted["judge_originated_placement_check_registrations"] = deepcopy(
+        new_checks
+    )
     for defect in adjusted.get("defects") or []:
         if not isinstance(defect, dict):
             continue
@@ -675,7 +667,7 @@ def normalize_judge_originated_placement_results(
         if check is None:
             continue
         defect["check_id"] = check["check_id"]
-        defect["placement_check_type"] = check["check_type"]
+        defect["check_type"] = check["check_type"]
         defect["relation"] = check["check_type"]
         _validate_placement_defect_for_check(defect, check=check)
     referenced_new_ids = {
@@ -756,7 +748,6 @@ def build_pending_placement_check(
         "subject_id",
         "context_ids",
         "check_type",
-        "observation_kind",
         "observation_goal",
     }
     if unknown:
@@ -799,7 +790,7 @@ def build_pending_placement_check(
             _REQUIRED_OBSERVATIONS[candidate["check_type"]]
         ),
         "observation_goals": [candidate["observation_goal"]],
-        "source_observation_kinds": [candidate["check_type"]],
+        "source_check_types": [candidate["check_type"]],
         "source_discovery_refs": [proposal_id],
         "origin": "judge_originated_evidence_request",
         "lifecycle_status": "evidence_requested",
@@ -1026,7 +1017,7 @@ def _validate_placement_defect_for_check(
         raise ValueError(
             f"placement defect does not map to check {check_id}"
         )
-    if str(defect.get("placement_check_type") or "") != str(
+    if str(defect.get("check_type") or "") != str(
         check["check_type"]
     ):
         raise ValueError(
@@ -1176,7 +1167,6 @@ def _pending_proposal_from_result(
 
 __all__ = [
     "canonicalize_placement_defect_linkage",
-    "LEGACY_PLACEMENT_CHECK_TYPE_MAP",
     "PLACEMENT_CHECK_CONCLUSIONS",
     "PLACEMENT_CHECK_LEDGER_VERSION",
     "PLACEMENT_CHECK_RESULT_VERSION",

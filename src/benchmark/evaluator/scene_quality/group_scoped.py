@@ -16,9 +16,13 @@ from benchmark.evaluator.scene_quality.claim_identity import (
     match_final_defects_to_routed_claims,
 )
 from benchmark.evaluator.scene_quality.functional_checks import (
+    canonicalize_clearance_causal_attribution,
     canonicalize_functional_defect_check_linkage,
     canonicalize_typed_invalid_envelope,
     validate_functional_check_results,
+)
+from benchmark.evaluator.scene_quality.functional_group_evidence import (
+    FunctionalGroupEvidenceBank,
 )
 from benchmark.evaluator.scene_quality.placement_checks import (
     canonicalize_placement_defect_linkage,
@@ -28,6 +32,10 @@ from benchmark.evaluator.scene_quality.placement_checks import (
 )
 from benchmark.evaluator.scene_quality.placement_severity import (
     placement_severity_summary,
+)
+from benchmark.evaluator.scene_quality.terminal import (
+    infrastructure_failure_from_scope,
+    terminalize_required_scope,
 )
 from benchmark.visual_judge.group_scope import (
     GroupCameraScope,
@@ -43,6 +51,15 @@ from benchmark.visual_judge.orchestration.budget import (
     extend_acquisition_ledger,
     merge_acquisition_ledger_delta,
 )
+from benchmark.visual_judge.orchestration.evidence_window import (
+    SHARED_GROUP_BANK_POLICY,
+)
+
+
+FUNCTIONAL_GROUP_LOCAL_EVIDENCE_POLICIES = {
+    "isolated_episode",
+    SHARED_GROUP_BANK_POLICY,
+}
 
 
 def resolve_group_evidence_packets(
@@ -250,8 +267,366 @@ def evaluate_group_scoped_judgements(
     normalize_judgement: Callable[..., dict[str, Any]],
     evidence_phase: str = "final",
     decision_mode: str = "final",
+    group_local_check_granularity: str = "batched",
+    group_local_evidence_policy: str = "isolated_episode",
+    group_local_active_window_max_images: int = 6,
 ) -> dict[str, Any]:
-    """Judge each local packet and aggregate without score averaging."""
+    """Evaluate group-local scopes in batched or atomic-check mode.
+
+    ``per_check`` is deliberately limited to Functional required checks.  In
+    ``isolated_episode`` mode every atomic episode receives the same immutable
+    seed packet and owns its follow-up evidence.  In ``shared_group_bank`` mode
+    the episodes remain semantically isolated while relevant visual artifacts
+    can flow forward through a bounded active window.  Both policies fold the
+    atomic results back into one group result before metric aggregation.
+    """
+
+    if group_local_check_granularity not in {"batched", "per_check"}:
+        raise ValueError(
+            "group_local_check_granularity must be exactly 'batched' or "
+            "'per_check'"
+        )
+    if group_local_evidence_policy not in (
+        FUNCTIONAL_GROUP_LOCAL_EVIDENCE_POLICIES
+    ):
+        raise ValueError(
+            "group_local_evidence_policy must be exactly "
+            "'isolated_episode' or 'shared_group_bank'"
+        )
+    if (
+        group_local_evidence_policy == SHARED_GROUP_BANK_POLICY
+        and group_local_check_granularity != "per_check"
+    ):
+        raise ValueError(
+            "shared_group_bank requires per_check Functional group-local "
+            "granularity"
+        )
+    if (
+        isinstance(group_local_active_window_max_images, bool)
+        or not isinstance(group_local_active_window_max_images, int)
+        or group_local_active_window_max_images < 2
+    ):
+        raise ValueError(
+            "group_local_active_window_max_images must be an integer >= 2"
+        )
+    base["group_local_check_granularity"] = (
+        group_local_check_granularity
+    )
+    base["group_local_evidence_policy"] = group_local_evidence_policy
+    base["group_local_active_window_max_images"] = (
+        group_local_active_window_max_images
+    )
+    if (
+        metric_name != "functional_consistency"
+        or group_local_check_granularity == "batched"
+    ):
+        return _evaluate_group_scoped_judgements_batched(
+            base=base,
+            metric_name=metric_name,
+            scene=scene,
+            prompt=prompt,
+            packets=packets,
+            vlm_judge=vlm_judge,
+            authorized_deviations=authorized_deviations,
+            visual_style_spec=visual_style_spec,
+            build_judge_request=build_judge_request,
+            call_judge=call_judge,
+            apply_prompt_exemptions=apply_prompt_exemptions,
+            normalize_judgement=normalize_judgement,
+            evidence_phase=evidence_phase,
+            decision_mode=decision_mode,
+        )
+
+    if group_local_evidence_policy == SHARED_GROUP_BANK_POLICY:
+        return _evaluate_functional_checks_with_shared_bank(
+            base=base,
+            metric_name=metric_name,
+            scene=scene,
+            prompt=prompt,
+            packets=packets,
+            vlm_judge=vlm_judge,
+            authorized_deviations=authorized_deviations,
+            visual_style_spec=visual_style_spec,
+            build_judge_request=build_judge_request,
+            call_judge=call_judge,
+            apply_prompt_exemptions=apply_prompt_exemptions,
+            normalize_judgement=normalize_judgement,
+            evidence_phase=evidence_phase,
+            decision_mode=decision_mode,
+            max_active_images=group_local_active_window_max_images,
+        )
+
+    expanded_packets = _expand_functional_check_packets(packets)
+    expanded = _evaluate_group_scoped_judgements_batched(
+        base=deepcopy(base),
+        metric_name=metric_name,
+        scene=scene,
+        prompt=prompt,
+        packets=expanded_packets,
+        vlm_judge=vlm_judge,
+        authorized_deviations=authorized_deviations,
+        visual_style_spec=visual_style_spec,
+        build_judge_request=build_judge_request,
+        call_judge=call_judge,
+        apply_prompt_exemptions=apply_prompt_exemptions,
+        normalize_judgement=normalize_judgement,
+        evidence_phase=evidence_phase,
+        decision_mode=decision_mode,
+    )
+    combined = _combine_functional_check_episodes(
+        packets=packets,
+        episode_results=list(expanded.get("group_results") or []),
+    )
+    expanded.pop("infrastructure_failures", None)
+    expanded["group_local_check_granularity"] = "per_check"
+    expanded["group_local_evidence_policy"] = "isolated_episode"
+    return _aggregate_group_results(
+        expanded,
+        combined,
+        metric_name=metric_name,
+    )
+
+
+def _evaluate_functional_checks_with_shared_bank(
+    *,
+    base: dict[str, Any],
+    metric_name: str,
+    scene: dict[str, Any],
+    prompt: str | None,
+    packets: list[dict[str, Any]],
+    vlm_judge: Any,
+    authorized_deviations: list[dict[str, Any]],
+    visual_style_spec: dict[str, Any] | None,
+    build_judge_request: Callable[..., dict[str, Any]],
+    call_judge: Callable[[Any, dict[str, Any]], dict[str, Any]],
+    apply_prompt_exemptions: Callable[..., dict[str, Any]],
+    normalize_judgement: Callable[..., dict[str, Any]],
+    evidence_phase: str,
+    decision_mode: str,
+    max_active_images: int,
+) -> dict[str, Any]:
+    """Evaluate atomic checks sequentially while sharing visual artifacts."""
+
+    episode_results: list[dict[str, Any]] = []
+    bank_records: dict[str, dict[str, Any]] = {}
+    metric_ledger = deepcopy(base.get("camera_acquisition_ledger"))
+
+    for packet in packets:
+        group_id = str((packet.get("group") or {}).get("group_id") or "")
+        bank: FunctionalGroupEvidenceBank | None = None
+        bank_error: str | None = None
+        if packet.get("paths") and (
+            packet.get("resolution") or {}
+        ).get("scope_satisfied"):
+            try:
+                bank = FunctionalGroupEvidenceBank.from_packet(
+                    packet,
+                    max_active_images=max_active_images,
+                )
+            except (TypeError, ValueError) as exc:
+                bank_error = f"{type(exc).__name__}: {exc}"
+
+        expanded_packets = _expand_functional_check_packets([packet])
+        for expanded_packet in expanded_packets:
+            episode = deepcopy(expanded_packet)
+            functional = episode.get("functional_probe_evidence")
+            required_checks = (
+                functional.get("required_checks")
+                if isinstance(functional, dict)
+                and isinstance(functional.get("required_checks"), list)
+                else []
+            )
+            if required_checks:
+                check = deepcopy(required_checks[0])
+                include_reusable = True
+            else:
+                check = {
+                    "check_id": f"group_baseline:{group_id}",
+                    "target_ids": list(
+                        (episode.get("group") or {}).get("object_ids") or []
+                    ),
+                    "required_observations": [],
+                }
+                include_reusable = False
+
+            if bank is not None:
+                active_evidence, initial_window = bank.initial_window(
+                    check,
+                    include_reusable=include_reusable,
+                )
+                episode["paths"] = list(active_evidence)
+                episode["functional_group_evidence_initial_window"] = (
+                    initial_window
+                )
+                episode["functional_group_evidence_window"] = (
+                    bank.window_context(check=check)
+                )
+                resolution = deepcopy(episode.get("resolution") or {})
+                resolution["functional_group_evidence"] = {
+                    "policy": SHARED_GROUP_BANK_POLICY,
+                    "max_active_images": max_active_images,
+                    "fixed_artifact_ids": list(bank.fixed_artifact_ids),
+                    "initial_artifact_ids": list(
+                        initial_window["selected_artifact_ids"]
+                    ),
+                    "bank_reuse_precedes_camera_selection": True,
+                }
+                acquisition_budget = resolution.get("acquisition_budget")
+                if isinstance(acquisition_budget, dict):
+                    acquisition_budget["initial_judge_evidence_count"] = len(
+                        evidence_artifact_refs(active_evidence)
+                    )
+                    acquisition_budget["active_window_max_images"] = (
+                        max_active_images
+                    )
+                episode["resolution"] = resolution
+                episode["camera_acquisition_ledger_after"] = (
+                    extend_acquisition_ledger(
+                        None,
+                        artifact_ids=evidence_artifact_refs(active_evidence),
+                    )
+                )
+            elif bank_error is not None:
+                # A malformed shared-bank contract must never silently run as
+                # the isolated policy.  Route the atomic scope through the
+                # existing required-scope terminalizer without invoking the
+                # Judge so the failure remains explicit and auditable.
+                episode["paths"] = []
+                resolution = deepcopy(episode.get("resolution") or {})
+                resolution.update(
+                    scope_satisfied=False,
+                    provider_status="failed",
+                    provider_reason=(
+                        "group_evidence_bank_validation_failed"
+                    ),
+                    group_evidence_bank_error=bank_error,
+                )
+                episode["resolution"] = resolution
+
+            episode_base = deepcopy(base)
+            if isinstance(metric_ledger, dict):
+                episode_base["camera_acquisition_ledger"] = deepcopy(
+                    metric_ledger
+                )
+            evaluated = _evaluate_group_scoped_judgements_batched(
+                base=episode_base,
+                metric_name=metric_name,
+                scene=scene,
+                prompt=prompt,
+                packets=[episode],
+                vlm_judge=vlm_judge,
+                authorized_deviations=authorized_deviations,
+                visual_style_spec=visual_style_spec,
+                build_judge_request=build_judge_request,
+                call_judge=call_judge,
+                apply_prompt_exemptions=apply_prompt_exemptions,
+                normalize_judgement=normalize_judgement,
+                evidence_phase=evidence_phase,
+                decision_mode=decision_mode,
+            )
+            results = list(evaluated.get("group_results") or [])
+            if len(results) != 1:
+                raise ValueError(
+                    "shared Functional evidence evaluation must produce "
+                    "exactly one atomic episode result"
+                )
+            record = deepcopy(results[0])
+            if bank is not None:
+                evidence_window = bank.absorb_controller_audit(
+                    record.get("camera_control_audit"),
+                    check=check,
+                    initial_window=initial_window,
+                )
+                record["functional_group_evidence_window_audit"] = (
+                    evidence_window
+                )
+                reused = list(
+                    dict.fromkeys(
+                        str(artifact_id)
+                        for event in evidence_window.get("events") or []
+                        if isinstance(event, dict)
+                        for artifact_id in event.get(
+                            "reused_artifact_ids"
+                        )
+                        or []
+                    )
+                )
+                record["shared_dynamic_evidence_reused"] = bool(reused)
+                record["shared_reused_artifact_ids"] = reused
+                record["camera_selector_avoided_by_bank_reuse"] = bool(
+                    reused
+                )
+            elif bank_error is not None:
+                record["functional_group_evidence_window_audit"] = {
+                    "policy": SHARED_GROUP_BANK_POLICY,
+                    "status": "failed_closed",
+                    "reason": "group_evidence_bank_validation_failed",
+                    "error": bank_error,
+                }
+            episode_results.append(record)
+            next_ledger = evaluated.get("camera_acquisition_ledger")
+            if isinstance(next_ledger, dict):
+                metric_ledger = deepcopy(next_ledger)
+
+        if bank is not None:
+            bank_records[group_id] = bank.to_dict()
+        else:
+            bank_records[group_id] = {
+                "schema_version": "functional_group_evidence_bank_v1",
+                "policy": SHARED_GROUP_BANK_POLICY,
+                "decision_authority": "none",
+                "group_id": group_id,
+                "status": "unavailable",
+                "reason": (
+                    "group_evidence_bank_validation_failed"
+                    if bank_error is not None
+                    else "group_seed_evidence_unavailable"
+                ),
+                **({"error": bank_error} if bank_error is not None else {}),
+            }
+
+    combined = _combine_functional_check_episodes(
+        packets=packets,
+        episode_results=episode_results,
+    )
+    result = deepcopy(base)
+    result.pop("infrastructure_failures", None)
+    if isinstance(metric_ledger, dict):
+        result["camera_acquisition_ledger"] = deepcopy(metric_ledger)
+    result["group_local_check_granularity"] = "per_check"
+    result["group_local_evidence_policy"] = SHARED_GROUP_BANK_POLICY
+    result["group_local_active_window_max_images"] = max_active_images
+    result["functional_group_evidence_bank"] = {
+        "schema_version": "functional_group_evidence_bank_collection_v1",
+        "policy": SHARED_GROUP_BANK_POLICY,
+        "decision_authority": "none",
+        "groups": bank_records,
+    }
+    return _aggregate_group_results(
+        result,
+        combined,
+        metric_name=metric_name,
+    )
+
+
+def _evaluate_group_scoped_judgements_batched(
+    *,
+    base: dict[str, Any],
+    metric_name: str,
+    scene: dict[str, Any],
+    prompt: str | None,
+    packets: list[dict[str, Any]],
+    vlm_judge: Any,
+    authorized_deviations: list[dict[str, Any]],
+    visual_style_spec: dict[str, Any] | None,
+    build_judge_request: Callable[..., dict[str, Any]],
+    call_judge: Callable[[Any, dict[str, Any]], dict[str, Any]],
+    apply_prompt_exemptions: Callable[..., dict[str, Any]],
+    normalize_judgement: Callable[..., dict[str, Any]],
+    evidence_phase: str = "final",
+    decision_mode: str = "final",
+) -> dict[str, Any]:
+    """Judge each supplied packet once and aggregate without score averaging."""
 
     group_results: list[dict[str, Any]] = []
     metric_ledger = deepcopy(
@@ -303,9 +678,23 @@ def evaluate_group_scoped_judgements(
             "evidence_paths": list(packet["paths"]),
             "evidence_resolution": deepcopy(resolution),
             "status": "unresolved",
+            "terminal_state": "pending",
             "score": None,
             "reason": resolution.get("provider_reason"),
             "vlm_invoked": False,
+            "judge_episode_count": 0,
+            "functional_check_episode_id": packet.get(
+                "functional_check_episode_id"
+            ),
+            "functional_check_granularity": packet.get(
+                "functional_check_granularity", "batched"
+            ),
+            "functional_group_evidence_window": deepcopy(
+                packet.get("functional_group_evidence_window")
+            ),
+            "functional_group_evidence_initial_window": deepcopy(
+                packet.get("functional_group_evidence_initial_window")
+            ),
             "judgement": None,
             "routed_candidate_claims": deepcopy(
                 packet.get("routed_candidate_claims") or []
@@ -340,7 +729,12 @@ def evaluate_group_scoped_judgements(
                 resolution.get("provider_reason")
                 or "group_local_render_evidence_unavailable"
             )
-            group_results.append(record)
+            group_results.append(
+                terminalize_required_scope(
+                    record,
+                    phase=_group_episode_phase(packet, group_id),
+                )
+            )
             continue
 
         judge_request_kwargs = {
@@ -364,6 +758,10 @@ def evaluate_group_scoped_judgements(
             judge_request_kwargs["functional_probe_evidence"] = record[
                 "functional_probe_evidence"
             ]
+        if record["functional_group_evidence_window"] is not None:
+            judge_request_kwargs["functional_group_evidence_window"] = (
+                deepcopy(record["functional_group_evidence_window"])
+            )
         if record["placement_discovery"] is not None:
             judge_request_kwargs["placement_discovery"] = record[
                 "placement_discovery"
@@ -383,6 +781,7 @@ def evaluate_group_scoped_judgements(
             episode_ledger_before_judge
         )
         record["vlm_invoked"] = True
+        record["judge_episode_count"] = 1
         audit_records = getattr(vlm_judge, "audit_records", None)
         audit_start = (
             len(audit_records)
@@ -418,20 +817,30 @@ def evaluate_group_scoped_judgements(
                             registered_checks,
                         )
                     )
-                adjusted, judge_originated_checks = (
-                    normalize_judge_originated_placement_results(
-                        adjusted,
-                        known_ids=set(members),
-                        groups=[group],
-                        existing_checks=list(
-                            (
-                                base.get("placement_check_ledger") or {}
-                            ).get("checks")
-                            or []
-                        ),
-                        expected_owner_stage="group_local",
-                    )
+                internal_registrations = adjusted.get(
+                    "judge_originated_placement_check_registrations"
                 )
+                if isinstance(internal_registrations, list):
+                    judge_originated_checks = [
+                        deepcopy(item)
+                        for item in internal_registrations
+                        if isinstance(item, dict)
+                    ]
+                else:
+                    adjusted, judge_originated_checks = (
+                        normalize_judge_originated_placement_results(
+                            adjusted,
+                            known_ids=set(members),
+                            groups=[group],
+                            existing_checks=list(
+                                (
+                                    base.get("placement_check_ledger") or {}
+                                ).get("checks")
+                                or []
+                            ),
+                            expected_owner_stage="group_local",
+                        )
+                    )
                 if judge_originated_checks:
                     base["placement_check_ledger"] = (
                         merge_placement_checks(
@@ -486,6 +895,14 @@ def evaluate_group_scoped_judgements(
                 metric_name == "functional_consistency"
                 and required_functional_checks
             ):
+                adjusted = canonicalize_clearance_causal_attribution(
+                    adjusted,
+                    required_checks=[
+                        deepcopy(item)
+                        for item in required_functional_checks
+                        if isinstance(item, dict)
+                    ],
+                )
                 adjusted = canonicalize_functional_defect_check_linkage(
                     adjusted,
                     required_checks=[
@@ -546,7 +963,7 @@ def evaluate_group_scoped_judgements(
         except Exception as exc:
             schema_audit = response_schema_audit_from_exception(exc)
             record.update(
-                status="unresolved",
+                status="failed",
                 reason="vlm_judge_failed",
                 judgement={
                     "error_type": type(exc).__name__,
@@ -578,7 +995,12 @@ def evaluate_group_scoped_judgements(
                     episode_before=episode_ledger_before_judge,
                     episode_after=next_ledger,
                 )
-        group_results.append(record)
+        group_results.append(
+            terminalize_required_scope(
+                record,
+                phase=_group_episode_phase(packet, group_id),
+            )
+        )
 
     if isinstance(metric_ledger, dict):
         base["camera_acquisition_ledger"] = deepcopy(metric_ledger)
@@ -587,6 +1009,242 @@ def evaluate_group_scoped_judgements(
         group_results,
         metric_name=metric_name,
     )
+
+
+def _group_episode_phase(packet: dict[str, Any], group_id: str) -> str:
+    check_id = str(packet.get("functional_check_episode_id") or "").strip()
+    if check_id:
+        return f"group_local:{group_id}:check:{check_id}"
+    return f"group_local:{group_id}"
+
+
+def _expand_functional_check_packets(
+    packets: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    expanded: list[dict[str, Any]] = []
+    for packet in packets:
+        functional = packet.get("functional_probe_evidence")
+        required = (
+            functional.get("required_checks")
+            if isinstance(functional, dict)
+            else None
+        )
+        required_checks = [
+            deepcopy(item)
+            for item in required or []
+            if isinstance(item, dict) and item.get("check_id")
+        ]
+        if not required_checks:
+            baseline = deepcopy(packet)
+            baseline["functional_check_granularity"] = "per_check"
+            baseline["functional_check_episode_id"] = None
+            expanded.append(baseline)
+            continue
+        for check in required_checks:
+            check_id = str(check["check_id"])
+            episode = deepcopy(packet)
+            episode["functional_check_granularity"] = "per_check"
+            episode["functional_check_episode_id"] = check_id
+            episode["shared_seed_evidence_reused"] = True
+            episode_functional = deepcopy(functional)
+            episode_functional["required_checks"] = [deepcopy(check)]
+            episode_functional["required_check_ids"] = [check_id]
+            episode_functional["required_check_count"] = 1
+            episode_functional["episode_scope"] = (
+                "single_group_local_functional_check"
+            )
+            for key in (
+                "observation_requests",
+                "relation_observation_requests",
+                "image_order",
+            ):
+                values = episode_functional.get(key)
+                if isinstance(values, list):
+                    episode_functional[key] = [
+                        deepcopy(item)
+                        for item in values
+                        if not isinstance(item, dict)
+                        or not item.get("check_ids")
+                        or check_id
+                        in {
+                            str(value)
+                            for value in item.get("check_ids") or []
+                        }
+                    ]
+            episode["functional_probe_evidence"] = episode_functional
+            expanded.append(episode)
+    return expanded
+
+
+def _combine_functional_check_episodes(
+    *,
+    packets: list[dict[str, Any]],
+    episode_results: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    by_group: dict[str, list[dict[str, Any]]] = {}
+    for result in episode_results:
+        by_group.setdefault(str(result.get("group_id") or ""), []).append(
+            deepcopy(result)
+        )
+
+    combined_results: list[dict[str, Any]] = []
+    for packet in packets:
+        group_id = str(packet["group"]["group_id"])
+        episodes = by_group.get(group_id, [])
+        functional = packet.get("functional_probe_evidence")
+        required_checks = [
+            deepcopy(item)
+            for item in (
+                functional.get("required_checks")
+                if isinstance(functional, dict)
+                else []
+            )
+            or []
+            if isinstance(item, dict) and item.get("check_id")
+        ]
+        if not required_checks:
+            if not episodes:
+                continue
+            baseline = deepcopy(episodes[0])
+            baseline["functional_check_granularity"] = "per_check"
+            baseline["check_episodes"] = deepcopy(episodes)
+            baseline["judge_episode_count"] = sum(
+                int(
+                    item.get("judge_episode_count")
+                    or (1 if item.get("vlm_invoked") else 0)
+                )
+                for item in episodes
+            )
+            combined_results.append(baseline)
+            continue
+
+        expected_ids = [str(item["check_id"]) for item in required_checks]
+        observed_episode_ids = [
+            str(item.get("functional_check_episode_id") or "")
+            for item in episodes
+            if item.get("functional_check_episode_id")
+        ]
+        if len(observed_episode_ids) != len(set(observed_episode_ids)):
+            raise ValueError(
+                "per-check Functional episodes contain duplicate check "
+                f"identities for {group_id}"
+            )
+        episode_by_id = {
+            str(item.get("functional_check_episode_id") or ""): item
+            for item in episodes
+            if item.get("functional_check_episode_id")
+        }
+        if set(episode_by_id) != set(expected_ids):
+            missing = sorted(set(expected_ids) - set(episode_by_id))
+            duplicate_or_extra = sorted(set(episode_by_id) - set(expected_ids))
+            raise ValueError(
+                "per-check Functional episodes do not match the required "
+                f"ledger for {group_id}: missing={missing}, "
+                f"extra={duplicate_or_extra}"
+            )
+        ordered = [episode_by_id[check_id] for check_id in expected_ids]
+        first = deepcopy(ordered[0])
+        first["functional_check_episode_id"] = None
+        first["functional_check_granularity"] = "per_check"
+        first["check_episodes"] = deepcopy(ordered)
+        first["judge_episode_count"] = sum(
+            int(
+                item.get("judge_episode_count")
+                or (1 if item.get("vlm_invoked") else 0)
+            )
+            for item in ordered
+        )
+        first["vlm_invoked"] = first["judge_episode_count"] > 0
+        first["camera_control_audits"] = [
+            deepcopy(item["camera_control_audit"])
+            for item in ordered
+            if isinstance(item.get("camera_control_audit"), dict)
+        ]
+        first["functional_check_result_refs"] = {
+            check_id: f"group_local_review:{group_id}:check:{check_id}"
+            for check_id in expected_ids
+        }
+        first["claim_correspondence"] = [
+            deepcopy(item)
+            for episode in ordered
+            for item in episode.get("claim_correspondence") or []
+        ]
+        failed = next(
+            (item for item in ordered if item.get("status") != "evaluated"),
+            None,
+        )
+        if failed is not None:
+            first.update(
+                status=failed.get("status"),
+                terminal_state=failed.get("terminal_state"),
+                score=None,
+                reason=failed.get("reason"),
+                judgement=deepcopy(failed.get("judgement")),
+            )
+            combined_results.append(first)
+            continue
+
+        judgements = [
+            item.get("judgement")
+            for item in ordered
+            if isinstance(item.get("judgement"), dict)
+        ]
+        rows = [
+            deepcopy(row)
+            for judgement in judgements
+            for row in judgement.get("functional_check_results") or []
+            if isinstance(row, dict)
+        ]
+        defects = [
+            deepcopy(defect)
+            for judgement in judgements
+            for defect in judgement.get("defects") or []
+            if isinstance(defect, dict)
+        ]
+        invalid = any(item.get("score") == 0.0 for item in ordered)
+        confidence = min(
+            (
+                float(judgement.get("confidence") or 0.0)
+                for judgement in judgements
+            ),
+            default=0.0,
+        )
+        aggregate_judgement = {
+            "evidence_status": "sufficient",
+            "verdict": "invalid" if invalid else "valid",
+            "confidence": confidence,
+            "reason": (
+                "At least one atomic group-local Functional check is invalid."
+                if invalid
+                else "Every atomic group-local Functional check is valid."
+            ),
+            "missing_evidence": [],
+            "defects": defects if invalid else [],
+            "evidence_request": None,
+            "functional_check_results": rows,
+            "aggregation": "atomic_group_local_checks",
+        }
+        check_resolution = validate_functional_check_results(
+            aggregate_judgement,
+            required_checks=required_checks,
+        )
+        first.update(
+            status="evaluated",
+            terminal_state=(
+                "evaluated_degraded"
+                if any(
+                    item.get("terminal_state") == "evaluated_degraded"
+                    for item in ordered
+                )
+                else "evaluated"
+            ),
+            score=0.0 if invalid else 1.0,
+            reason=None,
+            judgement=aggregate_judgement,
+            functional_check_resolution=check_resolution,
+        )
+        combined_results.append(first)
+    return combined_results
 
 
 def _camera_acquisition_ledger_from_audit(
@@ -682,6 +1340,12 @@ def group_packet_audit(packet: dict[str, Any]) -> dict[str, Any]:
         "functional_probe_evidence": deepcopy(
             packet.get("functional_probe_evidence")
         ),
+        "functional_group_evidence_window": deepcopy(
+            packet.get("functional_group_evidence_window")
+        ),
+        "functional_group_evidence_initial_window": deepcopy(
+            packet.get("functional_group_evidence_initial_window")
+        ),
         "placement_discovery": deepcopy(
             packet.get("placement_discovery")
         ),
@@ -743,6 +1407,14 @@ def _registered_placement_checks_from_controller_audit(
     ]
 
 
+def _group_control_audits(record: dict[str, Any]) -> list[Any]:
+    audits = record.get("camera_control_audits")
+    if isinstance(audits, list):
+        return list(audits)
+    audit = record.get("camera_control_audit")
+    return [audit] if audit is not None else []
+
+
 def _aggregate_group_results(
     base: dict[str, Any],
     group_results: list[dict[str, Any]],
@@ -760,13 +1432,18 @@ def _aggregate_group_results(
     )
     base["group_results"] = group_results
     base["judge_call_count"] = sum(
-        1 for item in group_results if item["vlm_invoked"]
+        int(
+            item.get("judge_episode_count")
+            or (1 if item.get("vlm_invoked") else 0)
+        )
+        for item in group_results
     )
     base["vlm_invoked"] = bool(base["judge_call_count"])
     base["evidence_request"]["vlm_invoked"] = base["vlm_invoked"]
     control_summaries = [
-        _control_audit_summary(item.get("camera_control_audit"))
+        _control_audit_summary(audit)
         for item in group_results
+        for audit in _group_control_audits(item)
     ]
     preview_count = sum(
         int(item["preview_render_count"])
@@ -838,6 +1515,59 @@ def _aggregate_group_results(
         "complete": all_resolved,
     }
 
+    infrastructure_failures = [
+        failure
+        for item in group_results
+        if (
+            failure := infrastructure_failure_from_scope(
+                item,
+                phase="group_local",
+                scope_id=str(item.get("group_id") or "") or None,
+            )
+        )
+        is not None
+    ]
+    if infrastructure_failures:
+        base["infrastructure_failures"] = deepcopy(
+            infrastructure_failures
+        )
+        base.update(
+            status="failed",
+            terminal_state="infrastructure_failure",
+            reason="required_scope_infrastructure_failure",
+            score=None,
+            judgement={
+                "evidence_status": "unavailable",
+                "verdict": None,
+                "confidence": 0.0,
+                "reason": (
+                    "One or more required group Judge scopes failed for an "
+                    "engineering reason; no scientific verdict was fabricated."
+                ),
+                "missing_evidence": [
+                    f"group_scoped_evidence:{item['group_id']}"
+                    for item in group_results
+                    if item.get("status") != "evaluated"
+                ],
+                "defects": [],
+                "aggregation": "fail_closed_on_required_scope_failure",
+                "infrastructure_failures": deepcopy(
+                    infrastructure_failures
+                ),
+                "group_judgements": deepcopy(group_results),
+            },
+        )
+        return base
+
+    aggregate_terminal_state = (
+        "evaluated_degraded"
+        if any(
+            item.get("terminal_state") == "evaluated_degraded"
+            for item in group_results
+        )
+        else "evaluated"
+    )
+
     defects = deduplicate_defects(
         metric_name,
         (
@@ -860,7 +1590,7 @@ def _aggregate_group_results(
         source_phase="group_visual",
         claim_status="final",
     )
-    if invalid:
+    if invalid and all_resolved:
         aggregate = (
             deepcopy(invalid[0]["judgement"])
             if len(group_results) == 1
@@ -894,6 +1624,7 @@ def _aggregate_group_results(
         )
         base.update(
             status="evaluated",
+            terminal_state=aggregate_terminal_state,
             reason=None,
             score=0.0,
             judgement=aggregate,
@@ -933,6 +1664,7 @@ def _aggregate_group_results(
         )
         base.update(
             status="evaluated",
+            terminal_state=aggregate_terminal_state,
             reason=None,
             score=1.0,
             judgement=aggregate,
@@ -944,21 +1676,27 @@ def _aggregate_group_results(
         for item in group_results
         if item["status"] != "evaluated"
     ]
+    contract_failure = {
+        "phase": "metric_aggregation",
+        "scope_id": metric_name,
+        "failure_kind": "terminal_contract_failure",
+        "reason": "required_scope_lacked_terminal_binary_result",
+        "controller_stop_reason": None,
+        "error_type": "TerminalContractError",
+        "error": "A required group did not produce a terminal result.",
+    }
+    base["infrastructure_failures"] = [deepcopy(contract_failure)]
     base.update(
-        status="unresolved",
-        reason=(
-            group_results[0]["reason"]
-            if len(group_results) == 1
-            and not group_results[0]["vlm_invoked"]
-            else "one_or_more_group_judgements_unresolved"
-        ),
+        status="failed",
+        terminal_state="infrastructure_failure",
+        reason="terminal_contract_failure",
         score=None,
         judgement={
-            "evidence_status": "insufficient",
-            "verdict": "ambiguous",
+            "evidence_status": "unavailable",
+            "verdict": None,
             "confidence": 0.0,
             "reason": (
-                "One or more group-scoped judgements remain unresolved."
+                "The required group terminal contract was not satisfied."
             ),
             "missing_evidence": [
                 f"group_scoped_evidence:{group_id}"
@@ -966,8 +1704,9 @@ def _aggregate_group_results(
             ],
             "defects": [],
             "aggregation": (
-                "unresolved_without_complete_group_coverage"
+                "fail_closed_on_terminal_contract_violation"
             ),
+            "infrastructure_failures": [deepcopy(contract_failure)],
             "group_judgements": deepcopy(group_results),
         },
     )

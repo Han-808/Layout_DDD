@@ -781,6 +781,11 @@ def validate_functional_check_results(
         raise ValueError(
             "functional valid verdict requires every required check to resolve valid"
         )
+    if unresolved and verdict != "ambiguous":
+        raise ValueError(
+            "unresolved functional checks require an ambiguous evidence-"
+            "acquisition verdict; an early invalid cannot stop the loop"
+        )
     if (
         verdict == "invalid"
         and invalid_verdict_requires_invalid_check
@@ -794,10 +799,10 @@ def validate_functional_check_results(
         raise ValueError(
             "functional ambiguous verdict requires an unresolved functional check"
         )
-    if verdict == "ambiguous" and invalid:
+    if verdict == "ambiguous" and result.get("defects"):
         raise ValueError(
-            "functional ambiguous verdict cannot retain an invalid check; "
-            "a supported invalid check is already a final defect"
+            "functional ambiguous verdict cannot emit final defects; resolved "
+            "invalid check rows may be repeated after coverage completes"
         )
     defects = result.get("defects") or []
     if not isinstance(defects, list) or any(
@@ -848,6 +853,8 @@ def validate_functional_check_results(
     for check_id in invalid:
         check = expected[check_id]
         defect = linked_defects.get(check_id)
+        if verdict == "ambiguous" and defect is None:
+            continue
         if defect is None:
             raise ValueError(
                 f"invalid functional check {check_id} requires one explicit "
@@ -859,12 +866,15 @@ def validate_functional_check_results(
             if str(target_id).strip()
         }
         if check.get("check_type") == "clearance":
+            clearance_row = row_by_check_id(rows)[check_id]
+            _validate_clearance_defect_causal_consistency(
+                defect,
+                row=clearance_row,
+                check=check,
+            )
             check_targets = {
                 str(target_id)
-                for target_id in row_by_check_id(rows)[check_id].get(
-                    "scoring_target_ids"
-                )
-                or []
+                for target_id in clearance_row.get("scoring_target_ids") or []
             }
             exact_match_required = True
         else:
@@ -892,6 +902,203 @@ def validate_functional_check_results(
         "rows": normalized_rows,
         "decision_authority": "none",
     }
+
+
+def canonicalize_clearance_causal_attribution(
+    result: dict[str, Any],
+    *,
+    required_checks: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Complete redundant clearance ownership fields without guessing.
+
+    Clearance ownership is represented both on its invalid result row and on
+    the linked defect.  The model owns the semantic cause: ``cause_kind`` and
+    ``causal_object_ids``.  Scoring ownership is deterministic bookkeeping,
+    not another model decision.  Once the semantic cause is validated there
+    is exactly one interpretation:
+
+    * ``affected_object_ids`` is the exact clearance-check target set;
+    * ``self_layout`` makes causal and scoring IDs that same target set; and
+    * ``external_object`` scores the validated causal blocker set; and
+    * the linked defect target is the same derived scoring-owner set.
+
+    Missing or wrong ``scoring_target_ids`` therefore cannot discard an
+    otherwise valid semantic judgement.  Conflicting, malformed, unknown, or
+    under-specified *causal* attribution is deliberately left untouched so
+    the strict validator still fails closed.  This runs before schema repair
+    because normalizing derived bookkeeping must not require the model to
+    rewrite its locked semantic content.
+    """
+
+    if not isinstance(result, dict) or not required_checks:
+        return result
+    rows = result.get("functional_check_results")
+    defects = result.get("defects")
+    if not isinstance(rows, list) or not isinstance(defects, list):
+        return result
+    normalized = deepcopy(result)
+    normalized_rows = normalized.get("functional_check_results") or []
+    normalized_defects = normalized.get("defects") or []
+    checks = {
+        str(check.get("check_id") or ""): check
+        for check in required_checks
+        if isinstance(check, dict) and str(check.get("check_id") or "")
+    }
+    changed = False
+
+    def read_ids(record: dict[str, Any], field: str) -> tuple[str, list[str] | None]:
+        raw = record.get(field)
+        if field not in record or raw is None or raw == "":
+            return "missing", None
+        if raw == []:
+            return "missing", None
+        if (
+            not isinstance(raw, list)
+            or any(
+                not isinstance(item, str) or not item.strip()
+                for item in raw
+            )
+        ):
+            return "invalid", None
+        values = sorted(str(item).strip() for item in raw)
+        if len(values) != len(set(values)):
+            return "invalid", None
+        return "valid", values
+
+    def read_cause(record: dict[str, Any]) -> tuple[str, str | None]:
+        if "cause_kind" not in record or not str(
+            record.get("cause_kind") or ""
+        ).strip():
+            return "missing", None
+        value = str(record.get("cause_kind") or "").strip()
+        if value not in {"external_object", "self_layout"}:
+            return "invalid", None
+        return "valid", value
+
+    def compatible_value(
+        records: list[tuple[str, Any]],
+    ) -> tuple[bool, Any | None]:
+        if any(status == "invalid" for status, _ in records):
+            return False, None
+        values = [value for status, value in records if status == "valid"]
+        if values and any(value != values[0] for value in values[1:]):
+            return False, None
+        return True, values[0] if values else None
+
+    for row in normalized_rows:
+        if not isinstance(row, dict) or row.get("conclusion") != "invalid":
+            continue
+        check_id = str(row.get("check_id") or "")
+        check = checks.get(check_id)
+        if not isinstance(check, dict) or check.get("check_type") != "clearance":
+            continue
+        linked = [
+            defect
+            for defect in normalized_defects
+            if isinstance(defect, dict)
+            and check_id in [
+                str(item)
+                for item in defect.get("check_refs") or []
+                if str(item).strip()
+            ]
+        ]
+        if len(linked) != 1:
+            continue
+        defect = linked[0]
+        expected_affected = sorted(
+            str(item).strip()
+            for item in check.get("target_ids") or []
+            if str(item).strip()
+        )
+        if not expected_affected:
+            continue
+        known_ids = {
+            str(item).strip()
+            for item in (
+                check.get("allowed_causal_object_ids")
+                or check.get("target_ids")
+                or []
+            )
+            if str(item).strip()
+        }
+
+        affected_ok, declared_affected = compatible_value(
+            [
+                read_ids(row, "affected_object_ids"),
+                read_ids(defect, "affected_object_ids"),
+            ]
+        )
+        cause_ok, cause_kind = compatible_value(
+            [read_cause(row), read_cause(defect)]
+        )
+        if (
+            not affected_ok
+            or (
+                declared_affected is not None
+                and declared_affected != expected_affected
+            )
+            or not cause_ok
+            or cause_kind is None
+        ):
+            continue
+
+        causal_records = [
+            read_ids(row, "causal_object_ids"),
+            read_ids(defect, "causal_object_ids"),
+        ]
+        causal_ok, declared_causal = compatible_value(causal_records)
+        if not causal_ok:
+            continue
+
+        if cause_kind == "self_layout":
+            if (
+                declared_causal is not None
+                and declared_causal != expected_affected
+            ):
+                continue
+            causal = list(expected_affected)
+        else:
+            if declared_causal is None:
+                continue
+            causal = list(declared_causal)
+            if (
+                not causal
+                or set(causal) & set(expected_affected)
+                or not set(causal) <= known_ids
+            ):
+                continue
+        scoring = list(causal)
+
+        values = {
+            "affected_object_ids": list(expected_affected),
+            "cause_kind": cause_kind,
+            "causal_object_ids": causal,
+            "scoring_target_ids": scoring,
+        }
+        for record in (row, defect):
+            for field, value in values.items():
+                if field == "scoring_target_ids":
+                    # Scoring ownership is derived from the validated cause,
+                    # so stale, malformed, or omitted model bookkeeping is
+                    # replaced rather than treated as a semantic conflict.
+                    if record.get(field) != value:
+                        record[field] = deepcopy(value)
+                        changed = True
+                    continue
+                if field == "cause_kind":
+                    status, _ = read_cause(record)
+                else:
+                    status, _ = read_ids(record, field)
+                if status == "missing":
+                    record[field] = deepcopy(value)
+                    changed = True
+        if defect.get("target_ids") != scoring:
+            # Functional clearance defects are charged to the repair owner:
+            # the external blocker, or the affected object for self-layout.
+            defect["target_ids"] = list(scoring)
+            changed = True
+
+    return normalized if changed else result
 
 
 def canonicalize_functional_defect_check_linkage(
@@ -1003,13 +1210,25 @@ def canonicalize_typed_invalid_envelope(
     """Derive the metric envelope from an asserted final typed defect.
 
     Exact defect/check linkage is still validated separately. This removes
-    only a redundant schema contradiction: a response cannot remain
-    ``ambiguous`` once it asserts a final defect, even if other required
-    checks are unresolved.
+    only a redundant schema contradiction after *all* typed checks have been
+    observed.  While any required check remains unresolved, invalid rows are
+    provisional audit facts rather than final defect claims and the outer
+    envelope must remain evidence-acquisition ``ambiguous`` with no defects.
     """
 
     defects = result.get("defects")
     if not isinstance(defects, list) or not defects:
+        return result
+    if any(
+        isinstance(row, dict)
+        and row.get("conclusion") == "unresolved"
+        for field in (
+            "functional_check_results",
+            "placement_check_results",
+            "judge_originated_placement_results",
+        )
+        for row in result.get(field) or []
+    ):
         return result
     invalid_check_ids = {
         str(row.get("check_id") or row.get("proposal_id") or "")
@@ -1092,6 +1311,13 @@ def apply_functional_check_judgements(
             if isinstance(record.get("judgement"), dict)
             else {}
         )
+        check_result_refs = (
+            record.get("functional_check_result_refs")
+            if isinstance(
+                record.get("functional_check_result_refs"), dict
+            )
+            else {}
+        )
         for row in judgement.get("functional_check_results") or []:
             if not isinstance(row, dict):
                 continue
@@ -1104,7 +1330,10 @@ def apply_functional_check_judgements(
                 raise ValueError(
                     f"functional check {check_id!r} was judged more than once"
                 )
-            rows_by_id[check_id] = (row, phase)
+            rows_by_id[check_id] = (
+                row,
+                str(check_result_refs.get(check_id) or phase),
+            )
 
     for check_id, check in checks_by_id.items():
         routed = rows_by_id.get(check_id)
@@ -1383,6 +1612,33 @@ def _validate_clearance_causal_attribution(
         raise ValueError(
             f"external-object clearance check {check['check_id']} must score "
             "the causal blocker set"
+        )
+
+
+def _validate_clearance_defect_causal_consistency(
+    defect: dict[str, Any],
+    *,
+    row: dict[str, Any],
+    check: dict[str, Any],
+) -> None:
+    """Reject a linked defect that contradicts the validated blocker claim."""
+
+    for field in ("affected_object_ids", "causal_object_ids"):
+        if field not in defect:
+            continue
+        defect_ids = _strict_result_ids(defect.get(field), label=field)
+        row_ids = _strict_result_ids(row.get(field), label=field)
+        if defect_ids != row_ids:
+            raise ValueError(
+                f"clearance check {check['check_id']} has conflicting "
+                f"{field} between its result row and linked defect"
+            )
+    if "cause_kind" in defect and defect.get("cause_kind") != row.get(
+        "cause_kind"
+    ):
+        raise ValueError(
+            f"clearance check {check['check_id']} has conflicting cause_kind "
+            "between its result row and linked defect"
         )
 
 

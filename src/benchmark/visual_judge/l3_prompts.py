@@ -8,7 +8,7 @@ semantics.
 from __future__ import annotations
 
 
-L3_METRIC_PROMPT_VERSION = "l3_lazy_group_relation_evidence_v23"
+L3_METRIC_PROMPT_VERSION = "l3_burden_categories_v25"
 
 L3_METRIC_BOUNDARY_RULES = (
     "Additional visual evidence can be acquired.",
@@ -78,12 +78,18 @@ L3_METRIC_BOUNDARY_RULES = (
     "A discovery record, routed candidate, functional probe, placement "
     "candidate, or decoded usable-side hypothesis identifies what to inspect; "
     "none is evidence that a defect exists. Every accepted required functional "
-    "check must be explicitly resolved by its owning Judge phase before a "
-    "final valid verdict. A supported invalid verdict may remain final while "
-    "other coverage gaps stay visible for audit.",
+    "check must be explicitly resolved by its owning Judge phase before any "
+    "final metric verdict. A supported observation remains auditable but cannot "
+    "mask unresolved required coverage.",
     "Exclude a rendering or materialization artifact only when supplied "
     "structured provenance explicitly identifies it as benchmark-owned "
     "degradation. Do not infer that exemption from appearance alone.",
+    "Each defect record represents one underlying scoring event. Use "
+    "attribution_mode=unary for one defective object, responsible_endpoint "
+    "when one relation endpoint owns the failure, and minimum_repair_set when "
+    "multiple objects form the smallest repair set. Independent failures must "
+    "be separate defect records; do not duplicate one full relation penalty "
+    "across every endpoint.",
 )
 
 L3_METRIC_RUBRICS = {
@@ -99,7 +105,9 @@ L3_METRIC_RUBRICS = {
         "A rare but plausible size variant is valid. Apparent image size alone "
         "is not physical-scale evidence. Do not judge object membership, style, "
         "placement, orientation, usability, collision, support, or general "
-        "scene quality. Request visual evidence only when object identity or "
+        "scene quality. For each invalid defect, classify category as oversized, "
+        "undersized, or relative_scale_mismatch and severity as noticeable or "
+        "gross. Request visual evidence only when object identity or "
         "relative-scale context is not observable and another view could "
         "resolve it."
     ),
@@ -119,7 +127,9 @@ L3_METRIC_RUBRICS = {
         "size, position, orientation, function, or color alone without a "
         "broader design-language conflict is insufficient. Do not judge "
         "functionality, collision, support, prompt completeness, or general "
-        "scene quality."
+        "scene quality. For each invalid defect, classify category as "
+        "style_outlier or style_cluster_conflict and severity as noticeable "
+        "or gross."
     ),
     "object_pairing_consistency": (
         "Judge only whether an object's identity and semantic role belong in "
@@ -133,7 +143,8 @@ L3_METRIC_RUBRICS = {
         "supplied group is evidence scope, not compatibility ground truth. Do "
         "not judge current support surface, zone, height, distance, "
         "orientation, access, clearance, scale, style, collision, or physical "
-        "support."
+        "support. Classify each invalid defect as out_of_context_object or "
+        "incompatible_object_set. Object-pairing invalidity has no mild tier."
     ),
     "functional_consistency": (
         "Judge only whether ordinary real-world use is feasible in the current "
@@ -142,8 +153,10 @@ L3_METRIC_RUBRICS = {
         "functional check is atomic: directional_correspondence tests only "
         "whether functional sides or facing directions are compatible for "
         "direct ordinary joint use; relative_use_geometry tests only whether "
-        "relative position, distance, reach, contact, or connection geometry "
-        "permits that joint use. Do not infer a relation check from broad "
+        "relative position, distance, reach, coordinated operation, or an "
+        "operational connection permits that joint use. Static support/contact "
+        "without an action-dependent joint use belongs to L1 physical support "
+        "or semantic-placement support_and_height. Do not infer a relation check from broad "
         "cooperation or semantic association. An object's own approach, "
         "opening, or operating free space belongs only to its object-level "
         "clearance check, even when another object is the visible blocker. "
@@ -169,7 +182,12 @@ L3_METRIC_RUBRICS = {
         "observable fact is genuinely absent and another view can resolve it, "
         "request that observation rather than assuming normality. Attribute "
         "defects only to objects whose own use fails. Do not judge category "
-        "membership, semantic location alone, style, scale, or L1 geometry."
+        "membership, semantic location alone, style, scale, or L1 geometry. "
+        "Classify each invalid defect as directed_surface_unusable, "
+        "functional_correspondence_failure, approach_clearance_failure, or "
+        "group_function_failure. Use impaired when core use remains possible "
+        "but materially degraded; use blocked only when core use requires "
+        "rearranging an authored scene object."
     ),
     "semantic_placement_consistency": (
         "Judge only semantic location, assuming that the object identity "
@@ -181,23 +199,17 @@ L3_METRIC_RUBRICS = {
         "identity, scale, style, intended function, and ordinary usable "
         "orientation fixed, then ask whether moving the same object to an "
         "ordinary location in the same scene would remove the anomaly. Return "
-        "invalid only when relocation alone would resolve the issue and one of "
-        "the following two exact severity levels is established. "
-        "clear_semantic_misplacement means that the observed support surface, "
-        "height, scene zone, or contextual anchor admits no ordinary "
-        "contextual interpretation for the object, while relocation alone "
-        "would restore one. material_contextual_mismatch means that a possible "
-        "interpretation remains, but the actual scene supplies a clear dominant "
-        "support, height, zone, or contextual-anchor relation; the object "
-        "materially violates that relation; a concrete ordinary alternative "
-        "relation can be named; no visible cue establishes an intentional "
-        "alternative activity; and the mismatch remains after granting ordinary "
-        "orientation and operability. Do not use either level for aesthetic "
+        "invalid only when relocation alone would resolve the issue. Classify "
+        "the defect as semantic_surface_mismatch, zone_placement_mismatch, "
+        "or local_arrangement_mismatch. These correspond only to the existing "
+        "support-and-height, scene-zone, and contextual-anchor checks. Use "
+        "atypical when the placement is "
+        "clearly unconventional but retains a plausible interpretation; use "
+        "implausible when no ordinary contextual interpretation remains and "
+        "relocation would restore one. Do not use either level for aesthetic "
         "preference, a merely less optimal location, or unexplained oddness. "
         "Every placement defect must contain severity equal to exactly "
-        "clear_semantic_misplacement or material_contextual_mismatch. An "
-        "unconventional but contextually plausible location that does not meet "
-        "all material_contextual_mismatch conditions is valid. Contextual "
+        "atypical or implausible. Contextual "
         "adjacency belongs here only when it describes where an otherwise "
         "usable object belongs; adjacency needed for reaching, viewing, "
         "sitting, operating, opening, or cooperative use belongs to functional "
@@ -256,10 +268,11 @@ L3_METRIC_PHASE_PROMPTS = {
             "was discovered. If any required check cannot be resolved from "
             "the current packet, return insufficient evidence and request "
             "only the missing observations for that check's target objects. "
-            "A final valid verdict requires every required check to resolve. "
-            "A supported invalid check may establish a final invalid verdict "
-            "while other check rows remain unresolved; keep those gaps "
-            "explicit for coverage audit and do not turn them into defects. "
+            "Any final verdict requires every required check to resolve. If a "
+            "supported invalid row coexists with an unresolved row, return "
+            "insufficient/ambiguous with no final defects and request only the "
+            "missing observations; repeat the invalid row and its defect once "
+            "coverage completes. "
             "The terminal budget policy will request inference under budget "
             "when acquisition is exhausted. "
             "Resolve directional_correspondence and relative_use_geometry as "
@@ -286,12 +299,12 @@ L3_METRIC_PHASE_PROMPTS = {
             "Inspect each routed subject's support-surface meaning, height, "
             "zone, and immediate adjacency. Context IDs are evidence context, "
             "not defect owners. Classify every accepted defect as exactly "
-            "clear_semantic_misplacement or material_contextual_mismatch. Do "
+            "atypical or implausible. Do "
             "not convert orientation or operability, action-required "
-            "adjacency, access, or clearance into placement defects. A final "
-            "valid verdict requires every routed check to resolve. A supported "
-            "invalid check may establish a final invalid verdict while other "
-            "unresolved rows remain visible only as coverage gaps."
+            "adjacency, access, or clearance into placement defects. Any final "
+            "verdict requires every routed check to resolve. If an invalid row "
+            "coexists with an unresolved row, keep acquisition open with an "
+            "insufficient/ambiguous response and no final defects."
         ),
     },
 }

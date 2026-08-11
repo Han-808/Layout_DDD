@@ -387,6 +387,21 @@ def test_official_proxy_case_uses_one_canonical_report(tmp_path: Path) -> None:
         "trusted_bbox_proxy_projection"
     )
     assert result["manifest"]["generator"]["invoked"] is False
+    assert report["scoring_profile"] == {
+        "scoring_profile_id": "custom_evaluation_profile_compat",
+        "scoring_spec_version": "legacy_metric_scoring_compat",
+        "layer_weights": {
+            L1: 1.0,
+            L2: 0.0,
+            L3: 0.0,
+            L4: 0.0,
+        },
+    }
+    assert "scoring" not in report["reports"]["generic_validity"]
+    assert report["reports"]["scene_quality"]["scoring"]["enabled"] is False
+    assert result["manifest"]["scoring_reliability"] == report[
+        "scoring_reliability"
+    ]
     schema = read_json(ROOT / "schemas" / "evaluation_report.schema.json")
     Draft202012Validator(schema).validate(report)
 
@@ -406,7 +421,9 @@ def test_official_proxy_case_rejects_active_l3(tmp_path: Path) -> None:
         )
 
 
-def test_official_proxy_case_allows_no_applicable_l3(tmp_path: Path) -> None:
+def test_official_proxy_case_without_l3_cannot_be_silently_renormalized(
+    tmp_path: Path,
+) -> None:
     root = _write_bundle(tmp_path)
     _add_artifact(
         root,
@@ -421,16 +438,24 @@ def test_official_proxy_case_allows_no_applicable_l3(tmp_path: Path) -> None:
         },
     )
     bundle = load_case_bundle(root)
-    result = evaluate_submission(
-        scene=_scene(),
-        case_bundle=bundle,
-        out_dir=tmp_path / "proxy_no_applicable_l3",
-        renderer=_FakeTrustedRenderer(),
-        vlm_judge=_FakeJudge(),
-        official_mode=True,
-    )
-    assert result["evaluation_report"]["layer_reports"][L3]["status"] == (
-        "not_applicable"
+    out_dir = tmp_path / "proxy_no_applicable_l3"
+    with pytest.raises(
+        SubmissionEvaluationError,
+        match="complete metric coverage",
+    ):
+        evaluate_submission(
+            scene=_scene(),
+            case_bundle=bundle,
+            out_dir=out_dir,
+            renderer=_FakeTrustedRenderer(),
+            vlm_judge=_FakeJudge(),
+            official_mode=True,
+        )
+    report = read_json(out_dir / "evaluation_report.json")
+    assert report["layer_reports"][L3]["status"] == "incomplete"
+    assert report["benchmark_score"] is None
+    assert report["benchmark_score_status"] == (
+        "insufficient_metric_coverage"
     )
 
 

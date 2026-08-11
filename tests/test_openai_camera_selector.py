@@ -69,6 +69,7 @@ def _request(
     candidates=(),
     mode: str,
     plans=(),
+    scene=None,
 ) -> CameraSelectionRequest:
     constraints = CameraConstraintSet(
         target_ids=("a", "b"),
@@ -89,7 +90,11 @@ def _request(
         task="functional_consistency",
         metric="functional_consistency",
         target_ids=("a", "b"),
-        scene={"objects": [{"id": "a"}, {"id": "b"}]},
+        scene=(
+            scene
+            if scene is not None
+            else {"objects": [{"id": "a"}, {"id": "b"}]}
+        ),
         evidence_goal={},
         existing_visual_evidence=(),
         budget={
@@ -154,6 +159,78 @@ def test_production_candidate_only_transport_and_active_contract(
     assert "do not require or\ninvent a wall" in system_prompt
     user_content = model.calls[0]["messages"][1]["content"]
     assert any(item.get("type") == "image_url" for item in user_content)
+
+
+def test_candidate_selector_compacts_canonical_scene_and_preview_metadata(
+    tmp_path: Path,
+) -> None:
+    marker = "asset-provenance-must-not-enter-selector-prompt"
+    model = _Model(
+        {
+            "selected_view_ids": ["trusted-view"],
+            "reason": "scoped targets are jointly visible",
+        }
+    )
+    transport = OpenAICompatibleCameraSelector(
+        model,
+        max_context_chars=5000,
+    )
+    active = ActiveVLMCameraSelector(
+        transport,
+        selection_mode="candidate_only",
+    )
+    candidate = _candidate(tmp_path / "compact-preview.png")
+    candidate["preview_metadata"] = {
+        "large": marker * 2000,
+    }
+    scene = {
+        "scene_id": "scene",
+        "scene_type": "living_room",
+        "boundary": [[0, 0], [4, 0], [4, 4], [0, 4]],
+        "objects": [
+            {
+                "id": "a",
+                "category": "sofa",
+                "center": [1, 1, 0.5],
+                "size": [2, 1, 1],
+                "rotation": [0, 0, 0],
+                "metadata": {"large": marker * 2000},
+            },
+            {
+                "id": "b",
+                "category": "television",
+                "center": [3, 1, 0.8],
+                "size": [1, 0.2, 1],
+                "rotation": [0, 0, 180],
+            },
+            {
+                "id": "unscoped",
+                "category": "plant",
+                "metadata": {"large": marker * 2000},
+            },
+        ],
+    }
+
+    result = active.select(
+        _request(
+            candidates=(candidate,),
+            mode="candidate_only",
+            scene=scene,
+        )
+    )
+
+    assert result.selected_view_ids == ("trusted-view",)
+    text = model.calls[0]["messages"][1]["content"][0]["text"]
+    outbound = json.loads(text.split("\n", 1)[1])
+    assert marker not in text
+    assert [
+        item["id"] for item in outbound["scene_context"]["objects"]
+    ] == ["a", "b"]
+    assert "preview_metadata" not in outbound["candidate_views"][0]
+    assert transport.last_request_metadata[
+        "context_compaction_version"
+    ] == "camera_selector_context_compaction_v1"
+    assert transport.last_request_metadata["structured_context_chars"] < 5000
 
 
 def test_legacy_query_cov_compatibility_does_not_construct_judge(

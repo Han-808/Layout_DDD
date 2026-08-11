@@ -12,6 +12,10 @@ from collections.abc import Iterable, Mapping
 from copy import deepcopy
 from typing import Any
 
+from benchmark.scoring_profiles import (
+    LEGACY_SCORING_SPEC_VERSION,
+    scoring_profile_for_run,
+)
 from benchmark.materialization.contracts import READINESS_GATE_VERSION
 
 
@@ -248,6 +252,17 @@ def build_not_evaluable_evaluation_report(
         bundle=bundle,
         overrides=active_metrics_by_layer,
     )
+    if resolved_profile_version == CANONICAL_PROFILE_VERSION:
+        scoring_profile = scoring_profile_for_run(
+            has_l2_task=bool(active_metrics.get(L2))
+        )
+        weights = deepcopy(scoring_profile["layer_weights"])
+    else:
+        scoring_profile = {
+            "scoring_profile_id": "custom_evaluation_profile_compat",
+            "scoring_spec_version": LEGACY_SCORING_SPEC_VERSION,
+            "layer_weights": deepcopy(weights),
+        }
     layer_reports = _blocked_layer_reports(
         readiness=normalized_readiness,
         active_metrics=active_metrics,
@@ -259,6 +274,8 @@ def build_not_evaluable_evaluation_report(
         active_metrics=active_metrics,
         weights=weights,
         profile_version=resolved_profile_version,
+        scoring_profile_id=str(scoring_profile["scoring_profile_id"]),
+        scoring_spec_version=str(scoring_profile["scoring_spec_version"]),
     )
     evaluation_plan = _evaluation_plan(
         profile=profile,
@@ -316,8 +333,43 @@ def build_not_evaluable_evaluation_report(
         "prompt_granularity_role": "metadata_only",
         "evaluation_status": "not_evaluable",
         "benchmark_score": None,
+        "benchmark_score_100": None,
         "benchmark_score_status": "not_evaluable",
         "evaluation_plan": evaluation_plan,
+        "scoring_profile": deepcopy(scoring_profile),
+        "canonical_object_denominator": {
+            "ordered_object_ids": [],
+            "n_scene": 0,
+        },
+        "scoring_reliability": {
+            "schema_version": "scoring_reliability_v2",
+            "rate_denominator_unit": "judge_episode",
+            "active_metric_count": 0,
+            "judge_episode_count": 0,
+            "forced_binary_metric_count": 0,
+            "forced_binary_episode_count": 0,
+            "forced_binary_rate": None,
+            "evidence_ambiguous_metric_count": 0,
+            "evidence_ambiguous_episode_count": 0,
+            "evidence_ambiguity_rate": None,
+            "unresolved_metric_ids": [],
+            "unresolved_claims": [],
+            "infrastructure_failures": [
+                {
+                    "metric_id": "l0_structural_validity.submission_readiness",
+                    "status": "not_evaluable",
+                    "reason": ",".join(
+                        normalized_readiness["reason_codes"]
+                    )
+                    or "submission_readiness_failed",
+                    "error_type": None,
+                    "adjudication_failures": [],
+                }
+            ],
+            "terminal_state": "infrastructure_failure",
+            "episodes": [],
+            "metrics": [],
+        },
         "layer_reports": layer_reports,
         "category_reports": deepcopy(layer_reports),
         "coverage": coverage,
@@ -777,6 +829,8 @@ def _blocked_coverage(
     active_metrics: Mapping[str, list[str]],
     weights: Mapping[str, float],
     profile_version: str,
+    scoring_profile_id: str,
+    scoring_spec_version: str,
 ) -> dict[str, Any]:
     active_layers = [
         layer
@@ -815,6 +869,8 @@ def _blocked_coverage(
         "comparability_signature": (
             f"{profile_version}|{layer_weight_signature}|"
             f"{per_layer_signature}"
+            f"|scoring_profile:{scoring_profile_id}"
+            f"|scoring_spec:{scoring_spec_version}"
         ),
         "covered_weight": 0.0,
         "required_weight": required_weight,

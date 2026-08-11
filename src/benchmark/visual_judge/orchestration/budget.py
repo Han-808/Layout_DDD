@@ -28,7 +28,7 @@ def _policy_for_stop_reason(
             "field": "on_budget_exhausted",
             "value": control.on_budget_exhausted,
         }
-    if stop_reason == "camera_selector_failed":
+    if stop_reason.startswith("camera_selector_failed"):
         return {
             "field": "on_selector_failure",
             "value": control.on_selector_failure,

@@ -4,6 +4,8 @@ import importlib.util
 import json
 from pathlib import Path
 
+import pytest
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT_PATH = PROJECT_ROOT / "scripts" / "build_vlm_evidence_viewer.py"
@@ -50,7 +52,11 @@ def test_viewer_renders_one_scene_page_with_button_navigation(
     assert 'id="previous-scene"' in document
     assert 'id="next-scene"' in document
     assert 'button.setAttribute("aria-current", "page")' in document
-    assert "function showScene(index, updateHash = true)" in document
+    assert (
+        "function showScene(index, updateHash = true, shouldScroll = true)"
+        in document
+    )
+    assert "showScene(initialSceneIndex >= 0 ? initialSceneIndex : 0, false, false)" in document
 
 
 def test_viewer_renders_an_in_progress_run_without_case_directory(
@@ -69,6 +75,167 @@ def test_viewer_renders_an_in_progress_run_without_case_directory(
     assert "No scene report is available yet" in document
     assert "<span>running</span>" in document
     assert 'sceneCounter.textContent = "0 / 0"' in document
+
+
+def test_viewer_renders_latest_fixed_weight_scoring_without_renormalizing() -> None:
+    case_manifest = {
+        "final_decision_status": "unresolved",
+        "benchmark_score": None,
+        "benchmark_score_100": None,
+        "benchmark_score_status": "insufficient_metric_coverage",
+        "scoring_profile": {
+            "scoring_profile_id": "intrinsic_validity_v1",
+            "scoring_spec_version": "object_equivalent_burden_v1",
+            "layer_weights": {
+                "l1_physical_plausibility": 0.3,
+                "l3_scene_quality": 0.7,
+            },
+        },
+        "canonical_object_denominator": {
+            "n_scene": 2,
+            "ordered_object_ids": ["chair", "table"],
+        },
+        "scoring_reliability": {
+            "terminal_state": "unresolved",
+            "judge_episode_count": 3,
+            "forced_binary_episode_count": 0,
+            "evidence_ambiguous_episode_count": 0,
+            "unresolved_metric_ids": [
+                "l1_physical_plausibility.collision",
+                "scoring_coverage",
+            ],
+            "infrastructure_failures": [],
+        },
+    }
+    l1_report = {
+        "status": "incomplete",
+        "score": None,
+        "partial_score": 0.9,
+        "backend_report": {
+            "scoring": {
+                "metric_weights": {
+                    "collision": 1 / 3,
+                    "support": 1 / 3,
+                    "oob": 1 / 3,
+                }
+            }
+        },
+        "metrics": {
+            "collision": {
+                "status": "requires_vlm",
+                "score": None,
+                "reason": "Judge endpoint failed.",
+            },
+            "support": {
+                "status": "checked",
+                "score": 1.0,
+                "scoring": {
+                    "event_count": 0,
+                    "events": [],
+                    "coefficient_n_m": 3,
+                    "burden_total_b_m": 0,
+                    "p_max": 0,
+                    "metric_deduction": 0,
+                },
+            },
+            "oob": {
+                "status": "checked",
+                "score": 0.8,
+                "scoring": {
+                    "event_count": 1,
+                    "events": [
+                        {
+                            "category": "room_boundary_crossing",
+                            "magnitude": 0.3,
+                            "burden": 0.6,
+                            "scoring_target_ids": ["chair"],
+                        }
+                    ],
+                    "coefficient_n_m": 3,
+                    "burden_total_b_m": 0.6,
+                    "p_max": 0.6,
+                    "metric_deduction": 0.2,
+                },
+            },
+        },
+    }
+    l3_report = {
+        "status": "evaluated",
+        "score": 1.0,
+        "resolved_score": 1.0,
+        "coverage": {
+            "eligible_count": 5,
+            "resolved_count": 5,
+            "complete": True,
+        },
+        "scoring": {
+            "metric_weights": {
+                "scale_consistency": 0.12,
+                "style_consistency": 0.12,
+                "object_pairing_consistency": 0.12,
+                "functional_consistency": 0.44,
+                "semantic_placement_consistency": 0.2,
+            }
+        },
+        "metrics": {
+            metric: {
+                "status": "evaluated",
+                "score": 1.0,
+                "judgement": {"verdict": "valid"},
+                "scoring": {"event_count": 0, "events": []},
+            }
+            for metric in (
+                "scale_consistency",
+                "style_consistency",
+                "object_pairing_consistency",
+                "functional_consistency",
+                "semantic_placement_consistency",
+            )
+        },
+    }
+    summary = VIEWER.case_scoring_summary(
+        case_id="N999",
+        case_manifest=case_manifest,
+        l1_report=l1_report,
+        l3_report=l3_report,
+        l1_diagnostics={
+            "engineering_failures": [
+                {
+                    "metric": "collision",
+                    "route": "vlm_adjudication_failed",
+                    "error": "HTTP 429",
+                }
+            ]
+        },
+    )
+
+    collision = next(
+        item for item in summary["metrics"] if item["metric"] == "collision"
+    )
+    oob = next(item for item in summary["metrics"] if item["metric"] == "oob")
+    function = next(
+        item
+        for item in summary["metrics"]
+        if item["metric"] == "functional_consistency"
+    )
+    assert summary["combined_score_100"] is None
+    assert summary["combined_status"] == "insufficient_metric_coverage"
+    assert collision["score"] is None
+    assert oob["score"] == 0.8
+    assert oob["overall_weight"] == pytest.approx(0.1)
+    assert function["overall_weight"] == pytest.approx(0.308)
+
+    rendered = VIEWER.render_case_scoring_dashboard(summary)
+    overview = VIEWER.render_run_scoring_overview([summary])
+    assert "Metric scores and combined result" in rendered
+    assert "intrinsic_validity_v1" in rendered
+    assert "insufficient_metric_coverage" in rendered
+    assert "this UI does not renormalize them" in rendered
+    assert "Scoring ledger unavailable because this metric" in rendered
+    assert "HTTP 429" in rendered
+    assert "room_boundary_crossing" in rendered
+    assert "Scores reported by the latest evaluator" in overview
+    assert "30.8%" in overview
 
 
 def test_viewer_renders_optional_audit_graph_summary(
@@ -546,6 +713,224 @@ def test_current_functional_packets_are_one_global_then_global_plus_local() -> N
         "angled_global_context",
         "group_local",
     ]
+
+
+def test_functional_per_check_episodes_are_individually_auditable() -> None:
+    seed = [
+        "/evidence/global_perspective.png",
+        "/evidence/group_local.png",
+        "/evidence/usable_side.png",
+    ]
+    report = {
+        "metric_prompt_version": VIEWER.L3_METRIC_PROMPT_VERSION,
+        "metrics": {
+            "functional_consistency": {
+                "route": "global_discovery_then_group_local",
+                "group_local_check_granularity": "per_check",
+                "global_discovery": {
+                    "verdict": "valid",
+                    "final_metric_verdict": True,
+                    "images_used": [seed[0]],
+                    "request_metadata": {},
+                },
+                "group_results": [
+                    {
+                        "group_id": "group_001",
+                        "member_ids": ["chair", "table"],
+                        "status": "evaluated",
+                        "score": 0.0,
+                        "reason": "One atomic check is invalid.",
+                        "vlm_invoked": True,
+                        "functional_check_granularity": "per_check",
+                        "judge_episode_count": 2,
+                        "check_episodes": [
+                            {
+                                "group_id": "group_001",
+                                "member_ids": ["chair", "table"],
+                                "status": "evaluated",
+                                "score": 1.0,
+                                "vlm_invoked": True,
+                                "functional_check_granularity": "per_check",
+                                "functional_check_episode_id": "check_001",
+                                "shared_seed_evidence_reused": True,
+                                "evidence_paths": seed,
+                                "judgement": {
+                                    "verdict": "valid",
+                                    "confidence": 0.9,
+                                    "reason": "The clearance check passes.",
+                                    "images_used": seed,
+                                    "request_metadata": {},
+                                },
+                            },
+                            {
+                                "group_id": "group_001",
+                                "member_ids": ["chair", "table"],
+                                "status": "evaluated",
+                                "score": 0.0,
+                                "vlm_invoked": True,
+                                "functional_check_granularity": "per_check",
+                                "functional_check_episode_id": "check_002",
+                                "shared_seed_evidence_reused": True,
+                                "evidence_paths": seed,
+                                "judgement": {
+                                    "verdict": "invalid",
+                                    "confidence": 0.8,
+                                    "reason": "The relation check fails.",
+                                    "images_used": seed,
+                                    "request_metadata": {},
+                                },
+                            },
+                        ],
+                    }
+                ],
+            }
+        },
+    }
+
+    calls = VIEWER.l3_calls(report)
+
+    assert [call["phase"] for call in calls] == [
+        "global_discovery",
+        "group_local_review",
+        "group_local_review",
+    ]
+    assert [call["scope"] for call in calls[1:]] == [
+        "group_001 · check_001",
+        "group_001 · check_002",
+    ]
+    assert calls[1]["images"] == seed
+    assert calls[2]["images"] == seed
+    assert calls[1]["routing_details"][
+        "shared_seed_evidence_reused"
+    ] is True
+    assert calls[2]["routing_details"][
+        "group_aggregate_result"
+    ]["score"] == 0.0
+    route = VIEWER.render_phase_routes(calls)
+    assert "1 group(s)" in route
+    assert "2 Judge episode(s)" in route
+    summary = VIEWER.l3_pipeline_summary(report)[0]
+    assert summary["group_local_granularity"] == "per_check"
+    assert summary["group_judge_episode_count"] == 2
+
+
+def test_viewer_exposes_shared_group_bank_reuse_and_window_history() -> None:
+    fixed = [
+        "path:/evidence/global.png",
+        "path:/evidence/group-local.png",
+    ]
+    shared = "path:/evidence/shared-detail.png"
+    window = {
+        "schema_version": "bounded_evidence_window_v1",
+        "policy": "shared_group_bank",
+        "group_id": "group_001",
+        "check_id": "check_002",
+        "max_active_images": 6,
+        "fixed_artifact_ids": fixed,
+        "initial_artifact_ids": fixed,
+        "final_artifact_ids": [*fixed, shared],
+        "events": [
+            {
+                "trigger": "shared_bank_reuse",
+                "reused_artifact_ids": [shared],
+                "evicted_artifact_ids": [],
+                "overflow_flush_applied": False,
+                "camera_selector_invoked": False,
+            }
+        ],
+        "physical_artifacts_deleted": False,
+    }
+    report = {
+        "metric_prompt_version": VIEWER.L3_METRIC_PROMPT_VERSION,
+        "metrics": {
+            "functional_consistency": {
+                "route": "global_discovery_then_group_local",
+                "group_local_check_granularity": "per_check",
+                "group_local_evidence_policy": "shared_group_bank",
+                "group_local_active_window_max_images": 6,
+                "functional_group_evidence_bank": {
+                    "policy": "shared_group_bank",
+                    "groups": {
+                        "group_001": {
+                            "artifacts": [
+                                {
+                                    "artifact_id": shared,
+                                    "sources": [
+                                        {
+                                            "source_kind": (
+                                                "check_camera_render"
+                                            ),
+                                            "source_check_id": "check_001",
+                                        }
+                                    ],
+                                    "consumer_check_ids": ["check_002"],
+                                }
+                            ]
+                        }
+                    },
+                },
+                "group_results": [
+                    {
+                        "group_id": "group_001",
+                        "member_ids": ["chair", "table"],
+                        "status": "evaluated",
+                        "score": 1.0,
+                        "check_episodes": [
+                            {
+                                "group_id": "group_001",
+                                "member_ids": ["chair", "table"],
+                                "status": "evaluated",
+                                "score": 1.0,
+                                "vlm_invoked": True,
+                                "functional_check_granularity": "per_check",
+                                "functional_check_episode_id": "check_002",
+                                "evidence_paths": [
+                                    "/evidence/global.png",
+                                    "/evidence/group-local.png",
+                                ],
+                                "camera_control_audit": {
+                                    "audit": {
+                                        "evidence_window": window,
+                                        "trace": [],
+                                    }
+                                },
+                                "judgement": {
+                                    "verdict": "valid",
+                                    "confidence": 0.9,
+                                    "reason": "The check is satisfied.",
+                                    "request_metadata": {},
+                                },
+                            }
+                        ],
+                    }
+                ],
+            }
+        },
+    }
+
+    calls = VIEWER.l3_calls(report)
+
+    assert len(calls) == 1
+    call = calls[0]
+    assert call["images"] == [
+        "/evidence/global.png",
+        "/evidence/group-local.png",
+        "/evidence/shared-detail.png",
+    ]
+    details = call["functional_group_evidence_window"]
+    assert details["reused_artifact_ids"] == [shared]
+    assert details["camera_selector_avoided_by_bank_reuse"] is True
+    assert details["artifact_records"][0]["sources"][0][
+        "source_check_id"
+    ] == "check_001"
+    assert details["artifact_records"][0]["consumer_check_ids"] == [
+        "check_002"
+    ]
+    rendered = VIEWER.render_functional_group_evidence_window(details)
+    assert "Shared group evidence window" in rendered
+    assert "Bank reuse avoided a CameraSelector call" in rendered
+    assert "check_001" in rendered
+    assert "check_002" in rendered
 
 
 def test_l3_calls_keep_required_group_scope_when_judge_not_invoked() -> None:

@@ -432,7 +432,18 @@ def test_not_evaluable_report_is_canonical_and_schema_valid() -> None:
 
     assert report["evaluation_status"] == "not_evaluable"
     assert report["benchmark_score"] is None
+    assert report["benchmark_score_100"] is None
     assert report["benchmark_score_status"] == "not_evaluable"
+    assert report["scoring_profile"]["scoring_profile_id"] == (
+        "intrinsic_validity_v1"
+    )
+    assert report["canonical_object_denominator"] == {
+        "ordered_object_ids": [],
+        "n_scene": 0,
+    }
+    assert report["scoring_reliability"]["schema_version"] == (
+        "scoring_reliability_v2"
+    )
     assert report["official_submission"] is False
     assert report["protocol_scope"] == "official_submission"
     assert tuple(report["layer_reports"]) == (L0, L1, L2, L3, L4)
@@ -455,6 +466,12 @@ def test_not_evaluable_report_is_canonical_and_schema_valid() -> None:
     assert report["reports"]["scene_quality"]["status"] == "not_run"
     assert report["coverage"]["covered_layers"] == []
     assert report["coverage"]["complete"] is False
+    assert "|scoring_profile:intrinsic_validity_v1|" in report[
+        "coverage"
+    ]["comparability_signature"]
+    assert "|scoring_spec:object_equivalent_burden_v1" in report[
+        "coverage"
+    ]["comparability_signature"]
     assert report["evidence_provenance"]["render_evidence"] == "not_generated"
 
     schema = read_json(ROOT / "schemas" / "evaluation_report.schema.json")

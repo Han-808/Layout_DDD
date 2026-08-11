@@ -93,6 +93,7 @@ def build_evaluation_query_graph(
             "metric": request.metric,
             "task": request.task,
             "claim": request.claim_or_event,
+            "typed_obligation_ids": _typed_obligation_ids(request),
         },
     )
     builder = _Builder(graph_id=graph_id)
@@ -202,6 +203,7 @@ def build_evaluation_query_graph(
     )
 
     trace = _trace(audit_value)
+    evidence_window_projection = _evidence_window_projection(audit_value)
     assignments, episodes = _episodes(trace)
     episode_nodes = {
         index: builder.node(
@@ -404,8 +406,85 @@ def build_evaluation_query_graph(
             "ownership_event_count": len(
                 typed_projection["ownership_nodes"]
             ),
+            "evidence_window": evidence_window_projection,
         },
     )
+
+
+def _evidence_window_projection(
+    audit: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    value = audit.get("evidence_window")
+    if not isinstance(value, Mapping):
+        return None
+    events = [
+        event
+        for event in value.get("events") or []
+        if isinstance(event, Mapping)
+    ]
+    reused = list(
+        dict.fromkeys(
+            str(artifact_id)
+            for event in events
+            for artifact_id in event.get("reused_artifact_ids") or []
+        )
+    )
+    evicted = list(
+        dict.fromkeys(
+            str(artifact_id)
+            for event in events
+            for artifact_id in event.get("evicted_artifact_ids") or []
+        )
+    )
+    return {
+        "schema_version": value.get("schema_version"),
+        "policy": value.get("policy"),
+        "group_id": value.get("group_id"),
+        "check_id": value.get("check_id"),
+        "max_active_images": value.get("max_active_images"),
+        "fixed_artifact_ids": list(
+            value.get("fixed_artifact_ids") or []
+        ),
+        "initial_artifact_ids": list(
+            value.get("initial_artifact_ids") or []
+        ),
+        "final_artifact_ids": list(
+            value.get("final_artifact_ids") or []
+        ),
+        "reused_artifact_ids": reused,
+        "evicted_artifact_ids": evicted,
+        "bank_reuse_event_count": sum(
+            1 for event in events if event.get("reused_artifact_ids")
+        ),
+        "overflow_flush_count": sum(
+            1
+            for event in events
+            if event.get("overflow_flush_applied") is True
+        ),
+        "physical_artifacts_deleted": False,
+        "decision_authority": "none",
+    }
+
+
+def _typed_obligation_ids(request: JudgeRequest) -> list[str]:
+    """Disambiguate isolated typed-check episodes within one claim scope."""
+
+    result: list[str] = []
+    for family, key in (
+        ("functional", "required_functional_checks"),
+        ("placement", "required_placement_checks"),
+    ):
+        raw_checks = request.context.get(key) or []
+        if not isinstance(raw_checks, list):
+            raise ValueError(f"JudgeRequest {key} must be a JSON list")
+        for raw in raw_checks:
+            if not isinstance(raw, Mapping):
+                raise ValueError(f"JudgeRequest {key} must contain objects")
+            check_id = str(raw.get("check_id") or "").strip()
+            if not check_id:
+                raise ValueError(f"JudgeRequest {key} requires check_id")
+            result.append(f"{family}:{check_id}")
+    return sorted(set(result))
 
 
 class _Builder:

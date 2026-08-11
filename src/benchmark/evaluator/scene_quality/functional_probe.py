@@ -1860,8 +1860,8 @@ def _probe_view_goal(unit: dict[str, Any]) -> str:
         if predicates == {"relative_use_geometry"}:
             return (
                 "Show all related objects together at a scale that preserves "
-                "their relative position, distance, reach, contact, or "
-                "connection region. Do not require a usable-side view unless "
+                "their relative position, distance, reach, coordinated-use, or "
+                "operational-connection region. Do not require a usable-side view unless "
                 "another supplied observation explicitly requests it."
             )
         return (

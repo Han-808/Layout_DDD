@@ -13,11 +13,19 @@
       "minimum": 0,
       "maximum": 1
     },
+    "score100": {
+      "type": ["number", "null"],
+      "minimum": 0,
+      "maximum": 100
+    },
     "budgetExhaustionForcedChoice": {
       "type": "object",
       "required": ["applied"],
       "properties": {
         "applied": {"type": "boolean"},
+        "forced_binary": {"type": "boolean"},
+        "evidence_ambiguous": {"type": "boolean"},
+        "stop_reason": {"type": ["string", "null"]},
         "trigger": {"type": ["string", "null"]},
         "ambiguity_before_forcing": {"type": "boolean"},
         "pre_force_judge_status": {
@@ -329,6 +337,7 @@
           "enum": ["complete", "incomplete", "not_evaluable"]
         },
         "benchmark_score": {"$ref": "#/$defs/score"},
+        "benchmark_score_100": {"$ref": "#/$defs/score100"},
         "benchmark_score_status": {
           "enum": [
             "complete",
@@ -338,6 +347,37 @@
         },
         "evaluation_plan": {
           "$ref": "#/$defs/canonicalEvaluationPlan"
+        },
+        "scoring_profile": {
+          "type": "object",
+          "required": [
+            "scoring_profile_id",
+            "scoring_spec_version",
+            "layer_weights"
+          ],
+          "properties": {
+            "scoring_profile_id": {"type": "string"},
+            "scoring_spec_version": {"type": "string"},
+            "layer_weights": {"$ref": "#/$defs/canonicalLayerWeights"},
+            "requires_l2_task": {"type": "boolean"}
+          },
+          "additionalProperties": false
+        },
+        "canonical_object_denominator": {
+          "type": "object",
+          "required": ["ordered_object_ids", "n_scene"],
+          "properties": {
+            "ordered_object_ids": {
+              "type": "array",
+              "items": {"type": "string"},
+              "uniqueItems": true
+            },
+            "n_scene": {"type": "integer", "minimum": 0}
+          },
+          "additionalProperties": false
+        },
+        "scoring_reliability": {
+          "$ref": "#/$defs/scoringReliability"
         },
         "layer_reports": {
           "$ref": "#/$defs/canonicalLayerMap"
@@ -865,6 +905,159 @@
         }
       }
     },
+    "scoringReliability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "rate_denominator_unit",
+        "active_metric_count",
+        "judge_episode_count",
+        "forced_binary_metric_count",
+        "forced_binary_episode_count",
+        "forced_binary_rate",
+        "evidence_ambiguous_metric_count",
+        "evidence_ambiguous_episode_count",
+        "evidence_ambiguity_rate",
+        "unresolved_metric_ids",
+        "unresolved_claims",
+        "infrastructure_failures",
+        "terminal_state",
+        "episodes",
+        "metrics"
+      ],
+      "properties": {
+        "schema_version": {"const": "scoring_reliability_v2"},
+        "rate_denominator_unit": {"const": "judge_episode"},
+        "active_metric_count": {"type": "integer", "minimum": 0},
+        "judge_episode_count": {"type": "integer", "minimum": 0},
+        "forced_binary_metric_count": {"type": "integer", "minimum": 0},
+        "forced_binary_episode_count": {"type": "integer", "minimum": 0},
+        "forced_binary_rate": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "maximum": 1
+        },
+        "evidence_ambiguous_metric_count": {"type": "integer", "minimum": 0},
+        "evidence_ambiguous_episode_count": {"type": "integer", "minimum": 0},
+        "evidence_ambiguity_rate": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "maximum": 1
+        },
+        "unresolved_metric_ids": {
+          "type": "array",
+          "items": {"type": "string"},
+          "uniqueItems": true
+        },
+        "unresolved_claims": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["metric_id", "family", "claim_id", "resolution", "reason"],
+            "properties": {
+              "metric_id": {"type": "string"},
+              "family": {"type": "string"},
+              "claim_id": {"type": "string"},
+              "resolution": {"type": "string"},
+              "reason": {"type": ["string", "null"]}
+            }
+          }
+        },
+        "infrastructure_failures": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "metric_id",
+              "status",
+              "reason",
+              "error_type",
+              "adjudication_failures"
+            ],
+            "properties": {
+              "metric_id": {"type": "string"},
+              "status": {"type": "string"},
+              "reason": {"type": ["string", "null"]},
+              "error_type": {"type": ["string", "null"]},
+              "adjudication_failures": {
+                "type": "array",
+                "items": {"type": "string"}
+              },
+              "family": {"type": "string"},
+              "claim_id": {"type": "string"}
+            }
+          }
+        },
+        "terminal_state": {
+          "enum": ["complete", "unresolved", "infrastructure_failure"]
+        },
+        "episodes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "episode_id",
+              "judge_method",
+              "layer",
+              "metric",
+              "metric_id",
+              "status",
+              "stop_reason",
+              "forced_binary",
+              "evidence_ambiguous",
+              "trigger",
+              "claim_or_event",
+              "group_id"
+            ],
+            "properties": {
+              "episode_id": {"type": "string"},
+              "judge_method": {"type": "string"},
+              "layer": {"type": "string"},
+              "metric": {"type": "string"},
+              "metric_id": {"type": "string"},
+              "status": {"type": "string"},
+              "stop_reason": {"type": ["string", "null"]},
+              "forced_binary": {"type": "boolean"},
+              "evidence_ambiguous": {"type": "boolean"},
+              "trigger": {"type": ["string", "null"]},
+              "claim_or_event": {},
+              "group_id": {"type": ["string", "null"]}
+            }
+          }
+        },
+        "metrics": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "metric_id",
+              "status",
+              "active",
+              "scientifically_complete",
+              "forced_binary",
+              "evidence_ambiguous",
+              "infrastructure_failure",
+              "judge_episode_count"
+            ],
+            "properties": {
+              "metric_id": {"type": "string"},
+              "status": {"type": "string"},
+              "active": {"type": "boolean"},
+              "scientifically_complete": {"type": "boolean"},
+              "forced_binary": {"type": "boolean"},
+              "evidence_ambiguous": {"type": "boolean"},
+              "infrastructure_failure": {"type": "boolean"},
+              "judge_episode_count": {"type": "integer", "minimum": 0}
+            }
+          }
+        }
+      }
+    },
     "canonicalMetricsByLayer": {
       "type": "object",
       "additionalProperties": false,
@@ -1018,6 +1211,9 @@
         "prompt_granularity_resolution_source": {
           "type": "string",
           "minLength": 1
+        },
+        "scoring_profile": {
+          "type": "object"
         }
       }
     },

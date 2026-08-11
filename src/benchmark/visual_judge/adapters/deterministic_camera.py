@@ -113,18 +113,29 @@ class TrustedTechnicalCameraCandidateBankBuilder:
             raw_candidates = list(deepcopy(request.candidate_views))
             source = "controller_candidate_bank"
             generation_outcome = "provided"
+            generation_error = None
         else:
-            raw_candidates = self.candidate_generator(
-                _candidate_generation_request(
-                    request,
-                    constraints=resolved_constraints,
-                ),
-                max_candidates=_positive_int(
-                    request.budget.get("candidate_budget", 8),
-                    "trusted candidate_budget",
-                ),
-                policy=self.candidate_policy,
-            )
+            generation_error: str | None = None
+            try:
+                raw_candidates = self.candidate_generator(
+                    _candidate_generation_request(
+                        request,
+                        constraints=resolved_constraints,
+                    ),
+                    max_candidates=_positive_int(
+                        request.budget.get("candidate_budget", 8),
+                        "trusted candidate_budget",
+                    ),
+                    policy=self.candidate_policy,
+                )
+            except NoFeasibleCameraCandidates as exc:
+                raw_candidates = []
+                generation_error = f"{type(exc).__name__}: {exc}"
+            except ValueError as exc:
+                if not _is_explicit_geometry_exhaustion(exc):
+                    raise
+                raw_candidates = []
+                generation_error = f"{type(exc).__name__}: {exc}"
             if not isinstance(raw_candidates, list) or not all(
                 isinstance(candidate, dict)
                 for candidate in raw_candidates
@@ -140,6 +151,8 @@ class TrustedTechnicalCameraCandidateBankBuilder:
             generation_outcome = (
                 "generated"
                 if raw_candidates
+                else "no_feasible_candidate"
+                if generation_error is not None
                 else "empty_candidate_bank"
             )
         raw_candidates = raw_candidates[
@@ -239,6 +252,7 @@ class TrustedTechnicalCameraCandidateBankBuilder:
                 "candidate_generation_source": source,
                 "candidate_policy": self.candidate_policy,
                 "generation_outcome": generation_outcome,
+                "generation_error": generation_error,
                 "candidate_count": len(raw_candidates),
                 "filtered_candidate_count": len(candidates),
                 "candidate_generation_time_seconds": max(
@@ -773,6 +787,7 @@ def _candidate_generation_request(
             "object_ids",
             list(group_scope.get("member_ids") or constraints.target_ids),
         )
+    functional_repair = request.context.get("functional_repair")
     return {
         "metric": request.metric,
         "scene": deepcopy(request.scene),
@@ -796,6 +811,11 @@ def _candidate_generation_request(
             request.context.get("detector_evidence") or {}
         ),
         "event": event,
+        **(
+            {"functional_repair": deepcopy(functional_repair)}
+            if isinstance(functional_repair, dict)
+            else {}
+        ),
         "_resolved_camera_pose_mode": resolved_mode,
         "_camera_render": deepcopy(
             request.context.get("camera_render") or {}

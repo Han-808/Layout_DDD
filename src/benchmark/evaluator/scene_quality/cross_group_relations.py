@@ -22,11 +22,15 @@ from benchmark.evaluator.scene_quality.claim_identity import (
     canonical_target_ids,
 )
 from benchmark.evaluator.scene_quality.functional_checks import (
+    canonicalize_clearance_causal_attribution,
     canonicalize_functional_defect_check_linkage,
     canonicalize_typed_invalid_envelope,
     checks_for_cross_group_relation,
     functional_relation_required_observations,
     validate_functional_check_results,
+)
+from benchmark.evaluator.scene_quality.terminal import (
+    terminalize_required_scope,
 )
 from benchmark.evaluator.scene_quality.functional_probe import (
     functional_relation_judge_packet,
@@ -563,8 +567,7 @@ def _evaluate_cross_group_relation_scopes(
         group_ids = list(spec.get("group_ids") or [])
         if spec.get("pair_specific_evidence_available") is not True:
             empty_ledger = _initial_camera_acquisition_ledger([])
-            results.append(
-                {
+            missing_record = {
                     **_relation_schedule_audit(spec),
                     "episode_index": episode_index,
                     "evidence_phase": "cross_group_relation_review",
@@ -572,7 +575,8 @@ def _evaluate_cross_group_relation_scopes(
                     "available_global_context_evidence_paths": list(
                         global_evidence
                     ),
-                    "status": "unresolved",
+                    "status": "failed",
+                    "terminal_state": "pending",
                     "score": None,
                     "reason": "pair_specific_evidence_unavailable",
                     "vlm_invoked": False,
@@ -597,6 +601,14 @@ def _evaluate_cross_group_relation_scopes(
                         "ledger_after_judge": deepcopy(empty_ledger),
                     },
                 }
+            results.append(
+                terminalize_required_scope(
+                    missing_record,
+                    phase=(
+                        "cross_group_relation:"
+                        f"{spec.get('relation_id')}"
+                    ),
+                )
             )
             continue
         evidence_paths = list(
@@ -616,6 +628,7 @@ def _evaluate_cross_group_relation_scopes(
             "evidence_phase": "cross_group_relation_review",
             "evidence_paths": evidence_paths,
             "status": "unresolved",
+            "terminal_state": "pending",
             "score": None,
             "reason": None,
             "vlm_invoked": True,
@@ -678,6 +691,12 @@ def _evaluate_cross_group_relation_scopes(
                 authorized_deviations=authorized_deviations,
             )
             adjusted = canonicalize_typed_invalid_envelope(adjusted)
+            adjusted = canonicalize_clearance_causal_attribution(
+                adjusted,
+                required_checks=deepcopy(
+                    spec.get("required_checks") or []
+                ),
+            )
             adjusted = canonicalize_functional_defect_check_linkage(
                 adjusted,
                 required_checks=deepcopy(
@@ -718,7 +737,7 @@ def _evaluate_cross_group_relation_scopes(
         except Exception as exc:
             schema_audit = response_schema_audit_from_exception(exc)
             record.update(
-                status="unresolved",
+                status="failed",
                 score=None,
                 reason="vlm_cross_group_relation_judge_failed",
                 final_metric_verdict=False,
@@ -746,7 +765,15 @@ def _evaluate_cross_group_relation_scopes(
                 record["camera_acquisition_episode"][
                     "ledger_after_judge"
                 ] = deepcopy(next_ledger)
-        results.append(record)
+        results.append(
+            terminalize_required_scope(
+                record,
+                phase=(
+                    "cross_group_relation:"
+                    f"{spec.get('relation_id')}"
+                ),
+            )
+        )
     return results
 
 

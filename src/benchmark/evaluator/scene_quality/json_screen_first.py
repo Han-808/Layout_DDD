@@ -19,6 +19,9 @@ from benchmark.evaluator.scene_quality.claim_identity import (
 from benchmark.evaluator.scene_quality.style_global_first import (
     suspicious_groups,
 )
+from benchmark.evaluator.scene_quality.terminal import (
+    terminalize_required_scope,
+)
 
 
 def evaluate_json_screen_then_group_visual(
@@ -103,7 +106,10 @@ def evaluate_json_screen_then_group_visual(
             audit_records=audit_records,
             audit_start=audit_start,
         )
-        return base
+        return terminalize_required_scope(
+            base,
+            phase=f"{metric_name}.json_screen",
+        )
 
     _attach_json_screen_audit(
         base,
@@ -159,7 +165,10 @@ def evaluate_json_screen_then_group_visual(
             "fraction": 1.0,
             "complete": True,
         }
-        return base
+        return terminalize_required_scope(
+            base,
+            phase=f"{metric_name}.json_screen",
+        )
 
     router_state = (
         "insufficient_evidence"
@@ -175,7 +184,22 @@ def evaluate_json_screen_then_group_visual(
     base["routed_candidate_claims"] = deepcopy(
         routed_candidate_claims
     )
-    compatibility_without_grouping = not groups
+    compatibility_without_grouping = bool(
+        not groups and metric_name == "scale_consistency"
+    )
+    if not groups and not compatibility_without_grouping:
+        base.update(
+            status="unresolved",
+            reason="object_grouping_unavailable_for_visual_confirmation",
+            route="json_screen_then_visual",
+            router_state=router_state,
+            judgement=screen_record,
+        )
+        return terminalize_required_scope(
+            base,
+            phase=f"{metric_name}.visual_confirmation_routing",
+        )
+
     candidate_groups = groups or _compatibility_target_groups(
         object_ids,
         judgement=screen_adjusted,
@@ -202,7 +226,10 @@ def evaluate_json_screen_then_group_visual(
             router_state=router_state,
             judgement=screen_record,
         )
-        return base
+        return terminalize_required_scope(
+            base,
+            phase=f"{metric_name}.visual_confirmation_routing",
+        )
 
     plan = metric_config.get("evidence_plan") or {}
     global_plan = (
@@ -420,7 +447,10 @@ def evaluate_json_screen_then_group_visual(
     )
     result["router_state"] = router_state
     result["route"] = route
-    return result
+    return terminalize_required_scope(
+        result,
+        phase=f"{metric_name}.visual_confirmation",
+    )
 
 
 def _attach_json_screen_audit(
@@ -521,6 +551,8 @@ def _compatibility_target_groups(
     judgement: dict[str, Any],
     include_all_when_unlocalized: bool,
 ) -> list[dict[str, Any]]:
+    """Retain Scale's established target-local direct-call fallback."""
+
     valid_ids = set(object_ids)
     target_ids = list(
         dict.fromkeys(

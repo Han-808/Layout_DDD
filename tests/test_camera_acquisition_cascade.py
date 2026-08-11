@@ -28,6 +28,9 @@ from benchmark.visual_judge.interfaces.camera import (
 from benchmark.visual_judge.orchestration.controller import (
     VLMEvaluationController,
 )
+from benchmark.visual_judge.orchestration.camera_acquisition import (
+    _functional_repair_context,
+)
 
 
 def _request() -> JudgeRequest:
@@ -213,6 +216,122 @@ def _control(policy: str, **total_overrides):
     )
 
 
+def test_functional_repair_context_is_targeted_and_reuses_decoded_side(
+) -> None:
+    request = JudgeRequest(
+        task="l3_scene_quality",
+        metric="functional_consistency",
+        claim_or_event={"object_ids": ["lamp", "cabinet"]},
+        scene_context={
+            "objects": [{"id": "lamp"}, {"id": "cabinet"}]
+        },
+        deterministic_evidence={},
+        visual_evidence=("global.png", "group.png"),
+        rubric={},
+        context={
+            "group_scope": {
+                "group_id": "group_002",
+                "member_ids": ["lamp", "cabinet"],
+            },
+            "functional_probe_evidence": {
+                "required_checks": [
+                    {
+                        "check_id": "functional_check_lamp",
+                        "check_type": "architecture_orientation",
+                        "target_ids": ["lamp"],
+                        "target_affordances": [
+                            {
+                                "target_id": "lamp",
+                                "directionality": "directed",
+                                "surface_roles": ["interaction_side"],
+                                "need_clearance": False,
+                            }
+                        ],
+                    },
+                    {
+                        "check_id": "functional_check_cabinet",
+                        "check_type": "clearance",
+                        "target_ids": ["cabinet"],
+                    },
+                    {
+                        "check_id": "functional_check_relation",
+                        "check_type": "relative_use_geometry",
+                        "target_ids": ["lamp", "cabinet"],
+                    },
+                ],
+                "boundary_clearance_evidence": {
+                    "usable_surface_hypotheses": [
+                        {
+                            "target_id": "lamp",
+                            "status": "identified",
+                            "surfaces": [
+                                {
+                                    "surface_role": "interaction_side",
+                                    "side_id": "local_neg_y",
+                                }
+                            ],
+                        }
+                    ]
+                },
+            },
+        },
+    )
+
+    repair = _functional_repair_context(
+        request=request,
+        evidence_goal={
+            "judge_evidence_request": {
+                "target_ids": ["lamp"],
+                "missing_observations": [
+                    "interaction_side_visible",
+                    "front_back_disambiguated",
+                ],
+                "view_goal": "show the lamp interaction side",
+                "metadata": {
+                    "check_ids": ["functional_check_lamp"]
+                },
+            }
+        },
+        target_ids=("lamp",),
+    )
+
+    assert repair is not None
+    assert repair["target_ids"] == ["lamp"]
+    assert repair["group_member_ids"] == ["lamp", "cabinet"]
+    assert repair["source_check_ids"] == ["functional_check_lamp"]
+    assert repair["surface_targets"][0]["surface_roles"] == [
+        "interaction_side"
+    ]
+    assert repair["usable_surface_hypotheses"][0]["surfaces"][0][
+        "side_id"
+    ] == "local_neg_y"
+    assert "functional_check_cabinet" not in str(repair)
+    assert "functional_check_relation" not in str(repair)
+
+    pair_repair = _functional_repair_context(
+        request=request,
+        evidence_goal={
+            "judge_evidence_request": {
+                "target_ids": ["lamp", "cabinet"],
+                "missing_observations": ["joint_visibility"],
+                "view_goal": "show the pair",
+                "metadata": {
+                    "unresolved_check_ids": [
+                        "functional_check_relation"
+                    ]
+                },
+            }
+        },
+        target_ids=("lamp", "cabinet"),
+    )
+    assert pair_repair is not None
+    assert pair_repair["target_ids"] == ["lamp", "cabinet"]
+    assert pair_repair["source_check_ids"] == [
+        "functional_check_relation"
+    ]
+    assert pair_repair["check_types"] == ["relative_use_geometry"]
+
+
 def _run(
     *,
     policy: str,
@@ -226,7 +345,7 @@ def _run(
     calls = []
     # Cascade tests start from an integrity-valid packet whose Judge requests
     # a metric-scoped repair unless a test supplies an explicit Judge script.
-    judge_results = tuple(judge_results) or (_need_more(),)
+    judge_results = tuple(judge_results) or (_need_more(), _valid())
     deterministic = _Selector(
         "deterministic",
         deterministic_results,
@@ -349,12 +468,12 @@ def test_vlm_selector_dispatch_without_model_inference_is_counted_separately():
     result = controller.run(_request(), candidate_views=())
 
     assert result.stop_reason == (
-        "vlm_no_feasible_candidate_forced_choice"
+        "trusted_candidate_bank_empty_forced_choice"
     )
     assert result.status == "valid"
     assert raw.calls == 0
     telemetry = result.audit["experiment_telemetry"]
-    assert telemetry["vlm_selector_dispatches"] == 1
+    assert telemetry["vlm_selector_dispatches"] == 0
     assert telemetry["vlm_selector_calls"] == 0
 
 
@@ -688,13 +807,12 @@ def test_empty_trusted_bank_reaches_cascade_then_forced_choice() -> None:
 
     assert result.status == "valid"
     assert result.stop_reason == (
-        "vlm_no_feasible_candidate_forced_choice"
+        "trusted_candidate_bank_empty_forced_choice"
     )
     assert calls == [
         "gate",
         "judge",
         "deterministic",
-        "vlm",
         "judge",
     ]
     escalation = next(
@@ -707,7 +825,7 @@ def test_empty_trusted_bank_reaches_cascade_then_forced_choice() -> None:
     assert result.audit["terminal_forced_choice"] == {
         "applied": True,
         "ambiguity_before_forcing": True,
-        "trigger_stop_reason": "vlm_no_feasible_candidate",
+        "trigger_stop_reason": "trusted_candidate_bank_empty",
         "original_evidence_request": {
             "target_ids": ["a", "b"],
             "missing_observations": ["contact_surface_visible"],
@@ -718,7 +836,7 @@ def test_empty_trusted_bank_reaches_cascade_then_forced_choice() -> None:
     }
     forced = result.audit["budget_exhaustion_forced_choice"]
     assert forced["applied"] is True
-    assert forced["trigger"] == "vlm_no_feasible_candidate"
+    assert forced["trigger"] == "trusted_candidate_bank_empty"
     assert forced["ambiguity_before_forcing"] is True
     assert forced["pre_force_judge_status"] == "need_more_evidence"
     assert forced["pre_force_evidence_request"][
@@ -732,6 +850,88 @@ def test_empty_trusted_bank_reaches_cascade_then_forced_choice() -> None:
     assert result.to_dict()[
         "budget_exhaustion_forced_choice"
     ] == forced
+
+
+def test_routing_screen_defers_instead_of_forcing_terminal_choice() -> None:
+    calls: list[str] = []
+
+    class EmptyBank:
+        def build(self, request, *, constraints):
+            del request, constraints
+            return TrustedCameraCandidateBank(
+                candidates=(),
+                rejected_candidates=(),
+                backend="test_empty_bank",
+                provenance={"candidate_count": 0},
+            )
+
+    controller = VLMEvaluationController(
+        judge=_Judge([_need_more()], calls),
+        renderer=_Renderer([], calls),
+        deterministic_camera_selector=_Selector(
+            "deterministic",
+            [
+                {
+                    "outcome": "no_feasible_candidate",
+                    "attempted_candidate_ids": [],
+                    "rejected_candidates": [],
+                    "reason_codes": ["no_feasible_candidate"],
+                    "reason": "the technical bank is empty",
+                }
+            ],
+            calls,
+        ),
+        vlm_camera_selector=_Selector(
+            "vlm",
+            [
+                {
+                    "outcome": "no_feasible_candidate",
+                    "attempted_candidate_ids": [],
+                    "rejected_candidates": [],
+                    "reason_codes": ["no_trusted_repair_plan"],
+                    "reason": "there is no trusted VLM option",
+                }
+            ],
+            calls,
+        ),
+        candidate_bank_builder=EmptyBank(),
+        evidence_gate=_Gate([_gate(ready=True)], calls),
+        control=_control("deterministic_then_vlm"),
+    )
+    request = _request()
+    screen_request = JudgeRequest(
+        task=request.task,
+        metric=request.metric,
+        claim_or_event=deepcopy(request.claim_or_event),
+        scene_context=deepcopy(request.scene_context),
+        deterministic_evidence=deepcopy(
+            request.deterministic_evidence
+        ),
+        visual_evidence=tuple(request.visual_evidence),
+        rubric=deepcopy(request.rubric),
+        context={
+            "decision_mode": "screen",
+            "evidence_phase": "global_screen",
+        },
+    )
+
+    result = controller.run(screen_request)
+
+    assert result.status == "unresolved"
+    assert result.stop_reason == (
+        "trusted_candidate_bank_empty_screen_deferred"
+    )
+    assert calls == ["gate", "judge", "deterministic"]
+    assert result.evidence_request is not None
+    assert result.audit["budget_exhaustion_forced_choice"] == {
+        "applied": False
+    }
+    policy = next(
+        item
+        for item in result.audit["trace"]
+        if item.get("stage") == "terminal_choice_policy"
+    )
+    assert policy["outcome"] == "deferred_to_downstream_review"
 
 
 def test_deterministic_constraint_conflict_has_explicit_escalation_reason():
@@ -977,8 +1177,9 @@ def test_selector_exception_is_not_normal_escalation() -> None:
         deterministic_results=[RuntimeError("selector broke")],
     )
 
-    assert result.stop_reason == "camera_selector_failed"
-    assert calls == ["gate", "judge", "deterministic"]
+    assert result.status == "valid"
+    assert result.stop_reason == "camera_selector_failed_forced_choice"
+    assert calls == ["gate", "judge", "deterministic", "judge"]
     assert not vlm.requests
     assert not any(
         event["stage"] == "camera_escalation"
@@ -993,6 +1194,19 @@ def test_selector_exception_is_not_normal_escalation() -> None:
         if event["kind"] == "camera_selection"
     )
     assert failure["outcome"] == "selector_exception"
+    assert result.audit["degraded_terminal_choice"] == {
+        "applied": True,
+        "trigger_stop_reason": "camera_selector_failed",
+        "failure_kind": "selector_exception",
+        "selection_stage": "deterministic",
+        "retained_prior_evidence": True,
+        "retained_evidence": ["initial.png"],
+        "final_status": "valid",
+    }
+    assert result.audit["applied_failure_policy"] == {
+        "field": "on_selector_failure",
+        "value": "keep_previous_evidence",
+    }
 
 
 def test_invalid_selector_response_is_counted_without_vlm_escalation() -> None:
@@ -1002,8 +1216,8 @@ def test_invalid_selector_response_is_counted_without_vlm_escalation() -> None:
         deterministic_results=[_selected("unknown-view")],
     )
 
-    assert result.stop_reason == "camera_selector_failed"
-    assert calls == ["gate", "judge", "deterministic"]
+    assert result.stop_reason == "camera_selector_failed_forced_choice"
+    assert calls == ["gate", "judge", "deterministic", "judge"]
     assert not vlm.requests
     telemetry = result.audit["experiment_telemetry"]
     assert telemetry["deterministic_selector_calls"] == 1
@@ -1026,8 +1240,8 @@ def test_inactive_failed_constraint_is_invalid_response_not_escalation():
         deterministic_results=[invalid],
     )
 
-    assert result.stop_reason == "camera_selector_failed"
-    assert calls == ["gate", "judge", "deterministic"]
+    assert result.stop_reason == "camera_selector_failed_forced_choice"
+    assert calls == ["gate", "judge", "deterministic", "judge"]
     assert not vlm.requests
     assert not any(
         event["stage"] == "camera_escalation"
@@ -1054,8 +1268,8 @@ def test_nested_selector_metric_decision_is_rejected(decision_key) -> None:
         deterministic_results=[selected],
     )
 
-    assert result.stop_reason == "camera_selector_failed"
-    assert calls == ["gate", "judge", "deterministic"]
+    assert result.stop_reason == "camera_selector_failed_forced_choice"
+    assert calls == ["gate", "judge", "deterministic", "judge"]
     assert not vlm.requests
     assert not any(
         event["stage"] == "camera_escalation"
@@ -1080,8 +1294,8 @@ def test_invalid_selector_telemetry_provenance_is_contract_failure(
         deterministic_results=[selected],
     )
 
-    assert result.stop_reason == "camera_selector_failed"
-    assert calls == ["gate", "judge", "deterministic"]
+    assert result.stop_reason == "camera_selector_failed_forced_choice"
+    assert calls == ["gate", "judge", "deterministic", "judge"]
     assert not vlm.requests
     event = next(
         item
@@ -1101,8 +1315,8 @@ def test_nested_nonfinite_selector_provenance_is_safe_contract_failure():
         deterministic_results=[selected],
     )
 
-    assert result.stop_reason == "camera_selector_failed"
-    assert calls == ["gate", "judge", "deterministic"]
+    assert result.stop_reason == "camera_selector_failed_forced_choice"
+    assert calls == ["gate", "judge", "deterministic", "judge"]
     assert not vlm.requests
     event = next(
         item

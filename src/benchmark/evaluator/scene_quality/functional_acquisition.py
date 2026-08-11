@@ -18,7 +18,7 @@ from benchmark.visual_judge.functional_evidence import (
     FUNCTIONAL_PROBE_MAX_UNITS,
 )
 
-FUNCTIONAL_ACQUISITION_PLAN_VERSION = "functional_acquisition_plan_v9"
+FUNCTIONAL_ACQUISITION_PLAN_VERSION = "functional_acquisition_plan_v11"
 
 _FRONTAGE_OBSERVATIONS = (
     "target_visible",
@@ -365,15 +365,31 @@ def build_functional_acquisition_plan(
         seen_identities.add(identity)
         unique_candidates.append(candidate)
 
-    # Greedy marginal-coverage scheduling. A candidate that resolves a new
-    # required check is always preferred over pure duplication. Among active
-    # obligations, cover previously unseen objects and directed objects before
-    # spending another unit on already represented targets. Family diversity
-    # remains a tie-breaker rather than the primary allocation authority.
+    # Every accepted cross-group relation owns an isolated Judge episode and
+    # therefore a mandatory evidence reservation.  Optional object/group
+    # probes use the remaining budget by marginal coverage.  Failing closed
+    # here is preferable to admitting a relation check that can never run.
+    mandatory_cross_group = [
+        candidate
+        for candidate in unique_candidates
+        if candidate.get("route_scope") == "cross_group"
+    ]
+    optional_candidates = [
+        candidate
+        for candidate in unique_candidates
+        if candidate.get("route_scope") != "cross_group"
+    ]
+    if len(mandatory_cross_group) > limit:
+        raise ValueError(
+            "accepted cross-group functional relations exceed the hard "
+            "probe-unit capacity; silent relation starvation is forbidden: "
+            f"required={len(mandatory_cross_group)}, capacity={limit}"
+        )
     selected, remaining = _coverage_aware_selection(
-        unique_candidates,
+        optional_candidates,
         limit=limit,
         directed_object_ids=set(directed),
+        preselected=mandatory_cross_group,
     )
     for candidate in remaining:
         backfill.append(candidate)
@@ -442,6 +458,14 @@ def build_functional_acquisition_plan(
         selected_probe_units=selected,
         deferred_probe_units=backfill,
     )
+    accepted_cross_group_count = sum(
+        candidate.get("route_scope") == "cross_group"
+        for candidate in unique_candidates
+    )
+    scheduled_cross_group_count = sum(
+        candidate.get("route_scope") == "cross_group"
+        for candidate in selected
+    )
     lazy_group_checks = [
         deepcopy(item)
         for item in functional_check_ledger.get("checks") or []
@@ -465,12 +489,22 @@ def build_functional_acquisition_plan(
                 unique_candidates
             ),
             "scheduled_under_effective_budget": len(selected),
+            "accepted_cross_group_acquisition_identities": (
+                accepted_cross_group_count
+            ),
+            "scheduled_cross_group_acquisition_identities": (
+                scheduled_cross_group_count
+            ),
+            "cross_group_reservation_complete": (
+                accepted_cross_group_count == scheduled_cross_group_count
+            ),
         },
         "scheduling_policy": {
             "policy": (
-                "marginal_check_object_directed_coverage_v1"
+                "mandatory_cross_group_then_marginal_coverage_v2"
             ),
             "priority_order": [
+                "all_accepted_cross_group_relations",
                 "new_required_check",
                 "new_object",
                 "new_directed_object",
@@ -750,6 +784,7 @@ def _coverage_aware_selection(
     *,
     limit: int,
     directed_object_ids: set[str],
+    preselected: list[dict[str, Any]] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Select bounded units by auditable marginal obligation coverage."""
 
@@ -759,6 +794,35 @@ def _coverage_aware_selection(
     covered_objects: set[str] = set()
     covered_directed: set[str] = set()
     covered_families: set[str] = set()
+    for chosen in preselected or []:
+        if len(selected) >= limit:
+            raise ValueError(
+                "mandatory functional evidence reservations exceed capacity"
+            )
+        gain = _candidate_coverage_gain(
+            chosen,
+            covered_checks=covered_checks,
+            covered_objects=covered_objects,
+            covered_directed=covered_directed,
+            covered_families=covered_families,
+            directed_object_ids=directed_object_ids,
+        )
+        chosen["scheduling_coverage_gain"] = {
+            "selection_round": len(selected) + 1,
+            "reservation": "accepted_cross_group_relation",
+            "new_check_ids": sorted(gain["new_checks"]),
+            "new_object_ids": sorted(gain["new_objects"]),
+            "new_directed_object_ids": sorted(gain["new_directed"]),
+            "first_family_coverage": bool(gain["new_family"]),
+            "repeated_target_ids": sorted(gain["repeated_objects"]),
+        }
+        selected.append(chosen)
+        covered_checks.update(gain["new_checks"])
+        covered_objects.update(gain["new_objects"])
+        covered_directed.update(gain["new_directed"])
+        family = str(chosen.get("_check_family") or "")
+        if family:
+            covered_families.add(family)
     while remaining and len(selected) < limit:
         best_index = 0
         best_gain = _candidate_coverage_gain(

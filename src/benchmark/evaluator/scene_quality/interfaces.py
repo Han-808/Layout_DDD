@@ -21,9 +21,9 @@ The module consumes prepared visual evidence and an injected VLM judge. When a
 local metric lacks scope-correct evidence, it may request a packet from an
 injected camera-evidence provider; that provider remains selection/rendering
 infrastructure and never supplies the metric verdict. This module does not own
-camera policy, grouping, or prompt parsing. Missing evidence, a missing judge,
-pending applicability, malformed responses, and missing grouping for Object
-Pairing are all explicit unresolved states.
+camera policy, grouping, or prompt parsing. Internal routers may temporarily
+request more evidence, but every required metric boundary must end in a binary
+scientific result or an explicit infrastructure failure.
 
 Prompt-authorized deviations are passed to the judge with target/relation scope.
 When a judge returns structured defects, defects covered by an exact exemption
@@ -97,6 +97,7 @@ from benchmark.evaluator.scene_quality.functional_ownership import (
     validate_functional_ownership_ledger,
 )
 from benchmark.evaluator.scene_quality.placement_severity import (
+    LEGACY_PLACEMENT_SEVERITY_LEVELS,
     PLACEMENT_SEVERITY_LEVELS,
     validate_placement_defect_severity,
 )
@@ -106,6 +107,14 @@ from benchmark.evaluator.scene_quality.json_screen_first import (
 from benchmark.evaluator.scene_quality.style_global_first import (
     evaluate_style_global_then_group_local as _evaluate_style_global_then_group_local,
 )
+from benchmark.evaluator.scene_quality.terminal import (
+    TERMINAL_EVALUATED,
+    TERMINAL_EVALUATED_DEGRADED,
+    TERMINAL_INFRASTRUCTURE_FAILURE,
+    infrastructure_failure_from_scope,
+    required_scope_failure,
+    terminalize_required_scope,
+)
 from benchmark.evaluator.evidence_contract import (
     EVIDENCE_STRATEGIES,
     FINAL_VLM_CONTEXT_CONTRACT,
@@ -114,6 +123,14 @@ from benchmark.evaluator.evidence_contract import (
     ROUTER_TRIGGER_STATES,
     canonical_hierarchy,
     grouping_policy_provenance,
+)
+from benchmark.evaluator.scoring import (
+    L3_CATEGORIES,
+    L3_METRIC_WEIGHTS,
+    L3_SEVERITY_BURDENS,
+    SCORING_SPEC_VERSION,
+    apply_projection,
+    score_l3_metric_report,
 )
 from benchmark.visual_judge.roles import (
     DecisionContract,
@@ -149,6 +166,8 @@ def evaluate_scene_quality_interfaces(
     run_overrides: dict[str, Any] | None = None,
     prompt: str | None = None,
     visual_style_spec: dict[str, Any] | None = None,
+    apply_burden_scoring: bool = True,
+    strict_metric_inventory: bool = False,
 ) -> dict[str, Any]:
     """Evaluate the five benchmark L3 metrics from prepared visual evidence.
 
@@ -258,14 +277,79 @@ def evaluate_scene_quality_interfaces(
         _attach_metric_forced_choice_audit(metric_report)
         metric_reports[metric_name] = metric_report
 
-    active = [entry for entry in metric_reports.values() if entry["affects_score"]]
+    # Workflow branches above intentionally retain binary scores while they
+    # route global/group judgements and construct Function -> Placement
+    # ownership.  Only consolidated final defects enter this pure projection.
+    if apply_burden_scoring:
+        for metric_name, metric_report in metric_reports.items():
+            if (
+                metric_report.get("status") == "evaluated"
+                and isinstance(metric_report.get("judgement"), dict)
+            ):
+                apply_projection(
+                    metric_report,
+                    score_l3_metric_report(
+                        metric_name,
+                        metric_report,
+                        ordered_object_ids=object_ids,
+                        nominal_weight=float(L3_METRIC_WEIGHTS[metric_name]),
+                    ),
+                )
+
+    # A versioned leaderboard projection has a frozen five-metric inventory.
+    # In particular, a diagnostic ``--metric`` subset or an applicability
+    # decision must not silently hand the omitted weight to the remaining
+    # metrics while the report still advertises the canonical scoring profile.
+    # Legacy/custom callers retain the historical applicable-metric behavior.
+    active_metric_names = (
+        list(SUPPORTED_SCENE_QUALITY_METRICS)
+        if strict_metric_inventory and top_enabled
+        else [
+            name
+            for name in SUPPORTED_SCENE_QUALITY_METRICS
+            if metric_reports[name]["affects_score"]
+        ]
+    )
+    active = [metric_reports[name] for name in active_metric_names]
     resolved_entries = [
         entry
         for entry in active
         if entry["status"] == "evaluated" and isinstance(entry["score"], (int, float))
     ]
-    resolved_score = _weighted_metric_score(resolved_entries)
     complete = bool(active) and len(resolved_entries) == len(active)
+    infrastructure_failures: list[dict[str, Any]] = []
+    for metric_name in active_metric_names:
+        metric_report = metric_reports[metric_name]
+        failure = infrastructure_failure_from_scope(
+            metric_report,
+            phase=f"l3_metric:{metric_name}",
+            scope_id=metric_name,
+        )
+        if failure is not None:
+            infrastructure_failures.append(failure)
+        elif metric_report.get("status") != "evaluated":
+            infrastructure_failures.append(
+                required_scope_failure(
+                    phase=f"l3_metric:{metric_name}",
+                    scope_id=metric_name,
+                    reason=str(
+                        metric_report.get("reason")
+                        or "required_metric_not_evaluable"
+                    ),
+                )
+            )
+    if strict_metric_inventory:
+        resolved_score = (
+            sum(
+                float(metric_reports[name]["score"])
+                * float(L3_METRIC_WEIGHTS[name])
+                for name in active_metric_names
+            )
+            if complete
+            else None
+        )
+    else:
+        resolved_score = _weighted_metric_score(resolved_entries)
     score = resolved_score if complete else None
     if not top_enabled:
         status, reason = "not_applicable", "disabled_by_configuration"
@@ -274,17 +358,30 @@ def evaluate_scene_quality_interfaces(
     elif complete:
         status, reason = "evaluated", None
     elif resolved_entries:
-        status, reason = "partial", "one_or_more_scene_quality_metrics_unresolved"
+        status, reason = (
+            "partial",
+            "one_or_more_scene_quality_metrics_failed_or_not_evaluable",
+        )
     else:
-        status, reason = "unresolved", "scene_quality_metrics_unresolved"
+        status, reason = "failed", "scene_quality_metrics_not_evaluable"
+
+    if status == "evaluated":
+        terminal_state = (
+            TERMINAL_EVALUATED_DEGRADED
+            if any(
+                entry.get("terminal_state")
+                == TERMINAL_EVALUATED_DEGRADED
+                for entry in active
+            )
+            else TERMINAL_EVALUATED
+        )
+    elif status == "not_applicable":
+        terminal_state = "not_applicable"
+    else:
+        terminal_state = TERMINAL_INFRASTRUCTURE_FAILURE
 
     eligible_count = len(active)
     resolved_count = len(resolved_entries)
-    active_metric_names = [
-        name
-        for name in SUPPORTED_SCENE_QUALITY_METRICS
-        if metric_reports[name]["affects_score"]
-    ]
     resolved_metric_names = [
         name
         for name in active_metric_names
@@ -299,6 +396,7 @@ def evaluate_scene_quality_interfaces(
         "implemented": True,
         "enabled": top_enabled,
         "status": status,
+        "terminal_state": terminal_state,
         "reason": reason,
         "score": score,
         "resolved_score": resolved_score,
@@ -335,6 +433,7 @@ def evaluate_scene_quality_interfaces(
         },
         "active_metrics": active_metric_names,
         "resolved_metrics": resolved_metric_names,
+        "infrastructure_failures": infrastructure_failures,
         # Retained as an empty wire-compatible field. All five metrics are
         # benchmark metrics in the v2 profile.
         "experimental_metrics": {},
@@ -360,9 +459,39 @@ def evaluate_scene_quality_interfaces(
         },
         "hierarchy": canonical_hierarchy(),
         "metrics": metric_reports,
+        "scoring": {
+            "enabled": bool(apply_burden_scoring),
+            "schema_version": (
+                SCORING_SPEC_VERSION
+                if apply_burden_scoring
+                else "legacy_metric_scoring_compat"
+            ),
+            "ordered_canonical_object_ids": list(object_ids),
+            "n_scene": len(object_ids),
+            "metric_weights": {
+                name: (
+                    float(L3_METRIC_WEIGHTS[name])
+                    if apply_burden_scoring
+                    else float(metric_reports[name]["weight"])
+                )
+                for name in SUPPORTED_SCENE_QUALITY_METRICS
+            },
+            "runtime_config_metric_weights": {
+                name: float(metric_reports[name]["weight"])
+                for name in SUPPORTED_SCENE_QUALITY_METRICS
+            },
+            "canonical_profile_metric_weights": deepcopy(
+                L3_METRIC_WEIGHTS
+            ),
+            "denominator_policy": "shared_canonical_scene_objects",
+        },
         "judgment_contract": {
             "evidence_first": True,
-            "insufficient_evidence_result": "unresolved",
+            "insufficient_evidence_result": (
+                "forced_binary_after_bounded_evidence_acquisition"
+            ),
+            "engineering_failure_result": "infrastructure_failure",
+            "no_scientific_unresolved_terminal_state": True,
             "invalid_requires": (
                 "one_or_more_significant_explicitly_identified_visible_metric_scoped_defects"
             ),
@@ -371,7 +500,8 @@ def evaluate_scene_quality_interfaces(
             "self_reported_confidence": "diagnostic_uncalibrated",
             "semantic_placement_severity": {
                 "levels": list(PLACEMENT_SEVERITY_LEVELS),
-                "metric_verdict_and_score_unchanged": True,
+                "metric_verdict_unchanged": True,
+                "severity_controls_post_hoc_burden": True,
             },
         },
         "authorized_deviations": deepcopy(deviations),
@@ -732,16 +862,26 @@ def _evaluate_metric(
     )
     if applicable_state == "pending":
         base.update(status="unresolved", reason="metric_applicability_pending")
+        # Applicability is an upstream routing prerequisite, not a final
+        # Judge scope.  A missing applicability declaration remains
+        # unresolved and must not be relabeled as a Judge/control failure.
         return base
     if eligible_count == 0:
         if scope in _GROUP_SCOPES and not grouping_available:
             base.update(status="unresolved", reason="object_grouping_unavailable")
+            return terminalize_required_scope(
+                base,
+                phase=f"{metric_name}:grouping",
+            )
         else:
             base.update(status="not_applicable", reason="no_eligible_targets", affects_score=False)
         return base
     if vlm_judge is None:
         base.update(status="unresolved", reason="vlm_judge_not_configured")
-        return base
+        return terminalize_required_scope(
+            base,
+            phase=f"{metric_name}:judge_configuration",
+        )
     if json_screen_first:
         return _evaluate_json_screen_then_group_visual(
             base=base,
@@ -801,7 +941,10 @@ def _evaluate_metric(
         )
     if not available:
         base.update(status="unresolved", reason=unavailable_reason)
-        return base
+        return terminalize_required_scope(
+            base,
+            phase=f"{metric_name}:initial_evidence",
+        )
 
     if style_global_screen_then_local:
         return _evaluate_style_global_then_group_local(
@@ -931,7 +1074,10 @@ def _evaluate_metric(
                 "error": str(exc),
             },
         )
-        return base
+        return terminalize_required_scope(
+            base,
+            phase=f"{metric_name}:direct_final_judge",
+        )
 
     base["judgement"] = adjusted
     base["status"] = outcome["status"]
@@ -944,7 +1090,10 @@ def _evaluate_metric(
             "fraction": 1.0,
             "complete": True,
         }
-    return base
+    return terminalize_required_scope(
+        base,
+        phase=f"{metric_name}:direct_final_judge",
+    )
 
 
 def _resolved_functional_ownership_for_placement(
@@ -1004,11 +1153,20 @@ def _attach_metric_forced_choice_audit(
         unique.append(event)
     if not unique:
         report["budget_exhaustion_forced_choice"] = {
-            "applied": False
+            "applied": False,
+            "forced_binary": False,
+            "evidence_ambiguous": False,
+            "stop_reason": None,
         }
         return
+    last = deepcopy(unique[-1])
     report["budget_exhaustion_forced_choice"] = {
-        **deepcopy(unique[-1]),
+        **last,
+        "forced_binary": True,
+        "evidence_ambiguous": bool(
+            last.get("ambiguity_before_forcing")
+        ),
+        "stop_reason": last.get("trigger"),
         "occurrence_count": len(unique),
         "events": unique,
     }
@@ -1512,6 +1670,7 @@ def _judge_request(
     group_scope: GroupCameraScope | None = None,
     routed_screen_claims: list[dict[str, Any]] | None = None,
     functional_probe_evidence: dict[str, Any] | None = None,
+    functional_group_evidence_window: dict[str, Any] | None = None,
     placement_discovery: dict[str, Any] | None = None,
     required_placement_checks: list[dict[str, Any]] | None = None,
     functional_ownership_ledger: dict[str, Any] | None = None,
@@ -1630,6 +1789,9 @@ def _judge_request(
         "functional_probe_evidence": deepcopy(
             functional_probe_evidence
         ),
+        "functional_group_evidence_window": deepcopy(
+            functional_group_evidence_window
+        ),
         "placement_discovery": deepcopy(placement_discovery),
         "required_placement_checks": placement_checks,
         "functional_ownership_ledger": deepcopy(
@@ -1692,6 +1854,21 @@ def _judge_request(
             "verdict": ["valid", "invalid", "ambiguous"],
             "invalid_requires_significant_metric_scoped_defect": True,
             "insufficient_requires_ambiguous": True,
+            "missing_evidence": {
+                "allowed": (
+                    "empty_or_exact_evidence_request_token_mirror"
+                ),
+                "authority": "evidence_request.missing_observations",
+            },
+            "evidence_request": {
+                "required_when_insufficient": True,
+                "fields": [
+                    "target_ids",
+                    "missing_observations",
+                    "view_goal",
+                    "metadata",
+                ],
+            },
             "allowed_target_ids": allowed_defect_target_ids,
             "defect_attribution_unit": (
                 "object"
@@ -1705,11 +1882,32 @@ def _judge_request(
             ),
             "defects": {
                 "required_when_invalid": True,
-                "fields": ["scope", "target_ids", "relation", "reason"],
+                "fields": [
+                    "scope",
+                    "target_ids",
+                    "relation",
+                    "reason",
+                    "category",
+                    "attribution_mode",
+                    *(
+                        []
+                        if metric_name == "object_pairing_consistency"
+                        else ["severity"]
+                    ),
+                ],
                 "allowed_scopes": list(
                     JUDGMENT_SCOPE_BY_METRIC[metric_name]["included"]
                 ),
                 "allowed_target_ids": allowed_defect_target_ids,
+                "allowed_field_values": {
+                    "category": sorted(L3_CATEGORIES[metric_name]),
+                    "severity": sorted(L3_SEVERITY_BURDENS[metric_name]),
+                    "attribution_mode": [
+                        "unary",
+                        "responsible_endpoint",
+                        "minimum_repair_set",
+                    ],
+                },
             },
         },
         **vlm_audit_metadata(
@@ -1745,6 +1943,13 @@ def _judge_request(
                 "causal_object_ids",
                 "scoring_target_ids",
             ],
+            "deterministically_derived_fields": {
+                "scoring_target_ids": (
+                    "validated causal_object_ids for external_object; "
+                    "affected_object_ids for self_layout"
+                ),
+                "defect.target_ids": "derived scoring_target_ids",
+            },
             "observation_status": [
                 "observed",
                 "inferred_under_budget",
@@ -1761,19 +1966,18 @@ def _judge_request(
         request["response_contract"]["defects"]["fields"].extend(
             [
                 "check_id",
-                "placement_check_type",
-                "severity",
+                "check_type",
             ]
         )
-        request["response_contract"]["defects"][
-            "allowed_field_values"
-        ] = {
-            "severity": list(PLACEMENT_SEVERITY_LEVELS),
-        }
         request["placement_severity_policy"] = {
-            "schema_version": "semantic_placement_severity_v1",
-            "levels": list(PLACEMENT_SEVERITY_LEVELS),
+            "schema_version": SCORING_SPEC_VERSION,
+            "levels": sorted(
+                L3_SEVERITY_BURDENS[
+                    "semantic_placement_consistency"
+                ]
+            ),
             "metric_verdict_unchanged": True,
+            "severity_controls_burden_only": True,
         }
         request["placement_check_policy"] = {
             "schema_version": "placement_check_results_v1",
@@ -1821,6 +2025,26 @@ def _judge_request(
             "same_call_resolution_requires_current_evidence": True,
             "insufficient_evidence_requires": (
                 "evidence_request.metadata.placement_check_proposal"
+            ),
+            "fields": [
+                "proposal_id",
+                "subject_id",
+                "context_ids",
+                "check_type",
+                "observation_goal",
+                "observation_status",
+                "conclusion",
+                "reason",
+                "severity",
+            ],
+            "check_type": [
+                "support_and_height",
+                "scene_zone",
+                "contextual_anchor",
+            ],
+            "proposal_defect_reference": (
+                "defect.check_id equals proposal_id in the model response; "
+                "the Controller replaces it with the stable check_id"
             ),
         }
     if allow_scene_wide_functional_ownership:
@@ -2075,12 +2299,31 @@ def _normalize_judgement(
             raise ValueError(
                 "insufficient scene-quality evidence requires verdict='ambiguous'"
             )
-        if not missing_evidence or any(
+        evidence_request = value.get("evidence_request")
+        if not isinstance(evidence_request, dict):
+            raise ValueError(
+                "insufficient scene-quality evidence requires the canonical "
+                "structured evidence_request"
+            )
+        if any(
             not isinstance(item, str) or not item.strip()
             for item in missing_evidence
         ):
             raise ValueError(
-                "insufficient scene-quality evidence must name missing evidence"
+                "scene-quality missing_evidence must contain non-empty tokens"
+            )
+        requested_missing = evidence_request.get("missing_observations")
+        if not isinstance(requested_missing, list) or not requested_missing:
+            raise ValueError(
+                "insufficient scene-quality evidence_request requires "
+                "missing_observations"
+            )
+        if missing_evidence and list(
+            dict.fromkeys(missing_evidence)
+        ) != list(dict.fromkeys(requested_missing)):
+            raise ValueError(
+                "scene-quality missing_evidence must be empty or exactly "
+                "mirror evidence_request.missing_observations"
             )
         if defects:
             raise ValueError(
@@ -2162,8 +2405,35 @@ def _normalize_judgement(
                         "scene-quality VLM defect scope is outside the canonical "
                         f"{metric_name} boundary"
                     )
+                category = defect.get("category")
+                if category is not None and category not in L3_CATEGORIES[metric_name]:
+                    raise ValueError(
+                        f"scene-quality {metric_name} defect category must be one of "
+                        f"{sorted(L3_CATEGORIES[metric_name])}"
+                    )
+                severity = defect.get("severity")
+                allowed_severities = set(L3_SEVERITY_BURDENS[metric_name])
+                if metric_name == "semantic_placement_consistency":
+                    allowed_severities.update(
+                        LEGACY_PLACEMENT_SEVERITY_LEVELS
+                    )
+                if severity is not None and severity not in allowed_severities:
+                    raise ValueError(
+                        f"scene-quality {metric_name} defect severity must be one of "
+                        f"{sorted(allowed_severities)}"
+                    )
                 if metric_name == "semantic_placement_consistency":
                     validate_placement_defect_severity(defect)
+                attribution_mode = defect.get("attribution_mode")
+                if attribution_mode is not None and attribution_mode not in {
+                    "unary",
+                    "responsible_endpoint",
+                    "minimum_repair_set",
+                }:
+                    raise ValueError(
+                        "scene-quality defect attribution_mode must be unary, "
+                        "responsible_endpoint, or minimum_repair_set"
+                    )
         return {
             "status": "evaluated",
             "score": 1.0 if verdict == "valid" else 0.0,

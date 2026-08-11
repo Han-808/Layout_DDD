@@ -53,19 +53,15 @@ _RAW_RESPONSE_LIMIT = 20_000
 
 FUNCTIONAL_AFFORDANCE_SYSTEM_PROMPT = """Inventory functional observability;
 do not judge validity. For every input object, classify ordinary use as
-directed or non_directed. Directed means intended use depends on a particular
-functional side; non_directed covers direction-independent use and objects
-without an ordinary operation. This classification asks whether a functional
-side exists, not which physical side it is. If a directional use is plausible
-but the exact side is not visible, use directed; later usable-side localization
-resolves the side. Record only the allowed surface roles and whether the
-object's own ordinary use requires a dedicated free-space region. Separately
-record whether an already-required directed-side or clearance observation
-must include the supplied logical room boundary. Boundary context only refines
-framing; it never creates an independent check. Therefore an object that is
-both non_directed and need_clearance=false must use
-boundary_review_state=routine. Category is a navigation hint; visible geometry
-and appearance remain relevant.
+directed iff use depends on a horizontally facing side relative to accessible
+architecture or a joint-use counterpart. Use non_directed otherwise, including
+top/bottom/gravity-axis controls and objects without ordinary operation. This
+asks whether such a side exists, not which side. If plausible but unseen, use
+directed; later localization resolves it. Record allowed surface roles and
+whether ordinary use needs dedicated free space. Boundary context may refine
+an already-required side or clearance view, never create a check; therefore
+non_directed with need_clearance=false requires boundary_review_state=routine.
+Category is a hint; visible geometry and appearance remain relevant.
 Set need_clearance=true only when ordinary approach, opening, or operation
 requires dedicated free space around the object. Do not classify the kind of
 clearance. This is not generic room circulation: passive objects without a
@@ -74,6 +70,8 @@ dedicated user or operating zone normally use need_clearance=false.
 The conditional fields must agree:
 - directed requires one or more surface_roles;
 - non_directed requires surface_roles=[];
+- top/bottom/gravity-axis access alone is non_directed even when an ordinary
+  control or interaction exists;
 - boundary_review_state=routine requires boundary_observation_goal="";
 - a non-routine boundary_review_state requires a non-empty
   boundary_observation_goal and requires either directionality=directed or
@@ -100,7 +98,7 @@ between exactly two objects and names exactly one predicate:
 - directional_correspondence: joint use depends on compatible functional-side
   or facing directions;
 - relative_use_geometry: joint use depends on relative position, distance,
-  reach, contact, or connection geometry.
+  reach, coordinated operation, or an operational connection.
 
 Create a row only when ordinary joint use imposes that observable condition.
 Broad cooperation, co-presence, similarity, style compatibility, or possible
@@ -114,6 +112,9 @@ clearance in affordance_prior.need_clearance_object_ids, never an object
 relation. Distance and group membership affect framing and scope only; the
 trusted_group_partition is not semantic ground truth and cannot suppress a
 real relation. Current bad geometry must not suppress the check that tests it.
+Static support, contact, or stacking alone is not Functional: physical support
+is L1 and semantic support/height is Placement, unless direct ordinary joint
+action independently requires the relation.
 
 The validated affordance_prior is a sparse positive hint, not a candidate whitelist.
 Use it to sharpen checks, while allowing the images and full object
@@ -142,6 +143,8 @@ already compliant row. Resolve contradictory rows from the same visual
 evidence:
 - directed requires one or more allowed surface_roles;
 - non_directed requires surface_roles=[];
+- top/bottom/gravity-axis access without horizontal facing dependence is
+  non_directed;
 - need_clearance must be a JSON boolean, never a clearance subtype;
 - boundary_review_state=routine requires boundary_observation_goal="";
 - non-routine boundary review requires a non-empty boundary_observation_goal.

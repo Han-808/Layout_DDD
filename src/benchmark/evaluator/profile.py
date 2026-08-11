@@ -401,6 +401,8 @@ def canonical_score_coverage(
     weights: dict[str, float],
     *,
     profile_version: str,
+    scoring_profile_id: str | None = None,
+    scoring_spec_version: str | None = None,
 ) -> dict[str, Any]:
     active_layers = [
         name
@@ -442,6 +444,12 @@ def canonical_score_coverage(
     layer_weight_signature = "|".join(
         f"{name}:{float(weights.get(name, 0.0)):.12g}" for name in SCORING_LAYERS
     )
+    scoring_signature = (
+        f"|scoring_profile:{scoring_profile_id}"
+        f"|scoring_spec:{scoring_spec_version}"
+        if scoring_profile_id and scoring_spec_version
+        else ""
+    )
     return {
         "active_layers": active_layers,
         "covered_layers": covered_layers,
@@ -453,7 +461,7 @@ def canonical_score_coverage(
         "layer_weight_signature": layer_weight_signature,
         "comparability_signature": (
             f"{profile_version}|{layer_weight_signature}|"
-            f"{per_layer_active_metric_signature}"
+            f"{per_layer_active_metric_signature}{scoring_signature}"
         ),
         "covered_weight": covered_weight,
         "required_weight": required_weight,

@@ -617,6 +617,33 @@ def _generate_feasible_camera_pose_candidates(
         and isinstance(request.get("functional_probe"), dict)
         else None
     )
+    functional_repair = (
+        request.get("functional_repair")
+        if metric == "functional_consistency"
+        and isinstance(request.get("functional_repair"), dict)
+        else None
+    )
+
+    if functional_repair is not None:
+        repair_target_ids = _object_id_list(
+            functional_repair.get("target_ids")
+        )
+        if repair_target_ids:
+            target_object_ids = repair_target_ids
+            objects = _target_objects(scene, target_object_ids)
+        if _functional_repair_requires_side_bank(functional_repair):
+            # A directed, single-object repair can reuse the decoded usable
+            # side.  Non-directed clearance and pair relations must not be
+            # mislabeled as frontage repairs.
+            repair_candidates = _functional_target_repair_candidates(
+                scene=scene,
+                repair=functional_repair,
+                target_object_ids=target_object_ids,
+                requested_count=count,
+            )
+            if repair_candidates:
+                return repair_candidates
+        functional_probe = _functional_probe_from_repair(functional_repair)
 
     # _target_objects preserves request order.  Support requests put the
     # subject first and candidate supporting objects afterwards, so this is now
@@ -749,7 +776,7 @@ def _generate_feasible_camera_pose_candidates(
             count=generation_target_count,
             preferred_azimuths=preferred_azimuths,
         )
-        policy_source = "functional_usable_side_candidate_bank_v2"
+        policy_source = "functional_required_observation_candidate_bank_v3"
         event_focus_source = "functional_probe_relation_target_union"
     elif metric in {"oob", "object_architecture_penetration"}:
         desired_distance = max(1.2, float(max(extent)) * 2.2)
@@ -1018,11 +1045,10 @@ def _generate_feasible_camera_pose_candidates(
         )
     if functional_probe is not None:
         return candidates
-    if len(candidates) != count:
-        raise ValueError(
-            "feasible camera candidate generation could not satisfy the exact "
-            f"bank size: requested={count}, generated={len(candidates)}, metric={metric}"
-        )
+    # ``count`` is a deterministic upper bound, not a feasibility promise.
+    # Geometry and framing constraints may yield fewer safe poses.  Returning
+    # that bounded trusted bank lets the acquisition state machine either use
+    # it or take its explicit empty-bank route without fabricating candidates.
     return candidates
 
 
@@ -1114,6 +1140,212 @@ def _functional_cross_group_context_fallback_candidates(
         }
         candidates.append(candidate)
     return candidates
+
+
+def _functional_target_repair_candidates(
+    *,
+    scene: dict[str, Any],
+    repair: dict[str, Any],
+    target_object_ids: list[str],
+    requested_count: int,
+) -> list[dict[str, Any]]:
+    """Build a small side-conditioned bank for one Functional repair.
+
+    Multi-target relation repairs continue through the normal relation-aware
+    bank.  This fallback is intentionally limited to one object because its
+    purpose is frontage/control/clearance disambiguation, not pair semantics.
+    """
+
+    repair_ids = list(
+        dict.fromkeys(
+            str(item)
+            for item in (
+                repair.get("target_ids") or target_object_ids
+            )
+            if str(item).strip()
+        )
+    )
+    if len(repair_ids) != 1:
+        return []
+    target_id = repair_ids[0]
+    candidates = generate_usable_surface_side_repair_bank(
+        scene,
+        target_id=target_id,
+    )
+    preferred_side_ids = list(
+        dict.fromkeys(
+            str(surface.get("side_id") or "")
+            for hypothesis in repair.get(
+                "usable_surface_hypotheses"
+            )
+            or []
+            if isinstance(hypothesis, dict)
+            and str(hypothesis.get("target_id") or "") == target_id
+            and str(hypothesis.get("status") or "")
+            != "no_directed_surface"
+            for surface in hypothesis.get("surfaces") or []
+            if isinstance(surface, dict)
+            and str(surface.get("side_id") or "").strip()
+        )
+    )
+    preferred_rank = {
+        side_id: index for index, side_id in enumerate(preferred_side_ids)
+    }
+    candidates.sort(
+        key=lambda item: (
+            preferred_rank.get(
+                str(item.get("local_side_id") or item.get("id") or ""),
+                len(preferred_rank),
+            ),
+            str(item.get("id") or ""),
+        )
+    )
+    limit = max(1, min(int(requested_count), len(candidates)))
+    result: list[dict[str, Any]] = []
+    for index, candidate in enumerate(candidates[:limit]):
+        local_side_id = str(
+            candidate.get("local_side_id")
+            or candidate.get("id")
+            or f"side_{index:02d}"
+        )
+        result.append(
+            {
+                **deepcopy(candidate),
+                "id": (
+                    "functional_consistency_repair_"
+                    f"{index:02d}_{local_side_id}"
+                ),
+                "name": f"functional_repair_{local_side_id}",
+                "target_object_ids": [target_id],
+                "focus_kind": "functional_target_repair",
+                "view_family": "functional_frontage_probe",
+                "functional_repair_schema_version": str(
+                    repair.get("schema_version")
+                    or "functional_camera_repair_v1"
+                ),
+                "functional_repair_source_check_ids": [
+                    str(item)
+                    for item in repair.get("source_check_ids") or []
+                    if str(item).strip()
+                ],
+                "usable_surface_informed": bool(preferred_side_ids),
+                "usable_surface_side_ids": list(preferred_side_ids),
+                "candidate_bank_requested_count": int(requested_count),
+                "candidate_bank_generated_count": limit,
+                "candidate_bank_complete": limit
+                == int(requested_count),
+                "candidate_policy": "local",
+                "policy_source": (
+                    "functional_judge_requested_elevated_side_repair_v1"
+                ),
+                "decision_authority": "none",
+            }
+        )
+    return result
+
+
+def _functional_repair_requires_side_bank(
+    repair: dict[str, Any],
+) -> bool:
+    target_ids = _object_id_list(repair.get("target_ids"))
+    if len(target_ids) != 1:
+        return False
+    required = {
+        str(item)
+        for item in repair.get("required_observations") or []
+    }
+    usable_hypothesis = any(
+        isinstance(item, dict)
+        and str(item.get("target_id") or "") == target_ids[0]
+        and str(item.get("status") or "") != "no_directed_surface"
+        and bool(item.get("surfaces"))
+        for item in repair.get("usable_surface_hypotheses") or []
+    )
+    side_observation = bool(
+        required
+        & {
+            "interaction_side_visible",
+            "front_back_disambiguated",
+        }
+    ) or usable_hypothesis
+    directed_target = any(
+        isinstance(item, dict)
+        and str(item.get("target_id") or "") == target_ids[0]
+        and (
+            str(item.get("directionality") or "") == "directed"
+            or bool(item.get("surface_roles"))
+        )
+        for item in repair.get("surface_targets") or []
+    )
+    return bool(
+        side_observation and (directed_target or usable_hypothesis)
+    )
+
+
+def _functional_probe_from_repair(
+    repair: dict[str, Any],
+) -> dict[str, Any]:
+    """Route unresolved Functional checks through the normal probe geometry."""
+
+    target_ids = _object_id_list(repair.get("target_ids"))
+    if not target_ids:
+        raise ValueError("functional camera repair requires target_ids")
+    required = _object_id_list(repair.get("required_observations"))
+    predicates = _object_id_list(repair.get("relation_predicates"))
+    if len(target_ids) > 1 and not predicates:
+        predicates = [
+            "directional_correspondence"
+            if {
+                "interaction_side_visible",
+                "front_back_disambiguated",
+            }
+            & set(required)
+            else "relative_use_geometry"
+        ]
+    return {
+        "probe_id": "functional_judge_repair",
+        "kind": (
+            "functional_correspondence"
+            if len(target_ids) > 1
+            else "approach_clearance"
+            if "approach_zone_visible" in required
+            else "functional_frontage"
+        ),
+        "target_ids": target_ids[:1],
+        "related_target_ids": target_ids[1:],
+        "required_observations": required,
+        "reason": str(
+            repair.get("view_goal") or "functional check clarification"
+        )[:1000],
+        "view_goal": str(
+            repair.get("view_goal") or "functional check clarification"
+        )[:1000],
+        "observation_goals": [
+            str(
+                repair.get("view_goal")
+                or "functional check clarification"
+            )[:1000]
+        ],
+        "route_scope": str(
+            repair.get("route_scope")
+            or ("cross_group" if len(target_ids) > 1 else "group_local")
+        ),
+        "owning_group_id": repair.get("group_id"),
+        "group_member_ids": _object_id_list(
+            repair.get("group_member_ids")
+        ),
+        "surface_targets": deepcopy(
+            repair.get("surface_targets") or []
+        ),
+        "usable_surface_hypotheses": deepcopy(
+            repair.get("usable_surface_hypotheses") or []
+        ),
+        "check_ids": _object_id_list(repair.get("source_check_ids")),
+        "check_types": _object_id_list(repair.get("check_types")),
+        "relation_predicates": predicates,
+        "source": "judge_need_more_evidence",
+        "decision_authority": "none",
+    }
 
 
 def _shortlist_functional_probe_candidates(

@@ -42,6 +42,10 @@ from benchmark.evaluator.profile import (  # noqa: E402
     L3,
     L4,
 )
+from benchmark.evaluator.scoring import (  # noqa: E402
+    INTRINSIC_VALIDITY_PROFILE_ID,
+    L3_METRIC_WEIGHTS,
+)
 from benchmark.evaluator.scene_quality.functional_ownership import (  # noqa: E402
     CROSS_METRIC_OWNERSHIP_AUDIT_VERSION,
     FUNCTIONAL_OWNERSHIP_LEDGER_VERSION,
@@ -61,6 +65,7 @@ from benchmark.visual_judge import (  # noqa: E402
     CameraEvidenceProvider,
     CameraViewEvidenceRenderer,
     DeterministicLocalCameraSelector,
+    FUNCTIONAL_PROBE_DEFAULT_UNITS,
     build_openai_compatible_camera_selector,
     build_openai_compatible_vlm_judge,
     resolve_vlm_evaluation_control,
@@ -85,7 +90,7 @@ from benchmark.visual_judge.graphs import (  # noqa: E402
 )
 
 
-RUNNER_SCHEMA_VERSION = "camera_cal_scene_level_runner_v7"
+RUNNER_SCHEMA_VERSION = "camera_cal_scene_level_runner_v8"
 PLAN_SCHEMA_VERSION = "camera_cal_scene_level_plan_v1"
 CASE_SCHEMA_VERSION = "camera_cal_scene_level_case_v5"
 COMPARISON_SCHEMA_VERSION = "camera_cal_scene_comparison_v1"
@@ -508,6 +513,83 @@ class _ObservedRenderer:
         return result
 
 
+def run_cases_parallel(
+    *,
+    cases: list[dict[str, Any]],
+    case_kwargs: dict[str, Any],
+    output_root: Path,
+    progress: ProgressReporter,
+    max_workers: int,
+    continue_on_error: bool,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Run cases concurrently without losing already-started final states."""
+
+    records: list[dict[str, Any]] = []
+    failures: list[dict[str, Any]] = []
+    fail_fast_triggered = False
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_case: dict[Future[dict[str, Any]], dict[str, Any]] = {
+            executor.submit(run_case, case=case, **case_kwargs): case
+            for case in cases
+        }
+        for completed, future in enumerate(
+            as_completed(future_to_case),
+            start=1,
+        ):
+            case = future_to_case[future]
+            if future.cancelled():
+                cancellation = record_case_cancellation(
+                    case=case,
+                    output_root=output_root,
+                )
+                records.append(cancellation)
+                progress.emit(
+                    "case_cancelled",
+                    case_id=str(case["case_id"]),
+                    completed_count=completed,
+                    case_count=len(cases),
+                    reason=cancellation["reason"],
+                )
+                continue
+            try:
+                record = future.result()
+            except Exception as exc:
+                failure = record_case_failure(
+                    case=case,
+                    output_root=output_root,
+                    error=exc,
+                )
+                failures.append(failure)
+                records.append(failure)
+                progress.emit(
+                    "case_failed",
+                    case_id=str(case["case_id"]),
+                    completed_count=completed,
+                    case_count=len(cases),
+                    error_type=failure["error_type"],
+                )
+                if not continue_on_error and not fail_fast_triggered:
+                    fail_fast_triggered = True
+                    for pending in future_to_case:
+                        if pending is not future:
+                            pending.cancel()
+            else:
+                records.append(record)
+                progress.emit(
+                    "case_completed",
+                    case_id=str(case["case_id"]),
+                    completed_count=completed,
+                    case_count=len(cases),
+                    status=record["status"],
+                    elapsed_seconds=round(
+                        float(record.get("elapsed_seconds") or 0.0),
+                        3,
+                    ),
+                    api_usage=record.get("api_usage"),
+                )
+    return records, failures
+
+
 def main() -> None:
     args = parse_args()
     route = effective_model_route()
@@ -541,6 +623,12 @@ def main() -> None:
         grouping_config_path=grouping_config_path,
         route=route,
         metrics=metrics,
+        functional_group_local_granularity=(
+            args.functional_group_local_granularity
+        ),
+        functional_group_local_evidence_policy=(
+            args.functional_group_local_evidence_policy
+        ),
         cases=cases,
         renderer_config=renderer_config,
         control=control.to_dict(),
@@ -583,6 +671,12 @@ def main() -> None:
         "grouping_config_path": grouping_config_path,
         "route": route,
         "metrics": metrics,
+        "functional_group_local_granularity": (
+            args.functional_group_local_granularity
+        ),
+        "functional_group_local_evidence_policy": (
+            args.functional_group_local_evidence_policy
+        ),
         "renderer_config": renderer_config,
         "control_config": control.to_dict(),
         "resume": args.resume,
@@ -638,51 +732,16 @@ def main() -> None:
                 case_index=index,
                 case_count=len(cases),
             )
-        with ThreadPoolExecutor(max_workers=args.max_workers) as executor:
-            future_to_case: dict[Future[dict[str, Any]], dict[str, Any]] = {
-                executor.submit(run_case, case=case, **case_kwargs): case
-                for case in cases
-            }
-            for completed, future in enumerate(
-                as_completed(future_to_case),
-                start=1,
-            ):
-                case = future_to_case[future]
-                try:
-                    record = future.result()
-                except Exception as exc:
-                    failure = record_case_failure(
-                        case=case,
-                        output_root=output_root,
-                        error=exc,
-                    )
-                    failures.append(failure)
-                    run_records.append(failure)
-                    progress.emit(
-                        "case_failed",
-                        case_id=str(case["case_id"]),
-                        completed_count=completed,
-                        case_count=len(cases),
-                        error_type=failure["error_type"],
-                    )
-                    if not args.continue_on_error:
-                        for pending in future_to_case:
-                            pending.cancel()
-                        break
-                else:
-                    run_records.append(record)
-                    progress.emit(
-                        "case_completed",
-                        case_id=str(case["case_id"]),
-                        completed_count=completed,
-                        case_count=len(cases),
-                        status=record["status"],
-                        elapsed_seconds=round(
-                            float(record.get("elapsed_seconds") or 0.0),
-                            3,
-                        ),
-                        api_usage=record.get("api_usage"),
-                    )
+        parallel_records, parallel_failures = run_cases_parallel(
+            cases=cases,
+            case_kwargs=case_kwargs,
+            output_root=output_root,
+            progress=progress,
+            max_workers=args.max_workers,
+            continue_on_error=args.continue_on_error,
+        )
+        run_records.extend(parallel_records)
+        failures.extend(parallel_failures)
 
     ordered_records = sorted(
         run_records,
@@ -746,6 +805,27 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         choices=ANNOTATED_L3_METRICS,
         default=[],
         help="Repeat to select L3 metrics. Omit to run all five annotations.",
+    )
+    parser.add_argument(
+        "--functional-group-local-granularity",
+        choices=("per_check", "batched"),
+        default="per_check",
+        help=(
+            "Functional group-local scheduling: per_check gives every typed "
+            "check an independent Judge episode with the same base group "
+            "evidence; batched judges all checks in one group call."
+        ),
+    )
+    parser.add_argument(
+        "--functional-group-local-evidence-policy",
+        choices=("isolated_episode", "shared_group_bank"),
+        default="isolated_episode",
+        help=(
+            "Functional per-check evidence sharing: isolated_episode keeps "
+            "camera follow-ups private to each check; shared_group_bank "
+            "reuses relevant group evidence through a bounded six-image "
+            "active window."
+        ),
     )
     parser.add_argument("--max-cases", type=positive_int, default=None)
     parser.add_argument("--max-workers", type=positive_int, default=1)
@@ -1031,6 +1111,8 @@ def build_experiment_plan(
     grouping_config_path: Path,
     route: dict[str, Any],
     metrics: tuple[str, ...],
+    functional_group_local_granularity: str,
+    functional_group_local_evidence_policy: str = "isolated_episode",
     cases: list[dict[str, Any]],
     renderer_config: dict[str, Any],
     control: dict[str, Any],
@@ -1073,6 +1155,13 @@ def build_experiment_plan(
                 "enabled": True,
                 "metrics": list(metrics),
                 "scope": "metric_policy_then_scene_level_aggregation",
+                "functional_group_local_granularity": (
+                    functional_group_local_granularity
+                ),
+                "functional_group_local_evidence_policy": (
+                    functional_group_local_evidence_policy
+                ),
+                "functional_group_local_active_window_max_images": 6,
                 "functional_global_probe_policy": {
                     "enabled_when_metric_selected": (
                         "functional_consistency" in metrics
@@ -1116,7 +1205,7 @@ def build_experiment_plan(
                         "functional_correspondence",
                         "approach_clearance",
                     ],
-                    "max_probe_units": 6,
+                    "max_probe_units": FUNCTIONAL_PROBE_DEFAULT_UNITS,
                     "candidate_count_by_probe_kind": {
                         "functional_frontage": 4,
                         "functional_correspondence": 4,
@@ -1188,6 +1277,8 @@ def run_case(
     renderer_config: dict[str, Any],
     control_config: dict[str, Any],
     resume: bool,
+    functional_group_local_granularity: str = "per_check",
+    functional_group_local_evidence_policy: str = "isolated_episode",
     export_audit_graphs: bool = False,
     progress: ProgressReporter | None = None,
 ) -> dict[str, Any]:
@@ -1209,6 +1300,12 @@ def run_case(
         paths=paths,
         route=route,
         metrics=metrics,
+        functional_group_local_granularity=(
+            functional_group_local_granularity
+        ),
+        functional_group_local_evidence_policy=(
+            functional_group_local_evidence_policy
+        ),
         grouping_config=grouping_config,
         renderer_config=renderer_config,
         control_config=control_config,
@@ -1254,6 +1351,19 @@ def run_case(
                 "l3_status": existing.get("l3_status"),
                 "final_decision_status": existing.get(
                     "final_decision_status"
+                ),
+                "l1_decision_status": existing.get(
+                    "l1_decision_status",
+                    existing.get("final_decision_status"),
+                ),
+                "l3_decision_status": existing.get(
+                    "l3_decision_status",
+                    "resolved"
+                    if existing.get("l3_status") == "evaluated"
+                    else None,
+                ),
+                "l3_unresolved_metrics": list(
+                    existing.get("l3_unresolved_metrics") or []
                 ),
                 "l1_engineering_failure": bool(
                     existing.get("l1_engineering_failure")
@@ -1473,6 +1583,7 @@ def run_case(
             vlm_judge=raw_judge,
             grouping_model=grouping_model,
             evaluation_profile=promptless_l1_l3_profile(),
+            scoring_profile_id=INTRINSIC_VALIDITY_PROFILE_ID,
             p0b_official_mode=L1_BINARY_FAILURE_POLICY["p0b_official_mode"],
             p0b_local_view_provider=l1_provider,
             l3_initial_evidence_provider=l3_provider,
@@ -1485,7 +1596,15 @@ def run_case(
             vlm_camera_selector=vlm_selector,
             evidence_renderer=evidence_renderer,
             candidate_preview_renderer=preview_renderer,
-            scene_quality_config=scene_quality_config(metrics),
+            scene_quality_config=scene_quality_config(
+                metrics,
+                functional_group_local_granularity=(
+                    functional_group_local_granularity
+                ),
+                functional_group_local_evidence_policy=(
+                    functional_group_local_evidence_policy
+                ),
+            ),
             asset_policy=camera_cal_asset_policy(),
             specification_contract=None,
             authorized_deviations=[],
@@ -1523,16 +1642,36 @@ def run_case(
     )
     l1_failures = collect_l1_engineering_failures(l1_report)
     schema_validation = binary_schema_validation_summary(l1_report)
-    final_decision_status = (
+    l1_decision_status = (
         "resolved"
         if l1_report.get("status") == "evaluated" and not l1_failures
+        else "infrastructure_failure"
+        if l1_failures
+        else "unresolved"
+    )
+    l3_resolution = l3_resolution_audit(
+        l3_report,
+        metrics=metrics,
+    )
+    l3_decision_status = str(l3_resolution["status"])
+    final_decision_status = (
+        "resolved"
+        if l1_decision_status == "resolved"
+        and l3_decision_status == "resolved"
+        else "infrastructure_failure"
+        if "infrastructure_failure"
+        in {l1_decision_status, l3_decision_status}
         else "unresolved"
     )
     diagnostic_reason = (
         "l1_engineering_failure"
         if l1_failures
+        else "l3_infrastructure_failure"
+        if l3_decision_status == "infrastructure_failure"
         else "l1_unresolved"
-        if final_decision_status == "unresolved"
+        if l1_decision_status == "unresolved"
+        else "l3_unresolved"
+        if l3_decision_status == "unresolved"
         else None
     )
     comparison = build_scene_comparison(
@@ -1542,12 +1681,14 @@ def run_case(
         metrics=metrics,
     )
     comparison["diagnostic_only"] = (
-        final_decision_status == "unresolved"
+        final_decision_status != "resolved"
     )
     comparison["diagnostic_reason"] = diagnostic_reason
     l1_diagnostics = {
         "policy": deepcopy(L1_BINARY_FAILURE_POLICY),
-        "final_decision_status": final_decision_status,
+        "final_decision_status": l1_decision_status,
+        "l1_decision_status": l1_decision_status,
+        "combined_final_decision_status": final_decision_status,
         "engineering_failure_count": len(l1_failures),
         "engineering_failures": l1_failures,
         "response_schema_validation": schema_validation,
@@ -1555,9 +1696,12 @@ def run_case(
     }
     report["runner_outcome"] = {
         "final_decision_status": final_decision_status,
+        "l1_decision_status": l1_decision_status,
+        "l3_decision_status": l3_decision_status,
+        "l3_resolution_audit": deepcopy(l3_resolution),
         "l1_engineering_failure": bool(l1_failures),
         "l3_results_are_diagnostic_only": (
-            final_decision_status == "unresolved"
+            final_decision_status != "resolved"
         ),
         "l1_diagnostics_path": str(
             (case_out / "l1_diagnostics.json").resolve()
@@ -1588,9 +1732,27 @@ def run_case(
         l1_status=l1_report.get("status"),
         l3_status=l3_report.get("status"),
         final_decision_status=final_decision_status,
+        l1_decision_status=l1_decision_status,
+        l3_decision_status=l3_decision_status,
+        l3_unresolved_metrics=list(
+            l3_resolution.get("unresolved_metrics") or []
+        ),
+        l3_infrastructure_failure_metrics=list(
+            l3_resolution.get("infrastructure_failure_metrics") or []
+        ),
         l1_engineering_failure=bool(l1_failures),
         l1_engineering_failure_count=len(l1_failures),
         binary_response_schema_validation=schema_validation,
+        scoring_profile=deepcopy(report.get("scoring_profile")),
+        canonical_object_denominator=deepcopy(
+            report.get("canonical_object_denominator")
+        ),
+        benchmark_score=report.get("benchmark_score"),
+        benchmark_score_100=report.get("benchmark_score_100"),
+        benchmark_score_status=report.get("benchmark_score_status"),
+        scoring_reliability=deepcopy(
+            report.get("scoring_reliability")
+        ),
         api_usage=api_usage,
         audit_graph_export=audit_graph_export,
         paths={
@@ -1630,6 +1792,14 @@ def run_case(
         "l1_status": l1_report.get("status"),
         "l3_status": l3_report.get("status"),
         "final_decision_status": final_decision_status,
+        "l1_decision_status": l1_decision_status,
+        "l3_decision_status": l3_decision_status,
+        "l3_unresolved_metrics": list(
+            l3_resolution.get("unresolved_metrics") or []
+        ),
+        "l3_infrastructure_failure_metrics": list(
+            l3_resolution.get("infrastructure_failure_metrics") or []
+        ),
         "l1_engineering_failure": bool(l1_failures),
         "l1_engineering_failure_count": len(l1_failures),
         "binary_response_schema_validation": schema_validation,
@@ -1769,9 +1939,9 @@ def promptless_scene_request(
 def promptless_l1_l3_profile() -> dict[str, Any]:
     profile = deepcopy(DEFAULT_EVALUATION_PROFILE)
     profile["layer_weights"] = {
-        L1: 7.0 / 15.0,
+        L1: 0.30,
         L2: 0.0,
-        L3: 8.0 / 15.0,
+        L3: 0.70,
         L4: 0.0,
     }
     profile[L2]["enabled"] = False
@@ -1781,14 +1951,60 @@ def promptless_l1_l3_profile() -> dict[str, Any]:
     return profile
 
 
-def scene_quality_config(metrics: tuple[str, ...]) -> dict[str, Any]:
+def scene_quality_config(
+    metrics: tuple[str, ...],
+    *,
+    functional_group_local_granularity: str = "per_check",
+    functional_group_local_evidence_policy: str = "isolated_episode",
+) -> dict[str, Any]:
+    if functional_group_local_granularity not in {
+        "per_check",
+        "batched",
+    }:
+        raise ValueError(
+            "functional_group_local_granularity must be exactly "
+            "'per_check' or 'batched'"
+        )
+    if functional_group_local_evidence_policy not in {
+        "isolated_episode",
+        "shared_group_bank",
+    }:
+        raise ValueError(
+            "functional_group_local_evidence_policy must be exactly "
+            "'isolated_episode' or 'shared_group_bank'"
+        )
+    if (
+        functional_group_local_evidence_policy == "shared_group_bank"
+        and functional_group_local_granularity != "per_check"
+    ):
+        raise ValueError(
+            "shared_group_bank requires "
+            "functional_group_local_granularity='per_check'"
+        )
     selected = set(metrics)
     return {
         "enabled": True,
         "metrics": {
             metric: {
                 "enabled": metric in selected,
-                "weight": 1.0 if metric in selected else 0.0,
+                "weight": (
+                    L3_METRIC_WEIGHTS[metric]
+                    if metric in selected
+                    else 0.0
+                ),
+                **(
+                    {
+                        "group_local_check_granularity": (
+                            functional_group_local_granularity
+                        ),
+                        "group_local_evidence_policy": (
+                            functional_group_local_evidence_policy
+                        ),
+                        "group_local_active_window_max_images": 6,
+                    }
+                    if metric == "functional_consistency"
+                    else {}
+                ),
             }
             for metric in ANNOTATED_L3_METRICS
         },
@@ -1860,6 +2076,8 @@ def case_input_fingerprint(
     paths: dict[str, Path],
     route: dict[str, Any],
     metrics: tuple[str, ...],
+    functional_group_local_granularity: str,
+    functional_group_local_evidence_policy: str = "isolated_episode",
     grouping_config: dict[str, Any],
     renderer_config: dict[str, Any],
     control_config: dict[str, Any],
@@ -1902,7 +2120,15 @@ def case_input_fingerprint(
                 for relative in FUNCTIONAL_PROBE_IMPLEMENTATION_FILES
             },
             "profile": promptless_l1_l3_profile(),
-            "scene_quality_config": scene_quality_config(metrics),
+            "scene_quality_config": scene_quality_config(
+                metrics,
+                functional_group_local_granularity=(
+                    functional_group_local_granularity
+                ),
+                functional_group_local_evidence_policy=(
+                    functional_group_local_evidence_policy
+                ),
+            ),
             "asset_policy": camera_cal_asset_policy(),
             "l1_binary_failure_policy": deepcopy(
                 L1_BINARY_FAILURE_POLICY
@@ -2022,8 +2248,27 @@ def build_scene_comparison(
 
 
 def metric_prediction(report: dict[str, Any]) -> str:
-    if report.get("status") != "evaluated":
+    status = str(report.get("status") or "")
+    if (
+        status in {"failed", "error", "infrastructure_failure"}
+        or report.get("terminal_state") == "infrastructure_failure"
+    ):
+        return "infrastructure_failure"
+    if status != "evaluated":
         return "unresolved"
+    judgement = report.get("judgement")
+    verdict = (
+        judgement.get("verdict")
+        if isinstance(judgement, dict)
+        else None
+    )
+    if verdict in {"valid", "invalid"}:
+        return str(verdict)
+    verdict_score = report.get("verdict_score")
+    if verdict_score == 1.0:
+        return "valid"
+    if verdict_score == 0.0:
+        return "invalid"
     score = report.get("score")
     if score == 1.0:
         return "valid"
@@ -2253,6 +2498,44 @@ def binary_schema_validation_summary(
     }
 
 
+def record_case_cancellation(
+    *,
+    case: dict[str, Any],
+    output_root: Path,
+) -> dict[str, Any]:
+    """Persist an explicit terminal record for a fail-fast cancellation."""
+
+    case_id = str(case["case_id"])
+    case_out = output_root / "cases" / case_id
+    case_out.mkdir(parents=True, exist_ok=True)
+    cancelled_at = utc_now()
+    record = {
+        "schema_version": CASE_SCHEMA_VERSION,
+        "case_id": case_id,
+        "status": "cancelled",
+        "reason": "cancelled_after_prior_case_failure",
+        "cancelled_at": cancelled_at,
+        "final_decision_status": "not_run",
+        "api_usage": api_usage_summary([]),
+    }
+    atomic_write_json(case_out / "cancellation.json", record)
+    manifest_path = case_out / "case_run_manifest.json"
+    if manifest_path.is_file():
+        manifest = read_json(manifest_path)
+        manifest.update(
+            status="cancelled",
+            completed_at=cancelled_at,
+            final_decision_status="not_run",
+            reason=record["reason"],
+            api_usage=deepcopy(record["api_usage"]),
+        )
+    else:
+        manifest = deepcopy(record)
+        manifest["completed_at"] = cancelled_at
+    atomic_write_json(manifest_path, manifest)
+    return record
+
+
 def record_case_failure(
     *,
     case: dict[str, Any],
@@ -2298,8 +2581,104 @@ def record_case_failure(
         )
         if schema_audit is not None:
             manifest["binary_response_schema_validation"] = schema_audit
-        atomic_write_json(manifest_path, manifest)
+    else:
+        manifest = deepcopy(failure)
+        manifest.update(
+            completed_at=failure["failed_at"],
+            final_decision_status="unresolved",
+        )
+        if schema_audit is not None:
+            manifest["binary_response_schema_validation"] = schema_audit
+    atomic_write_json(manifest_path, manifest)
     return failure
+
+
+def l3_resolution_audit(
+    scene_quality_report: dict[str, Any],
+    *,
+    metrics: tuple[str, ...],
+) -> dict[str, Any]:
+    """Resolve runner status from explicit L3 metric and coverage state."""
+
+    report_metrics = scene_quality_report.get("metrics")
+    report_metrics = (
+        report_metrics if isinstance(report_metrics, dict) else {}
+    )
+    unresolved: list[str] = []
+    infrastructure_failures: list[str] = []
+    reasons: dict[str, list[str]] = {}
+    for metric in metrics:
+        item = report_metrics.get(metric)
+        metric_reasons: list[str] = []
+        if not isinstance(item, dict):
+            metric_reasons.append("metric_report_missing")
+            infrastructure_failures.append(metric)
+        else:
+            item_status = str(item.get("status") or "")
+            terminal_state = str(item.get("terminal_state") or "")
+            if item_status != "evaluated":
+                metric_reasons.append(
+                    f"metric_status:{item_status or 'missing'}"
+                )
+            if (
+                item_status in {"failed", "error"}
+                or terminal_state == "infrastructure_failure"
+                or bool(item.get("infrastructure_failures"))
+            ):
+                infrastructure_failures.append(metric)
+            for field in (
+                "coverage",
+                "functional_check_coverage",
+                "placement_check_coverage",
+            ):
+                coverage = item.get(field)
+                if (
+                    isinstance(coverage, dict)
+                    and coverage.get("complete") is False
+                ):
+                    metric_reasons.append(f"{field}:incomplete")
+                    infrastructure_failures.append(metric)
+            for field in (
+                "functional_check_phase",
+                "placement_check_phase",
+                "group_phase",
+                "cross_group_relation_phase",
+            ):
+                phase = item.get(field)
+                if (
+                    isinstance(phase, dict)
+                    and str(phase.get("status") or "")
+                    in {
+                        "unresolved",
+                        "terminal_contract_failure",
+                        "infrastructure_failure",
+                    }
+                ):
+                    phase_status = str(phase.get("status") or "")
+                    metric_reasons.append(f"{field}:{phase_status}")
+                    if phase_status in {
+                        "terminal_contract_failure",
+                        "infrastructure_failure",
+                    }:
+                        infrastructure_failures.append(metric)
+        if metric_reasons:
+            if metric not in infrastructure_failures:
+                unresolved.append(metric)
+            reasons[metric] = list(dict.fromkeys(metric_reasons))
+    infrastructure_failures = list(dict.fromkeys(infrastructure_failures))
+    return {
+        "status": (
+            "infrastructure_failure"
+            if infrastructure_failures
+            else "unresolved"
+            if unresolved
+            else "resolved"
+        ),
+        "unresolved_metrics": unresolved,
+        "infrastructure_failure_metrics": infrastructure_failures,
+        "reasons_by_metric": reasons,
+        "policy": "terminal_binary_or_explicit_infrastructure_failure_v2",
+    }
 
 
 def build_summary(
@@ -2313,8 +2692,12 @@ def build_summary(
         for metric in metrics
     }
     successful = 0
+    cancelled = 0
     grouping_failures = 0
     final_unresolved = 0
+    final_infrastructure_failure = 0
+    l3_unresolved_cases = 0
+    l3_infrastructure_failure_cases = 0
     l1_engineering_failure_cases = 0
     binary_logical_judge_calls = 0
     binary_response_attempts = 0
@@ -2331,6 +2714,8 @@ def build_summary(
             all_api_call_records.extend(
                 read_api_call_records(Path(api_calls_path))
             )
+        if record.get("status") == "cancelled":
+            cancelled += 1
         if record.get("status") not in {"complete", "resumed"}:
             for summary in metric_summaries.values():
                 summary["case_failures"] += 1
@@ -2338,6 +2723,12 @@ def build_summary(
         successful += 1
         if record.get("final_decision_status") == "unresolved":
             final_unresolved += 1
+        if record.get("final_decision_status") == "infrastructure_failure":
+            final_infrastructure_failure += 1
+        if record.get("l3_decision_status") == "unresolved":
+            l3_unresolved_cases += 1
+        if record.get("l3_decision_status") == "infrastructure_failure":
+            l3_infrastructure_failure_cases += 1
         if record.get("l1_engineering_failure") is True:
             l1_engineering_failure_cases += 1
         binary_schema = record.get(
@@ -2387,7 +2778,7 @@ def build_summary(
             model = item.get("model")
             model = model if isinstance(model, dict) else {}
             summary = metric_summaries[metric]
-            if record.get("final_decision_status") == "unresolved":
+            if record.get("final_decision_status") != "resolved":
                 summary["diagnostic_only_cases"] += 1
             expected = human.get("expected")
             predicted = model.get("prediction")
@@ -2396,6 +2787,8 @@ def build_summary(
             if predicted in {"valid", "invalid"}:
                 summary["predicted_distribution"][predicted] += 1
                 summary["evaluated"] += 1
+            elif predicted == "infrastructure_failure":
+                summary["infrastructure_failure"] += 1
             else:
                 summary["unresolved"] += 1
             if human.get("unclear") is True:
@@ -2525,9 +2918,17 @@ def build_summary(
         "totals": {
             "cases": len(case_records),
             "successful": successful,
-            "failed": len(case_records) - successful,
+            "failed": len(case_records) - successful - cancelled,
+            "cancelled": cancelled,
             "grouping_failures": grouping_failures,
             "final_unresolved": final_unresolved,
+            "final_infrastructure_failure": (
+                final_infrastructure_failure
+            ),
+            "l3_unresolved_cases": l3_unresolved_cases,
+            "l3_infrastructure_failure_cases": (
+                l3_infrastructure_failure_cases
+            ),
             "l1_engineering_failure_cases": (
                 l1_engineering_failure_cases
             ),
@@ -2580,6 +2981,7 @@ def empty_metric_summary(*, total: int) -> dict[str, Any]:
         "total": total,
         "evaluated": 0,
         "unresolved": 0,
+        "infrastructure_failure": 0,
         "excluded_unclear": 0,
         "correct": 0,
         "incorrect": 0,

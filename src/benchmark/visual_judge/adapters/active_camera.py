@@ -485,6 +485,8 @@ def _base_payload(
         "focus_center",
         "target_extent",
         "grouping_role",
+        "functional_probe",
+        "functional_repair",
     ):
         if field in request.context:
             payload[field] = deepcopy(request.context[field])

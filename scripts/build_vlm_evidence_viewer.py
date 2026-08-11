@@ -66,6 +66,25 @@ OBJECT_LEVEL_ATTRIBUTION_METRICS = (
     "semantic_placement_consistency",
 )
 
+SCORING_METRIC_ORDER = (
+    ("L1", "collision", "Collision"),
+    ("L1", "support", "Support"),
+    ("L1", "oob", "Out of bounds"),
+    ("L3", "scale_consistency", "Scale"),
+    ("L3", "style_consistency", "Style"),
+    (
+        "L3",
+        "object_pairing_consistency",
+        "Object pairing",
+    ),
+    ("L3", "functional_consistency", "Function"),
+    (
+        "L3",
+        "semantic_placement_consistency",
+        "Placement",
+    ),
+)
+
 
 def read_json(path: Path) -> dict[str, Any]:
     value = json.loads(path.read_text(encoding="utf-8"))
@@ -100,6 +119,584 @@ def optional_jsonl(path: Path) -> list[dict[str, Any]]:
             )
         records.append(value)
     return records
+
+
+def _numeric(value: Any) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
+
+
+def _percent_text(value: Any, *, digits: int = 1) -> str:
+    numeric = _numeric(value)
+    return f"{numeric * 100:.{digits}f}" if numeric is not None else "—"
+
+
+def _scoring_status_class(status: Any) -> str:
+    token = str(status or "unknown").strip().lower()
+    safe = "".join(
+        character if character.isalnum() else "-" for character in token
+    ).strip("-")
+    return safe or "unknown"
+
+
+def case_scoring_summary(
+    *,
+    case_id: str,
+    case_manifest: dict[str, Any],
+    l1_report: dict[str, Any],
+    l3_report: dict[str, Any],
+    l1_diagnostics: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Extract the persisted scoring contract without re-scoring a case."""
+
+    profile = case_manifest.get("scoring_profile")
+    profile = profile if isinstance(profile, dict) else {}
+    layer_weights = profile.get("layer_weights")
+    layer_weights = layer_weights if isinstance(layer_weights, dict) else {}
+    l1_layer_weight = _numeric(
+        layer_weights.get("l1_physical_plausibility")
+    )
+    l3_layer_weight = _numeric(layer_weights.get("l3_scene_quality"))
+    l1_layer_weight = 0.0 if l1_layer_weight is None else l1_layer_weight
+    l3_layer_weight = 0.0 if l3_layer_weight is None else l3_layer_weight
+
+    denominator = case_manifest.get("canonical_object_denominator")
+    denominator = denominator if isinstance(denominator, dict) else {}
+    reliability = case_manifest.get("scoring_reliability")
+    reliability = reliability if isinstance(reliability, dict) else {}
+
+    l1_metrics = l1_report.get("metrics")
+    l1_metrics = l1_metrics if isinstance(l1_metrics, dict) else {}
+    l3_metrics = l3_report.get("metrics")
+    l3_metrics = l3_metrics if isinstance(l3_metrics, dict) else {}
+    l1_scoring = l1_report.get("scoring")
+    l1_scoring = l1_scoring if isinstance(l1_scoring, dict) else {}
+    l1_backend = l1_report.get("backend_report")
+    l1_backend = l1_backend if isinstance(l1_backend, dict) else {}
+    if not l1_scoring:
+        l1_scoring = l1_backend.get("scoring")
+        l1_scoring = l1_scoring if isinstance(l1_scoring, dict) else {}
+    l3_scoring = l3_report.get("scoring")
+    l3_scoring = l3_scoring if isinstance(l3_scoring, dict) else {}
+    l1_metric_weights = l1_scoring.get("metric_weights")
+    l1_metric_weights = (
+        l1_metric_weights if isinstance(l1_metric_weights, dict) else {}
+    )
+    l3_metric_weights = l3_scoring.get("metric_weights")
+    l3_metric_weights = (
+        l3_metric_weights if isinstance(l3_metric_weights, dict) else {}
+    )
+
+    metric_records: list[dict[str, Any]] = []
+    for layer, metric, label in SCORING_METRIC_ORDER:
+        source = l1_metrics if layer == "L1" else l3_metrics
+        metric_report = source.get(metric)
+        metric_report = (
+            metric_report if isinstance(metric_report, dict) else {}
+        )
+        scoring = metric_report.get("scoring")
+        scoring = scoring if isinstance(scoring, dict) else {}
+        local_weight = _numeric(
+            (
+                l1_metric_weights.get(metric)
+                if layer == "L1"
+                else l3_metric_weights.get(metric)
+            )
+        )
+        if local_weight is None:
+            local_weight = _numeric(scoring.get("nominal_metric_weight"))
+        if local_weight is None and layer == "L3":
+            local_weight = _numeric(metric_report.get("weight"))
+        if local_weight is None and layer == "L1":
+            local_weight = 1.0 / 3.0
+        local_weight = 0.0 if local_weight is None else local_weight
+        layer_weight = l1_layer_weight if layer == "L1" else l3_layer_weight
+        score = _numeric(metric_report.get("score"))
+        events = scoring.get("events")
+        events = (
+            [deepcopy(event) for event in events if isinstance(event, dict)]
+            if isinstance(events, list)
+            else []
+        )
+        judgement = metric_report.get("judgement")
+        judgement = judgement if isinstance(judgement, dict) else {}
+        metric_records.append(
+            {
+                "layer": layer,
+                "metric": metric,
+                "label": label,
+                "status": str(metric_report.get("status") or "not_recorded"),
+                "verdict": judgement.get("verdict"),
+                "reason": str(
+                    metric_report.get("reason")
+                    or judgement.get("reason")
+                    or ""
+                ),
+                "score": score,
+                "local_weight": local_weight,
+                "overall_weight": layer_weight * local_weight,
+                "weighted_points": (
+                    score * layer_weight * local_weight * 100.0
+                    if score is not None
+                    else None
+                ),
+                "coefficient": _numeric(scoring.get("coefficient_n_m")),
+                "burden": _numeric(scoring.get("burden_total_b_m")),
+                "p_max": _numeric(scoring.get("p_max")),
+                "deduction": _numeric(scoring.get("metric_deduction")),
+                "effective_factor": _numeric(
+                    scoring.get("effective_local_factor_w_m_n_m")
+                ),
+                "ledger_available": bool(scoring),
+                "event_count": int(scoring.get("event_count") or 0),
+                "events": events,
+            }
+        )
+
+    benchmark_score = _numeric(case_manifest.get("benchmark_score"))
+    benchmark_score_100 = _numeric(
+        case_manifest.get("benchmark_score_100")
+    )
+    if benchmark_score_100 is None and benchmark_score is not None:
+        benchmark_score_100 = benchmark_score * 100.0
+    benchmark_status = str(
+        case_manifest.get("benchmark_score_status") or ""
+    ).strip()
+    if not benchmark_status:
+        benchmark_status = (
+            "complete"
+            if benchmark_score_100 is not None
+            else "infrastructure_failure"
+            if (
+                str(case_manifest.get("final_decision_status"))
+                == "infrastructure_failure"
+                or reliability.get("terminal_state")
+                == "infrastructure_failure"
+            )
+            else "insufficient_metric_coverage"
+            if (
+                str(case_manifest.get("final_decision_status"))
+                == "unresolved"
+                or reliability.get("terminal_state") == "unresolved"
+            )
+            else "not_published"
+        )
+
+    l1_score = _numeric(l1_report.get("score"))
+    l1_partial = _numeric(l1_report.get("partial_score"))
+    l3_score = _numeric(l3_report.get("score"))
+    l3_partial = _numeric(l3_report.get("resolved_score"))
+    l3_coverage = l3_report.get("coverage")
+    l3_coverage = l3_coverage if isinstance(l3_coverage, dict) else {}
+    l1_diagnostics = (
+        l1_diagnostics if isinstance(l1_diagnostics, dict) else {}
+    )
+    engineering_failures = l1_diagnostics.get("engineering_failures")
+    engineering_failures = (
+        [
+            deepcopy(failure)
+            for failure in engineering_failures
+            if isinstance(failure, dict)
+        ]
+        if isinstance(engineering_failures, list)
+        else []
+    )
+    unique_failure_keys: set[tuple[str, str]] = set()
+    unique_engineering_failures: list[dict[str, Any]] = []
+    for failure in engineering_failures:
+        key = (
+            str(failure.get("metric") or "unknown"),
+            str(failure.get("error") or failure.get("route") or "unknown"),
+        )
+        if key in unique_failure_keys:
+            continue
+        unique_failure_keys.add(key)
+        unique_engineering_failures.append(failure)
+
+    return {
+        "case_id": case_id,
+        "profile_id": str(
+            profile.get("scoring_profile_id") or "not persisted"
+        ),
+        "spec_version": str(
+            profile.get("scoring_spec_version") or "not persisted"
+        ),
+        "layer_weights": deepcopy(layer_weights),
+        "n_scene": denominator.get("n_scene"),
+        "object_ids": list(denominator.get("ordered_object_ids") or []),
+        "combined_score_100": benchmark_score_100,
+        "combined_status": benchmark_status,
+        "final_decision_status": str(
+            case_manifest.get("final_decision_status") or "unknown"
+        ),
+        "layers": [
+            {
+                "layer": "L1",
+                "label": "Physical plausibility",
+                "status": str(l1_report.get("status") or "not_recorded"),
+                "score": l1_score,
+                "partial_score": l1_partial,
+                "weight": l1_layer_weight,
+                "coverage": None,
+            },
+            {
+                "layer": "L3",
+                "label": "Implicit scene validity",
+                "status": str(l3_report.get("status") or "not_recorded"),
+                "score": l3_score,
+                "partial_score": l3_partial,
+                "weight": l3_layer_weight,
+                "coverage": deepcopy(l3_coverage),
+            },
+        ],
+        "metrics": metric_records,
+        "reliability": deepcopy(reliability),
+        "engineering_failure_record_count": len(engineering_failures),
+        "engineering_failures": unique_engineering_failures,
+    }
+
+
+def _render_scoring_events(events: list[dict[str, Any]]) -> str:
+    if not events:
+        return '<p class="score-no-events">No scored defect event.</p>'
+    rows: list[str] = []
+    for event in events:
+        objects = event.get("scoring_target_ids")
+        if not isinstance(objects, list) or not objects:
+            objects = event.get("affected_object_ids")
+        objects = objects if isinstance(objects, list) else []
+        severity = event.get("severity")
+        magnitude = _numeric(event.get("magnitude"))
+        severity_text = (
+            str(severity)
+            if severity not in (None, "")
+            else f"magnitude {magnitude:.3f}"
+            if magnitude is not None
+            else "magnitude not persisted"
+        )
+        burden = _numeric(event.get("burden"))
+        burden_text = f"{burden:.3f}" if burden is not None else "—"
+        rows.append(
+            "<li>"
+            f"<strong>{html.escape(str(event.get('category') or 'uncategorized'))}</strong>"
+            f"<span>{html.escape(severity_text)}</span>"
+            f"<span>burden {burden_text}</span>"
+        )
+        rows[-1] += (
+            f"<code>{html.escape(', '.join(str(value) for value in objects) or 'no target')}</code>"
+            "</li>"
+        )
+    return f'<ul class="score-event-list">{"".join(rows)}</ul>'
+
+
+def render_case_scoring_dashboard(summary: dict[str, Any]) -> str:
+    combined = _numeric(summary.get("combined_score_100"))
+    combined_text = f"{combined:.1f}" if combined is not None else "—"
+    combined_status = str(summary.get("combined_status") or "unknown")
+    reliability = summary.get("reliability")
+    reliability = reliability if isinstance(reliability, dict) else {}
+    unresolved = reliability.get("unresolved_metric_ids")
+    unresolved = unresolved if isinstance(unresolved, list) else []
+    infra = reliability.get("infrastructure_failures")
+    infra = infra if isinstance(infra, list) else []
+    engineering_failures = summary.get("engineering_failures")
+    engineering_failures = (
+        engineering_failures
+        if isinstance(engineering_failures, list)
+        else []
+    )
+    engineering_failure_records = int(
+        summary.get("engineering_failure_record_count") or 0
+    )
+    has_infrastructure_failure = bool(
+        combined_status == "infrastructure_failure"
+        or reliability.get("terminal_state") == "infrastructure_failure"
+        or summary.get("final_decision_status")
+        == "infrastructure_failure"
+        or infra
+        or engineering_failures
+    )
+
+    layer_cards: list[str] = []
+    for layer in summary.get("layers") or []:
+        score = _numeric(layer.get("score"))
+        partial = _numeric(layer.get("partial_score"))
+        score_text = f"{score * 100:.1f}" if score is not None else "—"
+        qualifier = "official layer score"
+        if score is None and partial is not None:
+            score_text = f"{partial * 100:.1f}"
+            qualifier = "partial only"
+        coverage = layer.get("coverage")
+        coverage = coverage if isinstance(coverage, dict) else {}
+        coverage_text = ""
+        if coverage:
+            coverage_text = (
+                f" · {int(coverage.get('resolved_count') or 0)}/"
+                f"{int(coverage.get('eligible_count') or 0)} metrics resolved"
+            )
+        layer_cards.append(
+            f"""
+            <article class="layer-score-card">
+              <div>
+                <span class="score-layer-label">{html.escape(str(layer.get('layer')))}</span>
+                <strong>{html.escape(str(layer.get('label')))}</strong>
+              </div>
+              <div class="layer-score-value">{score_text}</div>
+              <p>{html.escape(qualifier)} · weight {_percent_text(layer.get('weight'))}%{html.escape(coverage_text)}</p>
+              <span class="score-status score-status-{_scoring_status_class(layer.get('status'))}">{html.escape(str(layer.get('status')))}</span>
+            </article>
+            """
+        )
+
+    metric_cards: list[str] = []
+    for metric in summary.get("metrics") or []:
+        score = _numeric(metric.get("score"))
+        score_text = f"{score * 100:.1f}" if score is not None else "—"
+        weighted = _numeric(metric.get("weighted_points"))
+        weighted_text = f"{weighted:.2f}" if weighted is not None else "—"
+        burden = _numeric(metric.get("burden"))
+        burden_text = f"{burden:.3f}" if burden is not None else "—"
+        deduction = _numeric(metric.get("deduction"))
+        deduction_text = (
+            f"{deduction * 100:.1f}%" if deduction is not None else "—"
+        )
+        p_max = _numeric(metric.get("p_max"))
+        p_max_text = f"{p_max:.3f}" if p_max is not None else "—"
+        coefficient = _numeric(metric.get("coefficient"))
+        coefficient_text = (
+            f"{coefficient:g}" if coefficient is not None else "—"
+        )
+        verdict = metric.get("verdict")
+        verdict_text = f" · {verdict}" if verdict else ""
+        ledger_html = (
+            _render_scoring_events(metric.get("events") or [])
+            if metric.get("ledger_available") is True
+            else (
+                '<p class="score-ledger-unavailable">'
+                "Scoring ledger unavailable because this metric did not "
+                "reach a scoreable terminal result."
+                + (
+                    " " + html.escape(str(metric.get("reason")))
+                    if metric.get("reason")
+                    else ""
+                )
+                + "</p>"
+            )
+        )
+        metric_cards.append(
+            f"""
+            <article class="metric-score-card metric-score-{_scoring_status_class(metric.get('status'))}">
+              <div class="metric-score-heading">
+                <div>
+                  <span>{html.escape(str(metric.get('layer')))}</span>
+                  <strong>{html.escape(str(metric.get('label')))}</strong>
+                </div>
+                <span class="score-status score-status-{_scoring_status_class(metric.get('status'))}">{html.escape(str(metric.get('status')))}{html.escape(verdict_text)}</span>
+              </div>
+              <div class="metric-score-value">{score_text}<small>/ 100</small></div>
+              <div class="metric-score-facts">
+                <span><strong>{_percent_text(metric.get('local_weight'))}%</strong> within layer</span>
+                <span><strong>{_percent_text(metric.get('overall_weight'))}%</strong> total weight</span>
+                <span><strong>{weighted_text}</strong> weighted points</span>
+                <span><strong>{burden_text}</strong> object burden</span>
+                <span><strong>{p_max_text}</strong> worst event</span>
+                <span><strong>{deduction_text}</strong> deduction</span>
+                <span><strong>{coefficient_text}×</strong> coefficient</span>
+                <span><strong>{int(metric.get('event_count') or 0)}</strong> scored event(s)</span>
+              </div>
+              <details class="metric-score-events">
+                <summary>Scoring ledger</summary>
+                {ledger_html}
+              </details>
+            </article>
+            """
+        )
+
+    unresolved_html = "".join(
+        f"<li><code>{html.escape(str(value))}</code></li>"
+        for value in unresolved
+    ) or "<li>None</li>"
+    infrastructure_html = "".join(
+        "<li>"
+        f"<code>{html.escape(str(failure.get('metric_id') or 'unknown metric'))}</code>"
+        + (
+            f" · {html.escape(str(failure.get('reason')))}"
+            if failure.get("reason")
+            else ""
+        )
+        + "</li>"
+        for failure in infra
+        if isinstance(failure, dict)
+    ) or "<li>None</li>"
+    objects = summary.get("object_ids") or []
+    object_html = " · ".join(html.escape(str(value)) for value in objects)
+    engineering_failure_html = "".join(
+        "<li>"
+        f"<strong>{html.escape(str(failure.get('metric') or 'unknown metric'))}</strong>"
+        f" · {html.escape(str(failure.get('route') or 'engineering failure'))}"
+        f"<code>{html.escape(str(failure.get('error') or 'No error detail persisted.'))}</code>"
+        "</li>"
+        for failure in engineering_failures
+    ) or "<li>None</li>"
+    combined_note = (
+        "All fixed-weight metric coverage is complete."
+        if combined is not None
+        else (
+            "No combined score was published because an evaluator, endpoint, "
+            "schema, renderer, or other infrastructure boundary failed. This "
+            "is not a scientific ambiguous verdict. Resolved metric scores "
+            "remain visible below; this UI does not renormalize them."
+            if has_infrastructure_failure
+            else
+            "The latest evaluator did not publish a combined score because "
+            "fixed profile coverage is incomplete. Resolved metric scores "
+            "remain visible below; this UI does not renormalize them."
+        )
+    )
+    return f"""
+      <section class="scoring-dashboard" aria-label="Canonical scoring">
+        <div class="scoring-dashboard-heading">
+          <div>
+            <div class="eyebrow">Latest scoring contract</div>
+            <h2>Metric scores and combined result</h2>
+            <p>{html.escape(str(summary.get('profile_id')))} · {html.escape(str(summary.get('spec_version')))}</p>
+          </div>
+          <div class="combined-score combined-score-{_scoring_status_class(combined_status)}">
+            <span>Combined / 100</span>
+            <strong>{combined_text}</strong>
+            <small>{html.escape(combined_status)}</small>
+          </div>
+        </div>
+        <p class="combined-score-note">{html.escape(combined_note)}</p>
+        <div class="layer-score-grid">{"".join(layer_cards)}</div>
+        <div class="metric-score-grid">{"".join(metric_cards)}</div>
+        <details class="scoring-audit">
+          <summary>Scoring coverage, reliability, and denominator</summary>
+          <div class="scoring-audit-grid">
+            <div>
+              <strong>Reliability</strong>
+              <span>{html.escape(str(reliability.get('terminal_state') or 'not persisted'))}</span>
+              <small>{int(reliability.get('judge_episode_count') or 0)} Judge episodes · {int(reliability.get('forced_binary_episode_count') or 0)} forced · {int(reliability.get('evidence_ambiguous_episode_count') or 0)} ambiguous · {len(infra)} scoring reliability failure(s) · {engineering_failure_records} runner engineering failure record(s)</small>
+            </div>
+            <div>
+              <strong>Frozen denominator</strong>
+              <span>N = {html.escape(str(summary.get('n_scene') or '—'))}</span>
+              <small>Shared canonical scene objects</small>
+            </div>
+            <div>
+              <strong>Final decision</strong>
+              <span>{html.escape(str(summary.get('final_decision_status')))}</span>
+              <small>No score is inferred from non-complete coverage.</small>
+            </div>
+          </div>
+          <div class="scoring-audit-details">
+            <div><strong>Scientific unresolved coverage</strong><ul>{unresolved_html}</ul></div>
+            <div><strong>Infrastructure failures</strong><ul>{infrastructure_html}</ul></div>
+            <div><strong>Canonical object IDs</strong><p>{object_html or 'Not persisted.'}</p></div>
+            <div class="scoring-engineering-failures"><strong>Runner engineering failures</strong><ul>{engineering_failure_html}</ul></div>
+          </div>
+        </details>
+      </section>
+    """
+
+
+def render_run_scoring_overview(
+    summaries: list[dict[str, Any]],
+) -> str:
+    if not summaries:
+        return ""
+    header = "".join(
+        f"<th>{html.escape(str(item.get('case_id')))}</th>"
+        for item in summaries
+    )
+
+    def score_cell(value: Any, status: Any) -> str:
+        numeric = _numeric(value)
+        text = f"{numeric:.1f}" if numeric is not None else "—"
+        return (
+            f'<td><strong>{text}</strong><small>{html.escape(str(status or "unknown"))}</small></td>'
+        )
+
+    combined_cells = "".join(
+        score_cell(item.get("combined_score_100"), item.get("combined_status"))
+        for item in summaries
+    )
+    rows = [
+        f'<tr class="score-matrix-combined"><th>Combined</th><td>100%</td>{combined_cells}</tr>'
+    ]
+    for layer_name in ("L1", "L3"):
+        layer_records = []
+        for item in summaries:
+            record = next(
+                (
+                    layer
+                    for layer in item.get("layers") or []
+                    if layer.get("layer") == layer_name
+                ),
+                {},
+            )
+            layer_records.append(record)
+        label = "L1 · Physical" if layer_name == "L1" else "L3 · Implicit validity"
+        weight = _numeric(layer_records[0].get("weight")) if layer_records else None
+        cells = "".join(
+            score_cell(
+                (
+                    _numeric(record.get("score")) * 100.0
+                    if _numeric(record.get("score")) is not None
+                    else None
+                ),
+                record.get("status"),
+            )
+            for record in layer_records
+        )
+        rows.append(
+            f"<tr><th>{html.escape(label)}</th><td>{_percent_text(weight)}%</td>{cells}</tr>"
+        )
+    for _layer, metric, label in SCORING_METRIC_ORDER:
+        records = []
+        for item in summaries:
+            record = next(
+                (
+                    value
+                    for value in item.get("metrics") or []
+                    if value.get("metric") == metric
+                ),
+                {},
+            )
+            records.append(record)
+        overall_weight = _numeric(records[0].get("overall_weight")) if records else None
+        cells = "".join(
+            score_cell(
+                (
+                    _numeric(record.get("score")) * 100.0
+                    if _numeric(record.get("score")) is not None
+                    else None
+                ),
+                record.get("status"),
+            )
+            for record in records
+        )
+        rows.append(
+            f"<tr><th>{html.escape(label)}</th><td>{_percent_text(overall_weight)}%</td>{cells}</tr>"
+        )
+    return f"""
+      <section class="run-score-overview">
+        <div class="run-score-overview-heading">
+          <div>
+            <div class="eyebrow">Run scoring matrix</div>
+            <h2>Scores reported by the latest evaluator</h2>
+          </div>
+          <p>Dash means no score was published. Fixed weights are never renormalized.</p>
+        </div>
+        <div class="score-matrix-scroll">
+          <table class="score-matrix">
+            <thead><tr><th>Metric</th><th>Total weight</th>{header}</tr></thead>
+            <tbody>{''.join(rows)}</tbody>
+          </table>
+        </div>
+      </section>
+    """
 
 
 def file_sha256(path: Path) -> str:
@@ -1871,6 +2468,58 @@ def l1_calls(report: dict[str, Any]) -> list[dict[str, Any]]:
     return calls
 
 
+def functional_group_evidence_window_details(
+    item: dict[str, Any],
+    control_audit: Any,
+) -> dict[str, Any] | None:
+    direct = item.get("functional_group_evidence_window_audit")
+    direct = deepcopy(direct) if isinstance(direct, dict) else {}
+    payload = (
+        control_audit.get("audit")
+        if isinstance(control_audit, dict)
+        and isinstance(control_audit.get("audit"), dict)
+        else control_audit
+        if isinstance(control_audit, dict)
+        else {}
+    )
+    controlled = payload.get("evidence_window")
+    controlled = (
+        deepcopy(controlled) if isinstance(controlled, dict) else {}
+    )
+    if not direct and not controlled:
+        return None
+    result = {**direct, **controlled}
+    events = controlled.get("events") or direct.get("events") or []
+    result["events"] = [
+        deepcopy(event) for event in events if isinstance(event, dict)
+    ]
+    result["reused_artifact_ids"] = list(
+        dict.fromkeys(
+            str(artifact_id)
+            for event in result["events"]
+            for artifact_id in event.get("reused_artifact_ids") or []
+        )
+    )
+    result["evicted_artifact_ids"] = list(
+        dict.fromkeys(
+            str(artifact_id)
+            for event in result["events"]
+            for artifact_id in event.get("evicted_artifact_ids") or []
+        )
+    )
+    result["camera_selector_avoided_by_bank_reuse"] = bool(
+        result["reused_artifact_ids"]
+    )
+    return result
+
+
+def _artifact_id_path(value: Any) -> str | None:
+    artifact_id = str(value or "").strip()
+    if artifact_id.startswith("path:"):
+        return artifact_id.removeprefix("path:")
+    return artifact_id if artifact_id.startswith("/") else None
+
+
 def l3_calls(report: dict[str, Any]) -> list[dict[str, Any]]:
     metrics = report.get("metrics")
     metrics = metrics if isinstance(metrics, dict) else {}
@@ -1885,6 +2534,15 @@ def l3_calls(report: dict[str, Any]) -> list[dict[str, Any]]:
         metric_budget = metric_report.get("combined_evidence_budget")
         metric_budget = (
             metric_budget if isinstance(metric_budget, dict) else None
+        )
+        bank_collection = metric_report.get(
+            "functional_group_evidence_bank"
+        )
+        bank_groups = (
+            bank_collection.get("groups")
+            if isinstance(bank_collection, dict)
+            and isinstance(bank_collection.get("groups"), dict)
+            else {}
         )
         group_results = metric_report.get("group_results")
         group_results = (
@@ -1977,9 +2635,62 @@ def l3_calls(report: dict[str, Any]) -> list[dict[str, Any]]:
                 if isinstance(members, list)
                 else []
             )
+            group_id = str(
+                group.get("group_id") or f"group_{index + 1:03d}"
+            )
+            check_episodes = group.get("check_episodes")
+            check_episodes = (
+                [
+                    item
+                    for item in check_episodes
+                    if isinstance(item, dict)
+                ]
+                if isinstance(check_episodes, list)
+                else []
+            )
+            if (
+                str(metric) == "functional_consistency"
+                and check_episodes
+            ):
+                aggregate = {
+                    "group_id": group_id,
+                    "status": group.get("status"),
+                    "score": group.get("score"),
+                    "reason": group.get("reason"),
+                    "judge_episode_count": group.get(
+                        "judge_episode_count"
+                    ),
+                }
+                for episode_index, raw_episode in enumerate(
+                    check_episodes,
+                    start=1,
+                ):
+                    episode = deepcopy(raw_episode)
+                    check_id = str(
+                        episode.get("functional_check_episode_id")
+                        or f"check_{episode_index:03d}"
+                    )
+                    episode["viewer_parent_group_id"] = group_id
+                    episode["viewer_group_aggregate"] = deepcopy(
+                        aggregate
+                    )
+                    candidates.append(
+                        (
+                            f"{group_id} · {check_id}",
+                            members,
+                            episode,
+                            "group_local_review",
+                            (
+                                3
+                                if relation_stage_present
+                                else 2
+                            ),
+                        )
+                    )
+                continue
             candidates.append(
                 (
-                    str(group.get("group_id") or f"group_{index + 1:03d}"),
+                    group_id,
                     members,
                     group,
                     "group_local_review",
@@ -2040,6 +2751,54 @@ def l3_calls(report: dict[str, Any]) -> list[dict[str, Any]]:
             metadata = judgement.get("request_metadata")
             metadata = metadata if isinstance(metadata, dict) else {}
             control_audit = item.get("camera_control_audit") or {}
+            evidence_window = functional_group_evidence_window_details(
+                item,
+                control_audit,
+            )
+            if isinstance(evidence_window, dict):
+                bank_group_id = str(
+                    item.get("viewer_parent_group_id")
+                    or item.get("group_id")
+                    or group_id
+                )
+                group_bank = bank_groups.get(bank_group_id)
+                artifact_records = (
+                    group_bank.get("artifacts")
+                    if isinstance(group_bank, dict)
+                    and isinstance(group_bank.get("artifacts"), list)
+                    else []
+                )
+                relevant_ids = {
+                    str(value)
+                    for key in (
+                        "fixed_artifact_ids",
+                        "initial_artifact_ids",
+                        "final_artifact_ids",
+                        "reused_artifact_ids",
+                        "evicted_artifact_ids",
+                    )
+                    for value in evidence_window.get(key) or []
+                }
+                evidence_window["artifact_records"] = [
+                    deepcopy(record)
+                    for record in artifact_records
+                    if isinstance(record, dict)
+                    and str(record.get("artifact_id") or "")
+                    in relevant_ids
+                ]
+                final_window_paths = [
+                    path
+                    for path in (
+                        _artifact_id_path(value)
+                        for value in evidence_window.get(
+                            "final_artifact_ids"
+                        )
+                        or []
+                    )
+                    if path is not None
+                ]
+                if final_window_paths:
+                    images = final_window_paths
             verdict = str(
                 judgement.get("verdict")
                 or (
@@ -2175,6 +2934,9 @@ def l3_calls(report: dict[str, Any]) -> list[dict[str, Any]]:
                         "persisted."
                     ),
                     "evidence_packet_audit": packet_audit,
+                    "functional_group_evidence_window": deepcopy(
+                        evidence_window
+                    ),
                     "result": compact_result(judgement)
                     or {
                         "status": item.get("status"),
@@ -2230,6 +2992,40 @@ def l3_calls(report: dict[str, Any]) -> list[dict[str, Any]]:
                             ),
                             "functional_probe_evidence": deepcopy(
                                 item.get("functional_probe_evidence")
+                            ),
+                            "functional_check_granularity": item.get(
+                                "functional_check_granularity"
+                            ),
+                            "functional_check_episode_id": item.get(
+                                "functional_check_episode_id"
+                            ),
+                            "shared_seed_evidence_reused": item.get(
+                                "shared_seed_evidence_reused"
+                            ),
+                            "group_local_evidence_policy": (
+                                metric_report.get(
+                                    "group_local_evidence_policy"
+                                )
+                            ),
+                            "functional_group_evidence_window": deepcopy(
+                                evidence_window
+                            ),
+                            "shared_dynamic_evidence_reused": item.get(
+                                "shared_dynamic_evidence_reused"
+                            ),
+                            "shared_reused_artifact_ids": deepcopy(
+                                item.get("shared_reused_artifact_ids")
+                            ),
+                            "camera_selector_avoided_by_bank_reuse": (
+                                item.get(
+                                    "camera_selector_avoided_by_bank_reuse"
+                                )
+                            ),
+                            "parent_group_id": item.get(
+                                "viewer_parent_group_id"
+                            ),
+                            "group_aggregate_result": deepcopy(
+                                item.get("viewer_group_aggregate")
                             ),
                             "placement_discovery": deepcopy(
                                 item.get("placement_discovery")
@@ -2294,6 +3090,31 @@ def l3_pipeline_summary(report: dict[str, Any]) -> list[dict[str, Any]]:
             1
             for item in groups
             if item.get("vlm_invoked") is True
+        )
+        granularity_values = {
+            str(item.get("functional_check_granularity") or "")
+            for item in groups
+            if str(item.get("functional_check_granularity") or "")
+        }
+        group_local_granularity = str(
+            metric_report.get("group_local_check_granularity")
+            or (
+                next(iter(granularity_values))
+                if len(granularity_values) == 1
+                else "mixed"
+                if granularity_values
+                else "batched"
+            )
+        )
+        group_judge_episode_count = sum(
+            int(item.get("judge_episode_count") or 0)
+            if isinstance(item.get("judge_episode_count"), int)
+            else len(item.get("check_episodes") or [])
+            if isinstance(item.get("check_episodes"), list)
+            else 1
+            if item.get("vlm_invoked") is True
+            else 0
+            for item in groups
         )
         resolved_relations = sum(
             1
@@ -2384,6 +3205,19 @@ def l3_pipeline_summary(report: dict[str, Any]) -> list[dict[str, Any]]:
                 "resolved_groups": resolved,
                 "unresolved_groups": unresolved,
                 "invoked_groups": invoked,
+                "group_local_granularity": group_local_granularity,
+                "group_local_evidence_policy": str(
+                    metric_report.get("group_local_evidence_policy")
+                    or "isolated_episode"
+                ),
+                "group_local_active_window_max_images": (
+                    metric_report.get(
+                        "group_local_active_window_max_images"
+                    )
+                ),
+                "group_judge_episode_count": (
+                    group_judge_episode_count
+                ),
                 "scheduled_relations": len(relations),
                 "invoked_relation_episodes": sum(
                     1
@@ -2793,7 +3627,12 @@ def render_l3_pipeline_summary(report: dict[str, Any]) -> str:
                 <div>
                   <strong>{local_step} · Group-local</strong>
                   <span>{html.escape(local_text)}</span>
-                  <small>{int(item['invoked_groups'])} Judge call scope(s)</small>
+                  <small>
+                    {int(item['invoked_groups'])} invoked group(s) ·
+                    {int(item.get('group_judge_episode_count') or 0)} Judge episode(s) ·
+                    {html.escape(str(item.get('group_local_granularity') or 'batched'))} ·
+                    {html.escape(str(item.get('group_local_evidence_policy') or 'isolated_episode'))}
+                  </small>
                 </div>
               </div>
               <p class="pipeline-reason">{html.escape(str(item['reason']))}</p>
@@ -2957,6 +3796,15 @@ def render_phase_routes(calls: list[dict[str, Any]]) -> str:
             for call in metric_calls
             if call.get("phase") == "group_local_review"
         ]
+        local_group_ids = {
+            str(
+                (
+                    call.get("routing_details") or {}
+                ).get("parent_group_id")
+                or str(call.get("scope") or "").split(" · ", 1)[0]
+            )
+            for call in local_calls
+        }
         relation_calls = [
             call
             for call in metric_calls
@@ -2996,7 +3844,9 @@ def render_phase_routes(calls: list[dict[str, Any]]) -> str:
               {relation_route}
               <span class="phase-arrow">→</span>
               <span class="phase-node phase-node-local">
-                {local_step} · Group-local review · {len(local_calls)} group(s)
+                {local_step} · Group-local review ·
+                {len(local_group_ids)} group(s) ·
+                {len(local_calls)} Judge episode(s)
               </span>
             </div>
             """
@@ -3425,6 +4275,47 @@ def render_evidence_packet_audit(
     """
 
 
+def render_functional_group_evidence_window(
+    value: dict[str, Any] | None,
+) -> str:
+    if not isinstance(value, dict):
+        return ""
+    fixed = value.get("fixed_artifact_ids") or []
+    initial = value.get("initial_artifact_ids") or []
+    final = value.get("final_artifact_ids") or []
+    reused = value.get("reused_artifact_ids") or []
+    evicted = value.get("evicted_artifact_ids") or []
+    events = value.get("events") or []
+    artifact_records = value.get("artifact_records") or []
+    selector_avoided = bool(
+        value.get("camera_selector_avoided_by_bank_reuse")
+        or reused
+    )
+    return f"""
+      <details class="evidence-flow functional-evidence-window">
+        <summary>
+          <span>
+            <strong>Shared group evidence window</strong>
+            <span class="flow-label">{html.escape(str(value.get('policy') or 'shared_group_bank'))}</span>
+          </span>
+          <span class="flow-stats">
+            {len(fixed)} fixed · {len(initial)} initial · {len(final)} final
+            · {len(reused)} reused · {len(evicted)} evicted
+          </span>
+        </summary>
+        <div class="flow-body">
+          <p class="trace-source">
+            Active limit: <code>{html.escape(str(value.get('max_active_images') or '—'))}</code>.
+            Bank reuse avoided a CameraSelector call:
+            <strong>{'yes' if selector_avoided else 'no'}</strong>.
+            Eviction changes only the active Judge window; source artifacts remain available.
+          </p>
+          <pre>{json_block({'fixed_artifact_ids': fixed, 'initial_artifact_ids': initial, 'final_artifact_ids': final, 'reused_artifact_ids': reused, 'evicted_artifact_ids': evicted, 'artifact_records': artifact_records, 'events': events})}</pre>
+        </div>
+      </details>
+    """
+
+
 def render_judge_episode_budget(call: dict[str, Any]) -> str:
     details = call.get("budget_details")
     if not isinstance(details, dict):
@@ -3604,6 +4495,9 @@ def render_call(
     packet_audit = render_evidence_packet_audit(
         call.get("evidence_packet_audit")
     )
+    functional_evidence_window = render_functional_group_evidence_window(
+        call.get("functional_group_evidence_window")
+    )
     judge_budget = render_judge_episode_budget(call)
     images = "".join(
         render_image(path, resolver)
@@ -3686,6 +4580,7 @@ def render_call(
         </div>
         <p class="reason">{reason}</p>
         {packet_audit}
+        {functional_evidence_window}
         {judge_budget}
         {acquisition_html}
         <div class="image-grid">{images}</div>
@@ -3872,12 +4767,23 @@ def build_viewer(
     )
     all_sections: list[str] = []
     all_calls: list[dict[str, Any]] = []
+    scoring_summaries: list[dict[str, Any]] = []
     metric_names: set[str] = set()
     for case_index, case_dir in enumerate(case_dirs):
         case_manifest = optional_json(case_dir / "case_run_manifest.json")
         grouping = optional_json(case_dir / "grouping.json")
         l1_report = optional_json(case_dir / "l1_report.json")
+        l1_diagnostics = optional_json(case_dir / "l1_diagnostics.json")
         l3_report = optional_json(case_dir / "scene_quality_report.json")
+        scoring_summary = case_scoring_summary(
+            case_id=case_dir.name,
+            case_manifest=case_manifest,
+            l1_report=l1_report,
+            l3_report=l3_report,
+            l1_diagnostics=l1_diagnostics,
+        )
+        scoring_summaries.append(scoring_summary)
+        scoring_dashboard = render_case_scoring_dashboard(scoring_summary)
         comparison = optional_json(case_dir / "scene_comparison.json")
         api_calls = optional_jsonl(case_dir / "api_calls.jsonl")
         source_paths = source_evidence_paths(case_manifest)
@@ -3921,6 +4827,7 @@ def build_viewer(
               id="{html.escape(case_dir.name)}"
               data-scene="{html.escape(case_dir.name)}"{initially_hidden}>
               {blender_command}
+              {scoring_dashboard}
               {grouping_output}
               {functional_evidence}
               <section class="scene">
@@ -3953,6 +4860,9 @@ def build_viewer(
             """
         )
     usage = prefer_runner_usage(summary, aggregate_usage(all_calls))
+    run_scoring_overview_html = render_run_scoring_overview(
+        scoring_summaries
+    )
     acquisition_overview_html = render_acquisition_overview(
         acquisition_overview(all_calls)
     )
@@ -4037,6 +4947,159 @@ def build_viewer(
     .notice {{
       padding: 12px 14px; border: 1px solid #d0d7de;
       border-left: 4px solid #57606a; background: white; line-height: 1.45;
+    }}
+    .run-score-overview, .scoring-dashboard {{
+      margin: 18px 0 22px; padding: 18px; border: 1px solid #aeb7c0;
+      border-top: 3px solid #0969da; background: white;
+    }}
+    .run-score-overview-heading, .scoring-dashboard-heading {{
+      display: flex; justify-content: space-between; align-items: start; gap: 24px;
+    }}
+    .run-score-overview-heading h2,
+    .scoring-dashboard-heading h2 {{ margin: 4px 0 0; }}
+    .run-score-overview-heading p,
+    .scoring-dashboard-heading p {{
+      max-width: 620px; margin: 0; color: #59636e; line-height: 1.45;
+    }}
+    .score-matrix-scroll {{ margin-top: 15px; overflow-x: auto; }}
+    .score-matrix {{ min-width: 720px; margin: 0; }}
+    .score-matrix th:first-child {{ min-width: 190px; }}
+    .score-matrix td {{ min-width: 130px; }}
+    .score-matrix td strong, .score-matrix td small {{ display: block; }}
+    .score-matrix td strong {{ font-size: 17px; }}
+    .score-matrix td small {{
+      margin-top: 3px; color: #59636e; font-size: 9px;
+      text-transform: uppercase;
+    }}
+    .score-matrix-combined {{ background: #f0f6fc; }}
+    .combined-score {{
+      min-width: 180px; padding: 12px 15px; border: 1px solid #8c959f;
+      background: #f6f8fa; text-align: right;
+    }}
+    .combined-score span, .combined-score strong,
+    .combined-score small {{ display: block; }}
+    .combined-score span {{
+      color: #59636e; font-size: 10px; font-weight: 700;
+      letter-spacing: .06em; text-transform: uppercase;
+    }}
+    .combined-score strong {{ margin: 2px 0; font-size: 34px; line-height: 1; }}
+    .combined-score small {{ color: #9a6700; font-weight: 650; }}
+    .combined-score-complete {{ border-color: #1a7f37; background: #dafbe1; }}
+    .combined-score-note {{
+      margin: 14px 0 0; padding: 10px 12px; border-left: 4px solid #bf8700;
+      background: #fff8c5; color: #4d3b00; line-height: 1.45;
+    }}
+    .layer-score-grid {{
+      display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px; margin-top: 14px;
+    }}
+    .layer-score-card {{
+      position: relative; display: grid;
+      grid-template-columns: minmax(0, 1fr) auto; gap: 4px 16px;
+      padding: 13px; border: 1px solid #d0d7de; background: #fbfcfd;
+    }}
+    .layer-score-card > div:first-child strong,
+    .layer-score-card > div:first-child span {{ display: block; }}
+    .score-layer-label {{
+      color: #0969da; font-size: 10px; font-weight: 750;
+      letter-spacing: .08em;
+    }}
+    .layer-score-value {{ font-size: 28px; font-weight: 750; }}
+    .layer-score-card p {{
+      grid-column: 1 / -1; margin: 2px 0 0; color: #59636e;
+      font-size: 11px;
+    }}
+    .layer-score-card > .score-status {{
+      position: absolute; right: 13px; bottom: 11px;
+    }}
+    .metric-score-grid {{
+      display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px; margin-top: 10px;
+    }}
+    .metric-score-card {{
+      min-width: 0; padding: 13px; border: 1px solid #d0d7de;
+      background: white;
+    }}
+    .metric-score-unresolved, .metric-score-requires-vlm {{
+      border-color: #d4a72c; background: #fffdf5;
+    }}
+    .metric-score-heading {{
+      display: flex; justify-content: space-between; align-items: start; gap: 8px;
+    }}
+    .metric-score-heading > div span,
+    .metric-score-heading > div strong {{ display: block; }}
+    .metric-score-heading > div span {{
+      color: #59636e; font-size: 9px; font-weight: 750;
+      letter-spacing: .08em;
+    }}
+    .metric-score-heading > div strong {{ margin-top: 2px; font-size: 14px; }}
+    .score-status {{
+      display: inline-block; padding: 3px 6px; border-radius: 999px;
+      background: #eaeef2; color: #59636e; font-size: 9px;
+      font-weight: 700; text-transform: uppercase;
+    }}
+    .score-status-evaluated, .score-status-checked {{
+      background: #dafbe1; color: #116329;
+    }}
+    .score-status-incomplete, .score-status-partial,
+    .score-status-unresolved, .score-status-requires-vlm {{
+      background: #fff8c5; color: #7d4e00;
+    }}
+    .metric-score-value {{
+      margin: 13px 0 10px; font-size: 29px; font-weight: 760;
+      letter-spacing: -.02em;
+    }}
+    .metric-score-value small {{
+      margin-left: 3px; color: #8c959f; font-size: 10px; font-weight: 600;
+    }}
+    .metric-score-facts {{
+      display: grid; grid-template-columns: 1fr 1fr; gap: 6px 8px;
+    }}
+    .metric-score-facts span {{
+      color: #59636e; font-size: 9px; line-height: 1.3;
+    }}
+    .metric-score-facts strong {{ display: block; color: #1f2328; font-size: 12px; }}
+    .metric-score-events {{ margin-top: 9px; border-top: 1px solid #e5e8eb; }}
+    .metric-score-events summary {{ color: #59636e; font-size: 10px; }}
+    .score-no-events {{ margin: 5px 0 0; color: #59636e; font-size: 10px; }}
+    .score-ledger-unavailable {{
+      margin: 7px 0 0; padding: 7px 8px; border-left: 3px solid #bf8700;
+      background: #fff8c5; color: #4d3b00; font-size: 10px; line-height: 1.4;
+    }}
+    .score-event-list {{ margin: 7px 0 0; padding: 0; list-style: none; }}
+    .score-event-list li {{
+      display: grid; grid-template-columns: 1fr auto; gap: 2px 8px;
+      padding: 6px 0; border-top: 1px solid #e5e8eb; font-size: 9px;
+    }}
+    .score-event-list li > strong {{ grid-column: 1 / -1; }}
+    .score-event-list code {{
+      grid-column: 1 / -1; color: #59636e; overflow-wrap: anywhere;
+    }}
+    .scoring-audit {{ margin-top: 12px; border-top: 1px solid #d8dee4; }}
+    .scoring-audit-grid {{
+      display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px; margin-top: 9px;
+    }}
+    .scoring-audit-grid > div {{
+      padding: 10px; border: 1px solid #d8dee4; background: #f6f8fa;
+    }}
+    .scoring-audit-grid strong, .scoring-audit-grid span,
+    .scoring-audit-grid small {{ display: block; }}
+    .scoring-audit-grid strong {{ color: #59636e; font-size: 10px; text-transform: uppercase; }}
+    .scoring-audit-grid span {{ margin-top: 3px; font-size: 17px; font-weight: 700; }}
+    .scoring-audit-grid small {{ margin-top: 3px; color: #59636e; line-height: 1.4; }}
+    .scoring-audit-details {{
+      display: grid; grid-template-columns: minmax(220px, 1fr) 2fr;
+      gap: 16px; margin-top: 12px;
+    }}
+    .scoring-audit-details ul {{ margin: 6px 0 0; padding-left: 18px; }}
+    .scoring-audit-details p {{ color: #59636e; font-size: 10px; line-height: 1.5; }}
+    .scoring-engineering-failures {{ grid-column: 1 / -1; }}
+    .scoring-engineering-failures ul {{ padding-left: 18px; }}
+    .scoring-engineering-failures li {{ margin-top: 5px; font-size: 10px; }}
+    .scoring-engineering-failures code {{
+      display: block; max-height: 90px; margin-top: 3px; overflow: auto;
+      color: #59636e; overflow-wrap: anywhere;
     }}
     .empty-run {{
       margin-top: 20px; padding: 28px; border: 1px dashed #aeb7c0;
@@ -4667,6 +5730,12 @@ def build_viewer(
       .page {{ width: min(100% - 20px, 1440px); margin-top: 16px; }}
       .summary {{ grid-template-columns: repeat(2, 1fr); }}
       .summary div {{ border-bottom: 1px solid #d8dee4; }}
+      .run-score-overview-heading, .scoring-dashboard-heading {{ display: block; }}
+      .run-score-overview-heading p {{ margin-top: 9px; }}
+      .combined-score {{ margin-top: 10px; text-align: left; }}
+      .layer-score-grid, .scoring-audit-grid,
+      .scoring-audit-details {{ grid-template-columns: 1fr; }}
+      .metric-score-grid {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }}
       .toolbar, .scene-title, .call-header,
       .object-findings-heading {{ display: block; }}
       .grouping-heading, .acquisition-heading {{ display: block; }}
@@ -4706,6 +5775,9 @@ def build_viewer(
       .timeline-images {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }}
       .image-grid {{ grid-template-columns: 1fr; }}
     }}
+    @media (max-width: 560px) {{
+      .metric-score-grid {{ grid-template-columns: 1fr; }}
+    }}
   </style>
 </head>
 <body>
@@ -4730,6 +5802,7 @@ def build_viewer(
       metric rubric, parsed result, and request metadata. Token totals cover
       persisted response usage only.
     </p>
+    {run_scoring_overview_html}
     {acquisition_overview_html}
     <div class="scene-controls">
       <nav class="scene-nav" aria-label="Scene navigation">
@@ -4801,7 +5874,7 @@ def build_viewer(
       );
     }}
 
-    function showScene(index, updateHash = true) {{
+    function showScene(index, updateHash = true, shouldScroll = true) {{
       if (!scenePages.length) {{
         previousScene.disabled = true;
         nextScene.disabled = true;
@@ -4836,7 +5909,7 @@ def build_viewer(
         );
       }}
       applyFilters();
-      scrollActiveSceneToTop();
+      if (shouldScroll) scrollActiveSceneToTop();
     }}
 
     function applyFilters() {{
@@ -4891,7 +5964,7 @@ def build_viewer(
       if (index >= 0) showScene(index, false);
     }});
     const initialSceneIndex = sceneIndexFromHash();
-    showScene(initialSceneIndex >= 0 ? initialSceneIndex : 0, false);
+    showScene(initialSceneIndex >= 0 ? initialSceneIndex : 0, false, false);
   </script>
 </body>
 </html>

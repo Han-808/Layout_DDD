@@ -318,9 +318,7 @@ def _style_global_then_local_config() -> dict:
 
 
 def test_l3_metric_prompts_have_versioned_generic_boundaries() -> None:
-    assert L3_METRIC_PROMPT_VERSION == (
-        "l3_lazy_group_relation_evidence_v23"
-    )
+    assert L3_METRIC_PROMPT_VERSION == "l3_burden_categories_v25"
     assert set(L3_METRIC_RUBRICS) == {
         "scale_consistency",
         "style_consistency",
@@ -504,14 +502,25 @@ def test_default_is_canonical_l3_and_policy_remains_overridable() -> None:
     assert functional["metric_status"] == "canonical_scoring"
     assert functional["activation_policy"] == "profile_and_applicability"
     assert functional["included_in_canonical_aggregate"] is True
+    assert functional["group_local_check_granularity"] == "per_check"
+    assert functional["group_local_evidence_policy"] == "isolated_episode"
+    assert functional["group_local_active_window_max_images"] == 6
     placement = resolved["metrics"]["semantic_placement_consistency"]
     assert placement["enabled"] is True
     assert placement["metric_status"] == "canonical_scoring"
     assert placement["activation_policy"] == "profile_and_applicability"
     assert placement["included_in_canonical_aggregate"] is True
-    assert all(
-        resolved["metrics"][name]["weight"] == pytest.approx(0.2)
+    assert {
+        name: resolved["metrics"][name]["weight"]
         for name in SCENE_QUALITY_INTERFACE_METRICS
+    } == pytest.approx(
+        {
+            "scale_consistency": 0.12,
+            "style_consistency": 0.12,
+            "object_pairing_consistency": 0.12,
+            "functional_consistency": 0.44,
+            "semantic_placement_consistency": 0.20,
+        }
     )
     assert set(SEMANTIC_PLACEMENT_METRICS) == {
         "semantic_placement_consistency"
@@ -591,7 +600,7 @@ def test_default_is_canonical_l3_and_policy_remains_overridable() -> None:
         "prejudgement_probe_policy"
     ]
     assert probe_policy["enabled"] is True
-    assert probe_policy["max_probe_units"] == 6
+    assert probe_policy["max_probe_units"] == 32
     assert probe_policy["candidate_count_by_probe_kind"] == {
         "functional_frontage": 4,
         "functional_correspondence": 4,
@@ -692,7 +701,10 @@ def test_style_global_clear_skips_group_local_review(tmp_path) -> None:
     assert metric["judge_call_count"] == 1
     assert metric["local_review"]["requested"] is False
     assert metric["budget_exhaustion_forced_choice"] == {
-        "applied": False
+        "applied": False,
+        "forced_binary": False,
+        "evidence_ambiguous": False,
+        "stop_reason": None,
     }
     assert len(provider_calls) == 0
     assert [call["evidence_phase"] for call in judge_calls] == [
@@ -734,6 +746,13 @@ def test_metric_report_exposes_forced_choice_without_reason_parsing(
     )["metrics"]["style_consistency"]
 
     assert metric["budget_exhaustion_forced_choice"]["applied"] is True
+    assert metric["budget_exhaustion_forced_choice"]["forced_binary"] is True
+    assert metric["budget_exhaustion_forced_choice"][
+        "evidence_ambiguous"
+    ] is True
+    assert metric["budget_exhaustion_forced_choice"]["stop_reason"] == (
+        "max_total_images_exhausted"
+    )
     assert metric["budget_exhaustion_forced_choice"]["trigger"] == (
         "max_total_images_exhausted"
     )
@@ -916,7 +935,7 @@ def test_style_localized_suspicion_reviews_only_implicated_group(
     assert len(judge_calls) == 2
 
 
-def test_style_required_local_confirmation_without_grouping_is_unresolved(
+def test_style_required_local_confirmation_without_grouping_is_infrastructure_failure(
     tmp_path,
 ) -> None:
     global_image = _images(tmp_path, "global")["global"]
@@ -937,12 +956,39 @@ def test_style_required_local_confirmation_without_grouping_is_unresolved(
         metric_applicability=_relevant("style_consistency"),
     )["metrics"]["style_consistency"]
 
-    assert metric["status"] == "unresolved"
+    assert metric["status"] == "failed"
+    assert metric["terminal_state"] == "infrastructure_failure"
+    assert metric["score"] is None
     assert metric["reason"] == (
         "object_grouping_unavailable_for_style_confirmation"
     )
     assert metric["local_review"]["requested"] is True
     assert len(judge_calls) == 1
+
+
+def test_style_global_screen_exception_is_infrastructure_failure(
+    tmp_path,
+) -> None:
+    global_image = _images(tmp_path, "global")["global"]
+
+    def judge(_request: dict) -> dict:
+        raise RuntimeError("style endpoint unavailable")
+
+    metric = evaluate_scene_quality_interfaces(
+        _scene(),
+        config=_style_global_then_local_config(),
+        object_grouping_report=_grouping_report(),
+        render_evidence={"global": [global_image]},
+        vlm_judge=judge,
+        metric_applicability=_relevant("style_consistency"),
+    )["metrics"]["style_consistency"]
+
+    assert metric["status"] == "failed"
+    assert metric["terminal_state"] == "infrastructure_failure"
+    assert metric["reason"] == "vlm_global_style_screen_failed"
+    assert metric["infrastructure_failure"]["error_type"] == (
+        "RuntimeError"
+    )
 
 
 def test_default_style_flow_uses_one_global_then_global_plus_local(
@@ -1031,6 +1077,122 @@ def test_json_screen_clear_skips_camera_and_visual_confirmation(
     )
     assert metric["dependencies"]["evidence_scope_satisfied"] is True
     assert metric["json_screen"]["screen_state"] == "clear"
+
+
+def test_json_screen_exception_is_infrastructure_failure() -> None:
+    def judge(_request: dict) -> dict:
+        raise RuntimeError("JSON screen endpoint unavailable")
+
+    metric = evaluate_scene_quality_interfaces(
+        _scene(),
+        config=_json_first_only("scale_consistency"),
+        object_grouping_report=_grouping_report(),
+        vlm_judge=judge,
+        metric_applicability=_relevant("scale_consistency"),
+    )["metrics"]["scale_consistency"]
+
+    assert metric["status"] == "failed"
+    assert metric["terminal_state"] == "infrastructure_failure"
+    assert metric["reason"] == "vlm_json_screen_failed"
+    assert metric["infrastructure_failure"]["error_type"] == (
+        "RuntimeError"
+    )
+
+
+def test_json_screen_scale_keeps_legacy_object_local_confirmation_without_grouping(
+    tmp_path,
+) -> None:
+    config = _json_first_only("scale_consistency")
+    config["metrics"]["scale_consistency"]["evidence_policy"] = {
+        "camera_scope": "object_local"
+    }
+    local_image = _images(tmp_path, "scale_object_local")[
+        "scale_object_local"
+    ]
+    judge_calls: list[dict] = []
+    provider_calls: list[dict] = []
+    suspicious = {
+        "evidence_status": "sufficient",
+        "verdict": "invalid",
+        "confidence": 0.8,
+        "reason": "The structured dimensions require visual confirmation.",
+        "missing_evidence": [],
+        "defects": [
+            {
+                "scope": "significant_visible_category_relative_scale_incoherence",
+                "target_ids": ["chair_01"],
+                "relation": "scale_outlier_candidate",
+                "reason": "Confirm against the local visual context.",
+            }
+        ],
+    }
+
+    def judge(request: dict) -> dict:
+        judge_calls.append(request)
+        return suspicious if len(judge_calls) == 1 else _valid(request)
+
+    def provider(request: dict) -> list[dict]:
+        provider_calls.append(request)
+        return [{"path": local_image, "role": "object_local"}]
+
+    metric = evaluate_scene_quality_interfaces(
+        _scene(),
+        config=config,
+        camera_evidence_provider=provider,
+        vlm_judge=judge,
+        metric_applicability=_relevant("scale_consistency"),
+    )["metrics"]["scale_consistency"]
+
+    assert metric["status"] == "evaluated"
+    assert metric["terminal_state"] == "evaluated"
+    assert metric["route"] == "json_screen_then_object_visual"
+    assert metric["compatibility_scope_fallback"] == (
+        "target_local_without_grouping"
+    )
+    assert metric["selected_group_ids"] == ["compat_target_chair_01"]
+    assert metric["selected_object_ids"] == ["chair_01"]
+    assert metric["evidence_paths"] == [local_image]
+    assert len(provider_calls) == 1
+    assert [call["evidence_phase"] for call in judge_calls] == [
+        "json_screen",
+        "visual_confirmation",
+    ]
+
+
+def test_json_screen_scale_without_grouping_or_evidence_fails_as_infrastructure(
+) -> None:
+    suspicious = {
+        "evidence_status": "sufficient",
+        "verdict": "invalid",
+        "confidence": 0.8,
+        "reason": "The structured dimensions require visual confirmation.",
+        "missing_evidence": [],
+        "defects": [
+            {
+                "scope": (
+                    "significant_visible_category_relative_scale_incoherence"
+                ),
+                "target_ids": ["chair_01"],
+                "relation": "scale_outlier_candidate",
+                "reason": "Confirm against the local visual context.",
+            }
+        ],
+    }
+
+    metric = evaluate_scene_quality_interfaces(
+        _scene(),
+        config=_json_first_only("scale_consistency"),
+        vlm_judge=lambda _request: suspicious,
+        metric_applicability=_relevant("scale_consistency"),
+    )["metrics"]["scale_consistency"]
+
+    assert metric["status"] == "failed"
+    assert metric["terminal_state"] == "infrastructure_failure"
+    assert metric["reason"] == "required_scope_infrastructure_failure"
+    assert metric["route"] == "json_screen_then_object_visual"
+    assert metric["compatibility_scope_fallback"] == (
+        "target_local_without_grouping"
+    )
 
 
 @pytest.mark.parametrize(
@@ -1273,7 +1435,7 @@ def test_json_candidate_confirmation_is_one_final_defect(
         metric_applicability=_relevant("scale_consistency"),
     )["metrics"]["scale_consistency"]
 
-    assert metric["score"] == 0.0
+    assert metric["score"] == pytest.approx(0.4)
     assert metric["json_screen"]["verdict"] == "candidate"
     assert metric["json_screen"]["defects"] == []
     assert len(metric["judgement"]["defects"]) == 1
@@ -1618,6 +1780,66 @@ def test_functional_global_uses_prejudgement_raw_probe_packet(
         images["global_perspective"]
     ]
     assert len(local_calls) == 1
+
+
+@pytest.mark.parametrize(
+    ("metric_name", "planner_method", "missing_label"),
+    [
+        (
+            "functional_consistency",
+            "discover_functional_evidence",
+            "functional_discovery",
+        ),
+        (
+            "semantic_placement_consistency",
+            "discover_placement_evidence",
+            "placement_discovery",
+        ),
+    ],
+)
+def test_explicit_discovery_failure_is_fail_closed(
+    tmp_path,
+    metric_name: str,
+    planner_method: str,
+    missing_label: str,
+) -> None:
+    images = _images(tmp_path, "global", "local")
+
+    class Planner:
+        pass
+
+    def fail(_self, _request):
+        raise ValueError("discovery schema rejected")
+
+    setattr(Planner, planner_method, fail)
+
+    def provider(_request: dict) -> list[dict]:
+        return [{"path": images["local"], "role": "group_local"}]
+
+    metric = evaluate_scene_quality_interfaces(
+        _scene(),
+        config=_only(metric_name),
+        object_grouping_report={
+            "object_groups": [
+                {
+                    "group_id": "group_001",
+                    "object_ids": ["chair_01", "desk_01"],
+                }
+            ]
+        },
+        render_evidence={"global": [images["global"]]},
+        camera_evidence_provider=provider,
+        functional_evidence_planner=Planner(),
+        functional_probe_evidence_provider=provider,
+        vlm_judge=lambda request: _valid(request),
+        metric_applicability=_relevant(metric_name),
+    )["metrics"][metric_name]
+
+    assert metric["status"] == "failed"
+    assert metric["terminal_state"] == "infrastructure_failure"
+    assert metric["score"] is None
+    assert metric["coverage"]["complete"] is False
+    assert missing_label in metric["judgement"]["missing_evidence"]
 
 
 def test_disabled_functional_prejudgement_skips_only_proactive_stage(
@@ -2013,9 +2235,67 @@ def test_functional_discovery_routes_cross_group_and_unusual_to_group(
         "skipped_missing_pair_evidence_count": 0,
         "resolved_relation_count": 1,
         "status": "complete",
-        "max_probe_units": 6,
+            "max_probe_units": 32,
     }
-    assert metric["judge_call_count"] == 4
+    group_check_calls = [
+        request
+        for request in judge_calls
+        if request["evidence_phase"] == "group_local_review"
+    ]
+    assert len(group_check_calls) == 4
+    assert all(
+        len(request["required_functional_checks"]) == 1
+        for request in group_check_calls
+    )
+    assert metric["group_local_check_granularity"] == "per_check"
+    assert metric["judge_call_count"] == 6
+
+    probe_calls.clear()
+    local_calls.clear()
+    judge_calls.clear()
+    batched_metric = evaluate_scene_quality_interfaces(
+        scene,
+        config={
+            "metrics": {
+                "style_consistency": {"enabled": False},
+                "scale_consistency": {"enabled": False},
+                "object_pairing_consistency": {"enabled": False},
+                "functional_consistency": {
+                    "enabled": True,
+                    "weight": 1.0,
+                    "group_local_check_granularity": "batched",
+                },
+                "semantic_placement_consistency": {"enabled": False},
+            }
+        },
+        object_grouping_report={
+            "object_groups": [
+                {"group_id": "group_001", "object_ids": ["sofa"]},
+                {
+                    "group_id": "group_002",
+                    "object_ids": ["television", "cabinet"],
+                },
+            ]
+        },
+        render_evidence={"global": [images["global"]]},
+        camera_evidence_provider=local_provider,
+        functional_evidence_planner=Discovery(),
+        functional_probe_evidence_provider=probe_provider,
+        vlm_judge=judge,
+        metric_applicability=_relevant("functional_consistency"),
+    )["metrics"]["functional_consistency"]
+    batched_group_calls = [
+        request
+        for request in judge_calls
+        if request["evidence_phase"] == "group_local_review"
+    ]
+    assert len(batched_group_calls) == 2
+    assert any(
+        len(request["required_functional_checks"]) > 1
+        for request in batched_group_calls
+    )
+    assert batched_metric["group_local_check_granularity"] == "batched"
+    assert batched_metric["judge_call_count"] == 4
 
 
 def test_each_acquired_cross_group_relation_gets_one_judge_episode(
@@ -2103,7 +2383,7 @@ def test_each_acquired_cross_group_relation_gets_one_judge_episode(
         relation_targets = set(
             request.get("target_object_ids") or []
         )
-        if phase == "global_discovery" or (
+        if (
             phase == "cross_group_relation_review"
             and relation_targets == {"sofa", "television"}
         ):
@@ -2190,11 +2470,8 @@ def test_each_acquired_cross_group_relation_gets_one_judge_episode(
     )
     assert metric["judge_call_count"] == 3
     assert metric["status"] == "evaluated"
-    assert metric["score"] == 0.0
-    assert metric["global_discovery"]["final_metric_verdict"] is False
-    assert "owned by the cross-group relation stage" in (
-        metric["global_discovery"]["error"]
-    )
+    assert metric["score"] == pytest.approx(0.8)
+    assert metric["global_discovery"]["final_metric_verdict"] is True
     assert metric["global_scene_claims"] == []
     assert len(metric["cross_group_relation_claims"]) == 1
     assert metric["cross_group_relation_claims"][0][
@@ -2294,8 +2571,8 @@ def test_failed_cross_group_acquisition_does_not_start_judge_episode(
         "judge_eligible_relation_count": 0,
         "skipped_missing_pair_evidence_count": 1,
         "resolved_relation_count": 0,
-        "status": "unresolved",
-        "max_probe_units": 6,
+        "status": "infrastructure_failure",
+        "max_probe_units": 32,
     }
     scheduled = metric["functional_cross_group_relation_schedule"][0]
     assert scheduled["pair_specific_evidence_available"] is False
@@ -2308,7 +2585,8 @@ def test_failed_cross_group_acquisition_does_not_start_judge_episode(
     assert relation_result["available_global_context_evidence_paths"] == [
         images["global"]
     ]
-    assert metric["status"] == "unresolved"
+    assert metric["status"] == "failed"
+    assert metric["terminal_state"] == "infrastructure_failure"
 
 
 def test_functional_discovery_forces_singleton_unusual_confirmation(
@@ -2724,7 +3002,7 @@ def test_localized_style_candidate_forces_its_singleton_group(
     ]
 
 
-def test_supported_invalid_is_final_even_when_coverage_is_incomplete() -> None:
+def test_supported_invalid_does_not_mask_incomplete_coverage() -> None:
     base = {
         "functional_check_coverage": {
             "unresolved_check_ids": ["functional_check_pending"],
@@ -2773,14 +3051,20 @@ def test_supported_invalid_is_final_even_when_coverage_is_incomplete() -> None:
         placement_check_phase_complete=True,
     )
 
-    assert result["status"] == "evaluated"
-    assert result["score"] == 0.0
+    assert result["status"] == "failed"
+    assert result["terminal_state"] == "infrastructure_failure"
+    assert result["score"] is None
     assert result["coverage"]["complete"] is False
-    assert result["judgement"]["verdict"] == "invalid"
-    assert result["judgement"]["unresolved_scopes"] == [
+    assert result["judgement"]["verdict"] is None
+    assert result["judgement"]["evidence_status"] == "unavailable"
+    assert result["judgement"]["missing_evidence"] == [
         "group_local_judgement:other",
         "functional_check:functional_check_pending",
     ]
+    assert result["final_object_findings"][0]["object_id"] == "chair_01"
+    assert result["infrastructure_failures"][0]["failure_kind"] == (
+        "terminal_contract_failure"
+    )
 
 
 def test_functional_global_pass_preserves_cross_group_defect(
@@ -2894,7 +3178,7 @@ def test_functional_global_pass_preserves_cross_group_defect(
 
     assert len(judge_calls) == 3
     assert metric["status"] == "evaluated"
-    assert metric["score"] == 0.0
+    assert metric["score"] == pytest.approx(0.8)
     assert metric["coverage"]["complete"] is True
     assert metric["judgement"]["defects"] == global_invalid["defects"]
     assert len(metric["global_scene_claims"]) == 1
@@ -2993,7 +3277,7 @@ def test_global_local_duplicate_claim_is_one_metric_object_penalty(
         metric_applicability=_relevant(metric_name),
     )["metrics"][metric_name]
 
-    assert metric["score"] == 0.0
+    assert metric["score"] == pytest.approx(0.6)
     assert len(metric["judgement"]["defects"]) == 1
     assert len(metric["final_defect_claims"]) == 1
     if metric_name == "style_consistency":
@@ -3033,7 +3317,7 @@ def test_global_local_duplicate_claim_is_one_metric_object_penalty(
         }
         assert metric["placement_severity"][
             "highest_severity"
-        ] == "material_contextual_mismatch"
+        ] == "atypical"
         assert metric["placement_severity"][
             "strict_failure_present"
         ] is False
@@ -3120,7 +3404,7 @@ def test_same_metric_object_is_one_penalty_across_distinct_phase_claims(
         metric_applicability=_relevant("functional_consistency"),
     )["metrics"]["functional_consistency"]
 
-    assert metric["score"] == 0.0
+    assert metric["score"] == pytest.approx(0.2)
     assert len(metric["final_defect_claims"]) == 2
     assert len(metric["final_object_findings"]) == 1
     finding = metric["final_object_findings"][0]
@@ -3505,7 +3789,7 @@ def test_three_metric_subset_evaluates_and_aggregates_when_complete(tmp_path) ->
                 ],
             },
             "evaluated",
-            0.0,
+            0.4,
             None,
         ),
         (
@@ -3516,19 +3800,27 @@ def test_three_metric_subset_evaluates_and_aggregates_when_complete(tmp_path) ->
                 "missing_evidence": [],
                 "defects": [],
             },
-            "unresolved",
+            "failed",
             None,
             "ambiguous_scene_quality_judgement",
         ),
         (
-            {
-                "evidence_status": "insufficient",
-                "verdict": "ambiguous",
-                "reason": "The complete silhouettes are not visible.",
+                {
+                    "evidence_status": "insufficient",
+                    "verdict": "ambiguous",
+                    "reason": "The complete silhouettes are not visible.",
                     "missing_evidence": ["complete target silhouettes"],
                     "defects": [],
-            },
-            "unresolved",
+                    "evidence_request": {
+                        "target_ids": ["chair_01", "desk_01"],
+                        "missing_observations": [
+                            "complete target silhouettes"
+                        ],
+                        "view_goal": "show complete target silhouettes",
+                        "metadata": {},
+                    },
+                },
+            "failed",
             None,
             "insufficient_visual_evidence",
         ),
@@ -3551,13 +3843,16 @@ def test_canonical_judgement_states(
     )
     metric = report["metrics"]["scale_consistency"]
     assert metric["status"] == status
-    assert metric["score"] == score
+    if score is None:
+        assert metric["score"] is None
+    else:
+        assert metric["score"] == pytest.approx(score)
     assert metric["reason"] == reason
-    if status == "unresolved":
+    if status == "failed":
         assert report["score"] is None
 
 
-def test_missing_inputs_are_unresolved_never_valid() -> None:
+def test_missing_inputs_are_infrastructure_failure_never_valid() -> None:
     report = evaluate_scene_quality_interfaces(
         _scene(),
         object_grouping_report=None,
@@ -3566,11 +3861,13 @@ def test_missing_inputs_are_unresolved_never_valid() -> None:
         metric_applicability=_relevant(*SCENE_QUALITY_INTERFACE_METRICS),
     )
     assert report["score"] is None
-    assert report["status"] == "unresolved"
+    assert report["status"] == "failed"
+    assert report["terminal_state"] == "infrastructure_failure"
     assert report["metrics"]["style_consistency"]["reason"] == "vlm_judge_not_configured"
     assert report["metrics"]["scale_consistency"]["reason"] == "vlm_judge_not_configured"
     pairing = report["metrics"]["object_pairing_consistency"]
-    assert pairing["status"] == "unresolved"
+    assert pairing["status"] == "failed"
+    assert pairing["terminal_state"] == "infrastructure_failure"
     assert pairing["reason"] == "object_grouping_unavailable"
 
     no_judge = evaluate_scene_quality_interfaces(
@@ -3593,7 +3890,8 @@ def test_pairing_requires_grouping_and_ignores_singleton_groups(tmp_path) -> Non
         vlm_judge=lambda request: _valid(),
         metric_applicability=_relevant("object_pairing_consistency"),
     )["metrics"]["object_pairing_consistency"]
-    assert missing["status"] == "unresolved"
+    assert missing["status"] == "failed"
+    assert missing["terminal_state"] == "infrastructure_failure"
     assert missing["reason"] == "object_grouping_unavailable"
 
     singleton = evaluate_scene_quality_interfaces(
@@ -3832,7 +4130,8 @@ def test_group_local_judge_cannot_report_a_defect_from_another_group(
         ),
     )["metrics"]["object_pairing_consistency"]
 
-    assert metric["status"] == "unresolved"
+    assert metric["status"] == "failed"
+    assert metric["terminal_state"] == "infrastructure_failure"
     assert metric["score"] is None
     assert metric["group_results"][0]["reason"] == "vlm_judge_failed"
     assert metric["group_results"][1]["status"] == "evaluated"
@@ -4074,7 +4373,7 @@ def test_placement_discovery_context_frames_camera_but_not_defect_scope(
                     {
                         "subject_id": "chair_01",
                         "context_ids": ["desk_01"],
-                        "observation_kind": "adjacency_context",
+                        "check_type": "contextual_anchor",
                         "observation_goal": (
                             "show the subject relative to its context"
                         ),
@@ -4154,17 +4453,26 @@ def test_placement_discovery_context_frames_camera_but_not_defect_scope(
         "target_ids",
         "relation",
         "reason",
-        "check_id",
-        "placement_check_type",
+        "category",
+        "attribution_mode",
         "severity",
+        "check_id",
+        "check_type",
     ]
     assert global_request["response_contract"]["defects"][
         "allowed_field_values"
     ] == {
-        "severity": [
-            "clear_semantic_misplacement",
-            "material_contextual_mismatch",
-        ]
+        "category": [
+            "local_arrangement_mismatch",
+            "semantic_surface_mismatch",
+            "zone_placement_mismatch",
+        ],
+        "severity": ["atypical", "implausible"],
+        "attribution_mode": [
+            "unary",
+            "responsible_endpoint",
+            "minimum_repair_set",
+        ],
     }
 
 
@@ -4332,7 +4640,8 @@ def test_global_context_cannot_replace_group_scoped_evidence(
 
     assert len(provider_calls) == 1
     assert judge_calls == []
-    assert metric["status"] == "unresolved"
+    assert metric["status"] == "failed"
+    assert metric["terminal_state"] == "infrastructure_failure"
     assert metric["score"] is None
     assert metric["group_results"][0]["evidence_resolution"][
         "scope_satisfied"
@@ -4538,6 +4847,7 @@ def test_asset_applicability_controls_denominator_without_defaulting_valid() -> 
     )
     metric = pending["metrics"]["style_consistency"]
     assert metric["status"] == "unresolved"
+    assert "terminal_state" not in metric
     assert metric["reason"] == "metric_applicability_pending"
     assert metric["score"] is None
     assert calls == []
@@ -4761,7 +5071,8 @@ def test_provider_failure_never_calls_final_judge(
         metric_applicability=_relevant("scale_consistency"),
     )
     metric = report["metrics"]["scale_consistency"]
-    assert metric["status"] == "unresolved"
+    assert metric["status"] == "failed"
+    assert metric["terminal_state"] == "infrastructure_failure"
     assert metric["score"] is None
     assert judge_calls == []
 
@@ -4776,7 +5087,8 @@ def test_nonexistent_scoped_evidence_never_reaches_custom_judge() -> None:
         metric_applicability=_relevant("scale_consistency"),
     )
     metric = report["metrics"]["scale_consistency"]
-    assert metric["status"] == "unresolved"
+    assert metric["status"] == "failed"
+    assert metric["terminal_state"] == "infrastructure_failure"
     assert metric["reason"] == "render_evidence_path_missing"
     assert metric["evidence_request"]["missing_paths"] == [
         "/definitely/missing/image.png"
@@ -4836,7 +5148,7 @@ def test_nonexistent_scoped_evidence_never_reaches_custom_judge() -> None:
         },
     ],
 )
-def test_malformed_judgement_is_unresolved(
+def test_malformed_judgement_is_infrastructure_failure(
     tmp_path,
     response: dict,
 ) -> None:
@@ -4848,7 +5160,8 @@ def test_malformed_judgement_is_unresolved(
         vlm_judge=lambda request: response,
         metric_applicability=_relevant("scale_consistency"),
     )["metrics"]["scale_consistency"]
-    assert metric["status"] == "unresolved"
+    assert metric["status"] == "failed"
+    assert metric["terminal_state"] == "infrastructure_failure"
     assert metric["reason"] == "vlm_judge_failed"
     assert metric["score"] is None
 
@@ -4927,38 +5240,60 @@ def test_complete_l3_subset_aggregation_uses_enabled_metric_scores(tmp_path) -> 
             ],
         }
 
+    config = {
+        "metrics": {
+            "functional_consistency": {"enabled": False},
+            "semantic_placement_consistency": {"enabled": False},
+        }
+    }
+    render_evidence = {
+        "global": [images["global"]],
+        "style_consistency": {
+            "group_001": [images["style_local"]],
+        },
+        "scale_consistency": [images["scale"]],
+        "object_pairing_consistency": [images["pair"]],
+    }
+    applicability = _relevant(
+        "style_consistency",
+        "scale_consistency",
+        "object_pairing_consistency",
+    )
     report = evaluate_scene_quality_interfaces(
         _scene(),
-        config={
-            "metrics": {
-                "functional_consistency": {"enabled": False},
-                "semantic_placement_consistency": {"enabled": False},
-            }
-        },
+        config=config,
         object_grouping_report=_grouping_report(),
-        render_evidence={
-            "global": [images["global"]],
-            "style_consistency": {
-                "group_001": [images["style_local"]],
-            },
-            "scale_consistency": [images["scale"]],
-            "object_pairing_consistency": [images["pair"]],
-        },
+        render_evidence=render_evidence,
         vlm_judge=judge,
-        metric_applicability=_relevant(
-            "style_consistency",
-            "scale_consistency",
-            "object_pairing_consistency",
-        ),
+        metric_applicability=applicability,
     )
     assert report["status"] == "evaluated"
-    assert report["score"] == pytest.approx(2.0 / 3.0)
-    assert report["resolved_score"] == pytest.approx(2.0 / 3.0)
+    assert report["score"] == pytest.approx(0.8)
+    assert report["resolved_score"] == pytest.approx(0.8)
     assert report["resolved_metrics"] == [
         "style_consistency",
         "scale_consistency",
         "object_pairing_consistency",
     ]
+
+    strict = evaluate_scene_quality_interfaces(
+        _scene(),
+        config=config,
+        object_grouping_report=_grouping_report(),
+        render_evidence=render_evidence,
+        vlm_judge=judge,
+        metric_applicability=applicability,
+        strict_metric_inventory=True,
+    )
+    assert strict["status"] == "partial"
+    assert strict["score"] is None
+    assert strict["resolved_score"] is None
+    assert strict["coverage"] == {
+        "eligible_count": 5,
+        "resolved_count": 3,
+        "fraction": 0.6,
+        "complete": False,
+    }
 
 
 def test_retired_namespaces_and_metric_aliases_are_rejected() -> None:
@@ -5014,6 +5349,20 @@ def test_invalid_canonical_configs_are_explicit() -> None:
         )
     with pytest.raises(SceneQualityInterfaceConfigError, match="must remain true"):
         resolve_scene_quality_config({"implemented": False})
+    with pytest.raises(
+        SceneQualityInterfaceConfigError,
+        match="shared_group_bank requires",
+    ):
+        resolve_scene_quality_config(
+            {
+                "metrics": {
+                    "functional_consistency": {
+                        "group_local_check_granularity": "batched",
+                        "group_local_evidence_policy": "shared_group_bank",
+                    }
+                }
+            }
+        )
     with pytest.raises(AuthorizedDeviationError, match="target-specific"):
         validate_authorized_deviations(
             [
@@ -5123,7 +5472,7 @@ def test_global_scope_does_not_require_deferred_local_check_result() -> None:
             "group_context_visible",
         ],
         "observation_goals": ["Inspect support and height."],
-        "source_observation_kinds": ["support_and_height"],
+        "source_check_types": ["support_and_height"],
         "source_discovery_refs": ["global-miss"],
         "origin": "judge_originated_evidence_request",
         "lifecycle_status": "evidence_requested",

@@ -453,6 +453,16 @@ def build_selection_request(
             "target_extent",
             deepcopy(group_scope.get("extent")),
         )
+    functional_repair = _functional_repair_context(
+        request=request,
+        evidence_goal=goal,
+        target_ids=targets,
+    )
+    if functional_repair is not None:
+        # This is a bounded routing hint, not the full Functional ledger.  In
+        # particular, the CameraSelector does not need unrelated checks or
+        # discovery prose from the owning group.
+        context["functional_repair"] = functional_repair
     context.update(
         {
             "camera_acquisition_policy": state.policy,
@@ -533,6 +543,234 @@ def build_selection_request(
         allow_scene_mutation=False,
         context=context,
     )
+
+
+def _functional_repair_context(
+    *,
+    request: JudgeRequest,
+    evidence_goal: dict[str, Any],
+    target_ids: tuple[str, ...],
+) -> dict[str, Any] | None:
+    """Project one pending Functional request into compact camera routing.
+
+    Required checks remain Judge-owned.  This projection only identifies the
+    target, owning group, requested observations, and any already-decoded
+    usable side so deterministic candidate generation can choose the existing
+    side-conditioned repair family instead of reframing the whole group.
+    """
+
+    if request.metric != "functional_consistency":
+        return None
+    raw_request = evidence_goal.get("judge_evidence_request")
+    raw_request = raw_request if isinstance(raw_request, dict) else {}
+    requested_ids = list(
+        dict.fromkeys(
+            str(item)
+            for item in (
+                raw_request.get("target_ids") or target_ids
+            )
+            if str(item).strip() and str(item) != "scene"
+        )
+    )
+    if not requested_ids:
+        return None
+    requested_observations = list(
+        dict.fromkeys(
+            str(item)
+            for item in (
+                raw_request.get("missing_observations")
+                or evidence_goal.get("missing_observations")
+                or []
+            )
+            if str(item).strip()
+        )
+    )
+    if not requested_observations:
+        return None
+
+    functional_packet = request.context.get(
+        "functional_probe_evidence"
+    )
+    functional_packet = (
+        functional_packet
+        if isinstance(functional_packet, dict)
+        else {}
+    )
+    metadata = raw_request.get("metadata")
+    metadata = metadata if isinstance(metadata, dict) else {}
+    requested_check_ids = {
+        str(item)
+        for item in [
+            *(metadata.get("check_ids") or []),
+            *(metadata.get("unresolved_check_ids") or []),
+        ]
+        if str(item).strip()
+    }
+    requested_id_set = set(requested_ids)
+    all_required_checks = [
+        deepcopy(item)
+        for item in functional_packet.get("required_checks") or []
+        if isinstance(item, dict)
+    ]
+    if requested_check_ids:
+        required_checks = [
+            item
+            for item in all_required_checks
+            if str(item.get("check_id") or "") in requested_check_ids
+        ]
+    else:
+        exact_checks = [
+            item
+            for item in all_required_checks
+            if {
+                str(target_id)
+                for target_id in item.get("target_ids") or []
+            }
+            == requested_id_set
+        ]
+        required_checks = exact_checks or [
+            item
+            for item in all_required_checks
+            if requested_id_set
+            & {
+                str(target_id)
+                for target_id in item.get("target_ids") or []
+            }
+        ]
+    boundary = functional_packet.get("boundary_clearance_evidence")
+    boundary = boundary if isinstance(boundary, dict) else {}
+    hypotheses = [
+        deepcopy(item)
+        for item in boundary.get("usable_surface_hypotheses") or []
+        if isinstance(item, dict)
+        and str(item.get("target_id") or "") in requested_id_set
+    ]
+    surface_targets: list[dict[str, Any]] = []
+    for target_id in requested_ids:
+        affordances = [
+            affordance
+            for check in required_checks
+            for affordance in check.get("target_affordances") or []
+            if isinstance(affordance, dict)
+            and str(affordance.get("target_id") or "") == target_id
+        ]
+        roles = list(
+            dict.fromkeys(
+                str(role)
+                for affordance in affordances
+                for role in affordance.get("surface_roles") or []
+                if str(role).strip()
+            )
+        )
+        matching_hypothesis = next(
+            (
+                deepcopy(item)
+                for item in hypotheses
+                if str(item.get("target_id") or "") == target_id
+            ),
+            None,
+        )
+        surface_targets.append(
+            {
+                "target_id": target_id,
+                "directionality": (
+                    "directed"
+                    if any(
+                        str(affordance.get("directionality") or "")
+                        == "directed"
+                        for affordance in affordances
+                    )
+                    else "non_directed"
+                ),
+                "surface_roles": roles,
+                "need_clearance": any(
+                    affordance.get("need_clearance") is True
+                    for affordance in affordances
+                )
+                or any(
+                    str(check.get("check_type") or "") == "clearance"
+                    and target_id
+                    in {
+                        str(item)
+                        for item in check.get("target_ids") or []
+                    }
+                    for check in required_checks
+                ),
+                **(
+                    {"precomputed_hypothesis": matching_hypothesis}
+                    if matching_hypothesis is not None
+                    else {}
+                ),
+            }
+        )
+
+    group_scope = request.context.get("group_scope")
+    group_scope = group_scope if isinstance(group_scope, dict) else {}
+    source_check_ids = list(
+        dict.fromkeys(
+            str(item.get("check_id") or "")
+            for item in required_checks
+            if str(item.get("check_id") or "").strip()
+        )
+    )
+    owner_stages = list(
+        dict.fromkeys(
+            str(item.get("owner_stage") or "")
+            for item in required_checks
+            if str(item.get("owner_stage") or "").strip()
+        )
+    )
+    return {
+        "schema_version": "functional_camera_repair_v2",
+        "source": "judge_need_more_evidence",
+        "target_ids": requested_ids,
+        "route_scope": (
+            "cross_group"
+            if "cross_group_relation" in owner_stages
+            else "group_local"
+        ),
+        "group_id": group_scope.get("group_id"),
+        "group_member_ids": [
+            str(item)
+            for item in group_scope.get("member_ids") or []
+            if str(item).strip()
+        ],
+        "required_observations": requested_observations,
+        "view_goal": str(
+            raw_request.get("view_goal")
+            or evidence_goal.get("view_goal")
+            or "functional target clarification"
+        )[:1000],
+        "source_check_ids": source_check_ids,
+        "check_types": list(
+            dict.fromkeys(
+                str(item.get("check_type") or "")
+                for item in required_checks
+                if str(item.get("check_type") or "").strip()
+            )
+        ),
+        "check_relations": list(
+            dict.fromkeys(
+                str(item.get("relation") or "")
+                for item in required_checks
+                if str(item.get("relation") or "").strip()
+            )
+        ),
+        "relation_predicates": list(
+            dict.fromkeys(
+                str(value)
+                for item in required_checks
+                for value in (
+                    item.get("observation_kinds")
+                    or ([item.get("predicate")] if item.get("predicate") else [])
+                )
+                if str(value).strip()
+            )
+        ),
+        "surface_targets": surface_targets,
+        "usable_surface_hypotheses": hypotheses,
+        "decision_authority": "none",
+    }
 
 
 def escalation_allowed(

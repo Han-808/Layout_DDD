@@ -192,7 +192,7 @@ def test_additive_partial_config_overrides_only_explicit_fields() -> None:
             "max_evidence_rounds": 1,
             "max_total_images": 4,
         },
-        "on_selector_failure": "unresolved",
+        "on_selector_failure": "keep_previous_evidence",
     }
     _validate(patch)
 
@@ -209,10 +209,17 @@ def test_additive_partial_config_overrides_only_explicit_fields() -> None:
     assert resolved.max_total_images == 4
     assert resolved.max_views_per_round == 2
     assert resolved.on_budget_exhausted == "force_choice"
-    assert resolved.on_selector_failure == "unresolved"
+    assert resolved.on_selector_failure == "keep_previous_evidence"
     assert resolved.sources["camera_selector.backend"] == "config"
     assert resolved.sources["budgets.max_total_images"] == "config"
     assert resolved.sources["budgets.max_views_per_round"] == "default"
+
+
+def test_selector_failure_policy_cannot_reopen_scientific_unresolved() -> None:
+    with pytest.raises(ValueError, match="on_selector_failure"):
+        resolve_vlm_evaluation_control(
+            {"on_selector_failure": "unresolved"}
+        )
 
 
 def test_old_or_empty_config_missing_new_fields_remains_valid() -> None:

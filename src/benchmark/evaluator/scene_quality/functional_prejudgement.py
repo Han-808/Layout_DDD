@@ -41,6 +41,7 @@ _COMPATIBLE_FUNCTIONAL_ACQUISITION_PLAN_VERSIONS = frozenset(
     {
         "functional_acquisition_plan_v7",
         "functional_acquisition_plan_v8",
+        "functional_acquisition_plan_v9",
         FUNCTIONAL_ACQUISITION_PLAN_VERSION,
     }
 )

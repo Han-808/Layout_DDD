@@ -22,10 +22,13 @@ canonical metric response contract. Use exactly the same visual evidence and
 structured context. This is contract reconciliation, not a second
 adjudication. Preserve coherent typed check conclusions, defect target IDs,
 evidence-request targets, and substantive explanations. If the response
-envelope contradicts its explicit typed rows, reconcile only the envelope: a
-typed invalid row with its explicit defect requires verdict=invalid even when
-other rows remain unresolved; verdict=valid requires every required row to
-resolve without a defect; insufficient evidence requires verdict=ambiguous;
+envelope contradicts its explicit typed rows, reconcile only the envelope. If
+any required typed row remains unresolved, use evidence_status=insufficient,
+verdict=ambiguous, and defects=[]; keep already-observed invalid conclusions in
+their typed rows for the next evidence round. Only after every required row is
+resolved does a typed invalid row require verdict=invalid plus its explicit
+defect. verdict=valid requires every required row to resolve without a defect;
+insufficient evidence requires verdict=ambiguous;
 sufficient evidence must clear missing_evidence and evidence_request. Judge only the requested metric
 and use only the allowed defect scopes, target IDs,
 and Camera DSL observation tokens from the previous user message. Do not
@@ -36,9 +39,10 @@ missing_evidence as a list; defects as a list; and evidence_request null unless
 evidence_status is insufficient. If the original request requires
 functional_check_results or placement_check_results, include every exact
 required check ID once and preserve its target/subject/context IDs, observation
-status, and conclusion. Every invalid required Functional check must appear in
-exactly one defect.check_refs list; one physical defect may reference multiple
-invalid checks. Preserve the semantics of judge-originated Placement
+status, and conclusion. When all Functional checks are resolved, every invalid
+required check must appear in exactly one defect.check_refs list; while any row
+is unresolved, final defects must remain empty. One physical defect may
+reference multiple invalid checks. Preserve the semantics of judge-originated Placement
 checks, but assign unique proposal IDs and canonical typed check IDs when the
 original identifiers collide. Preserve exact Function ownership references and
 required causal attribution fields for an invalid clearance check. Invalid
@@ -316,8 +320,18 @@ def _canonical_semantic_signature(
     """
 
     signature: dict[str, Any] = {}
+    functional_rows_value = value.get("functional_check_results")
+    functional_clearance_check_ids = _functional_clearance_check_ids(
+        functional_rows_value
+    )
     evidence_status = value.get("evidence_status")
-    semantic_invalid = _has_explicit_typed_invalid_defect(value)
+    functional_pending = _functional_rows_have_unresolved(
+        functional_rows_value
+    )
+    semantic_invalid = bool(
+        not functional_pending
+        and _has_explicit_typed_invalid_defect(value)
+    )
     missing_evidence = value.get("missing_evidence")
     evidence_request = value.get("evidence_request")
     evidence_envelope_conflict = bool(
@@ -325,6 +339,7 @@ def _canonical_semantic_signature(
             evidence_status == "insufficient"
             and semantic_invalid
         )
+        or (functional_pending and evidence_status != "insufficient")
         or (
             evidence_status == "sufficient"
             and (
@@ -340,14 +355,17 @@ def _canonical_semantic_signature(
         signature["evidence_status"] = evidence_status
     verdict = value.get("verdict")
     verdict_envelope_conflict = bool(
-        semantic_invalid and verdict != "invalid"
+        (semantic_invalid and verdict != "invalid")
+        or (functional_pending and verdict != "ambiguous")
     )
     if (
         verdict in {"valid", "invalid", "ambiguous"}
         and not verdict_envelope_conflict
     ):
         signature["verdict"] = verdict
-    if verdict == "invalid" or semantic_invalid:
+    if (
+        verdict == "invalid" and not functional_pending
+    ) or semantic_invalid:
         defects = value.get("defects")
         if isinstance(defects, list):
             signature["defect_count"] = len(defects)
@@ -364,6 +382,35 @@ def _canonical_semantic_signature(
             linked_claims = _defect_check_ref_claims(defects)
             if linked_claims:
                 signature["defect_check_refs"] = linked_claims
+            scoring_semantics = []
+            for defect in defects:
+                if not isinstance(defect, dict):
+                    continue
+                derived_scoring = bool(
+                    set(_normalized_text_set(defect.get("check_refs")))
+                    & functional_clearance_check_ids
+                )
+                scoring_semantics.append(
+                    (
+                        str(defect.get("category") or ""),
+                        str(defect.get("severity") or ""),
+                        (
+                            ()
+                            if derived_scoring
+                            else _normalized_text_set(
+                                defect.get("scoring_target_ids")
+                            )
+                        ),
+                        str(defect.get("attribution_mode") or ""),
+                    )
+                )
+            if (
+                len(scoring_semantics) == len(defects)
+                and any(any(item) for item in scoring_semantics)
+            ):
+                signature["defect_scoring_semantics"] = sorted(
+                    scoring_semantics
+                )
     if (
         (verdict == "ambiguous" or evidence_status == "insufficient")
         and not semantic_invalid
@@ -413,13 +460,12 @@ def _canonical_semantic_signature(
                         or []
                     )
                 ),
-                tuple(
-                    sorted(
-                        str(target_id)
-                        for target_id in item.get(
-                            "scoring_target_ids"
-                        )
-                        or []
+                (
+                    ()
+                    if str(item.get("check_id") or "")
+                    in functional_clearance_check_ids
+                    else _normalized_text_set(
+                        item.get("scoring_target_ids")
                     )
                 ),
             )
@@ -447,6 +493,23 @@ def _canonical_semantic_signature(
             for item in placement_rows
         )
     return signature
+
+
+def _functional_rows_have_unresolved(value: Any) -> bool:
+    """Return whether the typed Functional batch still needs evidence.
+
+    Invalid observations already made in the same batch remain auditable rows,
+    but they are not final defect claims until every required row is resolved.
+    """
+
+    return bool(
+        isinstance(value, list)
+        and any(
+            isinstance(row, dict)
+            and row.get("conclusion") == "unresolved"
+            for row in value
+        )
+    )
 
 
 def _has_explicit_typed_invalid_defect(value: dict[str, Any]) -> bool:
@@ -589,6 +652,29 @@ def _defect_check_ref_claims(
     return tuple(sorted(claims))
 
 
+def _functional_clearance_check_ids(value: Any) -> set[str]:
+    """Identify rows whose scoring owner is deterministic bookkeeping."""
+
+    if not isinstance(value, list):
+        return set()
+    return {
+        str(row.get("check_id") or "")
+        for row in value
+        if isinstance(row, dict)
+        and str(row.get("check_id") or "")
+        and (
+            row.get("cause_kind") in {"external_object", "self_layout"}
+            or any(
+                field in row
+                for field in (
+                    "affected_object_ids",
+                    "causal_object_ids",
+                )
+            )
+        )
+    }
+
+
 def _restore_canonical_natural_language(
     initial: dict[str, Any],
     repaired: dict[str, Any],
@@ -609,7 +695,10 @@ def _restore_canonical_natural_language(
         restored_fields=restored_fields,
     )
 
-    if (
+    initial_functional_pending = _functional_rows_have_unresolved(
+        initial.get("functional_check_results")
+    )
+    if not initial_functional_pending and (
         initial.get("verdict") == "invalid"
         or _has_explicit_typed_invalid_defect(initial)
     ):
@@ -692,6 +781,29 @@ def _restore_canonical_natural_language(
             )
             for field_name in fields_to_restore:
                 original_value = deepcopy(original.get(field_name))
+                if candidate.get(field_name) != original_value:
+                    restored_fields.append(
+                        f"defects[{index}].{field_name}"
+                    )
+                candidate[field_name] = original_value
+            semantic_fields = [
+                "category",
+                "severity",
+                "attribution_mode",
+                "ownership_event_id",
+            ]
+            clearance_check_ids = _functional_clearance_check_ids(
+                initial.get("functional_check_results")
+            )
+            is_derived_clearance_scoring = bool(
+                set(original_check_refs) & clearance_check_ids
+            )
+            if not is_derived_clearance_scoring:
+                semantic_fields.append("scoring_target_ids")
+            for field_name in semantic_fields:
+                if field_name not in original:
+                    continue
+                original_value = deepcopy(original[field_name])
                 if candidate.get(field_name) != original_value:
                     restored_fields.append(
                         f"defects[{index}].{field_name}"

@@ -9,6 +9,9 @@ from PIL import Image
 from benchmark.visual_judge.control_config import (
     resolve_vlm_evaluation_control,
 )
+from benchmark.visual_judge.adapters.deterministic_camera import (
+    DeterministicLocalCameraSelector,
+)
 from benchmark.visual_judge.control_loop import (
     EvidenceRenderResult,
     ExistingEvidenceRendererAdapter,
@@ -56,7 +59,11 @@ def _write_blank_png(path) -> None:
     Image.new("RGB", (4, 4), (255, 255, 255)).save(path)
 
 
-def _judge_request(*, evidence: tuple[object, ...] = ("initial.png",)):
+def _judge_request(
+    *,
+    evidence: tuple[object, ...] = ("initial.png",),
+    context: dict | None = None,
+):
     return JudgeRequest(
         task="collision",
         metric="collision",
@@ -65,6 +72,7 @@ def _judge_request(*, evidence: tuple[object, ...] = ("initial.png",)):
         deterministic_evidence={"detector": "unresolved"},
         visual_evidence=evidence,
         rubric={"scope": "collision"},
+        context=deepcopy(context or {}),
     )
 
 
@@ -186,6 +194,7 @@ def _run(
     selector_result=None,
     control=None,
     evidence=("initial.png",),
+    context=None,
     manifest_path=None,
 ):
     calls = []
@@ -208,7 +217,10 @@ def _run(
         control=control,
     )
     result = controller.run(
-        _judge_request(evidence=tuple(evidence)),
+        _judge_request(
+            evidence=tuple(evidence),
+            context=context,
+        ),
         candidate_views=({"id": "view-1"},),
         allowed_actions=("orbit",),
         control_manifest_path=manifest_path,
@@ -469,6 +481,212 @@ def test_judge_requested_camera_repair_runs_selector_render_gate_judge():
     ]
     assert len(gate.requests) == 2
     assert list(result.visual_evidence) == ["initial.png", "repair.png"]
+
+
+def test_shared_group_bank_reuse_precedes_camera_selector() -> None:
+    context = {
+        "functional_group_evidence_window": {
+            "policy": "shared_group_bank",
+            "group_id": "group_001",
+            "check_id": "check-a-b",
+            "max_active_images": 6,
+            "fixed_artifact_ids": [
+                "path:global.png",
+                "path:group-local.png",
+            ],
+            "reusable_artifacts": [
+                {
+                    "artifact_id": "path:shared-detail.png",
+                    "visual_evidence": "shared-detail.png",
+                    "check_ids": ["check-a-b"],
+                    "target_ids": ["a", "b"],
+                    "required_observations": [
+                        "support_contact_region"
+                    ],
+                    "sources": [
+                        {
+                            "source_kind": "check_camera_render",
+                            "source_check_id": "check-a",
+                        }
+                    ],
+                }
+            ],
+        }
+    }
+    result, calls, _, judge, selector, renderer = _run(
+        gate_results=[
+            _gate_result(ready=True),
+            _gate_result(ready=True),
+        ],
+        judge_results=[_need_more_result(), _valid_result()],
+        evidence=("global.png", "group-local.png"),
+        context=context,
+        control=resolve_vlm_evaluation_control(
+            {"budgets": {"max_total_images": 8}}
+        ),
+    )
+
+    assert result.status == "valid"
+    assert calls == ["gate", "judge", "gate", "judge"]
+    assert not selector.requests
+    assert not renderer.requests
+    assert list(judge.requests[-1].visual_evidence) == [
+        "global.png",
+        "group-local.png",
+        "shared-detail.png",
+    ]
+    assert all(
+        "functional_group_evidence_window" not in request.context
+        for request in judge.requests
+    )
+    assert "functional_group_evidence_window" in result.audit[
+        "judge_request"
+    ]["context"]
+    reuse = next(
+        item
+        for item in result.audit["trace"]
+        if item["stage"] == "evidence_bank_reuse"
+    )
+    assert reuse["camera_selector_invoked"] is False
+    assert reuse["reused_artifact_ids"] == [
+        "path:shared-detail.png"
+    ]
+    assert result.audit["evidence_window"]["final_artifact_ids"] == [
+        "path:global.png",
+        "path:group-local.png",
+        "path:shared-detail.png",
+    ]
+
+
+def test_shared_group_bank_render_flush_preserves_fixed_window() -> None:
+    evidence = (
+        "global.png",
+        "group-local.png",
+        "old-1.png",
+        "old-2.png",
+        "old-3.png",
+        "old-4.png",
+    )
+    result, calls, _, judge, _, _ = _run(
+        gate_results=[
+            _gate_result(ready=True),
+            _gate_result(ready=True),
+        ],
+        judge_results=[_need_more_result(), _valid_result()],
+        render_result={
+            "visual_evidence": ["new-detail.png"],
+            "merge_policy": "append",
+        },
+        evidence=evidence,
+        context={
+            "functional_group_evidence_window": {
+                "policy": "shared_group_bank",
+                "group_id": "group_001",
+                "check_id": "check-a-b",
+                "max_active_images": 6,
+                "fixed_artifact_ids": [
+                    "path:global.png",
+                    "path:group-local.png",
+                ],
+                "reusable_artifacts": [],
+            }
+        },
+        control=resolve_vlm_evaluation_control(
+            {"budgets": {"max_total_images": 8}}
+        ),
+    )
+
+    assert result.status == "valid"
+    assert calls == [
+        "gate",
+        "judge",
+        "selector",
+        "render",
+        "gate",
+        "judge",
+    ]
+    assert list(judge.requests[-1].visual_evidence) == [
+        "global.png",
+        "group-local.png",
+        "new-detail.png",
+    ]
+    window = result.audit["evidence_window"]
+    render_event = next(
+        item
+        for item in window["events"]
+        if item["trigger"] == "camera_render"
+    )
+    assert render_event["overflow_flush_applied"] is True
+    assert render_event["evicted_artifact_ids"] == [
+        "path:old-1.png",
+        "path:old-2.png",
+        "path:old-3.png",
+        "path:old-4.png",
+    ]
+    assert window["physical_artifacts_deleted"] is False
+
+
+def test_shared_group_bank_never_reintroduces_evicted_seen_artifacts() -> None:
+    reusable = [
+        {
+            "artifact_id": f"path:shared-{name}.png",
+            "visual_evidence": f"shared-{name}.png",
+            "check_ids": ["check-a-b"],
+            "target_ids": ["a", "b"],
+            "required_observations": ["support_contact_region"],
+        }
+        for name in ("first", "second")
+    ]
+    result, calls, _, _, selector, _ = _run(
+        gate_results=[_gate_result(ready=True) for _ in range(4)],
+        judge_results=[
+            _need_more_result(),
+            _need_more_result(),
+            _need_more_result(),
+            _valid_result(),
+        ],
+        evidence=("global.png", "group-local.png"),
+        context={
+            "functional_group_evidence_window": {
+                "policy": "shared_group_bank",
+                "group_id": "group_001",
+                "check_id": "check-a-b",
+                "max_active_images": 3,
+                "fixed_artifact_ids": [
+                    "path:global.png",
+                    "path:group-local.png",
+                ],
+                "reusable_artifacts": reusable,
+            }
+        },
+        control=resolve_vlm_evaluation_control(
+            {"budgets": {"max_total_images": 8}}
+        ),
+    )
+
+    assert result.status == "valid"
+    reuse_events = [
+        item
+        for item in result.audit["trace"]
+        if item["stage"] == "evidence_bank_reuse"
+    ]
+    assert [item["reused_artifact_ids"] for item in reuse_events] == [
+        ["path:shared-first.png"],
+        ["path:shared-second.png"],
+    ]
+    assert len(selector.requests) == 1
+    assert calls == [
+        "gate",
+        "judge",
+        "gate",
+        "judge",
+        "gate",
+        "judge",
+        "selector",
+        "render",
+        "gate",
+        "judge",
+    ]
 
 
 def test_renderer_cannot_exceed_max_views_per_round_before_judge():
@@ -949,18 +1167,43 @@ def test_rendered_packet_over_image_budget_is_rejected_before_rejudging():
     assert render_event["accepted_for_judging"] is False
 
 
-def test_selector_failure_keeps_previous_evidence_and_does_not_rejudge():
+def test_selector_failure_forces_terminal_choice_with_retained_evidence():
     result, calls, _, judge, _, _ = _run(
         gate_results=[_gate_result(ready=True)],
-        judge_results=[_need_more_result()],
+        judge_results=[_need_more_result(), _valid_result()],
         selector_result=RuntimeError("selector unavailable"),
     )
 
-    assert result.status == "unresolved"
-    assert result.stop_reason == "camera_selector_failed"
+    assert result.status == "valid"
+    assert result.stop_reason == "camera_selector_failed_forced_choice"
     assert list(result.visual_evidence) == ["initial.png"]
-    assert calls == ["gate", "judge", "selector"]
-    assert len(judge.requests) == 1
+    assert calls == ["gate", "judge", "selector", "judge"]
+    assert len(judge.requests) == 2
+    assert list(judge.requests[-1].visual_evidence) == ["initial.png"]
+    assert judge.requests[-1].context[
+        "budget_exhaustion_finalization"
+    ]["trigger_stop_reason"] == "camera_selector_failed"
+    assert result.audit["degraded_terminal_choice"] == {
+        "applied": True,
+        "trigger_stop_reason": "camera_selector_failed",
+        "failure_kind": "selector_exception",
+        "selection_stage": "deterministic",
+        "retained_prior_evidence": True,
+        "retained_evidence": ["initial.png"],
+        "final_status": "valid",
+    }
+
+
+def test_selector_failure_does_not_accept_a_second_need_more_response():
+    with pytest.raises(
+        ValueError,
+        match="terminal budget-exhaustion Judge must return valid or invalid",
+    ):
+        _run(
+            gate_results=[_gate_result(ready=True)],
+            judge_results=[_need_more_result(), _need_more_result()],
+            selector_result=RuntimeError("selector unavailable"),
+        )
 
 
 def test_unchanged_rendered_packet_is_gated_then_stops():
@@ -4071,6 +4314,98 @@ def test_controlled_composite_provider_cannot_return_two_independent_views(
     ]
 
 
+def test_canonical_scene_quality_geometry_exhaustion_forces_binary_choice(
+    tmp_path,
+) -> None:
+    initial = tmp_path / "initial.png"
+    _write_nonblank_png(initial)
+
+    class _Judge:
+        def __init__(self):
+            self.requests = []
+
+        def adjudicate_scene_quality(self, request):
+            self.requests.append(request)
+            if len(self.requests) == 1:
+                return {
+                    "evidence_status": "insufficient",
+                    "verdict": "ambiguous",
+                    "confidence": 0.2,
+                    "reason": "need a side-conditioned target view",
+                    "missing_evidence": [
+                        "interaction_side_visible",
+                        "front_back_disambiguated",
+                    ],
+                    "defects": [],
+                    "evidence_request": {
+                        "target_ids": ["lamp"],
+                        "missing_observations": [
+                            "interaction_side_visible",
+                            "front_back_disambiguated",
+                        ],
+                        "view_goal": "show the lamp interaction side",
+                    },
+                }
+            return {
+                "evidence_status": "sufficient",
+                "verdict": "valid",
+                "confidence": 0.7,
+                "reason": "forced conclusion from all bounded evidence",
+                "missing_evidence": [],
+                "defects": [],
+            }
+
+    class _Renderer:
+        def render(self, request):
+            raise AssertionError(request)
+
+    def exhausted_generator(*args, **kwargs):
+        del args, kwargs
+        raise ValueError(
+            "feasible camera candidate generation could not satisfy the exact "
+            "bank size: requested=6, generated=0, "
+            "metric=functional_consistency"
+        )
+
+    judge = _Judge()
+    wrapper = ControlledVLMJudge(
+        judge,
+        control=resolve_vlm_evaluation_control(),
+        deterministic_camera_selector=DeterministicLocalCameraSelector(
+            candidate_generator=exhausted_generator
+        ),
+        evidence_renderer=_Renderer(),
+    )
+
+    result = wrapper.adjudicate_scene_quality(
+        {
+            "metric": "functional_consistency",
+            "scene_summary": {
+                "objects": [{"id": "lamp"}],
+            },
+            "target_object_ids": ["lamp"],
+            "render_evidence": [str(initial)],
+            "judgment_scope": {
+                "included": ["functional_consistency"]
+            },
+        }
+    )
+
+    assert result["verdict"] == "valid"
+    assert len(judge.requests) == 2
+    audit_record = wrapper.audit_records[0]
+    assert audit_record["status"] == "valid"
+    assert audit_record["stop_reason"] == (
+        "no_feasible_candidate_forced_choice"
+    )
+    assert audit_record["budget_exhaustion_forced_choice"][
+        "applied"
+    ] is True
+    assert audit_record["audit"]["terminal_forced_choice"][
+        "ambiguity_before_forcing"
+    ] is True
+
+
 @pytest.mark.parametrize(
     ("method_name", "metric", "internal_method"),
     [
@@ -4210,7 +4545,18 @@ def test_relation_camera_selector_receives_all_plural_relation_targets(
     _write_nonblank_png(evidence)
 
     class _Judge:
+        def __init__(self):
+            self.calls = 0
+
         def _adjudicate_relation_control(self, request):
+            self.calls += 1
+            if self.calls > 1:
+                return {
+                    "status": "valid",
+                    "confidence": 0.6,
+                    "reason": "best bounded evidence supports the relation",
+                    "defects": [],
+                }
             return {
                 "status": "need_more_evidence",
                 "confidence": 0.1,
@@ -4249,36 +4595,39 @@ def test_relation_camera_selector_receives_all_plural_relation_targets(
         evidence_renderer=_Renderer(),
     )
 
-    with pytest.raises(EvidenceControlUnresolvedError):
-        wrapper.adjudicate_relation(
-            {
-                "metric": "around",
-                "relation": {
-                    "type": "around",
-                    "subject_ids": [
-                        "left",
-                        "right",
-                        "north",
-                        "south",
-                    ],
-                    "object_id": "middle",
-                },
-                "scene_summary": {
-                    "objects": [
-                        {"id": "left"},
-                        {"id": "right"},
-                        {"id": "north"},
-                        {"id": "south"},
-                        {"id": "middle"},
-                    ]
-                },
-                "render_evidence": [str(evidence)],
-                "candidate_views": [
-                    {"id": "around-view", "pose": {"id": "around-view"}}
+    result = wrapper.adjudicate_relation(
+        {
+            "metric": "around",
+            "relation": {
+                "type": "around",
+                "subject_ids": [
+                    "left",
+                    "right",
+                    "north",
+                    "south",
                 ],
-            }
-        )
+                "object_id": "middle",
+            },
+            "scene_summary": {
+                "objects": [
+                    {"id": "left"},
+                    {"id": "right"},
+                    {"id": "north"},
+                    {"id": "south"},
+                    {"id": "middle"},
+                ]
+            },
+            "render_evidence": [str(evidence)],
+            "candidate_views": [
+                {
+                    "id": "around-view",
+                    "pose": {"id": "around-view"},
+                },
+            ],
+        }
+    )
 
+    assert result["verdict"] == "valid"
     assert selector.requests[0].target_ids == (
         "left",
         "right",

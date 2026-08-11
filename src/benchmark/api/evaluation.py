@@ -18,15 +18,18 @@ Output:
 Function:
     Runs one canonical L0--L4 workflow. Prompt granularity is reporting metadata,
     L2 activation comes only from the frozen specification contract, and L3
-    contains Scale, Object Pairing, and Style Consistency. Unresolved evidence
-    keeps ``score=None`` rather than silently passing. The checked-in Game
-    profile is the only isolated compatibility adapter.
+    contains Scale, Style, Object Pairing, Functional, and Semantic Placement
+    Consistency. Scientific evidence ambiguity is forced to a binary Judge
+    result at terminal budget; infrastructure or incomplete coverage keeps
+    ``score=None`` rather than silently passing. The checked-in Game profile is
+    the only isolated compatibility adapter.
 """
 
 from __future__ import annotations
 
 import argparse
 from copy import deepcopy
+import math
 from pathlib import Path
 from typing import Any
 
@@ -66,6 +69,21 @@ from benchmark.evaluator.profile import (
     canonical_score_coverage,
     is_legacy_game_profile,
     resolve_evaluation_profile,
+)
+from benchmark.evaluator.scoring import (
+    INTRINSIC_VALIDITY_PROFILE_ID,
+    LEGACY_SCORING_SPEC_VERSION,
+    PROMPT_CONDITIONED_QUALITY_PROFILE_ID,
+    SCORING_SPEC_VERSION,
+    L3_METRIC_WEIGHTS,
+    apply_projection,
+    canonical_scene_object_ids,
+    resolve_scoring_profile,
+    score_collision_report,
+    score_oob_report,
+    score_support_report,
+    scoring_reliability_summary,
+    scoring_profile_for_run,
 )
 from benchmark.evaluator.generic_validity.mesh_geometry import load_collision_geometry_manifest
 from benchmark.grouping import (
@@ -123,6 +141,7 @@ def run_evaluate(
 
     profile = kwargs.get("evaluation_profile")
     if is_legacy_game_profile(profile):
+        kwargs.pop("scoring_profile_id", None)
         return _run_legacy_game_evaluate(**kwargs)
     return _run_canonical_evaluate(**kwargs)
 
@@ -148,6 +167,7 @@ def _run_canonical_evaluate(
     vlm_judge: object | None = None,
     grouping_model: object | None = None,
     evaluation_profile: dict | None = None,
+    scoring_profile_id: str | None = None,
     support_enabled: bool | None = None,
     p0b_official_mode: bool = False,
     p0b_local_view_provider: object | None = None,
@@ -237,6 +257,21 @@ def _run_canonical_evaluate(
             )
     active_l2_metrics = _active_specification_families(resolved_contract)
     resolved_profile = resolve_evaluation_profile(evaluation_profile)
+    scoring_profile = _resolve_run_scoring_profile(
+        scoring_profile_id=scoring_profile_id,
+        active_l2_metrics=active_l2_metrics,
+        resolved_profile=resolved_profile,
+    )
+    if scoring_profile is not None:
+        resolved_profile = deepcopy(resolved_profile)
+        resolved_profile["layer_weights"] = deepcopy(
+            scoring_profile["layer_weights"]
+        )
+        for metric_name, metric_weight in L3_METRIC_WEIGHTS.items():
+            resolved_profile[L3]["metrics"][metric_name]["weight"] = (
+                metric_weight
+            )
+    frozen_object_ids = canonical_scene_object_ids(normalized_scene)
     l3_render_evidence = _normalize_canonical_render_evidence(render_evidence)
     grouping_evidence = prepare_grouping_evidence(
         (
@@ -265,6 +300,15 @@ def _run_canonical_evaluate(
         active_l2_metrics=active_l2_metrics,
     )
     evaluation_plan["prompt_granularity_resolution_source"] = granularity_source
+    evaluation_plan["scoring_profile"] = (
+        deepcopy(scoring_profile)
+        if scoring_profile is not None
+        else {
+            "scoring_profile_id": "custom_evaluation_profile_compat",
+            "scoring_spec_version": LEGACY_SCORING_SPEC_VERSION,
+            "layer_weights": deepcopy(resolved_profile["layer_weights"]),
+        }
+    )
 
     renders = overview_render_evidence
     resolved_vlm_control = _resolve_runtime_vlm_control(
@@ -352,6 +396,11 @@ def _run_canonical_evaluate(
         p0b_official_mode=p0b_official_mode,
         metric_applicability=l1_applicability,
     )
+    if scoring_profile is not None:
+        _apply_canonical_l1_scoring(
+            reports["generic_validity"],
+            ordered_object_ids=frozen_object_ids,
+        )
     l1_report = _canonical_l1_report(reports["generic_validity"])
 
     if "oor" in active_l2_metrics:
@@ -452,6 +501,8 @@ def _run_canonical_evaluate(
         authorized_deviations=resolved_authorized_deviations,
         metric_applicability=scene_quality_applicability(resolved_asset_policy),
         visual_style_spec=resolved_visual_style_spec,
+        apply_burden_scoring=scoring_profile is not None,
+        strict_metric_inventory=scoring_profile is not None,
     )
     reports["scene_quality"] = scene_quality_report
 
@@ -480,11 +531,68 @@ def _run_canonical_evaluate(
     }
     scoring_reports = {name: layer_reports[name] for name in (L1, L2, L3, L4)}
     layer_weights = resolved_profile["layer_weights"]
-    benchmark_score = weighted_benchmark_score(scoring_reports, layer_weights)
+    resolved_scoring_profile_id = (
+        str(scoring_profile["scoring_profile_id"])
+        if scoring_profile is not None
+        else "custom_evaluation_profile_compat"
+    )
+    resolved_scoring_spec_version = (
+        str(scoring_profile["scoring_spec_version"])
+        if scoring_profile is not None
+        else LEGACY_SCORING_SPEC_VERSION
+    )
+    benchmark_score = (
+        _strict_scoring_profile_score(scoring_reports, layer_weights)
+        if scoring_profile is not None
+        else weighted_benchmark_score(scoring_reports, layer_weights)
+    )
+    benchmark_score_100 = (
+        None if benchmark_score is None else 100.0 * float(benchmark_score)
+    )
     coverage = canonical_score_coverage(
         scoring_reports,
         layer_weights,
         profile_version=CANONICAL_PROFILE_VERSION,
+        scoring_profile_id=resolved_scoring_profile_id,
+        scoring_spec_version=resolved_scoring_spec_version,
+    )
+    if scoring_profile is not None:
+        coverage = _strict_scoring_profile_coverage(
+            coverage,
+            scoring_reports=scoring_reports,
+            layer_weights=layer_weights,
+        )
+    vlm_control_manifest = _runtime_vlm_control_manifest(
+        resolved_vlm_control,
+        runtime_judge=runtime_vlm_judge,
+    )
+    runtime_control = (
+        vlm_control_manifest.get("integration", {}).get("runtime", {})
+        if isinstance(vlm_control_manifest, dict)
+        else {}
+    )
+    controlled_calls = (
+        runtime_control.get("controlled_calls")
+        if isinstance(runtime_control, dict)
+        and isinstance(runtime_control.get("controlled_calls"), list)
+        else []
+    )
+    required_reliability_metrics = (
+        {
+            L1: ["collision", "support", "oob"],
+            L2: list(active_l2_metrics),
+            L3: list(L3_METRIC_WEIGHTS),
+        }
+        if scoring_profile is not None
+        else None
+    )
+    scoring_reliability = scoring_reliability_summary(
+        l1_metrics=(reports["generic_validity"].get("metrics") or {}),
+        l2_metrics=(l2_report.get("claim_family_reports") or {}),
+        l3_metrics=(scene_quality_report.get("metrics") or {}),
+        judge_episodes=controlled_calls,
+        required_metrics_by_layer=required_reliability_metrics,
+        scoring_coverage=coverage,
     )
 
     report = {
@@ -502,10 +610,25 @@ def _run_canonical_evaluate(
             "complete" if coverage["complete"] else "incomplete"
         ),
         "benchmark_score": benchmark_score,
+        "benchmark_score_100": benchmark_score_100,
         "benchmark_score_status": (
             "complete" if benchmark_score is not None else "insufficient_metric_coverage"
         ),
         "evaluation_plan": evaluation_plan,
+        "scoring_profile": (
+            deepcopy(scoring_profile)
+            if scoring_profile is not None
+            else {
+                "scoring_profile_id": resolved_scoring_profile_id,
+                "scoring_spec_version": resolved_scoring_spec_version,
+                "layer_weights": deepcopy(layer_weights),
+            }
+        ),
+        "canonical_object_denominator": {
+            "ordered_object_ids": list(frozen_object_ids),
+            "n_scene": len(frozen_object_ids),
+        },
+        "scoring_reliability": scoring_reliability,
         "layer_reports": layer_reports,
         # Alias retained at the wire boundary, but contains canonical layers
         # only. Legacy category names never appear in a canonical report.
@@ -553,10 +676,7 @@ def _run_canonical_evaluate(
                 ),
             },
             "visual_config_unchanged": True,
-            "vlm_evaluation_control": _runtime_vlm_control_manifest(
-                resolved_vlm_control,
-                runtime_judge=runtime_vlm_judge,
-            ),
+            "vlm_evaluation_control": vlm_control_manifest,
             "deprecated_runtime_inputs": {
                 "eval_oor": "ignored; contract claims activate OOR",
                 "eval_oar": "ignored; contract claims activate OAR",
@@ -737,6 +857,9 @@ def _run_legacy_game_evaluate(
             p0b_official_mode=p0b_official_mode,
             metric_applicability=frozen_metric_applicability,
         )
+        _strip_canonical_scoring_audit_for_legacy_game(
+            reports["generic_validity"]
+        )
     # Finish both shared categories before executing either mode-specific
     # Category 2 branch. This keeps their VLM call order, inputs, and reports
     # independent of the prompt-granularity gate.
@@ -849,6 +972,7 @@ def _run_legacy_game_evaluate(
             authorized_deviations=resolved_authorized_deviations,
             metric_applicability=scene_quality_applicability(resolved_asset_policy),
             profile=None,
+            apply_burden_scoring=False,
         )
         if scene_quality_interfaces.get("enabled"):
             reports["scene_quality_interfaces"] = scene_quality_interfaces
@@ -1228,6 +1352,18 @@ def main() -> None:
             / "metric_profile_canonical_v2.yaml"
         ),
     )
+    parser.add_argument(
+        "--scoring-profile-id",
+        choices=[
+            INTRINSIC_VALIDITY_PROFILE_ID,
+            PROMPT_CONDITIONED_QUALITY_PROFILE_ID,
+        ],
+        default=None,
+        help=(
+            "Explicit leaderboard scoring profile. When omitted, the default "
+            "canonical profile selects it from L2 task activation."
+        ),
+    )
     args = parser.parse_args()
 
     vlm_control_config = (
@@ -1464,6 +1600,7 @@ def main() -> None:
         render_evidence=[str(_path_arg(path)) for path in args.render_evidence],
         vlm_judge=vlm_judge,
         evaluation_profile=evaluation_profile,
+        scoring_profile_id=args.scoring_profile_id,
         support_enabled=args.support_enabled,
         p0b_official_mode=args.p0b_official_mode,
         p0b_local_view_provider=local_view_provider,
@@ -2475,6 +2612,219 @@ def _is_canonical_score(value: Any) -> bool:
         and not isinstance(value, bool)
         and 0.0 <= float(value) <= 1.0
     )
+
+
+def _resolve_run_scoring_profile(
+    *,
+    scoring_profile_id: str | None,
+    active_l2_metrics: list[str],
+    resolved_profile: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Select a leaderboard profile without rewriting custom experiments."""
+
+    profile_version = str(resolved_profile.get("profile_version") or "")
+    if scoring_profile_id is not None:
+        if profile_version != CANONICAL_PROFILE_VERSION:
+            raise ValueError(
+                "versioned object-equivalent scoring profiles require "
+                f"{CANONICAL_PROFILE_VERSION!r}, got {profile_version!r}"
+            )
+        selected = resolve_scoring_profile(scoring_profile_id)
+        requires_l2 = bool(selected["requires_l2_task"])
+        if requires_l2 != bool(active_l2_metrics):
+            raise ValueError(
+                f"scoring profile {scoring_profile_id!r} requires_l2_task="
+                f"{requires_l2}, but active L2 metrics are {active_l2_metrics}"
+            )
+        return selected
+    if profile_version != CANONICAL_PROFILE_VERSION:
+        return None
+    if _evaluation_scoring_signature(resolved_profile) == (
+        _evaluation_scoring_signature(resolve_evaluation_profile())
+    ):
+        return scoring_profile_for_run(has_l2_task=bool(active_l2_metrics))
+    # Explicit custom diagnostic profiles keep their declared layer weights.
+    # They are not one of the two leaderboard profiles in metrics.md.
+    return None
+
+
+def _evaluation_scoring_signature(
+    profile: dict[str, Any],
+) -> dict[str, Any]:
+    """Extract only fields that intentionally define diagnostic scoring.
+
+    Detector thresholds, evidence policies, rubrics, and other execution
+    settings must not silently opt a run out of the versioned leaderboard
+    profile.  Custom layer/metric activation or weights remain an explicit
+    diagnostic compatibility path.
+    """
+
+    signature: dict[str, Any] = {
+        "layer_weights": deepcopy(profile.get("layer_weights")),
+        "layers": {},
+    }
+    for layer_name in (L1, L2, L3, L4):
+        layer = profile.get(layer_name)
+        if not isinstance(layer, dict):
+            signature["layers"][layer_name] = None
+            continue
+        metrics = layer.get("metrics")
+        metric_signature = (
+            {
+                str(name): {
+                    "enabled": value.get("enabled"),
+                    "weight": value.get("weight"),
+                }
+                for name, value in sorted(metrics.items())
+                if isinstance(value, dict)
+            }
+            if isinstance(metrics, dict)
+            else None
+        )
+        signature["layers"][layer_name] = {
+            "enabled": layer.get("enabled"),
+            "metrics": metric_signature,
+        }
+    return signature
+
+
+def _strict_scoring_profile_score(
+    reports: dict[str, dict[str, Any]],
+    layer_weights: dict[str, float],
+) -> float | None:
+    """Aggregate a leaderboard profile without dropping missing layers."""
+
+    required = [
+        name
+        for name, weight in layer_weights.items()
+        if float(weight) > 0.0
+    ]
+    if not required or any(
+        not _is_canonical_score((reports.get(name) or {}).get("score"))
+        for name in required
+    ):
+        return None
+    return sum(
+        float(reports[name]["score"]) * float(layer_weights[name])
+        for name in required
+    )
+
+
+def _strict_scoring_profile_coverage(
+    coverage: dict[str, Any],
+    *,
+    scoring_reports: dict[str, dict[str, Any]],
+    layer_weights: dict[str, float],
+) -> dict[str, Any]:
+    """Make every positive-weight leaderboard layer part of coverage."""
+
+    result = deepcopy(coverage)
+    required = [
+        name
+        for name, weight in layer_weights.items()
+        if float(weight) > 0.0
+    ]
+    covered = [
+        name
+        for name in required
+        if _is_canonical_score((scoring_reports.get(name) or {}).get("score"))
+    ]
+    required_weight = sum(float(layer_weights[name]) for name in required)
+    covered_weight = sum(float(layer_weights[name]) for name in covered)
+    result.update(
+        {
+            "active_layers": required,
+            "covered_layers": covered,
+            "active_layer_signature": (
+                "+".join(required) if required else "none"
+            ),
+            "covered_weight": covered_weight,
+            "required_weight": required_weight,
+            "complete": bool(
+                required
+                and math.isclose(
+                    covered_weight,
+                    required_weight,
+                    abs_tol=1.0e-9,
+                )
+            ),
+            "aggregation_denominator": required_weight,
+        }
+    )
+    return result
+
+
+def _apply_canonical_l1_scoring(
+    validity: dict[str, Any],
+    *,
+    ordered_object_ids: tuple[str, ...],
+) -> None:
+    metrics = validity.get("metrics")
+    if not isinstance(metrics, dict):
+        return
+    scorers = {
+        "collision": score_collision_report,
+        "oob": score_oob_report,
+        "support": score_support_report,
+    }
+    for metric_name, scorer in scorers.items():
+        metric_report = metrics.get(metric_name)
+        if not isinstance(metric_report, dict) or metric_report.get("status") != "checked":
+            continue
+        apply_projection(
+            metric_report,
+            scorer(metric_report, ordered_object_ids=ordered_object_ids),
+        )
+    canonical_reports = [metrics.get(name) for name in ("collision", "support", "oob")]
+    resolved = [
+        item
+        for item in canonical_reports
+        if isinstance(item, dict) and _is_canonical_score(item.get("score"))
+    ]
+    partial = (
+        None
+        if not resolved
+        else sum(float(item["score"]) for item in resolved) / len(resolved)
+    )
+    complete = len(resolved) == 3
+    validity["partial_score"] = partial
+    validity["score"] = partial if complete else None
+    validity["status"] = "ok" if complete else "incomplete"
+    validity["metric_scores"] = {
+        name: (
+            float(metrics[name]["score"])
+            if isinstance(metrics.get(name), dict)
+            and _is_canonical_score(metrics[name].get("score"))
+            else None
+        )
+        for name in metrics
+    }
+    validity["scoring"] = {
+        "schema_version": SCORING_SPEC_VERSION,
+        "ordered_canonical_object_ids": list(ordered_object_ids),
+        "n_scene": len(ordered_object_ids),
+        "metric_weights": {
+            "collision": 1.0 / 3.0,
+            "support": 1.0 / 3.0,
+            "oob": 1.0 / 3.0,
+        },
+        "denominator_policy": "shared_canonical_scene_objects",
+    }
+
+
+def _strip_canonical_scoring_audit_for_legacy_game(
+    validity: dict[str, Any],
+) -> None:
+    """Keep the frozen Game wire report free of new scoring-only fields."""
+
+    metrics = validity.get("metrics")
+    collision = metrics.get("collision") if isinstance(metrics, dict) else None
+    pairs = collision.get("pairs") if isinstance(collision, dict) else None
+    if not isinstance(pairs, list):
+        return
+    for pair in pairs:
+        if isinstance(pair, dict):
+            pair.pop("scoring_geometry", None)
 
 
 def _canonical_l1_report(validity: dict[str, Any]) -> dict[str, Any]:

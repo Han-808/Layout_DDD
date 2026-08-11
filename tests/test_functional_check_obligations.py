@@ -10,6 +10,7 @@ from benchmark.evaluator.scene_quality.functional_acquisition import (
 from benchmark.evaluator.scene_quality.functional_checks import (
     apply_functional_check_judgements,
     build_functional_check_ledger,
+    canonicalize_clearance_causal_attribution,
     canonicalize_functional_defect_check_linkage,
     canonicalize_typed_invalid_envelope,
     checks_for_group,
@@ -105,6 +106,312 @@ def test_multi_check_union_defect_is_split_into_atomic_linkages() -> None:
     )["complete"] is True
 
 
+def test_clearance_attribution_is_copied_from_linked_defect_before_repair() -> None:
+    checks = [
+        {
+            "check_id": "functional_check_010",
+            "check_type": "architecture_orientation",
+            "target_ids": ["tv_stand"],
+        },
+        {
+            "check_id": "functional_check_015",
+            "check_type": "clearance",
+            "target_ids": ["tv_stand"],
+            "allowed_causal_object_ids": ["television", "tv_stand"],
+        },
+    ]
+    result = {
+        "verdict": "invalid",
+        "defects": [
+            {
+                "scope": "opening_clearance",
+                "target_ids": ["tv_stand"],
+                "relation": "frontage_toward_boundary",
+                "reason": "The authored frontage is not usable.",
+                "check_refs": [
+                    "functional_check_010",
+                    "functional_check_015",
+                ],
+                "affected_object_ids": ["tv_stand"],
+                "cause_kind": "self_layout",
+                "causal_object_ids": ["tv_stand"],
+                "scoring_target_ids": ["tv_stand"],
+            }
+        ],
+        "functional_check_results": [
+            {
+                "check_id": "functional_check_010",
+                "target_ids": ["tv_stand"],
+                "observation_status": "observed",
+                "conclusion": "invalid",
+                "reason": "The frontage points toward the boundary.",
+            },
+            {
+                "check_id": "functional_check_015",
+                "target_ids": ["tv_stand"],
+                "observation_status": "observed",
+                "conclusion": "invalid",
+                "reason": "The approach region is unavailable.",
+            },
+        ],
+    }
+
+    normalized = canonicalize_clearance_causal_attribution(
+        result,
+        required_checks=checks,
+    )
+
+    clearance_row = normalized["functional_check_results"][1]
+    assert clearance_row["affected_object_ids"] == ["tv_stand"]
+    assert clearance_row["cause_kind"] == "self_layout"
+    assert clearance_row["causal_object_ids"] == ["tv_stand"]
+    assert clearance_row["scoring_target_ids"] == ["tv_stand"]
+    assert validate_functional_check_results(
+        normalized,
+        required_checks=checks,
+    )["complete"] is True
+
+
+def test_empty_self_layout_causal_ids_are_deterministically_completed() -> None:
+    checks = [
+        {
+            "check_id": "functional_check_005",
+            "check_type": "architecture_orientation",
+            "target_ids": ["toilet"],
+        },
+        {
+            "check_id": "functional_check_011",
+            "check_type": "clearance",
+            "target_ids": ["toilet"],
+            "allowed_causal_object_ids": ["toilet", "trash_bin"],
+        },
+    ]
+    result = {
+        "verdict": "invalid",
+        "defects": [
+            {
+                "scope": "interaction_side_accessibility",
+                "target_ids": ["toilet"],
+                "relation": "usable_side_clearance",
+                "reason": "The seating approach region is unavailable.",
+                "check_refs": [
+                    "functional_check_005",
+                    "functional_check_011",
+                ],
+                "affected_object_ids": ["toilet"],
+                "cause_kind": "self_layout",
+                "causal_object_ids": [],
+                "scoring_target_ids": ["toilet"],
+            }
+        ],
+        "functional_check_results": [
+            {
+                "check_id": "functional_check_005",
+                "target_ids": ["toilet"],
+                "observation_status": "observed",
+                "conclusion": "invalid",
+                "reason": "The usable side points outside the room.",
+            },
+            {
+                "check_id": "functional_check_011",
+                "target_ids": ["toilet"],
+                "observation_status": "observed",
+                "conclusion": "invalid",
+                "reason": "There is no usable approach region.",
+                "affected_object_ids": ["toilet"],
+                "cause_kind": "self_layout",
+                "causal_object_ids": [],
+                "scoring_target_ids": ["toilet"],
+            },
+        ],
+    }
+
+    normalized = canonicalize_clearance_causal_attribution(
+        result,
+        required_checks=checks,
+    )
+
+    assert normalized["defects"][0]["causal_object_ids"] == ["toilet"]
+    assert normalized["functional_check_results"][1][
+        "causal_object_ids"
+    ] == ["toilet"]
+    assert validate_functional_check_results(
+        normalized,
+        required_checks=checks,
+    )["complete"] is True
+
+
+@pytest.mark.parametrize(
+    ("affected_id", "blocker_id", "check_id"),
+    [
+        ("dartboard", "pool_table", "functional_check_013"),
+        ("pool_table", "sofa", "functional_check_016"),
+    ],
+)
+def test_external_blocker_drives_derived_scoring_attribution(
+    affected_id: str,
+    blocker_id: str,
+    check_id: str,
+) -> None:
+    """Recorded N025 shapes retain the semantic invalid conclusion."""
+
+    checks = [
+        {
+            "check_id": check_id,
+            "check_type": "clearance",
+            "target_ids": [affected_id],
+            "allowed_causal_object_ids": [affected_id, blocker_id],
+        }
+    ]
+    result = {
+        "verdict": "invalid",
+        "defects": [
+            {
+                "scope": "interaction_side_accessibility",
+                # The model used the affected object as the defect target and
+                # omitted redundant attribution fields, as in the real run.
+                "target_ids": [affected_id],
+                "relation": "usable_side_clearance",
+                "reason": f"{blocker_id} blocks ordinary use.",
+                "check_refs": [check_id],
+            }
+        ],
+        "functional_check_results": [
+            {
+                "check_id": check_id,
+                "target_ids": [affected_id],
+                "observation_status": "observed",
+                "conclusion": "invalid",
+                "reason": f"{blocker_id} occupies the required use zone.",
+                "affected_object_ids": [affected_id],
+                "cause_kind": "external_object",
+                "causal_object_ids": [blocker_id],
+                # This is derived bookkeeping, not a second semantic claim.
+                "scoring_target_ids": [affected_id],
+            }
+        ],
+    }
+
+    normalized = canonicalize_clearance_causal_attribution(
+        result,
+        required_checks=checks,
+    )
+
+    row = normalized["functional_check_results"][0]
+    defect = normalized["defects"][0]
+    assert row["causal_object_ids"] == [blocker_id]
+    assert row["scoring_target_ids"] == [blocker_id]
+    assert defect["causal_object_ids"] == [blocker_id]
+    assert defect["scoring_target_ids"] == [blocker_id]
+    assert defect["target_ids"] == [blocker_id]
+    assert validate_functional_check_results(
+        normalized,
+        required_checks=checks,
+    )["complete"] is True
+
+
+def test_external_blocker_normalization_fails_closed_on_conflicting_identity() -> None:
+    checks = [
+        {
+            "check_id": "functional_check_013",
+            "check_type": "clearance",
+            "target_ids": ["dartboard"],
+            "allowed_causal_object_ids": [
+                "dartboard",
+                "pool_table",
+                "sofa",
+            ],
+        }
+    ]
+    result = {
+        "verdict": "invalid",
+        "defects": [
+            {
+                "scope": "opening_clearance",
+                "target_ids": ["pool_table"],
+                "relation": "usable_side_clearance",
+                "reason": "A blocker occupies the required use zone.",
+                "check_refs": ["functional_check_013"],
+                "affected_object_ids": ["dartboard"],
+                "cause_kind": "external_object",
+                "causal_object_ids": ["sofa"],
+                "scoring_target_ids": ["pool_table"],
+            }
+        ],
+        "functional_check_results": [
+            {
+                "check_id": "functional_check_013",
+                "target_ids": ["dartboard"],
+                "observation_status": "observed",
+                "conclusion": "invalid",
+                "reason": "The pool table occupies the required use zone.",
+                "affected_object_ids": ["dartboard"],
+                "cause_kind": "external_object",
+                "causal_object_ids": ["pool_table"],
+                "scoring_target_ids": ["pool_table"],
+            }
+        ],
+    }
+
+    normalized = canonicalize_clearance_causal_attribution(
+        result,
+        required_checks=checks,
+    )
+    assert normalized == result
+    with pytest.raises(ValueError, match="conflicting causal_object_ids"):
+        validate_functional_check_results(
+            normalized,
+            required_checks=checks,
+        )
+
+
+def test_external_blocker_normalization_fails_closed_on_unknown_identity() -> None:
+    checks = [
+        {
+            "check_id": "functional_check_013",
+            "check_type": "clearance",
+            "target_ids": ["dartboard"],
+            "allowed_causal_object_ids": ["dartboard", "pool_table"],
+        }
+    ]
+    result = {
+        "verdict": "invalid",
+        "defects": [
+            {
+                "scope": "opening_clearance",
+                "target_ids": ["ghost"],
+                "relation": "usable_side_clearance",
+                "reason": "An unknown object is claimed as the blocker.",
+                "check_refs": ["functional_check_013"],
+            }
+        ],
+        "functional_check_results": [
+            {
+                "check_id": "functional_check_013",
+                "target_ids": ["dartboard"],
+                "observation_status": "observed",
+                "conclusion": "invalid",
+                "reason": "An unknown object is claimed as the blocker.",
+                "affected_object_ids": ["dartboard"],
+                "cause_kind": "external_object",
+                "causal_object_ids": ["ghost"],
+                "scoring_target_ids": ["ghost"],
+            }
+        ],
+    }
+
+    normalized = canonicalize_clearance_causal_attribution(
+        result,
+        required_checks=checks,
+    )
+    assert normalized == result
+    with pytest.raises(ValueError, match="unknown causal objects"):
+        validate_functional_check_results(
+            normalized,
+            required_checks=checks,
+        )
+
+
 def test_cross_group_episode_rejects_non_atomic_legacy_relation() -> None:
     with pytest.raises(ValueError, match="exactly two"):
         _cross_group_relation_episode_specs(
@@ -186,6 +493,47 @@ def test_untyped_defect_cannot_canonicalize_insufficient_envelope() -> None:
             }
         ],
         "functional_check_results": [],
+    }
+
+    assert canonicalize_typed_invalid_envelope(original) is original
+
+
+def test_typed_invalid_row_does_not_finalize_while_another_row_is_unresolved() -> None:
+    original = {
+        "evidence_status": "insufficient",
+        "verdict": "ambiguous",
+        "missing_evidence": ["joint_visibility"],
+        "evidence_request": {
+            "target_ids": ["bookshelf"],
+            "missing_observations": ["joint_visibility"],
+            "view_goal": "show the remaining relation",
+            "metadata": {},
+        },
+        "defects": [
+            {
+                "scope": "interaction_side_accessibility",
+                "target_ids": ["bookshelf"],
+                "relation": "architecture_orientation",
+                "reason": "The observed side faces inaccessible space.",
+                "check_refs": ["functional_check_001"],
+            }
+        ],
+        "functional_check_results": [
+            {
+                "check_id": "functional_check_001",
+                "target_ids": ["bookshelf"],
+                "observation_status": "observed",
+                "conclusion": "invalid",
+                "reason": "The observed side faces inaccessible space.",
+            },
+            {
+                "check_id": "functional_check_002",
+                "target_ids": ["bookshelf"],
+                "observation_status": "missing",
+                "conclusion": "unresolved",
+                "reason": "The approach region is hidden.",
+            },
+        ],
     }
 
     assert canonicalize_typed_invalid_envelope(original) is original
@@ -395,7 +743,7 @@ def test_relation_predicates_share_target_set_unit_without_conflating_views() ->
     assert len(cross_units[0]["check_ids"]) == 2
 
 
-def test_n011_scheduler_is_fair_to_usable_side_family() -> None:
+def test_n011_scheduler_does_not_starve_accepted_cross_group_relations() -> None:
     discovery = _base_discovery()
     discovery["cross_group_correspondences"] = [
         _cross_relation(
@@ -444,10 +792,14 @@ def test_n011_scheduler_is_fair_to_usable_side_family() -> None:
     )
 
     assert len(plan["probe_units"]) == 4
-    assert any(
-        item.get("owning_group_id") == "storage"
-        and "bookshelf_approach" in item.get("discovery_ids", [])
+    assert all(
+        item.get("route_scope") == "cross_group"
         for item in plan["probe_units"]
+    )
+    assert plan["budget"]["cross_group_reservation_complete"] is True
+    assert any(
+        "bookshelf_approach" in item.get("discovery_ids", [])
+        for item in plan["backfill_probe_units"]
     )
     storage_checks = checks_for_group(
         plan["functional_check_ledger"],
@@ -478,7 +830,7 @@ def test_n011_scheduler_is_fair_to_usable_side_family() -> None:
     assert clearance_check["surface_roles"] == ["access_side"]
     storage_unit = next(
         item
-        for item in plan["probe_units"]
+        for item in plan["backfill_probe_units"]
         if item.get("owning_group_id") == "storage"
     )
     assert set(storage_unit["check_ids"]) == {
@@ -496,7 +848,7 @@ def test_n011_scheduler_is_fair_to_usable_side_family() -> None:
     )
 
 
-def test_scheduler_prefers_new_directed_objects_over_repeated_relations() -> None:
+def test_scheduler_reserves_every_accepted_cross_group_relation() -> None:
     discovery = _base_discovery()
     discovery["cross_group_correspondences"] = [
         _cross_relation(
@@ -549,7 +901,7 @@ def test_scheduler_prefers_new_directed_objects_over_repeated_relations() -> Non
     assert sum(
         unit["route_scope"] == "cross_group"
         for unit in plan["probe_units"]
-    ) == 1
+    ) == 3
     selected_targets = {
         target_id
         for unit in plan["probe_units"]
@@ -558,62 +910,51 @@ def test_scheduler_prefers_new_directed_objects_over_repeated_relations() -> Non
             *unit.get("related_target_ids", []),
         ]
     }
-    assert {"bookshelf", "lamp"} <= selected_targets
-    directed_gains = {
-        target_id
+    assert {"bookshelf", "lamp"}.isdisjoint(selected_targets)
+    assert plan["budget"]["cross_group_reservation_complete"] is True
+    assert all(
+        unit["scheduling_coverage_gain"].get("reservation")
+        == "accepted_cross_group_relation"
         for unit in plan["probe_units"]
-        for target_id in unit["scheduling_coverage_gain"][
-            "new_directed_object_ids"
-        ]
-    }
-    assert {"bookshelf", "lamp"} <= directed_gains
+    )
 
 
-def test_functional_probe_budget_is_hard_capped_at_eight() -> None:
+def test_functional_probe_budget_is_hard_capped_at_thirty_two() -> None:
+    object_ids = [f"object_{index:02d}" for index in range(40)]
+    groups = [
+        {"group_id": f"group_{index:02d}", "object_ids": [object_id]}
+        for index, object_id in enumerate(object_ids)
+    ]
     discovery = _base_discovery()
+    discovery["inspected_object_ids"] = object_ids
     discovery["directed_surface_targets"] = [
         {
             "discovery_id": f"surface_{object_id}",
             "target_id": object_id,
             "owning_group_id": next(
                 group["group_id"]
-                for group in GROUPS
+                for group in groups
                 if object_id in group["object_ids"]
             ),
             "surface_roles": ["interaction_side"],
             "need_clearance": False,
             "observation_goal": f"show {object_id} interaction side",
         }
-        for object_id in discovery["inspected_object_ids"]
-    ]
-    discovery["cross_group_correspondences"] = [
-        _cross_relation(
-            f"relation_{target}",
-            "television",
-            target,
-            "media",
-            group_id,
-        )
-        for target, group_id in (
-            ("sofa", "seating"),
-            ("chair_1", "dining"),
-            ("bookshelf", "storage"),
-            ("lamp", "lighting"),
-        )
+        for object_id in object_ids
     ]
 
     plan = build_functional_acquisition_plan(
         discovery,
         max_probe_units=99,
-        groups=GROUPS,
+        groups=groups,
     )
 
-    assert plan["max_probe_units"] == FUNCTIONAL_PROBE_MAX_UNITS == 8
-    assert len(plan["probe_units"]) == 8
+    assert plan["max_probe_units"] == FUNCTIONAL_PROBE_MAX_UNITS == 32
+    assert len(plan["probe_units"]) == 32
     assert plan["budget"]["max_probe_units"] == {
         "requested": 99,
-        "effective": 8,
-        "hard_cap": 8,
+        "effective": 32,
+        "hard_cap": 32,
         "clamped_to_hard_cap": True,
         "source": "caller",
     }
@@ -1020,7 +1361,7 @@ def test_in_group_relation_uses_lazy_group_judge_acquisition() -> None:
     }
 
 
-def test_group_final_invalid_preserves_other_unresolved_check_for_audit() -> None:
+def test_group_invalid_row_keeps_acquisition_open_for_unresolved_check() -> None:
     discovery = _base_discovery()
     discovery["within_group_correspondences"] = [
         {
@@ -1046,21 +1387,22 @@ def test_group_final_invalid_preserves_other_unresolved_check_for_audit() -> Non
 
     resolution = validate_functional_check_results(
         {
-            "evidence_status": "sufficient",
-            "verdict": "invalid",
+            "evidence_status": "insufficient",
+            "verdict": "ambiguous",
             "confidence": 0.8,
             "reason": "One relation fails but another is not visible.",
-            "missing_evidence": [],
-            "defects": [
-                {
-                    "scope": "functional_relation",
-                    "target_ids": invalid_check["target_ids"],
-                    "relation": invalid_check["relation"],
-                    "reason": "The visible relation is incompatible.",
-                    "check_refs": [invalid_check["check_id"]],
-                }
-            ],
-            "evidence_request": None,
+            "missing_evidence": ["joint_visibility"],
+            "defects": [],
+            "evidence_request": {
+                "target_ids": unresolved_check["target_ids"],
+                "missing_observations": ["joint_visibility"],
+                "view_goal": "show the unresolved joint-use geometry",
+                "metadata": {
+                    "unresolved_check_ids": [
+                        unresolved_check["check_id"]
+                    ]
+                },
+            },
             "functional_check_results": [
                 {
                     "check_id": invalid_check["check_id"],

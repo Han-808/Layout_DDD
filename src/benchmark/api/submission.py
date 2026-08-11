@@ -581,7 +581,15 @@ def evaluate_prepared_submission(
                 },
                 "evaluation_report": report_path.as_posix(),
                 "benchmark_score": None,
+                "benchmark_score_100": None,
                 "benchmark_score_status": "not_evaluable",
+                "scoring_profile": deepcopy(report.get("scoring_profile")),
+                "canonical_object_denominator": deepcopy(
+                    report.get("canonical_object_denominator")
+                ),
+                "scoring_reliability": deepcopy(
+                    report.get("scoring_reliability")
+                ),
             },
         )
         if official_mode:
@@ -703,6 +711,18 @@ def evaluate_prepared_submission(
         evaluation_authority_path.as_posix()
     )
     manifest["evaluation_report"] = report_path.as_posix()
+    manifest["benchmark_score"] = report.get("benchmark_score")
+    manifest["benchmark_score_100"] = report.get("benchmark_score_100")
+    manifest["benchmark_score_status"] = report.get(
+        "benchmark_score_status"
+    )
+    manifest["scoring_profile"] = deepcopy(report.get("scoring_profile"))
+    manifest["canonical_object_denominator"] = deepcopy(
+        report.get("canonical_object_denominator")
+    )
+    manifest["scoring_reliability"] = deepcopy(
+        report.get("scoring_reliability")
+    )
     write_json(manifest_path, manifest)
     if (
         official_mode
@@ -1175,7 +1195,15 @@ def _evaluate_submission_impl(
         },
         "evaluation_report": report_path.as_posix(),
         "benchmark_score": report.get("benchmark_score"),
+        "benchmark_score_100": report.get("benchmark_score_100"),
         "benchmark_score_status": report.get("benchmark_score_status"),
+        "scoring_profile": deepcopy(report.get("scoring_profile")),
+        "canonical_object_denominator": deepcopy(
+            report.get("canonical_object_denominator")
+        ),
+        "scoring_reliability": deepcopy(
+            report.get("scoring_reliability")
+        ),
         "vlm_evaluation_control": deepcopy(
             report.get("evaluation_config", {}).get(
                 "vlm_evaluation_control"

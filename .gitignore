@@ -51,6 +51,7 @@ downloads/
 
 # Local documentation and operational notes
 *.md
+!/metrics.md
 !/Support/README.md
 !/docs/
 !/docs/grouping.md

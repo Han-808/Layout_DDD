@@ -27,7 +27,10 @@ from benchmark.visual_judge.usable_surface import (
 )
 
 
-CAMERA_SELECTOR_PROMPT_VERSION = "camera_selector_atomic_relations_v6"
+CAMERA_SELECTOR_PROMPT_VERSION = "camera_selector_compact_context_v7"
+CAMERA_SELECTOR_CONTEXT_COMPACTION_VERSION = (
+    "camera_selector_context_compaction_v1"
+)
 
 CAMERA_SELECTOR_SYSTEM_PROMPT = """You select visual evidence. You do not judge
 the benchmark metric.
@@ -46,8 +49,8 @@ For candidate_only:
 2. Evaluate candidates in this priority order:
    a. visibility of every target required by target_ids;
    b. required joint visibility;
-   c. visibility and disambiguation of the specifically requested contact,
-      support, architecture, functional frontage, interaction side, approach
+   c. visibility and disambiguation of the specifically requested operational
+      connection, support, architecture, functional frontage, interaction side, approach
       zone, depth, or group-context observation;
    d. sufficient target framing and projected coverage;
    e. preservation of required context or global anchor;
@@ -77,8 +80,9 @@ rather than guessing one side. For functional_correspondence, all relevant
 participants must be jointly interpretable. When relation_predicates includes
 directional_correspondence, expose the relevant functional sides and their
 relative directions. When it contains only relative_use_geometry, expose the
-relative position, reach, contact, or connection region without inventing a
-usable-side requirement. When
+    relative position, reach, coordinated-operation, or operational-connection
+    region without inventing a usable-side requirement. Static support/contact
+    alone belongs to L1 or semantic placement, not this relation. When
 architecture_plane_visible is required for a functional request, jointly show
 the decoded usable or control side, the nearest authoritative logical boundary
 or visible floor extent, and the interior-side user approach and operating
@@ -199,15 +203,19 @@ class OpenAICompatibleCameraSelector:
             judge_method="select",
         )
         structured.update(audit)
+        prompt_payload = _compact_camera_selector_prompt_payload(
+            structured
+        )
+        prompt_context_text = _bounded_json(
+            prompt_payload,
+            limit=self.max_context_chars,
+        )
         content: list[dict[str, Any]] = [
             {
                 "type": "text",
                 "text": (
                     "Select camera evidence from this trusted request.\n"
-                    + _bounded_json(
-                        _payload_without_image_paths(structured),
-                        limit=self.max_context_chars,
-                    )
+                    + prompt_context_text
                 ),
             }
         ]
@@ -258,13 +266,17 @@ class OpenAICompatibleCameraSelector:
                     else structured.get("metric") or "camera_selection"
                 ),
                 "scene_id": str(
-                    structured.get("scene", {}).get("scene_id")
-                    if isinstance(structured.get("scene"), dict)
+                    structured.get("scene_context", {}).get("scene_id")
+                    if isinstance(structured.get("scene_context"), dict)
                     else ""
                 ),
                 "objects": (
-                    structured.get("scene", {}).get("objects", [])
-                    if isinstance(structured.get("scene"), dict)
+                    prompt_payload.get("scene_context", {}).get(
+                        "objects", []
+                    )
+                    if isinstance(
+                        prompt_payload.get("scene_context"), dict
+                    )
                     else []
                 ),
             },
@@ -282,6 +294,16 @@ class OpenAICompatibleCameraSelector:
             **audit,
             "selection_mode": mode,
             "prompt_version": CAMERA_SELECTOR_PROMPT_VERSION,
+            "context_compaction_version": (
+                CAMERA_SELECTOR_CONTEXT_COMPACTION_VERSION
+            ),
+            "structured_context_chars": len(prompt_context_text),
+            "structured_context_limit": self.max_context_chars,
+            "prompt_scene_object_count": len(
+                (prompt_payload.get("scene_context") or {}).get(
+                    "objects", []
+                )
+            ),
             "candidate_ids": [
                 str(candidate["id"])
                 for candidate in structured.get("candidate_views", [])
@@ -654,13 +676,263 @@ def _validated_response(
     return result
 
 
-def _payload_without_image_paths(
+def _compact_camera_selector_prompt_payload(
     payload: dict[str, Any],
 ) -> dict[str, Any]:
-    result = deepcopy(payload)
-    for candidate in result.get("candidate_views", []):
-        if isinstance(candidate, dict):
-            candidate.pop("image_path", None)
+    """Project validated controller state into bounded camera-only context.
+
+    Full canonical scenes and preview diagnostics remain available internally
+    for validation and rendering.  The VLM receives only scoped geometry and
+    routing facts, avoiding accidental prompt growth from asset provenance.
+    """
+
+    result: dict[str, Any] = {
+        "context_compaction_version": (
+            CAMERA_SELECTOR_CONTEXT_COMPACTION_VERSION
+        )
+    }
+    for field in (
+        "vlm_role",
+        "decision_contract",
+        "judge_method",
+        "selection_mode",
+        "task",
+        "metric",
+        "target_ids",
+        "camera_constraints",
+        "attempted_candidate_ids",
+        "previous_evidence_summary",
+        "evidence_budget",
+        "evidence_round",
+        "scene_access",
+        "group_scope",
+        "member_ids",
+        "target_bounds",
+        "focus_center",
+        "target_extent",
+        "grouping_role",
+    ):
+        if field in payload:
+            result[field] = deepcopy(payload[field])
+
+    result["evidence_goal"] = _compact_evidence_goal(
+        payload.get("evidence_goal")
+    )
+    scoped_ids = {
+        str(item)
+        for item in payload.get("target_ids") or []
+        if str(item).strip()
+    }
+    group_scope = payload.get("group_scope")
+    if isinstance(group_scope, dict):
+        scoped_ids.update(
+            str(item)
+            for item in group_scope.get("member_ids") or []
+            if str(item).strip()
+        )
+    scoped_ids.update(
+        str(item)
+        for item in payload.get("member_ids") or []
+        if str(item).strip()
+    )
+    for field in ("functional_probe", "functional_repair"):
+        compact = _compact_functional_routing(payload.get(field))
+        if compact is not None:
+            result[field] = compact
+            scoped_ids.update(
+                str(item)
+                for item in [
+                    *(compact.get("target_ids") or []),
+                    *(compact.get("related_target_ids") or []),
+                    *(compact.get("group_member_ids") or []),
+                ]
+                if str(item).strip()
+            )
+
+    scene = payload.get("scene_context")
+    if isinstance(scene, dict):
+        objects = [
+            _compact_scene_object(item)
+            for item in scene.get("objects") or []
+            if isinstance(item, dict)
+            and (
+                not scoped_ids
+                or str(item.get("id") or "") in scoped_ids
+            )
+        ]
+        result["scene_context"] = {
+            field: deepcopy(scene[field])
+            for field in (
+                "schema_version",
+                "scene_id",
+                "request_id",
+                "scene_type",
+                "boundary",
+                "scene_height",
+            )
+            if field in scene
+        }
+        result["scene_context"]["objects"] = objects
+
+    result["candidate_views"] = [
+        _compact_candidate_view(item)
+        for item in payload.get("candidate_views") or []
+        if isinstance(item, dict)
+    ]
+    result["deterministic_rejected_candidates"] = [
+        _compact_rejected_candidate(item)
+        for item in payload.get("deterministic_rejected_candidates") or []
+        if isinstance(item, dict)
+    ]
+    if "trusted_repair_plans" in payload:
+        result["trusted_repair_plans"] = [
+            {
+                field: deepcopy(item[field])
+                for field in (
+                    "plan_id",
+                    "camera_action",
+                    "relaxed_constraints",
+                    "preserved_observations",
+                    "estimated_cost",
+                    "reason",
+                )
+                if field in item
+            }
+            for item in payload.get("trusted_repair_plans") or []
+            if isinstance(item, dict)
+        ]
+    return result
+
+
+def _compact_scene_object(value: dict[str, Any]) -> dict[str, Any]:
+    return {
+        field: deepcopy(value[field])
+        for field in (
+            "id",
+            "category",
+            "retrieval_category",
+            "center",
+            "size",
+            "rotation",
+            "geometry_provenance",
+        )
+        if field in value
+    }
+
+
+def _compact_candidate_view(value: dict[str, Any]) -> dict[str, Any]:
+    return {
+        field: deepcopy(value[field])
+        for field in (
+            "id",
+            "pose",
+            "target_ids",
+            "target_object_ids",
+            "group_id",
+            "technical_feasibility",
+            "target_visibility_estimate",
+            "joint_visibility_estimate",
+            "projected_coverage_estimate",
+            "view_family",
+            "focus_kind",
+            "context_scope",
+            "local_side_id",
+            "usable_surface_informed",
+            "usable_surface_side_ids",
+            "policy_source",
+            "render_status",
+            "fallback_reason",
+        )
+        if field in value
+    }
+
+
+def _compact_rejected_candidate(value: dict[str, Any]) -> dict[str, Any]:
+    return {
+        field: deepcopy(value[field])
+        for field in (
+            "id",
+            "candidate_id",
+            "reason",
+            "reason_code",
+            "reason_codes",
+            "constraint_conflicts",
+            "view_family",
+        )
+        if field in value
+    }
+
+
+def _compact_functional_routing(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    return {
+        field: deepcopy(value[field])
+        for field in (
+            "schema_version",
+            "source",
+            "probe_id",
+            "kind",
+            "target_ids",
+            "related_target_ids",
+            "route_scope",
+            "group_id",
+            "owning_group_id",
+            "group_member_ids",
+            "required_observations",
+            "view_goal",
+            "observation_goals",
+            "source_check_ids",
+            "check_types",
+            "check_relations",
+            "relation_predicates",
+            "surface_targets",
+            "usable_surface_hypotheses",
+            "decision_authority",
+        )
+        if field in value
+    }
+
+
+def _compact_evidence_goal(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    result = {
+        field: deepcopy(value[field])
+        for field in (
+            "view_goal",
+            "missing_observations",
+            "required_observations",
+            "target_ids",
+            "evidence_phase",
+            "evidence_role",
+        )
+        if field in value
+    }
+    request = value.get("judge_evidence_request")
+    if isinstance(request, dict):
+        compact_request = {
+            field: deepcopy(request[field])
+            for field in (
+                "target_ids",
+                "missing_observations",
+                "required_observations",
+                "view_goal",
+            )
+            if field in request
+        }
+        metadata = request.get("metadata")
+        if isinstance(metadata, dict):
+            compact_request["metadata"] = {
+                field: deepcopy(metadata[field])
+                for field in (
+                    "check_ids",
+                    "unresolved_check_ids",
+                    "check_types",
+                )
+                if field in metadata
+            }
+        result["judge_evidence_request"] = compact_request
     return result
 
 

@@ -297,6 +297,26 @@ def test_explicit_geometry_exhaustion_is_structured_no_feasible() -> None:
     )
 
 
+def test_trusted_bank_maps_explicit_geometry_exhaustion_to_empty_bank() -> None:
+    def exhausted_generator(*args, **kwargs):
+        del args, kwargs
+        raise ValueError(
+            "feasible camera candidate generation could not satisfy the exact "
+            "bank size: requested=8, generated=0, "
+            "metric=functional_consistency"
+        )
+
+    bank = DeterministicLocalCameraSelector(
+        candidate_generator=exhausted_generator
+    ).build_candidate_bank(_request(()))
+
+    assert bank.candidates == ()
+    assert bank.provenance["generation_outcome"] == (
+        "no_feasible_candidate"
+    )
+    assert "generated=0" in bank.provenance["generation_error"]
+
+
 def test_legacy_geometry_exhaustion_is_structured_no_feasible() -> None:
     def exhausted_generator(*args, **kwargs):
         del args, kwargs

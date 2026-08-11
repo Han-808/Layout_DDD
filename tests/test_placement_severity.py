@@ -8,7 +8,9 @@ from benchmark.evaluator.scene_quality.claim_identity import (
     object_level_finding_records,
 )
 from benchmark.evaluator.scene_quality.placement_severity import (
+    ATYPICAL,
     CLEAR_SEMANTIC_MISPLACEMENT,
+    IMPLAUSIBLE,
     MATERIAL_CONTEXTUAL_MISMATCH,
     PLACEMENT_SEVERITY_LEVELS,
     placement_severity_summary,
@@ -33,26 +35,30 @@ def _defect(severity: str) -> dict:
     }
 
 
-def test_placement_severity_policy_is_central_and_additive() -> None:
+def test_placement_severity_policy_is_central_and_controls_burden() -> None:
     policy = resolve_scene_quality_config()["metrics"][
         "semantic_placement_consistency"
     ]["severity_policy"]
 
     assert policy == {
-        "schema_version": "semantic_placement_severity_v1",
+        "schema_version": "object_equivalent_burden_v1",
         "levels": list(PLACEMENT_SEVERITY_LEVELS),
-        "strict_level": CLEAR_SEMANTIC_MISPLACEMENT,
-        "extended_level": MATERIAL_CONTEXTUAL_MISMATCH,
-        "affects_existing_metric_score": False,
+        "strict_level": IMPLAUSIBLE,
+        "extended_level": ATYPICAL,
+        "affects_existing_metric_score": True,
     }
 
 
 def test_placement_defect_requires_exact_severity_token() -> None:
     assert (
+        validate_placement_defect_severity(_defect(IMPLAUSIBLE))
+        == IMPLAUSIBLE
+    )
+    assert (
         validate_placement_defect_severity(
             _defect(CLEAR_SEMANTIC_MISPLACEMENT)
         )
-        == CLEAR_SEMANTIC_MISPLACEMENT
+        == IMPLAUSIBLE
     )
     with pytest.raises(ValueError, match="require severity"):
         validate_placement_defect_severity(
@@ -69,13 +75,14 @@ def test_canonical_contract_can_require_placement_severity() -> None:
         "confidence": 0.8,
         "reason": "The nightstand is materially misplaced.",
         "missing_evidence": [],
-        "defects": [_defect(MATERIAL_CONTEXTUAL_MISMATCH)],
+        "defects": [_defect(ATYPICAL)],
         "evidence_request": None,
     }
     validate_canonical_metric_response(
         result,
         allowed_scopes=("implausible_local_context",),
-        allowed_target_ids=("nightstand",),
+        allowed_defect_target_ids=("nightstand",),
+        allowed_evidence_request_target_ids=("nightstand",),
         required_defect_fields=(
             "scope",
             "target_ids",
@@ -102,7 +109,8 @@ def test_canonical_contract_can_require_placement_severity() -> None:
         validate_canonical_metric_response(
             missing,
             allowed_scopes=("implausible_local_context",),
-            allowed_target_ids=("nightstand",),
+            allowed_defect_target_ids=("nightstand",),
+            allowed_evidence_request_target_ids=("nightstand",),
             required_defect_fields=("severity",),
             allowed_defect_field_values={
                 "severity": PLACEMENT_SEVERITY_LEVELS,
@@ -111,8 +119,8 @@ def test_canonical_contract_can_require_placement_severity() -> None:
 
 
 def test_duplicate_placement_claim_keeps_stronger_observation() -> None:
-    weaker = _defect(MATERIAL_CONTEXTUAL_MISMATCH)
-    stronger = _defect(CLEAR_SEMANTIC_MISPLACEMENT)
+    weaker = _defect(ATYPICAL)
+    stronger = _defect(IMPLAUSIBLE)
 
     assert deduplicate_defects(
         "semantic_placement_consistency",
@@ -126,7 +134,7 @@ def test_duplicate_placement_claim_keeps_stronger_observation() -> None:
         ],
     )
     assert findings[0]["highest_severity"] == (
-        CLEAR_SEMANTIC_MISPLACEMENT
+        IMPLAUSIBLE
     )
     assert findings[0]["observation_count"] == 2
 
@@ -139,10 +147,11 @@ def test_placement_severity_summary_exposes_nested_thresholds() -> None:
         ]
     )
 
-    assert summary["highest_severity"] == CLEAR_SEMANTIC_MISPLACEMENT
+    assert summary["highest_severity"] == IMPLAUSIBLE
     assert summary["strict_failure_present"] is True
     assert summary["extended_issue_present"] is True
-    assert summary["affects_existing_metric_score"] is False
+    assert summary["affects_existing_metric_score"] is True
+    assert summary["counts"] == {ATYPICAL: 1, IMPLAUSIBLE: 1}
 
 
 def test_function_placement_boundary_is_action_based() -> None:

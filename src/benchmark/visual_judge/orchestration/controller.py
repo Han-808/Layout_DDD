@@ -86,6 +86,12 @@ from benchmark.visual_judge.orchestration.evidence_packet import (
     request_target_ids as _request_target_ids,
     validate_candidates as _validate_candidates,
 )
+from benchmark.visual_judge.orchestration.evidence_window import (
+    compose_bounded_evidence_window as _compose_bounded_evidence_window,
+    evidence_artifact_id as _evidence_artifact_id,
+    resolve_bounded_evidence_window as _resolve_bounded_evidence_window,
+    select_reusable_evidence as _select_reusable_evidence,
+)
 from benchmark.visual_judge.orchestration.repair_executor import (
     CameraRepairExecutor,
 )
@@ -93,6 +99,9 @@ from benchmark.visual_judge.orchestration.repair_executor import (
 
 VLM_CONTROL_LOOP_VERSION = "vlm_evaluation_control_loop_v1"
 EVALUATION_STATUSES = {"valid", "invalid", "unresolved"}
+_CONTROLLER_PRIVATE_CONTEXT_KEYS = frozenset(
+    {"functional_group_evidence_window"}
+)
 
 
 @dataclass(frozen=True)
@@ -306,6 +315,46 @@ class VLMEvaluationController:
 
         trace: list[dict[str, Any]] = []
         evidence = list(deepcopy(judge_request.visual_evidence))
+        evidence_window = _resolve_bounded_evidence_window(
+            judge_request.context,
+            initial_evidence=evidence,
+        )
+        initial_window_artifact_ids = [
+            _evidence_artifact_id(item) for item in evidence
+        ]
+        presented_window_artifact_ids = set(initial_window_artifact_ids)
+        evidence_window_events: list[dict[str, Any]] = []
+        if evidence_window is not None:
+            initialization = {
+                "schema_version": "bounded_evidence_window_v1",
+                "policy": evidence_window.policy,
+                "group_id": evidence_window.group_id,
+                "check_id": evidence_window.check_id,
+                "trigger": "initial_packet",
+                "max_active_images": evidence_window.max_active_images,
+                "fixed_artifact_ids": list(
+                    evidence_window.fixed_artifact_ids
+                ),
+                "before_artifact_ids": [],
+                "added_artifact_ids": list(
+                    initial_window_artifact_ids
+                ),
+                "evicted_artifact_ids": [],
+                "after_artifact_ids": list(
+                    initial_window_artifact_ids
+                ),
+                "overflow_flush_applied": False,
+                "physical_artifacts_deleted": False,
+            }
+            evidence_window_events.append(initialization)
+            trace.append(
+                {
+                    "stage": "evidence_window",
+                    "status": "initialized",
+                    "evidence_round": 0,
+                    "result": deepcopy(initialization),
+                }
+            )
         manifest_path = gate_manifest_path
         initial_usage = _normalize_camera_usage(initial_camera_usage)
         initial_ledger = _normalize_acquisition_ledger(
@@ -393,6 +442,15 @@ class VLMEvaluationController:
                 judge_request=judge_request,
                 acquisition_state=acquisition_state,
                 telemetry=telemetry,
+                evidence_window=(
+                    evidence_window.to_dict()
+                    if evidence_window is not None
+                    else None
+                ),
+                initial_window_artifact_ids=(
+                    initial_window_artifact_ids
+                ),
+                evidence_window_events=evidence_window_events,
             )
 
         def unresolved(
@@ -429,6 +487,26 @@ class VLMEvaluationController:
                     "terminal forced choice requires an actual prior "
                     "need_more_evidence response"
                 )
+            if _is_routing_screen_request(judge_request):
+                # A screen is a router, not a terminal decision authority.
+                # Preserve need_more_evidence so the enclosing metric workflow
+                # can supply its planned local/group evidence.  Forcing a
+                # binary answer here would silently bypass that downstream
+                # stage while reusing the same insufficient global packet.
+                trace.append(
+                    {
+                        "stage": "terminal_choice_policy",
+                        "outcome": "deferred_to_downstream_review",
+                        "trigger_stop_reason": trigger_stop_reason,
+                        "evidence_request": pending_request.to_dict(),
+                    }
+                )
+                return unresolved(
+                    reason=last_judge.reason,
+                    stop_reason=(
+                        f"{trigger_stop_reason}_screen_deferred"
+                    ),
+                )
             ambiguity_before_forcing = bool(
                 last_judge.status == "need_more_evidence"
             )
@@ -446,7 +524,9 @@ class VLMEvaluationController:
                 previous_request=pending_request,
                 trigger_stop_reason=trigger_stop_reason,
             )
-            raw_judge = self.judge.judge(final_request)
+            raw_judge = self.judge.judge(
+                _judge_visible_request(final_request)
+            )
             last_judge = JudgeResult.from_value(raw_judge)
             telemetry.record_judge(
                 evidence_round=rounds_used,
@@ -591,7 +671,9 @@ class VLMEvaluationController:
                         stop_reason="evidence_packet_already_judged",
                     )
                 judged_fingerprints.add(judge_fingerprint)
-                current_request = judge_request.with_visual_evidence(evidence)
+                current_request = _judge_visible_request(
+                    judge_request.with_visual_evidence(evidence)
+                )
                 raw_judge = self.judge.judge(current_request)
                 last_judge = JudgeResult.from_value(raw_judge)
                 raw_judge_response = deepcopy(
@@ -733,6 +815,66 @@ class VLMEvaluationController:
                         judge_request,
                         targets,
                     )
+                if evidence_window is not None:
+                    reusable_records = _select_reusable_evidence(
+                        evidence_window,
+                        active_evidence=evidence,
+                        target_ids=pending_request.target_ids,
+                        missing_observations=(
+                            pending_request.missing_observations
+                        ),
+                        excluded_artifact_ids=(
+                            presented_window_artifact_ids
+                        ),
+                    )
+                    remaining_image_budget = max(
+                        0,
+                        int(self.control.max_total_images)
+                        - total_images_acquired,
+                    )
+                    reusable_records = reusable_records[
+                        :remaining_image_budget
+                    ]
+                    if reusable_records:
+                        reusable_evidence = [
+                            deepcopy(item["visual_evidence"])
+                            for item in reusable_records
+                        ]
+                        evidence, window_event = (
+                            _compose_bounded_evidence_window(
+                                evidence_window,
+                                previous=evidence,
+                                additions=reusable_evidence,
+                                trigger="shared_bank_reuse",
+                            )
+                        )
+                        reused_ids = [
+                            str(item["artifact_id"])
+                            for item in reusable_records
+                        ]
+                        window_event["reused_artifact_ids"] = reused_ids
+                        window_event["camera_selector_invoked"] = False
+                        register_artifacts(reusable_evidence)
+                        presented_window_artifact_ids.update(reused_ids)
+                        evidence_window_events.append(
+                            deepcopy(window_event)
+                        )
+                        trace.append(
+                            {
+                                "stage": "evidence_bank_reuse",
+                                "status": "completed",
+                                "evidence_round": rounds_used,
+                                "group_id": evidence_window.group_id,
+                                "check_id": evidence_window.check_id,
+                                "reused_artifact_ids": reused_ids,
+                                "camera_selector_invoked": False,
+                                "result": deepcopy(window_event),
+                                "images_used": _evidence_refs(evidence),
+                            }
+                        )
+                        # The changed packet must return to EvidenceGate and
+                        # Judge before any camera-selection episode begins.
+                        continue
                 acquisition_state.start_episode()
                 vlm_selection_mode_override = None
                 try:
@@ -914,10 +1056,17 @@ class VLMEvaluationController:
             )
             if (
                 acquisition_state.stage == "vlm"
+                and candidates
                 and active_observations
                 & SEMANTIC_SELECTION_OBSERVATIONS
             ):
                 vlm_selection_mode_override = "candidate_only"
+            elif acquisition_state.stage == "vlm" and not candidates:
+                vlm_selection_mode_override = (
+                    "freeform_pose"
+                    if self.control.allow_freeform_pose
+                    else None
+                )
 
             while True:
                 selector = self._selector_for_stage(acquisition_state.stage)
@@ -928,6 +1077,22 @@ class VLMEvaluationController:
                             "not configured"
                         ),
                         stop_reason="camera_selector_unavailable",
+                    )
+                if (
+                    acquisition_state.stage == "vlm"
+                    and not candidates
+                    and not self.control.allow_freeform_pose
+                ):
+                    trace.append(
+                        {
+                            "stage": "trusted_candidate_bank",
+                            "episode_index": acquisition_state.episode_index,
+                            "status": "empty_terminalized",
+                            "candidate_count": 0,
+                        }
+                    )
+                    return force_terminal_choice(
+                        trigger_stop_reason="trusted_candidate_bank_empty"
                     )
                 stage_stop = _stage_budget_stop(
                     control=self.control,
@@ -978,6 +1143,7 @@ class VLMEvaluationController:
                 )
                 if (
                     acquisition_state.stage == "vlm"
+                    and candidates
                     and vlm_selection_mode_override
                     == "candidate_only"
                     and preview_episode
@@ -1104,12 +1270,49 @@ class VLMEvaluationController:
                         failure_kind=failure_kind,
                         failure_error=failure_error,
                     )
+                    # Selection is reached only after this packet passed the
+                    # deterministic integrity gate and the Judge requested a
+                    # repair.  A selector engineering failure must not erase
+                    # that still-valid packet or leave the scientific decision
+                    # open: ask the Judge for one final bounded choice using
+                    # the retained evidence.  The selector failure remains a
+                    # separately auditable degraded condition and is never a
+                    # normal deterministic-to-VLM escalation.
+                    if (
+                        gate_result.ready
+                        and last_judge is not None
+                        and last_judge.status == "need_more_evidence"
+                        and pending_request is not None
+                    ):
+                        trace.append(
+                            {
+                                "stage": "terminal_choice_policy",
+                                "outcome": (
+                                    "forced_with_retained_evidence"
+                                ),
+                                "trigger_stop_reason": (
+                                    "camera_selector_failed"
+                                ),
+                                "degraded": True,
+                                "failure_kind": failure_kind,
+                                "failure_error": failure_error,
+                                "selection_stage": (
+                                    acquisition_state.stage
+                                ),
+                                "retained_evidence": _evidence_refs(
+                                    evidence
+                                ),
+                            }
+                        )
+                        return force_terminal_choice(
+                            trigger_stop_reason=(
+                                "camera_selector_failed"
+                            ),
+                        )
                     return unresolved(
                         reason=(
-                            "camera selector failed; previous evidence was retained"
-                            if self.control.on_selector_failure
-                            == "keep_previous_evidence"
-                            else "camera selector failed"
+                            "camera selector failed without a previously "
+                            "validated evidence packet"
                         ),
                         stop_reason="camera_selector_failed",
                     )
@@ -1172,7 +1375,13 @@ class VLMEvaluationController:
                         escalation_reason
                         == "semantic_selection_required"
                     ):
-                        vlm_selection_mode_override = "candidate_only"
+                        vlm_selection_mode_override = (
+                            "candidate_only"
+                            if candidates
+                            else "freeform_pose"
+                            if self.control.allow_freeform_pose
+                            else None
+                        )
                     continue
                 if acquisition_state.stage == "vlm":
                     acquisition_state.mark_vlm_failed(selection.outcome)
@@ -1359,13 +1568,26 @@ class VLMEvaluationController:
                         "max_total_images_exhausted"
                     ),
                 )
-            evidence = _merge_evidence(
-                evidence,
-                rendered,
-                preserve_global_anchor=(
-                    camera_constraints.require_global_anchor
-                ),
-            )
+            window_event: dict[str, Any] | None = None
+            if evidence_window is not None:
+                evidence, window_event = (
+                    _compose_bounded_evidence_window(
+                        evidence_window,
+                        previous=evidence,
+                        additions=list(rendered.visual_evidence),
+                        trigger="camera_render",
+                    )
+                )
+                window_event["camera_selector_invoked"] = True
+                evidence_window_events.append(deepcopy(window_event))
+            else:
+                evidence = _merge_evidence(
+                    evidence,
+                    rendered,
+                    preserve_global_anchor=(
+                        camera_constraints.require_global_anchor
+                    ),
+                )
             current_fingerprint = _evidence_fingerprint(evidence)
             rounds_used += 1
             acquisition_state.record_render_round()
@@ -1410,6 +1632,11 @@ class VLMEvaluationController:
                         previous_fingerprint != current_fingerprint
                     ),
                     "images_used": _evidence_refs(evidence),
+                    **(
+                        {"evidence_window": deepcopy(window_event)}
+                        if window_event is not None
+                        else {}
+                    ),
                 }
             )
             telemetry.record_render(
@@ -1561,6 +1788,9 @@ class VLMEvaluationController:
         judge_request: JudgeRequest,
         acquisition_state: CameraAcquisitionState,
         telemetry: CameraExperimentTelemetry,
+        evidence_window: dict[str, Any] | None,
+        initial_window_artifact_ids: list[str],
+        evidence_window_events: list[dict[str, Any]],
         confidence: float = 0.0,
         defects: tuple[dict[str, Any], ...] = (),
     ) -> VLMEvaluationResult:
@@ -1591,6 +1821,27 @@ class VLMEvaluationController:
             total_images_acquired=total_images_acquired,
             acquisition_ledger=acquisition_ledger,
         )
+        if evidence_window is not None:
+            audit["evidence_window"] = {
+                "schema_version": "bounded_evidence_window_v1",
+                "policy": evidence_window["policy"],
+                "group_id": evidence_window.get("group_id"),
+                "check_id": evidence_window.get("check_id"),
+                "max_active_images": evidence_window[
+                    "max_active_images"
+                ],
+                "fixed_artifact_ids": list(
+                    evidence_window["fixed_artifact_ids"]
+                ),
+                "initial_artifact_ids": list(
+                    initial_window_artifact_ids
+                ),
+                "final_artifact_ids": [
+                    _evidence_artifact_id(item) for item in evidence
+                ],
+                "events": deepcopy(evidence_window_events),
+                "physical_artifacts_deleted": False,
+            }
         written_path: str | None = None
         if control_manifest_path is not None:
             target = Path(control_manifest_path).expanduser()
@@ -1657,6 +1908,41 @@ def _terminal_forced_choice_judge_request(
         rubric=deepcopy(request.rubric),
         context=context,
     )
+
+
+def _is_routing_screen_request(request: JudgeRequest) -> bool:
+    """Return whether a Judge call only routes a later review stage."""
+
+    context = request.context
+    if not isinstance(context, dict):
+        return False
+    return bool(
+        str(context.get("decision_mode") or "").strip().lower()
+        == "screen"
+        or str(context.get("evidence_phase") or "").strip().lower()
+        in {"global_screen", "required_area_global_screen"}
+    )
+
+
+def _judge_visible_request(request: JudgeRequest) -> JudgeRequest:
+    """Remove Controller-only orchestration state from the model prompt.
+
+    The shared evidence bank may contain artifacts that are not active for the
+    current atomic check.  Passing that routing structure to the Judge would
+    both waste context and leak inactive evidence provenance into a semantic
+    decision.  The Controller and persisted audit retain the full structure;
+    the Judge receives only the selected visual packet and ordinary metric
+    context.
+    """
+
+    if not any(key in request.context for key in _CONTROLLER_PRIVATE_CONTEXT_KEYS):
+        return request
+    visible_context = {
+        key: deepcopy(value)
+        for key, value in request.context.items()
+        if key not in _CONTROLLER_PRIVATE_CONTEXT_KEYS
+    }
+    return replace(request, context=visible_context)
 
 
 def _acquired_artifacts_from_provenance(

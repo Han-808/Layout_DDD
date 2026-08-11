@@ -265,6 +265,106 @@ def test_exporter_merges_identical_mirrored_audits(
     assert record["source_path"] == record["source_paths"][0]
 
 
+def test_exporter_distinguishes_per_check_episodes_in_same_claim(
+    tmp_path: Path,
+) -> None:
+    report = _report(_request())
+    metric = report["metrics"]["functional_consistency"]
+    first_audit = metric["global_camera_control_audit"]["audit"]
+    first_audit["judge_request"]["context"][
+        "required_functional_checks"
+    ] = [
+        {
+            "check_id": "functional_check_a",
+            "check_type": "directional_correspondence",
+            "target_ids": ["sofa", "television"],
+            "context_ids": [],
+            "owner_stage": "scene_global",
+            "owning_group_id": None,
+        }
+    ]
+    second_audit = deepcopy(first_audit)
+    second_audit["judge_request"]["context"][
+        "required_functional_checks"
+    ][0]["check_id"] = "functional_check_b"
+    metric["per_check_camera_control_audit"] = {
+        "audit": second_audit,
+    }
+
+    result = export_case_audit_graphs(
+        case_id="N021",
+        grouping_report=_grouping(),
+        scene_quality_report=report,
+        output_dir=tmp_path / "audit_graphs",
+    )
+
+    assert result["status"] == "complete"
+    records = result["evaluation_query_graphs"]
+    assert len(records) == 2
+    assert len({record["graph_id"] for record in records}) == 2
+
+
+def test_query_graph_projects_shared_evidence_window_audit(
+    tmp_path: Path,
+) -> None:
+    report = _report(_request())
+    audit = report["metrics"]["functional_consistency"][
+        "global_camera_control_audit"
+    ]["audit"]
+    audit["evidence_window"] = {
+        "schema_version": "bounded_evidence_window_v1",
+        "policy": "shared_group_bank",
+        "group_id": "seating",
+        "check_id": "functional_check_sofa_tv",
+        "max_active_images": 6,
+        "fixed_artifact_ids": [
+            "path:/tmp/global.png",
+            "path:/tmp/group-local.png",
+        ],
+        "initial_artifact_ids": [
+            "path:/tmp/global.png",
+            "path:/tmp/group-local.png",
+        ],
+        "final_artifact_ids": [
+            "path:/tmp/global.png",
+            "path:/tmp/group-local.png",
+            "path:/tmp/relation_wide.png",
+        ],
+        "events": [
+            {
+                "trigger": "shared_bank_reuse",
+                "reused_artifact_ids": [
+                    "path:/tmp/relation_wide.png"
+                ],
+                "evicted_artifact_ids": [],
+                "overflow_flush_applied": False,
+            }
+        ],
+        "physical_artifacts_deleted": False,
+    }
+
+    result = export_case_audit_graphs(
+        case_id="N021",
+        grouping_report=_grouping(),
+        scene_quality_report=report,
+        output_dir=tmp_path / "audit_graphs",
+    )
+
+    record = result["evaluation_query_graphs"][0]
+    graph = json.loads(
+        (tmp_path / "audit_graphs" / record["path"]).read_text(
+            encoding="utf-8"
+        )
+    )
+    window = graph["metadata"]["evidence_window"]
+    assert window["policy"] == "shared_group_bank"
+    assert window["bank_reuse_event_count"] == 1
+    assert window["reused_artifact_ids"] == [
+        "path:/tmp/relation_wide.png"
+    ]
+    assert window["physical_artifacts_deleted"] is False
+
+
 def test_unresolved_typed_relation_is_not_marked_adjudicated() -> None:
     relation_graph = build_relation_candidate_graph(
         case_id="N021",

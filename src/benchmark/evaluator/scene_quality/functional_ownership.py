@@ -27,7 +27,7 @@ def build_functional_ownership_ledger(
     for check in (functional_check_ledger or {}).get("checks") or []:
         if not isinstance(check, dict):
             raise TypeError("functional ownership checks must be objects")
-        phase = str(check.get("judge_result_ref") or "").strip()
+        phase = _ownership_phase_ref(check)
         if not phase or check.get("check_conclusion") != "invalid":
             continue
         checks_by_phase.setdefault(phase, []).append(check)
@@ -392,6 +392,31 @@ def _validated_check_refs(
             f"resolved invalid in that phase: {unknown}"
         )
     return refs
+
+
+def _ownership_phase_ref(check: dict[str, Any]) -> str:
+    """Map an atomic Judge episode back to its aggregate ownership phase."""
+
+    result_ref = str(check.get("judge_result_ref") or "").strip()
+    marker = ":check:"
+    if (
+        not result_ref.startswith("group_local_review:")
+        or marker not in result_ref
+    ):
+        return result_ref
+    phase, separator, episode_check_id = result_ref.partition(marker)
+    check_id = str(check.get("check_id") or "").strip()
+    if (
+        not separator
+        or not phase.removeprefix("group_local_review:")
+        or not check_id
+        or episode_check_id != check_id
+    ):
+        raise ValueError(
+            "functional ownership has a malformed per-check Judge result "
+            f"reference: {result_ref!r}"
+        )
+    return phase
 
 
 def _check_scoring_targets(check: dict[str, Any]) -> list[str]:

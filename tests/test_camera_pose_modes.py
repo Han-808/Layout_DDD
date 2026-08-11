@@ -618,7 +618,7 @@ def test_functional_probe_candidates_are_low_wide_and_context_preserving() -> No
     assert len(candidates) == 8
     assert all(
         item["policy_source"]
-        == "functional_usable_side_candidate_bank_v2"
+        == "functional_required_observation_candidate_bank_v3"
         for item in candidates
     )
     assert all(
@@ -662,6 +662,87 @@ def test_functional_probe_candidates_are_low_wide_and_context_preserving() -> No
     )
     assert np.all(framing_min[:2] <= target_min[:2])
     assert np.all(framing_max[:2] >= target_max[:2])
+
+
+def test_functional_repair_routes_by_check_semantics() -> None:
+    directed = _request("functional_consistency")
+    directed["object_ids"] = ["bed"]
+    directed["functional_repair"] = {
+        "target_ids": ["bed"],
+        "required_observations": [
+            "interaction_side_visible",
+            "front_back_disambiguated",
+        ],
+        "surface_targets": [
+            {
+                "target_id": "bed",
+                "directionality": "directed",
+                "surface_roles": ["interaction_side"],
+            }
+        ],
+    }
+    directed_candidates = generate_camera_pose_candidates(
+        directed,
+        max_candidates=4,
+    )
+    assert directed_candidates
+    assert all(
+        item["policy_source"]
+        == "functional_judge_requested_elevated_side_repair_v1"
+        for item in directed_candidates
+    )
+
+    non_directed = _request("functional_consistency")
+    non_directed["object_ids"] = ["bed"]
+    non_directed["functional_repair"] = {
+        "target_ids": ["bed"],
+        "required_observations": [
+            "target_visible",
+            "approach_zone_visible",
+        ],
+        "check_types": ["clearance"],
+        "surface_targets": [
+            {
+                "target_id": "bed",
+                "directionality": "non_directed",
+                "surface_roles": [],
+                "need_clearance": True,
+            }
+        ],
+    }
+    clearance_candidates = generate_camera_pose_candidates(
+        non_directed,
+        max_candidates=4,
+    )
+    assert clearance_candidates
+    assert all(
+        item["policy_source"]
+        == "functional_required_observation_candidate_bank_v3"
+        and item["view_family"] == "functional_frontage_probe"
+        for item in clearance_candidates
+    )
+
+    relation = _request("functional_consistency")
+    relation["object_ids"] = ["bed", "cabinet"]
+    relation["functional_repair"] = {
+        "target_ids": ["bed", "cabinet"],
+        "required_observations": [
+            "target_visible",
+            "joint_visibility",
+        ],
+        "check_types": ["within_group_correspondence"],
+        "relation_predicates": ["relative_use_geometry"],
+        "group_member_ids": ["bed", "cabinet"],
+    }
+    relation_candidates = generate_camera_pose_candidates(
+        relation,
+        max_candidates=4,
+    )
+    assert relation_candidates
+    assert all(
+        item["view_family"] == "functional_relation_wide"
+        for item in relation_candidates
+    )
 
 
 def test_cross_group_functional_probe_uses_global_context_when_local_pair_cannot_fit() -> None:

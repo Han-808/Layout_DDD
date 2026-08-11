@@ -9,6 +9,9 @@ from benchmark.evaluator.scene_quality.claim_identity import (
     claim_records,
     object_level_finding_records,
 )
+from benchmark.evaluator.scene_quality.terminal import (
+    terminalize_required_scope,
+)
 from benchmark.visual_judge.orchestration.audit import (
     evidence_artifact_refs,
 )
@@ -123,7 +126,10 @@ def evaluate_style_global_then_group_local(
                 ),
             },
         )
-        return base
+        return terminalize_required_scope(
+            base,
+            phase="style_consistency.global_screen",
+        )
 
     global_audit = _latest_audit(
         audit_records,
@@ -182,7 +188,10 @@ def evaluate_style_global_then_group_local(
             "fraction": 1.0,
             "complete": True,
         }
-        return base
+        return terminalize_required_scope(
+            base,
+            phase="style_consistency.global_screen",
+        )
 
     router_state = (
         "insufficient_evidence"
@@ -279,7 +288,10 @@ def evaluate_style_global_then_group_local(
                 ),
             },
         )
-        return base
+        return terminalize_required_scope(
+            base,
+            phase="style_consistency.local_confirmation_routing",
+        )
 
     selected_group_ids = [
         str(group["group_id"]) for group in selected_groups
@@ -452,7 +464,10 @@ def evaluate_style_global_then_group_local(
         ),
     }
     _attach_style_object_findings(result)
-    return result
+    return terminalize_required_scope(
+        result,
+        phase="style_consistency.local_confirmation",
+    )
 
 
 def suspicious_groups(
@@ -649,7 +664,10 @@ def _unresolved_without_grouping(
             "global_screen": deepcopy(global_adjusted),
         },
     )
-    return base
+    return terminalize_required_scope(
+        base,
+        phase="style_consistency.local_confirmation_routing",
+    )
 
 
 def _latest_audit(

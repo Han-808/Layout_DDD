@@ -50,13 +50,11 @@ def _candidate(
     subject: str,
     check_type: str,
     context: list[str] | None = None,
-    legacy_kind: str | None = None,
 ) -> dict:
     return {
         "subject_id": subject,
         "context_ids": list(context or []),
         "check_type": check_type,
-        "observation_kind": legacy_kind or check_type,
         "observation_goal": f"Inspect {subject} for {check_type}.",
     }
 
@@ -80,7 +78,7 @@ def _invalid_defect(check: dict) -> dict:
         "reason": "The typed placement obligation fails.",
         "severity": "material_contextual_mismatch",
         "check_id": check["check_id"],
-        "placement_check_type": check["check_type"],
+        "check_type": check["check_type"],
     }
 
 
@@ -97,7 +95,7 @@ def test_exact_check_id_canonicalizes_redundant_defect_fields() -> None:
                 {
                     **_invalid_defect(check),
                     "relation": "natural-language location wording",
-                    "placement_check_type": "wrong_redundant_value",
+                    "check_type": "wrong_redundant_value",
                 }
             ]
         },
@@ -105,27 +103,24 @@ def test_exact_check_id_canonicalizes_redundant_defect_fields() -> None:
     )
 
     assert result["defects"][0]["relation"] == "scene_zone"
-    assert result["defects"][0]["placement_check_type"] == "scene_zone"
+    assert result["defects"][0]["check_type"] == "scene_zone"
 
 
-def test_v1_candidates_map_to_v2_identities_and_routes() -> None:
+def test_canonical_candidates_merge_identities_and_route() -> None:
     discovery = _discovery(
         _candidate(
             subject="chair",
             check_type="support_and_height",
-            legacy_kind="support_surface",
         ),
         _candidate(
             subject="chair",
             check_type="support_and_height",
-            legacy_kind="placement_height",
         ),
         _candidate(subject="pendant", check_type="scene_zone"),
         _candidate(
             subject="pendant",
             check_type="contextual_anchor",
             context=["table"],
-            legacy_kind="adjacency_context",
         ),
         _candidate(
             subject="chair",
@@ -133,11 +128,6 @@ def test_v1_candidates_map_to_v2_identities_and_routes() -> None:
             context=["wardrobe"],
         ),
     )
-    # A persisted v1 discovery supplies observation_kind rather than
-    # check_type. The runtime normalization preserves that source provenance.
-    for item in discovery["candidates"][:2]:
-        item.pop("check_type")
-
     ledger = build_placement_check_ledger(discovery, groups=GROUPS)
 
     assert ledger["accepted_check_count"] == 4
@@ -148,10 +138,7 @@ def test_v1_candidates_map_to_v2_identities_and_routes() -> None:
     )
     assert support["owner_stage"] == "group_local"
     assert support["owning_group_id"] == "dining"
-    assert support["source_observation_kinds"] == [
-        "support_surface",
-        "placement_height",
-    ]
+    assert support["source_check_types"] == ["support_and_height"]
     assert {
         item["subject_id"]
         for item in placement_global_checks(ledger)
@@ -161,6 +148,19 @@ def test_v1_candidates_map_to_v2_identities_and_routes() -> None:
         for item in placement_checks_for_group(ledger, "dining")
     } == {"support_and_height", "contextual_anchor"}
     assert forced_group_ids_from_placement_checks(ledger) == ["dining"]
+
+
+def test_legacy_placement_candidate_field_fails_closed() -> None:
+    candidate = _candidate(
+        subject="chair",
+        check_type="support_and_height",
+    )
+    candidate["observation_kind"] = candidate.pop("check_type")
+    with pytest.raises(ValueError, match="unsupported placement check type"):
+        build_placement_check_ledger(
+            _discovery(candidate),
+            groups=GROUPS,
+        )
 
 
 def test_context_ids_are_canonicalized_for_stable_serialization() -> None:
@@ -374,7 +374,7 @@ def test_function_owned_exclusion_requires_exact_event_reference() -> None:
         )
 
 
-def test_placement_invalid_preserves_other_unresolved_check_for_audit() -> None:
+def test_placement_invalid_row_keeps_acquisition_open_for_unresolved_check() -> None:
     ledger = build_placement_check_ledger(
         _discovery(
             _candidate(subject="chair", check_type="scene_zone"),
@@ -397,8 +397,8 @@ def test_placement_invalid_preserves_other_unresolved_check_for_audit() -> None:
 
     resolution = validate_placement_check_results(
         {
-            "verdict": "invalid",
-            "defects": [_invalid_defect(invalid_check)],
+            "verdict": "ambiguous",
+            "defects": [],
             "placement_check_results": [
                 invalid_row,
                 unresolved_row,
@@ -460,19 +460,11 @@ def test_judge_originated_check_is_typed_and_phase_scoped() -> None:
         checks[0]["check_id"]
     )
 
-    # The OpenAI-compatible adapter normalizes before the evaluator performs
-    # its final fail-closed validation. Reprocessing the already-normalized
-    # payload must preserve one stable check and one result row.
-    readjusted, rechecks = normalize_judge_originated_placement_results(
-        adjusted,
-        known_ids=set(OBJECT_IDS),
-        groups=GROUPS,
-        existing_checks=[],
-        expected_owner_stage="scene_global",
-    )
-    assert readjusted == adjusted
-    assert rechecks == checks
-    assert len(readjusted["placement_check_results"]) == 1
+    assert "judge_originated_placement_results" not in adjusted
+    assert adjusted[
+        "judge_originated_placement_check_registrations"
+    ] == checks
+    assert len(adjusted["placement_check_results"]) == 1
 
     with pytest.raises(ValueError, match="active 'group_local' phase"):
         normalize_judge_originated_placement_results(
@@ -623,6 +615,64 @@ def test_pair_check_reference_survives_object_level_defect_attribution() -> None
     event = ownership["events"][0]
     assert event["check_refs"] == ["direction:chair-table"]
     assert event["scoring_target_ids"] == ["chair"]
+
+
+def test_per_check_episode_reference_projects_to_group_ownership_phase() -> None:
+    check_id = "direction:chair-table"
+    functional_ledger = {
+        "schema_version": "functional_check_ledger_v5",
+        "checks": [
+            {
+                "check_id": check_id,
+                "check_type": "directional_correspondence",
+                "target_ids": ["chair", "table"],
+                "check_conclusion": "invalid",
+                "judge_result_ref": (
+                    "group_local_review:dining:check:"
+                    f"{check_id}"
+                ),
+                "result_row": {
+                    "check_id": check_id,
+                    "target_ids": ["chair", "table"],
+                    "observation_status": "observed",
+                    "conclusion": "invalid",
+                    "reason": "The chair faces away from the table.",
+                },
+            }
+        ],
+    }
+    group_result = {
+        "group_id": "dining",
+        "score": 0.0,
+        "judgement": {
+            "verdict": "invalid",
+            "confidence": 0.9,
+            "reason": "The chair cannot support ordinary table use.",
+            "defects": [
+                {
+                    "scope": "functional_relation",
+                    "target_ids": ["chair"],
+                    "relation": "directional_correspondence",
+                    "reason": "The chair faces away from the table.",
+                    "check_refs": [check_id],
+                }
+            ],
+        },
+    }
+
+    ownership = build_functional_ownership_ledger(
+        scene_object_ids=OBJECT_IDS,
+        global_record=None,
+        relation_results=[],
+        group_results=[group_result],
+        functional_check_ledger=functional_ledger,
+    )
+
+    assert ownership["event_count"] == 1
+    assert ownership["events"][0]["check_refs"] == [check_id]
+    assert ownership["events"][0]["source_phase"] == (
+        "group_local_review:dining"
+    )
 
 
 def test_placement_lifecycle_and_cross_metric_audit_preserve_independent_defect() -> None:

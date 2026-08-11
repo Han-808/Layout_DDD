@@ -89,8 +89,8 @@ evidence_request must be:
 {"target_ids":["object_id"],"missing_observations":["exact_token"],
 "view_goal":"concrete visual goal","metadata":{}}.
 Use only target IDs in allowed_evidence_request_target_ids and exact observation tokens in
-allowed_missing_observations from the user context. missing_evidence may repeat those exact tokens
-for legacy compatibility or remain empty when evidence_request is present. Do not place prose in
+allowed_missing_observations from the user context. evidence_request is authoritative;
+missing_evidence may be [] or an exact duplicate of its missing_observations. Do not place prose in
 missing_evidence or missing_observations. Do not define camera constraints, poses, repair plans,
 metric scope, or rubric in evidence_request. Invalid requires one or more explicit significant
 defects in defects; otherwise return valid when evidence is sufficient. Each defect must contain
@@ -104,18 +104,26 @@ required functional check exactly once. Include check_id, exact target_ids,
 observation_status, conclusion, and a brief evidence-grounded reason. A valid
 verdict requires every listed check to resolve valid. Missing observation must
 be marked missing/unresolved and must not be silently treated as normal. For
-every invalid required check, include its exact check_id in exactly one
-defect.check_refs list. One physical defect may reference multiple invalid
+an evidence-complete response, every invalid required check must include its
+exact check_id in exactly one defect.check_refs list. If any required check is
+still missing/unresolved, the outer response remains evidence_status=insufficient
+and verdict=ambiguous, defects must be empty, and already-observed invalid rows
+remain only in functional_check_results until the requested coverage completes.
+One physical defect may reference multiple invalid
 checks only when defect.target_ids is a non-empty subset of every referenced
 check's target_ids. If invalid checks have different target scopes, emit one
 atomic defect per check instead of combining their target unions.
 Baseline defects that did not originate from a required check may omit
 check_refs. For an invalid clearance check, also return affected_object_ids,
-cause_kind
-(external_object or self_layout), causal_object_ids, and scoring_target_ids.
+cause_kind (external_object or self_layout), and causal_object_ids. Identify
+the actual external blocker in causal_object_ids; for self_layout,
+causal_object_ids must equal the affected clearance target IDs and must never
+be empty. scoring_target_ids is deterministic bookkeeping derived from the
+validated causal_object_ids, so do not make a second ownership decision with
+that field.
 Nearby causal candidates are routing priors, not a whitelist; use any legal
 scene object supported by the evidence. The defect target_ids must equal the
-scoring_target_ids.
+deterministically derived scoring_target_ids in the validated result.
 
 For semantic placement, resolve every required placement check exactly once.
 Use only support_and_height, scene_zone, or contextual_anchor. A placement
@@ -124,9 +132,14 @@ context_ids are never defect owners. Exclude an exact duplicate of a final
 Functional event only with conclusion=excluded_function_owned, the exact
 function_event_ref, and same_physical_event=true. Object identity alone is not
 enough. If baseline review finds a missed placement issue, emit a strictly
-typed judge_originated_placement_results item. Resolve it in the same call only
-when current evidence is sufficient; otherwise request evidence and place the
-typed candidate in evidence_request.metadata.placement_check_proposal."""
+typed judge_originated_placement_results item with exactly proposal_id,
+subject_id, context_ids, check_type, observation_goal, observation_status,
+conclusion, reason, and severity. Its defect.check_id must equal proposal_id;
+the Controller derives the stable check ID. Resolve it in the same call only
+when current evidence is sufficient; otherwise request evidence and place a
+proposal containing exactly proposal_id, subject_id, context_ids, check_type,
+and observation_goal in evidence_request.metadata.placement_check_proposal.
+Never emit observation_kind or placement_check_type."""
 
 _BUDGET_EXHAUSTION_FORCED_CHOICE_INSTRUCTION = """This is the terminal
 budget-exhaustion adjudication. No additional visual evidence can be acquired.
@@ -462,6 +475,7 @@ class OpenAICompatibleVLMJudge:
         allowed_evidence_request_target_ids = (
             _canonical_evidence_request_target_ids(request)
         )
+        allowed_defect_target_ids = _canonical_defect_target_ids(request)
         available_paths = [
             Path(str(value)).expanduser()
             for value in request.get("render_evidence", [])
@@ -628,6 +642,9 @@ class OpenAICompatibleVLMJudge:
             "allowed_evidence_request_target_ids": list(
                 allowed_evidence_request_target_ids
             ),
+            "allowed_defect_target_ids": list(
+                allowed_defect_target_ids
+            ),
             "evidence_phase": request.get("evidence_phase"),
             "decision_mode": request.get("decision_mode"),
             "phase_instruction": _canonical_phase_instruction(
@@ -690,6 +707,7 @@ class OpenAICompatibleVLMJudge:
                 "deterministic_evidence",
                 "allowed_missing_observations",
                 "allowed_evidence_request_target_ids",
+                "allowed_defect_target_ids",
                 "evidence_phase",
                 "decision_mode",
                 "phase_instruction",
@@ -831,13 +849,41 @@ class OpenAICompatibleVLMJudge:
                 )
 
                 result = canonicalize_typed_invalid_envelope(result)
+            if (
+                metric == "functional_consistency"
+                and required_functional_checks
+            ):
+                from benchmark.evaluator.scene_quality.functional_checks import (
+                    canonicalize_clearance_causal_attribution,
+                    canonicalize_functional_defect_check_linkage,
+                )
+
+                result = canonicalize_clearance_causal_attribution(
+                    result,
+                    required_checks=deepcopy(required_functional_checks),
+                )
+                result = canonicalize_functional_defect_check_linkage(
+                    result,
+                    required_checks=deepcopy(required_functional_checks),
+                )
+            result = _project_group_local_defects_to_scope(
+                result,
+                request=request,
+                required_functional_checks=required_functional_checks,
+            )
+            if metric == "semantic_placement_consistency":
+                _validate_pending_placement_proposal(
+                    result,
+                    request=request,
+                )
             normalized = validate_canonical_metric_response(
                 result,
                 allowed_scopes=allowed_scopes,
                 allowed_missing_observations=(
                     allowed_missing_observations
                 ),
-                allowed_target_ids=(
+                allowed_defect_target_ids=allowed_defect_target_ids,
+                allowed_evidence_request_target_ids=(
                     allowed_evidence_request_target_ids
                 ),
                 required_defect_fields=required_defect_fields,
@@ -852,15 +898,7 @@ class OpenAICompatibleVLMJudge:
                 # Keep the low-level OpenAI-compatible transport importable
                 # without eagerly initializing the evaluator package.
                 from benchmark.evaluator.scene_quality.functional_checks import (
-                    canonicalize_functional_defect_check_linkage,
                     validate_functional_check_results,
-                )
-
-                normalized = canonicalize_functional_defect_check_linkage(
-                    normalized,
-                    required_checks=deepcopy(
-                        required_functional_checks
-                    ),
                 )
                 validate_functional_check_results(
                     normalized,
@@ -924,7 +962,7 @@ class OpenAICompatibleVLMJudge:
             allowed_scopes=tuple(str(item) for item in allowed_scopes),
             allowed_target_ids=tuple(
                 str(item)
-                for item in allowed_evidence_request_target_ids
+                for item in allowed_defect_target_ids
             ),
             allowed_missing_observations=tuple(
                 str(item) for item in allowed_missing_observations
@@ -1964,6 +2002,186 @@ def _canonical_evidence_request_target_ids(
     return tuple(
         dict.fromkeys((*values, *external_ids, "scene"))
     )
+
+
+def _canonical_defect_target_ids(
+    request: dict[str, Any],
+) -> tuple[str, ...]:
+    contract = request.get("response_contract")
+    contract = contract if isinstance(contract, dict) else {}
+    defects = contract.get("defects")
+    defects = defects if isinstance(defects, dict) else {}
+    raw = defects.get("allowed_target_ids")
+    if not isinstance(raw, list):
+        group_scope = request.get("group_scope")
+        raw = (
+            group_scope.get("member_ids")
+            if isinstance(group_scope, dict)
+            and isinstance(group_scope.get("member_ids"), list)
+            else request.get("target_object_ids")
+        )
+    if not isinstance(raw, list) or not raw:
+        scene = request.get("scene_summary")
+        raw = [
+            item.get("id") or item.get("object_id")
+            for item in (
+                scene.get("objects")
+                if isinstance(scene, dict)
+                else []
+            )
+            or []
+            if isinstance(item, dict)
+        ]
+    values = tuple(
+        dict.fromkeys(
+            str(item)
+            for item in raw
+            if isinstance(item, (str, int)) and str(item).strip()
+        )
+    )
+    return tuple(dict.fromkeys((*values, "scene")))
+
+
+def _project_group_local_defects_to_scope(
+    result: dict[str, Any],
+    *,
+    request: dict[str, Any],
+    required_functional_checks: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Discard visual findings that do not belong to this group episode.
+
+    Global context is evidence, not decision scope.  The sole exception is an
+    external Functional clearance owner explicitly linked to its typed check
+    and exact ``scoring_target_ids``.  This projection is deterministic scope
+    enforcement, not response-schema compatibility repair.
+    """
+
+    if request.get("evidence_phase") != "group_local_review":
+        return result
+    group_scope = request.get("group_scope")
+    members = {
+        str(item)
+        for item in (
+            group_scope.get("member_ids")
+            if isinstance(group_scope, dict)
+            else []
+        )
+        or []
+        if str(item).strip()
+    }
+    defects = result.get("defects")
+    if not members or not isinstance(defects, list):
+        return result
+    checks = {
+        str(item.get("check_id") or ""): item
+        for item in required_functional_checks
+        if isinstance(item, dict) and item.get("check_id")
+    }
+    rows = {
+        str(item.get("check_id") or ""): item
+        for item in result.get("functional_check_results") or []
+        if isinstance(item, dict) and item.get("check_id")
+    }
+
+    def in_scope(defect: Any) -> bool:
+        if not isinstance(defect, dict):
+            return True
+        targets = {
+            str(item)
+            for item in defect.get("target_ids") or []
+            if str(item).strip()
+        }
+        if targets and targets <= members:
+            return True
+        refs = defect.get("check_refs")
+        if not isinstance(refs, list) or len(refs) != 1:
+            return False
+        check_id = str(refs[0])
+        check = checks.get(check_id)
+        row = rows.get(check_id)
+        return bool(
+            isinstance(check, dict)
+            and check.get("check_type") == "clearance"
+            and isinstance(row, dict)
+            and row.get("conclusion") == "invalid"
+            and targets
+            == {
+                str(item)
+                for item in row.get("scoring_target_ids") or []
+                if str(item).strip()
+            }
+        )
+
+    retained = [deepcopy(item) for item in defects if in_scope(item)]
+    if len(retained) == len(defects):
+        return result
+    projected = deepcopy(result)
+    projected["defects"] = retained
+    projected["group_scope_projection"] = {
+        "policy": "group_members_or_linked_clearance_owner_v1",
+        "discarded_defect_count": len(defects) - len(retained),
+    }
+    typed_invalid = any(
+        isinstance(row, dict) and row.get("conclusion") == "invalid"
+        for row in [
+            *(projected.get("functional_check_results") or []),
+            *(projected.get("placement_check_results") or []),
+        ]
+    )
+    if projected.get("verdict") == "invalid" and not retained:
+        if typed_invalid:
+            # A typed invalid without its exact authorized defect is a real
+            # contract failure and must proceed to schema repair/fail closed.
+            return projected
+        projected["verdict"] = "valid"
+        projected["reason"] = (
+            "The model described only defects outside the immutable group-local "
+            "decision scope; no in-scope defect remains."
+        )
+    return projected
+
+
+def _validate_pending_placement_proposal(
+    result: dict[str, Any],
+    *,
+    request: dict[str, Any],
+) -> None:
+    evidence_request = result.get("evidence_request")
+    if not isinstance(evidence_request, dict):
+        return
+    metadata = evidence_request.get("metadata")
+    if not isinstance(metadata, dict):
+        return
+    proposal = metadata.get("placement_check_proposal")
+    if proposal is None:
+        return
+    if not isinstance(proposal, dict) or not str(
+        proposal.get("proposal_id") or ""
+    ).strip():
+        raise ValueError(
+            "placement_check_proposal requires a canonical proposal_id"
+        )
+    from benchmark.evaluator.scene_quality.placement_checks import (
+        build_pending_placement_check,
+    )
+
+    pending = build_pending_placement_check(
+        proposal,
+        known_ids=_placement_known_ids_for_request(request),
+        groups=_placement_groups_for_request(request),
+        source_ref=str(proposal["proposal_id"]),
+    )
+    expected_stage = (
+        "group_local"
+        if request.get("evidence_phase") == "group_local_review"
+        else "scene_global"
+    )
+    if pending.get("owner_stage") != expected_stage:
+        raise ValueError(
+            "placement_check_proposal belongs to "
+            f"{pending.get('owner_stage')!r}, not active stage "
+            f"{expected_stage!r}"
+        )
 
 
 def _allowed_binary_camera_observations(

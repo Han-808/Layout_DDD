@@ -267,7 +267,12 @@ def _validate_legacy_judge_contract(
             allowed_missing_observations=(
                 _canonical_allowed_missing_observations(request)
             ),
-            allowed_target_ids=_canonical_allowed_target_ids(request),
+            allowed_defect_target_ids=(
+                _canonical_allowed_defect_target_ids(request)
+            ),
+            allowed_evidence_request_target_ids=(
+                _canonical_allowed_evidence_request_target_ids(request)
+            ),
             **_canonical_defect_field_contract(request),
         )
         return normalized
@@ -319,11 +324,21 @@ def _normalize_legacy_canonical_missing_observations(
             "metadata": {},
         },
         metric=request.metric,
-        known_target_ids=_canonical_allowed_target_ids(request),
+        known_target_ids=(
+            _canonical_allowed_evidence_request_target_ids(request)
+        ),
     )
     value["missing_evidence"] = list(
         constraints.required_observations
     )
+    value["evidence_request"] = {
+        "target_ids": list(constraints.target_ids),
+        "missing_observations": list(
+            constraints.required_observations
+        ),
+        "view_goal": "legacy_metric_scoped_visual_confirmation",
+        "metadata": {"source": "legacy_judge_adapter"},
+    }
 
 
 def _validate_native_judge_contract(
@@ -409,7 +424,12 @@ def _validate_native_judge_contract(
             allowed_missing_observations=(
                 _canonical_allowed_missing_observations(request)
             ),
-            allowed_target_ids=_canonical_allowed_target_ids(request),
+            allowed_defect_target_ids=(
+                _canonical_allowed_defect_target_ids(request)
+            ),
+            allowed_evidence_request_target_ids=(
+                _canonical_allowed_evidence_request_target_ids(request)
+            ),
             **_canonical_defect_field_contract(request),
         )
         return normalized
@@ -489,9 +509,27 @@ def _canonical_allowed_missing_observations(
     )
 
 
-def _canonical_allowed_target_ids(
+def _canonical_allowed_defect_target_ids(
     request: JudgeRequest,
 ) -> tuple[str, ...]:
+    response_contract = request.context.get("response_contract")
+    response_contract = (
+        response_contract
+        if isinstance(response_contract, dict)
+        else {}
+    )
+    defects = response_contract.get("defects")
+    defects = defects if isinstance(defects, dict) else {}
+    allowed = defects.get("allowed_target_ids")
+    if isinstance(allowed, list) and allowed:
+        return tuple(
+            dict.fromkeys(
+                str(value)
+                for value in allowed
+                if isinstance(value, (str, int))
+                and str(value).strip()
+            )
+        )
     scope = request.context.get("group_scope")
     if isinstance(scope, dict):
         members = scope.get("member_ids")
@@ -514,6 +552,36 @@ def _canonical_allowed_target_ids(
         if object_id is not None and str(object_id).strip():
             values.append(str(object_id))
     return tuple(dict.fromkeys((*values, "scene")))
+
+
+def _canonical_allowed_evidence_request_target_ids(
+    request: JudgeRequest,
+) -> tuple[str, ...]:
+    """Return objects the active episode may request additional views for."""
+
+    values = _request_target_ids(request)
+    external = request.context.get(
+        "allowed_external_evidence_target_ids"
+    )
+    if isinstance(external, list):
+        values.extend(external)
+    if not isinstance(request.context.get("group_scope"), dict):
+        for item in request.scene_context.get("objects") or []:
+            if not isinstance(item, dict):
+                continue
+            object_id = item.get("id") or item.get("object_id")
+            if object_id is not None and str(object_id).strip():
+                values.append(str(object_id))
+    return tuple(
+        dict.fromkeys(
+            (
+                str(value)
+                for value in (*values, "scene")
+                if isinstance(value, (str, int))
+                and str(value).strip()
+            )
+        )
+    )
 
 
 def _set_authoritative_provenance(

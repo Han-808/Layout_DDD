@@ -295,7 +295,7 @@ def test_acquisition_routes_cross_group_and_neutral_group_confirmation() -> None
     assert plan["budget_exhausted"] is False
 
 
-def test_acquisition_budget_exhaustion_is_explicit() -> None:
+def test_cross_group_reservation_over_budget_fails_closed() -> None:
     discovery = {
         "directed_surface_targets": [],
         "within_group_correspondences": [],
@@ -315,23 +315,14 @@ def test_acquisition_budget_exhaustion_is_explicit() -> None:
         "unusual_unconfirmed": [],
     }
 
-    plan = build_functional_acquisition_plan(
-        discovery,
-        max_probe_units=4,
-    )
-
-    assert len(plan["probe_units"]) == 4
-    assert plan["coverage_complete"] is False
-    assert plan["budget_exhausted"] is True
-    assert len(plan["unscheduled_discovery_items"]) == 1
-    unscheduled = plan["unscheduled_discovery_items"][0]
-    assert unscheduled["discovery_ids"] == ["relation_4"]
-    assert unscheduled["target_ids"] == ["left_4", "right_4"]
-    assert unscheduled["observation_goal"] == "show relation 4"
-    assert unscheduled["reason"] == "max_probe_units_exhausted"
-    assert unscheduled["acquisition_identity"][0] == (
-        "functional_correspondence"
-    )
+    with pytest.raises(
+        ValueError,
+        match="silent relation starvation is forbidden",
+    ):
+        build_functional_acquisition_plan(
+            discovery,
+            max_probe_units=4,
+        )
 
 
 def test_only_cross_group_relation_is_proactively_scheduled() -> None:
@@ -382,7 +373,7 @@ def test_only_cross_group_relation_is_proactively_scheduled() -> None:
     )
 
 
-def test_failed_probe_is_backfilled_by_next_deterministic_candidate(
+def test_failed_cross_group_probe_does_not_skip_next_reserved_relation(
     tmp_path: Path,
 ) -> None:
     global_image = tmp_path / "global.png"
@@ -451,7 +442,7 @@ def test_failed_probe_is_backfilled_by_next_deterministic_candidate(
             ],
         },
         global_image_path=str(global_image),
-        max_probe_units=1,
+        max_probe_units=2,
         groups=[
             {"group_id": f"group_{object_id}", "object_ids": [object_id]}
             for object_id in ("a", "b", "c", "d")
@@ -465,7 +456,7 @@ def test_failed_probe_is_backfilled_by_next_deterministic_candidate(
 
     assert calls == [["a", "b"], ["c", "d"]]
     assert paths == [str(replacement_image)]
-    assert audit["attempted_backfill_count"] == 1
+    assert audit["attempted_backfill_count"] == 0
     assert audit["successful_probe_count"] == 1
     assert audit["failed_probe_count"] == 1
     assert audit["budget_exhausted"] is False
@@ -1217,7 +1208,7 @@ def test_placement_discovery_separates_subject_from_context() -> None:
                 {
                     "subject_id": "subject",
                     "context_ids": ["context"],
-                    "observation_kind": "adjacency_context",
+                    "check_type": "contextual_anchor",
                     "observation_goal": (
                         "show the subject's location relative to context"
                     ),
@@ -1229,7 +1220,7 @@ def test_placement_discovery_separates_subject_from_context() -> None:
     )
     assert result["candidates"][0]["subject_id"] == "subject"
     assert result["candidates"][0]["context_ids"] == ["context"]
-    assert result["candidates"][0]["observation_kind"] == (
+    assert result["candidates"][0]["check_type"] == (
         "contextual_anchor"
     )
     assert result["candidates"][0]["observation_goal"] == (
@@ -2120,7 +2111,7 @@ def test_placement_discovery_records_explicit_vlm_role_and_contract(
                     {
                         "subject_id": "telephone",
                         "context_ids": [],
-                        "observation_kind": "scene_zone",
+                        "check_type": "scene_zone",
                         "observation_goal": (
                             "show the telephone's surrounding scene zone"
                         ),
@@ -2719,6 +2710,62 @@ def test_usable_surface_repair_bank_preserves_trusted_side_ids() -> None:
     assert all(
         item["elevation_degrees"] > primary[index]["elevation_degrees"]
         for index, item in enumerate(repair)
+    )
+
+
+def test_functional_judge_repair_uses_elevated_side_bank_for_high_target(
+) -> None:
+    scene = _single_cabinet_scene()
+    scene["objects"] = [
+        {
+            **scene["objects"][0],
+            "id": "small_high_target",
+            "center": [4.0, 4.0, 3.05],
+            "size": [0.35, 0.35, 0.35],
+        }
+    ]
+
+    candidates = generate_camera_pose_candidates(
+        {
+            "metric": "functional_consistency",
+            "scene": scene,
+            "object_ids": ["small_high_target"],
+            "functional_repair": {
+                "schema_version": "functional_camera_repair_v1",
+                "target_ids": ["small_high_target"],
+                "source_check_ids": ["functional_check_006"],
+                "usable_surface_hypotheses": [
+                    {
+                        "target_id": "small_high_target",
+                        "status": "identified",
+                        "surfaces": [
+                            {
+                                "surface_role": "interaction_side",
+                                "side_id": "local_neg_y",
+                            }
+                        ],
+                    }
+                ],
+            },
+        },
+        max_candidates=4,
+    )
+
+    assert candidates
+    assert candidates[0]["local_side_id"] == "local_neg_y"
+    assert {
+        item["policy_source"] for item in candidates
+    } == {"functional_judge_requested_elevated_side_repair_v1"}
+    assert all(
+        item["target_object_ids"] == ["small_high_target"]
+        for item in candidates
+    )
+
+
+def test_affordance_prompt_reserves_directed_for_horizontal_facing() -> None:
+    assert "horizontally facing side" in FUNCTIONAL_AFFORDANCE_SYSTEM_PROMPT
+    assert "top/bottom/gravity-axis" in (
+        FUNCTIONAL_AFFORDANCE_SYSTEM_PROMPT
     )
 
 

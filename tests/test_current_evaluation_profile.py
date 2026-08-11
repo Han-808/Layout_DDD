@@ -448,7 +448,13 @@ def test_canonical_report_has_exact_l0_l4_layers_and_validates_schema(
     assert report["coverage"]["active_metrics_by_layer"] == {
         L1: ["collision", "oob", "support"],
         L2: ["oor", "oar"],
-        L3: [],
+        L3: [
+            "scale_consistency",
+            "object_pairing_consistency",
+            "style_consistency",
+            "functional_consistency",
+            "semantic_placement_consistency",
+        ],
         L4: [],
     }
     assert report["coverage"]["resolved_metrics_by_layer"] == {
@@ -460,7 +466,10 @@ def test_canonical_report_has_exact_l0_l4_layers_and_validates_schema(
     assert report["coverage"]["active_metric_signatures"] == {
         L1: "collision+oob+support",
         L2: "oor+oar",
-        L3: "none",
+        L3: (
+            "scale_consistency+object_pairing_consistency+style_consistency+"
+            "functional_consistency+semantic_placement_consistency"
+        ),
         L4: "none",
     }
     assert report["coverage"]["comparability_signature"].startswith(
@@ -485,11 +494,8 @@ def test_report_schema_keeps_v1_l3_active_inventory_to_three_metrics(
     )
     schema = read_json(ROOT / "schemas" / "evaluation_report.schema.json")
     validator = Draft202012Validator(schema)
-    validator.validate(report)
-
-    report["coverage"]["active_metrics_by_layer"][L3].append(
-        "functional_consistency"
-    )
+    # A current five-metric report cannot be relabelled as the frozen v1
+    # three-metric contract by changing only its version string.
     assert list(validator.iter_errors(report))
 
 
@@ -597,6 +603,12 @@ def test_l1_oob_threshold_override_reaches_the_detector(tmp_path: Path) -> None:
     assert widened_report["evaluation_plan"]["layers"][L1]["metric_config"] == {
         "oob": {"floor_contact_tolerance_m": 0.25}
     }
+    assert widened_report["scoring_profile"]["scoring_profile_id"] == (
+        "intrinsic_validity_v1"
+    )
+    assert "scoring_profile:intrinsic_validity_v1" in (
+        widened_report["coverage"]["comparability_signature"]
+    )
 
 
 def test_input_scene_is_not_mutated_by_profile_execution(tmp_path: Path) -> None:

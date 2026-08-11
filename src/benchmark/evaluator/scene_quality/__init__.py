@@ -57,12 +57,16 @@ from benchmark.evaluator.scene_quality.functional_prejudgement import (
     RuntimeFunctionalPrejudgementEvidenceSource,
 )
 from benchmark.evaluator.scene_quality.placement_severity import (
+    ATYPICAL,
     CLEAR_SEMANTIC_MISPLACEMENT,
+    IMPLAUSIBLE,
+    LEGACY_PLACEMENT_SEVERITY_LEVELS,
     MATERIAL_CONTEXTUAL_MISMATCH,
     PLACEMENT_SEVERITY_LEVELS,
 )
 
 __all__ = [
+    "ATYPICAL",
     "AUTHORIZED_DEVIATION_SOURCES",
     "AuthorizedDeviationError",
     "CAMERA_MODES",
@@ -79,7 +83,9 @@ __all__ = [
     "FunctionalPrejudgementEvidenceResult",
     "FunctionalPrejudgementEvidenceSource",
     "IMAGE_ORDER_TOKENS",
+    "IMPLAUSIBLE",
     "JUDGMENT_SCOPE_BY_METRIC",
+    "LEGACY_PLACEMENT_SEVERITY_LEVELS",
     "MATERIAL_CONTEXTUAL_MISMATCH",
     "PERCEPTUAL_VISUAL_QUALITY",
     "PERCEPTUAL_VISUAL_QUALITY_METRICS",
