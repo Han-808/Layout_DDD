@@ -23,10 +23,16 @@ from benchmark.evaluator.scene_quality.functional_checks import (
     forced_group_ids_from_checks,
     update_functional_check_evidence,
 )
+from benchmark.evaluator.scene_quality.functional_measurements import (
+    compact_functional_measurements_for_checks,
+)
 from benchmark.evaluator.scene_quality.functional_planner_adapter import (
     FUNCTIONAL_DISCOVERY_PLANNER_MODE,
     FunctionalEvidencePlannerAdapter,
     LEGACY_FUNCTIONAL_PROBE_PLANNER_MODE,
+)
+from benchmark.evaluator.scene_quality.terminal import (
+    recoverable_validation_failure,
 )
 from benchmark.rendering.camera_pose import (
     FUNCTIONAL_PROBE_CANDIDATE_BUDGETS,
@@ -62,6 +68,8 @@ def acquire_functional_probe_evidence(
     identity_legend: dict[str, str] | None = None,
 ) -> tuple[list[str], dict[str, Any]]:
     """Plan and render raw probe images without issuing a metric verdict."""
+
+    base_evidence_available = Path(global_image_path).expanduser().is_file()
 
     audit: dict[str, Any] = {
         "schema_version": FUNCTIONAL_PROBE_ACQUISITION_VERSION,
@@ -178,18 +186,55 @@ def acquire_functional_probe_evidence(
                 boundary_evidence
             )
             audit["functional_discovery"] = deepcopy(discovery)
+            discovery_coverage = (
+                discovery.get("coverage")
+                if isinstance(discovery, dict)
+                and isinstance(discovery.get("coverage"), dict)
+                else None
+            )
+            if discovery_coverage is not None:
+                # Bubble the frozen per-object/relation obligations up to the
+                # acquisition component consumed by metric scoring. Keeping
+                # coverage only inside ``functional_discovery`` would make a
+                # salvaged bad row invisible to the final projection.
+                audit["coverage"] = deepcopy(discovery_coverage)
             audit["functional_acquisition_plan"] = deepcopy(plan)
             if isinstance(plan, dict):
                 audit["functional_check_ledger"] = deepcopy(
                     plan.get("functional_check_ledger")
                 )
+                audit["functional_measurement_bank"] = deepcopy(
+                    plan.get("functional_measurement_bank")
+                )
         audit["planner_mode"] = planner_execution.mode
     except Exception as exc:
+        recoverable = bool(
+            base_evidence_available
+            and recoverable_validation_failure(exc)
+        )
         audit.update(
-            status="failed",
-            reason="functional_probe_planner_failed",
+            status=(
+                "degraded_no_probes" if recoverable else "failed"
+            ),
+            reason=(
+                "functional_probe_planner_item_failure_isolated"
+                if recoverable
+                else "functional_probe_planner_failed"
+            ),
             error_type=type(exc).__name__,
             error=str(exc),
+            coverage={
+                "unit": "planner_contract_obligation",
+                "eligible_count": 1,
+                "grounded_count": 0,
+                "fraction": 0.0,
+                "complete": False,
+            },
+            fallback={
+                "policy": "no_specialized_probes_keep_base_evidence_v1",
+                "defaulted_probe_count": 1,
+                "base_group_and_global_judges_continue": recoverable,
+            },
         )
         schema_audit = getattr(exc, "schema_audit", None)
         if isinstance(schema_audit, dict):
@@ -278,11 +323,29 @@ def acquire_functional_probe_evidence(
         _attach_required_checks_to_group_packets(audit, groups=groups)
         _summarize_usable_surface_usage(audit)
         audit.update(
-            status="failed",
+            status=(
+                "degraded_no_probes"
+                if base_evidence_available
+                else "failed"
+            ),
             reason="functional_probe_provider_not_configured",
             rendered_probe_count=0,
             failed_probe_count=len(units),
             planned_probe_count=len(units),
+            acquisition_coverage={
+                "unit": "planned_functional_probe",
+                "eligible_count": len(units),
+                "grounded_count": 0,
+                "fraction": 0.0,
+                "complete": False,
+            },
+            fallback={
+                "policy": "no_specialized_probes_keep_base_evidence_v1",
+                "defaulted_probe_count": len(units),
+                "base_group_and_global_judges_continue": bool(
+                    base_evidence_available
+                ),
+            },
         )
         return [], audit
 
@@ -508,6 +571,9 @@ def acquire_functional_probe_evidence(
                 unit.get("discovery_ids") or []
             ),
             "check_ids": deepcopy(unit.get("check_ids") or []),
+            "functional_measurements": deepcopy(
+                unit.get("functional_measurements") or {}
+            ),
             "acquisition_trigger": unit.get("acquisition_trigger"),
             "acquisition_triggers": deepcopy(
                 unit.get("acquisition_triggers") or []
@@ -595,6 +661,14 @@ def acquire_functional_probe_evidence(
                     )
                 ),
                 provider_usage=provider_usage,
+                evidence_coverage=deepcopy(
+                    (
+                        provider_usage.get("functional_evidence_coverage")
+                        if isinstance(provider_usage, dict)
+                        else None
+                    )
+                    or {}
+                ),
                 usable_surface_audit=deepcopy(
                     (
                         getattr(provider, "last_call_usage", None)
@@ -768,6 +842,12 @@ def acquire_functional_probe_evidence(
             "functional_geometry": deepcopy(
                 result.get("functional_geometry")
             ),
+            "functional_measurements": deepcopy(
+                result.get("functional_measurements") or {}
+            ),
+            "evidence_coverage": deepcopy(
+                result.get("evidence_coverage") or {}
+            ),
             "evidence_reuse": deepcopy(
                 result.get("evidence_reuse") or {}
             ),
@@ -893,6 +973,15 @@ def acquire_functional_probe_evidence(
         backfill_attempt_quota or 0
     )
     audit["successful_probe_count"] = successful_probe_count
+    audit["acquisition_coverage"] = {
+        "unit": "planned_functional_probe",
+        "eligible_count": len(units),
+        "grounded_count": successful_probe_count,
+        "fraction": (
+            successful_probe_count / len(units) if units else 1.0
+        ),
+        "complete": successful_probe_count == len(units),
+    }
     audit["status"] = (
         "complete"
         if (
@@ -902,6 +991,8 @@ def acquire_functional_probe_evidence(
         )
         else "partial"
         if selected_paths
+        else "degraded_no_probes"
+        if base_evidence_available
         else "failed"
     )
     audit["reason"] = (
@@ -981,6 +1072,12 @@ def functional_probe_judge_packet(
                 ),
                 "functional_geometry": deepcopy(
                     result.get("functional_geometry")
+                ),
+                "functional_measurements": deepcopy(
+                    result.get("functional_measurements") or {}
+                ),
+                "evidence_coverage": deepcopy(
+                    result.get("evidence_coverage") or {}
                 ),
                 "evidence_reuse": deepcopy(
                     result.get("evidence_reuse") or {}
@@ -1082,6 +1179,13 @@ def functional_probe_judge_packet(
         if isinstance(check, dict)
         and check.get("owner_stage") == "cross_group_relation"
     ]
+    required_check_ids = [
+        str(check.get("check_id") or "") for check in required_checks
+    ]
+    functional_measurements = _judge_measurements_for_checks(
+        acquisition_audit,
+        required_check_ids,
+    )
     return {
         "schema_version": FUNCTIONAL_PROBE_JUDGE_PACKET_VERSION,
         "planning_role": "visual_evidence_only_no_metric_verdict",
@@ -1114,11 +1218,9 @@ def functional_probe_judge_packet(
             relation_observation_requests
         ),
         "required_checks": required_checks,
-        "required_check_ids": [
-            str(check.get("check_id") or "")
-            for check in required_checks
-        ],
+        "required_check_ids": required_check_ids,
         "required_check_count": len(required_checks),
+        "functional_measurements": functional_measurements,
         "image_order": image_roles,
         "acquisition_coverage_complete": not undelivered_cross_group,
         "observation_complete": False,
@@ -1319,6 +1421,9 @@ def functional_relation_judge_packet(
                 for check in normalized_required_checks
             ],
             "required_check_count": len(normalized_required_checks),
+            "functional_measurements": deepcopy(
+                probe_result.get("functional_measurements") or {}
+            ),
             "coverage_complete": False,
             "acquisition_coverage_complete": False,
             "observation_complete": False,
@@ -1382,6 +1487,65 @@ def functional_relation_judge_packet(
     return packet
 
 
+def _judge_measurements_for_checks(
+    acquisition_audit: dict[str, Any],
+    check_ids: list[str],
+) -> dict[str, Any]:
+    """Resolve compact measurements from the pre-scheduling bank.
+
+    Older frozen audits may contain only the compact subset copied onto a
+    probe result.  That fallback reuses recorded facts; it never recomputes
+    measurements after camera scheduling.
+    """
+
+    bank = acquisition_audit.get("functional_measurement_bank")
+    if isinstance(bank, dict):
+        return compact_functional_measurements_for_checks(bank, check_ids)
+    requested = {
+        str(item) for item in check_ids if str(item).strip()
+    }
+    rows: dict[str, dict[str, Any]] = {}
+    template: dict[str, Any] | None = None
+    for result in acquisition_audit.get("probe_results") or []:
+        if not isinstance(result, dict):
+            continue
+        context = result.get("functional_measurements")
+        if not isinstance(context, dict):
+            continue
+        template = context
+        for row in context.get("check_measurements") or []:
+            if not isinstance(row, dict):
+                continue
+            check_id = str(row.get("check_id") or "")
+            if check_id in requested:
+                rows.setdefault(check_id, deepcopy(row))
+    if template is None:
+        return compact_functional_measurements_for_checks(None, check_ids)
+    ordered = [
+        rows[check_id]
+        for check_id in check_ids
+        if check_id in rows
+    ]
+    return {
+        "schema_version": template.get("schema_version"),
+        "status": (
+            "complete"
+            if len(ordered) == len(requested)
+            else "partial"
+            if ordered
+            else "unavailable"
+        ),
+        "measurement_role": template.get(
+            "measurement_role",
+            "deterministic_spatial_evidence_not_verdict",
+        ),
+        "measurement_semantics": template.get("measurement_semantics"),
+        "decision_authority": "none",
+        "requested_check_ids": list(check_ids),
+        "check_measurements": ordered,
+    }
+
+
 def _machine_observation_complete(
     probe_result: dict[str, Any],
     *,
@@ -1413,6 +1577,10 @@ def _machine_observation_complete(
             *(functional_geometry.get("surface_observations") or []),
         ]
         if isinstance(item, dict) and item.get("target_id")
+        and (
+            item.get("status") == "identified"
+            or bool(item.get("side_id"))
+        )
     }
     trusted_targets = {str(item) for item in target_ids}
     return bool(
@@ -1498,6 +1666,12 @@ def _attach_required_checks_to_group_packets(
             str(check["check_id"]) for check in required_checks
         ]
         packet["required_check_count"] = len(required_checks)
+        packet["functional_measurements"] = (
+            _judge_measurements_for_checks(
+                audit,
+                packet["required_check_ids"],
+            )
+        )
         architecture_orientation_checks = [
             check
             for check in required_checks
@@ -1516,7 +1690,9 @@ def _attach_required_checks_to_group_packets(
             "predicate": (
                 "usable_side_points_toward_plausible_accessible_interior"
             ),
-            "deterministic_direction_descriptor": "routing_only",
+            "deterministic_direction_descriptor": (
+                "camera_routing_and_measurement_bank_judge_evidence"
+            ),
             "judge_evidence": [
                 "one_angled_global_view",
                 "same_side_conditioned_local_view",
@@ -1611,11 +1787,13 @@ def _attach_boundary_evidence_to_group_packets(
                     "front_back_disambiguated",
                 ],
                 "neutral_observation_goal": (
-                    "Use the decoded usable-side hypothesis and deterministic "
-                    "direction descriptor only to bind the correct local "
-                    "view. Judge architecture orientation from the angled "
-                    "global plus side-conditioned local visuals. Optional "
-                    "clearance measurements are evidence, not thresholds."
+                    "Use the decoded usable-side hypothesis to bind the "
+                    "correct local view. Use the compact Functional "
+                    "Measurement Bank heading and relation facts as "
+                    "deterministic spatial evidence, while the angled global "
+                    "and side-conditioned local visuals confirm side semantics "
+                    "and usage context. Optional clearance measurements are "
+                    "evidence, not thresholds."
                 ),
                 "usable_surface": deepcopy(
                     subset.get("usable_surface_hypotheses") or []
@@ -1658,6 +1836,18 @@ def _summarize_usable_surface_usage(
         boundary.get("decoder_calls") or 0
     ) + sum(
         int(item.get("decoder_calls") or 0)
+        for item in surface_audits
+    )
+    audit["usable_surface_catalog_contract_hits"] = int(
+        boundary.get("catalog_contract_hits") or 0
+    ) + sum(
+        int(item.get("catalog_contract_hits") or 0)
+        for item in surface_audits
+    )
+    audit["usable_surface_catalog_contract_misses"] = int(
+        boundary.get("catalog_contract_misses") or 0
+    ) + sum(
+        int(item.get("catalog_contract_misses") or 0)
         for item in surface_audits
     )
     audit["usable_surface_cache_hits"] = int(

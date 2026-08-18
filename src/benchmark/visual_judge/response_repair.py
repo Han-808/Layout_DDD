@@ -48,7 +48,9 @@ original identifiers collide. Preserve exact Function ownership references and
 required causal attribution fields for an invalid clearance check. Invalid
 requires at least one explicit
 in-scope defect. If the original decision cannot be represented without
-changing typed conclusions or defect identity, the caller will fail closed.
+changing typed conclusions or defect identity, the strict validator will
+reject it; the metric-specific caller may retain independent legal rows and
+default only the malformed atomic unit with explicit ambiguity audit.
 Return JSON only."""
 
 _FORCED_CHOICE_CANONICAL_SCHEMA_REPAIR_PROMPT = """Your previous response
@@ -108,6 +110,13 @@ def repair_canonical_response_schema_once(
     allowed_scopes: tuple[str, ...] = (),
     allowed_target_ids: tuple[str, ...] = (),
     allowed_missing_observations: tuple[str, ...] = (),
+    fail_soft_fallback: (
+        Callable[
+            [dict[str, Any], dict[str, Any]],
+            dict[str, Any],
+        ]
+        | None
+    ) = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Permit one same-evidence repair for a canonical metric response."""
 
@@ -147,6 +156,7 @@ def repair_canonical_response_schema_once(
             if force_binary_choice
             else _restore_canonical_natural_language
         ),
+        fail_soft_fallback=fail_soft_fallback,
     )
 
 
@@ -170,6 +180,13 @@ def _repair_response_schema_once(
         ]
         | None
     ),
+    fail_soft_fallback: (
+        Callable[
+            [dict[str, Any], dict[str, Any]],
+            dict[str, Any],
+        ]
+        | None
+    ) = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     raw = model.chat_messages(
         messages,
@@ -261,6 +278,42 @@ def _repair_response_schema_once(
             )
         repaired = validator(repaired_value)
     except (TypeError, ValueError, KeyError) as second_error:
+        if fail_soft_fallback is not None:
+            try:
+                fallback = fail_soft_fallback(
+                    repaired_value
+                    if isinstance(repaired_value, dict)
+                    else {},
+                    initial_value
+                    if isinstance(initial_value, dict)
+                    else {},
+                )
+                result = validator(fallback)
+            except (TypeError, ValueError, KeyError):
+                pass
+            else:
+                return result, {
+                    "policy": policy,
+                    "attempt_count": 2,
+                    "repair_retry_count": 1,
+                    "recovered": False,
+                    "item_level_salvage": True,
+                    "attempts": [
+                        first_attempt,
+                        {
+                            "attempt": 2,
+                            "call_type": repair_call_type,
+                            "raw_response": _bounded_raw_response(
+                                repaired_raw
+                            ),
+                            "validation_error_type": type(
+                                second_error
+                            ).__name__,
+                            "validation_error": str(second_error),
+                            "request_metadata": second_metadata,
+                        },
+                    ],
+                }
         audit = {
             "policy": policy,
             "attempt_count": 2,
@@ -492,6 +545,94 @@ def _canonical_semantic_signature(
             )
             for item in placement_rows
         )
+    group_rows = value.get("group_global_observations")
+    if isinstance(group_rows, list) and all(
+        isinstance(item, dict) for item in group_rows
+    ):
+        signature["group_global_observations"] = sorted(
+            (
+                str(item.get("group_id") or ""),
+                tuple(
+                    str(object_id)
+                    for object_id in item.get("object_ids") or []
+                ),
+                tuple(
+                    sorted(
+                        str(group_id)
+                        for group_id in item.get("related_group_ids") or []
+                    )
+                ),
+                str(item.get("evidence_sufficiency") or ""),
+                str(item.get("residual_issue_candidate") or ""),
+            )
+            for item in group_rows
+        )
+    judge_placement = value.get("judge_originated_placement_results")
+    anchors: list[tuple[str, tuple[str, ...], str]] = []
+    valid_atoms: list[tuple[Any, ...]] = []
+    if isinstance(judge_placement, list):
+        for item in judge_placement:
+            if not isinstance(item, dict):
+                continue
+            subject_id = str(item.get("subject_id") or "").strip()
+            context_ids = item.get("context_ids")
+            check_type = str(
+                item.get("check_type")
+                or item.get("placement_check_type")
+                or ""
+            ).strip()
+            if (
+                not subject_id
+                or not check_type
+                or not isinstance(context_ids, list)
+                or any(
+                    not isinstance(context_id, str)
+                    or not context_id.strip()
+                    for context_id in context_ids
+                )
+            ):
+                continue
+            identity = (
+                subject_id,
+                tuple(
+                    sorted(
+                        str(context_id).strip()
+                        for context_id in context_ids
+                    )
+                ),
+                check_type,
+            )
+            anchors.append(identity)
+            if (
+                item.get("conclusion") == "invalid"
+                and item.get("observation_status")
+                in {"observed", "inferred_under_budget"}
+                and str(item.get("reason") or "").strip()
+            ):
+                valid_atoms.append(
+                    (
+                        *identity,
+                        str(item.get("observation_status")),
+                        "invalid",
+                        str(item.get("severity") or ""),
+                    )
+                )
+    placement_scopes = {
+        "semantically_inappropriate_support_surface",
+        "implausible_placement_height",
+        "semantically_inappropriate_scene_zone",
+        "implausible_local_context",
+    }
+    if isinstance(judge_placement, list) or (
+        set(allowed_scopes) & placement_scopes
+    ):
+        # Candidate identities are semantic anchors: repair may fill their
+        # transport/schema fields, but it may neither invent nor delete an
+        # atom. The explicit empty set blocks a repair-only candidate for a
+        # Placement request without polluting other metrics' audit signatures.
+        signature["placement_judge_candidate_anchors"] = sorted(anchors)
+        if valid_atoms:
+            signature["placement_judge_valid_atoms"] = sorted(valid_atoms)
     return signature
 
 
@@ -572,6 +713,8 @@ def _require_semantic_preservation(
         if key in {
             "functional_check_results",
             "placement_check_results",
+            "placement_judge_valid_atoms",
+            "group_global_observations",
         }:
             # A schema retry may add omitted required rows, but every
             # structured check claim already made by the first response must

@@ -396,6 +396,13 @@ def test_official_proxy_case_uses_one_canonical_report(tmp_path: Path) -> None:
             L3: 0.0,
             L4: 0.0,
         },
+        "l3_metric_weights": {
+            "scale_consistency": 0.04,
+            "style_consistency": 0.07,
+            "object_pairing_consistency": 0.09,
+            "functional_consistency": 0.52,
+            "semantic_placement_consistency": 0.28,
+        },
     }
     assert "scoring" not in report["reports"]["generic_validity"]
     assert report["reports"]["scene_quality"]["scoring"]["enabled"] is False
@@ -421,7 +428,7 @@ def test_official_proxy_case_rejects_active_l3(tmp_path: Path) -> None:
         )
 
 
-def test_official_proxy_case_without_l3_cannot_be_silently_renormalized(
+def test_official_proxy_case_without_specialized_l3_targets_defaults_with_coverage(
     tmp_path: Path,
 ) -> None:
     root = _write_bundle(tmp_path)
@@ -441,7 +448,7 @@ def test_official_proxy_case_without_l3_cannot_be_silently_renormalized(
     out_dir = tmp_path / "proxy_no_applicable_l3"
     with pytest.raises(
         SubmissionEvaluationError,
-        match="complete metric coverage",
+        match="did not produce complete metric coverage",
     ):
         evaluate_submission(
             scene=_scene(),
@@ -451,11 +458,29 @@ def test_official_proxy_case_without_l3_cannot_be_silently_renormalized(
             vlm_judge=_FakeJudge(),
             official_mode=True,
         )
-    report = read_json(out_dir / "evaluation_report.json")
+    report = json.loads(
+        (out_dir / "evaluation_report.json").read_text(encoding="utf-8")
+    )
+    manifest = json.loads(
+        (out_dir / "submission_run_manifest.json").read_text(
+            encoding="utf-8"
+        )
+    )
     assert report["layer_reports"][L3]["status"] == "incomplete"
     assert report["benchmark_score"] is None
     assert report["benchmark_score_status"] == (
-        "insufficient_metric_coverage"
+        "failed_coverage_threshold"
+    )
+    assert report["coverage"]["coverage_threshold_passed"] is False
+    assert report["coverage"]["score_resolution_complete"] is False
+    assert report["coverage"]["score_grounding_complete"] is False
+    assert report["coverage"]["grounded_score_fraction"] < 1.0
+    assert manifest["score_coverage"] == report["coverage"]
+    assert all(
+        metric["coverage"]["score_grounding"]["fraction"] == 0.0
+        and metric["terminal_state"] == "evaluated_degraded"
+        and metric["score"] is None
+        for metric in report["layer_reports"][L3]["metrics"].values()
     )
 
 

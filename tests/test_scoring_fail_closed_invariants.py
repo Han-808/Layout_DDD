@@ -138,13 +138,17 @@ def test_fixed_defect_reports_denominator_sensitivity_and_floor() -> None:
 
     assert ten_objects["prevalence_deduction"] == pytest.approx(0.30)
     assert ten_objects["worst_event_floor_deduction"] == pytest.approx(0.25)
-    assert ten_objects["metric_deduction"] == pytest.approx(0.30)
-    assert ten_objects["score"] == pytest.approx(0.70)
+    assert ten_objects["base_metric_deduction"] == pytest.approx(0.30)
+    assert ten_objects["applied_deduction_multiplier"] == pytest.approx(2.0)
+    assert ten_objects["metric_deduction"] == pytest.approx(0.60)
+    assert ten_objects["score"] == pytest.approx(0.40)
 
     assert twenty_objects["prevalence_deduction"] == pytest.approx(0.15)
     assert twenty_objects["worst_event_floor_deduction"] == pytest.approx(0.25)
-    assert twenty_objects["metric_deduction"] == pytest.approx(0.25)
-    assert twenty_objects["score"] == pytest.approx(0.75)
+    assert twenty_objects["base_metric_deduction"] == pytest.approx(0.25)
+    assert twenty_objects["applied_deduction_multiplier"] == pytest.approx(2.0)
+    assert twenty_objects["metric_deduction"] == pytest.approx(0.50)
+    assert twenty_objects["score"] == pytest.approx(0.50)
 
 
 def test_minimum_repair_set_splits_one_total_functional_burden() -> None:

@@ -29,6 +29,8 @@ from benchmark.visual_judge.interfaces.camera import (
     CameraSelectionRequest,
     CameraSelectionResult,
     CameraSelector,
+    EvidenceReadinessRequest,
+    EvidenceReadinessResult,
 )
 from benchmark.visual_judge.interfaces.evidence import (
     EvidenceGate,
@@ -410,6 +412,30 @@ class VLMEvaluationController:
         vlm_selection_mode_override: str | None = None
         known_target_ids = _known_target_ids(judge_request, targets)
         relation_type = _request_relation_type(judge_request)
+        functional_atomic_check = _functional_atomic_required_check(
+            judge_request
+        )
+        functional_soft_contract_active = (
+            functional_atomic_check is not None
+        )
+        functional_terminal_recovery_active = bool(
+            judge_request.metric == "functional_consistency"
+            and not _is_routing_screen_request(judge_request)
+        )
+        evidence_readiness_reviewer = (
+            _resolve_evidence_readiness_reviewer(
+                self.vlm_camera_selector,
+                self.camera_selector,
+            )
+        )
+        readiness_reviewed_fingerprints: set[str] = set()
+        readiness_passed_fingerprints: set[str] = set()
+        readiness_review_count = 0
+        readiness_acquire_count = 0
+        targeted_acquisition_attempts = 0
+        usable_side_fallback_attempted = False
+        usable_side_fallback_applied = False
+        terminal_limited_evidence = False
         camera_constraints: CameraConstraintSet | None = None
         acquisition_state = CameraAcquisitionState.create(
             self.effective_camera_acquisition_policy,
@@ -451,6 +477,42 @@ class VLMEvaluationController:
                     initial_window_artifact_ids
                 ),
                 evidence_window_events=evidence_window_events,
+                functional_soft_evidence_contract={
+                    "schema_version": (
+                        "functional_soft_evidence_contract_v1"
+                    ),
+                    "active": functional_soft_contract_active,
+                    "check_id": (
+                        str(
+                            functional_atomic_check.get("check_id")
+                            or ""
+                        )
+                        if functional_atomic_check is not None
+                        else None
+                    ),
+                    "camera_selector_review_count": (
+                        readiness_review_count
+                    ),
+                    "camera_selector_acquire_count": (
+                        readiness_acquire_count
+                    ),
+                    "camera_selector_passed": bool(
+                        readiness_passed_fingerprints
+                    ),
+                    "targeted_acquisition_attempts": (
+                        targeted_acquisition_attempts
+                    ),
+                    "usable_side_fallback_attempted": (
+                        usable_side_fallback_attempted
+                    ),
+                    "usable_side_fallback_applied": (
+                        usable_side_fallback_applied
+                    ),
+                    "terminal_limited_evidence": (
+                        terminal_limited_evidence
+                    ),
+                    "decision_authority": "none",
+                },
             )
 
         def unresolved(
@@ -477,17 +539,24 @@ class VLMEvaluationController:
             *,
             trigger_stop_reason: str,
         ) -> VLMEvaluationResult:
-            nonlocal last_judge
+            nonlocal last_judge, terminal_limited_evidence
+            if pending_request is None:
+                raise ValueError(
+                    "terminal forced choice requires a pending evidence "
+                    "request"
+                )
             if (
-                last_judge is None
-                or last_judge.status != "need_more_evidence"
-                or pending_request is None
+                last_judge is not None
+                and last_judge.status != "need_more_evidence"
             ):
                 raise ValueError(
-                    "terminal forced choice requires an actual prior "
-                    "need_more_evidence response"
+                    "terminal forced choice cannot replace a completed Judge "
+                    "decision"
                 )
-            if _is_routing_screen_request(judge_request):
+            if (
+                last_judge is not None
+                and _is_routing_screen_request(judge_request)
+            ):
                 # A screen is a router, not a terminal decision authority.
                 # Preserve need_more_evidence so the enclosing metric workflow
                 # can supply its planned local/group evidence.  Forcing a
@@ -508,10 +577,25 @@ class VLMEvaluationController:
                     ),
                 )
             ambiguity_before_forcing = bool(
-                last_judge.status == "need_more_evidence"
+                last_judge is not None
+                and last_judge.status == "need_more_evidence"
             )
-            pre_force_judge_status = last_judge.status
-            pre_force_reason = last_judge.reason
+            pre_force_judge_status = (
+                last_judge.status
+                if last_judge is not None
+                else str(
+                    pending_request.metadata.get("source")
+                    or "pre_judge_evidence_acquisition"
+                )
+            )
+            pre_force_reason = (
+                last_judge.reason
+                if last_judge is not None
+                else str(
+                    pending_request.metadata.get("reason")
+                    or pending_request.view_goal
+                )
+            )
             original_evidence_request = (
                 pending_request.to_dict()
                 if pending_request is not None
@@ -570,6 +654,7 @@ class VLMEvaluationController:
                     "terminal budget-exhaustion Judge must return valid or "
                     "invalid; need_more_evidence is forbidden"
                 )
+            terminal_limited_evidence = True
             return finish(
                 status=last_judge.status,
                 confidence=last_judge.confidence,
@@ -620,10 +705,18 @@ class VLMEvaluationController:
             if total_images_acquired > self.control.max_total_images:
                 if (
                     gate_result.ready
-                    and last_judge is not None
-                    and last_judge.status == "need_more_evidence"
-                    and pending_request is not None
+                    and (
+                        pending_request is not None
+                        or functional_atomic_check is not None
+                    )
                 ):
+                    if pending_request is None:
+                        pending_request = (
+                            _functional_check_evidence_request(
+                                functional_atomic_check,
+                                source="initial_image_budget_exhausted",
+                            )
+                        )
                     return force_terminal_choice(
                         trigger_stop_reason="max_total_images_exhausted",
                     )
@@ -640,10 +733,18 @@ class VLMEvaluationController:
             if usage_overrun is not None:
                 if (
                     gate_result.ready
-                    and last_judge is not None
-                    and last_judge.status == "need_more_evidence"
-                    and pending_request is not None
+                    and (
+                        pending_request is not None
+                        or functional_atomic_check is not None
+                    )
                 ):
+                    if pending_request is None:
+                        pending_request = (
+                            _functional_check_evidence_request(
+                                functional_atomic_check,
+                                source="initial_camera_budget_exhausted",
+                            )
+                        )
                     return force_terminal_choice(
                         trigger_stop_reason=usage_overrun,
                     )
@@ -656,6 +757,12 @@ class VLMEvaluationController:
                 )
 
             if post_render_validation_error is not None:
+                if gate_result.ready and pending_request is not None:
+                    return force_terminal_choice(
+                        trigger_stop_reason=(
+                            "renderer_followup_contract_invalid"
+                        ),
+                    )
                 return unresolved(
                     reason=post_render_validation_error,
                     stop_reason="renderer_followup_contract_invalid",
@@ -663,87 +770,388 @@ class VLMEvaluationController:
 
             if gate_result.ready:
                 judge_fingerprint = _evidence_fingerprint(evidence)
-                if judge_fingerprint in judged_fingerprints:
-                    return unresolved(
-                        reason=(
-                            "the unchanged evidence packet was already judged"
-                        ),
-                        stop_reason="evidence_packet_already_judged",
-                    )
-                judged_fingerprints.add(judge_fingerprint)
-                current_request = _judge_visible_request(
-                    judge_request.with_visual_evidence(evidence)
-                )
-                raw_judge = self.judge.judge(current_request)
-                last_judge = JudgeResult.from_value(raw_judge)
-                raw_judge_response = deepcopy(
-                    getattr(self.judge, "last_raw_response", None)
-                )
-                telemetry.record_judge(
-                    evidence_round=rounds_used,
-                    episode_index=acquisition_state.episode_index,
-                    status=last_judge.status,
-                )
-                trace.append(
-                    {
-                        "stage": "judge",
-                        "evidence_round": rounds_used,
-                        "result": last_judge.to_dict(),
-                        "images_used": _evidence_refs(evidence),
-                    }
-                )
-                if last_judge.status in {"valid", "invalid"}:
-                    return finish(
-                        status=last_judge.status,
-                        confidence=last_judge.confidence,
-                        reason=last_judge.reason,
-                        defects=last_judge.defects,
-                        stop_reason="judge_conclusion",
+                acquisition_source: str | None = None
+                if functional_atomic_check is not None:
+                    active_preflight = _active_functional_preflight(
+                        judge_request,
                         evidence=evidence,
-                        judge_result=last_judge,
-                        evidence_request=None,
-                        trace=trace,
-                        selector_calls=selector_calls,
-                        actions_used=actions_used,
-                        rounds_used=rounds_used,
-                        total_images_acquired=total_images_acquired,
-                        control_manifest_path=control_manifest_path,
                     )
-                pending_request = last_judge.evidence_request
-                if not self.control.judge_allow_need_more_evidence:
-                    return unresolved(
-                        reason=last_judge.reason,
-                        stop_reason="judge_evidence_request_disabled",
+                    if active_preflight is not None:
+                        pending_request = (
+                            _functional_preflight_evidence_request(
+                                functional_atomic_check,
+                                active_preflight,
+                            )
+                        )
+                        acquisition_source = "usable_side_soft_fallback"
+                        usable_side_fallback_attempted = True
+                        usable_side_fallback_applied = True
+                        trace.append(
+                            {
+                                "stage": "functional_evidence_readiness",
+                                "status": "acquire",
+                                "source": acquisition_source,
+                                "evidence_round": rounds_used,
+                                "check_id": str(
+                                    functional_atomic_check.get(
+                                        "check_id"
+                                    )
+                                    or ""
+                                ),
+                                "result": {
+                                    "outcome": "acquire",
+                                    "missing_observations": list(
+                                        pending_request.missing_observations
+                                    ),
+                                    "view_goal": (
+                                        pending_request.view_goal
+                                    ),
+                                    "reason_codes": deepcopy(
+                                        active_preflight.get(
+                                            "reason_codes"
+                                        )
+                                        or []
+                                    ),
+                                    "decision_authority": "none",
+                                },
+                                "evidence_request": (
+                                    pending_request.to_dict()
+                                ),
+                                "images_used": _evidence_refs(evidence),
+                            }
+                        )
+                    elif (
+                        evidence_readiness_reviewer is not None
+                        # The Judge sees the initial target-aware packet
+                        # first.  CameraSelector readiness is a supplement
+                        # verifier after the Judge has requested more visual
+                        # evidence, not a mandatory second VLM opinion before
+                        # every atomic check.  Machine-detected usable-side
+                        # failure still takes the preflight branch above.
+                        and pending_request is not None
+                        and judge_fingerprint
+                        not in readiness_reviewed_fingerprints
+                    ):
+                        readiness_budget_stop = _budget_stop_reason(
+                            control=self.control,
+                            rounds_used=rounds_used,
+                            selector_calls=selector_calls,
+                            total_images_acquired=total_images_acquired,
+                        )
+                        if readiness_budget_stop is not None:
+                            pending_request = (
+                                _functional_check_evidence_request(
+                                    functional_atomic_check,
+                                    source=(
+                                        "camera_selector_readiness_budget_"
+                                        "exhausted"
+                                    ),
+                                )
+                            )
+                            return force_terminal_choice(
+                                trigger_stop_reason=(
+                                    readiness_budget_stop
+                                )
+                            )
+                        readiness_request = (
+                            _build_functional_readiness_request(
+                                judge_request,
+                                check=functional_atomic_check,
+                                evidence=evidence,
+                                budget=_remaining_budget(
+                                    control=self.control,
+                                    selector_calls=selector_calls,
+                                    actions_used=actions_used,
+                                    rounds_used=rounds_used,
+                                    total_images_acquired=(
+                                        total_images_acquired
+                                    ),
+                                ),
+                                evidence_window=(
+                                    evidence_window.to_dict()
+                                    if evidence_window is not None
+                                    else None
+                                ),
+                            )
+                        )
+                        readiness_reviewed_fingerprints.add(
+                            judge_fingerprint
+                        )
+                        readiness_review_count += 1
+                        try:
+                            raw_readiness = (
+                                evidence_readiness_reviewer.
+                                review_evidence_readiness(
+                                    readiness_request
+                                )
+                            )
+                            readiness_result = (
+                                EvidenceReadinessResult.from_value(
+                                    raw_readiness,
+                                    request=readiness_request,
+                                    backend=str(
+                                        getattr(
+                                            evidence_readiness_reviewer,
+                                            "backend",
+                                            "unknown",
+                                        )
+                                    ),
+                                )
+                            )
+                        except Exception as exc:
+                            selector_calls += (
+                                _evidence_readiness_call_count(
+                                    evidence_readiness_reviewer
+                                )
+                            )
+                            pending_request = (
+                                _functional_check_evidence_request(
+                                    functional_atomic_check,
+                                    source=(
+                                        "camera_selector_readiness_failed"
+                                    ),
+                                    reason=(
+                                        f"{type(exc).__name__}: {exc}"
+                                    ),
+                                )
+                            )
+                            trace.append(
+                                {
+                                    "stage": (
+                                        "functional_evidence_readiness"
+                                    ),
+                                    "status": "failed",
+                                    "evidence_round": rounds_used,
+                                    "check_id": str(
+                                        functional_atomic_check.get(
+                                            "check_id"
+                                        )
+                                        or ""
+                                    ),
+                                    "error": (
+                                        f"{type(exc).__name__}: {exc}"
+                                    ),
+                                    "fallback": (
+                                        "forced_binary_with_retained_"
+                                        "evidence"
+                                    ),
+                                    "evidence_request": (
+                                        pending_request.to_dict()
+                                    ),
+                                    "images_used": _evidence_refs(
+                                        evidence
+                                    ),
+                                    "decision_authority": "none",
+                                }
+                            )
+                            return force_terminal_choice(
+                                trigger_stop_reason=(
+                                    "camera_evidence_readiness_failed"
+                                )
+                            )
+                        selector_calls += _evidence_readiness_call_count(
+                            evidence_readiness_reviewer
+                        )
+                        trace.append(
+                            {
+                                "stage": "functional_evidence_readiness",
+                                "status": readiness_result.outcome,
+                                "source": "vlm_camera_selector",
+                                "evidence_round": rounds_used,
+                                "check_id": readiness_request.check_id,
+                                "result": readiness_result.to_dict(),
+                                **(
+                                    {
+                                        "evidence_request": {
+                                            "target_ids": list(
+                                                readiness_request.target_ids
+                                            ),
+                                            "missing_observations": list(
+                                                readiness_result.
+                                                missing_observations
+                                            ),
+                                            "view_goal": (
+                                                readiness_result.view_goal
+                                            ),
+                                            "metadata": {
+                                                "source": (
+                                                    "camera_selector_"
+                                                    "evidence_readiness_v1"
+                                                ),
+                                                "check_ids": list(
+                                                    _functional_check_ids(
+                                                        functional_atomic_check
+                                                    )
+                                                ),
+                                                "decision_authority": (
+                                                    "none"
+                                                ),
+                                            },
+                                        }
+                                    }
+                                    if readiness_result.outcome == "acquire"
+                                    else {}
+                                ),
+                                "images_used": _evidence_refs(evidence),
+                                "decision_authority": "none",
+                            }
+                        )
+                        if readiness_result.outcome == "pass":
+                            readiness_passed_fingerprints.add(
+                                judge_fingerprint
+                            )
+                        else:
+                            readiness_acquire_count += 1
+                            pending_request = EvidenceRequest(
+                                target_ids=(
+                                    readiness_request.target_ids
+                                ),
+                                missing_observations=(
+                                    readiness_result.
+                                    missing_observations
+                                ),
+                                view_goal=readiness_result.view_goal,
+                                metadata={
+                                    "source": (
+                                        "camera_selector_evidence_"
+                                        "readiness_v1"
+                                    ),
+                                    "check_ids": [
+                                        *_functional_check_ids(
+                                            functional_atomic_check
+                                        )
+                                    ],
+                                    "check_type": (
+                                        readiness_request.check_type
+                                    ),
+                                    "reason": readiness_result.reason,
+                                    "supporting_evidence_refs": list(
+                                        readiness_result.
+                                        supporting_evidence_refs
+                                    ),
+                                    "decision_authority": "none",
+                                },
+                            )
+                            acquisition_source = (
+                                "camera_selector_evidence_readiness"
+                            )
+
+                if acquisition_source is None:
+                    if judge_fingerprint in judged_fingerprints:
+                        if (
+                            functional_soft_contract_active
+                            and pending_request is not None
+                        ):
+                            return force_terminal_choice(
+                                trigger_stop_reason=(
+                                    "evidence_packet_already_judged"
+                                )
+                            )
+                        return unresolved(
+                            reason=(
+                                "the unchanged evidence packet was already "
+                                "judged"
+                            ),
+                            stop_reason="evidence_packet_already_judged",
+                        )
+                    judged_fingerprints.add(judge_fingerprint)
+                    pending_request = None
+                    current_request = _judge_visible_request(
+                        judge_request.with_visual_evidence(evidence)
                     )
-                if pending_request is None:  # Defensive; validator also checks.
-                    raise ValueError(
-                        "Judge need_more_evidence requires evidence_request"
+                    raw_judge = self.judge.judge(current_request)
+                    last_judge = JudgeResult.from_value(raw_judge)
+                    raw_judge_response = deepcopy(
+                        getattr(self.judge, "last_raw_response", None)
                     )
-                (
-                    judge_request,
-                    registered_placement_check,
-                ) = _register_pending_placement_check(
-                    judge_request,
-                    raw_response=raw_judge_response,
-                    evidence_request=pending_request,
-                )
-                if registered_placement_check is not None:
+                    telemetry.record_judge(
+                        evidence_round=rounds_used,
+                        episode_index=acquisition_state.episode_index,
+                        status=last_judge.status,
+                    )
                     trace.append(
                         {
-                            "stage": "placement_check_lifecycle",
+                            "stage": "judge",
                             "evidence_round": rounds_used,
-                            "status": str(
-                                registered_placement_check.get(
-                                    "handoff_status"
-                                )
-                                or "evidence_requested"
-                            ),
-                            "check": deepcopy(
-                                registered_placement_check
-                            ),
-                            "decision_authority": "none",
+                            "result": last_judge.to_dict(),
+                            "images_used": _evidence_refs(evidence),
                         }
                     )
+                    if last_judge.status in {"valid", "invalid"}:
+                        return finish(
+                            status=last_judge.status,
+                            confidence=last_judge.confidence,
+                            reason=last_judge.reason,
+                            defects=last_judge.defects,
+                            stop_reason="judge_conclusion",
+                            evidence=evidence,
+                            judge_result=last_judge,
+                            evidence_request=None,
+                            trace=trace,
+                            selector_calls=selector_calls,
+                            actions_used=actions_used,
+                            rounds_used=rounds_used,
+                            total_images_acquired=(
+                                total_images_acquired
+                            ),
+                            control_manifest_path=(
+                                control_manifest_path
+                            ),
+                        )
+                    pending_request = last_judge.evidence_request
+                    if not self.control.judge_allow_need_more_evidence:
+                        if (
+                            functional_soft_contract_active
+                            and pending_request is not None
+                        ):
+                            return force_terminal_choice(
+                                trigger_stop_reason=(
+                                    "judge_evidence_request_disabled"
+                                )
+                            )
+                        return unresolved(
+                            reason=last_judge.reason,
+                            stop_reason=(
+                                "judge_evidence_request_disabled"
+                            ),
+                        )
+                    if pending_request is None:
+                        raise ValueError(
+                            "Judge need_more_evidence requires "
+                            "evidence_request"
+                        )
+                    (
+                        judge_request,
+                        registered_placement_check,
+                    ) = _register_pending_placement_check(
+                        judge_request,
+                        raw_response=raw_judge_response,
+                        evidence_request=pending_request,
+                    )
+                    if registered_placement_check is not None:
+                        trace.append(
+                            {
+                                "stage": "placement_check_lifecycle",
+                                "evidence_round": rounds_used,
+                                "status": str(
+                                    registered_placement_check.get(
+                                        "handoff_status"
+                                    )
+                                    or "evidence_requested"
+                                ),
+                                "check": deepcopy(
+                                    registered_placement_check
+                                ),
+                                "decision_authority": "none",
+                            }
+                        )
+                    acquisition_source = "judge_need_more_evidence"
+
+                if (
+                    functional_soft_contract_active
+                    and pending_request is not None
+                ):
+                    targeted_acquisition_attempts += 1
                 protected_group_targets = _protected_group_targets(
                     judge_request
                 )
@@ -779,6 +1187,13 @@ class VLMEvaluationController:
                                 ),
                             }
                         )
+                        if functional_soft_contract_active:
+                            return force_terminal_choice(
+                                trigger_stop_reason=(
+                                    "judge_evidence_request_outside_group_"
+                                    "scope"
+                                )
+                            )
                         return unresolved(
                             reason=(
                                 "Judge evidence request attempted to change "
@@ -894,6 +1309,12 @@ class VLMEvaluationController:
                             source="judge_evidence_request",
                         )
                     )
+                    if functional_soft_contract_active:
+                        return force_terminal_choice(
+                            trigger_stop_reason=(
+                                "camera_constraint_contract_invalid"
+                            )
+                        )
                     return unresolved(
                         reason=(
                             "Judge evidence request could not be represented "
@@ -929,6 +1350,16 @@ class VLMEvaluationController:
                 )
 
             if self.effective_camera_acquisition_policy == "fixed":
+                if (
+                    functional_soft_contract_active
+                    and gate_result.ready
+                    and pending_request is not None
+                ):
+                    return force_terminal_choice(
+                        trigger_stop_reason=(
+                            "fixed_views_insufficient"
+                        )
+                    )
                 return unresolved(
                     reason=(
                         "fixed camera acquisition policy cannot repair "
@@ -949,6 +1380,16 @@ class VLMEvaluationController:
                 )
 
             if camera_constraints is None:
+                if (
+                    functional_soft_contract_active
+                    and gate_result.ready
+                    and pending_request is not None
+                ):
+                    return force_terminal_choice(
+                        trigger_stop_reason=(
+                            "camera_constraint_contract_invalid"
+                        )
+                    )
                 return unresolved(
                     reason="camera repair requires validated Camera DSL constraints",
                     stop_reason="camera_constraint_contract_invalid",
@@ -968,6 +1409,12 @@ class VLMEvaluationController:
                         source="controller_repair_policy",
                     )
                 )
+                if functional_soft_contract_active:
+                    return force_terminal_choice(
+                        trigger_stop_reason=(
+                            "camera_repair_policy_invalid"
+                        )
+                    )
                 return unresolved(
                     reason=(
                         "trusted camera repair policy could not be "
@@ -1025,6 +1472,12 @@ class VLMEvaluationController:
                             "error": f"{type(exc).__name__}: {exc}",
                         }
                     )
+                    if functional_soft_contract_active:
+                        return force_terminal_choice(
+                            trigger_stop_reason=(
+                                "camera_candidate_bank_failed"
+                            )
+                        )
                     return unresolved(
                         reason=(
                             "trusted technical camera candidate bank "
@@ -1071,6 +1524,16 @@ class VLMEvaluationController:
             while True:
                 selector = self._selector_for_stage(acquisition_state.stage)
                 if selector is None:
+                    if (
+                        functional_soft_contract_active
+                        and gate_result.ready
+                        and pending_request is not None
+                    ):
+                        return force_terminal_choice(
+                            trigger_stop_reason=(
+                                "camera_selector_unavailable"
+                            )
+                        )
                     return unresolved(
                         reason=(
                             f"{acquisition_state.stage} camera selector is "
@@ -1158,6 +1621,32 @@ class VLMEvaluationController:
                     )
                     if self.candidate_preview_renderer is None:
                         if requires_previews:
+                            if (
+                                functional_terminal_recovery_active
+                                and gate_result.ready
+                                and pending_request is not None
+                            ):
+                                trace.append(
+                                    {
+                                        "stage": (
+                                            "candidate_preview_render"
+                                        ),
+                                        "episode_index": (
+                                            acquisition_state.episode_index
+                                        ),
+                                        "status": "unavailable",
+                                        "fallback": (
+                                            "forced_binary_with_retained_"
+                                            "evidence"
+                                        ),
+                                    }
+                                )
+                                return force_terminal_choice(
+                                    trigger_stop_reason=(
+                                        "camera_preview_renderer_"
+                                        "unavailable"
+                                    )
+                                )
                             return unresolved(
                                 reason=(
                                     "production semantic camera selection "
@@ -1185,8 +1674,28 @@ class VLMEvaluationController:
                                     "error": (
                                         f"{type(exc).__name__}: {exc}"
                                     ),
+                                    "fallback": (
+                                        "forced_binary_with_retained_"
+                                        "evidence"
+                                        if (
+                                            functional_terminal_recovery_active
+                                            and gate_result.ready
+                                            and pending_request is not None
+                                        )
+                                        else None
+                                    ),
                                 }
                             )
+                            if (
+                                functional_terminal_recovery_active
+                                and gate_result.ready
+                                and pending_request is not None
+                            ):
+                                return force_terminal_choice(
+                                    trigger_stop_reason=(
+                                        "camera_preview_render_failed"
+                                    )
+                                )
                             return unresolved(
                                 reason=(
                                     "trusted camera candidate preview "
@@ -1280,9 +1789,15 @@ class VLMEvaluationController:
                     # normal deterministic-to-VLM escalation.
                     if (
                         gate_result.ready
-                        and last_judge is not None
-                        and last_judge.status == "need_more_evidence"
                         and pending_request is not None
+                        and (
+                            functional_soft_contract_active
+                            or (
+                                last_judge is not None
+                                and last_judge.status
+                                == "need_more_evidence"
+                            )
+                        )
                     ):
                         trace.append(
                             {
@@ -1685,7 +2200,26 @@ class VLMEvaluationController:
                     gate_after_no_change.ready
                     and current_fingerprint not in judged_fingerprints
                 ):
+                    if (
+                        functional_soft_contract_active
+                        and pending_request is not None
+                    ):
+                        return force_terminal_choice(
+                            trigger_stop_reason=(
+                                "evidence_packet_unchanged"
+                            )
+                        )
                     continue
+                if (
+                    gate_after_no_change.ready
+                    and functional_soft_contract_active
+                    and pending_request is not None
+                ):
+                    return force_terminal_choice(
+                        trigger_stop_reason=(
+                            "evidence_packet_unchanged"
+                        )
+                    )
                 return unresolved(
                     reason="camera repair did not change the evidence packet",
                     stop_reason="evidence_packet_unchanged",
@@ -1791,6 +2325,7 @@ class VLMEvaluationController:
         evidence_window: dict[str, Any] | None,
         initial_window_artifact_ids: list[str],
         evidence_window_events: list[dict[str, Any]],
+        functional_soft_evidence_contract: dict[str, Any],
         confidence: float = 0.0,
         defects: tuple[dict[str, Any], ...] = (),
     ) -> VLMEvaluationResult:
@@ -1842,6 +2377,10 @@ class VLMEvaluationController:
                 "events": deepcopy(evidence_window_events),
                 "physical_artifacts_deleted": False,
             }
+        if functional_soft_evidence_contract.get("active") is True:
+            audit["functional_soft_evidence_contract"] = deepcopy(
+                functional_soft_evidence_contract
+            )
         written_path: str | None = None
         if control_manifest_path is not None:
             target = Path(control_manifest_path).expanduser()
@@ -1859,6 +2398,394 @@ class VLMEvaluationController:
             audit=audit,
             manifest_path=written_path,
         )
+
+
+def _functional_atomic_required_check(
+    request: JudgeRequest,
+) -> dict[str, Any] | None:
+    if request.metric != "functional_consistency":
+        return None
+    packet = request.context.get("functional_probe_evidence")
+    packet = packet if isinstance(packet, dict) else {}
+    values = packet.get("required_checks")
+    if not isinstance(values, list):
+        values = request.context.get("required_functional_checks")
+    checks = [
+        deepcopy(item)
+        for item in values or []
+        if isinstance(item, dict)
+    ]
+    if not checks:
+        return None
+    if len(checks) == 1:
+        check = checks[0]
+    else:
+        target_sets = {
+            tuple(sorted(_functional_check_target_ids(item)))
+            for item in checks
+        }
+        if (
+            len(target_sets) != 1
+            or any(
+                str(item.get("owner_stage") or "")
+                != "cross_group_relation"
+                for item in checks
+            )
+        ):
+            return None
+        source_check_ids = [
+            str(item.get("check_id") or "") for item in checks
+        ]
+        check = {
+            "check_id": "cross_relation_episode::"
+            + "::".join(source_check_ids),
+            "source_check_ids": source_check_ids,
+            "check_type": "cross_group_relation_bundle",
+            "owner_stage": "cross_group_relation",
+            "target_ids": list(next(iter(target_sets))),
+            "group_ids": list(
+                dict.fromkeys(
+                    str(group_id)
+                    for item in checks
+                    for group_id in item.get("group_ids") or []
+                    if str(group_id).strip()
+                )
+            ),
+            "relation": next(
+                (
+                    deepcopy(item.get("relation"))
+                    for item in checks
+                    if item.get("relation") is not None
+                ),
+                None,
+            ),
+            "joint_task": next(
+                (
+                    str(item.get("joint_task"))
+                    for item in checks
+                    if str(item.get("joint_task") or "").strip()
+                ),
+                "",
+            ),
+            "constraint_kind": list(
+                dict.fromkeys(
+                    str(item.get("constraint_kind") or "")
+                    for item in checks
+                    if str(item.get("constraint_kind") or "").strip()
+                )
+            ),
+            "failure_condition": list(
+                dict.fromkeys(
+                    str(item.get("failure_condition") or "")
+                    for item in checks
+                    if str(item.get("failure_condition") or "").strip()
+                )
+            ),
+            "required_observations": list(
+                dict.fromkeys(
+                    str(observation)
+                    for item in checks
+                    for observation in (
+                        item.get("required_observations")
+                        or item.get("observation_kinds")
+                        or []
+                    )
+                    if str(observation).strip()
+                )
+            ),
+            "target_affordances": [
+                deepcopy(affordance)
+                for item in checks
+                for affordance in item.get("target_affordances") or []
+                if isinstance(affordance, dict)
+            ],
+        }
+    if (
+        not str(check.get("check_id") or "").strip()
+        or not _functional_check_target_ids(check)
+    ):
+        return None
+    return check
+
+
+def _functional_check_ids(check: dict[str, Any]) -> tuple[str, ...]:
+    values = check.get("source_check_ids") or [check.get("check_id")]
+    return tuple(
+        dict.fromkeys(
+            str(item) for item in values if str(item).strip()
+        )
+    )
+
+
+def _functional_check_target_ids(
+    check: dict[str, Any],
+) -> tuple[str, ...]:
+    return tuple(
+        dict.fromkeys(
+            str(item)
+            for item in check.get("target_ids") or []
+            if str(item).strip() and str(item) != "scene"
+        )
+    )
+
+
+def _functional_check_observations(
+    check: dict[str, Any],
+) -> tuple[str, ...]:
+    values = (
+        check.get("required_observations")
+        or check.get("observation_kinds")
+        or ["target_visible"]
+    )
+    return tuple(
+        dict.fromkeys(
+            str(item) for item in values if str(item).strip()
+        )
+    )
+
+
+def _functional_check_evidence_request(
+    check: dict[str, Any],
+    *,
+    source: str,
+    reason: str | None = None,
+) -> EvidenceRequest:
+    observations = _functional_check_observations(check)
+    return EvidenceRequest(
+        target_ids=_functional_check_target_ids(check),
+        missing_observations=observations,
+        view_goal=(
+            "show the typed Functional targets and the geometry needed for "
+            "the declared observations"
+        ),
+        metadata={
+            "source": str(source),
+            "check_ids": list(_functional_check_ids(check)),
+            "check_type": str(
+                check.get("check_type")
+                or check.get("predicate")
+                or "functional_check"
+            ),
+            **({"reason": str(reason)} if reason else {}),
+            "decision_authority": "none",
+        },
+    )
+
+
+def _active_functional_preflight(
+    request: JudgeRequest,
+    *,
+    evidence: list[Any],
+) -> dict[str, Any] | None:
+    value = request.context.get("functional_evidence_preflight")
+    if not isinstance(value, dict) or value.get("active") is not True:
+        return None
+    initial = {
+        _soft_evidence_artifact_id(item)
+        for item in value.get("initial_evidence_refs") or []
+        if str(item).strip()
+    }
+    current = {
+        _soft_evidence_artifact_id(item) for item in evidence
+    }
+    if current - initial:
+        return None
+    return deepcopy(value)
+
+
+def _soft_evidence_artifact_id(value: Any) -> str:
+    try:
+        return _evidence_artifact_id(value)
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def _functional_preflight_evidence_request(
+    check: dict[str, Any],
+    preflight: dict[str, Any],
+) -> EvidenceRequest:
+    allowed_observations = set(
+        _functional_check_observations(check)
+    )
+    missing = tuple(
+        dict.fromkeys(
+            str(item)
+            for item in preflight.get("missing_observations") or []
+            if str(item) in allowed_observations
+        )
+    )
+    if not missing:
+        missing = tuple(
+            item
+            for item in (
+                "interaction_side_visible",
+                "front_back_disambiguated",
+                "target_visible",
+            )
+            if item in allowed_observations
+        ) or _functional_check_observations(check)
+    allowed_targets = set(_functional_check_target_ids(check))
+    targets = tuple(
+        dict.fromkeys(
+            str(item)
+            for item in preflight.get("target_ids") or []
+            if str(item) in allowed_targets
+        )
+    ) or _functional_check_target_ids(check)
+    return EvidenceRequest(
+        target_ids=targets,
+        missing_observations=missing,
+        view_goal=(
+            "compare deterministic object-centric opposing views so the "
+            "usable or interaction side and front/back direction become "
+            "visually interpretable"
+        ),
+        metadata={
+            "source": "functional_evidence_preflight_v1",
+            "check_ids": list(_functional_check_ids(check)),
+            "check_type": str(
+                check.get("check_type")
+                or check.get("predicate")
+                or "functional_check"
+            ),
+            "reason_codes": deepcopy(
+                preflight.get("reason_codes") or []
+            ),
+            "usable_side_fallback": True,
+            "unresolved_usable_side_target_ids": list(targets),
+            "fallback_policy": (
+                "deterministic_opposing_target_views_then_selector_review"
+            ),
+            "decision_authority": "none",
+        },
+    )
+
+
+def _build_functional_readiness_request(
+    request: JudgeRequest,
+    *,
+    check: dict[str, Any],
+    evidence: list[Any],
+    budget: dict[str, int],
+    evidence_window: dict[str, Any] | None,
+) -> EvidenceReadinessRequest:
+    packet = request.context.get("functional_probe_evidence")
+    packet = packet if isinstance(packet, dict) else {}
+    boundary = packet.get("boundary_clearance_evidence")
+    boundary = boundary if isinstance(boundary, dict) else {}
+    preflight = request.context.get("functional_evidence_preflight")
+    group_scope = request.context.get("group_scope")
+    owner_stage = str(check.get("owner_stage") or "")
+    return EvidenceReadinessRequest(
+        task=request.task,
+        metric=request.metric,
+        check_id=str(check.get("check_id") or ""),
+        check_type=str(
+            check.get("check_type")
+            or check.get("predicate")
+            or "functional_check"
+        ),
+        target_ids=_functional_check_target_ids(check),
+        scene=deepcopy(request.scene_context),
+        required_observations=_functional_check_observations(check),
+        current_visual_evidence=tuple(deepcopy(evidence)),
+        budget={
+            str(key): int(value)
+            for key, value in budget.items()
+            if isinstance(value, int) and not isinstance(value, bool)
+        },
+        context={
+            "evidence_phase": request.context.get("evidence_phase"),
+            "route_scope": (
+                "cross_group"
+                if owner_stage == "cross_group_relation"
+                else "group_local"
+            ),
+            "group_scope": (
+                deepcopy(group_scope)
+                if isinstance(group_scope, dict)
+                else {}
+            ),
+            "functional_check": {
+                key: deepcopy(check[key])
+                for key in (
+                    "check_id",
+                    "source_check_ids",
+                    "check_type",
+                    "predicate",
+                    "target_ids",
+                    "group_ids",
+                    "owning_group_id",
+                    "relation",
+                    "joint_task",
+                    "constraint_kind",
+                    "failure_condition",
+                    "required_observations",
+                    "observation_goals",
+                    "target_affordances",
+                )
+                if key in check
+            },
+            "functional_evidence_preflight": (
+                deepcopy(preflight)
+                if isinstance(preflight, dict)
+                else {}
+            ),
+            "usable_surface_hypotheses": [
+                deepcopy(item)
+                for item in boundary.get(
+                    "usable_surface_hypotheses"
+                )
+                or []
+                if isinstance(item, dict)
+                and str(item.get("target_id") or "")
+                in set(_functional_check_target_ids(check))
+            ],
+            "evidence_window_summary": (
+                {
+                    "policy": evidence_window.get("policy"),
+                    "group_id": evidence_window.get("group_id"),
+                    "check_id": evidence_window.get("check_id"),
+                    "max_active_images": evidence_window.get(
+                        "max_active_images"
+                    ),
+                    "fixed_artifact_ids": list(
+                        evidence_window.get("fixed_artifact_ids") or []
+                    ),
+                }
+                if isinstance(evidence_window, dict)
+                else {}
+            ),
+        },
+        allow_scene_mutation=False,
+    )
+
+
+def _resolve_evidence_readiness_reviewer(
+    *selectors: Any,
+) -> Any | None:
+    for selector in selectors:
+        if selector is None:
+            continue
+        if getattr(selector, "supports_evidence_readiness", True) is False:
+            continue
+        if callable(
+            getattr(selector, "review_evidence_readiness", None)
+        ):
+            return selector
+    return None
+
+
+def _evidence_readiness_call_count(selector: Any) -> int:
+    usage = getattr(selector, "last_call_usage", None)
+    value = (
+        usage.get("vlm_call_count")
+        if isinstance(usage, dict)
+        else None
+    )
+    if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+        return value
+    return 1
 
 
 def _terminal_forced_choice_judge_request(
@@ -2110,7 +3037,10 @@ def _register_pending_placement_check(
     phase = str(context.get("evidence_phase") or "")
     expected_owner = (
         "scene_global"
-        if phase == "global_discovery"
+        if phase in {
+            "global_discovery",
+            "residual_global_placement_review",
+        }
         else "group_local"
         if phase in {"group_local_review", "initial_visual"}
         else None

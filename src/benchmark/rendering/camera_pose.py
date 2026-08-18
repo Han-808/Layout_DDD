@@ -1120,11 +1120,17 @@ def _functional_cross_group_context_fallback_candidates(
             ),
             "usable_surface_observability": {
                 "eligible": True,
+                "coverage_status": (
+                    "partial_but_usable"
+                    if _functional_surface_side_ids(functional_probe)
+                    else "sufficient"
+                ),
                 "covered_hypotheses": [],
                 "required_target_ids": list(target_object_ids),
                 "fallback_reason": (
                     "room_interior_joint_framing_infeasible"
                 ),
+                "rule": "predicate_aware_surface_observability_v2",
             },
             "candidate_bank_requested_count": int(requested_count),
             "candidate_bank_generated_count": limit,
@@ -1149,11 +1155,12 @@ def _functional_target_repair_candidates(
     target_object_ids: list[str],
     requested_count: int,
 ) -> list[dict[str, Any]]:
-    """Build a small side-conditioned bank for one Functional repair.
+    """Build side-conditioned candidates for a Functional repair.
 
-    Multi-target relation repairs continue through the normal relation-aware
-    bank.  This fallback is intentionally limited to one object because its
-    purpose is frontage/control/clearance disambiguation, not pair semantics.
+    Ordinary Judge repairs retain the established single-target behaviour.
+    A failed usable-side decode explicitly activates a bounded deterministic
+    fallback: object-centric opposing views are proposed for every unresolved
+    directed endpoint, after which the CameraSelector reviews sufficiency.
     """
 
     repair_ids = list(
@@ -1165,6 +1172,25 @@ def _functional_target_repair_candidates(
             if str(item).strip()
         )
     )
+    usable_side_fallback = repair.get("usable_side_fallback") is True
+    if usable_side_fallback:
+        fallback_ids = list(
+            dict.fromkeys(
+                str(item)
+                for item in (
+                    repair.get("unresolved_usable_side_target_ids")
+                    or repair_ids
+                )
+                if str(item).strip()
+            )
+        )
+        if fallback_ids:
+            return _usable_side_fallback_repair_candidates(
+                scene=scene,
+                repair=repair,
+                target_ids=fallback_ids,
+                requested_count=requested_count,
+            )
     if len(repair_ids) != 1:
         return []
     target_id = repair_ids[0]
@@ -1244,10 +1270,105 @@ def _functional_target_repair_candidates(
     return result
 
 
+def _usable_side_fallback_repair_candidates(
+    *,
+    scene: dict[str, Any],
+    repair: dict[str, Any],
+    target_ids: list[str],
+    requested_count: int,
+) -> list[dict[str, Any]]:
+    side_order = (
+        "local_pos_y",
+        "local_neg_y",
+        "local_pos_x",
+        "local_neg_x",
+    )
+    banks: dict[str, dict[str, dict[str, Any]]] = {}
+    for target_id in target_ids:
+        banks[target_id] = {
+            str(item.get("local_side_id") or item.get("id") or ""): item
+            for item in generate_usable_surface_side_repair_bank(
+                scene,
+                target_id=target_id,
+            )
+        }
+    ordered: list[tuple[str, str, dict[str, Any]]] = []
+    for side_id in side_order:
+        for target_id in target_ids:
+            candidate = banks.get(target_id, {}).get(side_id)
+            if candidate is not None:
+                ordered.append((target_id, side_id, candidate))
+    limit = max(1, min(int(requested_count), len(ordered)))
+    result: list[dict[str, Any]] = []
+    for index, (target_id, side_id, candidate) in enumerate(
+        ordered[:limit]
+    ):
+        safe_target = "".join(
+            character if character.isalnum() else "_"
+            for character in target_id
+        ).strip("_") or f"target_{index:02d}"
+        result.append(
+            {
+                **deepcopy(candidate),
+                "id": (
+                    "functional_consistency_usable_side_fallback_"
+                    f"{index:02d}_{safe_target}_{side_id}"
+                ),
+                "name": (
+                    f"usable_side_fallback_{safe_target}_{side_id}"
+                ),
+                "target_object_ids": [target_id],
+                "focus_kind": "functional_usable_side_fallback",
+                "view_family": "functional_frontage_probe",
+                "functional_repair_schema_version": str(
+                    repair.get("schema_version")
+                    or "functional_camera_repair_v3"
+                ),
+                "functional_repair_source_check_ids": [
+                    str(item)
+                    for item in repair.get("source_check_ids") or []
+                    if str(item).strip()
+                ],
+                "usable_side_fallback": True,
+                "fallback_target_id": target_id,
+                "fallback_local_side_id": side_id,
+                "fallback_opposing_side_id": (
+                    "local_neg_y"
+                    if side_id == "local_pos_y"
+                    else "local_pos_y"
+                    if side_id == "local_neg_y"
+                    else "local_neg_x"
+                    if side_id == "local_pos_x"
+                    else "local_pos_x"
+                ),
+                "fallback_policy": (
+                    "deterministic_opposing_target_views_then_selector_review"
+                ),
+                "candidate_bank_requested_count": int(requested_count),
+                "candidate_bank_generated_count": limit,
+                "candidate_bank_complete": limit
+                == int(requested_count),
+                "candidate_policy": "local",
+                "policy_source": (
+                    "functional_usable_side_soft_fallback_v1"
+                ),
+                "decision_authority": "none",
+            }
+        )
+    return result
+
+
 def _functional_repair_requires_side_bank(
     repair: dict[str, Any],
 ) -> bool:
     target_ids = _object_id_list(repair.get("target_ids"))
+    if repair.get("usable_side_fallback") is True:
+        return bool(
+            _object_id_list(
+                repair.get("unresolved_usable_side_target_ids")
+            )
+            or target_ids
+        )
     if len(target_ids) != 1:
         return False
     required = {
@@ -1399,6 +1520,20 @@ def _shortlist_functional_probe_candidates(
             1.0,
             max(0.0, actual_distance / intended_distance),
         )
+        observability = candidate.get("usable_surface_observability")
+        observability = (
+            observability if isinstance(observability, dict) else {}
+        )
+        coverage_status = str(
+            observability.get("coverage_status") or "sufficient"
+        )
+        coverage_quality = (
+            4.0
+            if coverage_status == "sufficient"
+            else 2.0
+            if coverage_status == "partial_but_usable"
+            else 0.0
+        )
         score = (
             (8.0 if framing.get("proxy_bounds_fit") is True else 0.0)
             + (
@@ -1408,6 +1543,7 @@ def _shortlist_functional_probe_candidates(
             )
             + 3.0 * framing_quality
             + 2.0 * context_distance_ratio
+            + coverage_quality
             + (
                 0.5
                 if feasibility.get("distance_truncated") is False
@@ -1937,25 +2073,97 @@ def _functional_surface_observability(
     objects: list[_CameraObject],
     camera_location: np.ndarray,
 ) -> dict[str, Any]:
-    """Check trusted usable-side half-spaces without semantic inference."""
+    """Classify minimum usable-side coverage without semantic inference.
+
+    A technically useful oblique or near-profile view is retained as
+    ``partial_but_usable`` instead of demanding a difficult ideal frontage.
+    Strongly rear-facing candidates remain ``not_covered``.  Correspondence
+    views use a wider profile tolerance because their joint framing is paired
+    with deterministic endpoint headings from the Functional Measurement
+    Bank.
+    """
 
     by_id = {item.id: item for item in objects}
+    predicates = {
+        str(item)
+        for item in probe.get("relation_predicates") or []
+        if str(item).strip()
+    }
+    directional_relation = bool(
+        str(probe.get("kind") or "") == "functional_correspondence"
+        and "directional_correspondence" in predicates
+    )
+    sufficient_alignment = 0.2 if directional_relation else 0.35
+    partial_alignment = -0.2 if directional_relation else -0.1
+    expected_target_ids = list(
+        dict.fromkeys(
+            [
+                str(item.get("target_id") or "")
+                for item in probe.get("surface_targets") or []
+                if isinstance(item, dict) and item.get("target_id")
+            ]
+            + [
+                str(item.get("target_id") or "")
+                for item in probe.get("usable_surface_hypotheses") or []
+                if isinstance(item, dict) and item.get("target_id")
+            ]
+        )
+    )
+    hypotheses_by_target = {
+        str(item.get("target_id") or ""): item
+        for item in probe.get("usable_surface_hypotheses") or []
+        if isinstance(item, dict) and item.get("target_id")
+    }
     required: list[str] = []
     covered: list[dict[str, Any]] = []
+    partial: list[dict[str, Any]] = []
     rejected: list[dict[str, Any]] = []
-    for hypothesis in probe.get("usable_surface_hypotheses") or []:
-        if not isinstance(hypothesis, dict):
-            continue
-        target_id = str(hypothesis.get("target_id") or "")
+    for target_id in expected_target_ids:
+        hypothesis = hypotheses_by_target.get(target_id)
         obj = by_id.get(target_id)
         surfaces = [
             item
-            for item in hypothesis.get("surfaces") or []
+            for item in (
+                hypothesis.get("surfaces")
+                if isinstance(hypothesis, dict)
+                else []
+            )
+            or []
             if isinstance(item, dict)
         ]
-        if obj is None or not surfaces:
-            continue
         required.append(target_id)
+        if obj is None:
+            rejected.append(
+                {
+                    "target_id": target_id,
+                    "reason_code": "target_not_available_for_camera",
+                }
+            )
+            continue
+        if not surfaces:
+            # A missing/ambiguous side hypothesis limits what this camera can
+            # establish, but rejecting every candidate would conflate decoder
+            # uncertainty with camera infeasibility.  Keep the view usable for
+            # visual semantics and local context while reporting honest partial
+            # predicate coverage.
+            partial.append(
+                {
+                    "target_id": target_id,
+                    "side_id": None,
+                    "coverage_status": "partial_but_usable",
+                    "reason_code": (
+                        "usable_side_hypothesis_has_no_trusted_side"
+                        if isinstance(hypothesis, dict)
+                        else "usable_side_hypothesis_not_available"
+                    ),
+                    "surface_hypothesis_status": (
+                        str(hypothesis.get("status") or "unknown")
+                        if isinstance(hypothesis, dict)
+                        else "missing"
+                    ),
+                }
+            )
+            continue
         camera_delta = np.asarray(camera_location, dtype=float) - obj.center
         camera_delta[2] = 0.0
         delta_norm = float(np.linalg.norm(camera_delta))
@@ -1968,7 +2176,8 @@ def _functional_surface_observability(
             )
             continue
         camera_delta /= delta_norm
-        target_covered: list[dict[str, Any]] = []
+        target_sufficient: list[dict[str, Any]] = []
+        target_partial: list[dict[str, Any]] = []
         for surface in surfaces:
             side_id = str(surface.get("side_id") or "")
             local_axis = USABLE_SURFACE_LOCAL_AXES.get(side_id)
@@ -1981,32 +2190,55 @@ def _functional_surface_observability(
                 continue
             world_axis /= axis_norm
             signed_alignment = float(np.dot(camera_delta, world_axis))
-            if signed_alignment >= -1.0e-9:
-                target_covered.append(
-                    {
-                        "target_id": target_id,
-                        "side_id": side_id,
-                        "signed_outward_alignment": signed_alignment,
-                    }
-                )
-        if target_covered:
-            covered.extend(target_covered)
+            record = {
+                "target_id": target_id,
+                "side_id": side_id,
+                "signed_outward_alignment": signed_alignment,
+            }
+            if signed_alignment >= sufficient_alignment:
+                record["coverage_status"] = "sufficient"
+                target_sufficient.append(record)
+            elif signed_alignment >= partial_alignment:
+                record["coverage_status"] = "partial_but_usable"
+                target_partial.append(record)
+        if target_sufficient:
+            covered.extend(target_sufficient)
+        elif target_partial:
+            partial.extend(target_partial)
         else:
             rejected.append(
                 {
                     "target_id": target_id,
-                    "reason_code": "outside_usable_side_half_space",
+                    "reason_code": "usable_side_materially_rear_facing",
                     "available_side_ids": [
                         str(item.get("side_id") or "") for item in surfaces
                     ],
                 }
             )
+    coverage_status = (
+        "not_covered"
+        if rejected
+        else "partial_but_usable"
+        if partial
+        else "sufficient"
+    )
     return {
-        "eligible": not rejected,
+        "eligible": coverage_status != "not_covered",
+        "coverage_status": coverage_status,
         "required_target_ids": list(dict.fromkeys(required)),
         "covered_hypotheses": covered,
+        "partial_hypotheses": partial,
         "rejections": rejected,
-        "rule": "camera_in_outward_half_space_v1",
+        "contract": (
+            "directional_correspondence_joint_profile_plus_measurements"
+            if directional_relation
+            else "front_oblique_minimum_sufficient_evidence"
+        ),
+        "thresholds": {
+            "sufficient_min_signed_alignment": sufficient_alignment,
+            "partial_min_signed_alignment": partial_alignment,
+        },
+        "rule": "predicate_aware_surface_observability_v2",
     }
 
 

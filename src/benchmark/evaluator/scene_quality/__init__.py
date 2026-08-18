@@ -64,6 +64,13 @@ from benchmark.evaluator.scene_quality.placement_severity import (
     MATERIAL_CONTEXTUAL_MISMATCH,
     PLACEMENT_SEVERITY_LEVELS,
 )
+from benchmark.evaluator.scene_quality.prompt_context import (
+    DEFAULT_METRIC_CONTEXT_FIELDS,
+    DEFAULT_METRIC_CONTEXT_INSTRUCTIONS,
+    METRIC_PROMPT_CONTEXT_VERSION,
+    metric_prompt_context,
+    resolve_scene_quality_prompt_context,
+)
 
 __all__ = [
     "ATYPICAL",
@@ -74,6 +81,8 @@ __all__ = [
     "CLEAR_SEMANTIC_MISPLACEMENT",
     "DEFAULT_SCENE_QUALITY_INTERFACE_CONFIG",
     "DEFAULT_FUNCTIONAL_PREJUDGEMENT_EVIDENCE_CONFIG",
+    "DEFAULT_METRIC_CONTEXT_FIELDS",
+    "DEFAULT_METRIC_CONTEXT_INSTRUCTIONS",
     "DisabledFunctionalPrejudgementEvidenceSource",
     "EVIDENCE_SELECTORS",
     "FUNCTIONAL_VALIDITY",
@@ -87,6 +96,7 @@ __all__ = [
     "JUDGMENT_SCOPE_BY_METRIC",
     "LEGACY_PLACEMENT_SEVERITY_LEVELS",
     "MATERIAL_CONTEXTUAL_MISMATCH",
+    "METRIC_PROMPT_CONTEXT_VERSION",
     "PERCEPTUAL_VISUAL_QUALITY",
     "PERCEPTUAL_VISUAL_QUALITY_METRICS",
     "PLACEMENT_SEVERITY_LEVELS",
@@ -104,6 +114,8 @@ __all__ = [
     "deviation_matches",
     "deviations_for_metric",
     "evaluate_scene_quality_interfaces",
+    "metric_prompt_context",
     "resolve_scene_quality_config",
+    "resolve_scene_quality_prompt_context",
     "validate_authorized_deviations",
 ]

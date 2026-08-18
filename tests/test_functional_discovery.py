@@ -35,14 +35,15 @@ from benchmark.visual_judge.functional_discovery import (
     FUNCTIONAL_AFFORDANCE_SYSTEM_PROMPT,
     FUNCTIONAL_RELATION_SYSTEM_PROMPT,
     compose_functional_discovery_result,
+    salvage_functional_relation_response,
     validate_functional_affordance_response,
     validate_functional_discovery_response,
     validate_functional_relation_response,
+    _apply_relation_admission_gate,
 )
 from benchmark.visual_judge.functional_evidence import (
     functional_probe_selector_context,
 )
-from benchmark.visual_judge.contracts import ResponseSchemaRepairError
 from benchmark.visual_judge.openai_camera_selector import (
     OpenAICompatibleCameraSelector,
 )
@@ -56,12 +57,13 @@ from benchmark.visual_judge.render_views import CameraEvidenceProvider
 from benchmark.visual_judge.placement_discovery import (
     PLACEMENT_DISCOVERY_SYSTEM_PROMPT,
     discover_openai_compatible_placement_evidence,
+    _salvage_placement_discovery_response,
     validate_placement_discovery_response,
 )
 from benchmark.visual_judge.usable_surface import (
+    CatalogContractThenVLMUsableSurfaceDetector,
     DEFAULT_USABLE_SURFACE_DETECTOR_BACKEND,
     USABLE_SURFACE_SYSTEM_PROMPT,
-    VLMTrustedSideUsableSurfaceDetector,
     usable_surface_cache_identity,
     validate_usable_surface_response,
 )
@@ -71,6 +73,32 @@ GROUPS = [
     {"group_id": "seating", "object_ids": ["sofa"]},
     {"group_id": "media", "object_ids": ["television", "cabinet"]},
 ]
+
+
+def _relation_row(
+    focal_id: str,
+    counterpart_id: str,
+    *,
+    predicate: str,
+    observation_goal: str,
+    dependency: str = "required",
+    counterpart_mode: str = "dedicated",
+    ordinary_mobility: str = "fixed",
+) -> dict:
+    return {
+        "target_ids": [focal_id, counterpart_id],
+        "predicate": predicate,
+        "dependency": dependency,
+        "counterpart_mode": counterpart_mode,
+        "ordinary_mobility": ordinary_mobility,
+        "observation_goal": observation_goal,
+    }
+
+
+def test_affordance_prompt_does_not_promote_routine_user_posture_to_clearance(
+) -> None:
+    assert "Mere nearby posture" in FUNCTIONAL_AFFORDANCE_SYSTEM_PROMPT
+    assert "dedicated approach" in FUNCTIONAL_AFFORDANCE_SYSTEM_PROMPT
 
 
 def _raw_discovery() -> dict:
@@ -473,6 +501,68 @@ def test_failed_cross_group_probe_does_not_skip_next_reserved_relation(
         "directional_correspondence"
     ]
     assert relation["decision_authority"] == "none"
+
+
+def test_missing_probe_provider_degrades_when_global_base_evidence_exists(
+    tmp_path: Path,
+) -> None:
+    global_image = tmp_path / "global.png"
+    Image.new("RGB", (16, 16), (40, 50, 60)).save(global_image)
+    discovery = {
+        "schema_version": "functional_discovery_v3",
+        "inspected_object_ids": ["cabinet"],
+        "directed_surface_targets": [
+            {
+                "discovery_id": "directed_surface_01",
+                "target_id": "cabinet",
+                "directionality": "directed",
+                "surface_roles": ["opening_side"],
+                "need_clearance": False,
+                "boundary_review_state": "routine",
+                "owning_group_id": "storage",
+                "observation_goal": "show the ordinary opening side",
+            }
+        ],
+        "within_group_correspondences": [],
+        "cross_group_correspondences": [],
+        "approach_clearance_targets": [],
+        "boundary_sensitive_targets": [],
+        "unusual_unconfirmed": [],
+        "reason": "one directed object",
+        "provenance": {},
+    }
+
+    class Planner:
+        def discover_functional_evidence(self, _request: dict) -> dict:
+            return deepcopy(discovery)
+
+    paths, audit = acquire_functional_probe_evidence(
+        planner=Planner(),
+        provider=None,
+        scene={
+            "scene_id": "scene",
+            "scene_type": "storage",
+            "objects": [
+                {
+                    "id": "cabinet",
+                    "category": "cabinet",
+                    "center": [0.0, 0.0, 1.0],
+                    "size": [1.0, 0.5, 2.0],
+                    "rotation": [0.0, 0.0, 0.0],
+                }
+            ],
+        },
+        global_image_path=str(global_image),
+        max_probe_units=1,
+        groups=[{"group_id": "storage", "object_ids": ["cabinet"]}],
+    )
+
+    assert paths == []
+    assert audit["status"] == "degraded_no_probes"
+    assert audit["fallback"][
+        "base_group_and_global_judges_continue"
+    ] is True
+    assert audit["acquisition_coverage"]["grounded_count"] == 0
 
 
 def test_directed_affordance_routes_to_usable_side_check() -> None:
@@ -1247,6 +1337,60 @@ def test_placement_discovery_separates_subject_from_context() -> None:
             )
 
 
+def test_placement_discovery_rejects_contextless_anchor_candidate() -> None:
+    with pytest.raises(
+        ValueError,
+        match="contextual_anchor requires one or more context IDs",
+    ):
+        validate_placement_discovery_response(
+            {
+                "considered_object_ids": ["subject", "context"],
+                "candidates": [
+                    {
+                        "subject_id": "subject",
+                        "context_ids": [],
+                        "check_type": "contextual_anchor",
+                        "observation_goal": "show the subject's anchor",
+                    }
+                ],
+                "reason": "complete",
+            },
+            object_ids=("subject", "context"),
+        )
+
+
+def test_placement_discovery_salvage_drops_contextless_anchor_only() -> None:
+    malformed = {
+        "considered_object_ids": ["subject", "context"],
+        "candidates": [
+            {
+                "subject_id": "subject",
+                "context_ids": [],
+                "check_type": "contextual_anchor",
+                "observation_goal": "show the subject's anchor",
+            }
+        ],
+        "reason": "one malformed candidate",
+    }
+
+    result = _salvage_placement_discovery_response(
+        malformed,
+        object_ids=("subject", "context"),
+        fallback_value=malformed,
+    )
+
+    assert result["considered_object_ids"] == ["subject", "context"]
+    assert result["candidates"] == []
+    assert result["coverage"]["complete"] is True
+    assert result["coverage"]["fraction"] == 1.0
+    assert result["item_salvage"]["rejected_candidate_count"] >= 1
+    assert all(
+        "contextual_anchor requires one or more context IDs"
+        in item["reason"]
+        for item in result["item_salvage"]["rejected_items"]
+    )
+
+
 def test_placement_camera_framing_uses_subject_and_context_without_reownership() -> None:
     captured: dict = {}
 
@@ -1480,9 +1624,8 @@ def test_group_packet_budget_overrun_reports_actual_episode_reason() -> None:
 
 
 def test_discovery_prompts_are_concise_and_case_agnostic() -> None:
-    # The approved affordance prompt is intentionally kept byte-for-byte
-    # unchanged even though its explicit field-consistency rules put it just
-    # above the general compact-prompt target.
+    # Affordance keeps its explicit field-consistency and clearance-admission
+    # rules within the established compact-prompt target.
     assert len(FUNCTIONAL_AFFORDANCE_SYSTEM_PROMPT) < 2300
     other_prompts = (
         FUNCTIONAL_RELATION_SYSTEM_PROMPT,
@@ -1514,21 +1657,274 @@ def test_discovery_prompts_are_concise_and_case_agnostic() -> None:
     )
 
 
+def test_relation_admission_uses_structured_required_dependency() -> None:
+    filtered, audit = _apply_relation_admission_gate(
+        {
+            "relations": [
+                _relation_row(
+                    "seat",
+                    "display",
+                    predicate="directional_correspondence",
+                    observation_goal=(
+                        "inspect whether the seating side faces the display "
+                        "for ordinary viewing"
+                    ),
+                ),
+                _relation_row(
+                    "seat",
+                    "table",
+                    predicate="relative_use_geometry",
+                    dependency="contextual",
+                    counterpart_mode="alternative",
+                    ordinary_mobility="movable_companion",
+                    observation_goal="inspect whether they are nearby",
+                ),
+                _relation_row(
+                    "cabinet",
+                    "chair",
+                    predicate="relative_use_geometry",
+                    dependency="contextual",
+                    ordinary_mobility="movable_companion",
+                    observation_goal="inspect opening clearance",
+                ),
+            ]
+        },
+        objects=[
+            {"id": "seat", "category": "seat"},
+            {"id": "display", "category": "display"},
+            {"id": "table", "category": "table"},
+            {"id": "cabinet", "category": "cabinet"},
+            {"id": "chair", "category": "chair"},
+        ],
+        groups=[
+            {
+                "group_id": "group_001",
+                "object_ids": [
+                    "seat",
+                    "display",
+                    "table",
+                    "cabinet",
+                    "chair",
+                ],
+            }
+        ],
+    )
+
+    assert len(filtered["relations"]) == 1
+    assert audit["additional_api_calls"] == 0
+    assert [row["admission_state"] for row in audit["rows"]] == [
+        "admitted",
+        "context_only",
+        "context_only",
+    ]
+    assert audit["decision_authority"] == "none"
+
+
+def test_relation_assignment_resolves_side_table_role_competition() -> None:
+    proposed = validate_functional_relation_response(
+        {
+            "considered_object_ids": ["armchair", "sofa", "side_table"],
+            "relations": [
+                _relation_row(
+                    "armchair",
+                    "side_table",
+                    predicate="relative_use_geometry",
+                    observation_goal=(
+                        "inspect ordinary seated reach from the armchair"
+                    ),
+                ),
+                _relation_row(
+                    "sofa",
+                    "side_table",
+                    predicate="relative_use_geometry",
+                    observation_goal="inspect ordinary seated reach from sofa",
+                ),
+            ],
+            "reason": "full-group role inventory",
+        },
+        object_ids=("armchair", "sofa", "side_table"),
+    )
+
+    assigned, audit = _apply_relation_admission_gate(
+        proposed,
+        objects=[
+            {"id": "armchair", "category": "armchair"},
+            {"id": "sofa", "category": "sofa"},
+            {"id": "side_table", "category": "side_table"},
+        ],
+        groups=[
+            {
+                "group_id": "seating_group",
+                "object_ids": ["armchair", "sofa", "side_table"],
+            }
+        ],
+    )
+
+    assert [row["target_ids"] for row in assigned["relations"]] == [
+        ["armchair", "side_table"]
+    ]
+    assert audit["dedicated_assignments"] == [
+        {"counterpart_id": "side_table", "focal_id": "armchair"}
+    ]
+    assert audit["rows"][1]["admission_state"] == "context_only"
+    assert "dedicated_counterpart_assigned_to_other_focal" in audit[
+        "rows"
+    ][1]["reasons"]
+    assert audit["context_only_relations"][0]["target_ids"] == [
+        "sofa",
+        "side_table",
+    ]
+    assert audit["context_only_relations"][0]["counterpart_mode"] == (
+        "dedicated"
+    )
+
+
+def test_relation_assignment_rejects_drum_claim_on_dedicated_piano_stool(
+) -> None:
+    proposed = validate_functional_relation_response(
+        {
+            "considered_object_ids": ["piano", "drum_kit", "piano_stool"],
+            "relations": [
+                _relation_row(
+                    "piano",
+                    "piano_stool",
+                    predicate="relative_use_geometry",
+                    ordinary_mobility="movable_companion",
+                    observation_goal=(
+                        "inspect seated reach for ordinary piano playing"
+                    ),
+                ),
+                _relation_row(
+                    "drum_kit",
+                    "piano_stool",
+                    predicate="relative_use_geometry",
+                    ordinary_mobility="movable_companion",
+                    observation_goal=(
+                        "inspect seated reach for ordinary drum playing"
+                    ),
+                ),
+            ],
+            "reason": "full-group role inventory",
+        },
+        object_ids=("piano", "drum_kit", "piano_stool"),
+    )
+
+    assigned, audit = _apply_relation_admission_gate(
+        proposed,
+        objects=[
+            {"id": "piano", "category": "piano"},
+            {"id": "drum_kit", "category": "drum_kit"},
+            {"id": "piano_stool", "category": "piano_stool"},
+        ],
+        groups=[
+            {
+                "group_id": "music_group",
+                "object_ids": ["piano", "drum_kit", "piano_stool"],
+            }
+        ],
+    )
+
+    assert [row["target_ids"] for row in assigned["relations"]] == [
+        ["piano", "piano_stool"]
+    ]
+    assert audit["rows"][1]["admission_state"] == "context_only"
+
+
+def test_relation_assignment_preserves_movable_companion_semantics() -> None:
+    proposed = validate_functional_relation_response(
+        {
+            "considered_object_ids": ["dining_table", "dining_stool"],
+            "relations": [
+                _relation_row(
+                    "dining_table",
+                    "dining_stool",
+                    predicate="relative_use_geometry",
+                    counterpart_mode="shared",
+                    ordinary_mobility="movable_companion",
+                    observation_goal=(
+                        "inspect seated reach for ordinary dining use"
+                    ),
+                )
+            ],
+            "reason": "full-group role inventory",
+        },
+        object_ids=("dining_table", "dining_stool"),
+    )
+
+    assigned, audit = _apply_relation_admission_gate(
+        proposed,
+        objects=[
+            {"id": "dining_table", "category": "dining_table"},
+            {"id": "dining_stool", "category": "dining_stool"},
+        ],
+        groups=[
+            {
+                "group_id": "dining_group",
+                "object_ids": ["dining_table", "dining_stool"],
+            }
+        ],
+    )
+
+    assert assigned["relations"][0]["ordinary_mobility"] == (
+        "movable_companion"
+    )
+    assert "movable_companion_retained_for_clearance_semantics" in audit[
+        "rows"
+    ][0]["reasons"]
+
+
+def test_relation_assignment_does_not_reclassify_by_goal_wording() -> None:
+    proposed = validate_functional_relation_response(
+        {
+            "considered_object_ids": ["focal", "counterpart"],
+            "relations": [
+                _relation_row(
+                    "focal",
+                    "counterpart",
+                    predicate="directional_correspondence",
+                    observation_goal="compare the two endpoints",
+                )
+            ],
+            "reason": "structured role inventory",
+        },
+        object_ids=("focal", "counterpart"),
+    )
+
+    assigned, _ = _apply_relation_admission_gate(
+        proposed,
+        objects=[
+            {"id": "focal", "category": "object"},
+            {"id": "counterpart", "category": "object"},
+        ],
+        groups=[
+            {
+                "group_id": "group_001",
+                "object_ids": ["focal", "counterpart"],
+            }
+        ],
+    )
+
+    assert len(assigned["relations"]) == 1
+
+
 def test_relation_audit_accepts_two_predicates_for_one_object_set() -> None:
     validated = validate_functional_relation_response(
         {
             "considered_object_ids": ["a", "b"],
             "relations": [
-                {
-                    "target_ids": ["a", "b"],
-                    "predicate": "directional_correspondence",
-                    "observation_goal": "show functional-side directions",
-                },
-                {
-                    "target_ids": ["b", "a"],
-                    "predicate": "relative_use_geometry",
-                    "observation_goal": "show relative use geometry",
-                },
+                _relation_row(
+                    "a",
+                    "b",
+                    predicate="directional_correspondence",
+                    observation_goal="show functional-side directions",
+                ),
+                _relation_row(
+                    "b",
+                    "a",
+                    predicate="relative_use_geometry",
+                    counterpart_mode="shared",
+                    observation_goal="show relative use geometry",
+                ),
             ],
             "reason": "complete",
         },
@@ -1541,22 +1937,44 @@ def test_relation_audit_accepts_two_predicates_for_one_object_set() -> None:
     ]
 
 
+def test_relation_audit_requires_explicit_role_assignment_semantics() -> None:
+    incomplete = _relation_row(
+        "a",
+        "b",
+        predicate="relative_use_geometry",
+        observation_goal="show ordinary joint use",
+    )
+    incomplete.pop("ordinary_mobility")
+
+    with pytest.raises(ValueError, match="ordinary_mobility"):
+        validate_functional_relation_response(
+            {
+                "considered_object_ids": ["a", "b"],
+                "relations": [incomplete],
+                "reason": "missing assignment semantics",
+            },
+            object_ids=("a", "b"),
+        )
+
+
 def test_relation_audit_rejects_duplicate_atomic_check() -> None:
     with pytest.raises(ValueError, match="duplicate"):
         validate_functional_relation_response(
             {
                 "considered_object_ids": ["a", "b"],
                 "relations": [
-                    {
-                        "target_ids": ["a", "b"],
-                        "predicate": "directional_correspondence",
-                        "observation_goal": "show functional-side directions",
-                    },
-                    {
-                        "target_ids": ["b", "a"],
-                        "predicate": "directional_correspondence",
-                        "observation_goal": "show the same direction check",
-                    },
+                    _relation_row(
+                        "a",
+                        "b",
+                        predicate="directional_correspondence",
+                        observation_goal="show functional-side directions",
+                    ),
+                    _relation_row(
+                        "b",
+                        "a",
+                        predicate="directional_correspondence",
+                        observation_goal="show the same direction check",
+                    ),
                 ],
                 "reason": "complete",
             },
@@ -1571,9 +1989,13 @@ def test_relation_audit_rejects_non_atomic_multi_object_target_set() -> None:
                 "considered_object_ids": ["a", "b", "c"],
                 "relations": [
                     {
+                        **_relation_row(
+                            "a",
+                            "b",
+                            predicate="directional_correspondence",
+                            observation_goal="show the direct-use direction",
+                        ),
                         "target_ids": ["a", "b", "c"],
-                        "predicate": "directional_correspondence",
-                        "observation_goal": "show the direct-use direction",
                     }
                 ],
                 "reason": "complete",
@@ -2044,7 +2466,7 @@ def test_openai_transport_separates_discovery_and_surface_calls(
         '"vlm_role":"functional_relation_discovery"' in relation_text
     )
     assert (
-        '"decision_contract":"functional_relation_audit_v3"'
+        '"decision_contract":"functional_relation_audit_v4"'
         in relation_text
     )
     assert (
@@ -2059,6 +2481,14 @@ def test_openai_transport_separates_discovery_and_surface_calls(
         '"trusted_group_partition":[{"group_id":"group_001",'
         '"object_ids":["television"]}]'
         in relation_text
+    )
+    assert (
+        '"allowed_counterpart_modes":["alternative","dedicated","shared"]'
+        in relation_text
+    )
+    assert (
+        '"allowed_ordinary_mobility":["fixed","movable_companion",'
+        '"portable_unrelated"]' in relation_text
     )
     assert '"vlm_role":"usable_surface_decoder"' in surface_text
     assert (
@@ -2091,6 +2521,9 @@ def test_openai_transport_separates_discovery_and_surface_calls(
         "rotation",
         "description",
     ]
+    assert relation_input["structured_context"][
+        "allowed_relation_dependencies"
+    ] == ["contextual", "required"]
     assert decoded["provenance"]["vlm_role"] == "usable_surface_decoder"
     assert (
         decoded["provenance"]["decision_contract"]
@@ -2143,6 +2576,154 @@ def test_placement_discovery_records_explicit_vlm_role_and_contract(
         result["provenance"]["decision_contract"]
         == "placement_discovery_v2"
     )
+
+
+def test_placement_discovery_accepts_only_the_exact_check_type_alias(
+    tmp_path: Path,
+) -> None:
+    global_image = tmp_path / "global.png"
+    Image.new("RGB", (16, 16), (100, 110, 120)).save(global_image)
+    model = _Model(
+        [
+            {
+                "considered_object_ids": ["telephone"],
+                "candidates": [
+                    {
+                        "subject_id": "telephone",
+                        "context_ids": [],
+                        "placement_check_type": "scene_zone",
+                        "observation_goal": "show the surrounding scene zone",
+                    }
+                ],
+                "reason": "complete",
+            }
+        ]
+    )
+
+    result = discover_openai_compatible_placement_evidence(
+        model=model,
+        request={
+            "metric": "semantic_placement_consistency",
+            "scene_id": "scene",
+            "scene_type": "living_room",
+            "global_image_path": str(global_image),
+            "objects": [{"id": "telephone", "category": "telephone"}],
+        },
+    )
+
+    assert result["candidates"][0]["check_type"] == "scene_zone"
+    assert result["normalization_warnings"][0]["code"] == (
+        "placement_check_type_alias_canonicalized"
+    )
+    assert len(model.calls) == 1
+
+
+def test_placement_discovery_salvages_valid_candidates_after_one_retry(
+    tmp_path: Path,
+) -> None:
+    global_image = tmp_path / "global.png"
+    Image.new("RGB", (16, 16), (100, 110, 120)).save(global_image)
+    good = {
+        "subject_id": "chair",
+        "context_ids": ["table"],
+        "check_type": "contextual_anchor",
+        "observation_goal": "show the chair relative to the table",
+    }
+    bad = {
+        "subject_id": "unknown",
+        "context_ids": [],
+        "check_type": "scene_zone",
+        "observation_goal": "show the zone",
+    }
+    model = _Model(
+        [
+            {
+                "considered_object_ids": ["chair", "table"],
+                "candidates": [good, bad],
+                "reason": "one candidate is malformed",
+            },
+            {
+                "considered_object_ids": ["chair"],
+                "candidates": [bad],
+                "reason": "repair remains incomplete",
+            },
+        ]
+    )
+
+    result = discover_openai_compatible_placement_evidence(
+        model=model,
+        request={
+            "metric": "semantic_placement_consistency",
+            "scene_id": "scene",
+            "scene_type": "dining_room",
+            "global_image_path": str(global_image),
+            "objects": [
+                {"id": "chair", "category": "chair"},
+                {"id": "table", "category": "table"},
+            ],
+        },
+    )
+
+    assert [item["subject_id"] for item in result["candidates"]] == [
+        "chair"
+    ]
+    schema = result["provenance"]["schema_validation"]
+    assert schema["repair_retry_count"] == 1
+    assert schema["item_level_salvage"] is True
+    assert result["coverage"]["fraction"] == 1.0
+
+
+def test_placement_discovery_repair_cannot_replace_or_invent_candidate_atoms(
+) -> None:
+    initial = {
+        "considered_object_ids": ["chair", "table", "lamp"],
+        "candidates": [
+            {
+                "subject_id": "chair",
+                "context_ids": ["table"],
+                "check_type": "contextual_anchor",
+                "observation_goal": "retain the initial chair-table atom",
+            },
+            {
+                "subject_id": "table",
+                "context_ids": [],
+                "check_type": "scene_zone",
+            },
+        ],
+        "reason": "one candidate is malformed",
+    }
+    repair = {
+        "considered_object_ids": ["chair", "table", "lamp"],
+        "candidates": [
+            {
+                "subject_id": "chair",
+                "context_ids": ["table"],
+                "check_type": "contextual_anchor",
+                "observation_goal": "attempted semantic replacement",
+            },
+            {
+                "subject_id": "lamp",
+                "context_ids": [],
+                "check_type": "scene_zone",
+                "observation_goal": "repair-only candidate",
+            },
+        ],
+        "reason": "repair",
+    }
+
+    result = _salvage_placement_discovery_response(
+        repair,
+        object_ids=("chair", "table", "lamp"),
+        fallback_value=initial,
+    )
+
+    assert len(result["candidates"]) == 1
+    assert result["candidates"][0]["source_observation_goal"] == (
+        "retain the initial chair-table atom"
+    )
+    assert result["item_salvage"]["anchored_candidate_count"] == 2
+    assert result["item_salvage"]["dropped_candidate_count"] == 1
+    assert result["coverage"]["fraction"] == pytest.approx(4 / 5)
 
 
 def test_discovery_identity_overlay_is_additive_and_exactly_grounded(
@@ -2377,7 +2958,7 @@ def test_affordance_contract_conflict_gets_one_same_evidence_repair(
     )
 
 
-def test_affordance_contract_repair_fails_closed_after_one_retry(
+def test_affordance_contract_repair_salvages_only_the_bad_row_after_one_retry(
     tmp_path: Path,
 ) -> None:
     global_image = tmp_path / "global.png"
@@ -2401,36 +2982,195 @@ def test_affordance_contract_repair_fails_closed_after_one_retry(
         [
             deepcopy(invalid),
             deepcopy(invalid),
+            {
+                "considered_object_ids": ["cabinet"],
+                "relations": [],
+                "reason": "no direct joint-use relation",
+            },
         ]
     )
 
-    with pytest.raises(ResponseSchemaRepairError) as exc_info:
-        OpenAICompatibleCameraSelector(
-            model
-        ).discover_functional_evidence(
-            {
-                "metric": "functional_consistency",
-                "scene_id": "scene",
-                "scene_type": "living_room",
-                "global_image_path": str(global_image),
-                "objects": [
-                    {"id": "cabinet", "category": "cabinet"}
-                ],
-                "groups": [
-                    {
-                        "group_id": "group_001",
-                        "object_ids": ["cabinet"],
-                    }
-                ],
-            }
-        )
+    discovery = OpenAICompatibleCameraSelector(
+        model
+    ).discover_functional_evidence(
+        {
+            "metric": "functional_consistency",
+            "scene_id": "scene",
+            "scene_type": "living_room",
+            "global_image_path": str(global_image),
+            "objects": [{"id": "cabinet", "category": "cabinet"}],
+            "groups": [
+                {"group_id": "group_001", "object_ids": ["cabinet"]}
+            ],
+        }
+    )
 
-    assert exc_info.value.schema_audit["attempt_count"] == 2
-    assert exc_info.value.schema_audit["recovered"] is False
+    assert discovery["object_affordance_ledger"][0] == {
+        "object_id": "cabinet",
+        "directionality": "non_directed",
+        "surface_roles": [],
+        "need_clearance": False,
+        "boundary_review_state": "routine",
+        "review_state": "routine",
+        "observation_goal": (
+            "Use the fixed group/global evidence; no specialised affordance "
+            "probe was scheduled for this object."
+        ),
+        "boundary_observation_goal": "",
+    }
+    assert discovery["object_coverage"][0]["object_id"] == "cabinet"
+    assert discovery["object_coverage"][0]["inspected"] is False
+    assert discovery["object_coverage"][0]["defaulted"] is True
+    assert discovery["coverage"]["fraction"] == 0.5
+    schema_audit = discovery["provenance"]["calls"]["affordance"][
+        "schema_validation"
+    ]
+    assert schema_audit["attempt_count"] == 2
+    assert schema_audit["recovered"] is False
+    assert schema_audit["item_level_salvage"] is True
     assert [call["kwargs"]["call_type"] for call in model.calls] == [
         "vlm_camera_pose.functional_discovery.affordance",
         "vlm_camera_pose.functional_discovery.affordance.schema_repair",
+        "vlm_camera_pose.functional_discovery.relations",
     ]
+
+
+def test_affordance_salvage_preserves_valid_initial_rows_across_retry(
+    tmp_path: Path,
+) -> None:
+    global_image = tmp_path / "global.png"
+    Image.new("RGB", (16, 16), (100, 110, 120)).save(global_image)
+    good_row = {
+        "object_id": "chair",
+        "directionality": "directed",
+        "surface_roles": ["seating_side"],
+        "need_clearance": True,
+        "boundary_review_state": "routine",
+        "review_state": "routine",
+        "observation_goal": "show the ordinary seating side",
+        "boundary_observation_goal": "",
+    }
+    bad_row = {
+        "object_id": "table",
+        "directionality": "non_directed",
+        "surface_roles": ["interaction_side"],
+        "need_clearance": False,
+        "boundary_review_state": "routine",
+        "review_state": "routine",
+        "observation_goal": "show the table",
+        "boundary_observation_goal": "",
+    }
+    model = _Model(
+        [
+            {"objects": [good_row, bad_row], "reason": "one bad row"},
+            {"objects": [bad_row], "reason": "repair still incomplete"},
+            {
+                "considered_object_ids": ["chair", "table"],
+                "relations": [],
+                "reason": "no direct relation",
+            },
+        ]
+    )
+
+    discovery = OpenAICompatibleCameraSelector(
+        model
+    ).discover_functional_evidence(
+        {
+            "metric": "functional_consistency",
+            "scene_id": "scene",
+            "scene_type": "dining_room",
+            "global_image_path": str(global_image),
+            "objects": [
+                {"id": "chair", "category": "chair"},
+                {"id": "table", "category": "table"},
+            ],
+            "groups": [
+                {
+                    "group_id": "group_001",
+                    "object_ids": ["chair", "table"],
+                }
+            ],
+        }
+    )
+
+    ledger = {
+        row["object_id"]: row
+        for row in discovery["object_affordance_ledger"]
+    }
+    assert ledger["chair"]["directionality"] == "directed"
+    assert ledger["table"]["directionality"] == "non_directed"
+    assert ledger["table"]["surface_roles"] == []
+    salvage = discovery["coverage"]["affordance"]
+    assert salvage["accepted_sources"] == {"chair": "initial"}
+    assert salvage["defaulted_object_ids"] == ["table"]
+    assert discovery["coverage"]["fraction"] == pytest.approx(2 / 3)
+
+
+def test_relation_repair_is_limited_to_initial_identity_anchors() -> None:
+    initial = {
+        "considered_object_ids": ["chair", "table", "lamp"],
+        "relations": [
+            _relation_row(
+                "chair",
+                "table",
+                predicate="directional_correspondence",
+                ordinary_mobility="movable_companion",
+                observation_goal="retain the initial relation atom",
+            ),
+            {
+                **_relation_row(
+                    "table",
+                    "lamp",
+                    predicate="relative_use_geometry",
+                    observation_goal="placeholder",
+                ),
+                "observation_goal": None,
+            },
+        ],
+        "reason": "one relation is malformed",
+    }
+    repair = {
+        "considered_object_ids": ["chair", "table", "lamp"],
+        "relations": [
+            _relation_row(
+                "chair",
+                "table",
+                predicate="directional_correspondence",
+                ordinary_mobility="fixed",
+                observation_goal="attempted semantic replacement",
+            ),
+            _relation_row(
+                "chair",
+                "lamp",
+                predicate="relative_use_geometry",
+                observation_goal="repair-only relation",
+            ),
+        ],
+        "reason": "repair",
+    }
+
+    result = salvage_functional_relation_response(
+        repair,
+        object_ids=("chair", "table", "lamp"),
+        fallback_value=initial,
+    )
+
+    assert result["relations"] == [
+        {
+            "target_ids": ["chair", "table"],
+            "predicate": "directional_correspondence",
+            "dependency": "required",
+            "counterpart_mode": "dedicated",
+            "ordinary_mobility": "movable_companion",
+            "observation_goal": "retain the initial relation atom",
+        }
+    ]
+    assert result["item_salvage"]["anchored_relation_count"] == 2
+    assert result["item_salvage"]["dropped_relation_count"] == 1
+    assert any(
+        item["reason"] == "relation_has_no_initial_identity_anchor"
+        for item in result["item_salvage"]["rejected_items"]
+    )
 
 
 def test_relation_discovery_uses_sparse_positive_non_filtering_prior(
@@ -2471,6 +3211,9 @@ def test_relation_discovery_uses_sparse_positive_non_filtering_prior(
                     {
                         "target_ids": ["table", "chair"],
                         "predicate": "relative_use_geometry",
+                        "dependency": "required",
+                        "counterpart_mode": "shared",
+                        "ordinary_mobility": "movable_companion",
                         "observation_goal": (
                             "show ordinary seated access to the table"
                         ),
@@ -2558,6 +3301,7 @@ class _Renderer:
         out_dir,
         camera_views,
         preview=False,
+        allow_blank_views=False,
     ):
         destination = Path(out_dir)
         destination.mkdir(parents=True, exist_ok=True)
@@ -2588,6 +3332,7 @@ class _Renderer:
         camera_views,
         overlay_spec,
         preview=False,
+        allow_blank_views=False,
     ):
         destination = Path(out_dir)
         destination.mkdir(parents=True, exist_ok=True)
@@ -2878,6 +3623,164 @@ def test_usable_surface_pending_runs_one_bounded_evidence_repair(
     )
 
 
+def test_usable_surface_schema_failure_retries_with_repair_bank(
+    tmp_path: Path,
+) -> None:
+    blend = tmp_path / "scene.blend"
+    blend.write_bytes(b"blend")
+
+    class RepairingSelector(_Selector):
+        def decode_usable_surface(self, request: dict) -> dict:
+            self.surface_calls.append(deepcopy(request))
+            return {
+                "schema_version": "usable_surface_decode_v2",
+                "target_id": request["target_id"],
+                "status": "identified",
+                "surfaces": [
+                    {
+                        "surface_role": request["surface_roles"][0],
+                        "side_id": "local_neg_y",
+                        "visual_cues": ["visible opening geometry"],
+                        "confidence": (
+                            2.0 if len(self.surface_calls) == 1 else 0.8
+                        ),
+                    }
+                ],
+                "reason": "schema retry test",
+                "provenance": {"prompt_version": "test"},
+            }
+
+    selector = RepairingSelector()
+    provider = CameraEvidenceProvider(
+        renderer=_Renderer(),
+        blend_file=blend,
+        out_dir=tmp_path / "evidence",
+        mode="query_cov",
+        selector=selector,
+        max_views=1,
+        max_steps=0,
+        candidate_count=4,
+        usable_surface_cache_dir=tmp_path / "surface_cache",
+    )
+    provider.provide_functional_boundary_evidence(
+        {
+            "metric": "functional_consistency",
+            "scene": _single_cabinet_scene(),
+            "surface_targets": [
+                {
+                    "target_id": "cabinet",
+                    "surface_roles": ["opening_side"],
+                }
+            ],
+        }
+    )
+
+    audit = provider.last_call_usage
+    manifest = json.loads(
+        Path(audit["manifest_path"]).read_text(encoding="utf-8")
+    )
+    decoder = manifest["decoder_audit"]
+    assert len(selector.surface_calls) == 2
+    assert decoder["resolution_status"] == "resolved"
+    assert decoder["decoder_round_failures"][0]["evidence_round"] == 1
+    assert decoder["decoder_round_failures"][0]["retryable"] is True
+    assert decoder["lifecycles"][0]["state"] == "resolved"
+
+
+def test_one_blank_usable_surface_side_preserves_bank_and_repairs_only_missing_side(
+    tmp_path: Path,
+) -> None:
+    blend = tmp_path / "scene.blend"
+    blend.write_bytes(b"blend")
+
+    class OneBlankSideRenderer(_Renderer):
+        def __init__(self) -> None:
+            super().__init__()
+            self.blank_injected = False
+
+        def render_camera_views(self, **kwargs):
+            assert kwargs.get("allow_blank_views") is True
+            manifest = super().render_camera_views(**kwargs)
+            ids = [str(item["id"]) for item in kwargs["camera_views"]]
+            blank_ids: list[str] = []
+            if (
+                kwargs.get("preview") is True
+                and len(ids) == 4
+                and not self.blank_injected
+            ):
+                blank_ids = ["local_pos_x"]
+                self.blank_injected = True
+            manifest["render_validation"] = {
+                "blank_views": blank_ids,
+            }
+            return manifest
+
+    class SurvivingSideSelector(_Selector):
+        def decode_usable_surface(self, request: dict) -> dict:
+            self.surface_calls.append(deepcopy(request))
+            return {
+                "schema_version": "usable_surface_decode_v2",
+                "target_id": request["target_id"],
+                "status": "identified",
+                "surfaces": [
+                    {
+                        "surface_role": request["surface_roles"][0],
+                        "side_id": "local_neg_y",
+                        "visual_cues": ["visible opening geometry"],
+                        "confidence": 0.8,
+                    }
+                ],
+                "reason": "surviving side remains sufficient",
+                "provenance": {"prompt_version": "test"},
+            }
+
+    selector = SurvivingSideSelector()
+    provider = CameraEvidenceProvider(
+        renderer=OneBlankSideRenderer(),
+        blend_file=blend,
+        out_dir=tmp_path / "evidence",
+        mode="query_cov",
+        selector=selector,
+        max_views=1,
+        max_steps=0,
+        candidate_count=4,
+        usable_surface_cache_dir=tmp_path / "surface_cache",
+        usable_surface_backend="vlm_trusted_side_ids",
+    )
+
+    result = provider.provide_functional_boundary_evidence(
+        {
+            "metric": "functional_consistency",
+            "scene": _single_cabinet_scene(),
+            "surface_targets": [
+                {
+                    "target_id": "cabinet",
+                    "surface_roles": ["opening_side"],
+                }
+            ],
+        }
+    )
+
+    decoder = result["decoder_audit"]
+    assert result["status"] == "complete"
+    assert decoder["failures"] == []
+    assert len(selector.surface_calls) == 2
+    assert [
+        item["side_id"] for item in selector.surface_calls[0]["previews"]
+    ] == ["local_neg_x", "local_pos_y", "local_neg_y"]
+    assert decoder["banks"][0]["raw_blank_side_ids"] == [
+        "local_pos_x"
+    ]
+    assert decoder["banks"][0]["cumulative_missing_side_ids"] == [
+        "local_pos_x"
+    ]
+    assert decoder["banks"][1]["requested_side_ids"] == [
+        "local_pos_x"
+    ]
+    assert decoder["banks"][1]["cumulative_missing_side_ids"] == []
+    assert decoder["banks"][1]["bank_complete"] is True
+
+
 def test_provider_decodes_surface_then_selects_and_renders(
     tmp_path: Path,
 ) -> None:
@@ -2898,7 +3801,7 @@ def test_provider_decodes_surface_then_selects_and_renders(
     )
     assert isinstance(
         provider.usable_surface_detector,
-        VLMTrustedSideUsableSurfaceDetector,
+        CatalogContractThenVLMUsableSurfaceDetector,
     )
     assert provider.policy_config["usable_surface"]["backend"] == (
         DEFAULT_USABLE_SURFACE_DETECTOR_BACKEND
@@ -3012,6 +3915,75 @@ def test_provider_decodes_surface_then_selects_and_renders(
     provider(request)
     assert provider.last_call_usage["cache_hit"] is False
     assert identity_path.is_file()
+
+
+def test_provider_uses_catalog_facing_contract_before_visual_decoder(
+    tmp_path: Path,
+) -> None:
+    blend = tmp_path / "scene.blend"
+    blend.write_bytes(b"blend")
+    selector = _Selector()
+    provider = CameraEvidenceProvider(
+        renderer=_Renderer(),
+        blend_file=blend,
+        out_dir=tmp_path / "evidence",
+        mode="query_cov",
+        selector=selector,
+        max_views=1,
+        max_steps=0,
+        candidate_count=4,
+        usable_surface_cache_dir=tmp_path / "surface_cache",
+    )
+    scene = {
+        "scene_id": "scene",
+        "boundary": [[0, 0], [8, 0], [8, 8], [0, 8]],
+        "scene_height": 3.0,
+        "objects": [
+            {
+                "id": "television",
+                "jid": "asset_tv",
+                "category": "television",
+                "center": [4.0, 4.0, 1.0],
+                "size": [1.4, 0.3, 1.0],
+                "rotation": [0.0, 0.0, 90.0],
+                "asset_ref": {
+                    "source_db": "fixed_catalog",
+                    "asset_key": "asset_tv",
+                },
+                "metadata": {
+                    "materialization": {
+                        "catalog_snapshot_id": (
+                            "imaginarium_catalog_test_snapshot"
+                        )
+                    }
+                },
+            }
+        ],
+    }
+
+    result = provider.provide_functional_boundary_evidence(
+        {
+            "metric": "functional_consistency",
+            "scene": scene,
+            "surface_targets": [
+                {
+                    "target_id": "television",
+                    "surface_roles": ["display_side"],
+                }
+            ],
+        }
+    )
+    hypotheses = result["usable_surface_hypotheses"]
+    audit = result["decoder_audit"]
+
+    assert hypotheses[0]["surfaces"][0]["side_id"] == "local_neg_y"
+    assert hypotheses[0]["provenance"]["resolution_path"] == (
+        "benchmark_catalog_contract"
+    )
+    assert audit["catalog_contract_hits"] == 1
+    assert audit["decoder_calls"] == 0
+    assert audit["preview_render_count"] == 0
+    assert selector.surface_calls == []
 
 
 def test_fake_surface_detector_drives_functional_probe_pipeline(
@@ -3572,3 +4544,57 @@ def test_functional_geometry_uses_rotated_frontage_not_object_center() -> None:
     # A 3m x 1m object rotated 90 degrees has a 1m x 3m world footprint.
     assert result["target_bounds"][0][:2] == pytest.approx([4.3, 1.5])
     assert result["target_bounds"][1][:2] == pytest.approx([5.3, 4.5])
+
+
+def test_functional_geometry_exposes_routing_only_counterpart_angle() -> None:
+    scene = {
+        "boundary": [[0, 0], [6, 0], [6, 6], [0, 6]],
+        "objects": [
+            {
+                "id": "seat",
+                "center": [1.0, 3.0, 0.5],
+                "size": [1.0, 1.0, 1.0],
+                "rotation": [0.0, 0.0, 0.0],
+            },
+            {
+                "id": "display",
+                "center": [5.0, 3.0, 1.0],
+                "size": [1.0, 0.2, 1.0],
+                "rotation": [0.0, 0.0, 180.0],
+            },
+        ],
+    }
+    result = build_functional_geometry_observations(
+        scene,
+        {
+            "probe_id": "pair",
+            "kind": "functional_correspondence",
+            "target_ids": ["seat", "display"],
+            "related_target_ids": [],
+            "surface_targets": [
+                {"target_id": "seat", "need_clearance": False},
+            ],
+            "usable_surface_hypotheses": [
+                {
+                    "target_id": "seat",
+                    "status": "identified",
+                    "surfaces": [
+                        {
+                            "side_id": "local_pos_x",
+                            "surface_role": "seating_side",
+                            "confidence": 0.9,
+                        }
+                    ],
+                }
+            ],
+        },
+    )
+
+    relation = result["relation_observations"][0]
+    assert relation["endpoint_id"] == "seat"
+    assert relation["counterpart_id"] == "display"
+    assert relation["facing_angle_to_counterpart_degrees"] == pytest.approx(
+        0.0
+    )
+    assert relation["routing_only"] is True
+    assert relation["decision_authority"] == "none"

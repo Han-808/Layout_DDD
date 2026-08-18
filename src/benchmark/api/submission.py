@@ -716,6 +716,7 @@ def evaluate_prepared_submission(
     manifest["benchmark_score_status"] = report.get(
         "benchmark_score_status"
     )
+    manifest["score_coverage"] = deepcopy(report.get("coverage"))
     manifest["scoring_profile"] = deepcopy(report.get("scoring_profile"))
     manifest["canonical_object_denominator"] = deepcopy(
         report.get("canonical_object_denominator")
@@ -1197,6 +1198,7 @@ def _evaluate_submission_impl(
         "benchmark_score": report.get("benchmark_score"),
         "benchmark_score_100": report.get("benchmark_score_100"),
         "benchmark_score_status": report.get("benchmark_score_status"),
+        "score_coverage": deepcopy(report.get("coverage")),
         "scoring_profile": deepcopy(report.get("scoring_profile")),
         "canonical_object_denominator": deepcopy(
             report.get("canonical_object_denominator")

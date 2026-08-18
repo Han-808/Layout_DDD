@@ -20,9 +20,12 @@ from benchmark.visual_judge.contracts import ResponseSchemaRepairError
 from benchmark.visual_judge.functional_discovery_contract import (
     FUNCTIONAL_AFFORDANCE_PROMPT_VERSION,
     FUNCTIONAL_AFFORDANCE_SCHEMA_VERSION,
+    FUNCTIONAL_COUNTERPART_MODES,
     FUNCTIONAL_DIRECTIONALITY,
     FUNCTIONAL_DISCOVERY_PROMPT_VERSION,
     FUNCTIONAL_DISCOVERY_SCHEMA_VERSION,
+    FUNCTIONAL_ORDINARY_MOBILITY,
+    FUNCTIONAL_RELATION_DEPENDENCIES,
     FUNCTIONAL_RELATION_PREDICATES,
     FUNCTIONAL_RELATION_PROMPT_VERSION,
     FUNCTIONAL_RELATION_SCHEMA_VERSION,
@@ -32,6 +35,8 @@ from benchmark.visual_judge.functional_discovery_contract import (
 )
 from benchmark.visual_judge.functional_discovery_validation import (
     compose_functional_discovery_result,
+    salvage_functional_affordance_response,
+    salvage_functional_relation_response,
     validate_functional_affordance_response,
     validate_functional_discovery_request,
     validate_functional_discovery_response,
@@ -57,15 +62,14 @@ directed iff use depends on a horizontally facing side relative to accessible
 architecture or a joint-use counterpart. Use non_directed otherwise, including
 top/bottom/gravity-axis controls and objects without ordinary operation. This
 asks whether such a side exists, not which side. If plausible but unseen, use
-directed; later localization resolves it. Record allowed surface roles and
-whether ordinary use needs dedicated free space. Boundary context may refine
-an already-required side or clearance view, never create a check; therefore
-non_directed with need_clearance=false requires boundary_review_state=routine.
-Category is a hint; visible geometry and appearance remain relevant.
-Set need_clearance=true only when ordinary approach, opening, or operation
-requires dedicated free space around the object. Do not classify the kind of
-clearance. This is not generic room circulation: passive objects without a
-dedicated user or operating zone normally use need_clearance=false.
+directed; later localization resolves it. Set need_clearance=true only when
+blocking a dedicated approach, opening, or operation region prevents ordinary
+use. Mere nearby posture, generic circulation, or use of a seat, table, or work
+surface is insufficient; passive objects normally use false. Do not subtype
+clearance. Boundary context may refine an already-required side or clearance
+view, never create a check; thus non_directed with need_clearance=false requires
+boundary_review_state=routine. Category is a hint; visible geometry remains
+relevant.
 
 The conditional fields must agree:
 - directed requires one or more surface_roles;
@@ -92,39 +96,40 @@ Use only the supplied vocabulary. Never return a defect, score, verdict, pose,
 vector, camera action, or scene edit. Return no other fields."""
 
 
-FUNCTIONAL_RELATION_SYSTEM_PROMPT = """Inventory direct ordinary joint-use
-checks; do not judge the current arrangement. Every row is one atomic relation
-between exactly two objects and names exactly one predicate:
-- directional_correspondence: joint use depends on compatible functional-side
-  or facing directions;
-- relative_use_geometry: joint use depends on relative position, distance,
-  reach, coordinated operation, or an operational connection.
+FUNCTIONAL_RELATION_SYSTEM_PROMPT = """Inventory ordinary joint-use role
+assignments; never judge validity. Analyze all objects jointly. Each row uses
+target_ids exactly [focal_id,counterpart_id] and one predicate:
+- directional_correspondence: use depends on compatible functional-side or
+  facing directions;
+- relative_use_geometry: use depends on relative position, distance, reach,
+  coordinated operation, or an operational connection.
 
-Create a row only when ordinary joint use imposes that observable condition.
-Broad cooperation, co-presence, similarity, style compatibility, or possible
-usefulness together is insufficient. If one focal object has several direct
-participants, emit one focal-participant row for each real direct relation; do
-not emit one multi-object row or invent every pair in the set. The same pair
-may occur once per predicate with distinct observation goals.
+Use dependency=required only if ordinary use of the focal materially depends
+on this counterpart condition; otherwise contextual. Use counterpart_mode:
+dedicated when the counterpart serves this focal assignment, shared only when
+it genuinely serves multiple focals, or alternative when interchangeable. Use
+ordinary_mobility for the counterpart: fixed; movable_companion when ordinary
+use expects repositioning; portable_unrelated when it is not an assigned
+participant. Movable_companion is context, never by itself evidence of a
+permanent clearance blocker.
 
-An object's own approach, opening, or operating free space is object-level
-clearance in affordance_prior.need_clearance_object_ids, never an object
-relation. Distance and group membership affect framing and scope only; the
-trusted_group_partition is not semantic ground truth and cannot suppress a
-real relation. Current bad geometry must not suppress the check that tests it.
-Static support, contact, or stacking alone is not Functional: physical support
-is L1 and semantic support/height is Placement, unless direct ordinary joint
-action independently requires the relation.
-
-The validated affordance_prior is a sparse positive hint, not a candidate whitelist.
-Use it to sharpen checks, while allowing the images and full object
-list to recover omitted or misclassified relations. Test each object for a
-direct ordinary joint-use counterpart before returning none.
+Resolve roles across the full set. Never assign one dedicated counterpart to
+multiple focals, promote optional associations to required, or emit every
+possible pair. Put the strongest dedicated claim first if claims conflict.
+Broad cooperation, co-presence, similarity, style, or possible usefulness is
+contextual at most. Object-level approach/opening/operation clearance is not a
+relation. Static support/contact is L1 or Placement. Distance and group membership
+affect framing; they cannot suppress a real relation. Bad current
+geometry cannot suppress the check. The affordance_prior is a sparse positive
+hint, not a candidate whitelist; inspect every object before returning none.
 
 Copy every object ID exactly once in considered_object_ids. Return exactly:
 {"considered_object_ids":["id"],
 "relations":[{"target_ids":["id1","id2"],
 "predicate":"directional_correspondence",
+"dependency":"required",
+"counterpart_mode":"dedicated",
+"ordinary_mobility":"fixed",
 "observation_goal":"neutral atomic joint-use observation"}],
 "reason":"brief coverage summary"}
 
@@ -161,9 +166,12 @@ exactly the same image and trusted object list; it is not a metric judgment.
 Copy every trusted object ID exactly once in considered_object_ids and in the
 original order. Preserve compliant atomic checks, remove duplicate
 (target_ids, predicate) identities, use exactly two trusted target IDs per
-relation, and use exactly one allowed predicate per row. Split a multi-object
-set only into supported direct focal-participant relations; do not generate a
-complete pair graph. Object-level
+relation in [focal,counterpart] order, and use exactly one allowed predicate,
+dependency, counterpart_mode, and ordinary_mobility per row. Keep full-set role
+assignment coherent: a dedicated counterpart cannot serve multiple focals;
+shared and alternative are explicit, and portable_unrelated cannot create a
+required obligation. Split a multi-object set only into supported direct
+focal-participant relations; do not generate a complete pair graph. Object-level
 approach, opening, or operating clearance is not a relation. Do not output any
 defect, validity, score, camera action, or scene edit. Return exactly the
 relation-audit JSON object required by the original request, with no
@@ -268,6 +276,11 @@ def discover_openai_compatible_functional_evidence(
                 value,
                 object_ids=object_ids,
             ),
+            salvage=lambda value, fallback: salvage_functional_affordance_response(
+                value,
+                object_ids=object_ids,
+                fallback_value=fallback,
+            ),
         )
     )
     affordance_meta["schema_validation"] = deepcopy(
@@ -299,6 +312,15 @@ def discover_openai_compatible_functional_evidence(
         "schema_version": FUNCTIONAL_RELATION_SCHEMA_VERSION,
         "allowed_relation_predicates": sorted(
             FUNCTIONAL_RELATION_PREDICATES
+        ),
+        "allowed_relation_dependencies": sorted(
+            FUNCTIONAL_RELATION_DEPENDENCIES
+        ),
+        "allowed_counterpart_modes": sorted(
+            FUNCTIONAL_COUNTERPART_MODES
+        ),
+        "allowed_ordinary_mobility": sorted(
+            FUNCTIONAL_ORDINARY_MOBILITY
         ),
         "trusted_group_partition": deepcopy(normalized["groups"]),
         "group_partition_semantics": (
@@ -339,6 +361,11 @@ def discover_openai_compatible_functional_evidence(
             validator=lambda value: validate_functional_relation_response(
                 value,
                 object_ids=object_ids,
+            ),
+            salvage=lambda value, fallback: salvage_functional_relation_response(
+                value,
+                object_ids=object_ids,
+                fallback_value=fallback,
             ),
         )
     )
@@ -381,6 +408,10 @@ def discover_openai_compatible_functional_evidence(
             "identity_grounding",
             "trusted_group_partition",
             "affordance_prior",
+            "allowed_relation_predicates",
+            "allowed_relation_dependencies",
+            "allowed_counterpart_modes",
+            "allowed_ordinary_mobility",
         ],
         "structured_context": {
             "scene_id": relation_context["scene_id"],
@@ -394,6 +425,18 @@ def discover_openai_compatible_functional_evidence(
             ),
             "affordance_prior": deepcopy(
                 relation_context["affordance_prior"]
+            ),
+            "allowed_relation_predicates": deepcopy(
+                relation_context["allowed_relation_predicates"]
+            ),
+            "allowed_relation_dependencies": deepcopy(
+                relation_context["allowed_relation_dependencies"]
+            ),
+            "allowed_counterpart_modes": deepcopy(
+                relation_context["allowed_counterpart_modes"]
+            ),
+            "allowed_ordinary_mobility": deepcopy(
+                relation_context["allowed_ordinary_mobility"]
             ),
         },
         "object_fields": ["id", "category"],
@@ -413,14 +456,93 @@ def discover_openai_compatible_functional_evidence(
         "group_count": len(normalized["groups"]),
     }
     relation_meta["input_contract"] = deepcopy(relation_input_contract)
+    relations, relation_admission_audit = _apply_relation_admission_gate(
+        relations,
+        objects=normalized["objects"],
+        groups=normalized["groups"],
+    )
+    relation_meta["relation_admission"] = deepcopy(
+        relation_admission_audit
+    )
     result = compose_functional_discovery_result(
         affordance=affordance,
         relations=relations,
         object_ids=tuple(item["id"] for item in normalized["objects"]),
         groups=normalized["groups"],
     )
+    result["relation_admission_audit"] = relation_admission_audit
+    affordance_salvage = (
+        affordance.get("item_salvage")
+        if isinstance(affordance.get("item_salvage"), dict)
+        else {}
+    )
+    relation_salvage = (
+        relations.get("item_salvage")
+        if isinstance(relations.get("item_salvage"), dict)
+        else {}
+    )
+    expected_object_count = len(object_ids)
+    accepted_object_count = int(
+        affordance_salvage.get(
+            "accepted_object_count",
+            expected_object_count,
+        )
+    )
+    relation_contract_valid = bool(
+        relation_salvage.get("consideration_contract_valid", True)
+    )
+    anchored_relation_count = int(
+        relation_salvage.get(
+            "anchored_relation_count",
+            len(relations.get("relations") or []),
+        )
+    )
+    accepted_relation_count = int(
+        relation_salvage.get(
+            "accepted_relation_count",
+            len(relations.get("relations") or []),
+        )
+    )
+    coverage_eligible = expected_object_count + 1 + anchored_relation_count
+    coverage_grounded = accepted_object_count + int(
+        relation_contract_valid
+    ) + accepted_relation_count
     return FunctionalDiscoveryResult(
         **result,
+        coverage={
+            "unit": "discovery_contract_obligation",
+            "eligible_count": coverage_eligible,
+            "grounded_count": coverage_grounded,
+            "fraction": (
+                coverage_grounded / coverage_eligible
+                if coverage_eligible
+                else 0.0
+            ),
+            "complete": coverage_grounded == coverage_eligible,
+            "affordance": deepcopy(
+                affordance_salvage
+                or {
+                    "expected_object_count": expected_object_count,
+                    "accepted_object_count": expected_object_count,
+                    "defaulted_object_count": 0,
+                    "coverage_fraction": 1.0,
+                }
+            ),
+            "relations": deepcopy(
+                relation_salvage
+                or {
+                    "consideration_contract_valid": True,
+                    "anchored_relation_count": len(
+                        relations.get("relations") or []
+                    ),
+                    "accepted_relation_count": len(
+                        relations.get("relations") or []
+                    ),
+                    "dropped_relation_count": 0,
+                    "rejected_relation_count": 0,
+                }
+            ),
+        },
         provenance={
             "prompt_version": FUNCTIONAL_DISCOVERY_PROMPT_VERSION,
             "schema_version": FUNCTIONAL_DISCOVERY_SCHEMA_VERSION,
@@ -507,6 +629,194 @@ def _relation_affordance_prior(
         "directed_surface_roles": directed_surface_roles,
         "need_clearance_object_ids": need_clearance_object_ids,
     }
+
+
+def _apply_relation_admission_gate(
+    value: dict[str, Any],
+    *,
+    objects: list[dict[str, str]],
+    groups: list[dict[str, Any]],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Assign relation roles jointly, without another model call.
+
+    The model call inventories candidates for the entire scene.  This gate then
+    treats those rows as one assignment problem, rather than independently
+    promoting every plausible pair to an obligation.  It has no metric-decision
+    authority: contextual, alternative, and losing role claims remain in the
+    audit instead of becoming Functional checks.
+    """
+
+    result = deepcopy(value)
+    category_by_id = {
+        str(item["id"]): str(item["category"])
+        for item in objects
+    }
+    group_by_id: dict[str, str] = {}
+    for group in groups:
+        group_id = str(group["group_id"])
+        for object_id in group.get("object_ids") or []:
+            group_by_id[str(object_id)] = group_id
+
+    proposals: list[dict[str, Any]] = []
+    for index, relation in enumerate(result.get("relations") or [], start=1):
+        target_ids = [str(item) for item in relation["target_ids"]]
+        focal_id, counterpart_id = target_ids
+        goal = str(relation.get("observation_goal") or "").strip()
+        predicate = str(relation.get("predicate") or "")
+        dependency = str(relation.get("dependency") or "")
+        counterpart_mode = str(relation.get("counterpart_mode") or "")
+        ordinary_mobility = str(
+            relation.get("ordinary_mobility") or ""
+        )
+        reasons: list[str] = []
+        state = "admitted"
+        if dependency == "contextual":
+            state = "context_only"
+            reasons.append("contextual_dependency_is_not_function_required")
+        elif counterpart_mode == "alternative":
+            state = "context_only"
+            reasons.append("alternative_requires_disjunctive_obligation")
+        elif ordinary_mobility == "portable_unrelated":
+            state = "context_only"
+            reasons.append("portable_unrelated_is_not_assigned_counterpart")
+        proposals.append(
+            {
+                "proposal_ref": f"relation_proposal_{index:03d}",
+                "relation": deepcopy(relation),
+                "target_ids": target_ids,
+                "focal_id": focal_id,
+                "counterpart_id": counterpart_id,
+                "focal_category": category_by_id.get(focal_id),
+                "counterpart_category": category_by_id.get(counterpart_id),
+                "focal_group_id": group_by_id.get(focal_id),
+                "counterpart_group_id": group_by_id.get(counterpart_id),
+                "predicate": predicate,
+                "dependency": dependency,
+                "counterpart_mode": counterpart_mode,
+                "ordinary_mobility": ordinary_mobility,
+                "observation_goal": goal,
+                "admission_state": state,
+                "reasons": reasons,
+            }
+        )
+
+    # A dedicated counterpart has one focal owner across the entire accepted
+    # inventory.  Multiple predicates for the same focal-counterpart assignment
+    # remain valid.  Proposal order is used only as the deterministic tie-break
+    # for contradictory model claims; the prompt requires strongest fit first.
+    dedicated_owner: dict[str, str] = {}
+    for proposal in proposals:
+        if (
+            proposal["admission_state"] == "admitted"
+            and proposal["counterpart_mode"] == "dedicated"
+        ):
+            dedicated_owner.setdefault(
+                proposal["counterpart_id"],
+                proposal["focal_id"],
+            )
+
+    admitted: list[dict[str, Any]] = []
+    audit_rows: list[dict[str, Any]] = []
+    for proposal in proposals:
+        state = str(proposal["admission_state"])
+        reasons = list(proposal["reasons"])
+        counterpart_id = str(proposal["counterpart_id"])
+        focal_id = str(proposal["focal_id"])
+        owner = dedicated_owner.get(counterpart_id)
+        if state == "admitted" and owner is not None and owner != focal_id:
+            state = "context_only"
+            reasons.append("dedicated_counterpart_assigned_to_other_focal")
+        if state == "admitted":
+            reasons.append("atomic_direct_joint_use_assignment_admitted")
+            if proposal["ordinary_mobility"] == "movable_companion":
+                reasons.append(
+                    "movable_companion_retained_for_clearance_semantics"
+                )
+            admitted.append(deepcopy(proposal["relation"]))
+        audit_rows.append(
+            {
+                key: deepcopy(item)
+                for key, item in proposal.items()
+                if key != "relation"
+            }
+            | {
+                "admission_state": state,
+                "reasons": reasons,
+                "selected_dedicated_focal_id": owner,
+                "same_group": bool(
+                    proposal["focal_group_id"]
+                    and proposal["focal_group_id"]
+                    == proposal["counterpart_group_id"]
+                ),
+                "decision_authority": "none",
+            }
+        )
+    result["relations"] = admitted
+    audit = {
+        "schema_version": "functional_relation_assignment_v2",
+        "policy": "deterministic_group_aware_role_assignment",
+        "proposal_count": len(audit_rows),
+        "admitted_count": sum(
+            row["admission_state"] == "admitted" for row in audit_rows
+        ),
+        "context_only_count": sum(
+            row["admission_state"] == "context_only" for row in audit_rows
+        ),
+        "rejected_count": sum(
+            row["admission_state"] == "rejected" for row in audit_rows
+        ),
+        "dedicated_assignments": [
+            {
+                "counterpart_id": counterpart_id,
+                "focal_id": focal_id,
+            }
+            for counterpart_id, focal_id in dedicated_owner.items()
+        ],
+        "context_only_relations": [
+            {
+                key: deepcopy(row.get(key))
+                for key in (
+                    "proposal_ref",
+                    "target_ids",
+                    "focal_id",
+                    "counterpart_id",
+                    "focal_group_id",
+                    "counterpart_group_id",
+                    "predicate",
+                    "dependency",
+                    "counterpart_mode",
+                    "ordinary_mobility",
+                    "observation_goal",
+                    "reasons",
+                )
+            }
+            for row in audit_rows
+            if row["admission_state"] == "context_only"
+        ],
+        "rejected_relations": [
+            {
+                key: deepcopy(row.get(key))
+                for key in (
+                    "proposal_ref",
+                    "target_ids",
+                    "focal_id",
+                    "counterpart_id",
+                    "predicate",
+                    "dependency",
+                    "counterpart_mode",
+                    "ordinary_mobility",
+                    "observation_goal",
+                    "reasons",
+                )
+            }
+            for row in audit_rows
+            if row["admission_state"] == "rejected"
+        ],
+        "rows": audit_rows,
+        "decision_authority": "none",
+        "additional_api_calls": 0,
+    }
+    return result, audit
 
 
 def _run_discovery_call(
@@ -611,9 +921,14 @@ def _validate_discovery_response_with_single_repair(
     label: str,
     repair_prompt: str,
     validator: Callable[[dict[str, Any]], dict[str, Any]],
+    salvage: Callable[
+        [dict[str, Any], dict[str, Any]],
+        dict[str, Any],
+    ],
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Validate a non-judging inventory, then permit one bounded repair."""
 
+    initial_value: Any = None
     try:
         initial_value = parse_json_object(initial_raw)
         validated = validator(initial_value)
@@ -736,17 +1051,33 @@ def _validate_discovery_response_with_single_repair(
                 },
             ],
         }
-        raise ResponseSchemaRepairError(
-            f"{label} remained invalid after one repair retry: "
-            f"{second_error}",
-            schema_audit=audit,
-        ) from second_error
+        salvaged = salvage(
+            repaired_value if isinstance(repaired_value, dict) else {},
+            initial_value if isinstance(initial_value, dict) else {},
+        )
+        audit.update(
+            item_level_salvage=True,
+            fallback_mode="valid_items_plus_neutral_defaults",
+            salvage=deepcopy(salvaged.get("item_salvage") or {}),
+        )
+        return salvaged, audit
 
-    return repaired, {
+    # Even a fully schema-valid repair is not allowed to revise a legal
+    # initial atom or invent a relation identity.  The atomic merger keeps
+    # initial-valid rows first and uses the repair only for missing/malformed
+    # atoms with a trusted identity anchor.
+    merged = salvage(
+        repaired_value if isinstance(repaired_value, dict) else repaired,
+        initial_value if isinstance(initial_value, dict) else {},
+    )
+    return merged, {
         "policy": FUNCTIONAL_DISCOVERY_REPAIR_POLICY,
         "attempt_count": 2,
         "repair_retry_count": 1,
         "recovered": True,
+        "item_level_salvage": True,
+        "fallback_mode": "initial_valid_atoms_plus_anchored_repair",
+        "salvage": deepcopy(merged.get("item_salvage") or {}),
         "attempts": [
             first_attempt,
             {
@@ -796,11 +1127,14 @@ __all__ = [
     "FUNCTIONAL_AFFORDANCE_PROMPT_VERSION",
     "FUNCTIONAL_AFFORDANCE_SCHEMA_VERSION",
     "FUNCTIONAL_AFFORDANCE_SYSTEM_PROMPT",
+    "FUNCTIONAL_COUNTERPART_MODES",
     "FUNCTIONAL_DIRECTIONALITY",
     "FUNCTIONAL_DISCOVERY_MAX_TOKENS",
     "FUNCTIONAL_DISCOVERY_PROMPT_VERSION",
     "FUNCTIONAL_DISCOVERY_REPAIR_POLICY",
     "FUNCTIONAL_DISCOVERY_SCHEMA_VERSION",
+    "FUNCTIONAL_ORDINARY_MOBILITY",
+    "FUNCTIONAL_RELATION_DEPENDENCIES",
     "FUNCTIONAL_RELATION_PREDICATES",
     "FUNCTIONAL_RELATION_PROMPT_VERSION",
     "FUNCTIONAL_RELATION_SCHEMA_VERSION",

@@ -15,12 +15,23 @@ from typing import Any, Callable
 
 from benchmark.evaluator.scene_quality.claim_identity import (
     claim_records,
+    deduplicate_defects,
 )
 from benchmark.evaluator.scene_quality.style_global_first import (
     suspicious_groups,
 )
 from benchmark.evaluator.scene_quality.terminal import (
+    infrastructure_failure_from_scope,
+    scope_was_defaulted,
     terminalize_required_scope,
+)
+from benchmark.evaluator.scene_quality.target_scope import (
+    localized_target_ids,
+)
+from benchmark.evaluator.scene_quality.target_scoped import (
+    evaluate_target_scoped_judgements,
+    resolve_target_evidence_packets,
+    target_packet_audit,
 )
 
 
@@ -187,25 +198,19 @@ def evaluate_json_screen_then_group_visual(
     compatibility_without_grouping = bool(
         not groups and metric_name == "scale_consistency"
     )
-    if not groups and not compatibility_without_grouping:
-        base.update(
-            status="unresolved",
-            reason="object_grouping_unavailable_for_visual_confirmation",
-            route="json_screen_then_visual",
-            router_state=router_state,
-            judgement=screen_record,
+    candidate_groups = (
+        groups
+        or (
+            _compatibility_target_groups(
+                object_ids,
+                judgement=screen_adjusted,
+                include_all_when_unlocalized=(
+                    router_state == "insufficient_evidence"
+                ),
+            )
+            if compatibility_without_grouping
+            else []
         )
-        return terminalize_required_scope(
-            base,
-            phase=f"{metric_name}.visual_confirmation_routing",
-        )
-
-    candidate_groups = groups or _compatibility_target_groups(
-        object_ids,
-        judgement=screen_adjusted,
-        include_all_when_unlocalized=(
-            router_state == "insufficient_evidence"
-        ),
     )
     selected_groups = suspicious_groups(
         candidate_groups,
@@ -214,13 +219,31 @@ def evaluate_json_screen_then_group_visual(
             router_state == "insufficient_evidence"
         ),
     )
-    if not selected_groups:
+    localized_ids = localized_target_ids(
+        screen_adjusted,
+        valid_object_ids=object_ids,
+    )
+    grouped_selected_ids = {
+        str(member)
+        for group in selected_groups
+        for member in group.get("object_ids") or []
+    }
+    target_fallback_ids = (
+        [
+            target_id
+            for target_id in localized_ids
+            if target_id not in grouped_selected_ids
+        ]
+        if metric_name == "object_pairing_consistency"
+        else []
+    )
+    if not selected_groups and not target_fallback_ids:
         base.update(
             status="unresolved",
             reason=(
                 "object_grouping_unavailable_for_visual_confirmation"
                 if compatibility_without_grouping
-                else "json_suspicion_not_mapped_to_group"
+                else "json_suspicion_not_localized_for_target_confirmation"
             ),
             route="json_screen_then_visual",
             router_state=router_state,
@@ -259,13 +282,13 @@ def evaluate_json_screen_then_group_visual(
             or global_budget + local_budget
         ),
     )
-    local_scope = (
+    group_local_scope = (
         str(local_plan.get("camera_scope") or "object_local")
         if compatibility_without_grouping
         else "group_local"
     )
-    visual_policy = {
-        "camera_scope": local_scope,
+    group_policy = {
+        "camera_scope": group_local_scope,
         "camera_mode": "metric_local",
         "selector": "deterministic",
         # These are maximums, not required cardinalities.  A smaller packet may
@@ -274,9 +297,14 @@ def evaluate_json_screen_then_group_visual(
         "global_image_budget": global_budget,
         "scoped_image_budget": local_budget,
         "presentation": "raw",
-        "image_order": ["global_context", local_scope],
+        "image_order": ["global_context", group_local_scope],
         "include_global_context": global_budget > 0,
         "camera_pose_mode": "visibility_ranked",
+    }
+    target_policy = {
+        **deepcopy(group_policy),
+        "camera_scope": "object_local",
+        "image_order": ["global_context", "object_local"],
     }
     visual_input: dict[str, Any]
     if isinstance(render_evidence, dict):
@@ -287,20 +315,24 @@ def evaluate_json_screen_then_group_visual(
         render_evidence
     )[:global_budget]
 
-    packets = resolve_group_evidence_packets(
-        visual_input,
-        metric_name=metric_name,
-        policy=visual_policy,
-        scene=scene,
-        prompt=prompt,
-        groups=selected_groups,
-        grouping_report=(
-            None
-            if compatibility_without_grouping
-            else grouping_report
-        ),
-        camera_evidence_provider=camera_evidence_provider,
-        resolve_metric_evidence=resolve_metric_evidence,
+    packets = (
+        resolve_group_evidence_packets(
+            visual_input,
+            metric_name=metric_name,
+            policy=group_policy,
+            scene=scene,
+            prompt=prompt,
+            groups=selected_groups,
+            grouping_report=(
+                None
+                if compatibility_without_grouping
+                else grouping_report
+            ),
+            camera_evidence_provider=camera_evidence_provider,
+            resolve_metric_evidence=resolve_metric_evidence,
+        )
+        if selected_groups
+        else []
     )
     for packet in packets:
         member_ids = {
@@ -315,29 +347,68 @@ def evaluate_json_screen_then_group_visual(
                 for item in claim.get("target_ids") or []
             )
         ]
+    target_specs: list[dict[str, Any]] = []
+    for target_id in target_fallback_ids:
+        matching_claims = [
+            deepcopy(claim)
+            for claim in routed_candidate_claims
+            if target_id
+            in {str(item) for item in claim.get("target_ids") or []}
+        ]
+        explicit_context_ids = list(
+            dict.fromkeys(
+                str(item)
+                for claim in matching_claims
+                for item in claim.get("target_ids") or []
+                if str(item) != target_id and str(item) in set(object_ids)
+            )
+        )
+        target_specs.append(
+            {
+                "target_id": target_id,
+                "context_ids": explicit_context_ids,
+                "routed_candidate_claims": matching_claims,
+            }
+        )
+    target_packets = resolve_target_evidence_packets(
+        visual_input,
+        metric_name=metric_name,
+        policy=target_policy,
+        scene=scene,
+        prompt=prompt,
+        targets=target_specs,
+        camera_evidence_provider=camera_evidence_provider,
+        resolve_metric_evidence=resolve_metric_evidence,
+    )
     selected_group_ids = [
         str(group["group_id"]) for group in selected_groups
     ]
     selected_object_ids = list(
         dict.fromkeys(
-            str(member)
-            for group in selected_groups
-            for member in group.get("object_ids") or []
+            [
+                *[
+                    str(member)
+                    for group in selected_groups
+                    for member in group.get("object_ids") or []
+                ],
+                *target_fallback_ids,
+            ]
         )
     )
-    packet_scope_satisfied = bool(packets) and all(
+    all_packets = [*packets, *target_packets]
+    packet_scope_satisfied = bool(all_packets) and all(
         packet["resolution"].get("scope_satisfied") is True
-        for packet in packets
+        for packet in all_packets
     )
     provider_invoked = any(
         packet["resolution"].get("provider_invoked") is True
-        for packet in packets
+        for packet in all_packets
     )
-    provider_status = _packet_status(packets)
+    provider_status = _packet_status(all_packets)
     provider_reason = next(
         (
             packet["resolution"].get("provider_reason")
-            for packet in packets
+            for packet in all_packets
             if packet["resolution"].get("provider_reason")
         ),
         None,
@@ -345,13 +416,17 @@ def evaluate_json_screen_then_group_visual(
     missing_paths = list(
         dict.fromkeys(
             str(path)
-            for packet in packets
+            for packet in all_packets
             for path in packet["resolution"].get("missing_paths") or []
         )
     )
     route = (
         "json_screen_then_object_visual"
         if compatibility_without_grouping
+        else "json_screen_then_group_and_target_visual"
+        if packets and target_packets
+        else "json_screen_then_target_visual"
+        if target_packets
         else "json_screen_then_group_visual"
     )
     base["router_state"] = router_state
@@ -359,6 +434,8 @@ def evaluate_json_screen_then_group_visual(
     base["compatibility_scope_fallback"] = (
         "target_local_without_grouping"
         if compatibility_without_grouping
+        else "target_centered_context_without_group_redefinition"
+        if target_packets
         else None
     )
     base["selected_group_ids"] = selected_group_ids
@@ -366,7 +443,7 @@ def evaluate_json_screen_then_group_visual(
     base["evidence_paths"] = list(
         dict.fromkeys(
             path
-            for packet in packets
+            for packet in all_packets
             for path in packet["paths"]
         )
     )
@@ -376,7 +453,10 @@ def evaluate_json_screen_then_group_visual(
         for path in base["evidence_paths"]
         if path not in global_paths
     ]
-    base["resolved_evidence_policy"] = deepcopy(visual_policy)
+    base["resolved_evidence_policy"] = {
+        "group_policy": deepcopy(group_policy),
+        "target_policy": deepcopy(target_policy),
+    }
     base["dependencies"].update(
         {
             "render_evidence": (
@@ -384,9 +464,21 @@ def evaluate_json_screen_then_group_visual(
                 if base["evidence_paths"]
                 else "unavailable"
             ),
-            "requested_evidence_scope": local_scope,
+            "requested_evidence_scope": (
+                "mixed_group_and_target_local"
+                if packets and target_packets
+                else "target_local"
+                if target_packets
+                else group_local_scope
+            ),
             "evidence_scope_satisfied": packet_scope_satisfied,
-            "evidence_source": "per_group_camera_evidence",
+            "evidence_source": (
+                "group_and_target_camera_evidence"
+                if packets and target_packets
+                else "target_centered_camera_evidence"
+                if target_packets
+                else "per_group_camera_evidence"
+            ),
             "provider_status": provider_status,
         }
     )
@@ -398,19 +490,29 @@ def evaluate_json_screen_then_group_visual(
     )
     base["evidence_request"].update(
         {
-            "camera_scope": local_scope,
-            "image_budget": visual_policy["image_budget"],
+            "camera_scope": (
+                "mixed_group_and_target_local"
+                if packets and target_packets
+                else "object_local"
+                if target_packets
+                else group_local_scope
+            ),
+            "image_budget": max_packet_images,
             "global_image_budget": global_budget,
             "scoped_image_budget": local_budget,
-            "image_order": list(visual_policy["image_order"]),
-            "include_global_context": visual_policy[
-                "include_global_context"
-            ],
+            "image_order": ["global_context", "scoped_local"],
+            "include_global_context": global_budget > 0,
             "evidence_phase": "visual_confirmation",
             "provider_invoked": provider_invoked,
             "provider_status": provider_status,
             "provider_reason": provider_reason,
-            "evidence_source": "per_group_camera_evidence",
+            "evidence_source": (
+                "group_and_target_camera_evidence"
+                if packets and target_packets
+                else "target_centered_camera_evidence"
+                if target_packets
+                else "per_group_camera_evidence"
+            ),
             "scope_satisfied": packet_scope_satisfied,
             "missing_paths": missing_paths,
             "target_object_ids": selected_object_ids,
@@ -418,14 +520,36 @@ def evaluate_json_screen_then_group_visual(
             "group_requests": [
                 group_packet_audit(packet) for packet in packets
             ],
+            "target_requests": [
+                target_packet_audit(packet) for packet in target_packets
+            ],
         }
     )
-    result = evaluate_group_scoped_judgements(
-        base=base,
+    grouped_result = (
+        evaluate_group_scoped_judgements(
+            base=deepcopy(base),
+            metric_name=metric_name,
+            scene=scene,
+            prompt=prompt,
+            packets=packets,
+            vlm_judge=vlm_judge,
+            authorized_deviations=authorized_deviations,
+            visual_style_spec=visual_style_spec,
+            build_judge_request=build_judge_request,
+            call_judge=call_judge,
+            apply_prompt_exemptions=apply_prompt_exemptions,
+            normalize_judgement=normalize_judgement,
+            evidence_phase="visual_confirmation",
+            decision_mode="final",
+        )
+        if packets
+        else deepcopy(base)
+    )
+    target_results = evaluate_target_scoped_judgements(
         metric_name=metric_name,
         scene=scene,
         prompt=prompt,
-        packets=packets,
+        packets=target_packets,
         vlm_judge=vlm_judge,
         authorized_deviations=authorized_deviations,
         visual_style_spec=visual_style_spec,
@@ -433,12 +557,15 @@ def evaluate_json_screen_then_group_visual(
         call_judge=call_judge,
         apply_prompt_exemptions=apply_prompt_exemptions,
         normalize_judgement=normalize_judgement,
-        evidence_phase="visual_confirmation",
-        decision_mode="final",
+        evidence_phase="target_local_confirmation",
     )
-    result["judge_call_count"] = 1 + int(
-        result.get("judge_call_count") or 0
+    result = _merge_json_visual_scopes(
+        base=base,
+        grouped_result=grouped_result,
+        target_results=target_results,
+        metric_name=metric_name,
     )
+    result["judge_call_count"] = 1 + int(result["judge_call_count"])
     result["vlm_invoked"] = True
     result["evidence_request"]["vlm_invoked"] = True
     result["json_screen"] = screen_record
@@ -451,6 +578,187 @@ def evaluate_json_screen_then_group_visual(
         result,
         phase=f"{metric_name}.visual_confirmation",
     )
+
+
+def _merge_json_visual_scopes(
+    *,
+    base: dict[str, Any],
+    grouped_result: dict[str, Any],
+    target_results: list[dict[str, Any]],
+    metric_name: str,
+) -> dict[str, Any]:
+    """Aggregate real group scopes and non-group target scopes together."""
+
+    result = deepcopy(grouped_result if grouped_result else base)
+    group_results = [
+        deepcopy(item)
+        for item in result.get("group_results") or []
+        if isinstance(item, dict)
+    ]
+    result["group_results"] = group_results
+    result["target_scope_results"] = deepcopy(target_results)
+    result["target_scope_policy"] = {
+        "scope_kind": "target_centered_context",
+        "creates_group": False,
+        "redefines_group_membership": False,
+        "context_objects_are_defect_owners": False,
+        "judge_episode": "independent_per_target",
+    }
+    scopes = [*group_results, *target_results]
+    evaluated = [item for item in scopes if item.get("status") == "evaluated"]
+    grounded = [
+        item
+        for item in evaluated
+        if not scope_was_defaulted(item)
+        and not (
+            isinstance(item.get("evidence_coverage"), dict)
+            and item["evidence_coverage"].get("grounded") is False
+        )
+    ]
+    invalid = [item for item in evaluated if item.get("score") == 0.0]
+    failures: list[dict[str, Any]] = []
+    for item in group_results:
+        failure = infrastructure_failure_from_scope(
+            item,
+            phase="group_local",
+            scope_id=str(item.get("group_id") or "") or None,
+        )
+        if failure is not None:
+            failures.append(failure)
+    for item in target_results:
+        failure = infrastructure_failure_from_scope(
+            item,
+            phase="target_local",
+            scope_id=str(item.get("target_id") or "") or None,
+        )
+        if failure is not None:
+            failures.append(failure)
+
+    result["judge_call_count"] = sum(
+        int(item.get("judge_episode_count") or 0) for item in scopes
+    )
+    result["vlm_invoked"] = bool(result["judge_call_count"])
+    result.setdefault("evidence_request", {})["vlm_invoked"] = result[
+        "vlm_invoked"
+    ]
+    result["coverage"] = {
+        "eligible_count": len(scopes),
+        "resolved_count": len(grounded),
+        "terminal_resolved_count": len(evaluated),
+        "fraction": len(grounded) / len(scopes) if scopes else None,
+        "complete": bool(scopes) and len(grounded) == len(scopes),
+        "group_scope_count": len(group_results),
+        "target_scope_count": len(target_results),
+        "score_grounding": {
+            "unit": "frozen_evaluation_obligation",
+            "eligible_count": len(scopes),
+            "grounded_count": len(grounded),
+            "defaulted_count": len(scopes) - len(grounded),
+            "fraction": (
+                len(grounded) / len(scopes) if scopes else 0.0
+            ),
+            "complete": bool(scopes) and len(grounded) == len(scopes),
+            "defaulted_units": [
+                {
+                    "unit_id": (
+                        "target_local:"
+                        + str(item.get("target_id"))
+                        if item.get("scope_kind")
+                        == "target_centered_context"
+                        else "group_local:"
+                        + str(item.get("group_id"))
+                    ),
+                    "unit_type": "judge_episode",
+                    "grounded": False,
+                    "defaulted": scope_was_defaulted(item),
+                }
+                for item in evaluated
+                if item not in grounded
+            ],
+        },
+    }
+    if failures:
+        result["infrastructure_failures"] = deepcopy(failures)
+        result.update(
+            status="failed",
+            terminal_state="infrastructure_failure",
+            reason="required_scope_infrastructure_failure",
+            score=None,
+            judgement={
+                "evidence_status": "unavailable",
+                "verdict": None,
+                "confidence": 0.0,
+                "reason": (
+                    "One or more required visual confirmation scopes failed "
+                    "for an engineering reason."
+                ),
+                "missing_evidence": [
+                    f"{item.get('phase')}:{item.get('scope_id')}"
+                    for item in failures
+                ],
+                "defects": [],
+                "aggregation": "fail_closed_on_required_scope_failure",
+                "group_judgements": deepcopy(group_results),
+                "target_scope_judgements": deepcopy(target_results),
+            },
+        )
+        return result
+
+    defects = deduplicate_defects(
+        metric_name,
+        (
+            defect
+            for item in invalid
+            for defect in (item.get("judgement") or {}).get("defects") or []
+        ),
+    )
+    result["final_defect_claims"] = claim_records(
+        metric_name,
+        defects,
+        source_phase="visual_confirmation",
+        claim_status="final",
+    )
+    degraded = any(
+        item.get("terminal_state") == "evaluated_degraded"
+        for item in evaluated
+    )
+    if invalid:
+        confidence = min(
+            float((item.get("judgement") or {}).get("confidence") or 0.0)
+            for item in invalid
+        )
+        verdict = "invalid"
+        score = 0.0
+        reason = "At least one required visual confirmation scope is invalid."
+    else:
+        confidence = min(
+            (
+                float((item.get("judgement") or {}).get("confidence") or 0.0)
+                for item in evaluated
+            ),
+            default=0.0,
+        )
+        verdict = "valid"
+        score = 1.0
+        reason = "All required visual confirmation scopes resolved valid."
+    result.update(
+        status="evaluated",
+        terminal_state=("evaluated_degraded" if degraded else "evaluated"),
+        reason=None,
+        score=score,
+        judgement={
+            "evidence_status": "sufficient",
+            "verdict": verdict,
+            "confidence": confidence,
+            "reason": reason,
+            "missing_evidence": [],
+            "defects": defects,
+            "aggregation": "invalid_if_any_visual_scope_invalid",
+            "group_judgements": deepcopy(group_results),
+            "target_scope_judgements": deepcopy(target_results),
+        },
+    )
+    return result
 
 
 def _attach_json_screen_audit(

@@ -18,6 +18,25 @@ VIEWER = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(VIEWER)
 
 
+def test_bundled_evidence_url_is_relative_to_the_viewer_document(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source.png"
+    source.write_bytes(b"not-a-real-png-but-stable-copy-input")
+    bundle_dir = tmp_path / "nested" / "viewer_bundle"
+    resolver = VIEWER.EvidenceURLResolver(
+        serve_root=tmp_path,
+        bundle_dir=bundle_dir,
+    )
+
+    url = resolver.url_for(source)
+
+    assert url is not None
+    assert url.startswith("evidence/")
+    assert not url.startswith("/")
+    assert (bundle_dir / url).is_file()
+
+
 def test_viewer_renders_one_scene_page_with_button_navigation(
     tmp_path: Path,
 ) -> None:
@@ -77,7 +96,7 @@ def test_viewer_renders_an_in_progress_run_without_case_directory(
     assert 'sceneCounter.textContent = "0 / 0"' in document
 
 
-def test_viewer_renders_latest_fixed_weight_scoring_without_renormalizing() -> None:
+def test_viewer_renders_coverage_conditioned_scoring() -> None:
     case_manifest = {
         "final_decision_status": "unresolved",
         "benchmark_score": None,
@@ -85,7 +104,7 @@ def test_viewer_renders_latest_fixed_weight_scoring_without_renormalizing() -> N
         "benchmark_score_status": "insufficient_metric_coverage",
         "scoring_profile": {
             "scoring_profile_id": "intrinsic_validity_v1",
-            "scoring_spec_version": "object_equivalent_burden_v1",
+            "scoring_spec_version": "object_equivalent_burden_v3",
             "layer_weights": {
                 "l1_physical_plausibility": 0.3,
                 "l3_scene_quality": 0.7,
@@ -146,10 +165,18 @@ def test_viewer_renders_latest_fixed_weight_scoring_without_renormalizing() -> N
                     "events": [
                         {
                             "category": "room_boundary_crossing",
+                            "severity": "major",
                             "magnitude": 0.3,
                             "burden": 0.6,
                             "scoring_target_ids": ["chair"],
-                        }
+                        },
+                        {
+                            "category": "room_boundary_crossing",
+                            "severity": None,
+                            "magnitude": 0.3,
+                            "burden": 0.6,
+                            "scoring_target_ids": ["table"],
+                        },
                     ],
                     "coefficient_n_m": 3,
                     "burden_total_b_m": 0.6,
@@ -193,6 +220,12 @@ def test_viewer_renders_latest_fixed_weight_scoring_without_renormalizing() -> N
             )
         },
     }
+    # Simulate an older run with a numeric Placement score and incomplete score
+    # grounding. The current UI keeps the observed score and reduces its
+    # effective aggregate weight to the grounded fraction.
+    l3_report["metrics"]["semantic_placement_consistency"]["coverage"] = {
+        "score_grounding": {"fraction": 0.5, "complete": False}
+    }
     summary = VIEWER.case_scoring_summary(
         case_id="N999",
         case_manifest=case_manifest,
@@ -218,24 +251,163 @@ def test_viewer_renders_latest_fixed_weight_scoring_without_renormalizing() -> N
         for item in summary["metrics"]
         if item["metric"] == "functional_consistency"
     )
-    assert summary["combined_score_100"] is None
-    assert summary["combined_status"] == "insufficient_metric_coverage"
+    placement = next(
+        item
+        for item in summary["metrics"]
+        if item["metric"] == "semantic_placement_consistency"
+    )
+    assert summary["combined_score_100"] == pytest.approx(97.5903614458)
+    assert summary["combined_status"] == "partial_coverage"
+    assert summary["combined_coverage_fraction"] == pytest.approx(0.83)
     assert collision["score"] is None
     assert oob["score"] == 0.8
     assert oob["overall_weight"] == pytest.approx(0.1)
     assert function["overall_weight"] == pytest.approx(0.308)
+    assert placement["score"] is None
+    assert placement["observed_score"] == 1.0
+    assert placement["coverage_fraction"] == 0.5
+    assert placement["coverage_threshold_passed"] is False
+    l3_layer = next(
+        layer for layer in summary["layers"] if layer["layer"] == "L3"
+    )
+    assert l3_layer["score"] == 1.0
+    assert l3_layer["coverage"]["complete"] is False
 
     rendered = VIEWER.render_case_scoring_dashboard(summary)
-    overview = VIEWER.render_run_scoring_overview([summary])
+    overview = VIEWER.render_run_scoring_overview(
+        [summary],
+        evaluator_model_label="gpt-5.6-sol",
+    )
     assert "Metric scores and combined result" in rendered
     assert "intrinsic_validity_v1" in rendered
-    assert "insufficient_metric_coverage" in rendered
-    assert "this UI does not renormalize them" in rendered
+    assert "partial_coverage" in rendered
+    assert "coverage 83.0%" in rendered
+    assert "failed_coverage_threshold" in rendered
+    assert "minimum 80%" in rendered
+    assert "Missing evidence is excluded" in rendered
+    assert "coverage-conditioned layer score" in rendered
     assert "Scoring ledger unavailable because this metric" in rendered
     assert "HTTP 429" in rendered
     assert "room_boundary_crossing" in rendered
-    assert "Scores reported by the latest evaluator" in overview
+    assert "Deduction events and severity" in rendered
+    assert "Severity" in rendered
+    assert "major" in rendered
+    assert "continuous" in rendered
+    assert "burden 0.600 / 1.000" in rendered
+    assert "Run-wide result" in overview
     assert "30.8%" in overview
+    assert "gpt-5.6-sol" in overview
+    assert "Official mean / 100" in overview
+    assert "1/1 scenes publishable" in overview
+    assert "Per-scene score matrix" in overview
+
+    l3_report["metrics"]["semantic_placement_consistency"]["coverage"] = {
+        "score_grounding": {"fraction": 0.0, "complete": False}
+    }
+    below_threshold = VIEWER.case_scoring_summary(
+        case_id="N998",
+        case_manifest=case_manifest,
+        l1_report=l1_report,
+        l3_report=l3_report,
+    )
+    assert below_threshold["combined_coverage_fraction"] == pytest.approx(
+        0.76
+    )
+    assert below_threshold["combined_observed_score_100"] is not None
+    assert below_threshold["combined_score_100"] is None
+    assert below_threshold["combined_status"] == (
+        "failed_coverage_threshold"
+    )
+
+    aggregate = VIEWER.run_scoring_aggregate([summary, below_threshold])
+    assert aggregate["case_count"] == 2
+    assert aggregate["published_case_count"] == 1
+    assert aggregate["official_score_100"] is None
+    placement_aggregate = next(
+        item
+        for item in aggregate["metrics"]
+        if item["metric"] == "semantic_placement_consistency"
+    )
+    assert placement_aggregate["published_case_count"] == 0
+    assert placement_aggregate["mean_score_100"] is None
+
+
+def test_viewer_separates_generator_models_from_evaluator_route(
+    tmp_path: Path,
+) -> None:
+    def case_summary(case_id: str, model: str, score: float) -> dict:
+        summary = {
+            "case_id": case_id,
+            "generator_model_label": model,
+            "generator_task_id": f"t{case_id[1:]}",
+            "combined_score_100": score,
+            "combined_observed_score_100": score,
+            "combined_coverage_fraction": 0.9,
+            "final_decision_status": "resolved",
+            "metrics": [],
+        }
+        for layer, metric, label in VIEWER.SCORING_METRIC_ORDER:
+            summary["metrics"].append(
+                {
+                    "layer": layer,
+                    "metric": metric,
+                    "label": label,
+                    "score": score / 100.0,
+                    "observed_score": score / 100.0,
+                    "coverage_fraction": 0.9,
+                    "overall_weight": 0.1,
+                }
+            )
+        return summary
+
+    summaries = [
+        case_summary("S060", "Opus5", 91.0),
+        case_summary("S061", "Opus5", 89.0),
+        case_summary("S070", "Grok4.6", 80.0),
+    ]
+    rendered = VIEWER.render_generator_model_performance(summaries)
+    aggregates = VIEWER.generator_model_aggregates(summaries)
+
+    assert [item["model_label"] for item in aggregates] == [
+        "Opus5",
+        "Grok4.6",
+    ]
+    assert aggregates[0]["official_score_100"] == pytest.approx(90.0)
+    assert aggregates[0]["publishable_partial_case_count"] == 2
+    assert "Scene scores by generating model" in rendered
+    assert "Opus5" in rendered
+    assert "Grok4.6" in rendered
+    assert "The evaluator model is held fixed" in rendered
+    assert "coverage 90.0%" in rendered
+
+    source_root = tmp_path / "dataset" / "S060"
+    original_root = tmp_path / "staging" / "t060"
+    source_root.mkdir(parents=True)
+    original_root.mkdir(parents=True)
+    (source_root / "case_manifest.json").write_text(
+        json.dumps(
+            {
+                "source": {
+                    "task_id": "t060",
+                    "namespace": "strict_one_shot",
+                    "original_case_root": str(original_root),
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    (original_root / "audit_manifest.json").write_text(
+        json.dumps({"model_label": "Opus5"}),
+        encoding="utf-8",
+    )
+    metadata = VIEWER.generator_case_metadata(
+        {"case_id": "S060", "source_case_root": str(source_root)}
+    )
+    assert metadata == {
+        "model_label": "Opus5",
+        "task_id": "t060",
+        "source_namespace": "strict_one_shot",
+    }
 
 
 def test_viewer_renders_optional_audit_graph_summary(
@@ -395,12 +567,14 @@ def test_viewer_shows_blender_command_at_top_of_each_scene_page(
     output = VIEWER.build_viewer(run_root, serve_root=tmp_path)
     document = output.read_text(encoding="utf-8")
 
-    command = f"open -a Blender {blend_path}"
+    helper = PROJECT_ROOT / "scripts/blender/open_textured_material_preview.py"
+    command = f"open -na Blender --args {blend_path} --python {helper}"
     scene_start = document.index('class="scene-page"')
     command_start = document.index('class="blender-launch"', scene_start)
     grouping_start = document.index('class="grouping-output"', scene_start)
     assert command_start < grouping_start
     assert command in document
+    assert "Opens in textured Material Preview" in document
     assert 'class="copy-blender-command"' in document
     assert 'navigator.clipboard.writeText(button.dataset.copyText)' in document
     assert "function scrollActiveSceneToTop()" in document
@@ -657,6 +831,116 @@ def test_l3_calls_show_global_discovery_before_group_local_review() -> None:
     assert "Group-local review" in route
 
 
+def test_residual_global_placement_is_visible_after_typed_review() -> None:
+    report = {
+        "metric_prompt_version": VIEWER.L3_METRIC_PROMPT_VERSION,
+        "metrics": {
+            "semantic_placement_consistency": {
+                "global_discovery": {
+                    "verdict": "valid",
+                    "final_metric_verdict": True,
+                    "images_used": ["/evidence/global_angle.png"],
+                    "request_metadata": {},
+                },
+                "group_results": [
+                    {
+                        "group_id": "group_001",
+                        "member_ids": ["chair", "table"],
+                        "status": "evaluated",
+                        "score": 1.0,
+                        "judgement": {
+                            "verdict": "valid",
+                            "images_used": [
+                                "/evidence/global_angle.png",
+                                "/evidence/group_local.png",
+                            ],
+                            "request_metadata": {},
+                        },
+                    }
+                ],
+                "residual_global_placement_review": {
+                    "verdict": "invalid",
+                    "final_metric_verdict": True,
+                    "defects": [
+                        {
+                            "check_type": "scene_zone",
+                            "target_ids": ["chair"],
+                            "placement_component": (
+                                "residual_global_review"
+                            ),
+                        }
+                    ],
+                    "request_metadata": {},
+                },
+                "residual_global_placement_evidence_paths": [
+                    "/evidence/global_angle.png",
+                    "/evidence/global_top.png",
+                    "/evidence/object_ids.png",
+                ],
+                "residual_global_placement_phase": {
+                    "status": "complete"
+                },
+                "residual_global_placement_context": {
+                    "schema_version": "placement_residual_context_v2",
+                    "scene_program": {
+                        "scene_type": "living_room",
+                        "aesthetic_theme_in_scope": False,
+                    },
+                    "object_inventory": [
+                        {
+                            "object_id": "chair",
+                            "category": "chair",
+                            "group_ids": ["group_001"],
+                        },
+                        {
+                            "object_id": "table",
+                            "category": "table",
+                            "group_ids": ["group_001"],
+                        },
+                    ],
+                    "object_inventory_complete": True,
+                },
+                "placement_subscore_policy": {
+                    "typed_weight": 0.8,
+                    "residual_global_review_weight": 0.2,
+                },
+            }
+        },
+    }
+
+    calls = VIEWER.l3_calls(report)
+
+    assert [call["phase"] for call in calls] == [
+        "global_discovery",
+        "group_local_review",
+        "residual_global_placement_review",
+    ]
+    residual = calls[-1]
+    assert residual["workflow_step"] == 3
+    assert residual["images"] == [
+        "/evidence/global_angle.png",
+        "/evidence/global_top.png",
+        "/evidence/object_ids.png",
+    ]
+    assert residual["evidence_packet_audit"]["actual_roles"] == [
+        "angled_global",
+        "top_down_global",
+        "identity_global",
+    ]
+    assert "residual scene-global synthesis" in residual["prompt"]
+    assert residual["routing_details"]["placement_residual_context"][
+        "scene_program"
+    ]["scene_type"] == "living_room"
+    route = VIEWER.render_phase_routes(calls)
+    assert "Residual global Placement" in route
+
+    summary = VIEWER.l3_pipeline_summary(report)[0]
+    assert summary["residual_global_placement_phase"]["status"] == "complete"
+    assert summary["placement_subscore_policy"][
+        "residual_global_review_weight"
+    ] == 0.2
+
+
 def test_current_functional_packets_are_one_global_then_global_plus_local() -> None:
     report = {
         "metric_prompt_version": VIEWER.L3_METRIC_PROMPT_VERSION,
@@ -891,7 +1175,28 @@ def test_viewer_exposes_shared_group_bank_reuse_and_window_history() -> None:
                                 "camera_control_audit": {
                                     "audit": {
                                         "evidence_window": window,
-                                        "trace": [],
+                                        "functional_soft_evidence_contract": {
+                                            "schema_version": "functional_soft_evidence_contract_v1",
+                                            "active": True,
+                                            "camera_selector_review_count": 2,
+                                            "camera_selector_acquire_count": 1,
+                                            "camera_selector_passed": True,
+                                            "usable_side_fallback_applied": True,
+                                            "terminal_limited_evidence": False,
+                                            "decision_authority": "none",
+                                        },
+                                        "trace": [
+                                            {
+                                                "stage": "functional_evidence_readiness",
+                                                "status": "acquire",
+                                                "decision_authority": "none",
+                                            },
+                                            {
+                                                "stage": "functional_evidence_readiness",
+                                                "status": "pass",
+                                                "decision_authority": "none",
+                                            },
+                                        ],
                                     }
                                 },
                                 "judgement": {
@@ -920,6 +1225,13 @@ def test_viewer_exposes_shared_group_bank_reuse_and_window_history() -> None:
     details = call["functional_group_evidence_window"]
     assert details["reused_artifact_ids"] == [shared]
     assert details["camera_selector_avoided_by_bank_reuse"] is True
+    assert [
+        event["status"]
+        for event in details["evidence_readiness_events"]
+    ] == ["acquire", "pass"]
+    assert details["functional_soft_evidence_contract"][
+        "camera_selector_passed"
+    ] is True
     assert details["artifact_records"][0]["sources"][0][
         "source_check_id"
     ] == "check_001"
@@ -929,6 +1241,9 @@ def test_viewer_exposes_shared_group_bank_reuse_and_window_history() -> None:
     rendered = VIEWER.render_functional_group_evidence_window(details)
     assert "Shared group evidence window" in rendered
     assert "Bank reuse avoided a CameraSelector call" in rendered
+    assert "Soft evidence loop" in rendered
+    assert "acquire → pass" in rendered
+    assert "usable-side fallback: yes" in rendered
     assert "check_001" in rendered
     assert "check_002" in rendered
 
@@ -1091,6 +1406,29 @@ def test_l3_pipeline_summary_exposes_discovery_and_unresolved_groups() -> None:
                         "reason": "functional_probe_planner_failed",
                     },
                 },
+                "functional_measurement_bank": {
+                    "schema_version": "functional_measurement_bank_v1",
+                    "generation_stage": (
+                        "accepted_checks_before_camera_scheduling"
+                    ),
+                    "measurement_role": "deterministic_context",
+                    "decision_authority": "none",
+                    "accepted_check_count": 1,
+                    "check_measurement_count": 1,
+                    "coverage": {
+                        "record_coverage_complete": True,
+                    },
+                    "check_measurements": [
+                        {
+                            "check_id": "functional_check_001",
+                            "check_type": "clearance",
+                            "target_ids": ["chair"],
+                            "status": "complete",
+                            "measurement_extensions": {},
+                            "decision_authority": "none",
+                        }
+                    ],
+                },
                 "group_results": [
                     {
                         "group_id": "group_001",
@@ -1122,6 +1460,21 @@ def test_l3_pipeline_summary_exposes_discovery_and_unresolved_groups() -> None:
                     ],
                     "reason": "Two observations routed.",
                 },
+                "functional_spatial_context": {
+                    "schema_version": "functional_spatial_context_v3",
+                    "context_role": "attention_only",
+                    "decision_authority": "none",
+                    "clearance_requirements": [
+                        {
+                            "object_id": "chair",
+                            "observation_goal": "inspect ordinary clearance",
+                            "source_check_id": "approach_clearance_01",
+                            "ownership": "neutral_prerequisite",
+                            "measurement": None,
+                        }
+                    ],
+                    "related_pairs": [],
+                },
                 "group_results": [],
             },
         }
@@ -1136,12 +1489,20 @@ def test_l3_pipeline_summary_exposes_discovery_and_unresolved_groups() -> None:
     assert functional["skipped_groups"] == 1
     assert functional["discovery"]["status"] == "failed"
     assert functional["discovery"]["budget"] == 2
+    assert functional["discovery"]["functional_measurement_bank"][
+        "check_measurement_count"
+    ] == 1
     assert placement["discovery"]["status"] == "complete"
     assert placement["discovery"]["planned"] == 2
+    assert placement["discovery"]["functional_spatial_context"][
+        "clearance_requirements"
+    ][0]["object_id"] == "chair"
 
     rendered = VIEWER.render_l3_pipeline_summary(report)
     assert "functional_probe_planner_failed" in rendered
     assert "2 candidate(s)" in rendered
+    assert "Function → Placement attention context" in rendered
+    assert "Pre-camera Measurement Bank · 1 checks" in rendered
     assert "Includes unresolved group scopes" in rendered
 
 

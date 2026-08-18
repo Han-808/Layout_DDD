@@ -15,6 +15,9 @@ from copy import deepcopy
 from typing import Any, Iterable, Mapping, Sequence
 
 from benchmark.scoring_profiles import (
+    DEFAULT_L3_METRIC_WEIGHTS,
+    DEFAULT_DEDUCTION_MULTIPLIER,
+    DEDUCTION_MULTIPLIER_METRICS,
     INTRINSIC_VALIDITY_PROFILE_ID,
     LEGACY_SCORING_SPEC_VERSION,
     PROMPT_CONDITIONED_QUALITY_PROFILE_ID,
@@ -30,13 +33,9 @@ L1_METRIC_WEIGHTS = {
     "oob": 1.0 / 3.0,
 }
 
-L3_METRIC_WEIGHTS = {
-    "scale_consistency": 0.12,
-    "style_consistency": 0.12,
-    "object_pairing_consistency": 0.12,
-    "functional_consistency": 0.44,
-    "semantic_placement_consistency": 0.20,
-}
+L3_METRIC_WEIGHTS = dict(DEFAULT_L3_METRIC_WEIGHTS)
+
+DEFAULT_RESIDUAL_GLOBAL_PLACEMENT_WEIGHT = 0.20
 
 METRIC_COEFFICIENTS = {
     "collision": 2.0,
@@ -50,6 +49,7 @@ METRIC_COEFFICIENTS = {
 }
 
 MINIMUM_INVALID_BURDEN = 0.4
+MIN_PUBLISHABLE_SCORE_COVERAGE = 0.80
 WORST_EVENT_FLOOR_FACTOR = 0.25
 COLLISION_THIN_THRESHOLD_M = 0.04
 COLLISION_FULL_SEVERITY_RATIO = 0.20
@@ -476,17 +476,30 @@ def project_metric_events(
     ordered_object_ids: Sequence[str],
     events: Iterable[Mapping[str, Any]],
     nominal_weight: float | None = None,
+    deduction_multiplier: float = DEFAULT_DEDUCTION_MULTIPLIER,
 ) -> dict[str, Any]:
     """Project immutable event allocations into one metric score."""
 
     if metric not in METRIC_COEFFICIENTS:
         raise ValueError(f"unsupported burden metric {metric!r}")
+    configured_deduction_multiplier = _positive_finite(
+        deduction_multiplier,
+        "deduction multiplier",
+    )
+    applied_deduction_multiplier = (
+        configured_deduction_multiplier
+        if metric in DEDUCTION_MULTIPLIER_METRICS
+        else 1.0
+    )
     ordered = tuple(str(item) for item in ordered_object_ids)
     if len(set(ordered)) != len(ordered):
         raise ValueError("canonical scoring object IDs must be unique")
     known = set(ordered)
     ledger: list[dict[str, Any]] = []
-    raw_object_burdens = {object_id: 0.0 for object_id in ordered}
+    raw_object_burden_sums = {object_id: 0.0 for object_id in ordered}
+    per_object_event_burdens: dict[str, list[float]] = {
+        object_id: [] for object_id in ordered
+    }
     p_max = 0.0
     seen_event_ids: set[str] = set()
 
@@ -516,7 +529,8 @@ def project_metric_events(
                 )
             value = _finite_unit(raw_value, "event allocation")
             normalized_allocations[object_id] = value
-            raw_object_burdens[object_id] += value
+            raw_object_burden_sums[object_id] += value
+            per_object_event_burdens[object_id].append(value)
         if not math.isclose(
             sum(normalized_allocations.values()), burden, abs_tol=1.0e-8
         ):
@@ -528,11 +542,24 @@ def project_metric_events(
         ledger.append(event)
         p_max = max(p_max, burden)
 
-    capped = {
-        object_id: min(1.0, float(raw_object_burdens[object_id]))
+    object_burden_aggregation = (
+        "per_object_max_across_events"
+        if metric
+        in {
+            "functional_consistency",
+            "semantic_placement_consistency",
+        }
+        else "sum_then_cap_at_one"
+    )
+    effective_object_burdens = {
+        object_id: (
+            max(per_object_event_burdens[object_id], default=0.0)
+            if object_burden_aggregation == "per_object_max_across_events"
+            else min(1.0, float(raw_object_burden_sums[object_id]))
+        )
         for object_id in ordered
     }
-    burden_total = sum(capped.values())
+    burden_total = sum(effective_object_burdens.values())
     category_distribution: dict[str, int] = {}
     severity_distribution: dict[str, int] = {}
     for event in ledger:
@@ -556,12 +583,20 @@ def project_metric_events(
     if object_count:
         prevalence = min(1.0, coefficient * burden_total / float(object_count))
         floor = WORST_EVENT_FLOOR_FACTOR * p_max
-        deduction = max(prevalence, floor)
+        base_deduction = max(prevalence, floor)
+        deduction = min(
+            1.0,
+            applied_deduction_multiplier * base_deduction,
+        )
         score: float | None = 1.0 - deduction
-        saturation_burden: float | None = float(object_count) / coefficient
+        saturation_burden: float | None = (
+            float(object_count)
+            / (coefficient * applied_deduction_multiplier)
+        )
     else:
         prevalence = None
         floor = None
+        base_deduction = None
         deduction = None
         score = None
         saturation_burden = None
@@ -573,22 +608,42 @@ def project_metric_events(
         "coefficient_n_m": coefficient,
         "minimum_invalid_burden": MINIMUM_INVALID_BURDEN,
         "worst_event_floor_factor": WORST_EVENT_FLOOR_FACTOR,
+        "configured_deduction_multiplier": (
+            configured_deduction_multiplier
+        ),
+        "applied_deduction_multiplier": applied_deduction_multiplier,
+        "deduction_multiplier_applicable": (
+            metric in DEDUCTION_MULTIPLIER_METRICS
+        ),
         "events": ledger,
         "event_count": len(ledger),
         "category_distribution": category_distribution,
         "severity_distribution": severity_distribution,
-        "raw_object_burdens": raw_object_burdens,
-        "capped_object_burdens": capped,
+        "object_burden_aggregation": object_burden_aggregation,
+        "raw_object_burden_sums": raw_object_burden_sums,
+        "effective_object_burdens": effective_object_burdens,
+        # Stable aliases retained for report consumers.  Their explicit names
+        # above define the new contract; neither alias changes the projection.
+        "raw_object_burdens": raw_object_burden_sums,
+        "capped_object_burdens": effective_object_burdens,
         "burden_total_b_m": burden_total,
         "p_max": p_max,
         "prevalence_deduction": prevalence,
         "worst_event_floor_deduction": floor,
+        "base_metric_deduction": base_deduction,
         "metric_deduction": deduction,
         "score": score,
         "saturation_burden": saturation_burden,
         "nominal_metric_weight": resolved_nominal_weight,
         "maximum_metric_contribution": resolved_nominal_weight,
         "effective_local_factor_w_m_n_m": (
+            None
+            if resolved_nominal_weight is None
+            else resolved_nominal_weight
+            * coefficient
+            * applied_deduction_multiplier
+        ),
+        "base_effective_local_factor_w_m_n_m": (
             None
             if resolved_nominal_weight is None
             else resolved_nominal_weight * coefficient
@@ -600,7 +655,10 @@ def project_metric_events(
 
 
 def score_collision_report(
-    report: Mapping[str, Any], *, ordered_object_ids: Sequence[str]
+    report: Mapping[str, Any],
+    *,
+    ordered_object_ids: Sequence[str],
+    deduction_multiplier: float = DEFAULT_DEDUCTION_MULTIPLIER,
 ) -> dict[str, Any]:
     events: list[dict[str, Any]] = []
     for index, pair in enumerate(report.get("pairs") or []):
@@ -633,11 +691,15 @@ def score_collision_report(
         ordered_object_ids=ordered_object_ids,
         events=_deduplicate_scoring_events(events),
         nominal_weight=L1_METRIC_WEIGHTS["collision"],
+        deduction_multiplier=deduction_multiplier,
     )
 
 
 def score_oob_report(
-    report: Mapping[str, Any], *, ordered_object_ids: Sequence[str]
+    report: Mapping[str, Any],
+    *,
+    ordered_object_ids: Sequence[str],
+    deduction_multiplier: float = DEFAULT_DEDUCTION_MULTIPLIER,
 ) -> dict[str, Any]:
     events: list[dict[str, Any]] = []
     for index, record in enumerate(report.get("objects") or []):
@@ -667,11 +729,15 @@ def score_oob_report(
         ordered_object_ids=ordered_object_ids,
         events=events,
         nominal_weight=L1_METRIC_WEIGHTS["oob"],
+        deduction_multiplier=deduction_multiplier,
     )
 
 
 def score_support_report(
-    report: Mapping[str, Any], *, ordered_object_ids: Sequence[str]
+    report: Mapping[str, Any],
+    *,
+    ordered_object_ids: Sequence[str],
+    deduction_multiplier: float = DEFAULT_DEDUCTION_MULTIPLIER,
 ) -> dict[str, Any]:
     records = [
         item
@@ -725,6 +791,7 @@ def score_support_report(
         ordered_object_ids=ordered_object_ids,
         events=events,
         nominal_weight=L1_METRIC_WEIGHTS["support"],
+        deduction_multiplier=deduction_multiplier,
     )
     projection["causal_root_by_invalid_object"] = root_for
     projection["robust_clearance_statistic"] = "positive_clearance_statistics_m.p25"
@@ -737,6 +804,7 @@ def score_l3_metric_report(
     *,
     ordered_object_ids: Sequence[str],
     nominal_weight: float | None = None,
+    deduction_multiplier: float = DEFAULT_DEDUCTION_MULTIPLIER,
 ) -> dict[str, Any]:
     if metric not in L3_METRIC_WEIGHTS:
         raise ValueError(f"unsupported L3 metric {metric!r}")
@@ -772,7 +840,190 @@ def score_l3_metric_report(
             if nominal_weight is None
             else float(nominal_weight)
         ),
+        deduction_multiplier=deduction_multiplier,
     )
+
+
+def score_placement_metric_report(
+    report: Mapping[str, Any],
+    *,
+    ordered_object_ids: Sequence[str],
+    nominal_weight: float | None = None,
+    deduction_multiplier: float = DEFAULT_DEDUCTION_MULTIPLIER,
+    residual_weight: float = DEFAULT_RESIDUAL_GLOBAL_PLACEMENT_WEIGHT,
+) -> dict[str, Any]:
+    """Score typed and residual Placement as an explicit 80/20 mixture.
+
+    The two components retain the canonical object-equivalent burden model.
+    Their normalized scores are mixed only after each component is projected,
+    so residual global findings can consume at most their configured share of
+    the Placement metric.  Defects without an explicit component marker are
+    legacy/current typed findings.
+    """
+
+    if (
+        isinstance(residual_weight, bool)
+        or not isinstance(residual_weight, (int, float))
+        or not math.isfinite(float(residual_weight))
+        or not 0.0 < float(residual_weight) < 1.0
+    ):
+        raise ValueError("residual placement weight must be in (0,1)")
+    judgement = report.get("judgement")
+    if not isinstance(judgement, Mapping):
+        raise ValueError("Placement report requires a final judgement")
+    verdict = judgement.get("verdict")
+    defects = judgement.get("defects") or []
+    if verdict not in {"valid", "invalid"}:
+        raise ValueError(
+            f"cannot score unresolved Placement verdict {verdict!r}"
+        )
+    if not isinstance(defects, list):
+        raise ValueError("Placement judgement defects must be a list")
+
+    residual_defects = [
+        deepcopy(defect)
+        for defect in defects
+        if isinstance(defect, Mapping)
+        and str(defect.get("placement_component") or "")
+        == "residual_global_review"
+    ]
+    typed_defects = [
+        deepcopy(defect)
+        for defect in defects
+        if isinstance(defect, Mapping)
+        and str(defect.get("placement_component") or "")
+        != "residual_global_review"
+    ]
+
+    def component_projection(
+        component_defects: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        component_report = {
+            "judgement": {
+                "verdict": (
+                    "invalid" if component_defects else "valid"
+                ),
+                "defects": component_defects,
+            }
+        }
+        return score_l3_metric_report(
+            "semantic_placement_consistency",
+            component_report,
+            ordered_object_ids=ordered_object_ids,
+            nominal_weight=nominal_weight,
+            deduction_multiplier=deduction_multiplier,
+        )
+
+    typed = component_projection(typed_defects)
+    residual = component_projection(residual_defects)
+    residual_share = float(residual_weight)
+    typed_share = 1.0 - residual_share
+    typed_score = typed.get("score")
+    residual_score = residual.get("score")
+    if not isinstance(typed_score, (int, float)) or not isinstance(
+        residual_score,
+        (int, float),
+    ):
+        combined_score = None
+        combined_deduction = None
+    else:
+        combined_score = (
+            typed_share * float(typed_score)
+            + residual_share * float(residual_score)
+        )
+        combined_deduction = 1.0 - combined_score
+
+    def component_events(
+        projection: Mapping[str, Any],
+        *,
+        component: str,
+        weight: float,
+    ) -> list[dict[str, Any]]:
+        records: list[dict[str, Any]] = []
+        for raw in projection.get("events") or []:
+            if not isinstance(raw, Mapping):
+                continue
+            event = deepcopy(dict(raw))
+            original_event_id = str(event.get("event_id") or "")
+            event["component_event_id"] = original_event_id
+            event["event_id"] = (
+                f"placement_component:{component}:{original_event_id}"
+            )
+            event["placement_component"] = component
+            event["placement_component_weight"] = weight
+            records.append(event)
+        return records
+
+    events = [
+        *component_events(
+            typed,
+            component="typed",
+            weight=typed_share,
+        ),
+        *component_events(
+            residual,
+            component="residual_global_review",
+            weight=residual_share,
+        ),
+    ]
+    result = deepcopy(typed)
+    result.update(
+        schema_version=SCORING_SPEC_VERSION,
+        metric="semantic_placement_consistency",
+        score=combined_score,
+        metric_deduction=combined_deduction,
+        base_metric_deduction=(
+            None
+            if typed.get("base_metric_deduction") is None
+            or residual.get("base_metric_deduction") is None
+            else typed_share
+            * float(typed["base_metric_deduction"])
+            + residual_share
+            * float(residual["base_metric_deduction"])
+        ),
+        prevalence_deduction=(
+            None
+            if typed.get("prevalence_deduction") is None
+            or residual.get("prevalence_deduction") is None
+            else typed_share
+            * float(typed["prevalence_deduction"])
+            + residual_share
+            * float(residual["prevalence_deduction"])
+        ),
+        worst_event_floor_deduction=max(
+            typed_share
+            * float(typed.get("worst_event_floor_deduction") or 0.0),
+            residual_share
+            * float(residual.get("worst_event_floor_deduction") or 0.0),
+        ),
+        burden_total_b_m=(
+            typed_share * float(typed.get("burden_total_b_m") or 0.0)
+            + residual_share
+            * float(residual.get("burden_total_b_m") or 0.0)
+        ),
+        p_max=max(
+            typed_share * float(typed.get("p_max") or 0.0),
+            residual_share * float(residual.get("p_max") or 0.0),
+        ),
+        events=events,
+        event_count=len(events),
+        placement_subscore_schema_version=(
+            "placement_typed_residual_weighted_v1"
+        ),
+        placement_component_weights={
+            "typed": typed_share,
+            "residual_global_review": residual_share,
+        },
+        placement_components={
+            "typed": typed,
+            "residual_global_review": residual,
+        },
+        score_formula=(
+            "typed_score * typed_weight + residual_global_score * "
+            "residual_global_weight"
+        ),
+    )
+    return result
 
 
 def apply_projection(report: dict[str, Any], projection: Mapping[str, Any]) -> None:
@@ -787,6 +1038,97 @@ def apply_projection(report: dict[str, Any], projection: Mapping[str, Any]) -> N
     else:
         report["score_mode"] = SCORING_SPEC_VERSION
     report["scoring"] = deepcopy(dict(projection))
+
+
+def project_incomplete_metric_coverage(
+    projection: Mapping[str, Any],
+    *,
+    coverage_fraction: float,
+) -> dict[str, Any]:
+    """Publish the observed score together with its grounded coverage.
+
+    Missing obligations are neither extrapolated nor treated as valid.  A
+    positive-coverage score is conditional on the grounded obligations and
+    receives only ``nominal_weight * coverage`` in higher-level aggregation.
+    Zero coverage cannot publish a numeric score.
+    """
+
+    coverage = float(coverage_fraction)
+    if not math.isfinite(coverage) or not 0.0 <= coverage <= 1.0:
+        raise ValueError("metric coverage_fraction must be in [0,1]")
+    result = deepcopy(dict(projection))
+    raw_score = result.get("score")
+    raw_prevalence = result.get("prevalence_deduction")
+    nominal_weight = result.get("nominal_metric_weight")
+    raw_score_available = bool(
+        isinstance(raw_score, (int, float))
+        and not isinstance(raw_score, bool)
+        and math.isfinite(float(raw_score))
+    )
+    if not raw_score_available:
+        # Coverage projection is a post-processing step; it cannot create a
+        # score when the canonical object denominator (or another upstream
+        # scoring prerequisite) produced no score at all.
+        result["coverage_projection"] = {
+            "policy": "coverage_conditioned_observed_score_v1",
+            "coverage_fraction": coverage,
+            "raw_score_before_coverage_projection": raw_score,
+            "raw_prevalence_deduction": raw_prevalence,
+            "base_metric_deduction": projection.get(
+                "base_metric_deduction"
+            ),
+            "applied_deduction_multiplier": projection.get(
+                "applied_deduction_multiplier"
+            ),
+            "raw_metric_deduction": projection.get("metric_deduction"),
+            "earned_score_mass": None,
+            "minimum_publishable_coverage": MIN_PUBLISHABLE_SCORE_COVERAGE,
+            "coverage_threshold_passed": False,
+            "projected_score": None,
+            "defaulted": False,
+            "projected": False,
+            "excluded_from_aggregate": True,
+            "projection_blocked_reason": "raw_score_unavailable",
+            "grounded_metric_weight": (
+                float(nominal_weight) * coverage
+                if isinstance(nominal_weight, (int, float))
+                and not isinstance(nominal_weight, bool)
+                else None
+            ),
+        }
+        return result
+    score_available = coverage >= MIN_PUBLISHABLE_SCORE_COVERAGE
+    complete = math.isclose(coverage, 1.0, abs_tol=1.0e-12)
+    earned_score_mass = float(raw_score) * coverage
+    result["score"] = float(raw_score) if score_available else None
+    result["coverage_projection"] = {
+        "policy": "coverage_conditioned_observed_score_v1",
+        "coverage_fraction": coverage,
+        "raw_score_before_coverage_projection": raw_score,
+        "raw_prevalence_deduction": raw_prevalence,
+        "base_metric_deduction": projection.get("base_metric_deduction"),
+        "applied_deduction_multiplier": projection.get(
+            "applied_deduction_multiplier"
+        ),
+        "raw_metric_deduction": projection.get("metric_deduction"),
+        "earned_score_mass": earned_score_mass,
+        "minimum_publishable_coverage": MIN_PUBLISHABLE_SCORE_COVERAGE,
+        "coverage_threshold_passed": score_available,
+        "projected_score": float(raw_score) if score_available else None,
+        "defaulted": False,
+        "projected": False,
+        "coverage_conditioned": not complete,
+        "excluded_from_aggregate": not score_available,
+        "projection_blocked_reason": (
+            None if score_available else "below_minimum_score_coverage"
+        ),
+        "grounded_metric_weight": (
+            float(nominal_weight) * coverage
+            if isinstance(nominal_weight, (int, float))
+            else None
+        ),
+    }
+    return result
 
 
 def _collision_magnitude(pair: Mapping[str, Any]) -> tuple[float | None, str]:
@@ -1237,6 +1579,7 @@ def _ownership_references(defect: Mapping[str, Any]) -> dict[str, Any]:
         "claim_id",
         "defect_id",
         "finding_id",
+        "same_physical_event_check_ref",
     )
     return {
         field: deepcopy(defect[field])
@@ -1258,6 +1601,15 @@ def _defect_event_identity(
         "metric": metric,
         "scoring_targets": sorted(str(item) for item in targets),
     }
+    same_event_check = str(
+        defect.get("same_physical_event_check_ref") or ""
+    ).strip()
+    if same_event_check:
+        return {
+            **common,
+            "stable_identity_type": "check_refs",
+            "value": [same_event_check],
+        }
     for field in (
         "ownership_event_id",
         "function_event_ref",
@@ -1379,6 +1731,15 @@ def _finite_unit(value: Any, label: str) -> float:
     return result
 
 
+def _positive_finite(value: Any, label: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise TypeError(f"{label} must be numeric")
+    result = float(value)
+    if not math.isfinite(result) or result <= 0.0:
+        raise ValueError(f"{label} must be finite and greater than zero")
+    return result
+
+
 def _optional_finite(value: Any) -> float | None:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
@@ -1401,10 +1762,13 @@ def _clip(value: float) -> float:
 
 
 __all__ = [
+    "DEFAULT_DEDUCTION_MULTIPLIER",
+    "DEDUCTION_MULTIPLIER_METRICS",
     "INTRINSIC_VALIDITY_PROFILE_ID",
     "L1_METRIC_WEIGHTS",
     "L3_CATEGORIES",
     "L3_METRIC_WEIGHTS",
+    "MIN_PUBLISHABLE_SCORE_COVERAGE",
     "L3_SEVERITY_BURDENS",
     "LEGACY_SCORING_SPEC_VERSION",
     "METRIC_COEFFICIENTS",
@@ -1414,6 +1778,7 @@ __all__ = [
     "apply_projection",
     "canonical_scene_object_ids",
     "invalid_burden",
+    "project_incomplete_metric_coverage",
     "project_metric_events",
     "resolve_scoring_profile",
     "score_collision_report",

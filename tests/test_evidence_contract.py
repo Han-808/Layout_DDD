@@ -143,11 +143,16 @@ def test_router_options_reject_execution() -> None:
 
 
 def test_evidence_plan_requires_prompt_context() -> None:
-    # A plan whose text_context omits original_prompt is rejected.
-    with pytest.raises(EvidenceContractError, match="original_prompt"):
+    # A plan must declare full-prompt or metric-scoped prompt context.
+    with pytest.raises(EvidenceContractError, match="metric_prompt_context"):
         validate_evidence_plan(
             {"evidence_strategy": "global_only", "text_context": ["asset_policy"]}
         )
+    metric_scoped = {
+        "evidence_strategy": "global_only",
+        "text_context": ["metric_prompt_context.none", "asset_policy"],
+    }
+    assert validate_evidence_plan(metric_scoped) is metric_scoped
     # A complete plan validates and is returned.
     plan = {
         "evidence_strategy": "global_screen_then_local",

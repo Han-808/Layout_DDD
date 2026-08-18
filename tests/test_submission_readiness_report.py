@@ -9,6 +9,8 @@ from typing import Any
 import pytest
 from jsonschema import Draft202012Validator
 
+from benchmark.scoring_profiles import INTRINSIC_VALIDITY_PROFILE_ID
+
 import benchmark.api.submission as submission_module
 import benchmark.materialization.preparation as preparation_module
 import benchmark.materialization.readiness as readiness_module
@@ -435,7 +437,7 @@ def test_not_evaluable_report_is_canonical_and_schema_valid() -> None:
     assert report["benchmark_score_100"] is None
     assert report["benchmark_score_status"] == "not_evaluable"
     assert report["scoring_profile"]["scoring_profile_id"] == (
-        "intrinsic_validity_v1"
+        INTRINSIC_VALIDITY_PROFILE_ID
     )
     assert report["canonical_object_denominator"] == {
         "ordered_object_ids": [],
@@ -466,12 +468,28 @@ def test_not_evaluable_report_is_canonical_and_schema_valid() -> None:
     assert report["reports"]["scene_quality"]["status"] == "not_run"
     assert report["coverage"]["covered_layers"] == []
     assert report["coverage"]["complete"] is False
-    assert "|scoring_profile:intrinsic_validity_v1|" in report[
+    assert report["coverage"]["score_resolution_complete"] is False
+    assert report["coverage"]["score_grounding_complete"] is False
+    assert report["coverage"]["grounded_score_weight"] == 0.0
+    assert report["coverage"]["grounded_score_fraction"] == 0.0
+    assert all(
+        fraction == 0.0
+        for fraction in report["coverage"][
+            "layer_grounding_fractions"
+        ].values()
+    )
+    assert f"|scoring_profile:{INTRINSIC_VALIDITY_PROFILE_ID}|" in report[
         "coverage"
     ]["comparability_signature"]
-    assert "|scoring_spec:object_equivalent_burden_v1" in report[
+    assert "|scoring_spec:object_equivalent_burden_v3" in report[
         "coverage"
     ]["comparability_signature"]
+    assert "|deduction_multiplier:2" in report["coverage"][
+        "comparability_signature"
+    ]
+    assert "|l3_metric_weights:" in report["coverage"][
+        "comparability_signature"
+    ]
     assert report["evidence_provenance"]["render_evidence"] == "not_generated"
 
     schema = read_json(ROOT / "schemas" / "evaluation_report.schema.json")

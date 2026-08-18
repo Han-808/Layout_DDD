@@ -38,6 +38,7 @@ from blender_worker import (  # noqa: E402
     _root_location,
     _world_bounds,
 )
+from saved_blend_view import configure_textured_inspection_view  # noqa: E402
 
 
 PLAN_VERSION = "catalog_materialization_plan_v1"
@@ -117,6 +118,10 @@ def main() -> None:
     )
     _pack_external_images()
     _assert_sanitized_build_state()
+    inspection_view = configure_textured_inspection_view(bpy)
+    scene["benchmark_saved_inspection_view"] = _canonical_json(
+        inspection_view
+    )
     bpy.context.view_layer.update()
     bpy.ops.wm.save_as_mainfile(filepath=str(out_blend))
 
@@ -147,6 +152,7 @@ def main() -> None:
         "rendered_wall_ids": rendered_wall_ids,
         "instances": built_instances,
         "scene_normalizations": scene_normalizations,
+        "saved_inspection_view": inspection_view,
         "source_scene_saved": True,
         "source_scene_kind": "benchmark_owned_sanitized_output",
     }

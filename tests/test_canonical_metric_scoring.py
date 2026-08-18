@@ -11,17 +11,25 @@ from benchmark.api.evaluation import (
 )
 from benchmark.evaluator.profile import L1, resolve_evaluation_profile
 from benchmark.evaluator.scoring import (
+    DEFAULT_DEDUCTION_MULTIPLIER,
+    DEDUCTION_MULTIPLIER_METRICS,
     INTRINSIC_VALIDITY_PROFILE_ID,
     L3_METRIC_WEIGHTS,
     PROMPT_CONDITIONED_QUALITY_PROFILE_ID,
+    project_incomplete_metric_coverage,
     project_metric_events,
     resolve_scoring_profile,
     score_collision_report,
     score_l3_metric_report,
+    score_placement_metric_report,
     score_oob_report,
     score_support_report,
     scoring_reliability_summary,
     scoring_profile_for_run,
+)
+from benchmark.scoring_profiles import (
+    PREVIOUS_INTRINSIC_VALIDITY_PROFILE_ID,
+    PREVIOUS_L3_METRIC_WEIGHTS,
 )
 
 
@@ -59,6 +67,22 @@ def test_versioned_scoring_profiles_are_explicit_and_normalized() -> None:
         "l4_downstream_task_functionality": 0.0,
     }
     assert math.isclose(sum(L3_METRIC_WEIGHTS.values()), 1.0)
+    assert intrinsic["l3_metric_weights"] == L3_METRIC_WEIGHTS == {
+        "scale_consistency": 0.04,
+        "style_consistency": 0.07,
+        "object_pairing_consistency": 0.09,
+        "functional_consistency": 0.52,
+        "semantic_placement_consistency": 0.28,
+    }
+    assert prompted["l3_metric_weights"] == L3_METRIC_WEIGHTS
+    previous = resolve_scoring_profile(
+        PREVIOUS_INTRINSIC_VALIDITY_PROFILE_ID
+    )
+    assert previous["l3_metric_weights"] == PREVIOUS_L3_METRIC_WEIGHTS
+    assert intrinsic["deduction_multiplier"] == 2.0
+    assert intrinsic["deduction_multiplier_metrics"] == list(
+        DEDUCTION_MULTIPLIER_METRICS
+    )
     assert scoring_profile_for_run(has_l2_task=False)[
         "scoring_profile_id"
     ] == INTRINSIC_VALIDITY_PROFILE_ID
@@ -133,10 +157,48 @@ def test_coefficient_and_worst_event_floor_examples() -> None:
         events=[_event("function-mild", burden=0.4, allocations={ids[0]: 0.4})],
     )
 
-    assert scale_max["score"] == 0.7
+    assert scale_max["score"] == 0.4
     assert functional_max["score"] == 0.75
-    assert scale_mild["score"] == 0.88
+    assert scale_mild["score"] == 0.76
     assert functional_mild["score"] == 0.9
+    assert scale_max["base_metric_deduction"] == 0.3
+    assert scale_max["metric_deduction"] == 0.6
+    assert scale_max["configured_deduction_multiplier"] == 2.0
+    assert scale_max["applied_deduction_multiplier"] == 2.0
+    assert functional_max["configured_deduction_multiplier"] == 2.0
+    assert functional_max["applied_deduction_multiplier"] == 1.0
+
+
+def test_deduction_multiplier_one_reproduces_unscaled_projection() -> None:
+    ids = _ids()
+    scaled = project_metric_events(
+        "scale_consistency",
+        ordered_object_ids=ids,
+        events=[_event("scale", burden=1.0, allocations={ids[0]: 1.0})],
+        deduction_multiplier=DEFAULT_DEDUCTION_MULTIPLIER,
+    )
+    unscaled = project_metric_events(
+        "scale_consistency",
+        ordered_object_ids=ids,
+        events=[_event("scale", burden=1.0, allocations={ids[0]: 1.0})],
+        deduction_multiplier=1.0,
+    )
+
+    assert scaled["score"] == pytest.approx(0.4)
+    assert unscaled["score"] == pytest.approx(0.7)
+    assert unscaled["base_metric_deduction"] == pytest.approx(0.3)
+    assert unscaled["metric_deduction"] == pytest.approx(0.3)
+
+
+@pytest.mark.parametrize("value", [0.0, -1.0, math.inf, math.nan, True])
+def test_deduction_multiplier_must_be_positive_and_finite(value) -> None:
+    with pytest.raises((TypeError, ValueError)):
+        project_metric_events(
+            "scale_consistency",
+            ordered_object_ids=_ids(),
+            events=[],
+            deduction_multiplier=value,
+        )
 
 
 def test_relation_split_preserves_one_event_burden_and_unsplit_floor() -> None:
@@ -502,6 +564,62 @@ def test_function_owned_placement_check_is_zero_burden_but_independent_check_sco
     ] == "placement_independent"
 
 
+def test_residual_global_placement_is_capped_to_twenty_percent() -> None:
+    ids = _ids()
+
+    def defect(*, target: str, component: str | None = None) -> dict:
+        value = {
+            "check_id": f"placement_{target}",
+            "check_type": "scene_zone",
+            "category": "zone_placement_mismatch",
+            "severity": "implausible",
+            "target_ids": [target],
+            "scope": "semantically_inappropriate_scene_zone",
+            "relation": "scene_zone",
+            "reason": "Relocation alone restores an ordinary scene zone.",
+        }
+        if component is not None:
+            value["placement_component"] = component
+        return value
+
+    residual_only = score_placement_metric_report(
+        {
+            "judgement": {
+                "verdict": "invalid",
+                "defects": [
+                    defect(
+                        target=ids[0],
+                        component="residual_global_review",
+                    )
+                ],
+            }
+        },
+        ordered_object_ids=ids,
+        residual_weight=0.20,
+    )
+    typed_only = score_placement_metric_report(
+        {
+            "judgement": {
+                "verdict": "invalid",
+                "defects": [defect(target=ids[0])],
+            }
+        },
+        ordered_object_ids=ids,
+        residual_weight=0.20,
+    )
+
+    assert residual_only["placement_component_weights"] == {
+        "typed": 0.8,
+        "residual_global_review": 0.2,
+    }
+    assert residual_only["placement_components"]["typed"]["score"] == 1.0
+    assert residual_only["placement_components"][
+        "residual_global_review"
+    ]["score"] == 0.75
+    assert residual_only["score"] == pytest.approx(0.95)
+    assert typed_only["score"] == pytest.approx(0.80)
+
+
 def test_scoring_reliability_publishes_forced_ambiguity_and_failures() -> None:
     summary = scoring_reliability_summary(
         l1_metrics={
@@ -669,6 +787,97 @@ def test_empty_canonical_denominator_is_not_evaluable() -> None:
     assert result["metric_deduction"] is None
 
 
+def test_partial_metric_score_is_conditioned_on_grounded_coverage() -> None:
+    projected = project_incomplete_metric_coverage(
+        {
+            "score": 25 / 30,
+            "prevalence_deduction": 5 / 30,
+            "worst_event_floor_deduction": 0.0,
+            "metric_deduction": 5 / 30,
+            "nominal_metric_weight": 0.30,
+        },
+        coverage_fraction=25 / 30,
+    )
+
+    assert projected["score"] == pytest.approx(25 / 30)
+    assert projected["coverage_projection"]["grounded_metric_weight"] == (
+        pytest.approx(0.25)
+    )
+    assert projected["coverage_projection"]["coverage_fraction"] == (
+        pytest.approx(25 / 30)
+    )
+    assert projected["coverage_projection"]["coverage_conditioned"] is True
+    assert projected["coverage_projection"]["excluded_from_aggregate"] is False
+    assert projected["coverage_projection"]["projection_blocked_reason"] is None
+
+
+def test_zero_coverage_never_defaults_valid() -> None:
+    projected = project_incomplete_metric_coverage(
+        {
+            "score": 0.2,
+            "prevalence_deduction": 0.8,
+            "worst_event_floor_deduction": 0.8,
+            "metric_deduction": 0.8,
+            "nominal_metric_weight": 0.30,
+        },
+        coverage_fraction=0.0,
+    )
+
+    assert projected["score"] is None
+    assert projected["metric_deduction"] == 0.8
+    assert projected["coverage_projection"]["defaulted"] is False
+    assert projected["coverage_projection"]["excluded_from_aggregate"] is True
+
+
+def test_metric_below_eighty_percent_coverage_fails_publication() -> None:
+    projected = project_incomplete_metric_coverage(
+        {
+            "score": 0.9,
+            "prevalence_deduction": 0.1,
+            "worst_event_floor_deduction": 0.0,
+            "metric_deduction": 0.1,
+            "nominal_metric_weight": 0.44,
+        },
+        coverage_fraction=0.79,
+    )
+
+    assert projected["score"] is None
+    assert projected["coverage_projection"]["earned_score_mass"] == (
+        pytest.approx(0.9 * 0.79)
+    )
+    assert projected["coverage_projection"][
+        "minimum_publishable_coverage"
+    ] == pytest.approx(0.80)
+    assert projected["coverage_projection"][
+        "coverage_threshold_passed"
+    ] is False
+    assert projected["coverage_projection"][
+        "projection_blocked_reason"
+    ] == "below_minimum_score_coverage"
+
+
+def test_empty_denominator_cannot_become_valid_through_coverage_projection() -> None:
+    raw = project_metric_events(
+        "functional_consistency",
+        ordered_object_ids=(),
+        events=[],
+        nominal_weight=0.44,
+    )
+
+    projected = project_incomplete_metric_coverage(
+        raw,
+        coverage_fraction=0.0,
+    )
+
+    assert projected["score"] is None
+    assert projected["metric_deduction"] is None
+    assert projected["coverage_projection"]["projected_score"] is None
+    assert projected["coverage_projection"]["projection_blocked_reason"] == (
+        "raw_score_unavailable"
+    )
+    assert projected["coverage_projection"]["defaulted"] is False
+
+
 def test_saved_ledger_replays_without_a_judge_call() -> None:
     ids = _ids()
     original = project_metric_events(
@@ -728,3 +937,117 @@ def test_functional_causal_blocker_is_not_automatically_double_charged() -> None
     assert event["scoring_target_ids"] == [ids[1]]
     assert event["allocations"] == {ids[1]: 1.0}
     assert result["burden_total_b_m"] == 1.0
+
+
+def test_reconciled_endpoint_relation_does_not_double_charge_same_event() -> None:
+    ids = _ids()
+    result = score_l3_metric_report(
+        "functional_consistency",
+        {
+            "judgement": {
+                "verdict": "invalid",
+                "defects": [
+                    {
+                        "category": "directed_surface_unusable",
+                        "severity": "impaired",
+                        "target_ids": [ids[0]],
+                        "scope": "architecture_orientation",
+                        "relation": "usable side faces the boundary",
+                        "attribution_mode": "unary",
+                        "check_refs": ["orientation:endpoint"],
+                    },
+                    {
+                        "category": "functional_correspondence_failure",
+                        "severity": "impaired",
+                        "target_ids": [ids[0]],
+                        "scope": "functional_correspondence",
+                        "relation": "the same endpoint breaks the relation",
+                        "attribution_mode": "responsible_endpoint",
+                        "check_refs": ["relation:endpoint-pair"],
+                        "same_physical_event_check_ref": (
+                            "orientation:endpoint"
+                        ),
+                    },
+                ],
+            }
+        },
+        ordered_object_ids=ids,
+    )
+
+    assert result["event_count"] == 1
+    assert result["events"][0]["observation_count"] == 2
+    assert result["raw_object_burdens"][ids[0]] == pytest.approx(0.4)
+
+
+def test_independent_functional_checks_on_one_object_remain_separate() -> None:
+    ids = _ids()
+    result = score_l3_metric_report(
+        "functional_consistency",
+        {
+            "judgement": {
+                "verdict": "invalid",
+                "defects": [
+                    {
+                        "category": "directed_surface_unusable",
+                        "severity": "impaired",
+                        "target_ids": [ids[0]],
+                        "scope": "architecture_orientation",
+                        "relation": "usable side faces the boundary",
+                        "attribution_mode": "unary",
+                        "check_refs": ["orientation:endpoint"],
+                    },
+                    {
+                        "category": "approach_clearance_failure",
+                        "severity": "impaired",
+                        "target_ids": [ids[0]],
+                        "scope": "group_real_world_usability",
+                        "relation": "independent approach-space obstruction",
+                        "attribution_mode": "unary",
+                        "check_refs": ["clearance:endpoint"],
+                    },
+                ],
+            }
+        },
+        ordered_object_ids=ids,
+    )
+
+    assert result["event_count"] == 2
+    assert result["raw_object_burdens"][ids[0]] == pytest.approx(0.8)
+    assert result["effective_object_burdens"][ids[0]] == pytest.approx(0.4)
+    assert result["object_burden_aggregation"] == (
+        "per_object_max_across_events"
+    )
+
+
+def test_stronger_functional_event_replaces_mild_same_object_burden() -> None:
+    ids = _ids()
+    result = project_metric_events(
+        "functional_consistency",
+        ordered_object_ids=ids,
+        events=[
+            _event("mild", burden=0.4, allocations={ids[0]: 0.4}),
+            _event("blocked", burden=1.0, allocations={ids[0]: 1.0}),
+        ],
+    )
+
+    assert result["raw_object_burden_sums"][ids[0]] == pytest.approx(1.4)
+    assert result["effective_object_burdens"][ids[0]] == pytest.approx(1.0)
+    assert result["burden_total_b_m"] == pytest.approx(1.0)
+
+
+def test_placement_checks_use_same_per_object_max_policy() -> None:
+    ids = _ids()
+    result = project_metric_events(
+        "semantic_placement_consistency",
+        ordered_object_ids=ids,
+        events=[
+            _event("zone", burden=0.4, allocations={ids[0]: 0.4}),
+            _event("anchor", burden=0.4, allocations={ids[0]: 0.4}),
+        ],
+    )
+
+    assert result["raw_object_burden_sums"][ids[0]] == pytest.approx(0.8)
+    assert result["effective_object_burdens"][ids[0]] == pytest.approx(0.4)
+    assert result["object_burden_aggregation"] == (
+        "per_object_max_across_events"
+    )

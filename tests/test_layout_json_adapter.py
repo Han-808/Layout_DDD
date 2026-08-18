@@ -815,8 +815,17 @@ def test_harness_renders_current_scene_for_canonical_evidence(
     assert manifest["artifacts"]["render_manifest"].endswith("renders/render_manifest.json")
     assert len(manifest["artifacts"]["render_evidence"]) == 2
     # No canonical L2 contract or L3 asset-policy applicability was supplied,
-    # so rendering is available evidence but cannot silently activate a judge.
+    # so the evaluator does not silently activate a Judge. Active L3 metrics
+    # retain audited zero-grounding diagnostics, but fail closed for publishing.
     assert judge_calls == []
     report = read_json(out_dir / "evaluation_report.json")
     assert report["evaluator_version"] == "scene_harness_evaluator_v2"
-    assert report["benchmark_score_status"] == "insufficient_metric_coverage"
+    assert report["benchmark_score"] is None
+    assert report["benchmark_score_status"] == "failed_coverage_threshold"
+    assert all(
+        metric["coverage"]["score_grounding"]["fraction"] == 0.0
+        and metric["terminal_state"] == "evaluated_degraded"
+        for metric in report["layer_reports"][
+            "l3_scene_quality"
+        ]["metrics"].values()
+    )

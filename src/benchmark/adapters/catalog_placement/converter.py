@@ -12,6 +12,7 @@ from benchmark.adapters.catalog_placement.prompt import (
     CATALOG_PLACEMENT_VERSION,
     public_slot_ids_from_generation_input as _prompt_public_slot_ids,
 )
+from benchmark.assets.facing import benchmark_catalog_facing_contract
 from benchmark.nl_scene.generation_input import STRUCTURED_ASSETS_INPUT_MODE
 from benchmark.scene_io.validate import (
     ArtifactValidationError,
@@ -272,6 +273,7 @@ def convert_catalog_placement_to_scene(
         "schema_version": "catalog_instance_registry_v1",
         "request_id": request_id,
         "generator_output_schema": CATALOG_PLACEMENT_VERSION,
+        "catalog_facing_contract": benchmark_catalog_facing_contract(),
         "instances": registry_entries,
     }
     scene = {
@@ -288,6 +290,7 @@ def convert_catalog_placement_to_scene(
             "generator_output_schema": CATALOG_PLACEMENT_VERSION,
             "output_adapter": "catalog_placement",
             "asset_grounding": "selected_frozen_catalog_exact_asset_id",
+            "catalog_facing_contract": benchmark_catalog_facing_contract(),
             "coordinate_frame": deepcopy(COORDINATE_FRAME),
             "instance_registry": deepcopy(registry),
             "transform_semantics": {

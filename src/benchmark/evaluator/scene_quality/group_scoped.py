@@ -24,6 +24,9 @@ from benchmark.evaluator.scene_quality.functional_checks import (
 from benchmark.evaluator.scene_quality.functional_group_evidence import (
     FunctionalGroupEvidenceBank,
 )
+from benchmark.evaluator.scene_quality.functional_measurements import (
+    compact_functional_measurements_for_checks,
+)
 from benchmark.evaluator.scene_quality.placement_checks import (
     canonicalize_placement_defect_linkage,
     merge_placement_checks,
@@ -35,6 +38,7 @@ from benchmark.evaluator.scene_quality.placement_severity import (
 )
 from benchmark.evaluator.scene_quality.terminal import (
     infrastructure_failure_from_scope,
+    scope_was_defaulted,
     terminalize_required_scope,
 )
 from benchmark.visual_judge.group_scope import (
@@ -729,10 +733,14 @@ def _evaluate_group_scoped_judgements_batched(
                 resolution.get("provider_reason")
                 or "group_local_render_evidence_unavailable"
             )
+            terminal = terminalize_required_scope(
+                record,
+                phase=_group_episode_phase(packet, group_id),
+            )
             group_results.append(
-                terminalize_required_scope(
-                    record,
-                    phase=_group_episode_phase(packet, group_id),
+                _attach_default_typed_rows(
+                    terminal,
+                    metric_name=metric_name,
                 )
             )
             continue
@@ -777,6 +785,12 @@ def _evaluate_group_scoped_judgements_batched(
         request = build_judge_request(
             **judge_request_kwargs,
         )
+        functional_preflight = _functional_visual_preflight(
+            packet,
+            required_checks=required_functional_checks_from_packet(packet),
+        )
+        if functional_preflight is not None:
+            request["functional_evidence_preflight"] = functional_preflight
         request["camera_acquisition_ledger"] = deepcopy(
             episode_ledger_before_judge
         )
@@ -995,10 +1009,14 @@ def _evaluate_group_scoped_judgements_batched(
                     episode_before=episode_ledger_before_judge,
                     episode_after=next_ledger,
                 )
+        terminal = terminalize_required_scope(
+            record,
+            phase=_group_episode_phase(packet, group_id),
+        )
         group_results.append(
-            terminalize_required_scope(
-                record,
-                phase=_group_episode_phase(packet, group_id),
+            _attach_default_typed_rows(
+                terminal,
+                metric_name=metric_name,
             )
         )
 
@@ -1009,6 +1027,107 @@ def _evaluate_group_scoped_judgements_batched(
         group_results,
         metric_name=metric_name,
     )
+
+
+def _attach_default_typed_rows(
+    record: dict[str, Any],
+    *,
+    metric_name: str,
+) -> dict[str, Any]:
+    """Complete only the typed rows owned by one defaulted Judge episode."""
+
+    if not scope_was_defaulted(record):
+        return record
+    judgement = (
+        record.get("judgement")
+        if isinstance(record.get("judgement"), dict)
+        else {}
+    )
+    if metric_name == "functional_consistency":
+        required = list(
+            (
+                record.get("functional_probe_evidence")
+                if isinstance(
+                    record.get("functional_probe_evidence"), dict
+                )
+                else {}
+            ).get("required_checks")
+            or []
+        )
+        rows = [
+            {
+                "check_id": str(check["check_id"]),
+                "target_ids": [
+                    str(item) for item in check.get("target_ids") or []
+                ],
+                "observation_status": "inferred_under_budget",
+                "conclusion": "valid",
+                "reason": (
+                    "The atomic check defaulted valid after a non-hard "
+                    "episode failure; ambiguity is retained in audit."
+                ),
+            }
+            for check in required
+            if isinstance(check, dict) and check.get("check_id")
+        ]
+        judgement["functional_check_results"] = rows
+        if required:
+            record["functional_check_resolution"] = (
+                validate_functional_check_results(
+                    judgement,
+                    required_checks=required,
+                )
+            )
+    elif metric_name == "semantic_placement_consistency":
+        required = [
+            deepcopy(check)
+            for check in record.get("required_placement_checks") or []
+            if isinstance(check, dict) and check.get("check_id")
+        ]
+        rows = [
+            {
+                "check_id": str(check["check_id"]),
+                "subject_id": str(check["subject_id"]),
+                "context_ids": sorted(
+                    str(item) for item in check.get("context_ids") or []
+                ),
+                "observation_status": "inferred_under_budget",
+                "conclusion": "valid",
+                "reason": (
+                    "The atomic check defaulted valid after a non-hard "
+                    "episode failure; ambiguity is retained in audit."
+                ),
+            }
+            for check in required
+        ]
+        judgement["placement_check_results"] = rows
+        record["placement_check_resolution"] = (
+            validate_placement_check_results(
+                judgement,
+                required_checks=required,
+                function_events=list(
+                    (
+                        record.get("functional_ownership_ledger")
+                        if isinstance(
+                            record.get("functional_ownership_ledger"),
+                            dict,
+                        )
+                        else {}
+                    ).get("events")
+                    or []
+                ),
+            )
+        )
+    record["judgement"] = judgement
+    record["defaulted_scoring_unit_count"] = max(
+        1,
+        len(
+            judgement.get("functional_check_results")
+            or judgement.get("placement_check_results")
+            or []
+        ),
+    )
+    return record
 
 
 def _group_episode_phase(packet: dict[str, Any], group_id: str) -> str:
@@ -1053,6 +1172,15 @@ def _expand_functional_check_packets(
             episode_functional["episode_scope"] = (
                 "single_group_local_functional_check"
             )
+            if isinstance(
+                episode_functional.get("functional_measurements"), dict
+            ):
+                episode_functional["functional_measurements"] = (
+                    compact_functional_measurements_for_checks(
+                        episode_functional["functional_measurements"],
+                        [check_id],
+                    )
+                )
             for key in (
                 "observation_requests",
                 "relation_observation_requests",
@@ -1072,8 +1200,276 @@ def _expand_functional_check_packets(
                         }
                     ]
             episode["functional_probe_evidence"] = episode_functional
+            episode = _scope_functional_episode_evidence(
+                episode,
+                check=check,
+            )
             expanded.append(episode)
     return expanded
+
+
+def required_functional_checks_from_packet(
+    packet: dict[str, Any],
+) -> list[dict[str, Any]]:
+    functional = packet.get("functional_probe_evidence")
+    return [
+        deepcopy(item)
+        for item in (
+            functional.get("required_checks")
+            if isinstance(functional, dict)
+            else []
+        )
+        or []
+        if isinstance(item, dict) and item.get("check_id")
+    ]
+
+
+def _scope_functional_episode_evidence(
+    packet: dict[str, Any],
+    *,
+    check: dict[str, Any],
+) -> dict[str, Any]:
+    """Keep the fixed group packet plus evidence relevant to one check.
+
+    The probe acquisition stage is group-owned, so its original packet may
+    contain probes for several objects.  Per-check judging is meaningful only
+    when those dynamic paths are filtered with the same check identity as the
+    structured obligations.  Fixed angled-global and group-local evidence is
+    always retained.
+    """
+
+    result = deepcopy(packet)
+    paths = list(
+        dict.fromkeys(
+            str(path)
+            for path in result.get("paths") or []
+            if str(path).strip()
+        )
+    )
+    resolution = (
+        deepcopy(result.get("resolution"))
+        if isinstance(result.get("resolution"), dict)
+        else {}
+    )
+    reuse = (
+        resolution.get("functional_probe_reuse")
+        if isinstance(
+            resolution.get("functional_probe_reuse"), dict
+        )
+        else {}
+    )
+    baseline = [
+        str(path)
+        for path in reuse.get("baseline_packet_paths") or []
+        if str(path).strip() and str(path) in paths
+    ]
+    requested = {
+        str(path)
+        for path in reuse.get("requested_probe_paths") or []
+        if str(path).strip()
+    }
+    if not baseline:
+        # Packets without supplementary probe metadata are already scoped and
+        # must remain unchanged.  With probe metadata, the first two entries
+        # are the frozen global/local seed contract.
+        baseline = paths if not requested else paths[:2]
+
+    functional = result.get("functional_probe_evidence")
+    image_order = (
+        functional.get("image_order")
+        if isinstance(functional, dict)
+        and isinstance(functional.get("image_order"), list)
+        else []
+    )
+    check_id = str(check.get("check_id") or "")
+    targets = {
+        str(item) for item in check.get("target_ids") or [] if str(item)
+    }
+    relevant: set[str] = {
+        str(path)
+        for path in check.get("evidence_refs") or []
+        if str(path).strip()
+    }
+    for item in image_order:
+        if not isinstance(item, dict):
+            continue
+        artifact = str(item.get("artifact_id") or "").strip()
+        if not artifact:
+            continue
+        item_check_ids = {
+            str(value) for value in item.get("check_ids") or []
+        }
+        item_targets = {
+            str(value)
+            for value in [
+                *list(item.get("target_ids") or []),
+                *list(item.get("related_target_ids") or []),
+            ]
+        }
+        if (
+            check_id in item_check_ids
+            or (not item_check_ids and bool(targets & item_targets))
+        ):
+            relevant.add(artifact)
+
+    dynamic_paths = [
+        path
+        for path in paths
+        if path not in baseline
+        and (
+            path in relevant
+            or (not requested and not image_order)
+        )
+    ]
+    selected = list(dict.fromkeys([*baseline, *dynamic_paths]))
+    omitted = [path for path in paths if path not in selected]
+    result["paths"] = selected
+    resolution["functional_check_evidence_scope"] = {
+        "policy": "fixed_group_seed_plus_check_bound_dynamic_v1",
+        "check_id": check_id,
+        "target_ids": sorted(targets),
+        "fixed_paths": list(baseline),
+        "selected_dynamic_paths": list(dynamic_paths),
+        "omitted_unrelated_paths": omitted,
+    }
+    acquisition_budget = resolution.get("acquisition_budget")
+    if isinstance(acquisition_budget, dict):
+        acquisition_budget["initial_judge_evidence_count"] = len(
+            evidence_artifact_refs(selected)
+        )
+    result["resolution"] = resolution
+    result["camera_acquisition_ledger_after"] = (
+        extend_acquisition_ledger(
+            None,
+            artifact_ids=evidence_artifact_refs(selected),
+        )
+    )
+    return result
+
+
+def _functional_visual_preflight(
+    packet: dict[str, Any],
+    *,
+    required_checks: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Require one recovery view when machine-side direction binding failed.
+
+    This is a routing guard, not a semantic sufficiency decision.  It covers
+    the narrow fail-closed case where a check explicitly depends on a decoded
+    usable side but no trusted surface observation or complete orientation
+    binding reached the Judge packet.
+    """
+
+    if len(required_checks) != 1:
+        return None
+    check = required_checks[0]
+    required = {
+        str(item) for item in check.get("required_observations") or []
+    }
+    directional_observations = {
+        "interaction_side_visible",
+        "front_back_disambiguated",
+    }
+    if not (required & directional_observations):
+        return None
+    directed_targets = {
+        str(item.get("target_id") or "")
+        for item in check.get("target_affordances") or []
+        if isinstance(item, dict)
+        and item.get("directionality") == "directed"
+        and str(item.get("target_id") or "")
+    }
+    if check.get("check_type") == "architecture_orientation":
+        directed_targets.update(
+            str(item) for item in check.get("target_ids") or []
+        )
+    if not directed_targets:
+        return None
+
+    functional = packet.get("functional_probe_evidence")
+    functional = functional if isinstance(functional, dict) else {}
+    observed_targets = _trusted_surface_observation_targets(functional)
+    missing_targets = sorted(directed_targets - observed_targets)
+    reason_codes: list[str] = []
+    if missing_targets:
+        reason_codes.append("usable_surface_not_machine_resolved")
+
+    if check.get("check_type") == "architecture_orientation":
+        bindings = (
+            (functional.get("architecture_orientation_policy") or {}).get(
+                "evidence_bindings"
+            )
+            if isinstance(
+                functional.get("architecture_orientation_policy"), dict
+            )
+            else []
+        )
+        binding = next(
+            (
+                item
+                for item in bindings or []
+                if isinstance(item, dict)
+                and str(item.get("check_id") or "")
+                == str(check.get("check_id") or "")
+            ),
+            None,
+        )
+        if not isinstance(binding, dict) or binding.get("status") != "complete":
+            reason_codes.append("side_conditioned_view_not_bound")
+
+    if not reason_codes:
+        return None
+    missing_observations = [
+        item
+        for item in (
+            "interaction_side_visible",
+            "front_back_disambiguated",
+        )
+        if item in required
+    ]
+    return {
+        "schema_version": "functional_evidence_preflight_v1",
+        "active": True,
+        "check_id": str(check.get("check_id") or ""),
+        "target_ids": missing_targets or sorted(directed_targets),
+        "missing_observations": missing_observations,
+        "reason_codes": list(dict.fromkeys(reason_codes)),
+        "initial_evidence_refs": list(
+            dict.fromkeys(str(path) for path in packet.get("paths") or [])
+        ),
+        "resolution_policy": "acquire_before_binary_judgement",
+        "decision_authority": "none",
+    }
+
+
+def _trusted_surface_observation_targets(
+    functional: dict[str, Any],
+) -> set[str]:
+    hypotheses: list[Any] = []
+    boundary = functional.get("boundary_clearance_evidence")
+    if isinstance(boundary, dict):
+        hypotheses.extend(boundary.get("usable_surface_hypotheses") or [])
+    for request in functional.get("observation_requests") or []:
+        if not isinstance(request, dict):
+            continue
+        usable = request.get("usable_surface")
+        if isinstance(usable, dict):
+            hypotheses.extend(usable.get("hypotheses") or [])
+        elif isinstance(usable, list):
+            hypotheses.extend(usable)
+        geometry = request.get("functional_geometry")
+        if isinstance(geometry, dict):
+            hypotheses.extend(geometry.get("surface_observations") or [])
+    return {
+        str(item.get("target_id") or "")
+        for item in hypotheses
+        if isinstance(item, dict)
+        and str(item.get("target_id") or "")
+        and (
+            item.get("status") == "identified"
+            or bool(item.get("side_id"))
+        )
+    }
 
 
 def _combine_functional_check_episodes(

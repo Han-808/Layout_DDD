@@ -18,6 +18,7 @@ from benchmark.visual_judge.adapters.deterministic_camera import (
 from benchmark.visual_judge.camera_dsl import CameraConstraintSet
 from benchmark.visual_judge.interfaces.camera import (
     CameraSelectionRequest,
+    EvidenceReadinessRequest,
 )
 
 
@@ -231,6 +232,112 @@ def test_candidate_selector_compacts_canonical_scene_and_preview_metadata(
         "context_compaction_version"
     ] == "camera_selector_context_compaction_v1"
     assert transport.last_request_metadata["structured_context_chars"] < 5000
+
+
+def test_evidence_readiness_is_camera_only_and_attaches_current_images(
+    tmp_path: Path,
+) -> None:
+    image_path = tmp_path / "current.png"
+    _candidate(image_path)
+    model = _Model(
+        {
+            "outcome": "pass",
+            "supporting_evidence_refs": ["image_00"],
+            "visible_observations": [
+                "interaction_side_visible",
+                "front_back_disambiguated",
+            ],
+            "missing_observations": [],
+            "view_goal": "",
+            "reason": "The opposing side geometry is interpretable.",
+            "provenance": {},
+        }
+    )
+    transport = OpenAICompatibleCameraSelector(model)
+    active = ActiveVLMCameraSelector(
+        transport,
+        selection_mode="repair_plan",
+        repair_solver=DeterministicCameraRepairSolver(),
+    )
+    request = EvidenceReadinessRequest(
+        task="scene_quality",
+        metric="functional_consistency",
+        check_id="check-tv-sofa",
+        check_type="directional_correspondence",
+        target_ids=("a", "b"),
+        scene={
+            "scene_id": "scene",
+            "objects": [
+                {"id": "a", "category": "sofa"},
+                {"id": "b", "category": "television"},
+            ],
+        },
+        required_observations=(
+            "interaction_side_visible",
+            "front_back_disambiguated",
+        ),
+        current_visual_evidence=(str(image_path),),
+        budget={"remaining_selector_calls": 3},
+        context={
+            "route_scope": "cross_group",
+            "functional_check": {
+                "joint_task": "viewing",
+                "constraint_kind": "directional_correspondence",
+            },
+        },
+    )
+
+    result = active.review_evidence_readiness(request)
+
+    assert result.outcome == "pass"
+    assert result.supporting_evidence_refs == ("image_00",)
+    assert transport.last_request_metadata["decision_contract"] == (
+        "camera_evidence_readiness_v1"
+    )
+    assert transport.last_request_metadata["selection_mode"] == (
+        "evidence_readiness"
+    )
+    user_content = model.calls[0]["messages"][1]["content"]
+    assert sum(
+        item.get("type") == "image_url" for item in user_content
+    ) == 1
+    system = model.calls[0]["messages"][0]["content"]
+    assert "You do not judge the benchmark metric" in system
+    assert "soft evidence contract" in system
+
+
+def test_evidence_readiness_cannot_invent_observations(
+    tmp_path: Path,
+) -> None:
+    image_path = tmp_path / "current.png"
+    _candidate(image_path)
+    transport = OpenAICompatibleCameraSelector(
+        _Model(
+            {
+                "outcome": "acquire",
+                "supporting_evidence_refs": ["image_00"],
+                "visible_observations": [],
+                "missing_observations": ["invented_observation"],
+                "view_goal": "show something else",
+                "reason": "missing",
+                "provenance": {},
+            }
+        )
+    )
+    request = EvidenceReadinessRequest(
+        task="scene_quality",
+        metric="functional_consistency",
+        check_id="check-a",
+        check_type="clearance",
+        target_ids=("a",),
+        scene={"objects": [{"id": "a"}]},
+        required_observations=("approach_clearance_visible",),
+        current_visual_evidence=(str(image_path),),
+        budget={"remaining_selector_calls": 3},
+    )
+
+    with pytest.raises(ValueError, match="declared observations"):
+        transport.review_evidence_readiness(request)
 
 
 def test_legacy_query_cov_compatibility_does_not_construct_judge(

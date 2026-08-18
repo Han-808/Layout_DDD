@@ -67,6 +67,8 @@ def acquire_functional_boundary_evidence(
         "functional_geometry": {},
         "decoder_audit": {},
         "decoder_calls": 0,
+        "catalog_contract_hits": 0,
+        "catalog_contract_misses": 0,
         "cache_hits": 0,
         "preview_render_count": 0,
         "provider_invoked": False,
@@ -121,6 +123,12 @@ def acquire_functional_boundary_evidence(
     )
     audit["decoder_calls"] = _nonnegative_int(
         decoder.get("decoder_calls", 0)
+    )
+    audit["catalog_contract_hits"] = _nonnegative_int(
+        decoder.get("catalog_contract_hits", 0)
+    )
+    audit["catalog_contract_misses"] = _nonnegative_int(
+        decoder.get("catalog_contract_misses", 0)
     )
     audit["cache_hits"] = _nonnegative_int(
         decoder.get("cache_hits", 0)

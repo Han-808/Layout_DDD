@@ -23,6 +23,7 @@ QUERY_NODE_KINDS = frozenset(
         "relation_candidate",
         "evidence_artifact",
         "evidence_request",
+        "evidence_readiness_review",
         "acquisition_episode",
         "camera_selection",
         "judge_call",
@@ -42,6 +43,8 @@ QUERY_EDGE_KINDS = frozenset(
         "uses_evidence",
         "judged_by",
         "requests_evidence",
+        "reviews_evidence_for",
+        "reviews_evidence",
         "starts_episode",
         "contains_episode",
         "contains_selection",
@@ -81,7 +84,18 @@ EDGE_ENDPOINT_KINDS = {
     ),
     "uses_evidence": ({"claim", "judge_call"}, {"evidence_artifact"}),
     "judged_by": ({"claim"}, {"judge_call"}),
-    "requests_evidence": ({"judge_call"}, {"evidence_request"}),
+    "requests_evidence": (
+        {"judge_call", "evidence_readiness_review"},
+        {"evidence_request"},
+    ),
+    "reviews_evidence_for": (
+        {"claim"},
+        {"evidence_readiness_review"},
+    ),
+    "reviews_evidence": (
+        {"evidence_readiness_review"},
+        {"evidence_artifact"},
+    ),
     "starts_episode": ({"evidence_request"}, {"acquisition_episode"}),
     "contains_episode": ({"evaluation"}, {"acquisition_episode"}),
     "contains_selection": (

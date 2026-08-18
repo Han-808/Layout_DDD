@@ -11,6 +11,9 @@ from PIL import Image, PngImagePlugin
 
 from benchmark.visual_judge import OpenAICompatibleVLMJudge, build_openai_compatible_vlm_judge, evaluate_vlm_category
 from benchmark.visual_judge.openai_compatible import (
+    _functional_preflight_response,
+    _residual_placement_canonical_scene,
+    _require_placement_residual_context_in_model_context,
     _select_judge_visual_paths,
     _selector_candidate_order_key,
 )
@@ -43,6 +46,306 @@ class FakeMultimodalModel:
         return json.dumps(self.responses[index])
 
 
+def test_residual_placement_context_delivery_requires_complete_roster() -> None:
+    source = {
+        "scene_program": {
+            "scene_type": "living_room",
+            "aesthetic_theme_in_scope": False,
+            "generation_prompt_in_scope": False,
+        },
+        "object_inventory": [
+            {
+                "object_id": "sofa",
+                "category": "sofa",
+                "group_ids": ["seating"],
+            },
+            {
+                "object_id": "television",
+                "category": "television",
+                "group_ids": ["media"],
+            },
+        ],
+        "object_inventory_complete": True,
+        "groups": [
+            {"group_id": "seating", "object_ids": ["sofa"]},
+            {"group_id": "media", "object_ids": ["television"]},
+        ],
+    }
+    audit = _require_placement_residual_context_in_model_context(
+        json.dumps(
+            {
+                "placement_residual_context": source,
+                "object_groups": source["groups"],
+            }
+        ),
+        source_context=source,
+    )
+
+    assert audit == {
+        "schema_version": (
+            "placement_residual_context_delivery_audit_v2"
+        ),
+        "scene_type": "living_room",
+        "expected_object_count": 2,
+        "delivered_object_count": 2,
+        "object_ids_complete": True,
+        "group_ids": ["seating", "media"],
+        "group_roster_complete": True,
+        "group_semantic_metadata_delivered": False,
+        "aesthetic_theme_delivered": False,
+        "generation_prompt_delivered": False,
+    }
+
+    truncated = deepcopy(source)
+    truncated["object_inventory"] = truncated["object_inventory"][:1]
+    with pytest.raises(ValueError, match="complete object inventory"):
+        _require_placement_residual_context_in_model_context(
+            json.dumps(
+                {
+                    "placement_residual_context": truncated,
+                    "object_groups": source["groups"],
+                }
+            ),
+            source_context=source,
+        )
+
+    leaked = {
+        "placement_residual_context": source,
+        "object_groups": source["groups"],
+        "natural_language_request": "Make a luxurious modern room",
+    }
+    with pytest.raises(ValueError, match="leaked"):
+        _require_placement_residual_context_in_model_context(
+            json.dumps(leaked),
+            source_context=source,
+        )
+
+    leaked_groups = {
+        "placement_residual_context": source,
+        "object_groups": [
+            {
+                "group_id": "seating",
+                "object_ids": ["sofa"],
+                "edge_reasons": ["near:television"],
+            },
+            {"group_id": "media", "object_ids": ["television"]},
+        ],
+    }
+    with pytest.raises(ValueError, match="leaked"):
+        _require_placement_residual_context_in_model_context(
+            json.dumps(leaked_groups),
+            source_context=source,
+        )
+
+
+def test_residual_placement_scene_json_keeps_geometry_not_style_text() -> None:
+    compact = _residual_placement_canonical_scene(
+        {
+            "scene_id": "scene_1",
+            "scene_type": "living_room",
+            "boundary": [[0, 0], [5, 0], [5, 5], [0, 5]],
+            "objects": [
+                {
+                    "id": "sofa",
+                    "category": "sofa",
+                    "description": "luxurious modern velvet sofa",
+                    "center": [1.0, 2.0, 0.5],
+                    "size": [2.0, 0.9, 1.0],
+                    "rotation": [0.0, 0.0, 0.0],
+                }
+            ],
+        }
+    )
+
+    assert compact["objects"] == [
+        {
+            "id": "sofa",
+            "category": "sofa",
+            "center": [1.0, 2.0, 0.5],
+            "size": [2.0, 0.9, 1.0],
+            "rotation": [0.0, 0.0, 0.0],
+        }
+    ]
+    assert "description" not in compact["objects"][0]
+
+
+def test_residual_placement_model_receives_program_roster_not_theme(
+    tmp_path: Path,
+) -> None:
+    image_path = tmp_path / "residual_global.png"
+    _write_test_png(image_path)
+    model = FakeMultimodalModel(
+        {
+            "evidence_status": "sufficient",
+            "verdict": "valid",
+            "confidence": 0.82,
+            "reason": "No novel scene-level placement defect is visible.",
+            "missing_evidence": [],
+            "defects": [],
+            "evidence_request": None,
+            "group_global_observations": [
+                {
+                    "group_id": "seating",
+                    "object_ids": ["sofa"],
+                    "global_position_observation": (
+                        "The seating group occupies the main living zone."
+                    ),
+                    "related_group_ids": [],
+                    "inter_group_observation": (
+                        "No other group is present in this fixture."
+                    ),
+                    "evidence_sufficiency": "sufficient",
+                    "residual_issue_candidate": "none",
+                }
+            ],
+        }
+    )
+    residual_context = {
+        "schema_version": "placement_residual_context_v3",
+        "scene_program": {
+            "scene_type": "living_room",
+            "aesthetic_theme_in_scope": False,
+            "generation_prompt_in_scope": False,
+        },
+        "object_inventory": [
+            {
+                "object_id": "sofa",
+                "category": "sofa",
+                "group_ids": ["seating"],
+            }
+        ],
+        "object_inventory_complete": True,
+        "groups": [
+            {"group_id": "seating", "object_ids": ["sofa"]}
+        ],
+    }
+
+    result = OpenAICompatibleVLMJudge(model).adjudicate_scene_quality(
+        {
+            "metric": "semantic_placement_consistency",
+            "evidence_phase": "residual_global_placement_review",
+            "decision_mode": "final",
+            "prompt": "Create a luxurious modern living room.",
+            "judgment_scope": {
+                "included": [
+                    "semantically_inappropriate_scene_zone",
+                    "implausible_local_context",
+                ]
+            },
+            "scene_summary": {
+                "scene_id": "scene_1",
+                "scene_type": "living_room",
+                "object_count": 1,
+                "objects": [
+                    {
+                        "id": "sofa",
+                        "category": "sofa",
+                        "description": "luxurious modern velvet sofa",
+                        "center": [1.0, 2.0, 0.5],
+                        "size": [2.0, 0.9, 1.0],
+                        "rotation": [0.0, 0.0, 0.0],
+                    }
+                ],
+            },
+            "object_groups": [
+                {"group_id": "seating", "object_ids": ["sofa"]}
+            ],
+            "placement_residual_context": residual_context,
+            "render_evidence": [str(image_path)],
+        }
+    )
+
+    context = json.loads(
+        model.calls[0]["messages"][1]["content"][0]["text"].split(
+            "\n", 1
+        )[1]
+    )
+    assert context["natural_language_request"] is None
+    assert context["placement_residual_context"] == residual_context
+    assert context["object_groups"] == [
+        {"group_id": "seating", "object_ids": ["sofa"]}
+    ]
+    assert context["canonical_scene"]["objects"][0] == {
+        "id": "sofa",
+        "category": "sofa",
+        "center": [1.0, 2.0, 0.5],
+        "size": [2.0, 0.9, 1.0],
+        "rotation": [0.0, 0.0, 0.0],
+    }
+    assert result["request_metadata"][
+        "placement_residual_context_delivery"
+    ]["object_ids_complete"] is True
+    assert result["group_global_observation_coverage"]["complete"] is True
+
+
+def test_residual_group_observation_schema_failure_is_local_fail_soft(
+    tmp_path: Path,
+) -> None:
+    image_path = tmp_path / "residual_fail_soft.png"
+    _write_test_png(image_path)
+    missing_rows = {
+        "evidence_status": "sufficient",
+        "verdict": "valid",
+        "confidence": 0.7,
+        "reason": "No residual defect is established.",
+        "missing_evidence": [],
+        "defects": [],
+        "evidence_request": None,
+    }
+    model = FakeMultimodalModel([missing_rows, missing_rows])
+    groups = [{"group_id": "seating", "object_ids": ["sofa"]}]
+    result = OpenAICompatibleVLMJudge(model).adjudicate_scene_quality(
+        {
+            "metric": "semantic_placement_consistency",
+            "evidence_phase": "residual_global_placement_review",
+            "decision_mode": "final",
+            "judgment_scope": {
+                "included": ["semantically_inappropriate_scene_zone"]
+            },
+            "scene_summary": {
+                "scene_id": "scene_1",
+                "scene_type": "living_room",
+                "object_count": 1,
+                "objects": [{"id": "sofa", "category": "sofa"}],
+            },
+            "object_groups": groups,
+            "placement_residual_context": {
+                "schema_version": "placement_residual_context_v3",
+                "scene_program": {
+                    "scene_type": "living_room",
+                    "aesthetic_theme_in_scope": False,
+                    "generation_prompt_in_scope": False,
+                },
+                "object_inventory": [
+                    {
+                        "object_id": "sofa",
+                        "category": "sofa",
+                        "group_ids": ["seating"],
+                    }
+                ],
+                "object_inventory_complete": True,
+                "groups": groups,
+            },
+            "render_evidence": [str(image_path)],
+        }
+    )
+
+    assert result["verdict"] == "valid"
+    assert result["evidence_ambiguous"] is True
+    assert result["group_global_observation_coverage"] == {
+        "schema_version": "placement_residual_group_observations_v1",
+        "expected_group_count": 1,
+        "grounded_group_count": 0,
+        "fraction": 0.0,
+        "complete": False,
+        "defaulted_group_ids": ["seating"],
+        "ungrounded_group_ids": ["seating"],
+        "source_by_group": {"seating": "defaulted"},
+        "decision_authority": "none",
+    }
+    assert len(model.calls) == 2
+
+
 def test_ordinary_rejudge_keeps_global_anchor_and_latest_repair_views() -> None:
     paths = [Path(f"/tmp/image_{index}.png") for index in range(8)]
 
@@ -56,6 +359,63 @@ def test_ordinary_rejudge_keeps_global_anchor_and_latest_repair_views() -> None:
     assert audit["visual_selection_policy"] == (
         "global_anchor_plus_most_recent"
     )
+
+
+def test_functional_preflight_requests_recovery_before_binary_judge(
+    tmp_path: Path,
+) -> None:
+    initial = tmp_path / "initial.png"
+    replacement = tmp_path / "replacement.png"
+    _write_test_png(initial)
+    _write_test_png(replacement)
+    request = {
+        "functional_evidence_preflight": {
+            "active": True,
+            "check_id": "functional_check_001",
+            "target_ids": ["cabinet"],
+            "missing_observations": [
+                "interaction_side_visible",
+                "front_back_disambiguated",
+            ],
+            "initial_evidence_refs": [str(initial)],
+            "reason_codes": ["usable_surface_not_machine_resolved"],
+        }
+    }
+    checks = [
+        {
+            "check_id": "functional_check_001",
+            "target_ids": ["cabinet"],
+        }
+    ]
+
+    response = _functional_preflight_response(
+        request,
+        selected_paths=[initial],
+        required_checks=checks,
+        allowed_missing_observations=(
+            "interaction_side_visible",
+            "front_back_disambiguated",
+        ),
+        allowed_target_ids=("cabinet",),
+        forced_choice=False,
+    )
+
+    assert response is not None
+    assert response["verdict"] == "ambiguous"
+    assert response["functional_check_results"][0]["conclusion"] == (
+        "unresolved"
+    )
+    assert _functional_preflight_response(
+        request,
+        selected_paths=[initial, replacement],
+        required_checks=checks,
+        allowed_missing_observations=(
+            "interaction_side_visible",
+            "front_back_disambiguated",
+        ),
+        allowed_target_ids=("cabinet",),
+        forced_choice=False,
+    ) is None
 
 
 def _request(image_path: Path) -> dict:
@@ -1747,6 +2107,207 @@ def test_required_functional_checks_fail_closed_before_context_truncation(
     assert model.calls == []
 
 
+def test_functional_measurements_survive_large_probe_packet_budgeting(
+    tmp_path: Path,
+) -> None:
+    image_path = tmp_path / "functional_measurement_context.png"
+    _write_test_png(image_path)
+    check = {
+        "check_id": "functional_check_001",
+        "check_type": "clearance",
+        "owner_stage": "group_local",
+        "target_ids": ["cabinet"],
+        "required_observations": ["approach_zone_visible"],
+        "observation_goals": ["inspect usable-side-forward clearance"],
+        "artifact_rendered": True,
+        "machine_view_coverage_status": "sufficient",
+        "machine_view_coverage_usable": True,
+    }
+    measurements = {
+        "schema_version": "functional_measurement_bank_v1",
+        "status": "complete",
+        "measurement_role": (
+            "deterministic_spatial_evidence_not_verdict"
+        ),
+        "decision_authority": "none",
+        "requested_check_ids": ["functional_check_001"],
+        "check_measurements": [
+            {
+                "check_id": "functional_check_001",
+                "check_type": "clearance",
+                "target_ids": ["cabinet"],
+                "status": "complete",
+                "measurement_extensions": {
+                    "directional_clearance": {
+                        "source": "deterministic",
+                        "decision_authority": "none",
+                        "measurement": {
+                            "nearest_forward_obstacle_distance_m": 1.1,
+                            "decision_authority": "none",
+                        },
+                    }
+                },
+            }
+        ],
+    }
+    response = {
+        "evidence_status": "sufficient",
+        "verdict": "valid",
+        "confidence": 0.8,
+        "reason": "The measured and visible clearance is adequate.",
+        "missing_evidence": [],
+        "defects": [],
+        "evidence_request": None,
+        "functional_check_results": [
+            {
+                "check_id": "functional_check_001",
+                "target_ids": ["cabinet"],
+                "observation_status": "observed",
+                "conclusion": "valid",
+                "reason": "The measured and visible clearance is adequate.",
+            }
+        ],
+    }
+    model = FakeMultimodalModel(response)
+
+    result = OpenAICompatibleVLMJudge(
+        model,
+        max_context_chars=25_000,
+    ).adjudicate_scene_quality(
+        {
+            "metric": "functional_consistency",
+            "metric_prompt_version": L3_METRIC_PROMPT_VERSION,
+            "metric_boundary_rules": list(L3_METRIC_BOUNDARY_RULES),
+            "evidence_phase": "group_local_review",
+            "decision_mode": "final",
+            "judgment_scope": {
+                "included": ["interaction_side_accessibility"]
+            },
+            "target_object_ids": ["cabinet"],
+            "render_evidence": [str(image_path)],
+            "required_functional_checks": [check],
+            "functional_probe_evidence": {
+                "required_checks": [check],
+                "functional_measurements": measurements,
+                "observation_requests": [
+                    {
+                        "probe_id": f"probe_{index:03d}",
+                        "neutral_observation_goal": "x" * 300,
+                    }
+                    for index in range(200)
+                ],
+            },
+        }
+    )
+
+    assert result["verdict"] == "valid"
+    assert len(model.calls) == 1
+    context = json.loads(
+        model.calls[0]["messages"][1]["content"][0]["text"].split(
+            "\n", 1
+        )[1]
+    )
+    assert context["functional_measurements"] == measurements
+    assert context["functional_measurements"].get("_truncated") is not True
+
+
+def test_oversized_functional_measurements_are_soft_evidence(
+    tmp_path: Path,
+) -> None:
+    image_path = tmp_path / "oversized_functional_measurement.png"
+    _write_test_png(image_path)
+    check = {
+        "check_id": "functional_check_001",
+        "check_type": "clearance",
+        "owner_stage": "group_local",
+        "target_ids": ["cabinet"],
+        "required_observations": ["approach_zone_visible"],
+        "observation_goals": ["inspect clearance"],
+    }
+    measurements = {
+        "schema_version": "functional_measurement_bank_v1",
+        "status": "complete",
+        "requested_check_ids": ["functional_check_001"],
+        "check_measurements": [
+            {
+                "check_id": "functional_check_001",
+                "check_type": "clearance",
+                "target_ids": ["cabinet"],
+                "status": "complete",
+                "measurement_extensions": {
+                    "directional_clearance": {
+                        "measurement": {
+                            "forward_intersections": [
+                                {
+                                    "object_id": f"object_{index:03d}",
+                                    "audit_detail": "x" * 200,
+                                }
+                                for index in range(100)
+                            ]
+                        }
+                    }
+                },
+            }
+        ],
+    }
+    model = FakeMultimodalModel(
+        {
+            "evidence_status": "sufficient",
+            "verdict": "valid",
+            "confidence": 0.8,
+            "reason": "The visible evidence supports a valid choice.",
+            "missing_evidence": [],
+            "defects": [],
+            "evidence_request": None,
+            "functional_check_results": [
+                {
+                    "check_id": "functional_check_001",
+                    "target_ids": ["cabinet"],
+                    "observation_status": "observed",
+                    "conclusion": "valid",
+                    "reason": (
+                        "The visible evidence supports a valid choice."
+                    ),
+                }
+            ],
+        }
+    )
+
+    result = OpenAICompatibleVLMJudge(
+        model,
+        max_context_chars=5_000,
+    ).adjudicate_scene_quality(
+        {
+            "metric": "functional_consistency",
+            "metric_prompt_version": L3_METRIC_PROMPT_VERSION,
+            "metric_boundary_rules": list(L3_METRIC_BOUNDARY_RULES),
+            "evidence_phase": "group_local_review",
+            "decision_mode": "final",
+            "judgment_scope": {
+                "included": ["interaction_side_accessibility"]
+            },
+            "target_object_ids": ["cabinet"],
+            "render_evidence": [str(image_path)],
+            "required_functional_checks": [check],
+            "functional_probe_evidence": {
+                "required_checks": [check],
+                "functional_measurements": measurements,
+            },
+        }
+    )
+
+    assert len(model.calls) == 1
+    assert result["verdict"] == "valid"
+    assert result["evidence_ambiguous"] is True
+    delivery = result["functional_measurement_delivery_audit"]
+    assert delivery["status"] == "unavailable"
+    assert delivery["truncated"] is True
+    assert delivery["blocks_judge"] is False
+    assert result["request_metadata"]["functional_measurement_delivery"] == (
+        delivery
+    )
+
+
 def test_scene_quality_adapter_keeps_semantic_placement_out_of_l1(
     tmp_path: Path,
 ) -> None:
@@ -1839,6 +2400,92 @@ def test_scene_quality_adapter_keeps_semantic_placement_out_of_l1(
     assert model.calls[0]["kwargs"]["call_type"] == (
         "vlm_judge.canonical.semantic_placement_consistency"
     )
+
+
+def test_placement_schema_fallback_preserves_legal_initial_judge_candidate(
+    tmp_path: Path,
+) -> None:
+    image_path = tmp_path / "placement_salvage.png"
+    _write_test_png(image_path)
+    initial = {
+        "evidence_status": "sufficient",
+        "verdict": "invalid",
+        "confidence": 2.0,
+        "reason": "The phone occupies an implausible room zone.",
+        "missing_evidence": [],
+        "defects": [
+            {
+                "scope": "semantically_inappropriate_scene_zone",
+                "target_ids": ["phone"],
+                "relation": "scene_zone",
+                "reason": "The phone occupies an implausible room zone.",
+                "severity": "material_contextual_mismatch",
+                "check_id": "proposal-zone",
+            }
+        ],
+        "judge_originated_placement_results": [
+            {
+                "proposal_id": "proposal-zone",
+                "subject_id": "phone",
+                "context_ids": [],
+                "check_type": "scene_zone",
+                "observation_goal": "Inspect the phone's room zone.",
+                "observation_status": "observed",
+                "conclusion": "invalid",
+                "reason": "The phone occupies an implausible room zone.",
+                "severity": "material_contextual_mismatch",
+            }
+        ],
+    }
+    repair = {
+        "evidence_status": "sufficient",
+        "verdict": "valid",
+        "confidence": 0.8,
+        "reason": "Repair attempted to replace the finding.",
+        "missing_evidence": [],
+        "defects": [],
+    }
+    model = FakeMultimodalModel([initial, repair])
+
+    result = OpenAICompatibleVLMJudge(model).adjudicate_scene_quality(
+        {
+            "metric": "semantic_placement_consistency",
+            "evidence_phase": "global_discovery",
+            "decision_mode": "final",
+            "judgment_scope": {
+                "included": [
+                    "semantically_inappropriate_support_surface",
+                    "implausible_placement_height",
+                    "semantically_inappropriate_scene_zone",
+                    "implausible_local_context",
+                ],
+                "excluded": ["collision", "physical_support"],
+            },
+            "target_object_ids": ["phone", "side_table"],
+            "scene_summary": {
+                "scene_type": "living_room",
+                "objects": [
+                    {"id": "phone", "category": "telephone"},
+                    {"id": "side_table", "category": "side_table"},
+                ],
+            },
+            "object_groups": [
+                {
+                    "group_id": "group-1",
+                    "object_ids": ["phone", "side_table"],
+                }
+            ],
+            "render_evidence": [str(image_path)],
+        }
+    )
+
+    assert result["verdict"] == "invalid"
+    assert result["placement_check_results"][0]["conclusion"] == (
+        "invalid"
+    )
+    assert result["request_metadata"]["response_schema_validation"][
+        "item_level_salvage"
+    ] is True
 
 
 def test_global_placement_prompt_defers_group_local_discovery_miss(

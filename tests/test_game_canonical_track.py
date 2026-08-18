@@ -312,7 +312,9 @@ def test_report_records_the_l1_thresholds_that_produced_the_score(tmp_path: Path
     assert recorded[L1] == _game_profile()[L1]["metric_config"]
 
 
-def test_l3_stays_unresolved_when_the_case_declares_no_asset_policy(tmp_path: Path) -> None:
+def test_l3_pending_applicability_fails_official_coverage_threshold(
+    tmp_path: Path,
+) -> None:
     scene, geometry = _exported_level(tmp_path)
     root = _bundle(tmp_path, scene)
 
@@ -320,9 +322,10 @@ def test_l3_stays_unresolved_when_the_case_declares_no_asset_policy(tmp_path: Pa
     del manifest["artifacts"]["asset_policy"]
     write_json(root / "case_bundle.json", manifest)
 
-    # Without an asset policy every L3 metric is conservatively 'pending', so
-    # Scene Quality cannot score and the official run refuses to certify.
-    with pytest.raises(SubmissionEvaluationError, match="complete metric coverage"):
+    with pytest.raises(
+        SubmissionEvaluationError,
+        match="complete metric coverage",
+    ):
         evaluate_submission(
             scene=scene,
             case_bundle=load_case_bundle(root),
@@ -332,7 +335,10 @@ def test_l3_stays_unresolved_when_the_case_declares_no_asset_policy(tmp_path: Pa
             official_mode=True,
         )
 
-    written = json.loads((tmp_path / "run" / "evaluation_report.json").read_text())
+    written = read_json(tmp_path / "run" / "evaluation_report.json")
     style = written["layer_reports"][L3]["metrics"]["style_consistency"]
-    assert style["status"] == "unresolved"
-    assert style["reason"] == "metric_applicability_pending"
+    assert style["status"] == "evaluated"
+    assert style["terminal_state"] == "evaluated_degraded"
+    assert style["coverage"]["score_grounding"]["fraction"] == 0.0
+    assert style["judgement"]["evidence_ambiguous"] is True
+    assert written["benchmark_score_status"] == "failed_coverage_threshold"

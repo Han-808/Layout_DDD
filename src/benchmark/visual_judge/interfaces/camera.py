@@ -14,6 +14,9 @@ CAMERA_SELECTION_OUTCOMES = {
     "no_feasible_candidate",
 }
 
+EvidenceReadinessOutcome = Literal["pass", "acquire"]
+EVIDENCE_READINESS_OUTCOMES = {"pass", "acquire"}
+
 
 @dataclass(frozen=True)
 class TrustedCameraCandidateBank:
@@ -198,6 +201,183 @@ class CameraSelectionResult:
         }
 
 
+@dataclass(frozen=True)
+class EvidenceReadinessRequest:
+    """CameraSelector-owned review of whether one visual packet is usable.
+
+    This contract is deliberately narrower than metric judging.  It may only
+    decide whether the current images expose the observations already required
+    by one typed check.  It cannot add a check, infer a defect, or emit a metric
+    verdict.
+    """
+
+    task: str
+    metric: str
+    check_id: str
+    check_type: str
+    target_ids: tuple[str, ...]
+    scene: dict[str, Any]
+    required_observations: tuple[str, ...]
+    current_visual_evidence: tuple[Any, ...]
+    budget: dict[str, int]
+    context: dict[str, Any] = field(default_factory=dict)
+    allow_scene_mutation: bool = False
+
+    def __post_init__(self) -> None:
+        if self.allow_scene_mutation is not False:
+            raise ValueError(
+                "evidence readiness has read-only scene access"
+            )
+        if not self.check_id.strip():
+            raise ValueError("evidence readiness requires check_id")
+        if not self.check_type.strip():
+            raise ValueError("evidence readiness requires check_type")
+        if not self.target_ids or any(
+            not str(item).strip() for item in self.target_ids
+        ):
+            raise ValueError(
+                "evidence readiness requires non-empty target_ids"
+            )
+        if not self.required_observations or any(
+            not str(item).strip() for item in self.required_observations
+        ):
+            raise ValueError(
+                "evidence readiness requires declared observations"
+            )
+        if not self.current_visual_evidence:
+            raise ValueError(
+                "evidence readiness requires current visual evidence"
+            )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "vlm_role": "vlm_camera_selector",
+            "decision_contract": "camera_evidence_readiness_v1",
+            "task": self.task,
+            "metric": self.metric,
+            "check_id": self.check_id,
+            "check_type": self.check_type,
+            "target_ids": list(self.target_ids),
+            "scene_context": deepcopy(self.scene),
+            "required_observations": list(
+                self.required_observations
+            ),
+            "current_visual_evidence": list(
+                deepcopy(self.current_visual_evidence)
+            ),
+            "evidence_budget": deepcopy(self.budget),
+            "scene_access": "read_only",
+            "allow_scene_mutation": False,
+            "context": deepcopy(self.context),
+        }
+
+
+@dataclass(frozen=True)
+class EvidenceReadinessResult:
+    outcome: str
+    reason: str
+    supporting_evidence_refs: tuple[str, ...] = ()
+    visible_observations: tuple[str, ...] = ()
+    missing_observations: tuple[str, ...] = ()
+    view_goal: str = ""
+    backend: str = "unknown"
+    provenance: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_value(
+        cls,
+        value: Any,
+        *,
+        request: EvidenceReadinessRequest | None = None,
+        backend: str = "unknown",
+    ) -> "EvidenceReadinessResult":
+        if isinstance(value, cls):
+            value = value.to_dict()
+        if not isinstance(value, dict):
+            raise ValueError(
+                "evidence readiness response must be a JSON object"
+            )
+        outcome = str(value.get("outcome") or "").strip()
+        if outcome not in EVIDENCE_READINESS_OUTCOMES:
+            raise ValueError(
+                "evidence readiness outcome must be pass or acquire"
+            )
+        reason = str(value.get("reason") or "").strip()
+        if not reason:
+            raise ValueError("evidence readiness requires a reason")
+        supporting = _string_tuple(
+            value.get("supporting_evidence_refs")
+        )
+        visible = _string_tuple(value.get("visible_observations"))
+        missing = _string_tuple(value.get("missing_observations"))
+        view_goal = str(value.get("view_goal") or "").strip()
+        if outcome == "pass":
+            if not supporting:
+                raise ValueError(
+                    "evidence readiness pass requires supporting evidence"
+                )
+            if missing or view_goal:
+                raise ValueError(
+                    "evidence readiness pass cannot request acquisition"
+                )
+        else:
+            if not missing or not view_goal:
+                raise ValueError(
+                    "evidence readiness acquire requires missing observations "
+                    "and a view_goal"
+                )
+        if request is not None:
+            allowed = set(request.required_observations)
+            unknown_observations = (set(visible) | set(missing)) - allowed
+            if unknown_observations:
+                raise ValueError(
+                    "evidence readiness may only reference declared "
+                    "observations: "
+                    f"{sorted(unknown_observations)}"
+                )
+            aliases = {
+                f"image_{index:02d}"
+                for index in range(
+                    len(request.current_visual_evidence)
+                )
+            }
+            unknown_refs = set(supporting) - aliases
+            if unknown_refs:
+                raise ValueError(
+                    "evidence readiness references unknown images: "
+                    f"{sorted(unknown_refs)}"
+                )
+        provenance = value.get("provenance") or {}
+        if not isinstance(provenance, dict):
+            raise ValueError(
+                "evidence readiness provenance must be a JSON object"
+            )
+        return cls(
+            outcome=outcome,
+            reason=reason,
+            supporting_evidence_refs=supporting,
+            visible_observations=visible,
+            missing_observations=missing,
+            view_goal=view_goal,
+            backend=str(value.get("backend") or backend),
+            provenance=deepcopy(provenance),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "outcome": self.outcome,
+            "reason": self.reason,
+            "supporting_evidence_refs": list(
+                self.supporting_evidence_refs
+            ),
+            "visible_observations": list(self.visible_observations),
+            "missing_observations": list(self.missing_observations),
+            "view_goal": self.view_goal,
+            "backend": self.backend,
+            "provenance": deepcopy(self.provenance),
+        }
+
+
 @runtime_checkable
 class CameraSelector(Protocol):
     def select(self, request: CameraSelectionRequest) -> CameraSelectionResult: ...
@@ -207,3 +387,14 @@ def _positive_int(value: Any, label: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
         raise ValueError(f"{label} must be a positive integer")
     return value
+
+
+def _string_tuple(value: Any) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, (list, tuple)):
+        raise ValueError("expected a JSON list of strings")
+    result = tuple(str(item).strip() for item in value)
+    if any(not item for item in result) or len(result) != len(set(result)):
+        raise ValueError("strings must be unique and non-empty")
+    return result

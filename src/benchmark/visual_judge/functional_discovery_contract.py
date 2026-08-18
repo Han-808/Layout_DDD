@@ -13,12 +13,12 @@ from dataclasses import dataclass, field
 from typing import Any, Mapping
 
 
-FUNCTIONAL_DISCOVERY_SCHEMA_VERSION = "functional_discovery_v4"
-FUNCTIONAL_DISCOVERY_PROMPT_VERSION = "functional_discovery_v13"
+FUNCTIONAL_DISCOVERY_SCHEMA_VERSION = "functional_discovery_v6"
+FUNCTIONAL_DISCOVERY_PROMPT_VERSION = "functional_discovery_v15"
 FUNCTIONAL_AFFORDANCE_SCHEMA_VERSION = "functional_affordance_ledger_v4"
-FUNCTIONAL_AFFORDANCE_PROMPT_VERSION = "functional_affordance_ledger_v8"
-FUNCTIONAL_RELATION_SCHEMA_VERSION = "functional_relation_audit_v3"
-FUNCTIONAL_RELATION_PROMPT_VERSION = "functional_relation_audit_v8"
+FUNCTIONAL_AFFORDANCE_PROMPT_VERSION = "functional_affordance_ledger_v9"
+FUNCTIONAL_RELATION_SCHEMA_VERSION = "functional_relation_audit_v4"
+FUNCTIONAL_RELATION_PROMPT_VERSION = "functional_relation_audit_v10"
 
 FUNCTIONAL_SURFACE_ROLES = frozenset(
     {
@@ -36,6 +36,26 @@ FUNCTIONAL_RELATION_PREDICATES = frozenset(
     {
         "directional_correspondence",
         "relative_use_geometry",
+    }
+)
+FUNCTIONAL_RELATION_DEPENDENCIES = frozenset(
+    {
+        "required",
+        "contextual",
+    }
+)
+FUNCTIONAL_COUNTERPART_MODES = frozenset(
+    {
+        "dedicated",
+        "shared",
+        "alternative",
+    }
+)
+FUNCTIONAL_ORDINARY_MOBILITY = frozenset(
+    {
+        "fixed",
+        "movable_companion",
+        "portable_unrelated",
     }
 )
 # Frozen discovery-v3 records are normalized through this map before current
@@ -117,17 +137,29 @@ class FunctionalDiscoveryResult:
     approach_clearance_targets: tuple[dict[str, Any], ...] = ()
     boundary_sensitive_targets: tuple[dict[str, Any], ...] = ()
     unusual_unconfirmed: tuple[dict[str, Any], ...] = ()
+    relation_admission_audit: dict[str, Any] = field(default_factory=dict)
     reason: str = ""
+    coverage: dict[str, Any] = field(default_factory=dict)
     provenance: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
+        affordance_coverage = (
+            self.coverage.get("affordance")
+            if isinstance(self.coverage.get("affordance"), dict)
+            else {}
+        )
+        defaulted_ids = {
+            str(item)
+            for item in affordance_coverage.get("defaulted_object_ids") or []
+        }
         return {
             "schema_version": FUNCTIONAL_DISCOVERY_SCHEMA_VERSION,
             "inspected_object_ids": list(self.inspected_object_ids),
             "object_coverage": [
                 {
                     "object_id": object_id,
-                    "inspected": True,
+                    "inspected": object_id not in defaulted_ids,
+                    "defaulted": object_id in defaulted_ids,
                     **deepcopy(
                         next(
                             (
@@ -166,7 +198,11 @@ class FunctionalDiscoveryResult:
             "unusual_unconfirmed": list(
                 deepcopy(self.unusual_unconfirmed)
             ),
+            "relation_admission_audit": deepcopy(
+                self.relation_admission_audit
+            ),
             "reason": self.reason,
+            "coverage": deepcopy(self.coverage),
             "decision_authority": "none",
             "provenance": deepcopy(self.provenance),
         }
@@ -176,13 +212,16 @@ __all__ = [
     "FUNCTIONAL_AFFORDANCE_PROMPT_VERSION",
     "FUNCTIONAL_AFFORDANCE_SCHEMA_VERSION",
     "FUNCTIONAL_DIRECTIONALITY",
+    "FUNCTIONAL_COUNTERPART_MODES",
     "FUNCTIONAL_DISCOVERY_PROMPT_VERSION",
     "FUNCTIONAL_DISCOVERY_SCHEMA_VERSION",
     "FUNCTIONAL_RELATION_PREDICATES",
     "FUNCTIONAL_RELATION_OBSERVATIONS",
+    "FUNCTIONAL_RELATION_DEPENDENCIES",
     "FUNCTIONAL_RELATION_PROMPT_VERSION",
     "FUNCTIONAL_RELATION_SCHEMA_VERSION",
     "FUNCTIONAL_REVIEW_STATES",
+    "FUNCTIONAL_ORDINARY_MOBILITY",
     "FUNCTIONAL_SURFACE_ROLES",
     "LEGACY_FUNCTIONAL_RELATION_PREDICATE_MAP",
     "FunctionalDiscoveryResult",

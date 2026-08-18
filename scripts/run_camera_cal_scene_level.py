@@ -17,6 +17,7 @@ from copy import deepcopy
 from datetime import datetime, timezone
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -43,8 +44,11 @@ from benchmark.evaluator.profile import (  # noqa: E402
     L4,
 )
 from benchmark.evaluator.scoring import (  # noqa: E402
+    DEFAULT_DEDUCTION_MULTIPLIER,
+    DEDUCTION_MULTIPLIER_METRICS,
     INTRINSIC_VALIDITY_PROFILE_ID,
     L3_METRIC_WEIGHTS,
+    MIN_PUBLISHABLE_SCORE_COVERAGE,
 )
 from benchmark.evaluator.scene_quality.functional_ownership import (  # noqa: E402
     CROSS_METRIC_OWNERSHIP_AUDIT_VERSION,
@@ -54,7 +58,12 @@ from benchmark.evaluator.scene_quality.placement_checks import (  # noqa: E402
     PLACEMENT_CHECK_LEDGER_VERSION,
     PLACEMENT_CHECK_RESULT_VERSION,
 )
-from benchmark.models import OpenAICompatibleModel  # noqa: E402
+from benchmark.models import (  # noqa: E402
+    EndpointConfigurationError,
+    EndpointStabilityPreflightError,
+    OpenAICompatibleModel,
+    run_endpoint_stability_preflight,
+)
 from benchmark.rendering import (  # noqa: E402
     CYCLES_DEVICES,
     RENDER_ENGINES,
@@ -90,8 +99,8 @@ from benchmark.visual_judge.graphs import (  # noqa: E402
 )
 
 
-RUNNER_SCHEMA_VERSION = "camera_cal_scene_level_runner_v8"
-PLAN_SCHEMA_VERSION = "camera_cal_scene_level_plan_v1"
+RUNNER_SCHEMA_VERSION = "camera_cal_scene_level_runner_v9"
+PLAN_SCHEMA_VERSION = "camera_cal_scene_level_plan_v2"
 CASE_SCHEMA_VERSION = "camera_cal_scene_level_case_v5"
 COMPARISON_SCHEMA_VERSION = "camera_cal_scene_comparison_v1"
 SUMMARY_SCHEMA_VERSION = "camera_cal_scene_level_summary_v2"
@@ -164,7 +173,7 @@ FUNCTIONAL_PROBE_IMPLEMENTATION_FILES = (
     "src/benchmark/visual_judge/usable_surface.py",
 )
 
-_CASE_ID_PATTERN = re.compile(r"N\d{3}")
+_CASE_ID_PATTERN = re.compile(r"[NS]\d{3}")
 _ENV_NAME_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 _TOKEN_FIELDS = (
     "prompt_tokens",
@@ -207,6 +216,41 @@ class ProgressReporter:
         return record
 
 
+class ModelRouteAbortSignal:
+    """Run-shared circuit breaker for permanent endpoint route failures."""
+
+    def __init__(self) -> None:
+        self._event = threading.Event()
+        self._lock = threading.Lock()
+        self._error_type: str | None = None
+        self._error: str | None = None
+
+    def trip(self, error: Exception) -> None:
+        with self._lock:
+            if not self._event.is_set():
+                self._error_type = type(error).__name__
+                self._error = _bounded_error(error)
+                self._event.set()
+
+    def is_set(self) -> bool:
+        return self._event.is_set()
+
+    def raise_if_set(self) -> None:
+        if self._event.is_set():
+            raise EndpointConfigurationError(
+                "model route was disabled after a permanent upstream "
+                "configuration failure"
+            )
+
+    def report(self) -> dict[str, Any]:
+        with self._lock:
+            return {
+                "triggered": self._event.is_set(),
+                "error_type": self._error_type,
+                "error": self._error,
+            }
+
+
 class APICallTracker:
     """Record actual logical chat-completions calls and reported token usage."""
 
@@ -217,11 +261,13 @@ class APICallTracker:
         calls_path: Path,
         usage_path: Path,
         progress: ProgressReporter,
+        model_route_abort_signal: ModelRouteAbortSignal | None = None,
     ) -> None:
         self.case_id = str(case_id)
         self.calls_path = calls_path.expanduser().resolve()
         self.usage_path = usage_path.expanduser().resolve()
         self.progress = progress
+        self.model_route_abort_signal = model_route_abort_signal
         self._lock = threading.Lock()
         self._records = read_api_call_records(self.calls_path)
         self._next_call_number = len(self._records) + 1
@@ -344,6 +390,8 @@ class _ObservedChatModel:
         messages: list[dict[str, Any]],
         **kwargs: Any,
     ) -> str:
+        if self._tracker.model_route_abort_signal is not None:
+            self._tracker.model_route_abort_signal.raise_if_set()
         call_type = str(kwargs.get("call_type") or "chat")
         call_number, call_id, started = self._tracker.begin_call(
             role=self._role,
@@ -362,6 +410,11 @@ class _ObservedChatModel:
                 request_metadata=_safe_request_metadata(self._model),
                 error=exc,
             )
+            if (
+                isinstance(exc, EndpointConfigurationError)
+                and self._tracker.model_route_abort_signal is not None
+            ):
+                self._tracker.model_route_abort_signal.trip(exc)
             raise
         self._tracker.finish_call(
             call_number=call_number,
@@ -521,6 +574,7 @@ def run_cases_parallel(
     progress: ProgressReporter,
     max_workers: int,
     continue_on_error: bool,
+    model_route_abort_signal: ModelRouteAbortSignal | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Run cases concurrently without losing already-started final states."""
 
@@ -587,6 +641,15 @@ def run_cases_parallel(
                     ),
                     api_usage=record.get("api_usage"),
                 )
+            route_aborted = bool(
+                model_route_abort_signal is not None
+                and model_route_abort_signal.is_set()
+            )
+            if route_aborted and not fail_fast_triggered:
+                fail_fast_triggered = True
+                for pending in future_to_case:
+                    if pending is not future:
+                        pending.cancel()
     return records, failures
 
 
@@ -629,10 +692,15 @@ def main() -> None:
         functional_group_local_evidence_policy=(
             args.functional_group_local_evidence_policy
         ),
+        deduction_multiplier=args.deduction_multiplier,
         cases=cases,
         renderer_config=renderer_config,
         control=control.to_dict(),
         max_workers=args.max_workers,
+        endpoint_preflight_attempts=args.endpoint_preflight_attempts,
+        endpoint_preflight_timeout_seconds=(
+            args.endpoint_preflight_timeout_seconds
+        ),
         resume=args.resume,
         continue_on_error=args.continue_on_error,
         export_audit_graphs=args.export_audit_graphs,
@@ -644,7 +712,7 @@ def main() -> None:
     failures: list[dict[str, Any]] = []
     run_manifest = {
         "schema_version": RUNNER_SCHEMA_VERSION,
-        "status": "running",
+        "status": "endpoint_preflight",
         "started_at": utc_now(),
         "completed_at": None,
         "elapsed_seconds": None,
@@ -655,8 +723,89 @@ def main() -> None:
         "cases": [],
         "progress_path": str(progress.path),
         "api_usage": api_usage_summary([]),
+        "endpoint_preflight_path": str(
+            (output_root / "endpoint_preflight.json").resolve()
+        ),
     }
     atomic_write_json(output_root / "run_manifest.json", run_manifest)
+    preflight_image = _endpoint_preflight_image(cases[0])
+    progress.emit(
+        "endpoint_preflight_started",
+        attempts=args.endpoint_preflight_attempts,
+        concurrency=min(args.max_workers, args.endpoint_preflight_attempts),
+        model=route["model"],
+    )
+    try:
+        endpoint_preflight = run_endpoint_stability_preflight(
+            endpoint=str(route["endpoint"]),
+            model_id=str(route["model"]),
+            api_key_env=str(route["api_key_env"]),
+            image_path=preflight_image,
+            attempts=args.endpoint_preflight_attempts,
+            concurrency=min(
+                args.max_workers,
+                args.endpoint_preflight_attempts,
+            ),
+            timeout_seconds=args.endpoint_preflight_timeout_seconds,
+        )
+    except EndpointStabilityPreflightError as exc:
+        endpoint_preflight = exc.report
+        atomic_write_json(
+            output_root / "endpoint_preflight.json",
+            endpoint_preflight,
+        )
+        elapsed = time.monotonic() - started
+        run_manifest.update(
+            status="endpoint_preflight_failed",
+            completed_at=utc_now(),
+            elapsed_seconds=elapsed,
+            endpoint_preflight=deepcopy(endpoint_preflight),
+        )
+        atomic_write_json(output_root / "run_manifest.json", run_manifest)
+        progress.emit(
+            "endpoint_preflight_failed",
+            error_type=type(exc).__name__,
+            fatal_route_configuration=bool(
+                endpoint_preflight.get("fatal_route_configuration")
+            ),
+            completed_attempts=endpoint_preflight.get(
+                "completed_attempts"
+            ),
+            attempts_required=endpoint_preflight.get(
+                "attempts_required"
+            ),
+        )
+        print(
+            json.dumps(
+                {
+                    "status": "endpoint_preflight_failed",
+                    "report_path": str(
+                        (output_root / "endpoint_preflight.json").resolve()
+                    ),
+                    "fatal_route_configuration": endpoint_preflight.get(
+                        "fatal_route_configuration"
+                    ),
+                },
+                indent=2,
+            ),
+            flush=True,
+        )
+        raise SystemExit(2) from exc
+    atomic_write_json(
+        output_root / "endpoint_preflight.json",
+        endpoint_preflight,
+    )
+    run_manifest.update(
+        status="running",
+        endpoint_preflight=deepcopy(endpoint_preflight),
+    )
+    atomic_write_json(output_root / "run_manifest.json", run_manifest)
+    progress.emit(
+        "endpoint_preflight_completed",
+        attempts=endpoint_preflight["attempts_required"],
+        api_invocations=endpoint_preflight["api_invocations"],
+        model=route["model"],
+    )
     progress.emit(
         "run_started",
         case_count=len(cases),
@@ -665,6 +814,7 @@ def main() -> None:
         output_root=str(output_root),
     )
 
+    model_route_abort_signal = ModelRouteAbortSignal()
     case_kwargs = {
         "dataset_root": dataset_root,
         "output_root": output_root,
@@ -677,11 +827,13 @@ def main() -> None:
         "functional_group_local_evidence_policy": (
             args.functional_group_local_evidence_policy
         ),
+        "deduction_multiplier": args.deduction_multiplier,
         "renderer_config": renderer_config,
         "control_config": control.to_dict(),
         "resume": args.resume,
         "export_audit_graphs": args.export_audit_graphs,
         "progress": progress,
+        "model_route_abort_signal": model_route_abort_signal,
     }
     if args.max_workers == 1:
         for index, case in enumerate(cases, start=1):
@@ -724,6 +876,8 @@ def main() -> None:
                     ),
                     api_usage=record.get("api_usage"),
                 )
+            if model_route_abort_signal.is_set():
+                break
     else:
         for index, case in enumerate(cases, start=1):
             progress.emit(
@@ -739,9 +893,25 @@ def main() -> None:
             progress=progress,
             max_workers=args.max_workers,
             continue_on_error=args.continue_on_error,
+            model_route_abort_signal=model_route_abort_signal,
         )
         run_records.extend(parallel_records)
         failures.extend(parallel_failures)
+
+    if model_route_abort_signal.is_set():
+        route_abort = model_route_abort_signal.report()
+        failures.append(
+            {
+                "case_id": "__run__",
+                "status": "failed",
+                "reason": "permanent_model_route_configuration_failure",
+                **route_abort,
+            }
+        )
+        progress.emit(
+            "run_model_route_aborted",
+            error_type=route_abort.get("error_type"),
+        )
 
     ordered_records = sorted(
         run_records,
@@ -819,16 +989,41 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--functional-group-local-evidence-policy",
         choices=("isolated_episode", "shared_group_bank"),
-        default="isolated_episode",
+        default="shared_group_bank",
         help=(
             "Functional per-check evidence sharing: isolated_episode keeps "
             "camera follow-ups private to each check; shared_group_bank "
-            "reuses relevant group evidence through a bounded six-image "
-            "active window."
+            "is the default and reuses relevant group evidence through a "
+            "bounded six-image active window."
+        ),
+    )
+    parser.add_argument(
+        "--deduction-multiplier",
+        type=positive_float,
+        default=DEFAULT_DEDUCTION_MULTIPLIER,
+        help=(
+            "Multiply final deductions for Collision, Support, OOB, Scale, "
+            "Style, and Object Pairing (default: 2.0; use 1.0 for the "
+            "unscaled projection)."
         ),
     )
     parser.add_argument("--max-cases", type=positive_int, default=None)
     parser.add_argument("--max-workers", type=positive_int, default=1)
+    parser.add_argument(
+        "--endpoint-preflight-attempts",
+        type=positive_int,
+        default=10,
+        help=(
+            "Required consecutive real-image endpoint calls before any case "
+            "starts (default: 10). All attempts must succeed."
+        ),
+    )
+    parser.add_argument(
+        "--endpoint-preflight-timeout-seconds",
+        type=positive_int,
+        default=300,
+        help="Per-call timeout for the pre-run endpoint stability gate.",
+    )
     parser.add_argument(
         "--terminal-progress",
         action=argparse.BooleanOptionalAction,
@@ -905,6 +1100,15 @@ def positive_int(value: str) -> int:
     parsed = int(value)
     if parsed < 1:
         raise argparse.ArgumentTypeError("value must be at least 1")
+    return parsed
+
+
+def positive_float(value: str) -> float:
+    parsed = float(value)
+    if not math.isfinite(parsed) or parsed <= 0.0:
+        raise argparse.ArgumentTypeError(
+            "value must be finite and greater than zero"
+        )
     return parsed
 
 
@@ -1046,6 +1250,17 @@ def case_paths(
     }
 
 
+def _endpoint_preflight_image(case: dict[str, Any]) -> Path:
+    source_root = Path(str(case["case_root"])).expanduser().resolve()
+    manifest = read_json(source_root / "case_manifest.json")
+    image_path = case_paths(source_root, manifest)["perspective"]
+    if not image_path.is_file():
+        raise FileNotFoundError(
+            f"endpoint preflight image does not exist: {image_path}"
+        )
+    return image_path
+
+
 def renderer_config_from_args(
     args: argparse.Namespace,
     *,
@@ -1112,11 +1327,14 @@ def build_experiment_plan(
     route: dict[str, Any],
     metrics: tuple[str, ...],
     functional_group_local_granularity: str,
-    functional_group_local_evidence_policy: str = "isolated_episode",
+    functional_group_local_evidence_policy: str = "shared_group_bank",
+    deduction_multiplier: float = DEFAULT_DEDUCTION_MULTIPLIER,
     cases: list[dict[str, Any]],
     renderer_config: dict[str, Any],
     control: dict[str, Any],
     max_workers: int,
+    endpoint_preflight_attempts: int,
+    endpoint_preflight_timeout_seconds: int,
     resume: bool,
     continue_on_error: bool,
     export_audit_graphs: bool = False,
@@ -1137,6 +1355,12 @@ def build_experiment_plan(
             "decision_authority": "none",
         },
         "l3_metric_prompt_version": L3_METRIC_PROMPT_VERSION,
+        "scoring": {
+            "deduction_multiplier": deduction_multiplier,
+            "deduction_multiplier_metrics": list(
+                DEDUCTION_MULTIPLIER_METRICS
+            ),
+        },
         "layers": {
             L1: {
                 "enabled": True,
@@ -1236,6 +1460,18 @@ def build_experiment_plan(
             L4: {"enabled": False},
         },
         "model_route": safe_route_manifest(route),
+        "endpoint_stability_preflight": {
+            "required": True,
+            "attempts": int(endpoint_preflight_attempts),
+            "concurrency": min(
+                int(max_workers),
+                int(endpoint_preflight_attempts),
+            ),
+            "timeout_seconds": int(endpoint_preflight_timeout_seconds),
+            "input": "first_selected_case_standardized_perspective",
+            "success_contract": "all_real_image_calls_complete",
+            "route_configuration_failure_policy": "abort_run",
+        },
         "grouping": {
             "config_path": str(grouping_config_path),
             "config_sha256": file_sha256(grouping_config_path),
@@ -1278,9 +1514,11 @@ def run_case(
     control_config: dict[str, Any],
     resume: bool,
     functional_group_local_granularity: str = "per_check",
-    functional_group_local_evidence_policy: str = "isolated_episode",
+    functional_group_local_evidence_policy: str = "shared_group_bank",
+    deduction_multiplier: float = DEFAULT_DEDUCTION_MULTIPLIER,
     export_audit_graphs: bool = False,
     progress: ProgressReporter | None = None,
+    model_route_abort_signal: ModelRouteAbortSignal | None = None,
 ) -> dict[str, Any]:
     del dataset_root
     case_id = str(case["case_id"])
@@ -1306,6 +1544,7 @@ def run_case(
         functional_group_local_evidence_policy=(
             functional_group_local_evidence_policy
         ),
+        deduction_multiplier=deduction_multiplier,
         grouping_config=grouping_config,
         renderer_config=renderer_config,
         control_config=control_config,
@@ -1406,6 +1645,7 @@ def run_case(
         calls_path=case_out / "api_calls.jsonl",
         usage_path=case_out / "api_usage.json",
         progress=progress,
+        model_route_abort_signal=model_route_abort_signal,
     )
     started = time.monotonic()
     case_run_manifest = {
@@ -1421,6 +1661,7 @@ def run_case(
         "source_prompt_used": False,
         "model_route": safe_route_manifest(route),
         "selected_l3_metrics": list(metrics),
+        "deduction_multiplier": deduction_multiplier,
         "l1_binary_failure_policy": deepcopy(
             L1_BINARY_FAILURE_POLICY
         ),
@@ -1584,6 +1825,7 @@ def run_case(
             grouping_model=grouping_model,
             evaluation_profile=promptless_l1_l3_profile(),
             scoring_profile_id=INTRINSIC_VALIDITY_PROFILE_ID,
+            deduction_multiplier=deduction_multiplier,
             p0b_official_mode=L1_BINARY_FAILURE_POLICY["p0b_official_mode"],
             p0b_local_view_provider=l1_provider,
             l3_initial_evidence_provider=l3_provider,
@@ -1740,6 +1982,12 @@ def run_case(
         l3_infrastructure_failure_metrics=list(
             l3_resolution.get("infrastructure_failure_metrics") or []
         ),
+        l3_partial_coverage_metrics=list(
+            l3_resolution.get("partial_coverage_metrics") or []
+        ),
+        l3_below_coverage_threshold_metrics=list(
+            l3_resolution.get("below_coverage_threshold_metrics") or []
+        ),
         l1_engineering_failure=bool(l1_failures),
         l1_engineering_failure_count=len(l1_failures),
         binary_response_schema_validation=schema_validation,
@@ -1799,6 +2047,12 @@ def run_case(
         ),
         "l3_infrastructure_failure_metrics": list(
             l3_resolution.get("infrastructure_failure_metrics") or []
+        ),
+        "l3_partial_coverage_metrics": list(
+            l3_resolution.get("partial_coverage_metrics") or []
+        ),
+        "l3_below_coverage_threshold_metrics": list(
+            l3_resolution.get("below_coverage_threshold_metrics") or []
         ),
         "l1_engineering_failure": bool(l1_failures),
         "l1_engineering_failure_count": len(l1_failures),
@@ -1955,7 +2209,7 @@ def scene_quality_config(
     metrics: tuple[str, ...],
     *,
     functional_group_local_granularity: str = "per_check",
-    functional_group_local_evidence_policy: str = "isolated_episode",
+    functional_group_local_evidence_policy: str = "shared_group_bank",
 ) -> dict[str, Any]:
     if functional_group_local_granularity not in {
         "per_check",
@@ -2003,6 +2257,21 @@ def scene_quality_config(
                         "group_local_active_window_max_images": 6,
                     }
                     if metric == "functional_consistency"
+                    else {}
+                ),
+                **(
+                    {
+                        "residual_global_review": {
+                            "enabled": True,
+                            "placement_weight": 0.20,
+                            "image_budget": 3,
+                            "allowed_check_types": [
+                                "scene_zone",
+                                "contextual_anchor",
+                            ],
+                        }
+                    }
+                    if metric == "semantic_placement_consistency"
                     else {}
                 ),
             }
@@ -2077,7 +2346,8 @@ def case_input_fingerprint(
     route: dict[str, Any],
     metrics: tuple[str, ...],
     functional_group_local_granularity: str,
-    functional_group_local_evidence_policy: str = "isolated_episode",
+    functional_group_local_evidence_policy: str = "shared_group_bank",
+    deduction_multiplier: float = DEFAULT_DEDUCTION_MULTIPLIER,
     grouping_config: dict[str, Any],
     renderer_config: dict[str, Any],
     control_config: dict[str, Any],
@@ -2086,6 +2356,18 @@ def case_input_fingerprint(
     critical = critical if isinstance(critical, dict) else {}
     prompt_path = (
         PROJECT_ROOT / "src" / "benchmark" / "visual_judge" / "l3_prompts.py"
+    )
+    prompt_context_path = (
+        PROJECT_ROOT
+        / "src"
+        / "benchmark"
+        / "evaluator"
+        / "scene_quality"
+        / "prompt_context.py"
+    )
+    scoring_paths = (
+        PROJECT_ROOT / "src" / "benchmark" / "evaluator" / "scoring.py",
+        PROJECT_ROOT / "src" / "benchmark" / "scoring_profiles.py",
     )
     return json_sha256(
         {
@@ -2112,9 +2394,24 @@ def case_input_fingerprint(
                 "camera_selector": CAMERA_SELECTOR_COMPLETION_MAX_TOKENS,
             },
             "selected_l3_metrics": list(metrics),
+            "deduction_multiplier": deduction_multiplier,
             "source_prompt_used": False,
+            "metric_scoped_public_context": {
+                "default_fields": {
+                    "style_consistency": ["room_type"],
+                    "object_pairing_consistency": ["room_type"],
+                },
+                "full_generation_instruction_used": False,
+            },
             "l3_metric_prompt_version": L3_METRIC_PROMPT_VERSION,
             "l3_prompt_source_sha256": file_sha256(prompt_path),
+            "l3_prompt_context_source_sha256": file_sha256(
+                prompt_context_path
+            ),
+            "scoring_implementation_sha256": {
+                str(path.relative_to(PROJECT_ROOT)): file_sha256(path)
+                for path in scoring_paths
+            },
             "functional_probe_implementation_sha256": {
                 relative: file_sha256(PROJECT_ROOT / relative)
                 for relative in FUNCTIONAL_PROBE_IMPLEMENTATION_FILES
@@ -2598,7 +2895,7 @@ def l3_resolution_audit(
     *,
     metrics: tuple[str, ...],
 ) -> dict[str, Any]:
-    """Resolve runner status from explicit L3 metric and coverage state."""
+    """Resolve runner status without relabelling partial coverage as infra."""
 
     report_metrics = scene_quality_report.get("metrics")
     report_metrics = (
@@ -2606,26 +2903,42 @@ def l3_resolution_audit(
     )
     unresolved: list[str] = []
     infrastructure_failures: list[str] = []
+    partial_coverage: list[str] = []
+    below_coverage_threshold: list[str] = []
     reasons: dict[str, list[str]] = {}
+    coverage_warnings: dict[str, list[str]] = {}
     for metric in metrics:
         item = report_metrics.get(metric)
         metric_reasons: list[str] = []
+        metric_coverage_warnings: list[str] = []
         if not isinstance(item, dict):
             metric_reasons.append("metric_report_missing")
             infrastructure_failures.append(metric)
         else:
             item_status = str(item.get("status") or "")
             terminal_state = str(item.get("terminal_state") or "")
-            if item_status != "evaluated":
+            item_reason = str(item.get("reason") or "")
+            coverage_threshold_failure = bool(
+                item_status == "failed_coverage_threshold"
+                or item_reason
+                in {
+                    "below_minimum_score_coverage",
+                    "failed_coverage_threshold",
+                }
+            )
+            explicit_infrastructure_failure = bool(
+                item_status in {"error", "infrastructure_failure"}
+                or (item_status == "failed" and not coverage_threshold_failure)
+                or terminal_state == "infrastructure_failure"
+                or bool(item.get("infrastructure_failures"))
+            )
+            if explicit_infrastructure_failure:
+                infrastructure_failures.append(metric)
+            score_publishable = _metric_score_is_publishable(item)
+            if item_status not in {"evaluated", "partial"}:
                 metric_reasons.append(
                     f"metric_status:{item_status or 'missing'}"
                 )
-            if (
-                item_status in {"failed", "error"}
-                or terminal_state == "infrastructure_failure"
-                or bool(item.get("infrastructure_failures"))
-            ):
-                infrastructure_failures.append(metric)
             for field in (
                 "coverage",
                 "functional_check_coverage",
@@ -2636,8 +2949,37 @@ def l3_resolution_audit(
                     isinstance(coverage, dict)
                     and coverage.get("complete") is False
                 ):
-                    metric_reasons.append(f"{field}:incomplete")
-                    infrastructure_failures.append(metric)
+                    marker = f"{field}:incomplete"
+                    if score_publishable:
+                        metric_coverage_warnings.append(marker)
+                    else:
+                        metric_reasons.append(marker)
+            if metric_coverage_warnings:
+                partial_coverage.append(metric)
+                coverage_warnings[metric] = list(
+                    dict.fromkeys(metric_coverage_warnings)
+                )
+            elif (
+                not explicit_infrastructure_failure
+                and not score_publishable
+                and any(
+                    isinstance(item.get(field), dict)
+                    and item[field].get("complete") is False
+                    for field in (
+                        "coverage",
+                        "functional_check_coverage",
+                        "placement_check_coverage",
+                    )
+                )
+            ):
+                below_coverage_threshold.append(metric)
+                metric_reasons.append("coverage:below_publishable_threshold")
+            elif (
+                not explicit_infrastructure_failure
+                and item_status in {"evaluated", "partial"}
+                and not score_publishable
+            ):
+                metric_reasons.append("metric_score:unavailable")
             for field in (
                 "functional_check_phase",
                 "placement_check_phase",
@@ -2666,6 +3008,11 @@ def l3_resolution_audit(
                 unresolved.append(metric)
             reasons[metric] = list(dict.fromkeys(metric_reasons))
     infrastructure_failures = list(dict.fromkeys(infrastructure_failures))
+    unresolved = list(dict.fromkeys(unresolved))
+    partial_coverage = list(dict.fromkeys(partial_coverage))
+    below_coverage_threshold = list(
+        dict.fromkeys(below_coverage_threshold)
+    )
     return {
         "status": (
             "infrastructure_failure"
@@ -2676,9 +3023,43 @@ def l3_resolution_audit(
         ),
         "unresolved_metrics": unresolved,
         "infrastructure_failure_metrics": infrastructure_failures,
+        "partial_coverage_metrics": partial_coverage,
+        "below_coverage_threshold_metrics": below_coverage_threshold,
         "reasons_by_metric": reasons,
-        "policy": "terminal_binary_or_explicit_infrastructure_failure_v2",
+        "coverage_warnings_by_metric": coverage_warnings,
+        "minimum_publishable_coverage": MIN_PUBLISHABLE_SCORE_COVERAGE,
+        "policy": "terminal_binary_or_scoreable_partial_coverage_v3",
     }
+
+
+def _metric_score_is_publishable(item: dict[str, Any]) -> bool:
+    """Treat the evaluator's published score and threshold audit as authority."""
+
+    score = item.get("score")
+    if (
+        not isinstance(score, (int, float))
+        or isinstance(score, bool)
+        or not math.isfinite(float(score))
+    ):
+        return False
+    coverage = item.get("coverage")
+    coverage = coverage if isinstance(coverage, dict) else {}
+    scoring = item.get("scoring")
+    scoring = scoring if isinstance(scoring, dict) else {}
+    projections = [
+        coverage,
+        coverage.get("score_projection"),
+        scoring.get("coverage_projection"),
+    ]
+    explicit_thresholds = [
+        projection.get("coverage_threshold_passed")
+        for projection in projections
+        if isinstance(projection, dict)
+        and isinstance(projection.get("coverage_threshold_passed"), bool)
+    ]
+    if explicit_thresholds:
+        return all(explicit_thresholds)
+    return True
 
 
 def build_summary(

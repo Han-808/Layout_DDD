@@ -776,6 +776,7 @@ def _candidate_generation_request(
     except ValueError:
         resolved_mode = "visibility_ranked"
     group_scope = request.context.get("group_scope")
+    target_scope = request.context.get("target_scope")
     event = deepcopy(request.context.get("event") or {})
     if isinstance(group_scope, dict):
         event.setdefault("group_id", group_scope.get("group_id"))
@@ -787,6 +788,16 @@ def _candidate_generation_request(
             "object_ids",
             list(group_scope.get("member_ids") or constraints.target_ids),
         )
+    elif isinstance(target_scope, dict):
+        event.setdefault("target_id", target_scope.get("target_id"))
+        event.setdefault(
+            "focus_region",
+            deepcopy(target_scope.get("target_bounds")),
+        )
+        event.setdefault(
+            "object_ids",
+            list(target_scope.get("framing_ids") or constraints.target_ids),
+        )
     functional_repair = request.context.get("functional_repair")
     return {
         "metric": request.metric,
@@ -796,6 +807,11 @@ def _candidate_generation_request(
         "group_scope": (
             deepcopy(group_scope)
             if isinstance(group_scope, dict)
+            else None
+        ),
+        "target_scope": (
+            deepcopy(target_scope)
+            if isinstance(target_scope, dict)
             else None
         ),
         "target_bounds": deepcopy(

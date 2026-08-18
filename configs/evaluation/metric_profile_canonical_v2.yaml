@@ -66,28 +66,35 @@ l3_scene_quality:
   metrics:
     scale_consistency:
       enabled: true
-      weight: 0.2
+      weight: 0.04
     object_pairing_consistency:
       enabled: true
-      weight: 0.2
+      weight: 0.09
       requires:
         - object_grouping_report
       scope: group_member_category_and_role_compatibility_only
     style_consistency:
       enabled: true
-      weight: 0.2
+      weight: 0.07
     functional_consistency:
       enabled: true
-      weight: 0.2
+      weight: 0.52
       requires:
         - object_grouping_report
       scope: ordinary_static_visual_usability
     semantic_placement_consistency:
       enabled: true
-      weight: 0.2
+      weight: 0.28
       requires:
         - object_grouping_report
       scope: semantic_location_plausibility_only
+      residual_global_review:
+        enabled: true
+        placement_weight: 0.20
+        image_budget: 3
+        allowed_check_types:
+          - scene_zone
+          - contextual_anchor
 
 l4_downstream_task_functionality:
   enabled: false

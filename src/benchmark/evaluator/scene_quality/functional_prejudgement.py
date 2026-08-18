@@ -29,6 +29,9 @@ from benchmark.evaluator.scene_quality.functional_probe import (
 from benchmark.visual_judge.identity_evidence import (
     validate_identity_evidence,
 )
+from benchmark.visual_judge.usable_surface import (
+    DEFAULT_USABLE_SURFACE_DETECTOR_BACKEND,
+)
 
 _COMPATIBLE_FUNCTIONAL_PROBE_ACQUISITION_VERSIONS = frozenset(
     {
@@ -1022,7 +1025,8 @@ def _provider_detector_manifest(provider: Any) -> dict[str, Any]:
     )
     return {
         "implementation_id": str(
-            usable.get("backend") or "vlm_trusted_side_ids"
+            usable.get("backend")
+            or DEFAULT_USABLE_SURFACE_DETECTOR_BACKEND
         ),
         "version": str(
             usable.get("detector_version")

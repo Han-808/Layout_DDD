@@ -8,8 +8,8 @@ import json
 from typing import Any, Iterable
 
 
-FUNCTIONAL_OWNERSHIP_LEDGER_VERSION = "functional_ownership_ledger_v1"
-CROSS_METRIC_OWNERSHIP_AUDIT_VERSION = "cross_metric_ownership_audit_v1"
+FUNCTIONAL_OWNERSHIP_LEDGER_VERSION = "functional_ownership_ledger_v2"
+CROSS_METRIC_OWNERSHIP_AUDIT_VERSION = "cross_metric_ownership_audit_v2"
 
 
 def build_functional_ownership_ledger(
@@ -152,6 +152,16 @@ def build_functional_ownership_ledger(
                     if check.get("check_id")
                 }
             )
+            related_object_ids = {
+                str(object_id)
+                for check in related_checks
+                for object_id in check.get("target_ids") or []
+            }
+            related_object_ids.update(causal["affected_object_ids"])
+            related_object_ids.update(causal["causal_object_ids"])
+            counterpart_object_ids = sorted(
+                related_object_ids - set(causal["scoring_target_ids"])
+            )
             decision_ref = _decision_ref(phase, judgement)
             identity = {
                 "phase": phase,
@@ -172,11 +182,13 @@ def build_functional_ownership_ledger(
                 {
                     "event_id": event_id,
                     "metric": "functional_consistency",
+                    "owning_metric": "functional_consistency",
                     "source_phase": phase,
                     "scope": str(defect.get("scope") or ""),
                     "relation": str(defect.get("relation") or ""),
                     "reason": str(defect.get("reason") or ""),
                     **causal,
+                    "counterpart_object_ids": counterpart_object_ids,
                     "check_refs": check_refs,
                     "decision_ref": decision_ref,
                     "defect_ref": _stable_id(
@@ -207,7 +219,7 @@ def build_cross_metric_ownership_audit(
     functional_ownership_ledger: dict[str, Any] | None,
     placement_check_ledger: dict[str, Any] | None,
 ) -> dict[str, Any]:
-    """Audit exact Function-owned exclusions without changing either verdict."""
+    """Audit exact Function-owned deduplication without object-overlap guesses."""
 
     events = {
         str(item.get("event_id")): item
@@ -232,12 +244,26 @@ def build_cross_metric_ownership_audit(
                 f"placement check {check_id!r} references an unknown "
                 "functional ownership event"
             )
+        result_row = check.get("result_row")
+        same_physical_event = bool(
+            check.get("same_physical_event") is True
+            or (
+                isinstance(result_row, dict)
+                and result_row.get("same_physical_event") is True
+            )
+        )
+        if not same_physical_event:
+            raise ValueError(
+                f"placement check {check_id!r} lacks explicit same-event "
+                "confirmation"
+            )
         exclusions.append(
             {
                 "placement_check_id": check_id,
                 "function_event_ref": event_ref,
                 "subject_id": str(check.get("subject_id") or ""),
                 "same_physical_event": True,
+                "deduplication_basis": "explicit_stable_event_reference",
                 "decision_authority": "none",
             }
         )
@@ -252,9 +278,11 @@ def build_cross_metric_ownership_audit(
             independent_invalids
         ),
         "deduplication_key": (
-            "exact_function_event_ref_and_same_physical_event"
+            "explicit_function_event_ref_and_same_physical_event"
         ),
+        "runtime_cross_metric_suppression": bool(exclusions),
         "object_identity_alone_suppresses_placement": False,
+        "placement_claims_judged_before_deduplication": True,
         "decision_authority": "none",
     }
 
@@ -298,12 +326,14 @@ def validate_functional_ownership_ledger(
             "affected_object_ids",
             "causal_object_ids",
             "scoring_target_ids",
+            "counterpart_object_ids",
         ):
-            _validated_event_ids(
-                event.get(field),
-                known_ids=known,
-                label=f"functional ownership {field}",
-            )
+            values = event.get(field)
+            if field == "counterpart_object_ids" and values == []:
+                continue
+            _validated_event_ids(values, known_ids=known, label=f"functional ownership {field}")
+        if event.get("owning_metric") != "functional_consistency":
+            raise ValueError("functional ownership event has wrong owning_metric")
         if event.get("cause_kind") not in {
             "external_object",
             "self_layout",

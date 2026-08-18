@@ -13,7 +13,10 @@ from pathlib import Path
 from typing import Any
 
 from benchmark.visual_judge.functional_discovery_contract import (
+    FUNCTIONAL_COUNTERPART_MODES,
     FUNCTIONAL_DIRECTIONALITY,
+    FUNCTIONAL_ORDINARY_MOBILITY,
+    FUNCTIONAL_RELATION_DEPENDENCIES,
     FUNCTIONAL_RELATION_PREDICATES,
     FUNCTIONAL_REVIEW_STATES,
     FUNCTIONAL_SURFACE_ROLES,
@@ -267,6 +270,141 @@ def validate_functional_affordance_response(
     }
 
 
+def salvage_functional_affordance_response(
+    value: Any,
+    *,
+    object_ids: tuple[str, ...],
+    fallback_value: Any = None,
+) -> dict[str, Any]:
+    """Retain valid object rows and default only malformed/missing rows.
+
+    The strict validator above remains the authoritative contract.  This
+    helper is used only after the single repair quota has been exhausted; it
+    cannot create a usable surface or clearance requirement.  A defaulted row
+    therefore means only "no specialised probe was scheduled for this
+    object", never that the object's functionality was judged valid.
+    """
+
+    # A schema repair has no authority to revise an already-valid semantic
+    # atom.  It may only fill a missing or malformed row for the same trusted
+    # object identity.
+    sources = [
+        (
+            "initial",
+            fallback_value if isinstance(fallback_value, dict) else {},
+        ),
+        ("repair", value if isinstance(value, dict) else {}),
+    ]
+    known_ids = set(object_ids)
+    rows_by_source: dict[str, dict[str, list[tuple[int, dict[str, Any]]]]] = {}
+    rejected_items: list[dict[str, Any]] = []
+    for source_name, response in sources:
+        raw_rows = response.get("objects")
+        raw_rows = raw_rows if isinstance(raw_rows, list) else []
+        source_rows: dict[str, list[tuple[int, dict[str, Any]]]] = {}
+        rows_by_source[source_name] = source_rows
+        for index, item in enumerate(raw_rows):
+            if not isinstance(item, dict):
+                rejected_items.append(
+                    {
+                        "source": source_name,
+                        "index": index,
+                        "object_id": None,
+                        "reason": "row_is_not_an_object",
+                    }
+                )
+                continue
+            object_id = str(item.get("object_id") or "").strip()
+            if object_id not in known_ids:
+                rejected_items.append(
+                    {
+                        "source": source_name,
+                        "index": index,
+                        "object_id": object_id or None,
+                        "reason": "unknown_or_empty_object_id",
+                    }
+                )
+                continue
+            source_rows.setdefault(object_id, []).append((index, item))
+
+    normalized: list[dict[str, Any]] = []
+    accepted_ids: list[str] = []
+    accepted_sources: dict[str, str] = {}
+    defaulted_ids: list[str] = []
+    for object_id in object_ids:
+        accepted = False
+        for source_name, _ in sources:
+            candidates = rows_by_source[source_name].get(object_id, [])
+            if len(candidates) > 1:
+                rejected_items.append(
+                    {
+                        "source": source_name,
+                        "index": None,
+                        "object_id": object_id,
+                        "reason": "duplicate_object_rows",
+                    }
+                )
+                continue
+            if not candidates:
+                continue
+            index, candidate = candidates[0]
+            try:
+                validated = validate_functional_affordance_response(
+                    {
+                        "objects": [candidate],
+                        "reason": "item-level salvage validation",
+                    },
+                    object_ids=(object_id,),
+                )
+            except (TypeError, ValueError, KeyError) as exc:
+                rejected_items.append(
+                    {
+                        "source": source_name,
+                        "index": index,
+                        "object_id": object_id,
+                        "reason": str(exc),
+                    }
+                )
+                continue
+            normalized.append(validated["objects"][0])
+            accepted_ids.append(object_id)
+            accepted_sources[object_id] = source_name
+            accepted = True
+            break
+        if not accepted:
+            rejected_items.append(
+                {
+                    "source": None,
+                    "index": None,
+                    "object_id": object_id,
+                    "reason": "no_valid_object_row_after_retry",
+                }
+            )
+            normalized.append(_default_affordance_row(object_id))
+            defaulted_ids.append(object_id)
+
+    return {
+        "objects": normalized,
+        "reason": (
+            "Valid affordance rows were retained; malformed or missing rows "
+            "defaulted to no specialised usable-surface or clearance probe."
+        ),
+        "item_salvage": {
+            "policy": "valid_rows_plus_neutral_object_fallback_v1",
+            "expected_object_count": len(object_ids),
+            "accepted_object_ids": accepted_ids,
+            "accepted_sources": accepted_sources,
+            "accepted_object_count": len(accepted_ids),
+            "defaulted_object_ids": defaulted_ids,
+            "defaulted_object_count": len(defaulted_ids),
+            "coverage_fraction": (
+                len(accepted_ids) / len(object_ids) if object_ids else 0.0
+            ),
+            "rejected_items": rejected_items,
+        },
+    }
+
+
 def validate_functional_relation_response(
     value: Any,
     *,
@@ -298,6 +436,9 @@ def validate_functional_relation_response(
         extra = set(item) - {
             "target_ids",
             "predicate",
+            "dependency",
+            "counterpart_mode",
+            "ordinary_mobility",
             "observation_goal",
         }
         if extra:
@@ -321,6 +462,21 @@ def validate_functional_relation_response(
             FUNCTIONAL_RELATION_PREDICATES,
             "relations.predicate",
         )
+        dependency = _allowed_token(
+            item.get("dependency"),
+            FUNCTIONAL_RELATION_DEPENDENCIES,
+            "relations.dependency",
+        )
+        counterpart_mode = _allowed_token(
+            item.get("counterpart_mode"),
+            FUNCTIONAL_COUNTERPART_MODES,
+            "relations.counterpart_mode",
+        )
+        ordinary_mobility = _allowed_token(
+            item.get("ordinary_mobility"),
+            FUNCTIONAL_ORDINARY_MOBILITY,
+            "relations.ordinary_mobility",
+        )
         identity = (tuple(sorted(target_ids)), predicate)
         if identity in identities:
             raise ValueError(
@@ -331,6 +487,9 @@ def validate_functional_relation_response(
             {
                 "target_ids": target_ids,
                 "predicate": predicate,
+                "dependency": dependency,
+                "counterpart_mode": counterpart_mode,
+                "ordinary_mobility": ordinary_mobility,
                 "observation_goal": _required_text(
                     item.get("observation_goal"),
                     "functional relation observation_goal",
@@ -344,6 +503,171 @@ def validate_functional_relation_response(
             value.get("reason"),
             "functional relation reason",
         ),
+    }
+
+
+def salvage_functional_relation_response(
+    value: Any,
+    *,
+    object_ids: tuple[str, ...],
+    fallback_value: Any = None,
+) -> dict[str, Any]:
+    """Keep independently valid relation rows after one failed repair."""
+
+    initial = fallback_value if isinstance(fallback_value, dict) else {}
+    repair = value if isinstance(value, dict) else {}
+    sources = [("initial", initial), ("repair", repair)]
+    accepted: list[dict[str, Any]] = []
+    rejected: list[dict[str, Any]] = []
+    identities: set[tuple[tuple[str, ...], str]] = set()
+    known_ids = set(object_ids)
+    initial_anchors: list[tuple[tuple[str, ...], str]] = []
+    initial_rows = initial.get("relations")
+    initial_rows = initial_rows if isinstance(initial_rows, list) else []
+    for index, item in enumerate(initial_rows):
+        try:
+            anchor = _functional_relation_identity_anchor(
+                item,
+                known_ids=known_ids,
+            )
+        except (TypeError, ValueError, KeyError) as exc:
+            rejected.append(
+                {
+                    "source": "initial",
+                    "index": index,
+                    "reason": f"invalid_identity_anchor: {exc}",
+                }
+            )
+            continue
+        if anchor not in initial_anchors:
+            initial_anchors.append(anchor)
+
+    considered_valid = False
+    for source_name, response in sources:
+        considered = response.get("considered_object_ids")
+        considered_valid = considered_valid or bool(
+            isinstance(considered, list)
+            and tuple(str(item).strip() for item in considered) == object_ids
+        )
+        raw_relations = response.get("relations")
+        raw_relations = raw_relations if isinstance(raw_relations, list) else []
+        for index, item in enumerate(raw_relations):
+            try:
+                raw_identity = _functional_relation_identity_anchor(
+                    item,
+                    known_ids=known_ids,
+                )
+            except (TypeError, ValueError, KeyError) as exc:
+                rejected.append(
+                    {
+                        "source": source_name,
+                        "index": index,
+                        "reason": f"invalid_identity_anchor: {exc}",
+                    }
+                )
+                continue
+            if raw_identity not in initial_anchors:
+                rejected.append(
+                    {
+                        "source": source_name,
+                        "index": index,
+                        "reason": "relation_has_no_initial_identity_anchor",
+                    }
+                )
+                continue
+            try:
+                validated = validate_functional_relation_response(
+                    {
+                        "considered_object_ids": list(object_ids),
+                        "relations": [item],
+                        "reason": "item-level salvage validation",
+                    },
+                    object_ids=object_ids,
+                )
+                row = validated["relations"][0]
+                identity = (
+                    tuple(sorted(row["target_ids"])),
+                    str(row["predicate"]),
+                )
+            except (TypeError, ValueError, KeyError) as exc:
+                rejected.append(
+                    {
+                        "source": source_name,
+                        "index": index,
+                        "reason": str(exc),
+                    }
+                )
+                continue
+            if identity in identities:
+                continue
+            identities.add(identity)
+            accepted.append(row)
+    dropped_anchors = [
+        {
+            "target_ids": list(identity[0]),
+            "predicate": identity[1],
+        }
+        for identity in initial_anchors
+        if identity not in identities
+    ]
+    return {
+        "considered_object_ids": list(object_ids),
+        "relations": accepted,
+        "reason": (
+            "Valid relation rows were retained; malformed rows were omitted "
+            "without affecting other objects or checks."
+        ),
+        "item_salvage": {
+            "policy": "initial_anchored_relation_atoms_v2",
+            "consideration_contract_valid": considered_valid,
+            "anchored_relation_count": len(initial_anchors),
+            "accepted_relation_count": len(accepted),
+            "dropped_relation_count": len(dropped_anchors),
+            "dropped_relation_anchors": dropped_anchors,
+            "rejected_relation_count": len(rejected),
+            "rejected_items": rejected,
+        },
+    }
+
+
+def _functional_relation_identity_anchor(
+    value: Any,
+    *,
+    known_ids: set[str],
+) -> tuple[tuple[str, ...], str]:
+    """Read only the semantic identity needed to authorize schema repair."""
+
+    if not isinstance(value, dict):
+        raise ValueError("relation row is not an object")
+    target_ids = value.get("target_ids")
+    if (
+        not isinstance(target_ids, list)
+        or len(target_ids) != 2
+        or any(not isinstance(item, str) or not item.strip() for item in target_ids)
+    ):
+        raise ValueError("relation target_ids are not one trusted pair")
+    normalized_targets = tuple(sorted(str(item).strip() for item in target_ids))
+    if len(set(normalized_targets)) != 2 or not set(normalized_targets) <= known_ids:
+        raise ValueError("relation target_ids are unknown or duplicated")
+    predicate = str(value.get("predicate") or "").strip()
+    if predicate not in FUNCTIONAL_RELATION_PREDICATES:
+        raise ValueError("relation predicate is unsupported")
+    return normalized_targets, predicate
+
+
+def _default_affordance_row(object_id: str) -> dict[str, Any]:
+    return {
+        "object_id": object_id,
+        "directionality": "non_directed",
+        "surface_roles": [],
+        "need_clearance": False,
+        "boundary_review_state": "routine",
+        "review_state": "routine",
+        "observation_goal": (
+            "Use the fixed group/global evidence; no specialised affordance "
+            "probe was scheduled for this object."
+        ),
+        "boundary_observation_goal": "",
     }
 
 
@@ -927,6 +1251,8 @@ def _reject_forbidden_fields(value: Any, *, path: str = "response") -> None:
 
 __all__ = [
     "compose_functional_discovery_result",
+    "salvage_functional_affordance_response",
+    "salvage_functional_relation_response",
     "validate_functional_affordance_response",
     "validate_functional_discovery_request",
     "validate_functional_discovery_response",

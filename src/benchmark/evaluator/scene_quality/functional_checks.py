@@ -195,6 +195,12 @@ def build_functional_check_ledger(
                     else "judge_requested_on_demand"
                 ),
                 "lifecycle_status": "accepted",
+                "obligation_lifecycle": [
+                    {
+                        "state": "discovered",
+                        "source": "functional_discovery",
+                    }
+                ],
                 "acquisition_status": "pending",
                 "artifact_rendered": False,
                 "view_coverage_complete": False,
@@ -413,18 +419,72 @@ def build_functional_check_ledger(
 
     for item in discovery.get("unusual_unconfirmed") or []:
         _require_record(item, "local affordance confirmation")
+        confirmation_targets = _validated_targets(
+            list(item.get("target_ids") or []),
+            known_ids=known_ids,
+        )
+        confirmation_owner = _optional_text(item.get("owning_group_id"))
+        confirmation_source = _required_discovery_id(item)
+        confirmation_goal = _observation_goal(item)
+
+        # A singleton confirmation is a fallback route, not a third semantic
+        # predicate for an object that already owns a directed-side or
+        # clearance check.  Preserve its complete provenance and observation
+        # goal on the existing atomic check instead of charging another Judge
+        # episode for the same target and local evidence packet.
+        if len(confirmation_targets) == 1:
+            target_id = str(confirmation_targets[0])
+            covering = [
+                record
+                for record in pending.values()
+                if record.get("owner_stage") == "group_local"
+                and record.get("owning_group_id") == confirmation_owner
+                and list(record.get("target_ids") or []) == [target_id]
+                and record.get("check_type")
+                in {"architecture_orientation", "clearance"}
+            ]
+            covering.sort(
+                key=lambda record: (
+                    0
+                    if record.get("check_type")
+                    == "architecture_orientation"
+                    else 1,
+                    str(record.get("check_type") or ""),
+                )
+            )
+            if covering:
+                routed = covering[0]
+                routed["source_discovery_ids"] = _stable_unique(
+                    [
+                        *routed["source_discovery_ids"],
+                        confirmation_source,
+                    ]
+                )
+                routed["routing_discovery_ids"] = _stable_unique(
+                    [
+                        *routed["routing_discovery_ids"],
+                        confirmation_source,
+                    ]
+                )
+                routed["observation_goals"] = _stable_unique(
+                    [
+                        *routed["observation_goals"],
+                        confirmation_goal,
+                    ]
+                )
+                continue
         add(
             check_type="local_affordance_confirmation",
             owner_stage="group_local",
-            target_ids=list(item.get("target_ids") or []),
-            owning_group_id=_optional_text(item.get("owning_group_id")),
+            target_ids=confirmation_targets,
+            owning_group_id=confirmation_owner,
             group_ids=[],
             relation="local_affordance_confirmation",
             required_observations=_LOCAL_CONFIRMATION_OBSERVATIONS,
-            discovery_id=_required_discovery_id(item),
+            discovery_id=confirmation_source,
             check_family="local_affordance_confirmation",
             requires_dedicated_acquisition=True,
-            observation_goal=_observation_goal(item),
+            observation_goal=confirmation_goal,
         )
 
     # A usable-side record may also be relevant to a correspondence or local
@@ -536,17 +596,32 @@ def route_functional_check_ledger(
                 if check.get("requires_dedicated_acquisition")
                 else "shared_probe_scheduled"
             )
+            _append_obligation_transition(
+                check,
+                "scheduled",
+                source="functional_probe_planner",
+            )
         elif check_id in deferred_ids:
             check["acquisition_status"] = (
                 "deferred_budget"
                 if check.get("requires_dedicated_acquisition")
                 else "shared_probe_deferred"
             )
+            _append_obligation_transition(
+                check,
+                "deferred",
+                source="functional_probe_budget",
+            )
         else:
             check["acquisition_status"] = (
                 "shared_scope_evidence"
                 if check.get("requires_dedicated_acquisition")
                 else "judge_requested_on_demand"
+            )
+            _append_obligation_transition(
+                check,
+                "scheduled",
+                source="shared_scope_or_on_demand",
             )
     return result
 
@@ -567,6 +642,12 @@ def update_functional_check_evidence(
             results_by_check.setdefault(str(check_id), []).append(probe)
     for check in result.get("checks") or []:
         records = results_by_check.get(str(check.get("check_id") or ""), [])
+        if records:
+            _append_obligation_transition(
+                check,
+                "acquisition_attempted",
+                source="functional_evidence_provider",
+            )
         paths = _stable_unique(
             [
                 str(path)
@@ -580,6 +661,38 @@ def update_functional_check_evidence(
             for record in records
         )
         failed = bool(records) and not available
+        machine_coverage_states = [
+            str(
+                (
+                    record.get("evidence_coverage")
+                    if isinstance(record.get("evidence_coverage"), dict)
+                    else {}
+                ).get("coverage_status")
+                or ""
+            )
+            for record in records
+            if str(
+                (
+                    record.get("evidence_coverage")
+                    if isinstance(record.get("evidence_coverage"), dict)
+                    else {}
+                ).get("coverage_status")
+                or ""
+            )
+        ]
+        check["machine_view_coverage_status"] = (
+            "sufficient"
+            if "sufficient" in machine_coverage_states
+            else "partial_but_usable"
+            if "partial_but_usable" in machine_coverage_states
+            else "not_covered"
+            if "not_covered" in machine_coverage_states
+            else "not_measured"
+        )
+        check["machine_view_coverage_usable"] = (
+            check["machine_view_coverage_status"]
+            in {"sufficient", "partial_but_usable"}
+        )
         check["evidence_refs"] = paths
         check["artifact_rendered"] = bool(available)
         # A rendered image is not proof that the required relation or usable
@@ -589,8 +702,18 @@ def update_functional_check_evidence(
         check["observation_complete"] = False
         if available:
             check["acquisition_status"] = "artifact_rendered"
+            _append_obligation_transition(
+                check,
+                "acquired",
+                source="functional_evidence_provider",
+            )
         elif failed:
             check["acquisition_status"] = "failed"
+            _append_obligation_transition(
+                check,
+                "acquisition_failed",
+                source="functional_evidence_provider",
+            )
     return result
 
 
@@ -901,6 +1024,197 @@ def validate_functional_check_results(
         "complete": not unresolved,
         "rows": normalized_rows,
         "decision_authority": "none",
+    }
+
+
+def salvage_functional_judge_response(
+    value: Any,
+    *,
+    required_checks: list[dict[str, Any]],
+    fallback_value: Any = None,
+    retain_invalid: bool = True,
+) -> dict[str, Any]:
+    """Retain legal Functional check atoms and default only broken rows.
+
+    Initial legal atoms are authoritative.  The single schema-repair response
+    may fill a missing or malformed row only for an already-required check ID;
+    it cannot replace an initial conclusion or create another check.
+    """
+
+    sources = [
+        (
+            "initial",
+            fallback_value if isinstance(fallback_value, dict) else {},
+        ),
+        ("repair", value if isinstance(value, dict) else {}),
+    ]
+    normalized_sources: list[tuple[str, dict[str, Any]]] = []
+    for source_name, source in sources:
+        normalized = canonicalize_clearance_causal_attribution(
+            deepcopy(source),
+            required_checks=required_checks,
+        )
+        normalized = canonicalize_functional_defect_check_linkage(
+            normalized,
+            required_checks=required_checks,
+        )
+        normalized_sources.append((source_name, normalized))
+
+    accepted_rows: list[dict[str, Any]] = []
+    accepted_defects: list[dict[str, Any]] = []
+    accepted_sources: dict[str, str] = {}
+    defaulted_check_ids: list[str] = []
+    rejected_rows: list[dict[str, Any]] = []
+    for check in required_checks:
+        check_id = str(check.get("check_id") or "")
+        accepted = False
+        for source_name, source in normalized_sources:
+            rows = source.get("functional_check_results")
+            rows = rows if isinstance(rows, list) else []
+            matching_rows = [
+                deepcopy(row)
+                for row in rows
+                if isinstance(row, dict)
+                and str(row.get("check_id") or "") == check_id
+            ]
+            if len(matching_rows) != 1:
+                rejected_rows.append(
+                    {
+                        "source": source_name,
+                        "check_id": check_id,
+                        "reason": (
+                            "missing_check_row"
+                            if not matching_rows
+                            else "duplicate_check_rows"
+                        ),
+                    }
+                )
+                continue
+            row = matching_rows[0]
+            conclusion = str(row.get("conclusion") or "")
+            if conclusion not in {"valid", "invalid"}:
+                rejected_rows.append(
+                    {
+                        "source": source_name,
+                        "check_id": check_id,
+                        "reason": "row_did_not_make_a_binary_choice",
+                    }
+                )
+                continue
+            defects = source.get("defects")
+            defects = defects if isinstance(defects, list) else []
+            matching_defects = [
+                deepcopy(defect)
+                for defect in defects
+                if isinstance(defect, dict)
+                and check_id
+                in [
+                    str(item)
+                    for item in defect.get("check_refs") or []
+                    if str(item).strip()
+                ]
+            ]
+            row_defects = (
+                matching_defects
+                if retain_invalid and conclusion == "invalid"
+                else []
+            )
+            synthetic = {
+                "verdict": "invalid" if row_defects else "valid",
+                "defects": row_defects,
+                "functional_check_results": [row],
+            }
+            try:
+                validate_functional_check_results(
+                    synthetic,
+                    required_checks=[check],
+                    invalid_verdict_requires_invalid_check=False,
+                )
+            except (TypeError, ValueError, KeyError) as exc:
+                rejected_rows.append(
+                    {
+                        "source": source_name,
+                        "check_id": check_id,
+                        "reason": str(exc),
+                    }
+                )
+                continue
+            accepted_rows.append(row)
+            accepted_defects.extend(row_defects)
+            accepted_sources[check_id] = source_name
+            accepted = True
+            break
+        if not accepted:
+            accepted_rows.append(_default_valid_functional_row(check))
+            defaulted_check_ids.append(check_id)
+
+    invalid = bool(accepted_defects)
+    confidence = next(
+        (
+            source.get("confidence")
+            for _, source in normalized_sources
+            if isinstance(source.get("confidence"), (int, float))
+        ),
+        0.0,
+    )
+    if not isinstance(confidence, (int, float)) or not 0.0 <= float(
+        confidence
+    ) <= 1.0:
+        confidence = 0.0
+    grounded = len(required_checks) - len(defaulted_check_ids)
+    eligible = len(required_checks)
+    return {
+        "evidence_status": "sufficient",
+        "verdict": "invalid" if invalid else "valid",
+        "confidence": float(confidence),
+        "reason": (
+            "Legal Functional check rows were retained; malformed or missing "
+            "rows defaulted valid after the bounded schema retry."
+        ),
+        "missing_evidence": [],
+        "defects": accepted_defects if invalid else [],
+        "evidence_request": None,
+        "functional_check_results": accepted_rows,
+        "evidence_ambiguous": bool(defaulted_check_ids),
+        "forced_binary": bool(defaulted_check_ids),
+        "defaulted": bool(defaulted_check_ids),
+        "decision_source": (
+            "item_level_salvage"
+            if defaulted_check_ids
+            else "retained_legal_rows"
+        ),
+        "functional_salvage_audit": {
+            "policy": "initial_valid_rows_plus_default_valid_v1",
+            "required_check_count": eligible,
+            "grounded_check_count": grounded,
+            "defaulted_check_ids": defaulted_check_ids,
+            "accepted_sources": accepted_sources,
+            "rejected_rows": rejected_rows,
+            "coverage": {
+                "unit": "required_functional_check",
+                "eligible_count": eligible,
+                "grounded_count": grounded,
+                "fraction": grounded / eligible if eligible else 1.0,
+                "complete": grounded == eligible,
+            },
+        },
+    }
+
+
+def _default_valid_functional_row(
+    check: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "check_id": str(check["check_id"]),
+        "target_ids": [
+            str(item) for item in check.get("target_ids") or []
+        ],
+        "observation_status": "inferred_under_budget",
+        "conclusion": "valid",
+        "reason": (
+            "No legal invalid finding survived the bounded recovery path; "
+            "this atomic Functional check defaults valid with ambiguity."
+        ),
     }
 
 
@@ -1354,6 +1668,20 @@ def apply_functional_check_judgements(
         check["observation_status"] = observation_status
         check["check_conclusion"] = conclusion
         check["result_row"] = deepcopy(row)
+        check["grounded"] = observation_status == "observed"
+        if observation_status == "observed":
+            _append_obligation_transition(
+                check,
+                "gate_ready",
+                source=phase,
+            )
+            _append_obligation_transition(check, "judged", source=phase)
+        elif observation_status == "inferred_under_budget":
+            _append_obligation_transition(
+                check,
+                "forced_or_defaulted",
+                source=phase,
+            )
         if check.get("check_type") == "clearance" and conclusion == "invalid":
             for field in (
                 "affected_object_ids",
@@ -1383,6 +1711,11 @@ def apply_functional_check_judgements(
         for check_id, check in checks_by_id.items()
         if check.get("check_conclusion") == "invalid"
     ]
+    grounded_ids = [
+        check_id
+        for check_id, check in checks_by_id.items()
+        if check.get("grounded") is True
+    ]
     coverage = {
         "schema_version": FUNCTIONAL_CHECK_RESULT_VERSION,
         "required_check_count": len(checks_by_id),
@@ -1390,10 +1723,29 @@ def apply_functional_check_judgements(
         "resolved_check_ids": resolved_ids,
         "unresolved_check_ids": unresolved_ids,
         "invalid_check_ids": invalid_ids,
+        "grounded_check_count": len(grounded_ids),
+        "grounded_check_ids": grounded_ids,
+        "grounding_fraction": (
+            len(grounded_ids) / len(checks_by_id)
+            if checks_by_id
+            else 1.0
+        ),
         "complete": not unresolved_ids,
         "decision_authority": "none",
     }
     return result, coverage
+
+
+def _append_obligation_transition(
+    check: dict[str, Any],
+    state: str,
+    *,
+    source: str,
+) -> None:
+    lifecycle = check.setdefault("obligation_lifecycle", [])
+    transition = {"state": str(state), "source": str(source)}
+    if not lifecycle or lifecycle[-1] != transition:
+        lifecycle.append(transition)
 
 
 def check_ids_for_discovery(

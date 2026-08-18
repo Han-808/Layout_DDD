@@ -4,6 +4,7 @@ import json
 from copy import deepcopy
 from typing import Any
 
+from benchmark.assets.facing import benchmark_catalog_facing_contract
 from benchmark.nl_scene.generation_input import (
     STRUCTURED_ASSETS_INPUT_MODE,
     build_generator_visible_payload,
@@ -34,6 +35,15 @@ this generator-owned scale.
 rotation_euler_xyz_deg is intrinsic XYZ Euler degrees, applied to column vectors as
 Rz @ Ry @ Rx about the canonical bbox center. Express floor or support placement
 directly through center_m; there is no vertical-anchor field.
+
+For directed assets in the supplied Imaginarium catalog, use the benchmark-owned
+catalog_facing_contract. Their canonical functional front defaults to local -Y;
+do not assume local +Y. First decide the intended world-space facing direction,
+then rotate that local side with rotation_euler_xyz_deg[2]. With the default
+local_neg_y front: yaw 0 faces world -Y, yaw 90 faces world +X, yaw 180 faces
+world +Y, and yaw -90 faces world -X. A benchmark-provided explicit per-asset
+override supersedes the default. Non-directed assets have no facing constraint.
+This convention changes neither the asset mesh nor the generator-owned transform.
 
 Because this adapter receives structured_assets input, slot_id is required on every
 instance and must exactly match one of public_slot_ids supplied below. Multiple
@@ -107,6 +117,7 @@ def build_catalog_placement_method_input(generation_input: dict) -> dict:
         "structure": visible.get("structure"),
         "asset_selection": deepcopy(asset_selection),
         "public_slot_ids": public_slots,
+        "catalog_facing_contract": benchmark_catalog_facing_contract(),
     }
     reflection = visible.get("self_reflection")
     if isinstance(reflection, dict):
@@ -132,6 +143,7 @@ def build_catalog_placement_method_input(generation_input: dict) -> dict:
         "input_mode": input_mode,
         "request_id": str(generation_input.get("request_id") or "request_001"),
         "public_slot_ids": public_slots,
+        "catalog_facing_contract": benchmark_catalog_facing_contract(),
         "messages": [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": user_prompt},

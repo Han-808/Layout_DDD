@@ -5,6 +5,10 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
+from benchmark.assets.facing import (
+    CATALOG_FACING_CONTRACT_VERSION,
+    DEFAULT_DIRECTED_FUNCTIONAL_SIDE,
+)
 from benchmark.evaluator.evidence_contract import GROUPING_POLICY_ID
 from benchmark.evaluator.scene_quality.functional_prejudgement import (
     DEFAULT_FUNCTIONAL_PREJUDGEMENT_EVIDENCE_CONFIG,
@@ -12,11 +16,15 @@ from benchmark.evaluator.scene_quality.functional_prejudgement import (
 from benchmark.evaluator.scene_quality.placement_severity import (
     PLACEMENT_SEVERITY_LEVELS,
 )
+from benchmark.scoring_profiles import DEFAULT_L3_METRIC_WEIGHTS
 from benchmark.visual_judge.l3_prompts import (
     L3_METRIC_RUBRICS,
 )
 from benchmark.visual_judge.functional_evidence import (
     FUNCTIONAL_PROBE_DEFAULT_UNITS,
+)
+from benchmark.visual_judge.usable_surface import (
+    CATALOG_CONTRACT_USABLE_SURFACE_DETECTOR_BACKEND,
 )
 
 SCENE_QUALITY_INTERFACE_VERSION = "scene_quality_v7"
@@ -172,7 +180,7 @@ DEFAULT_SCENE_QUALITY_INTERFACE_CONFIG: dict[str, Any] = {
             "metric_status": "canonical_scoring",
             "activation_policy": "profile_and_applicability",
             "included_in_canonical_aggregate": True,
-            "weight": 0.12,
+            "weight": DEFAULT_L3_METRIC_WEIGHTS["style_consistency"],
             "evidence_policy": {
                 "camera_scope": "global",
                 "camera_mode": "global_oblique",
@@ -208,8 +216,8 @@ DEFAULT_SCENE_QUALITY_INTERFACE_CONFIG: dict[str, Any] = {
                 },
                 "router_options": None,
                 "text_context": [
-                    "original_prompt",
-                    "parsed_prompt_requirements",
+                    "metric_prompt_context.room_type",
+                    "visual_style_spec",
                     "authorized_deviations",
                     "asset_policy",
                 ],
@@ -221,7 +229,7 @@ DEFAULT_SCENE_QUALITY_INTERFACE_CONFIG: dict[str, Any] = {
             "metric_status": "canonical_scoring",
             "activation_policy": "profile_and_applicability",
             "included_in_canonical_aggregate": True,
-            "weight": 0.12,
+            "weight": DEFAULT_L3_METRIC_WEIGHTS["scale_consistency"],
             "evidence_policy": {
                 "camera_scope": "group_local",
                 "camera_mode": "metric_local",
@@ -261,8 +269,7 @@ DEFAULT_SCENE_QUALITY_INTERFACE_CONFIG: dict[str, Any] = {
                     },
                 },
                 "text_context": [
-                    "original_prompt",
-                    "parsed_prompt_requirements",
+                    "metric_prompt_context.none",
                     "authorized_deviations",
                     "asset_policy",
                     "object_grouping_report",
@@ -275,7 +282,9 @@ DEFAULT_SCENE_QUALITY_INTERFACE_CONFIG: dict[str, Any] = {
             "metric_status": "canonical_scoring",
             "activation_policy": "profile_and_applicability",
             "included_in_canonical_aggregate": True,
-            "weight": 0.12,
+            "weight": DEFAULT_L3_METRIC_WEIGHTS[
+                "object_pairing_consistency"
+            ],
             "evidence_policy": {
                 "camera_scope": "group_local",
                 "camera_mode": "metric_local",
@@ -315,8 +324,7 @@ DEFAULT_SCENE_QUALITY_INTERFACE_CONFIG: dict[str, Any] = {
                     },
                 },
                 "text_context": [
-                    "original_prompt",
-                    "parsed_prompt_requirements",
+                    "metric_prompt_context.room_type",
                     "authorized_deviations",
                     "asset_policy",
                     "object_grouping_report",
@@ -329,9 +337,11 @@ DEFAULT_SCENE_QUALITY_INTERFACE_CONFIG: dict[str, Any] = {
             "metric_status": "canonical_scoring",
             "activation_policy": "profile_and_applicability",
             "included_in_canonical_aggregate": True,
-            "weight": 0.44,
+            "weight": DEFAULT_L3_METRIC_WEIGHTS[
+                "functional_consistency"
+            ],
             "group_local_check_granularity": "per_check",
-            "group_local_evidence_policy": "isolated_episode",
+            "group_local_evidence_policy": "shared_group_bank",
             "group_local_active_window_max_images": 6,
             "evidence_policy": {
                 "camera_scope": "global",
@@ -376,7 +386,15 @@ DEFAULT_SCENE_QUALITY_INTERFACE_CONFIG: dict[str, Any] = {
                         "unusual_confirmation_scope": "group_local",
                     },
                     "usable_surface": {
-                        "backend": "vlm_trusted_side_ids",
+                        "backend": (
+                            CATALOG_CONTRACT_USABLE_SURFACE_DETECTOR_BACKEND
+                        ),
+                        "catalog_default_directed_side": (
+                            DEFAULT_DIRECTED_FUNCTIONAL_SIDE
+                        ),
+                        "catalog_contract_version": (
+                            CATALOG_FACING_CONTRACT_VERSION
+                        ),
                         "trusted_side_ids": [
                             "local_pos_x",
                             "local_neg_x",
@@ -387,7 +405,10 @@ DEFAULT_SCENE_QUALITY_INTERFACE_CONFIG: dict[str, Any] = {
                             "directed_or_uncertain_clearance_targets_"
                             "before_probe_budget"
                         ),
-                        "fallback": "existing_geometry_local_camera",
+                        "fallback": (
+                            "vlm_trusted_side_ids_then_existing_geometry_"
+                            "local_camera"
+                        ),
                         "scene_access": "read_only",
                     },
                     "planner_input": (
@@ -408,7 +429,7 @@ DEFAULT_SCENE_QUALITY_INTERFACE_CONFIG: dict[str, Any] = {
                 },
                 "router_options": None,
                 "text_context": [
-                    "original_prompt",
+                    "metric_prompt_context.none",
                     "authorized_deviations",
                     "asset_policy",
                     "object_grouping_report",
@@ -423,13 +444,28 @@ DEFAULT_SCENE_QUALITY_INTERFACE_CONFIG: dict[str, Any] = {
             "metric_status": "canonical_scoring",
             "activation_policy": "profile_and_applicability",
             "included_in_canonical_aggregate": True,
-            "weight": 0.20,
+            "weight": DEFAULT_L3_METRIC_WEIGHTS[
+                "semantic_placement_consistency"
+            ],
             "severity_policy": {
                 "schema_version": "object_equivalent_burden_v1",
                 "levels": list(PLACEMENT_SEVERITY_LEVELS),
                 "strict_level": "implausible",
                 "extended_level": "atypical",
                 "affects_existing_metric_score": True,
+            },
+            # Experimental post-typed holistic review.  It stays disabled in
+            # the generic library default so existing API callers retain
+            # their call graph; the camera-cal runner and canonical v2
+            # profile explicitly enable it for the current experiment.
+            "residual_global_review": {
+                "enabled": False,
+                "placement_weight": 0.20,
+                "image_budget": 3,
+                "allowed_check_types": [
+                    "scene_zone",
+                    "contextual_anchor",
+                ],
             },
             "evidence_policy": {
                 "camera_scope": "global",
@@ -466,7 +502,7 @@ DEFAULT_SCENE_QUALITY_INTERFACE_CONFIG: dict[str, Any] = {
                 },
                 "router_options": None,
                 "text_context": [
-                    "original_prompt",
+                    "metric_prompt_context.none",
                     "authorized_deviations",
                     "asset_policy",
                     "object_grouping_report",

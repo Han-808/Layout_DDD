@@ -427,6 +427,7 @@ def build_selection_request(
     # Judge/Selector/Renderer interfaces directly rather than a legacy wrapper.
     for key in (
         "group_scope",
+        "target_scope",
         "grouping_role",
         "member_ids",
         "target_bounds",
@@ -452,6 +453,24 @@ def build_selection_request(
         context.setdefault(
             "target_extent",
             deepcopy(group_scope.get("extent")),
+        )
+    target_scope = context.get("target_scope")
+    if isinstance(target_scope, dict):
+        context.setdefault(
+            "member_ids",
+            deepcopy(target_scope.get("framing_ids")),
+        )
+        context.setdefault(
+            "target_bounds",
+            deepcopy(target_scope.get("target_bounds")),
+        )
+        context.setdefault(
+            "focus_center",
+            deepcopy(target_scope.get("focus_center")),
+        )
+        context.setdefault(
+            "target_extent",
+            deepcopy(target_scope.get("extent")),
         )
     functional_repair = _functional_repair_context(
         request=request,
@@ -598,6 +617,24 @@ def _functional_repair_context(
     )
     metadata = raw_request.get("metadata")
     metadata = metadata if isinstance(metadata, dict) else {}
+    preflight = request.context.get("functional_evidence_preflight")
+    preflight = preflight if isinstance(preflight, dict) else {}
+    usable_side_fallback = bool(
+        metadata.get("usable_side_fallback") is True
+        or str(metadata.get("source") or "")
+        == "functional_evidence_preflight_v1"
+    )
+    unresolved_usable_side_target_ids = list(
+        dict.fromkeys(
+            str(item)
+            for item in (
+                metadata.get("unresolved_usable_side_target_ids")
+                or preflight.get("target_ids")
+                or []
+            )
+            if str(item).strip() and str(item) in set(requested_ids)
+        )
+    )
     requested_check_ids = {
         str(item)
         for item in [
@@ -721,8 +758,12 @@ def _functional_repair_context(
         )
     )
     return {
-        "schema_version": "functional_camera_repair_v2",
-        "source": "judge_need_more_evidence",
+        "schema_version": "functional_camera_repair_v3",
+        "source": (
+            "usable_side_soft_fallback"
+            if usable_side_fallback
+            else "judge_need_more_evidence"
+        ),
         "target_ids": requested_ids,
         "route_scope": (
             "cross_group"
@@ -769,6 +810,15 @@ def _functional_repair_context(
         ),
         "surface_targets": surface_targets,
         "usable_surface_hypotheses": hypotheses,
+        "usable_side_fallback": usable_side_fallback,
+        "unresolved_usable_side_target_ids": (
+            unresolved_usable_side_target_ids
+        ),
+        "fallback_policy": (
+            "deterministic_opposing_target_views_then_selector_review"
+            if usable_side_fallback
+            else None
+        ),
         "decision_authority": "none",
     }
 

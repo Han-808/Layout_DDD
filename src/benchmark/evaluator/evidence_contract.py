@@ -361,9 +361,15 @@ def validate_text_context(values: Any, *, where: str = "text_context") -> list[s
     for token in values:
         if not isinstance(token, str) or not token.strip():
             raise EvidenceContractError(f"{where} entries must be non-empty strings")
-    if "original_prompt" not in values:
+    has_metric_scoped_context = any(
+        token == "metric_prompt_context"
+        or token.startswith("metric_prompt_context.")
+        for token in values
+    )
+    if "original_prompt" not in values and not has_metric_scoped_context:
         raise EvidenceContractError(
-            f"{where} must include 'original_prompt'; every L2/L3 evidence plan must carry prompt context"
+            f"{where} must include 'original_prompt' or an explicit "
+            "'metric_prompt_context.*' selection"
         )
     return list(values)
 
@@ -373,7 +379,8 @@ def validate_evidence_plan(plan: Any, *, where: str = "evidence_plan") -> dict[s
 
     A plan may declare a single ``evidence_strategy`` and/or a ``router_options``
     map of candidate routers, plus optional ``global_policy``, ``local_policy``,
-    and a required ``text_context`` that always carries the prompt. Unknown,
+    and a required ``text_context`` that declares either the full original
+    prompt or a metric-scoped public-context selection. Unknown,
     future-compatible fields are preserved.
     """
 

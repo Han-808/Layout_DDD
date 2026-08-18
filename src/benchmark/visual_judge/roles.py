@@ -25,6 +25,7 @@ class DecisionContract(str, Enum):
     P0B_BINARY = "p0b_binary_v1"
     RELATION_BINARY = "relation_binary_v1"
     CAMERA_SELECTION = "camera_selection_v1"
+    CAMERA_EVIDENCE_READINESS = "camera_evidence_readiness_v1"
     GENERIC_VISUAL_SCORE = "generic_visual_score_v1"
     # Compatibility-only routed Spatial Fidelity candidates remain binary.
     SPATIAL_FIDELITY_BINARY = "spatial_fidelity_binary_v1"
@@ -32,7 +33,7 @@ class DecisionContract(str, Enum):
     FUNCTIONAL_AFFORDANCE_DISCOVERY = (
         "functional_affordance_ledger_v4"
     )
-    FUNCTIONAL_RELATION_DISCOVERY = "functional_relation_audit_v3"
+    FUNCTIONAL_RELATION_DISCOVERY = "functional_relation_audit_v4"
     FUNCTIONAL_PROBE_PLAN = "functional_probe_plan_v2"
     PLACEMENT_DISCOVERY = "placement_discovery_v2"
     USABLE_SURFACE_DECODE = "usable_surface_decode_v2"

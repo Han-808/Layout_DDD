@@ -21,6 +21,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from benchmark.visual_judge.l3_prompts import (  # noqa: E402
     L3_METRIC_BOUNDARY_RULES,
+    L3_METRIC_PHASE_PROMPTS,
     L3_METRIC_PROMPT_VERSION,
     L3_METRIC_RUBRICS,
 )
@@ -39,6 +40,8 @@ GROUP_COLORS = (
 
 TRACE_STAGE_LABELS = {
     "evidence_gate": "Evidence gate",
+    "functional_evidence_readiness": "Evidence readiness review",
+    "evidence_bank_reuse": "Shared-bank reuse",
     "judge": "Judge",
     "judge_evidence_request": "Judge evidence request",
     "acquisition_planner": "Acquisition plan",
@@ -65,6 +68,8 @@ OBJECT_LEVEL_ATTRIBUTION_METRICS = (
     "functional_consistency",
     "semantic_placement_consistency",
 )
+
+MIN_PUBLISHABLE_SCORE_COVERAGE = 0.80
 
 SCORING_METRIC_ORDER = (
     ("L1", "collision", "Collision"),
@@ -119,6 +124,61 @@ def optional_jsonl(path: Path) -> list[dict[str, Any]]:
             )
         records.append(value)
     return records
+
+
+def generator_case_metadata(
+    case_manifest: dict[str, Any],
+) -> dict[str, str]:
+    """Resolve generator provenance without treating the evaluator as it."""
+
+    source_case_root_value = case_manifest.get("source_case_root")
+    source_case_root = (
+        Path(source_case_root_value).expanduser().resolve()
+        if isinstance(source_case_root_value, str) and source_case_root_value
+        else None
+    )
+    dataset_manifest = (
+        optional_json(source_case_root / "case_manifest.json")
+        if source_case_root is not None
+        else {}
+    )
+    source = dataset_manifest.get("source")
+    source = source if isinstance(source, dict) else {}
+    task_id = str(source.get("task_id") or case_manifest.get("case_id") or "")
+    namespace = str(source.get("namespace") or "")
+    original_case_root_value = source.get("original_case_root")
+    original_case_root = (
+        Path(original_case_root_value).expanduser().resolve()
+        if isinstance(original_case_root_value, str) and original_case_root_value
+        else None
+    )
+    model_label = ""
+    if original_case_root is not None:
+        for filename in (
+            "audit_manifest.json",
+            "generation_freeze.json",
+            "fixed_instruction.json",
+            "one_shot_audit.json",
+            "scene_request.json",
+        ):
+            record = optional_json(original_case_root / filename)
+            metadata = record.get("metadata")
+            metadata = metadata if isinstance(metadata, dict) else {}
+            provenance = record.get("provenance")
+            provenance = provenance if isinstance(provenance, dict) else {}
+            value = (
+                record.get("model_label")
+                or metadata.get("model_label")
+                or provenance.get("model_label")
+            )
+            if isinstance(value, str) and value.strip():
+                model_label = value.strip()
+                break
+    return {
+        "model_label": model_label or "generator not persisted",
+        "task_id": task_id,
+        "source_namespace": namespace,
+    }
 
 
 def _numeric(value: Any) -> float | None:
@@ -212,7 +272,55 @@ def case_scoring_summary(
             local_weight = 1.0 / 3.0
         local_weight = 0.0 if local_weight is None else local_weight
         layer_weight = l1_layer_weight if layer == "L1" else l3_layer_weight
-        score = _numeric(metric_report.get("score"))
+        persisted_score = _numeric(metric_report.get("score"))
+        coverage_projection = scoring.get("coverage_projection")
+        coverage_projection = (
+            coverage_projection
+            if isinstance(coverage_projection, dict)
+            else {}
+        )
+        observed_score = persisted_score
+        if observed_score is None:
+            observed_score = _numeric(
+                coverage_projection.get(
+                    "raw_score_before_coverage_projection"
+                )
+            )
+        metric_coverage = metric_report.get("coverage")
+        metric_coverage = (
+            metric_coverage if isinstance(metric_coverage, dict) else {}
+        )
+        score_grounding = metric_coverage.get("score_grounding")
+        score_grounding = (
+            score_grounding if isinstance(score_grounding, dict) else {}
+        )
+        coverage_fraction = _numeric(score_grounding.get("fraction"))
+        if coverage_fraction is None:
+            coverage_fraction = _numeric(metric_coverage.get("fraction"))
+        coverage_complete = (
+            score_grounding.get("complete")
+            if isinstance(score_grounding.get("complete"), bool)
+            else metric_coverage.get("complete")
+            if isinstance(metric_coverage.get("complete"), bool)
+            else None
+        )
+        if coverage_fraction is None:
+            coverage_fraction = 1.0 if observed_score is not None else 0.0
+        coverage_fraction = min(1.0, max(0.0, coverage_fraction))
+        coverage_threshold_passed = (
+            observed_score is not None
+            and coverage_fraction >= MIN_PUBLISHABLE_SCORE_COVERAGE
+        )
+        score = observed_score if coverage_threshold_passed else None
+        score_status = (
+            "complete"
+            if score is not None and coverage_fraction >= 1.0 - 1.0e-12
+            else "partial_coverage"
+            if score is not None
+            else "failed_coverage_threshold"
+            if observed_score is not None
+            else "insufficient_metric_coverage"
+        )
         events = scoring.get("events")
         events = (
             [deepcopy(event) for event in events if isinstance(event, dict)]
@@ -221,6 +329,32 @@ def case_scoring_summary(
         )
         judgement = metric_report.get("judgement")
         judgement = judgement if isinstance(judgement, dict) else {}
+        placement_component_weights = scoring.get(
+            "placement_component_weights"
+        )
+        placement_component_weights = (
+            deepcopy(placement_component_weights)
+            if isinstance(placement_component_weights, dict)
+            else None
+        )
+        placement_components = scoring.get("placement_components")
+        placement_components = (
+            {
+                str(name): {
+                    "score": _numeric(component.get("score")),
+                    "deduction": _numeric(
+                        component.get("metric_deduction")
+                    ),
+                    "event_count": int(
+                        component.get("event_count") or 0
+                    ),
+                }
+                for name, component in placement_components.items()
+                if isinstance(component, dict)
+            }
+            if isinstance(placement_components, dict)
+            else None
+        )
         metric_records.append(
             {
                 "layer": layer,
@@ -234,11 +368,26 @@ def case_scoring_summary(
                     or ""
                 ),
                 "score": score,
+                "observed_score": observed_score,
+                "score_status": score_status,
+                "coverage_fraction": coverage_fraction,
+                "coverage_complete": coverage_complete,
+                "coverage_threshold_passed": coverage_threshold_passed,
+                "coverage": deepcopy(metric_coverage),
                 "local_weight": local_weight,
                 "overall_weight": layer_weight * local_weight,
+                "grounded_overall_weight": (
+                    layer_weight * local_weight * coverage_fraction
+                    if observed_score is not None
+                    else 0.0
+                ),
                 "weighted_points": (
-                    score * layer_weight * local_weight * 100.0
-                    if score is not None
+                    observed_score
+                    * layer_weight
+                    * local_weight
+                    * coverage_fraction
+                    * 100.0
+                    if observed_score is not None
                     else None
                 ),
                 "coefficient": _numeric(scoring.get("coefficient_n_m")),
@@ -251,44 +400,149 @@ def case_scoring_summary(
                 "ledger_available": bool(scoring),
                 "event_count": int(scoring.get("event_count") or 0),
                 "events": events,
+                "placement_component_weights": placement_component_weights,
+                "placement_components": placement_components,
             }
         )
 
-    benchmark_score = _numeric(case_manifest.get("benchmark_score"))
-    benchmark_score_100 = _numeric(
-        case_manifest.get("benchmark_score_100")
-    )
-    if benchmark_score_100 is None and benchmark_score is not None:
-        benchmark_score_100 = benchmark_score * 100.0
-    benchmark_status = str(
-        case_manifest.get("benchmark_score_status") or ""
-    ).strip()
-    if not benchmark_status:
-        benchmark_status = (
-            "complete"
-            if benchmark_score_100 is not None
-            else "infrastructure_failure"
-            if (
-                str(case_manifest.get("final_decision_status"))
-                == "infrastructure_failure"
-                or reliability.get("terminal_state")
-                == "infrastructure_failure"
-            )
-            else "insufficient_metric_coverage"
-            if (
-                str(case_manifest.get("final_decision_status"))
-                == "unresolved"
-                or reliability.get("terminal_state") == "unresolved"
-            )
-            else "not_published"
-        )
-
-    l1_score = _numeric(l1_report.get("score"))
-    l1_partial = _numeric(l1_report.get("partial_score"))
-    l3_score = _numeric(l3_report.get("score"))
-    l3_partial = _numeric(l3_report.get("resolved_score"))
+    scoreable_records = [
+        item
+        for item in metric_records
+        if _numeric(item.get("overall_weight")) not in (None, 0.0)
+    ]
+    l1_coverage = l1_report.get("coverage")
+    l1_coverage = l1_coverage if isinstance(l1_coverage, dict) else {}
     l3_coverage = l3_report.get("coverage")
     l3_coverage = l3_coverage if isinstance(l3_coverage, dict) else {}
+    l1_records = [item for item in scoreable_records if item["layer"] == "L1"]
+    l3_records = [item for item in scoreable_records if item["layer"] == "L3"]
+
+    def covered_layer(
+        records: list[dict[str, Any]],
+    ) -> tuple[float | None, float | None, float, int]:
+        required = sum(float(item.get("local_weight") or 0.0) for item in records)
+        grounded = sum(
+            float(item.get("local_weight") or 0.0)
+            * float(item.get("coverage_fraction") or 0.0)
+            for item in records
+            if _numeric(item.get("observed_score")) is not None
+        )
+        points = sum(
+            float(item["observed_score"])
+            * float(item.get("local_weight") or 0.0)
+            * float(item.get("coverage_fraction") or 0.0)
+            for item in records
+            if _numeric(item.get("observed_score")) is not None
+        )
+        observed_score = points / grounded if grounded > 0.0 else None
+        fraction = grounded / required if required > 0.0 else 0.0
+        fraction = min(1.0, max(0.0, fraction))
+        score = (
+            observed_score
+            if observed_score is not None
+            and fraction >= MIN_PUBLISHABLE_SCORE_COVERAGE
+            else None
+        )
+        resolved = sum(
+            _numeric(item.get("observed_score")) is not None
+            and float(item.get("coverage_fraction") or 0.0) > 0.0
+            for item in records
+        )
+        return score, observed_score, fraction, resolved
+
+    (
+        l1_score,
+        l1_observed_score,
+        l1_fraction,
+        l1_resolved_count,
+    ) = covered_layer(l1_records)
+    (
+        l3_score,
+        l3_observed_score,
+        l3_fraction,
+        l3_resolved_count,
+    ) = covered_layer(l3_records)
+    l1_coverage = {
+        **l1_coverage,
+        "eligible_count": len(l1_records),
+        "resolved_count": l1_resolved_count,
+        "fraction": l1_fraction,
+        "grounded_score_fraction": l1_fraction,
+        "observed_score": l1_observed_score,
+        "earned_score_mass": (
+            l1_observed_score * l1_fraction
+            if l1_observed_score is not None
+            else None
+        ),
+        "minimum_publishable_coverage": MIN_PUBLISHABLE_SCORE_COVERAGE,
+        "coverage_threshold_passed": (
+            l1_fraction >= MIN_PUBLISHABLE_SCORE_COVERAGE
+        ),
+        "complete": bool(l1_records) and l1_fraction >= 1.0 - 1.0e-12,
+    }
+    l3_coverage = {
+        **l3_coverage,
+        "eligible_count": len(l3_records),
+        "resolved_count": l3_resolved_count,
+        "fraction": l3_fraction,
+        "grounded_score_fraction": l3_fraction,
+        "observed_score": l3_observed_score,
+        "earned_score_mass": (
+            l3_observed_score * l3_fraction
+            if l3_observed_score is not None
+            else None
+        ),
+        "minimum_publishable_coverage": MIN_PUBLISHABLE_SCORE_COVERAGE,
+        "coverage_threshold_passed": (
+            l3_fraction >= MIN_PUBLISHABLE_SCORE_COVERAGE
+        ),
+        "complete": bool(l3_records) and l3_fraction >= 1.0 - 1.0e-12,
+    }
+    layer_values = (
+        (l1_observed_score, l1_layer_weight, l1_fraction),
+        (l3_observed_score, l3_layer_weight, l3_fraction),
+    )
+    combined_grounded_weight = sum(
+        weight * fraction
+        for score, weight, fraction in layer_values
+        if score is not None
+    )
+    combined_required_weight = l1_layer_weight + l3_layer_weight
+    benchmark_observed_score = (
+        sum(
+            float(score) * weight * fraction
+            for score, weight, fraction in layer_values
+            if score is not None
+        )
+        / combined_grounded_weight
+        if combined_grounded_weight > 0.0
+        else None
+    )
+    combined_coverage_fraction = (
+        combined_grounded_weight / combined_required_weight
+        if combined_required_weight > 0.0
+        else 0.0
+    )
+    benchmark_score = (
+        benchmark_observed_score
+        if benchmark_observed_score is not None
+        and combined_coverage_fraction >= MIN_PUBLISHABLE_SCORE_COVERAGE
+        else None
+    )
+    benchmark_score_100 = (
+        benchmark_score * 100.0 if benchmark_score is not None else None
+    )
+    benchmark_status = (
+        "complete"
+        if benchmark_score is not None
+        and combined_coverage_fraction >= 1.0 - 1.0e-12
+        else "partial_coverage"
+        if benchmark_score is not None
+        else "failed_coverage_threshold"
+        if benchmark_observed_score is not None
+        and combined_coverage_fraction < MIN_PUBLISHABLE_SCORE_COVERAGE
+        else "insufficient_metric_coverage"
+    )
     l1_diagnostics = (
         l1_diagnostics if isinstance(l1_diagnostics, dict) else {}
     )
@@ -322,11 +576,18 @@ def case_scoring_summary(
         "spec_version": str(
             profile.get("scoring_spec_version") or "not persisted"
         ),
+        "deduction_multiplier": profile.get("deduction_multiplier"),
         "layer_weights": deepcopy(layer_weights),
         "n_scene": denominator.get("n_scene"),
         "object_ids": list(denominator.get("ordered_object_ids") or []),
         "combined_score_100": benchmark_score_100,
+        "combined_observed_score_100": (
+            benchmark_observed_score * 100.0
+            if benchmark_observed_score is not None
+            else None
+        ),
         "combined_status": benchmark_status,
+        "combined_coverage_fraction": combined_coverage_fraction,
         "final_decision_status": str(
             case_manifest.get("final_decision_status") or "unknown"
         ),
@@ -336,16 +597,36 @@ def case_scoring_summary(
                 "label": "Physical plausibility",
                 "status": str(l1_report.get("status") or "not_recorded"),
                 "score": l1_score,
-                "partial_score": l1_partial,
+                "observed_score": l1_observed_score,
+                "score_status": (
+                    "complete"
+                    if l1_score is not None
+                    and l1_fraction >= 1.0 - 1.0e-12
+                    else "partial_coverage"
+                    if l1_score is not None
+                    else "failed_coverage_threshold"
+                    if l1_observed_score is not None
+                    else "insufficient_metric_coverage"
+                ),
                 "weight": l1_layer_weight,
-                "coverage": None,
+                "coverage": deepcopy(l1_coverage),
             },
             {
                 "layer": "L3",
                 "label": "Implicit scene validity",
                 "status": str(l3_report.get("status") or "not_recorded"),
                 "score": l3_score,
-                "partial_score": l3_partial,
+                "observed_score": l3_observed_score,
+                "score_status": (
+                    "complete"
+                    if l3_score is not None
+                    and l3_fraction >= 1.0 - 1.0e-12
+                    else "partial_coverage"
+                    if l3_score is not None
+                    else "failed_coverage_threshold"
+                    if l3_observed_score is not None
+                    else "insufficient_metric_coverage"
+                ),
                 "weight": l3_layer_weight,
                 "coverage": deepcopy(l3_coverage),
             },
@@ -355,6 +636,57 @@ def case_scoring_summary(
         "engineering_failure_record_count": len(engineering_failures),
         "engineering_failures": unique_engineering_failures,
     }
+
+
+def _severity_css_class(value: Any) -> str:
+    text = str(value or "not_persisted").strip().lower()
+    normalized = "".join(
+        character if character.isalnum() else "-" for character in text
+    ).strip("-")
+    return normalized or "not-persisted"
+
+
+def _severity_summary(events: list[dict[str, Any]]) -> str:
+    counts: dict[str, int] = {}
+    continuous_burdens: list[float] = []
+    for event in events:
+        severity = event.get("severity")
+        if severity not in (None, ""):
+            label = str(severity).strip()
+            counts[label] = counts.get(label, 0) + 1
+            continue
+        burden = _numeric(event.get("burden"))
+        if burden is not None:
+            continuous_burdens.append(burden)
+            continue
+        counts["missing audit field"] = (
+            counts.get("missing audit field", 0) + 1
+        )
+    if not counts and not continuous_burdens:
+        return ""
+    badges = "".join(
+        '<span class="severity-badge '
+        f'severity-{html.escape(_severity_css_class(label))}">'
+        f'<span>Severity</span><strong>{html.escape(label)}</strong>'
+        f'<small>×{count}</small></span>'
+        for label, count in counts.items()
+    )
+    if continuous_burdens:
+        minimum = min(continuous_burdens)
+        maximum = max(continuous_burdens)
+        burden_range = (
+            f"burden {minimum:.3f} / 1.000"
+            if len(continuous_burdens) == 1
+            or abs(maximum - minimum) <= 1.0e-12
+            else f"burden {minimum:.3f}–{maximum:.3f} / 1.000"
+        )
+        badges += (
+            '<span class="severity-badge severity-continuous">'
+            "<span>Severity</span><strong>continuous</strong>"
+            f"<small>{html.escape(burden_range)} "
+            f"×{len(continuous_burdens)}</small></span>"
+        )
+    return badges
 
 
 def _render_scoring_events(events: list[dict[str, Any]]) -> str:
@@ -367,20 +699,32 @@ def _render_scoring_events(events: list[dict[str, Any]]) -> str:
             objects = event.get("affected_object_ids")
         objects = objects if isinstance(objects, list) else []
         severity = event.get("severity")
-        magnitude = _numeric(event.get("magnitude"))
-        severity_text = (
-            str(severity)
-            if severity not in (None, "")
-            else f"magnitude {magnitude:.3f}"
-            if magnitude is not None
-            else "magnitude not persisted"
-        )
         burden = _numeric(event.get("burden"))
+        if severity not in (None, ""):
+            severity_text = str(severity).strip()
+            severity_detail = "categorical"
+        elif burden is not None:
+            severity_text = "continuous"
+            severity_detail = f"burden {burden:.3f} / 1.000"
+        else:
+            severity_text = "missing audit field"
+            severity_detail = "deduction severity unavailable"
+        magnitude = _numeric(event.get("magnitude"))
+        magnitude_text = (
+            f"magnitude {magnitude:.3f}"
+            if magnitude is not None
+            else "magnitude —"
+        )
         burden_text = f"{burden:.3f}" if burden is not None else "—"
         rows.append(
             "<li>"
             f"<strong>{html.escape(str(event.get('category') or 'uncategorized'))}</strong>"
-            f"<span>{html.escape(severity_text)}</span>"
+            '<span class="severity-badge '
+            f'severity-{html.escape(_severity_css_class(severity_text))}">'
+            f'<span>Severity</span><strong>{html.escape(severity_text)}</strong>'
+            f"<small>{html.escape(severity_detail)}</small>"
+            "</span>"
+            f"<span>{html.escape(magnitude_text)}</span>"
             f"<span>burden {burden_text}</span>"
         )
         rows[-1] += (
@@ -393,6 +737,12 @@ def _render_scoring_events(events: list[dict[str, Any]]) -> str:
 def render_case_scoring_dashboard(summary: dict[str, Any]) -> str:
     combined = _numeric(summary.get("combined_score_100"))
     combined_text = f"{combined:.1f}" if combined is not None else "—"
+    combined_coverage = _numeric(summary.get("combined_coverage_fraction"))
+    combined_coverage_text = (
+        f"coverage {combined_coverage * 100:.1f}%"
+        if combined_coverage is not None
+        else "coverage not persisted"
+    )
     combined_status = str(summary.get("combined_status") or "unknown")
     reliability = summary.get("reliability")
     reliability = reliability if isinstance(reliability, dict) else {}
@@ -421,20 +771,46 @@ def render_case_scoring_dashboard(summary: dict[str, Any]) -> str:
     layer_cards: list[str] = []
     for layer in summary.get("layers") or []:
         score = _numeric(layer.get("score"))
-        partial = _numeric(layer.get("partial_score"))
-        score_text = f"{score * 100:.1f}" if score is not None else "—"
-        qualifier = "official layer score"
-        if score is None and partial is not None:
-            score_text = f"{partial * 100:.1f}"
-            qualifier = "partial only"
+        observed_score = _numeric(layer.get("observed_score"))
+        score_text = (
+            f"{score * 100:.1f}"
+            if score is not None
+            else "FAILED"
+            if observed_score is not None
+            else "—"
+        )
+        qualifier = (
+            "coverage-conditioned layer score"
+            if score is not None
+            else "failed coverage threshold (minimum 80%)"
+            if observed_score is not None
+            else "no grounded layer score"
+        )
         coverage = layer.get("coverage")
         coverage = coverage if isinstance(coverage, dict) else {}
         coverage_text = ""
         if coverage:
+            eligible = coverage.get("eligible_count")
+            if eligible is None:
+                eligible = coverage.get("active_metric_count")
+            resolved = coverage.get("resolved_count")
+            if resolved is None:
+                unresolved_metrics = coverage.get("unresolved_metrics")
+                unresolved_count = (
+                    len(unresolved_metrics)
+                    if isinstance(unresolved_metrics, list)
+                    else 0
+                )
+                resolved = max(int(eligible or 0) - unresolved_count, 0)
             coverage_text = (
-                f" · {int(coverage.get('resolved_count') or 0)}/"
-                f"{int(coverage.get('eligible_count') or 0)} metrics resolved"
+                f" · {int(resolved or 0)}/"
+                f"{int(eligible or 0)} metrics resolved"
             )
+            fraction = _numeric(coverage.get("grounded_score_fraction"))
+            if fraction is None:
+                fraction = _numeric(coverage.get("fraction"))
+            if fraction is not None:
+                coverage_text += f" · coverage {fraction * 100:.1f}%"
         layer_cards.append(
             f"""
             <article class="layer-score-card">
@@ -444,7 +820,7 @@ def render_case_scoring_dashboard(summary: dict[str, Any]) -> str:
               </div>
               <div class="layer-score-value">{score_text}</div>
               <p>{html.escape(qualifier)} · weight {_percent_text(layer.get('weight'))}%{html.escape(coverage_text)}</p>
-              <span class="score-status score-status-{_scoring_status_class(layer.get('status'))}">{html.escape(str(layer.get('status')))}</span>
+              <span class="score-status score-status-{_scoring_status_class(layer.get('score_status'))}">{html.escape(str(layer.get('score_status') or layer.get('status')))}</span>
             </article>
             """
         )
@@ -452,7 +828,20 @@ def render_case_scoring_dashboard(summary: dict[str, Any]) -> str:
     metric_cards: list[str] = []
     for metric in summary.get("metrics") or []:
         score = _numeric(metric.get("score"))
-        score_text = f"{score * 100:.1f}" if score is not None else "—"
+        observed_score = _numeric(metric.get("observed_score"))
+        score_text = (
+            f"{score * 100:.1f}"
+            if score is not None
+            else "FAILED"
+            if observed_score is not None
+            else "—"
+        )
+        coverage_fraction = _numeric(metric.get("coverage_fraction"))
+        coverage_label = (
+            f"coverage {coverage_fraction * 100:.1f}%"
+            if coverage_fraction is not None
+            else "coverage not persisted"
+        )
         weighted = _numeric(metric.get("weighted_points"))
         weighted_text = f"{weighted:.2f}" if weighted is not None else "—"
         burden = _numeric(metric.get("burden"))
@@ -469,8 +858,23 @@ def render_case_scoring_dashboard(summary: dict[str, Any]) -> str:
         )
         verdict = metric.get("verdict")
         verdict_text = f" · {verdict}" if verdict else ""
+        metric_public_status = metric.get("score_status") or metric.get(
+            "status"
+        )
+        scoring_events = metric.get("events") or []
+        has_deduction_without_events = bool(
+            deduction is not None and deduction > 0.0 and not scoring_events
+        )
+        severity_summary_html = _severity_summary(scoring_events)
+        if has_deduction_without_events:
+            severity_summary_html = (
+                '<span class="severity-badge severity-missing-audit-field">'
+                "<span>Severity</span><strong>missing audit field</strong>"
+                "<small>deduction exists without an event ledger</small>"
+                "</span>"
+            )
         ledger_html = (
-            _render_scoring_events(metric.get("events") or [])
+            _render_scoring_events(scoring_events)
             if metric.get("ledger_available") is True
             else (
                 '<p class="score-ledger-unavailable">'
@@ -484,29 +888,71 @@ def render_case_scoring_dashboard(summary: dict[str, Any]) -> str:
                 + "</p>"
             )
         )
+        component_weights = metric.get("placement_component_weights")
+        components = metric.get("placement_components")
+        placement_component_html = ""
+        if isinstance(component_weights, dict) and isinstance(
+            components, dict
+        ):
+            component_rows: list[str] = []
+            for component_name in ("typed", "residual_global_review"):
+                component = components.get(component_name)
+                if not isinstance(component, dict):
+                    continue
+                component_score = _numeric(component.get("score"))
+                component_deduction = _numeric(
+                    component.get("deduction")
+                )
+                component_weight = _numeric(
+                    component_weights.get(component_name)
+                )
+                label = (
+                    "Typed Placement"
+                    if component_name == "typed"
+                    else "Residual global Placement"
+                )
+                component_rows.append(
+                    "<span>"
+                    f"<strong>{html.escape(label)}</strong> · "
+                    f"weight {_percent_text(component_weight)}% · "
+                    f"score {f'{component_score * 100:.1f}' if component_score is not None else '—'} · "
+                    f"deduction {f'{component_deduction * 100:.1f}%' if component_deduction is not None else '—'} · "
+                    f"{int(component.get('event_count') or 0)} event(s)"
+                    "</span>"
+                )
+            if component_rows:
+                placement_component_html = (
+                    '<div class="placement-component-summary">'
+                    + "".join(component_rows)
+                    + "</div>"
+                )
         metric_cards.append(
             f"""
-            <article class="metric-score-card metric-score-{_scoring_status_class(metric.get('status'))}">
+            <article class="metric-score-card metric-score-{_scoring_status_class(metric_public_status)}">
               <div class="metric-score-heading">
                 <div>
                   <span>{html.escape(str(metric.get('layer')))}</span>
                   <strong>{html.escape(str(metric.get('label')))}</strong>
                 </div>
-                <span class="score-status score-status-{_scoring_status_class(metric.get('status'))}">{html.escape(str(metric.get('status')))}{html.escape(verdict_text)}</span>
+                <span class="score-status score-status-{_scoring_status_class(metric_public_status)}">{html.escape(str(metric_public_status))}{html.escape(verdict_text)}</span>
               </div>
-              <div class="metric-score-value">{score_text}<small>/ 100</small></div>
+              <div class="metric-score-value">{score_text}<small>{'/ 100' if score is not None else html.escape(coverage_label)}</small></div>
               <div class="metric-score-facts">
                 <span><strong>{_percent_text(metric.get('local_weight'))}%</strong> within layer</span>
                 <span><strong>{_percent_text(metric.get('overall_weight'))}%</strong> total weight</span>
-                <span><strong>{weighted_text}</strong> weighted points</span>
+                <span><strong>{coverage_label}</strong></span>
+                <span><strong>{f'{observed_score * 100:.1f}' if observed_score is not None else '—'}</strong> observed score (audit)</span>
+                <span><strong>{weighted_text}</strong> grounded weighted points</span>
                 <span><strong>{burden_text}</strong> object burden</span>
                 <span><strong>{p_max_text}</strong> worst event</span>
                 <span><strong>{deduction_text}</strong> deduction</span>
                 <span><strong>{coefficient_text}×</strong> coefficient</span>
                 <span><strong>{int(metric.get('event_count') or 0)}</strong> scored event(s)</span>
               </div>
-              <details class="metric-score-events">
-                <summary>Scoring ledger</summary>
+              {placement_component_html}
+              {f'<div class="deduction-severity-summary">{severity_summary_html}</div>' if severity_summary_html else ''}
+              <details class="metric-score-events"{' open' if scoring_events else ''}>
+                <summary>Deduction events and severity</summary>
                 {ledger_html}
               </details>
             </article>
@@ -541,17 +987,26 @@ def render_case_scoring_dashboard(summary: dict[str, Any]) -> str:
     ) or "<li>None</li>"
     combined_note = (
         "All fixed-weight metric coverage is complete."
-        if combined is not None
+        if combined is not None and combined_coverage is not None and combined_coverage >= 1.0 - 1.0e-12
         else (
-            "No combined score was published because an evaluator, endpoint, "
-            "schema, renderer, or other infrastructure boundary failed. This "
-            "is not a scientific ambiguous verdict. Resolved metric scores "
-            "remain visible below; this UI does not renormalize them."
-            if has_infrastructure_failure
+            "The score is conditioned on grounded coverage. Missing evidence "
+            "is excluded from both earned points and the score denominator; "
+            "it is neither zero nor full credit. An infrastructure failure is "
+            "also recorded for this case."
+            if combined is not None and has_infrastructure_failure
             else
-            "The latest evaluator did not publish a combined score because "
-            "fixed profile coverage is incomplete. Resolved metric scores "
-            "remain visible below; this UI does not renormalize them."
+            "The score is conditioned on grounded coverage. Missing evidence "
+            "is excluded from both earned points and the score denominator; "
+            "it is neither zero nor full credit."
+            if combined is not None
+            else
+            "Coverage is below the 80% publication threshold, so this scope "
+            "is failed and no percentage is published. The observed score "
+            "mass and coverage remain available for audit."
+            if combined_status == "failed_coverage_threshold"
+            else
+            "No grounded score is available. Coverage and audit findings "
+            "remain visible below."
         )
     )
     return f"""
@@ -560,12 +1015,12 @@ def render_case_scoring_dashboard(summary: dict[str, Any]) -> str:
           <div>
             <div class="eyebrow">Latest scoring contract</div>
             <h2>Metric scores and combined result</h2>
-            <p>{html.escape(str(summary.get('profile_id')))} · {html.escape(str(summary.get('spec_version')))}</p>
+            <p>{html.escape(str(summary.get('profile_id')))} · {html.escape(str(summary.get('spec_version')))} · deduction multiplier {html.escape(str(summary.get('deduction_multiplier') if summary.get('deduction_multiplier') is not None else 'not persisted'))}</p>
           </div>
           <div class="combined-score combined-score-{_scoring_status_class(combined_status)}">
             <span>Combined / 100</span>
             <strong>{combined_text}</strong>
-            <small>{html.escape(combined_status)}</small>
+            <small>{html.escape(combined_status)} · {html.escape(combined_coverage_text)}</small>
           </div>
         </div>
         <p class="combined-score-note">{html.escape(combined_note)}</p>
@@ -587,7 +1042,7 @@ def render_case_scoring_dashboard(summary: dict[str, Any]) -> str:
             <div>
               <strong>Final decision</strong>
               <span>{html.escape(str(summary.get('final_decision_status')))}</span>
-              <small>No score is inferred from non-complete coverage.</small>
+              <small>Score is normalized over grounded coverage only.</small>
             </div>
           </div>
           <div class="scoring-audit-details">
@@ -601,11 +1056,332 @@ def render_case_scoring_dashboard(summary: dict[str, Any]) -> str:
     """
 
 
+def _mean_numeric(values: list[Any]) -> float | None:
+    numbers = [value for value in (_numeric(item) for item in values) if value is not None]
+    return sum(numbers) / len(numbers) if numbers else None
+
+
+def run_scoring_aggregate(
+    summaries: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Summarize persisted case scores without filling missing coverage."""
+
+    total_cases = len(summaries)
+    published_combined = [
+        value
+        for value in (
+            _numeric(item.get("combined_score_100")) for item in summaries
+        )
+        if value is not None
+    ]
+    observed_combined = [
+        value
+        for value in (
+            _numeric(item.get("combined_observed_score_100"))
+            for item in summaries
+        )
+        if value is not None
+    ]
+    official_score = (
+        sum(published_combined) / total_cases
+        if total_cases and len(published_combined) == total_cases
+        else None
+    )
+    metric_summaries: list[dict[str, Any]] = []
+    for layer, metric, label in SCORING_METRIC_ORDER:
+        records = [
+            next(
+                (
+                    value
+                    for value in item.get("metrics") or []
+                    if value.get("metric") == metric
+                ),
+                {},
+            )
+            for item in summaries
+        ]
+        published_scores = [
+            value * 100.0
+            for value in (_numeric(record.get("score")) for record in records)
+            if value is not None
+        ]
+        observed_scores = [
+            value * 100.0
+            for value in (
+                _numeric(record.get("observed_score")) for record in records
+            )
+            if value is not None
+        ]
+        coverage_values = [
+            value
+            for value in (
+                _numeric(record.get("coverage_fraction"))
+                for record in records
+            )
+            if value is not None
+        ]
+        overall_weight = next(
+            (
+                value
+                for value in (
+                    _numeric(record.get("overall_weight"))
+                    for record in records
+                )
+                if value is not None
+            ),
+            None,
+        )
+        metric_summaries.append(
+            {
+                "layer": layer,
+                "metric": metric,
+                "label": label,
+                "overall_weight": overall_weight,
+                "published_case_count": len(published_scores),
+                "mean_score_100": _mean_numeric(published_scores),
+                "observed_case_count": len(observed_scores),
+                "mean_observed_score_100": _mean_numeric(observed_scores),
+                "mean_coverage_fraction": _mean_numeric(coverage_values),
+            }
+        )
+    return {
+        "case_count": total_cases,
+        "published_case_count": len(published_combined),
+        "official_score_100": official_score,
+        "diagnostic_observed_score_100": _mean_numeric(observed_combined),
+        "mean_combined_coverage_fraction": _mean_numeric(
+            [item.get("combined_coverage_fraction") for item in summaries]
+        ),
+        "infrastructure_failure_case_count": sum(
+            str(item.get("final_decision_status"))
+            == "infrastructure_failure"
+            for item in summaries
+        ),
+        "metrics": metric_summaries,
+    }
+
+
+def generator_model_aggregates(
+    summaries: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Group comparable scene results by the model that generated them."""
+
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for summary in summaries:
+        model_label = str(
+            summary.get("generator_model_label")
+            or "generator not persisted"
+        )
+        grouped.setdefault(model_label, []).append(summary)
+    results: list[dict[str, Any]] = []
+    for model_label, model_summaries in grouped.items():
+        aggregate = run_scoring_aggregate(model_summaries)
+        case_ids = [str(item.get("case_id") or "") for item in model_summaries]
+        task_ids = [
+            str(item.get("generator_task_id") or "")
+            for item in model_summaries
+        ]
+        coverage_values = [
+            value
+            for value in (
+                _numeric(item.get("combined_coverage_fraction"))
+                for item in model_summaries
+            )
+            if value is not None
+        ]
+        aggregate.update(
+            {
+                "model_label": model_label,
+                "case_ids": case_ids,
+                "task_ids": task_ids,
+                "full_coverage_case_count": sum(
+                    value >= 1.0 - 1.0e-12 for value in coverage_values
+                ),
+                "publishable_partial_case_count": sum(
+                    MIN_PUBLISHABLE_SCORE_COVERAGE
+                    <= value
+                    < 1.0 - 1.0e-12
+                    for value in coverage_values
+                ),
+                "below_threshold_case_count": sum(
+                    value < MIN_PUBLISHABLE_SCORE_COVERAGE
+                    for value in coverage_values
+                ),
+            }
+        )
+        results.append(aggregate)
+    return results
+
+
+def render_generator_model_performance(
+    summaries: list[dict[str, Any]],
+) -> str:
+    models = generator_model_aggregates(summaries)
+    if not models:
+        return ""
+    case_count = sum(int(item.get("case_count") or 0) for item in models)
+    overall = run_scoring_aggregate(summaries)
+    overall_coverage = _numeric(
+        overall.get("mean_combined_coverage_fraction")
+    )
+    model_cards: list[str] = []
+    for item in models:
+        official_score = _numeric(item.get("official_score_100"))
+        diagnostic_score = _numeric(
+            item.get("diagnostic_observed_score_100")
+        )
+        mean_coverage = _numeric(
+            item.get("mean_combined_coverage_fraction")
+        )
+        score_text = (
+            f"{official_score:.1f}" if official_score is not None else "—"
+        )
+        diagnostic_text = (
+            f"{diagnostic_score:.1f}"
+            if diagnostic_score is not None
+            else "—"
+        )
+        coverage_text = (
+            f"{mean_coverage * 100:.1f}%"
+            if mean_coverage is not None
+            else "—"
+        )
+        cases = [value for value in item.get("case_ids") or [] if value]
+        case_range = (
+            f"{cases[0]}–{cases[-1]}" if len(cases) > 1 else cases[0]
+            if cases
+            else "case provenance unavailable"
+        )
+        bar_width = min(100.0, max(0.0, official_score or 0.0))
+        model_cards.append(
+            f"""
+            <article class="generator-model-card">
+              <div class="generator-model-heading">
+                <div><strong>{html.escape(str(item.get('model_label')))}</strong><small>{html.escape(case_range)}</small></div>
+                <strong>{score_text}</strong>
+              </div>
+              <div class="generator-score-track" role="img" aria-label="{html.escape(str(item.get('model_label')))} official mean score {score_text} out of 100"><span style="width:{bar_width:.2f}%"></span></div>
+              <div class="generator-model-facts">
+                <span><strong>{int(item.get('published_case_count') or 0)}/{int(item.get('case_count') or 0)}</strong> publishable</span>
+                <span><strong>{coverage_text}</strong> mean coverage</span>
+                <span><strong>{int(item.get('full_coverage_case_count') or 0)}</strong> full coverage</span>
+                <span><strong>{int(item.get('publishable_partial_case_count') or 0)}</strong> partial ≥80%</span>
+                <span><strong>{int(item.get('infrastructure_failure_case_count') or 0)}</strong> infrastructure failure</span>
+                <span><strong>{diagnostic_text}</strong> observed audit mean</span>
+              </div>
+            </article>
+            """
+        )
+
+    model_headers = "".join(
+        f"<th>{html.escape(str(item.get('model_label')))}</th>"
+        for item in models
+    )
+    metric_rows: list[str] = []
+    for _layer, metric_id, label in SCORING_METRIC_ORDER:
+        model_cells: list[str] = []
+        for model in models:
+            metric = next(
+                (
+                    item
+                    for item in model.get("metrics") or []
+                    if item.get("metric") == metric_id
+                ),
+                {},
+            )
+            score = _numeric(metric.get("mean_score_100"))
+            observed = _numeric(metric.get("mean_observed_score_100"))
+            coverage = _numeric(metric.get("mean_coverage_fraction"))
+            score_text = f"{score:.1f}" if score is not None else "—"
+            coverage_text = (
+                f"{coverage * 100:.1f}%" if coverage is not None else "—"
+            )
+            observed_text = (
+                f"{observed:.1f}" if observed is not None else "—"
+            )
+            bar_width = min(100.0, max(0.0, score or 0.0))
+            model_cells.append(
+                "<td>"
+                f'<div class="generator-metric-value"><strong>{score_text}</strong><span>{int(metric.get("published_case_count") or 0)}/{int(model.get("case_count") or 0)} scenes</span></div>'
+                f'<div class="generator-metric-track"><span style="width:{bar_width:.2f}%"></span></div>'
+                f"<small>coverage {coverage_text} · observed {observed_text}</small>"
+                "</td>"
+            )
+        metric_rows.append(
+            "<tr>"
+            f"<th>{html.escape(label)}<small>{html.escape(_layer)}</small></th>"
+            + "".join(model_cells)
+            + "</tr>"
+        )
+    overall_coverage_text = (
+        f"{overall_coverage * 100:.1f}%"
+        if overall_coverage is not None
+        else "—"
+    )
+    return f"""
+      <section class="generator-performance" aria-label="Generator model performance">
+        <div class="generator-performance-heading">
+          <div>
+            <div class="eyebrow">Generator performance</div>
+            <h2>Scene scores by generating model</h2>
+          </div>
+          <p>{case_count} scenes · overall mean grounding coverage {overall_coverage_text}. The evaluator model is held fixed; these labels identify the models that authored the scenes.</p>
+        </div>
+        <div class="generator-model-grid">{''.join(model_cards)}</div>
+        <div class="generator-metric-scroll">
+          <table class="generator-metric-table">
+            <thead><tr><th>Metric</th>{model_headers}</tr></thead>
+            <tbody>{''.join(metric_rows)}</tbody>
+          </table>
+        </div>
+      </section>
+    """
+
+
 def render_run_scoring_overview(
     summaries: list[dict[str, Any]],
+    *,
+    evaluator_model_label: str = "not persisted",
 ) -> str:
     if not summaries:
         return ""
+    aggregate = run_scoring_aggregate(summaries)
+    official_score = _numeric(aggregate.get("official_score_100"))
+    diagnostic_score = _numeric(
+        aggregate.get("diagnostic_observed_score_100")
+    )
+    coverage = _numeric(aggregate.get("mean_combined_coverage_fraction"))
+    official_text = f"{official_score:.1f}" if official_score is not None else "—"
+    diagnostic_text = (
+        f"{diagnostic_score:.1f}"
+        if diagnostic_score is not None
+        else "—"
+    )
+    coverage_text = f"{coverage * 100:.1f}%" if coverage is not None else "—"
+    metric_bars: list[str] = []
+    for item in aggregate.get("metrics") or []:
+        mean_score = _numeric(item.get("mean_score_100"))
+        mean_observed = _numeric(item.get("mean_observed_score_100"))
+        mean_coverage = _numeric(item.get("mean_coverage_fraction"))
+        display_score = f"{mean_score:.1f}" if mean_score is not None else "—"
+        observed_text = (
+            f"observed {mean_observed:.1f}"
+            if mean_observed is not None
+            else "observed —"
+        )
+        bar_width = min(100.0, max(0.0, mean_score or 0.0))
+        metric_bars.append(
+            f"""
+            <div class="run-metric-bar">
+              <div class="run-metric-bar-heading">
+                <span><strong>{html.escape(str(item.get('label')))}</strong><small>{html.escape(str(item.get('layer')))} · weight {_percent_text(item.get('overall_weight'))}%</small></span>
+                <strong>{display_score}</strong>
+              </div>
+              <div class="run-metric-track" role="img" aria-label="{html.escape(str(item.get('label')))} mean publishable score {display_score} out of 100"><span style="width:{bar_width:.2f}%"></span></div>
+              <small>{int(item.get('published_case_count') or 0)}/{int(aggregate.get('case_count') or 0)} publishable · mean coverage {f'{mean_coverage * 100:.1f}%' if mean_coverage is not None else '—'} · {observed_text}</small>
+            </div>
+            """
+        )
     header = "".join(
         f"<th>{html.escape(str(item.get('case_id')))}</th>"
         for item in summaries
@@ -646,7 +1422,7 @@ def render_run_scoring_overview(
                     if _numeric(record.get("score")) is not None
                     else None
                 ),
-                record.get("status"),
+                record.get("score_status") or record.get("status"),
             )
             for record in layer_records
         )
@@ -673,7 +1449,7 @@ def render_run_scoring_overview(
                     if _numeric(record.get("score")) is not None
                     else None
                 ),
-                record.get("status"),
+                record.get("score_status") or record.get("status"),
             )
             for record in records
         )
@@ -684,17 +1460,26 @@ def render_run_scoring_overview(
       <section class="run-score-overview">
         <div class="run-score-overview-heading">
           <div>
-            <div class="eyebrow">Run scoring matrix</div>
-            <h2>Scores reported by the latest evaluator</h2>
+            <div class="eyebrow">Run-wide result</div>
+            <h2>All evaluated scenes</h2>
           </div>
-          <p>Dash means no score was published. Fixed weights are never renormalized.</p>
+          <p>Evaluator: {html.escape(evaluator_model_label)}. Scores are published only at coverage ≥ 80%, as earned score mass divided by coverage. A run-level score is published only when every scene has a publishable combined score.</p>
         </div>
+        <div class="run-model-score-grid">
+          <div class="run-model-score-primary"><span>Official mean / 100</span><strong>{official_text}</strong><small>{int(aggregate.get('published_case_count') or 0)}/{int(aggregate.get('case_count') or 0)} scenes publishable</small></div>
+          <div><span>Audit-only observed mean</span><strong>{diagnostic_text}</strong><small>Grounded fragments only; not a benchmark score</small></div>
+          <div><span>Mean combined coverage</span><strong>{coverage_text}</strong><small>{int(aggregate.get('infrastructure_failure_case_count') or 0)} infrastructure-failure scenes</small></div>
+        </div>
+        <div class="run-metric-bars">{''.join(metric_bars)}</div>
+        <details class="run-score-matrix-details">
+          <summary>Per-scene score matrix</summary>
         <div class="score-matrix-scroll">
           <table class="score-matrix">
             <thead><tr><th>Metric</th><th>Total weight</th>{header}</tr></thead>
             <tbody>{''.join(rows)}</tbody>
           </table>
         </div>
+        </details>
       </section>
     """
 
@@ -749,7 +1534,11 @@ class EvidenceURLResolver:
             "copy_verified": True,
             "source_modified": False,
         }
-        return "/evidence/" + quote(destination_name)
+        # Keep bundled evidence URLs relative to the viewer document.  A
+        # root-relative `/evidence/...` URL only works when the bundle itself
+        # is mounted at the HTTP server root; it breaks reusable viewer hubs
+        # that embed a bundle from a nested run directory.
+        return "evidence/" + quote(destination_name)
 
     def write_manifest(self) -> Path | None:
         if self.bundle_dir is None:
@@ -831,7 +1620,22 @@ def render_blender_command(
         )
         copy_button = ""
     else:
-        command = f"open -a Blender {shlex.quote(str(blend_path))}"
+        preview_helper = (
+            PROJECT_ROOT
+            / "scripts"
+            / "blender"
+            / "open_textured_material_preview.py"
+        )
+        command_parts = [
+            "open",
+            "-na",
+            "Blender",
+            "--args",
+            str(blend_path),
+        ]
+        if preview_helper.is_file():
+            command_parts.extend(["--python", str(preview_helper)])
+        command = " ".join(shlex.quote(part) for part in command_parts)
         command_html = f"<code>{html.escape(command)}</code>"
         copy_button = (
             '<button type="button" class="copy-blender-command" '
@@ -846,6 +1650,10 @@ def render_blender_command(
             <strong>Open {html.escape(case_id)} in Blender</strong>
           </div>
           {copy_button}
+        </div>
+        <div class="blender-launch-note">
+          Opens in textured Material Preview. This changes only the in-memory
+          viewport; the benchmark source file is not rewritten automatically.
         </div>
         <div class="blender-command">{command_html}</div>
       </section>
@@ -978,12 +1786,19 @@ def evidence_packet_audit(
             "global_discovery",
             "cross_group_relation_review",
             "group_local_review",
+            "residual_global_placement_review",
         }
     ):
         return None
     expected_roles = (
         ["angled_global"]
         if phase == "global_discovery"
+        else [
+            "angled_global",
+            "top_down_global",
+            "identity_global",
+        ]
+        if phase == "residual_global_placement_review"
         else [
             "angled_global_context",
             "cross_group_relation_local",
@@ -994,12 +1809,21 @@ def evidence_packet_audit(
     actual_roles: list[str] = []
     for index, path in enumerate(images):
         filename = Path(path).name.lower()
-        if any(
+        if phase == "residual_global_placement_review":
+            role = (
+                expected_roles[index]
+                if index < len(expected_roles)
+                else "residual_global_extra"
+            )
+        elif any(
             token in filename
             for token in ("top", "overhead", "birdseye", "bird_eye")
         ):
             role = "top_down_global"
-        elif phase == "global_discovery":
+        elif phase in {
+            "global_discovery",
+            "residual_global_placement_review",
+        }:
             role = "angled_global"
         elif index == 0:
             role = "angled_global_context"
@@ -1121,6 +1945,18 @@ def object_level_finding_summary(
                 observations.extend(
                     (phase, defect)
                     for defect in judgement.get("defects") or []
+                    if isinstance(defect, dict)
+                )
+            residual_record = metric_report.get(
+                "residual_global_placement_review"
+            )
+            if (
+                isinstance(residual_record, dict)
+                and str(residual_record.get("verdict") or "") == "invalid"
+            ):
+                observations.extend(
+                    ("residual_global_placement_review", defect)
+                    for defect in residual_record.get("defects") or []
                     if isinstance(defect, dict)
                 )
             findings = _reconstruct_object_findings(
@@ -2486,7 +3322,26 @@ def functional_group_evidence_window_details(
     controlled = (
         deepcopy(controlled) if isinstance(controlled, dict) else {}
     )
-    if not direct and not controlled:
+    soft_contract = payload.get("functional_soft_evidence_contract")
+    soft_contract = (
+        deepcopy(soft_contract)
+        if isinstance(soft_contract, dict)
+        else {}
+    )
+    trace = payload.get("trace")
+    trace = trace if isinstance(trace, list) else []
+    readiness_events = [
+        deepcopy(event)
+        for event in trace
+        if isinstance(event, dict)
+        and event.get("stage") == "functional_evidence_readiness"
+    ]
+    if (
+        not direct
+        and not controlled
+        and not soft_contract
+        and not readiness_events
+    ):
         return None
     result = {**direct, **controlled}
     events = controlled.get("events") or direct.get("events") or []
@@ -2510,6 +3365,8 @@ def functional_group_evidence_window_details(
     result["camera_selector_avoided_by_bank_reuse"] = bool(
         result["reused_artifact_ids"]
     )
+    result["functional_soft_evidence_contract"] = soft_contract
+    result["evidence_readiness_events"] = readiness_events
     return result
 
 
@@ -2704,6 +3561,58 @@ def l3_calls(report: dict[str, Any]) -> list[dict[str, Any]]:
                     ),
                 )
             )
+        residual_global = metric_report.get(
+            "residual_global_placement_review"
+        )
+        if (
+            isinstance(residual_global, dict)
+            and isinstance(
+                residual_global.get("request_metadata"),
+                dict,
+            )
+        ):
+            residual_verdict = str(
+                residual_global.get("verdict") or "ambiguous"
+            )
+            residual_evaluated = (
+                residual_global.get("final_metric_verdict") is True
+            )
+            residual_step = max(
+                (candidate[4] for candidate in candidates),
+                default=1,
+            ) + 1
+            candidates.append(
+                (
+                    "scene residual placement",
+                    [],
+                    {
+                        "status": (
+                            "evaluated"
+                            if residual_evaluated
+                            else "unresolved"
+                        ),
+                        "score": (
+                            1.0
+                            if residual_verdict == "valid"
+                            else 0.0
+                            if residual_verdict == "invalid"
+                            else None
+                        ),
+                        "judgement": residual_global,
+                        "evidence_paths": metric_report.get(
+                            "residual_global_placement_evidence_paths"
+                        ),
+                        "camera_control_audit": metric_report.get(
+                            "residual_global_placement_camera_control_audit"
+                        ),
+                        "placement_residual_context": metric_report.get(
+                            "residual_global_placement_context"
+                        ),
+                    },
+                    "residual_global_placement_review",
+                    residual_step,
+                )
+            )
         global_judgement = metric_report.get("judgement")
         if (
             not isinstance(global_discovery, dict)
@@ -2858,6 +3767,14 @@ def l3_calls(report: dict[str, Any]) -> list[dict[str, Any]]:
             displayed_prompt_version = (
                 run_prompt_version or "not persisted"
             )
+            phase_prompt = (
+                L3_METRIC_PHASE_PROMPTS.get(str(metric), {}).get(phase)
+                if isinstance(
+                    L3_METRIC_PHASE_PROMPTS.get(str(metric)),
+                    dict,
+                )
+                else None
+            )
             if judge_invoked:
                 acquisition = acquisition_timeline(
                     control_audit=control_audit,
@@ -2922,6 +3839,12 @@ def l3_calls(report: dict[str, Any]) -> list[dict[str, Any]]:
                                 str(metric),
                                 "Metric rubric unavailable.",
                             )
+                        )
+                        + (
+                            "\n\nPhase-specific contract:\n"
+                            + str(phase_prompt)
+                            if phase_prompt
+                            else ""
                         )
                         + "\n\nShared metric-boundary rules:\n- "
                         + "\n- ".join(L3_METRIC_BOUNDARY_RULES)
@@ -3030,11 +3953,15 @@ def l3_calls(report: dict[str, Any]) -> list[dict[str, Any]]:
                             "placement_discovery": deepcopy(
                                 item.get("placement_discovery")
                             ),
+                            "placement_residual_context": deepcopy(
+                                item.get("placement_residual_context")
+                            ),
                         }
                         if phase
                         in {
                             "cross_group_relation_review",
                             "group_local_review",
+                            "residual_global_placement_review",
                         }
                         else None
                     ),
@@ -3143,6 +4070,30 @@ def l3_pipeline_summary(report: dict[str, Any]) -> list[dict[str, Any]]:
             )
             budget = functional.get("budget_usage")
             budget = budget if isinstance(budget, dict) else {}
+            functional_discovery = metric_report.get(
+                "functional_discovery"
+            )
+            functional_discovery = (
+                functional_discovery
+                if isinstance(functional_discovery, dict)
+                else {}
+            )
+            relation_admission = functional_discovery.get(
+                "relation_admission_audit"
+            )
+            relation_admission = (
+                relation_admission
+                if isinstance(relation_admission, dict)
+                else None
+            )
+            functional_measurement_bank = metric_report.get(
+                "functional_measurement_bank"
+            )
+            functional_measurement_bank = (
+                functional_measurement_bank
+                if isinstance(functional_measurement_bank, dict)
+                else None
+            )
             discovery = {
                 "label": "Usable-side / relation evidence discovery",
                 "status": str(
@@ -3161,10 +4112,24 @@ def l3_pipeline_summary(report: dict[str, Any]) -> list[dict[str, Any]]:
                 ),
                 "budget": budget.get("max_probe_units"),
                 "details": deepcopy(functional),
+                "relation_admission_audit": deepcopy(
+                    relation_admission
+                ),
+                "functional_measurement_bank": deepcopy(
+                    functional_measurement_bank
+                ),
             }
         elif metric == "semantic_placement_consistency":
             placement = metric_report.get("placement_discovery")
             placement = placement if isinstance(placement, dict) else {}
+            functional_spatial_context = metric_report.get(
+                "functional_spatial_context"
+            )
+            functional_spatial_context = (
+                functional_spatial_context
+                if isinstance(functional_spatial_context, dict)
+                else None
+            )
             candidates = placement.get("candidates")
             candidates = candidates if isinstance(candidates, list) else []
             discovery = {
@@ -3177,7 +4142,26 @@ def l3_pipeline_summary(report: dict[str, Any]) -> list[dict[str, Any]]:
                 "rendered": None,
                 "budget": None,
                 "details": deepcopy(placement),
+                "functional_spatial_context": deepcopy(
+                    functional_spatial_context
+                ),
             }
+        residual_phase = metric_report.get(
+            "residual_global_placement_phase"
+        )
+        residual_phase = (
+            deepcopy(residual_phase)
+            if isinstance(residual_phase, dict)
+            else None
+        )
+        placement_subscore_policy = metric_report.get(
+            "placement_subscore_policy"
+        )
+        placement_subscore_policy = (
+            deepcopy(placement_subscore_policy)
+            if isinstance(placement_subscore_policy, dict)
+            else None
+        )
         summaries.append(
             {
                 "metric": str(metric),
@@ -3234,6 +4218,8 @@ def l3_pipeline_summary(report: dict[str, Any]) -> list[dict[str, Any]]:
                 "relation_stage_present": relation_stage_present,
                 "skipped_groups": len(skipped),
                 "discovery": discovery,
+                "residual_global_placement_phase": residual_phase,
+                "placement_subscore_policy": placement_subscore_policy,
                 "budget": metric_budget_summary(metric_report),
                 "check_chain": metric_check_chain_summary(
                     str(metric),
@@ -3317,10 +4303,9 @@ def metric_check_chain_summary(
                     if raw.get("judge_result_ref")
                     else None
                 ),
-                "function_event_ref": (
-                    str(raw.get("function_event_ref"))
-                    if raw.get("function_event_ref")
-                    else None
+                "grounded": raw.get("grounded") is True,
+                "obligation_lifecycle": deepcopy(
+                    raw.get("obligation_lifecycle") or []
                 ),
             }
         )
@@ -3377,6 +4362,12 @@ def render_metric_check_chain(
             or check.get("lifecycle_status")
             or "pending"
         )
+        grounding = "grounded" if check.get("grounded") else "ungrounded"
+        lifecycle = " → ".join(
+            str(item.get("state") or "")
+            for item in check.get("obligation_lifecycle") or []
+            if isinstance(item, dict) and item.get("state")
+        )
         rows.append(
             "<tr>"
             f"<td><code>{html.escape(str(check.get('check_type') or ''))}</code>"
@@ -3385,7 +4376,9 @@ def render_metric_check_chain(
             f"<td>{html.escape(context)}</td>"
             f"<td>{html.escape(route)}</td>"
             f"<td><strong>{html.escape(conclusion)}</strong>"
-            f"<small>{html.escape(str(check.get('observation_status') or ''))}</small></td>"
+            f"<small>{html.escape(str(check.get('observation_status') or ''))}"
+            f" · {html.escape(grounding)}</small>"
+            f"<small>{html.escape(lifecycle)}</small></td>"
             "</tr>"
         )
     if not rows:
@@ -3417,6 +4410,8 @@ def render_metric_check_chain(
             f"{html.escape(', '.join(str(item) for item in event.get('causal_object_ids') or []) or '—')}"
             " · scored to "
             f"{html.escape(', '.join(str(item) for item in event.get('scoring_target_ids') or []) or '—')}"
+            " · counterparts "
+            f"{html.escape(', '.join(str(item) for item in event.get('counterpart_object_ids') or []) or '—')}"
             "</li>"
         )
     ownership_html = (
@@ -3520,12 +4515,51 @@ def render_l3_pipeline_summary(report: dict[str, Any]) -> str:
             if isinstance(discovery.get("budget"), int):
                 counts.append(f"budget {discovery['budget']}")
             count_text = " · ".join(counts) or "no count persisted"
+            spatial_context = discovery.get(
+                "functional_spatial_context"
+            )
+            spatial_context_html = (
+                "<details><summary>Function → Placement attention context"
+                "</summary><pre>"
+                f"{json_block(spatial_context)}</pre></details>"
+                if isinstance(spatial_context, dict)
+                else ""
+            )
+            relation_admission = discovery.get(
+                "relation_admission_audit"
+            )
+            relation_admission_html = (
+                "<details><summary>Relation admission · "
+                f"{int(relation_admission.get('admitted_count') or 0)} admitted"
+                " · "
+                f"{int(relation_admission.get('context_only_count') or 0)} context-only"
+                " · "
+                f"{int(relation_admission.get('rejected_count') or 0)} rejected"
+                "</summary><pre>"
+                f"{json_block(relation_admission)}</pre></details>"
+                if isinstance(relation_admission, dict)
+                else ""
+            )
+            measurement_bank = discovery.get(
+                "functional_measurement_bank"
+            )
+            measurement_bank_html = (
+                "<details><summary>Pre-camera Measurement Bank · "
+                f"{int(measurement_bank.get('check_measurement_count') or 0)} checks"
+                "</summary><pre>"
+                f"{json_block(measurement_bank)}</pre></details>"
+                if isinstance(measurement_bank, dict)
+                else ""
+            )
             discovery_html = f"""
               <div class="pipeline-discovery">
                 <strong>{html.escape(str(discovery['label']))}</strong>
                 <span class="pipeline-status">{html.escape(str(discovery['status']))}</span>
                 <span>{html.escape(count_text)}</span>
                 <p>{html.escape(str(discovery.get('reason') or ''))}</p>
+                {spatial_context_html}
+                {relation_admission_html}
+                {measurement_bank_html}
                 <details>
                   <summary>Discovery record</summary>
                   <pre>{json_block(discovery.get("details") or {})}</pre>
@@ -3810,6 +4844,12 @@ def render_phase_routes(calls: list[dict[str, Any]]) -> str:
             for call in metric_calls
             if call.get("phase") == "cross_group_relation_review"
         ]
+        residual_calls = [
+            call
+            for call in metric_calls
+            if call.get("phase")
+            == "residual_global_placement_review"
+        ]
         if not global_calls or not local_calls:
             continue
         has_relation_stage = bool(
@@ -3834,6 +4874,17 @@ def render_phase_routes(calls: list[dict[str, Any]]) -> str:
             else ""
         )
         local_step = 3 if has_relation_stage else 2
+        residual_step = local_step + 1
+        residual_route = (
+            f"""
+              <span class="phase-arrow">→</span>
+              <span class="phase-node phase-node-residual">
+                {residual_step} · Residual global Placement · 20% subscore
+              </span>
+            """
+            if residual_calls
+            else ""
+        )
         routes.append(
             f"""
             <div class="phase-route">
@@ -3848,6 +4899,7 @@ def render_phase_routes(calls: list[dict[str, Any]]) -> str:
                 {len(local_group_ids)} group(s) ·
                 {len(local_calls)} Judge episode(s)
               </span>
+              {residual_route}
             </div>
             """
         )
@@ -4287,16 +5339,76 @@ def render_functional_group_evidence_window(
     evicted = value.get("evicted_artifact_ids") or []
     events = value.get("events") or []
     artifact_records = value.get("artifact_records") or []
+    soft_contract = value.get("functional_soft_evidence_contract")
+    soft_contract = (
+        soft_contract if isinstance(soft_contract, dict) else {}
+    )
+    readiness_events = value.get("evidence_readiness_events") or []
+    readiness_events = [
+        event for event in readiness_events if isinstance(event, dict)
+    ]
     selector_avoided = bool(
         value.get("camera_selector_avoided_by_bank_reuse")
         or reused
     )
+    readiness_outcomes = [
+        str(event.get("status") or "unknown")
+        for event in readiness_events
+    ]
+    readiness_review_count = int(
+        soft_contract.get("camera_selector_review_count")
+        or len(readiness_events)
+    )
+    readiness_acquire_count = int(
+        soft_contract.get("camera_selector_acquire_count") or 0
+    )
+    readiness_state = (
+        "passed"
+        if soft_contract.get("camera_selector_passed")
+        else "limited evidence"
+        if soft_contract.get("terminal_limited_evidence")
+        else "not passed"
+    )
+    fallback_state = (
+        "yes"
+        if soft_contract.get("usable_side_fallback_applied")
+        else "no"
+    )
+    terminal_state = (
+        "yes"
+        if soft_contract.get("terminal_limited_evidence")
+        else "no"
+    )
+    policy = str(value.get("policy") or "")
+    section_title = (
+        "Shared group evidence window"
+        if policy == "shared_group_bank"
+        else "Functional evidence readiness"
+    )
+    soft_loop_html = ""
+    if soft_contract or readiness_events:
+        soft_loop_html = f"""
+          <div class="packet-audit packet-current">
+            <div>
+              <strong>Soft evidence loop</strong>
+              <span>{html.escape(' → '.join(readiness_outcomes) or 'no persisted review')}</span>
+            </div>
+            <div>
+              <strong>CameraSelector reviews</strong>
+              <span>{readiness_review_count} review(s) · {readiness_acquire_count} acquire request(s)</span>
+            </div>
+            <div class="packet-status">
+              <strong>{readiness_state}</strong>
+              <span>usable-side fallback: {fallback_state} · terminal binary choice: {terminal_state}</span>
+            </div>
+          </div>
+        """
     return f"""
       <details class="evidence-flow functional-evidence-window">
         <summary>
           <span>
-            <strong>Shared group evidence window</strong>
-            <span class="flow-label">{html.escape(str(value.get('policy') or 'shared_group_bank'))}</span>
+            <strong>{html.escape(section_title)}</strong>
+            <span class="flow-label">{html.escape(policy or 'soft_evidence_contract')}</span>
           </span>
           <span class="flow-stats">
             {len(fixed)} fixed · {len(initial)} initial · {len(final)} final
@@ -4304,13 +5416,14 @@ def render_functional_group_evidence_window(
           </span>
         </summary>
         <div class="flow-body">
+          {soft_loop_html}
           <p class="trace-source">
             Active limit: <code>{html.escape(str(value.get('max_active_images') or '—'))}</code>.
             Bank reuse avoided a CameraSelector call:
             <strong>{'yes' if selector_avoided else 'no'}</strong>.
             Eviction changes only the active Judge window; source artifacts remain available.
           </p>
-          <pre>{json_block({'fixed_artifact_ids': fixed, 'initial_artifact_ids': initial, 'final_artifact_ids': final, 'reused_artifact_ids': reused, 'evicted_artifact_ids': evicted, 'artifact_records': artifact_records, 'events': events})}</pre>
+          <pre>{json_block({'fixed_artifact_ids': fixed, 'initial_artifact_ids': initial, 'final_artifact_ids': final, 'reused_artifact_ids': reused, 'evicted_artifact_ids': evicted, 'artifact_records': artifact_records, 'window_events': events, 'evidence_readiness_events': readiness_events, 'functional_soft_evidence_contract': soft_contract})}</pre>
         </div>
       </details>
     """
@@ -4418,6 +5531,9 @@ def render_call(
         "global_discovery": "Global discovery",
         "cross_group_relation_review": "Cross-group relation review",
         "group_local_review": "Group-local review",
+        "residual_global_placement_review": (
+            "Residual global Placement review"
+        ),
         "scene_global": "Scene-global judgement",
     }
     phase_label = phase_labels.get(
@@ -4440,6 +5556,7 @@ def render_call(
             "global_discovery",
             "cross_group_relation_review",
             "group_local_review",
+            "residual_global_placement_review",
             "scene_global",
         }
         else "unspecified"
@@ -4755,6 +5872,12 @@ def build_viewer(
     serve_root = serve_root.expanduser().resolve()
     run_manifest = read_json(run_root / "run_manifest.json")
     summary = optional_json(run_root / "summary.json")
+    experiment_plan = optional_json(run_root / "experiment_plan.json")
+    model_route = experiment_plan.get("model_route")
+    model_route = model_route if isinstance(model_route, dict) else {}
+    evaluator_model_label = str(
+        model_route.get("model") or "model not persisted"
+    )
     resolver = EvidenceURLResolver(
         serve_root=serve_root,
         bundle_dir=bundle_dir,
@@ -4782,6 +5905,14 @@ def build_viewer(
             l3_report=l3_report,
             l1_diagnostics=l1_diagnostics,
         )
+        generator_metadata = generator_case_metadata(case_manifest)
+        scoring_summary["generator_model_label"] = generator_metadata[
+            "model_label"
+        ]
+        scoring_summary["generator_task_id"] = generator_metadata["task_id"]
+        scoring_summary["generator_source_namespace"] = generator_metadata[
+            "source_namespace"
+        ]
         scoring_summaries.append(scoring_summary)
         scoring_dashboard = render_case_scoring_dashboard(scoring_summary)
         comparison = optional_json(case_dir / "scene_comparison.json")
@@ -4861,6 +5992,10 @@ def build_viewer(
         )
     usage = prefer_runner_usage(summary, aggregate_usage(all_calls))
     run_scoring_overview_html = render_run_scoring_overview(
+        scoring_summaries,
+        evaluator_model_label=evaluator_model_label,
+    )
+    generator_model_performance_html = render_generator_model_performance(
         scoring_summaries
     )
     acquisition_overview_html = render_acquisition_overview(
@@ -4948,10 +6083,59 @@ def build_viewer(
       padding: 12px 14px; border: 1px solid #d0d7de;
       border-left: 4px solid #57606a; background: white; line-height: 1.45;
     }}
-    .run-score-overview, .scoring-dashboard {{
+    .generator-performance, .run-score-overview, .scoring-dashboard {{
       margin: 18px 0 22px; padding: 18px; border: 1px solid #aeb7c0;
       border-top: 3px solid #0969da; background: white;
     }}
+    .generator-performance {{ border-top-color: #8250df; }}
+    .generator-performance-heading {{
+      display: flex; justify-content: space-between; align-items: start; gap: 24px;
+    }}
+    .generator-performance-heading h2 {{ margin: 4px 0 0; }}
+    .generator-performance-heading p {{
+      max-width: 620px; margin: 0; color: #59636e; line-height: 1.45;
+    }}
+    .generator-model-grid {{
+      display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px; margin-top: 16px;
+    }}
+    .generator-model-card {{
+      min-width: 0; padding: 14px; border: 1px solid #d0d7de;
+      background: #fbfcfd;
+    }}
+    .generator-model-heading {{
+      display: flex; justify-content: space-between; align-items: start; gap: 12px;
+    }}
+    .generator-model-heading div strong,
+    .generator-model-heading div small {{ display: block; }}
+    .generator-model-heading div strong {{ font-size: 17px; }}
+    .generator-model-heading div small {{ margin-top: 3px; color: #59636e; }}
+    .generator-model-heading > strong {{ font-size: 28px; line-height: 1; }}
+    .generator-score-track, .generator-metric-track {{
+      height: 9px; margin: 10px 0; overflow: hidden;
+      border: 1px solid #b6bec7; background: #eef1f4;
+    }}
+    .generator-score-track span, .generator-metric-track span {{
+      display: block; height: 100%; background: #8250df;
+    }}
+    .generator-model-facts {{
+      display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 7px 12px;
+    }}
+    .generator-model-facts span {{ color: #59636e; font-size: 10px; }}
+    .generator-model-facts strong {{ display: block; color: #1f2328; font-size: 13px; }}
+    .generator-metric-scroll {{ margin-top: 18px; overflow-x: auto; }}
+    .generator-metric-table {{ min-width: 900px; margin: 0; }}
+    .generator-metric-table th:first-child {{ min-width: 150px; }}
+    .generator-metric-table th small {{ display: block; color: #59636e; }}
+    .generator-metric-table td {{ min-width: 210px; }}
+    .generator-metric-value {{
+      display: flex; align-items: baseline; justify-content: space-between; gap: 10px;
+    }}
+    .generator-metric-value strong {{ font-size: 18px; }}
+    .generator-metric-value span,
+    .generator-metric-table td > small {{ color: #59636e; font-size: 10px; }}
+    .generator-metric-track {{ height: 7px; margin: 5px 0; }}
     .run-score-overview-heading, .scoring-dashboard-heading {{
       display: flex; justify-content: space-between; align-items: start; gap: 24px;
     }}
@@ -4960,6 +6144,47 @@ def build_viewer(
     .run-score-overview-heading p,
     .scoring-dashboard-heading p {{
       max-width: 620px; margin: 0; color: #59636e; line-height: 1.45;
+    }}
+    .run-model-score-grid {{
+      display: grid; grid-template-columns: 1.2fr 1fr 1fr;
+      margin-top: 16px; border: 1px solid #d0d7de; background: #fbfcfd;
+    }}
+    .run-model-score-grid > div {{
+      padding: 14px; border-right: 1px solid #d0d7de;
+    }}
+    .run-model-score-grid > div:last-child {{ border-right: 0; }}
+    .run-model-score-grid span, .run-model-score-grid strong,
+    .run-model-score-grid small {{ display: block; }}
+    .run-model-score-grid span {{
+      color: #59636e; font-size: 10px; font-weight: 750;
+      letter-spacing: .05em; text-transform: uppercase;
+    }}
+    .run-model-score-grid strong {{ margin: 4px 0; font-size: 25px; }}
+    .run-model-score-grid small {{ color: #59636e; line-height: 1.35; }}
+    .run-model-score-primary {{ background: #fff8c5; }}
+    .run-metric-bars {{
+      display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 13px 22px; margin-top: 18px;
+    }}
+    .run-metric-bar-heading {{
+      display: flex; align-items: start; justify-content: space-between;
+      gap: 12px;
+    }}
+    .run-metric-bar-heading span strong,
+    .run-metric-bar-heading span small {{ display: block; }}
+    .run-metric-bar-heading span small,
+    .run-metric-bar > small {{ color: #59636e; }}
+    .run-metric-bar-heading > strong {{ font-size: 18px; }}
+    .run-metric-track {{
+      height: 8px; margin: 6px 0; overflow: hidden;
+      border: 1px solid #b6bec7; background: #eef1f4;
+    }}
+    .run-metric-track span {{
+      display: block; height: 100%; background: #0969da;
+    }}
+    .run-score-matrix-details {{ margin-top: 18px; }}
+    .run-score-matrix-details > summary {{
+      cursor: pointer; color: #0969da; font-weight: 700;
     }}
     .score-matrix-scroll {{ margin-top: 15px; overflow-x: auto; }}
     .score-matrix {{ min-width: 720px; margin: 0; }}
@@ -5061,6 +6286,32 @@ def build_viewer(
     .metric-score-facts strong {{ display: block; color: #1f2328; font-size: 12px; }}
     .metric-score-events {{ margin-top: 9px; border-top: 1px solid #e5e8eb; }}
     .metric-score-events summary {{ color: #59636e; font-size: 10px; }}
+    .deduction-severity-summary {{
+      display: flex; flex-wrap: wrap; gap: 5px; margin-top: 9px;
+    }}
+    .severity-badge {{
+      display: inline-flex; align-items: baseline; gap: 4px;
+      width: fit-content; padding: 3px 6px; border: 1px solid #d0d7de;
+      border-radius: 999px; background: #f6f8fa; color: #32383f;
+      font-size: 9px; line-height: 1.2;
+    }}
+    .severity-badge > span {{
+      color: #59636e; font-size: 8px; font-weight: 700;
+      letter-spacing: .04em; text-transform: uppercase;
+    }}
+    .severity-badge > strong {{ font-size: 9px; }}
+    .severity-badge > small {{ color: #59636e; font-size: 8px; }}
+    .severity-blocked, .severity-severe, .severity-critical,
+    .severity-clear-semantic-misplacement {{
+      border-color: #ff8182; background: #ffebe9; color: #82071e;
+    }}
+    .severity-impaired, .severity-major,
+    .severity-material-contextual-mismatch {{
+      border-color: #d4a72c; background: #fff8c5; color: #7d4e00;
+    }}
+    .severity-not-persisted {{
+      border-style: dashed; color: #59636e;
+    }}
     .score-no-events {{ margin: 5px 0 0; color: #59636e; font-size: 10px; }}
     .score-ledger-unavailable {{
       margin: 7px 0 0; padding: 7px 8px; border-left: 3px solid #bf8700;
@@ -5068,7 +6319,7 @@ def build_viewer(
     }}
     .score-event-list {{ margin: 7px 0 0; padding: 0; list-style: none; }}
     .score-event-list li {{
-      display: grid; grid-template-columns: 1fr auto; gap: 2px 8px;
+      display: grid; grid-template-columns: auto 1fr auto; gap: 4px 8px;
       padding: 6px 0; border-top: 1px solid #e5e8eb; font-size: 9px;
     }}
     .score-event-list li > strong {{ grid-column: 1 / -1; }}
@@ -5320,6 +6571,9 @@ def build_viewer(
       gap: 16px;
     }}
     .blender-launch-heading strong {{ display: block; margin-top: 2px; }}
+    .blender-launch-note {{
+      margin-top: 7px; color: #59636e; font-size: 12px; line-height: 1.45;
+    }}
     .blender-command {{
       margin-top: 9px; padding: 9px 11px; overflow-x: auto;
       border: 1px solid #d8dee4; border-radius: 4px; background: #f6f8fa;
@@ -5527,6 +6781,7 @@ def build_viewer(
     .phase-node-global {{ background: #f4edff; color: #6639ba; }}
     .phase-node-relation {{ background: #fff8c5; color: #7d4e00; }}
     .phase-node-local {{ background: #ddf4ff; color: #0550ae; }}
+    .phase-node-residual {{ background: #dafbe1; color: #116329; }}
     .phase-arrow {{ color: #59636e; font-weight: 800; }}
     table {{ width: 100%; border-collapse: collapse; background: white; }}
     th, td {{ padding: 8px 10px; border: 1px solid #d8dee4; text-align: left; }}
@@ -5540,6 +6795,15 @@ def build_viewer(
       border-left: 4px solid #bf8700;
     }}
     .call-phase-group_local_review {{ border-left: 4px solid #0969da; }}
+    .call-phase-residual_global_placement_review {{
+      border-left: 4px solid #1a7f37;
+    }}
+    .placement-component-summary {{
+      display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 7px; margin: 10px 0; padding: 9px 10px;
+      border: 1px solid #a7d8b2; background: #f0fff4; font-size: 11px;
+    }}
+    .placement-component-summary span {{ display: block; }}
     .phase-pill {{
       display: inline-block; margin-left: 7px; padding: 2px 5px;
       border: 1px solid #d0d7de; border-radius: 3px; background: #f6f8fa;
@@ -5730,8 +6994,17 @@ def build_viewer(
       .page {{ width: min(100% - 20px, 1440px); margin-top: 16px; }}
       .summary {{ grid-template-columns: repeat(2, 1fr); }}
       .summary div {{ border-bottom: 1px solid #d8dee4; }}
+      .generator-performance-heading,
       .run-score-overview-heading, .scoring-dashboard-heading {{ display: block; }}
+      .generator-performance-heading p {{ margin-top: 9px; }}
+      .generator-model-grid {{ grid-template-columns: 1fr; }}
       .run-score-overview-heading p {{ margin-top: 9px; }}
+      .run-model-score-grid {{ grid-template-columns: 1fr; }}
+      .run-model-score-grid > div {{
+        border-right: 0; border-bottom: 1px solid #d0d7de;
+      }}
+      .run-model-score-grid > div:last-child {{ border-bottom: 0; }}
+      .run-metric-bars {{ grid-template-columns: 1fr; }}
       .combined-score {{ margin-top: 10px; text-align: left; }}
       .layer-score-grid, .scoring-audit-grid,
       .scoring-audit-details {{ grid-template-columns: 1fr; }}
@@ -5802,6 +7075,7 @@ def build_viewer(
       metric rubric, parsed result, and request metadata. Token totals cover
       persisted response usage only.
     </p>
+    {generator_model_performance_html}
     {run_scoring_overview_html}
     {acquisition_overview_html}
     <div class="scene-controls">

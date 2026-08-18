@@ -6,6 +6,7 @@ from typing import Any
 
 from benchmark.evaluator.evidence_contract import canonical_hierarchy
 from benchmark.nl_scene.converter import COARSE_GRAINED, FINE_GRAINED, PROMPT_GRANULARITIES
+from benchmark.scoring_profiles import DEFAULT_L3_METRIC_WEIGHTS
 
 
 CANONICAL_PROFILE_VERSION = "canonical_scene_evaluation_v2"
@@ -106,23 +107,35 @@ DEFAULT_EVALUATION_PROFILE: dict[str, Any] = {
     L3: {
         "enabled": True,
         "metrics": {
-            "scale_consistency": {"enabled": True, "weight": 1.0 / 5.0},
+            "scale_consistency": {
+                "enabled": True,
+                "weight": DEFAULT_L3_METRIC_WEIGHTS["scale_consistency"],
+            },
             "object_pairing_consistency": {
                 "enabled": True,
-                "weight": 1.0 / 5.0,
+                "weight": DEFAULT_L3_METRIC_WEIGHTS[
+                    "object_pairing_consistency"
+                ],
                 "requires": ["object_grouping_report"],
                 "scope": "group_member_category_and_role_compatibility_only",
             },
-            "style_consistency": {"enabled": True, "weight": 1.0 / 5.0},
+            "style_consistency": {
+                "enabled": True,
+                "weight": DEFAULT_L3_METRIC_WEIGHTS["style_consistency"],
+            },
             "functional_consistency": {
                 "enabled": True,
-                "weight": 1.0 / 5.0,
+                "weight": DEFAULT_L3_METRIC_WEIGHTS[
+                    "functional_consistency"
+                ],
                 "requires": ["object_grouping_report"],
                 "scope": "ordinary_static_visual_usability",
             },
             "semantic_placement_consistency": {
                 "enabled": True,
-                "weight": 1.0 / 5.0,
+                "weight": DEFAULT_L3_METRIC_WEIGHTS[
+                    "semantic_placement_consistency"
+                ],
                 "requires": ["object_grouping_report"],
                 "scope": "semantic_location_plausibility_only",
             },
@@ -403,6 +416,8 @@ def canonical_score_coverage(
     profile_version: str,
     scoring_profile_id: str | None = None,
     scoring_spec_version: str | None = None,
+    l3_metric_weights: dict[str, float] | None = None,
+    deduction_multiplier: float | None = None,
 ) -> dict[str, Any]:
     active_layers = [
         name
@@ -418,6 +433,37 @@ def canonical_score_coverage(
         if _is_score(category_reports[name].get("score"))
     ]
     covered_weight = sum(float(weights[name]) for name in covered_layers)
+    layer_grounding_fractions = {
+        name: _layer_score_grounding_fraction(category_reports.get(name))
+        for name in active_layers
+    }
+    grounded_score_weight = min(
+        required_weight,
+        max(
+            0.0,
+            sum(
+                float(weights[name]) * layer_grounding_fractions[name]
+                for name in active_layers
+            ),
+        ),
+    )
+    grounded_score_fraction = (
+        min(1.0, max(0.0, grounded_score_weight / required_weight))
+        if required_weight > 0.0
+        else 0.0
+    )
+    score_resolution_complete = bool(
+        active_layers
+        and math.isclose(covered_weight, required_weight, abs_tol=1e-9)
+    )
+    score_grounding_complete = bool(
+        score_resolution_complete
+        and math.isclose(
+            grounded_score_weight,
+            required_weight,
+            abs_tol=1e-9,
+        )
+    )
     active_metrics_by_layer: dict[str, list[str]] = {}
     resolved_metrics_by_layer: dict[str, list[str]] = {}
     active_metric_signatures: dict[str, str] = {}
@@ -450,6 +496,23 @@ def canonical_score_coverage(
         if scoring_profile_id and scoring_spec_version
         else ""
     )
+    if deduction_multiplier is not None:
+        resolved_multiplier = float(deduction_multiplier)
+        if not math.isfinite(resolved_multiplier) or resolved_multiplier <= 0.0:
+            raise ValueError(
+                "deduction_multiplier must be finite and greater than zero"
+            )
+        scoring_signature += (
+            f"|deduction_multiplier:{resolved_multiplier:.12g}"
+        )
+    if l3_metric_weights is not None:
+        l3_metric_weight_signature = "+".join(
+            f"{name}:{float(l3_metric_weights[name]):.12g}"
+            for name in sorted(l3_metric_weights)
+        )
+        scoring_signature += (
+            f"|l3_metric_weights:{l3_metric_weight_signature}"
+        )
     return {
         "active_layers": active_layers,
         "covered_layers": covered_layers,
@@ -465,13 +528,102 @@ def canonical_score_coverage(
         ),
         "covered_weight": covered_weight,
         "required_weight": required_weight,
-        "complete": bool(active_layers and math.isclose(covered_weight, required_weight, abs_tol=1e-9)),
+        # ``complete`` remains the wire-compatible numeric-score completion
+        # flag.  Grounding completeness is deliberately separate: a
+        # fail-soft metric may publish a numeric score without pretending the
+        # whole score was supported by evaluated evidence.
+        "complete": score_resolution_complete,
+        "score_resolution_complete": score_resolution_complete,
+        "score_grounding_complete": score_grounding_complete,
+        "grounded_score_weight": grounded_score_weight,
+        "grounded_score_fraction": grounded_score_fraction,
+        "layer_grounding_fractions": layer_grounding_fractions,
         "aggregation_denominator": required_weight,
         "case_comparability": (
             "compare_only_with_same_profile_version_layer_weight_signature_"
             "and_per_layer_active_metric_signatures"
         ),
     }
+
+
+def _layer_score_grounding_fraction(report: Any) -> float:
+    """Return the grounded share of one numeric layer score.
+
+    Metric-level ``score_grounding`` is authoritative when present.  Older
+    fully evaluated metrics have no such field and remain fully grounded.
+    A numeric defaulted metric without an explicit coverage record is treated
+    as ungrounded rather than receiving accidental full credit.
+    """
+
+    if not isinstance(report, dict) or not _is_score(report.get("score")):
+        return 0.0
+    layer_coverage = report.get("coverage")
+    layer_coverage = layer_coverage if isinstance(layer_coverage, dict) else {}
+    layer_grounding = layer_coverage.get("score_grounding")
+    layer_grounding = (
+        layer_grounding if isinstance(layer_grounding, dict) else {}
+    )
+    layer_fraction = layer_grounding.get("fraction")
+    if (
+        isinstance(layer_fraction, (int, float))
+        and not isinstance(layer_fraction, bool)
+        and math.isfinite(float(layer_fraction))
+    ):
+        return min(1.0, max(0.0, float(layer_fraction)))
+    metrics = report.get("metrics")
+    active_names = [str(name) for name in (report.get("active_metrics") or [])]
+    if not isinstance(metrics, dict) or not active_names:
+        return 1.0
+
+    weighted: list[tuple[float, float]] = []
+    for name in active_names:
+        metric = metrics.get(name)
+        if not isinstance(metric, dict):
+            weighted.append((1.0, 0.0))
+            continue
+        raw_weight = metric.get("weight")
+        weight = (
+            float(raw_weight)
+            if isinstance(raw_weight, (int, float))
+            and not isinstance(raw_weight, bool)
+            and math.isfinite(float(raw_weight))
+            and float(raw_weight) > 0.0
+            else 1.0
+        )
+        weighted.append((weight, _metric_score_grounding_fraction(metric)))
+    denominator = sum(weight for weight, _ in weighted)
+    if denominator <= 0.0:
+        return 0.0
+    return min(
+        1.0,
+        max(
+            0.0,
+            sum(weight * fraction for weight, fraction in weighted)
+            / denominator,
+        ),
+    )
+
+
+def _metric_score_grounding_fraction(metric: dict[str, Any]) -> float:
+    if not _is_score(metric.get("score")):
+        return 0.0
+    coverage = metric.get("coverage")
+    coverage = coverage if isinstance(coverage, dict) else {}
+    grounding = coverage.get("score_grounding")
+    grounding = grounding if isinstance(grounding, dict) else {}
+    fraction = grounding.get("fraction")
+    if isinstance(fraction, (int, float)) and not isinstance(fraction, bool):
+        value = float(fraction)
+        if math.isfinite(value):
+            return min(1.0, max(0.0, value))
+    judgement = metric.get("judgement")
+    if isinstance(judgement, dict) and judgement.get("defaulted") is True:
+        return 0.0
+    if metric.get("terminal_state") == "evaluated_degraded":
+        terminal = metric.get("terminal_decision")
+        if isinstance(terminal, dict) and terminal.get("defaulted") is True:
+            return 0.0
+    return 1.0
 
 
 def _validate_l0(config: Any) -> None:

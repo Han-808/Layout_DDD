@@ -134,6 +134,18 @@ def _audit() -> dict:
                 ],
             },
             {
+                "stage": "functional_evidence_readiness",
+                "status": "need_more_evidence",
+                "source": "camera_selector",
+                "check_id": "functional_group_001",
+                "evidence_round": 0,
+                "result": {"ready": False},
+                "images_used": ["/tmp/N021_global.png"],
+                "evidence_request": _need_more_result()[
+                    "evidence_request"
+                ],
+            },
+            {
                 "stage": "acquisition_planner",
                 "episode_index": 1,
                 "evidence_round": 0,
@@ -530,6 +542,130 @@ def test_query_graph_projects_deferred_check_without_current_evidence() -> None:
         and edge.source_id in typed_node_ids
         for edge in graph.edges
     )
+
+
+def test_query_graph_projects_target_scope_and_target_local_phase() -> None:
+    check = {
+        "check_id": "placement_check_chair_context",
+        "check_type": "contextual_anchor",
+        "subject_id": "chair",
+        "context_ids": ["desk"],
+        "target_ids": ["chair"],
+        "owner_stage": "target_local",
+        "owning_group_id": None,
+    }
+    request = JudgeRequest(
+        task="scene_quality",
+        metric="semantic_placement_consistency",
+        claim_or_event={"claim_id": "target_chair", "target_ids": ["chair"]},
+        scene_context={
+            "scene_id": "N_target",
+            "objects": [
+                {"id": "chair", "category": "chair"},
+                {"id": "desk", "category": "desk"},
+            ],
+        },
+        deterministic_evidence={"read_only": True},
+        visual_evidence=(
+            {"path": "/tmp/N_target_global.png", "role": "global_context"},
+        ),
+        rubric={"rubric_id": "placement_v2"},
+        context={
+            "case_id": "N_target",
+            "evidence_phase": "target_local_confirmation",
+            "target_object_ids": ["chair"],
+            "context_object_ids": ["desk"],
+            "target_scope": {
+                "scope_version": "target_camera_scope_v1",
+                "scope_id": "target_scope_chair",
+                "target_id": "chair",
+                "context_ids": ["desk"],
+                "framing_ids": ["chair", "desk"],
+                "focus_center": [1.0, 1.0, 0.5],
+                "extent": [1.5, 1.0, 1.0],
+                "require_global_anchor": True,
+                "group_identity": None,
+                "context_objects_are_defect_owners": False,
+            },
+        },
+    )
+    resolved = {
+        **check,
+        "judge_result_ref": "target_local_confirmation:chair",
+        "check_conclusion": "valid",
+        "observation_status": "inferred_under_budget",
+        "result_row": {
+            "check_id": check["check_id"],
+            "subject_id": "chair",
+            "context_ids": ["desk"],
+            "observation_status": "inferred_under_budget",
+            "conclusion": "valid",
+            "reason": "The retained anchor supports a bounded choice.",
+        },
+    }
+
+    graph = build_evaluation_query_graph(
+        judge_request=request,
+        audit={
+            "schema_version": "vlm_evaluation_audit_v2",
+            "evaluation": {
+                "case_id": "N_target",
+                "metric": "semantic_placement_consistency",
+            },
+            "trace": [
+                {
+                    "stage": "judge",
+                    "evidence_round": 0,
+                    "result": {
+                        "status": "valid",
+                        "confidence": 0.4,
+                        "reason": "Forced target-local result.",
+                        "defects": [],
+                        "evidence_request": None,
+                        "backend": "test",
+                        "provenance": {
+                            "decision_ref": "target:chair"
+                        },
+                    },
+                    "images_used": ["/tmp/N_target_global.png"],
+                }
+            ],
+        },
+        workflow_context={
+            "placement_check_ledger": {
+                "schema_version": "placement_check_ledger_v1",
+                "checks": [resolved],
+            }
+        },
+    )
+
+    scope = next(node for node in graph.nodes if node.kind == "scope")
+    assert scope.attributes["scope_type"] == "target_centered_context"
+    assert scope.attributes["target_id"] == "chair"
+    assert scope.attributes["context_ids"] == ["desk"]
+    assert scope.attributes["context_objects_are_defect_owners"] is False
+    assert graph.metadata["typed_check_count"] == 1
+    assert graph.metadata["check_result_count"] == 1
+
+
+def test_query_graph_rejects_target_scope_context_attribution() -> None:
+    request = _judge_request().to_dict()
+    request["context"].pop("group_scope")
+    request["context"].update(
+        target_object_ids=["floor_lamp"],
+        target_scope={
+            "scope_id": "target_scope_sofa",
+            "target_id": "sofa",
+            "context_ids": ["floor_lamp"],
+            "framing_ids": ["sofa", "floor_lamp"],
+            "require_global_anchor": True,
+            "group_identity": None,
+            "context_objects_are_defect_owners": False,
+        },
+    )
+
+    with pytest.raises(ValueError, match="attribution must remain target-only"):
+        build_evaluation_query_graph(judge_request=request)
 
 
 def test_query_graph_rejects_group_scope_outside_trusted_partition() -> None:

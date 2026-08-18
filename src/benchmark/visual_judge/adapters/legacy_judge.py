@@ -1540,6 +1540,7 @@ def _selector_context(request: dict[str, Any]) -> dict[str, Any]:
         "preview_visibility_warning",
         "selection_phase",
         "group_scope",
+        "target_scope",
         "grouping_role",
         "member_ids",
         "target_bounds",

@@ -744,6 +744,43 @@ def test_functional_repair_routes_by_check_semantics() -> None:
         for item in relation_candidates
     )
 
+    usable_fallback = _request("functional_consistency")
+    usable_fallback["object_ids"] = ["bed", "cabinet"]
+    usable_fallback["functional_repair"] = {
+        "schema_version": "functional_camera_repair_v3",
+        "target_ids": ["bed", "cabinet"],
+        "required_observations": [
+            "interaction_side_visible",
+            "front_back_disambiguated",
+        ],
+        "usable_side_fallback": True,
+        "unresolved_usable_side_target_ids": ["bed", "cabinet"],
+        "source_check_ids": ["relation-check"],
+    }
+    fallback_candidates = generate_camera_pose_candidates(
+        usable_fallback,
+        max_candidates=4,
+    )
+    assert len(fallback_candidates) == 4
+    assert all(
+        item["policy_source"]
+        == "functional_usable_side_soft_fallback_v1"
+        and item["usable_side_fallback"] is True
+        for item in fallback_candidates
+    )
+    assert {
+        (
+            tuple(item["target_object_ids"]),
+            item["fallback_local_side_id"],
+        )
+        for item in fallback_candidates
+    } == {
+        (("bed",), "local_pos_y"),
+        (("cabinet",), "local_pos_y"),
+        (("bed",), "local_neg_y"),
+        (("cabinet",), "local_neg_y"),
+    }
+
 
 def test_cross_group_functional_probe_uses_global_context_when_local_pair_cannot_fit() -> None:
     request = _request("functional_consistency")

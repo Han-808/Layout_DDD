@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from copy import deepcopy
+from types import SimpleNamespace
 
 import pytest
 from PIL import Image
@@ -164,6 +165,35 @@ class _Selector:
         return deepcopy(self.result)
 
 
+class _ReadinessSelector(_Selector):
+    preserve_configured_adapter = True
+    backend = "test_readiness_selector"
+    supports_evidence_readiness = True
+
+    def __init__(self, result, calls, readiness_results):
+        super().__init__(result, calls)
+        self.readiness_results = list(readiness_results)
+        self.readiness_requests = []
+        self.last_call_usage = {"vlm_call_count": 0}
+
+    def review_evidence_readiness(self, request):
+        self.calls.append("readiness")
+        self.readiness_requests.append(request)
+        self.last_call_usage = {"vlm_call_count": 1}
+        value = self.readiness_results.pop(0)
+        if isinstance(value, Exception):
+            raise value
+        return deepcopy(value)
+
+    def select(self, request):
+        self.last_call_usage = {"vlm_call_count": 1}
+        return super().select(request)
+
+
+class _PreviewReadinessSelector(_ReadinessSelector):
+    requires_candidate_previews = True
+
+
 class _Renderer:
     def __init__(self, result, calls):
         self.result = result
@@ -178,11 +208,125 @@ class _Renderer:
         return deepcopy(self.result)
 
 
+class _PassThroughCandidateBankBuilder:
+    def build(self, request, *, constraints):
+        del constraints
+        return SimpleNamespace(
+            candidates=tuple(deepcopy(request.candidate_views)),
+            rejected_candidates=(),
+            backend="test_pass_through",
+            provenance={"source": "test"},
+        )
+
+
 def _selection(*, action: dict | None = None) -> dict:
     return {
         "selected_view_ids": ["view-1"],
         "action": action,
         "reason": "best available scoped view",
+    }
+
+
+def _functional_request(
+    *,
+    evidence=("initial.png",),
+    preflight: dict | None = None,
+    batched: bool = False,
+) -> JudgeRequest:
+    check = {
+        "check_id": "functional-check-a",
+        "check_type": "architecture_orientation",
+        "predicate": "architecture_orientation",
+        "owner_stage": "group_local",
+        "target_ids": ["a"],
+        "required_observations": [
+            "interaction_side_visible",
+            "front_back_disambiguated",
+        ],
+        "target_affordances": [
+            {
+                "target_id": "a",
+                "directionality": "directed",
+                "surface_roles": ["interaction_side"],
+                "need_clearance": False,
+            }
+        ],
+    }
+    checks = [check]
+    if batched:
+        checks.append(
+            {
+                **deepcopy(check),
+                "check_id": "functional-check-b",
+                "target_ids": ["b"],
+            }
+        )
+    context = {
+        "evidence_phase": "group_local_review",
+        "group_scope": {
+            "group_id": "group-1",
+            "member_ids": ["a", "b"],
+        },
+        "functional_probe_evidence": {
+            "required_checks": checks,
+            "boundary_clearance_evidence": {
+                "usable_surface_hypotheses": []
+            },
+        },
+    }
+    if preflight is not None:
+        context["functional_evidence_preflight"] = deepcopy(preflight)
+    return JudgeRequest(
+        task="scene_quality",
+        metric="functional_consistency",
+        claim_or_event={"claim_id": "functional-check-a"},
+        scene_context={
+            "scene_id": "scene-1",
+            "objects": [{"id": "a"}, {"id": "b"}],
+        },
+        deterministic_evidence={"routing_only": True},
+        visual_evidence=tuple(evidence),
+        rubric={"scope": "functional_consistency"},
+        context=context,
+    )
+
+
+def _readiness_pass() -> dict:
+    return {
+        "outcome": "pass",
+        "reason": "the declared observations are visually interpretable",
+        "supporting_evidence_refs": ["image_00"],
+        "visible_observations": [
+            "interaction_side_visible",
+            "front_back_disambiguated",
+        ],
+        "missing_observations": [],
+        "view_goal": "",
+    }
+
+
+def _readiness_acquire() -> dict:
+    return {
+        "outcome": "acquire",
+        "reason": "front and back remain visually ambiguous",
+        "supporting_evidence_refs": ["image_00"],
+        "visible_observations": ["interaction_side_visible"],
+        "missing_observations": ["front_back_disambiguated"],
+        "view_goal": "show the opposite object-centric side",
+    }
+
+
+def _functional_need_more_result() -> dict:
+    return {
+        "status": "need_more_evidence",
+        "confidence": 0.4,
+        "reason": "the functional front/back direction remains ambiguous",
+        "defects": [],
+        "evidence_request": {
+            "target_ids": ["a"],
+            "missing_observations": ["front_back_disambiguated"],
+            "view_goal": "show the opposite object-centric side",
+        },
     }
 
 
@@ -239,6 +383,303 @@ def test_ready_evidence_calls_judge_without_camera():
     assert len(judge.requests) == 1
     assert not selector.requests
     assert not renderer.requests
+
+
+def test_functional_initial_packet_reaches_atomic_judge_without_readiness() -> None:
+    calls = []
+    selector = _ReadinessSelector(
+        _selection(), calls, []
+    )
+    judge = _Judge([_valid_result()], calls)
+    controller = VLMEvaluationController(
+        judge=judge,
+        camera_selector=selector,
+        evidence_gate=_Gate([_gate_result(ready=True)], calls),
+        renderer=_Renderer(
+            {"visual_evidence": ["repair.png"]}, calls
+        ),
+    )
+
+    result = controller.run(
+        _functional_request(),
+        candidate_views=({"id": "view-1"},),
+        allowed_actions=("orbit",),
+    )
+
+    assert result.status == "valid"
+    assert calls == ["gate", "judge"]
+    assert len(selector.readiness_requests) == 0
+    assert len(judge.requests) == 1
+    soft = result.audit["functional_soft_evidence_contract"]
+    assert soft["camera_selector_review_count"] == 0
+    assert soft["camera_selector_passed"] is False
+    assert soft["decision_authority"] == "none"
+
+
+def test_functional_soft_contract_acquires_then_reviews_again() -> None:
+    calls = []
+    selector = _ReadinessSelector(
+        _selection(),
+        calls,
+        [_readiness_pass()],
+    )
+    judge = _Judge(
+        [_functional_need_more_result(), _valid_result()], calls
+    )
+    controller = VLMEvaluationController(
+        judge=judge,
+        camera_selector=selector,
+        evidence_gate=_Gate(
+            [_gate_result(ready=True), _gate_result(ready=True)],
+            calls,
+        ),
+        renderer=_Renderer(
+            {
+                "visual_evidence": ["repair.png"],
+                "merge_policy": "append",
+            },
+            calls,
+        ),
+    )
+
+    result = controller.run(
+        _functional_request(),
+        candidate_views=({"id": "view-1"},),
+        allowed_actions=("orbit",),
+    )
+
+    assert result.status == "valid"
+    assert calls == [
+        "gate",
+        "judge",
+        "selector",
+        "render",
+        "gate",
+        "readiness",
+        "judge",
+    ]
+    assert len(judge.requests) == 2
+    assert list(judge.requests[1].visual_evidence) == [
+        "initial.png",
+        "repair.png",
+    ]
+    readiness_events = [
+        item
+        for item in result.audit["trace"]
+        if item["stage"] == "functional_evidence_readiness"
+    ]
+    assert [item["status"] for item in readiness_events] == ["pass"]
+
+
+def test_usable_side_preflight_routes_fallback_before_readiness() -> None:
+    calls = []
+    selector = _ReadinessSelector(
+        _selection(), calls, [_readiness_pass()]
+    )
+    judge = _Judge([_valid_result()], calls)
+    controller = VLMEvaluationController(
+        judge=judge,
+        camera_selector=selector,
+        evidence_gate=_Gate(
+            [_gate_result(ready=True), _gate_result(ready=True)],
+            calls,
+        ),
+        renderer=_Renderer(
+            {
+                "visual_evidence": ["side-repair.png"],
+                "merge_policy": "append",
+            },
+            calls,
+        ),
+    )
+    preflight = {
+        "schema_version": "functional_evidence_preflight_v1",
+        "active": True,
+        "check_id": "functional-check-a",
+        "target_ids": ["a"],
+        "missing_observations": [
+            "interaction_side_visible",
+            "front_back_disambiguated",
+        ],
+        "reason_codes": ["usable_surface_not_machine_resolved"],
+        "initial_evidence_refs": ["initial.png"],
+        "decision_authority": "none",
+    }
+
+    result = controller.run(
+        _functional_request(preflight=preflight),
+        candidate_views=({"id": "view-1"},),
+        allowed_actions=("orbit",),
+    )
+
+    assert result.status == "valid"
+    assert calls == [
+        "gate",
+        "selector",
+        "render",
+        "gate",
+        "readiness",
+        "judge",
+    ]
+    repair = selector.requests[0].context["functional_repair"]
+    assert repair["usable_side_fallback"] is True
+    assert repair["unresolved_usable_side_target_ids"] == ["a"]
+    soft = result.audit["functional_soft_evidence_contract"]
+    assert soft["usable_side_fallback_attempted"] is True
+    assert soft["usable_side_fallback_applied"] is True
+
+
+def test_readiness_budget_exhaustion_forces_binary_without_unresolved() -> None:
+    calls = []
+    selector = _ReadinessSelector(
+        _selection(), calls, [_readiness_acquire()]
+    )
+    judge = _Judge(
+        [_functional_need_more_result(), _valid_result()], calls
+    )
+    controller = VLMEvaluationController(
+        judge=judge,
+        camera_selector=selector,
+        evidence_gate=_Gate([_gate_result(ready=True)], calls),
+        renderer=_Renderer(
+            {"visual_evidence": ["repair.png"]}, calls
+        ),
+        control=resolve_vlm_evaluation_control(
+            {"budgets": {"max_selector_calls": 2}}
+        ),
+    )
+
+    result = controller.run(
+        _functional_request(),
+        candidate_views=({"id": "view-1"},),
+        allowed_actions=("orbit",),
+    )
+
+    assert result.status == "valid"
+    assert calls == [
+        "gate",
+        "judge",
+        "selector",
+        "render",
+        "gate",
+        "readiness",
+        "judge",
+    ]
+    assert judge.requests[1].context[
+        "budget_exhaustion_finalization"
+    ]["required"] is True
+    soft = result.audit["functional_soft_evidence_contract"]
+    assert soft["terminal_limited_evidence"] is True
+
+
+def test_functional_soft_contract_forces_after_illegal_scope_request() -> None:
+    calls = []
+    selector = _ReadinessSelector(
+        _selection(), calls, [_readiness_pass()]
+    )
+    judge = _Judge(
+        [
+            {
+                "status": "need_more_evidence",
+                "confidence": 0.35,
+                "reason": "A view outside the immutable group was requested.",
+                "defects": [],
+                "evidence_request": {
+                    "target_ids": ["outside-group"],
+                    "missing_observations": [
+                        "front_back_disambiguated"
+                    ],
+                    "view_goal": "Show an object outside the group.",
+                },
+            },
+            _valid_result(),
+        ],
+        calls,
+    )
+    controller = VLMEvaluationController(
+        judge=judge,
+        camera_selector=selector,
+        evidence_gate=_Gate([_gate_result(ready=True)], calls),
+        renderer=_Renderer(
+            {"visual_evidence": ["repair.png"]}, calls
+        ),
+    )
+
+    result = controller.run(
+        _functional_request(),
+        candidate_views=({"id": "view-1"},),
+        allowed_actions=("orbit",),
+    )
+
+    assert result.status == "valid"
+    assert calls == ["gate", "judge", "judge"]
+    assert result.stop_reason == (
+        "judge_evidence_request_outside_group_scope_forced_choice"
+    )
+    assert result.audit["functional_soft_evidence_contract"][
+        "terminal_limited_evidence"
+    ] is True
+
+
+@pytest.mark.parametrize("batched", [False, True])
+def test_functional_preview_render_failure_forces_retained_binary(
+    batched: bool,
+) -> None:
+    calls = []
+    selector = _PreviewReadinessSelector(
+        _selection(), calls, [_readiness_pass()]
+    )
+    judge = _Judge(
+        [_functional_need_more_result(), _valid_result()], calls
+    )
+    controller = VLMEvaluationController(
+        judge=judge,
+        vlm_camera_selector=selector,
+        candidate_preview_renderer=_Renderer(
+            RuntimeError("candidate preview render failed"), calls
+        ),
+        candidate_bank_builder=_PassThroughCandidateBankBuilder(),
+        evidence_gate=_Gate([_gate_result(ready=True)], calls),
+        renderer=_Renderer(
+            {"visual_evidence": ["repair.png"]}, calls
+        ),
+        control=resolve_vlm_evaluation_control(
+            {
+                "camera_acquisition": {
+                    "policy": "vlm_only",
+                    "vlm": {"selection_mode": "candidate_only"},
+                }
+            }
+        ),
+    )
+
+    result = controller.run(
+        _functional_request(batched=batched),
+        candidate_views=({"id": "view-1"},),
+        allowed_actions=("orbit",),
+    )
+
+    assert result.status == "valid"
+    assert result.stop_reason == (
+        "camera_preview_render_failed_forced_choice"
+    )
+    assert calls == ["gate", "judge", "render", "judge"]
+    preview_event = next(
+        item
+        for item in result.audit["trace"]
+        if item["stage"] == "candidate_preview_render"
+    )
+    assert preview_event["status"] == "failed"
+    assert preview_event["fallback"] == (
+        "forced_binary_with_retained_evidence"
+    )
+    forced = result.audit["budget_exhaustion_forced_choice"]
+    assert forced["applied"] is True
+    assert forced["trigger"] == "camera_preview_render_failed"
+    if not batched:
+        assert result.audit["functional_soft_evidence_contract"][
+            "terminal_limited_evidence"
+        ] is True
 
 
 def test_controller_registers_pending_typed_placement_check() -> None:
@@ -695,7 +1136,7 @@ def test_renderer_cannot_exceed_max_views_per_round_before_judge():
             _gate_result(ready=True),
             _gate_result(ready=True),
         ],
-        judge_results=[_need_more_result()],
+        judge_results=[_need_more_result(), _valid_result()],
         render_result={
             "visual_evidence": ["repair-a.png", "repair-b.png"],
             "merge_policy": "replace",
@@ -710,14 +1151,81 @@ def test_renderer_cannot_exceed_max_views_per_round_before_judge():
         ),
     )
 
-    assert result.status == "unresolved"
-    assert result.stop_reason == "renderer_followup_contract_invalid"
-    assert calls == ["gate", "judge", "selector", "render", "gate"]
-    assert len(judge.requests) == 1
+    assert result.status == "valid"
+    assert result.stop_reason == (
+        "renderer_followup_contract_invalid_forced_choice"
+    )
+    assert calls == [
+        "gate",
+        "judge",
+        "selector",
+        "render",
+        "gate",
+        "judge",
+    ]
+    assert len(judge.requests) == 2
+    assert result.audit["budget_exhaustion_forced_choice"]["applied"] is True
     render_event = next(
         item for item in result.audit["trace"] if item["stage"] == "render"
     )
     assert render_event["rendered_view_count"] == 2
+
+
+def test_fixed_global_context_does_not_consume_followup_view_budget():
+    local_pose = {"id": "view-1", "location": [1.0, 0.0, 1.0]}
+    result, calls, _, judge, _, _ = _run(
+        gate_results=[
+            _gate_result(ready=True),
+            _gate_result(ready=True),
+        ],
+        judge_results=[_need_more_result(), _valid_result()],
+        render_result={
+            "visual_evidence": [
+                {
+                    "path": "local-rgb.png",
+                    "role": "metric_local_rgb",
+                    "view_id": "view-1",
+                    "pose": local_pose,
+                },
+                {
+                    "path": "local-highlight.png",
+                    "role": "metric_local_highlight",
+                    "view_id": "view-1",
+                    "pose": local_pose,
+                },
+                {
+                    "path": "global-highlight.png",
+                    "role": "metric_highlighted_global",
+                    "view_id": "global_top",
+                    "pose": {"id": "global_top", "camera_type": "ORTHO"},
+                },
+            ],
+            "merge_policy": "replace",
+        },
+        control=resolve_vlm_evaluation_control(
+            {
+                "budgets": {
+                    "max_views_per_round": 1,
+                    "max_total_images": 6,
+                }
+            }
+        ),
+    )
+
+    assert result.status == "valid"
+    assert calls == [
+        "gate",
+        "judge",
+        "selector",
+        "render",
+        "gate",
+        "judge",
+    ]
+    assert len(judge.requests) == 2
+    render_event = next(
+        item for item in result.audit["trace"] if item["stage"] == "render"
+    )
+    assert render_event["rendered_view_count"] == 1
 
 
 def test_same_pose_render_bundle_counts_as_one_view_per_round():
@@ -1212,7 +1720,7 @@ def test_unchanged_rendered_packet_is_gated_then_stops():
             _gate_result(ready=True),
             _gate_result(ready=True),
         ],
-        judge_results=[_need_more_result()],
+        judge_results=[_need_more_result(), _valid_result()],
         render_result={
             "visual_evidence": ["initial.png"],
             "merge_policy": "replace",
@@ -1298,17 +1806,26 @@ def test_invalid_post_render_candidates_are_gated_before_safe_stop():
             _gate_result(ready=True),
             _gate_result(ready=True),
         ],
-        judge_results=[_need_more_result()],
+        judge_results=[_need_more_result(), _valid_result()],
         render_result={
             "visual_evidence": ["repair.png"],
             "next_candidate_views": [{"id": ""}],
         },
     )
 
-    assert result.stop_reason == "renderer_followup_contract_invalid"
-    assert calls == ["gate", "judge", "selector", "render", "gate"]
+    assert result.stop_reason == (
+        "renderer_followup_contract_invalid_forced_choice"
+    )
+    assert calls == [
+        "gate",
+        "judge",
+        "selector",
+        "render",
+        "gate",
+        "judge",
+    ]
     assert len(gate.requests) == 2
-    assert len(judge.requests) == 1
+    assert len(judge.requests) == 2
 
 
 def test_same_image_pixels_with_changed_metadata_are_not_rejudged(tmp_path):
@@ -4234,7 +4751,7 @@ def test_controlled_initial_provider_overrun_is_not_forced_without_need_more(
     )
 
 
-def test_controlled_composite_provider_cannot_return_two_independent_views(
+def test_controlled_composite_provider_rejects_repeated_ambiguous_terminal(
     tmp_path,
 ):
     initial = tmp_path / "initial.png"
@@ -4284,34 +4801,21 @@ def test_controlled_composite_provider_cannot_return_two_independent_views(
         camera_provider=provider,
     )
 
-    result = wrapper.adjudicate_scene_quality(
-        {
-            "metric": "style_consistency",
-            "scene_summary": {"scene_id": "scene"},
-            "render_evidence": [str(initial)],
-            "judgment_scope": {"included": ["style_consistency"]},
-        }
-    )
+    with pytest.raises(
+        ValueError,
+        match="terminal budget-exhaustion Judge must return valid or invalid",
+    ):
+        wrapper.adjudicate_scene_quality(
+            {
+                "metric": "style_consistency",
+                "scene_summary": {"scene_id": "scene"},
+                "render_evidence": [str(initial)],
+                "judgment_scope": {"included": ["style_consistency"]},
+            }
+        )
 
-    assert result["verdict"] == "ambiguous"
-    assert judge.calls == 1
+    assert judge.calls == 2
     assert len(provider_calls) == 1
-    audit_record = wrapper.audit_records[0]
-    assert audit_record["status"] == "unresolved"
-    assert (
-        audit_record["stop_reason"]
-        == "renderer_followup_contract_invalid"
-    )
-    assert [
-        event["stage"] for event in audit_record["audit"]["trace"]
-    ] == [
-        "evidence_gate",
-        "judge",
-        "acquisition_planner",
-        "camera_selector",
-        "render",
-        "evidence_gate",
-    ]
 
 
 def test_canonical_scene_quality_geometry_exhaustion_forces_binary_choice(

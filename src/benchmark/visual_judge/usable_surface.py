@@ -11,6 +11,12 @@ from io import BytesIO
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
+from benchmark.assets.facing import (
+    CATALOG_FACING_CONTRACT_VERSION,
+    catalog_facing_cache_manifest,
+    normalize_catalog_facing_overrides,
+    resolve_catalog_functional_side,
+)
 from benchmark.models import OpenAICompatibleModel, parse_json_object
 from benchmark.visual_judge.functional_discovery import (
     FUNCTIONAL_SURFACE_ROLES,
@@ -32,7 +38,16 @@ USABLE_SURFACE_EVIDENCE_LOOP_VERSION = (
     "usable_surface_evidence_loop_v1"
 )
 USABLE_SURFACE_MAX_EVIDENCE_ROUNDS = 2
-DEFAULT_USABLE_SURFACE_DETECTOR_BACKEND = "vlm_trusted_side_ids"
+VLM_USABLE_SURFACE_DETECTOR_BACKEND = "vlm_trusted_side_ids"
+CATALOG_CONTRACT_USABLE_SURFACE_DETECTOR_BACKEND = (
+    "catalog_contract_then_vlm"
+)
+CATALOG_CONTRACT_USABLE_SURFACE_DETECTOR_VERSION = (
+    "catalog_contract_then_vlm_v1"
+)
+DEFAULT_USABLE_SURFACE_DETECTOR_BACKEND = (
+    CATALOG_CONTRACT_USABLE_SURFACE_DETECTOR_BACKEND
+)
 USABLE_SURFACE_SIDE_IDS = (
     "local_pos_x",
     "local_neg_x",
@@ -144,9 +159,9 @@ class UsableSurfaceDetector(Protocol):
 
 
 class VLMTrustedSideUsableSurfaceDetector:
-    """Default adapter around the existing trusted-side VLM decoder."""
+    """Adapter around the existing trusted-side VLM decoder."""
 
-    implementation_id = DEFAULT_USABLE_SURFACE_DETECTOR_BACKEND
+    implementation_id = VLM_USABLE_SURFACE_DETECTOR_BACKEND
     version = USABLE_SURFACE_PROMPT_VERSION
 
     def __init__(
@@ -235,23 +250,163 @@ class VLMTrustedSideUsableSurfaceDetector:
         }
 
 
+class CatalogContractThenVLMUsableSurfaceDetector:
+    """Resolve local catalog assets deterministically, then fall back to VLM."""
+
+    implementation_id = CATALOG_CONTRACT_USABLE_SURFACE_DETECTOR_BACKEND
+    version = CATALOG_CONTRACT_USABLE_SURFACE_DETECTOR_VERSION
+
+    def __init__(
+        self,
+        decoder: Any,
+        *,
+        configuration: dict[str, Any] | None = None,
+    ) -> None:
+        self.configuration = deepcopy(configuration or {})
+        self.catalog_side_overrides = normalize_catalog_facing_overrides(
+            self.configuration.get("catalog_side_overrides")
+        )
+        self.fallback = VLMTrustedSideUsableSurfaceDetector(
+            decoder,
+            configuration={
+                key: deepcopy(value)
+                for key, value in self.configuration.items()
+                if key != "catalog_side_overrides"
+            },
+        )
+
+    def resolve_without_previews(
+        self,
+        request: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """Return a contract-backed side without rendering a side bank."""
+
+        if not isinstance(request, dict):
+            raise TypeError("catalog usable-surface request must be an object")
+        target_id = str(request.get("target_id") or "").strip()
+        category = str(request.get("target_category") or "").strip()
+        if not target_id or not category:
+            raise ValueError(
+                "catalog usable-surface request requires target identity"
+            )
+        roles = _validated_text_list(
+            request.get("surface_roles"),
+            allowed=FUNCTIONAL_SURFACE_ROLES,
+            label="surface_roles",
+        )
+        resolution = resolve_catalog_functional_side(
+            request.get("object_record"),
+            surface_roles=roles,
+            overrides=self.catalog_side_overrides,
+        )
+        if resolution is None:
+            return None
+        side_id = str(resolution["side_id"])
+        return {
+            "schema_version": USABLE_SURFACE_SCHEMA_VERSION,
+            "target_id": target_id,
+            "status": "identified",
+            "surfaces": [
+                {
+                    "surface_role": roles[0],
+                    "side_id": side_id,
+                    "visual_cues": [
+                        "benchmark-owned catalog canonical-facing contract"
+                    ],
+                    "confidence": 1.0,
+                }
+            ],
+            "reason": (
+                "The versioned Imaginarium catalog-facing contract resolves "
+                f"the directed functional side as {side_id}."
+            ),
+            "bank_complete": False,
+            "available_side_ids": [side_id],
+            "detector_implementation_id": self.implementation_id,
+            "detector_version": self.version,
+            "decision_authority": "none",
+            "provenance": {
+                "detector_interface_version": (
+                    USABLE_SURFACE_DETECTOR_INTERFACE_VERSION
+                ),
+                "detector_implementation_id": self.implementation_id,
+                "detector_version": self.version,
+                "resolution_path": "benchmark_catalog_contract",
+                "decoder_called": False,
+                "comparison_bank_required": False,
+                "applicable_surface_roles": list(roles),
+                "catalog_facing_resolution": deepcopy(resolution),
+            },
+        }
+
+    def detect(self, request: dict[str, Any]) -> dict[str, Any]:
+        result = self.fallback.detect(request)
+        return {
+            **result,
+            "detector_implementation_id": self.implementation_id,
+            "detector_version": self.version,
+            "provenance": {
+                **deepcopy(result.get("provenance") or {}),
+                "detector_interface_version": (
+                    USABLE_SURFACE_DETECTOR_INTERFACE_VERSION
+                ),
+                "detector_implementation_id": self.implementation_id,
+                "detector_version": self.version,
+                "resolution_path": "vlm_trusted_side_fallback",
+                "fallback_detector_implementation_id": (
+                    self.fallback.implementation_id
+                ),
+                "fallback_detector_version": self.fallback.version,
+            },
+        }
+
+    def manifest(self) -> dict[str, Any]:
+        fallback = self.fallback.manifest()
+        return {
+            **fallback,
+            "interface_version": USABLE_SURFACE_DETECTOR_INTERFACE_VERSION,
+            "implementation_id": self.implementation_id,
+            "version": self.version,
+            "configuration": {
+                **deepcopy(self.configuration),
+                "catalog_facing": catalog_facing_cache_manifest(
+                    overrides=self.catalog_side_overrides
+                ),
+            },
+            "catalog_facing_contract_version": (
+                CATALOG_FACING_CONTRACT_VERSION
+            ),
+            "resolution_order": [
+                "benchmark_catalog_contract",
+                "vlm_trusted_side_fallback",
+            ],
+            "fallback_detector": deepcopy(fallback),
+            "decision_authority": "none",
+        }
+
+
 def build_usable_surface_detector(
     *,
     backend: str = DEFAULT_USABLE_SURFACE_DETECTOR_BACKEND,
     decoder: Any = None,
     configuration: dict[str, Any] | None = None,
 ) -> UsableSurfaceDetector:
-    """Resolve one detector backend without an implicit fallback."""
+    """Resolve a versioned detector backend."""
 
     resolved = str(backend or "").strip()
-    if resolved != DEFAULT_USABLE_SURFACE_DETECTOR_BACKEND:
-        raise ValueError(
-            "unsupported usable-surface detector backend: "
-            f"{resolved!r}"
+    if resolved == CATALOG_CONTRACT_USABLE_SURFACE_DETECTOR_BACKEND:
+        return CatalogContractThenVLMUsableSurfaceDetector(
+            decoder,
+            configuration=configuration,
         )
-    return VLMTrustedSideUsableSurfaceDetector(
-        decoder,
-        configuration=configuration,
+    if resolved == VLM_USABLE_SURFACE_DETECTOR_BACKEND:
+        return VLMTrustedSideUsableSurfaceDetector(
+            decoder,
+            configuration=configuration,
+        )
+    raise ValueError(
+        "unsupported usable-surface detector backend: "
+        f"{resolved!r}"
     )
 
 

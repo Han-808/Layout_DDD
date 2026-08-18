@@ -11,6 +11,7 @@ from typing import Any
 import pytest
 
 from benchmark.evaluator.profile import L1, L2, L3
+from benchmark.models import EndpointConfigurationError
 from benchmark.visual_judge.contracts import ResponseSchemaRepairError
 from scripts import run_camera_cal_scene_level as runner
 
@@ -21,6 +22,38 @@ def test_default_discovery_covers_all_ready_camera_cal_cases() -> None:
     assert len(cases) == 30
     assert cases[0]["case_id"] == "N001"
     assert cases[-1]["case_id"] == "N030"
+
+
+def test_discovery_accepts_s_namespace_cases(tmp_path: Path) -> None:
+    case_root = tmp_path / "S061"
+    (case_root / "scene").mkdir(parents=True)
+    (case_root / "prepared").mkdir()
+    (case_root / "evidence").mkdir()
+    for path in (
+        case_root / "scene/canonical_scene.json",
+        case_root / "prepared/evaluation.blend",
+        case_root / "annotation.json",
+        case_root / "evidence/standardized_perspective.png",
+        case_root / "evidence/standardized_top.png",
+        case_root / "evidence/standardized_identity_map.png",
+        case_root / "evidence/collision_geometry_manifest.json",
+    ):
+        path.write_bytes(b"{}")
+    (case_root / "case_manifest.json").write_text(
+        json.dumps(
+            {
+                "case_id": "S061",
+                "status": "ready",
+                "scene_type": "test",
+                "object_count": 1,
+                "paths": {},
+            }
+        )
+    )
+
+    cases = runner.discover_cases(tmp_path, case_ids=["S061"])
+
+    assert [case["case_id"] for case in cases] == ["S061"]
 
 
 def test_promptless_profile_and_request_disable_l2_prompt_use() -> None:
@@ -61,6 +94,43 @@ def test_audit_graph_export_is_explicitly_opt_in(tmp_path: Path) -> None:
     assert enabled_args.export_audit_graphs is True
 
 
+def test_endpoint_stability_preflight_defaults_to_ten_real_image_calls(
+    tmp_path: Path,
+) -> None:
+    args = runner.parse_args(["--output-root", str(tmp_path / "run")])
+
+    assert args.endpoint_preflight_attempts == 10
+    assert args.endpoint_preflight_timeout_seconds == 300
+
+
+def test_deduction_multiplier_defaults_to_two_and_is_configurable(
+    tmp_path: Path,
+) -> None:
+    default_args = runner.parse_args(
+        ["--output-root", str(tmp_path / "default")]
+    )
+    unscaled_args = runner.parse_args(
+        [
+            "--output-root",
+            str(tmp_path / "unscaled"),
+            "--deduction-multiplier",
+            "1.0",
+        ]
+    )
+
+    assert default_args.deduction_multiplier == 2.0
+    assert unscaled_args.deduction_multiplier == 1.0
+    with pytest.raises(SystemExit):
+        runner.parse_args(
+            [
+                "--output-root",
+                str(tmp_path / "invalid"),
+                "--deduction-multiplier",
+                "0",
+            ]
+        )
+
+
 def test_functional_group_local_granularity_supports_both_modes(
     tmp_path: Path,
 ) -> None:
@@ -87,9 +157,13 @@ def test_functional_group_local_granularity_supports_both_modes(
     assert default_args.functional_group_local_granularity == "per_check"
     assert (
         default_args.functional_group_local_evidence_policy
-        == "isolated_episode"
+        == "shared_group_bank"
     )
     assert batched_args.functional_group_local_granularity == "batched"
+    assert (
+        batched_args.functional_group_local_evidence_policy
+        == "shared_group_bank"
+    )
     assert (
         shared_args.functional_group_local_evidence_policy
         == "shared_group_bank"
@@ -103,6 +177,7 @@ def test_functional_group_local_granularity_supports_both_modes(
     assert runner.scene_quality_config(
         ("functional_consistency",),
         functional_group_local_granularity="batched",
+        functional_group_local_evidence_policy="isolated_episode",
     )["metrics"]["functional_consistency"][
         "group_local_check_granularity"
     ] == "batched"
@@ -356,13 +431,23 @@ def test_scene_match_does_not_hide_anomaly_object_attribution_failure():
     ]
 
 
-def test_l3_resolution_audit_rejects_hidden_incomplete_coverage() -> None:
+def test_l3_resolution_audit_accepts_publishable_partial_coverage() -> None:
     audit = runner.l3_resolution_audit(
         {
             "metrics": {
                 "functional_consistency": {
                     "status": "evaluated",
-                    "coverage": {"complete": False},
+                    "score": 0.8,
+                    "coverage": {
+                        "complete": False,
+                        "score_grounding": {
+                            "fraction": 0.8,
+                            "complete": False,
+                        },
+                        "score_projection": {
+                            "coverage_threshold_passed": True,
+                        },
+                    },
                     "functional_check_coverage": {
                         "complete": False,
                         "unresolved_check_ids": ["functional_check_001"],
@@ -370,6 +455,7 @@ def test_l3_resolution_audit_rejects_hidden_incomplete_coverage() -> None:
                 },
                 "semantic_placement_consistency": {
                     "status": "evaluated",
+                    "score": 1.0,
                     "coverage": {"complete": True},
                 },
             }
@@ -380,14 +466,78 @@ def test_l3_resolution_audit_rejects_hidden_incomplete_coverage() -> None:
         ),
     )
 
-    assert audit["status"] == "infrastructure_failure"
+    assert audit["status"] == "resolved"
     assert audit["unresolved_metrics"] == []
-    assert audit["infrastructure_failure_metrics"] == [
+    assert audit["infrastructure_failure_metrics"] == []
+    assert audit["partial_coverage_metrics"] == [
+        "functional_consistency"
+    ]
+    assert audit["coverage_warnings_by_metric"][
+        "functional_consistency"
+    ] == [
+        "coverage:incomplete",
+        "functional_check_coverage:incomplete",
+    ]
+
+
+def test_l3_resolution_audit_keeps_below_threshold_out_of_infra() -> None:
+    audit = runner.l3_resolution_audit(
+        {
+            "metrics": {
+                "functional_consistency": {
+                    "status": "evaluated",
+                    "score": None,
+                    "coverage": {
+                        "complete": False,
+                        "score_grounding": {
+                            "fraction": 0.7,
+                            "complete": False,
+                        },
+                        "score_projection": {
+                            "coverage_threshold_passed": False,
+                        },
+                    },
+                    "functional_check_coverage": {"complete": False},
+                }
+            }
+        },
+        metrics=("functional_consistency",),
+    )
+
+    assert audit["status"] == "unresolved"
+    assert audit["unresolved_metrics"] == ["functional_consistency"]
+    assert audit["infrastructure_failure_metrics"] == []
+    assert audit["below_coverage_threshold_metrics"] == [
         "functional_consistency"
     ]
     assert audit["reasons_by_metric"]["functional_consistency"] == [
         "coverage:incomplete",
         "functional_check_coverage:incomplete",
+        "coverage:below_publishable_threshold",
+    ]
+
+
+def test_l3_resolution_audit_preserves_explicit_infrastructure_failure() -> None:
+    audit = runner.l3_resolution_audit(
+        {
+            "metrics": {
+                "functional_consistency": {
+                    "status": "failed",
+                    "terminal_state": "infrastructure_failure",
+                    "score": None,
+                    "infrastructure_failures": [
+                        {"failure_kind": "engineering_failure"}
+                    ],
+                }
+            }
+        },
+        metrics=("functional_consistency",),
+    )
+
+    assert audit["status"] == "infrastructure_failure"
+    assert audit["unresolved_metrics"] == []
+    assert audit["infrastructure_failure_metrics"] == [
+        "functional_consistency"
     ]
 
 
@@ -756,6 +906,45 @@ def test_api_tracker_persists_progress_calls_and_reported_tokens(
         .splitlines()
     ]
     assert events == ["api_call_started", "api_call_completed"]
+
+
+def test_api_tracker_trips_shared_route_circuit_breaker(
+    tmp_path: Path,
+) -> None:
+    progress = runner.ProgressReporter(
+        tmp_path / "progress.jsonl",
+        terminal=False,
+    )
+    signal = runner.ModelRouteAbortSignal()
+    tracker = runner.APICallTracker(
+        case_id="N001",
+        calls_path=tmp_path / "api_calls.jsonl",
+        usage_path=tmp_path / "api_usage.json",
+        progress=progress,
+        model_route_abort_signal=signal,
+    )
+
+    class BrokenModel:
+        model_id = "claude-opus-5-aihub"
+        endpoint = "http://127.0.0.1:4010/v1"
+        last_request_metadata: dict[str, Any] = {}
+
+        def chat_messages(self, messages: list[dict], **_: Any) -> str:
+            del messages
+            raise EndpointConfigurationError(
+                "HTTP 400: on-demand throughput isn't supported; use an "
+                "inference profile"
+            )
+
+    observed = tracker.observe_model(BrokenModel(), role="judge")
+    with pytest.raises(EndpointConfigurationError):
+        observed.chat_messages([{"role": "user", "content": "first"}])
+    assert signal.is_set() is True
+    assert tracker.summary()["api_calls_number"] == 1
+
+    with pytest.raises(EndpointConfigurationError, match="route was disabled"):
+        observed.chat_messages([{"role": "user", "content": "second"}])
+    assert tracker.summary()["api_calls_number"] == 1
 
 
 def test_api_usage_marks_missing_endpoint_usage_without_estimating() -> None:

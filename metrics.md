@@ -17,11 +17,11 @@ and MUST NOT be mixed in one leaderboard.
 
 | Profile ID | L1 | L2 | L3 | Intended use |
 | --- | ---: | ---: | ---: | --- |
-| `intrinsic_validity_v1` | 30 | 0 | 70 | Promptless intrinsic scene validity |
-| `prompt_conditioned_quality_v1` | 20 | 20 | 60 | Prompt/reference-conditioned generation quality |
+| `intrinsic_validity_v2` | 30 | 0 | 70 | Promptless intrinsic scene validity |
+| `prompt_conditioned_quality_v2` | 20 | 20 | 60 | Prompt/reference-conditioned generation quality |
 
 Missing L2 MUST NOT trigger silent weight renormalization. A run without an L2
-task selects `intrinsic_validity_v1` explicitly:
+task selects `intrinsic_validity_v2` explicitly:
 
 \[
 S_{\mathrm{final}}=100\left(0.30S_{L1}+0.70S_{L3}\right).
@@ -46,32 +46,46 @@ S_{L1}=\frac{S_{\mathrm{collision}}+S_{\mathrm{support}}+
 S_{\mathrm{OOB}}}{3}.
 \]
 
-Under `intrinsic_validity_v1`, each L1 metric therefore owns 10 final points.
+Under `intrinsic_validity_v2`, each L1 metric therefore owns 10 final points.
 
 ### 2.2 L3 implicit visual validity
 
 The fixed L3 ratio is:
 
-| L3 metric | Internal L3 weight | Final weight in `intrinsic_validity_v1` |
+| L3 metric | Internal L3 weight | Final weight in `intrinsic_validity_v2` |
 | --- | ---: | ---: |
-| Scale consistency | 12% | 8.4 |
-| Style consistency | 12% | 8.4 |
-| Object-pairing consistency | 12% | 8.4 |
-| Functional consistency | 44% | 30.8 |
-| Semantic-placement consistency | 20% | 14.0 |
+| Scale consistency | 4% | 2.8 |
+| Style consistency | 7% | 4.9 |
+| Object-pairing consistency | 9% | 6.3 |
+| Functional consistency | 52% | 36.4 |
+| Semantic-placement consistency | 28% | 19.6 |
 
 \[
 \begin{aligned}
-S_{L3}={}&0.12S_{\mathrm{scale}}
-+0.12S_{\mathrm{style}}
-+0.12S_{\mathrm{pairing}}\\
-&+0.44S_{\mathrm{functional}}
-+0.20S_{\mathrm{placement}}.
+S_{L3}={}&0.04S_{\mathrm{scale}}
++0.07S_{\mathrm{style}}
++0.09S_{\mathrm{pairing}}\\
+&+0.52S_{\mathrm{functional}}
++0.28S_{\mathrm{placement}}.
 \end{aligned}
 \]
 
 The integer ratio is the stored configuration. Expanded absolute weights are
 derived values and MUST NOT be maintained as independent configuration.
+The v1 profile IDs remain readable for historical replay and retain the former
+12/12/12/44/20 L3 ratio; new runs default to v2.
+
+### 2.3 Metric-scoped public task context
+
+L3 prompt context uses the versioned `l3_metric_prompt_context_v1` interface.
+The evaluator freezes a bank of short public values and records an explicit
+field selection for every metric. By default, Style and Object Pairing receive
+only `room_type`; Scale, Function, and Placement receive no generation prompt.
+The complete generation instruction is excluded unless a versioned experiment
+explicitly selects `original_prompt` for a metric. Room type is disambiguating
+context rather than a required answer: it must not impose stereotypical
+contents or a stereotypical style. Authorized deviations and an explicit
+visual-style specification remain separate structured inputs.
 
 ## 3. Canonical scene denominator
 
@@ -122,14 +136,28 @@ Rules:
 - semantic object category or perceived importance MUST NOT change object
   weight.
 
-For metric `m`, allocate each event to its scoring target objects and compute:
+For collision, support, OOB, scale, style, and object pairing, allocate each
+event to its scoring targets and compute:
 
 \[
 B_m=\sum_o\min\left(1,\sum_{e\rightarrow o}P_o(e)\right).
 \]
 
-`1.0` burden means one fully invalid object-equivalent. One object contributes
-at most `1.0` to one metric, even if several findings affect it.
+Functional and Placement expose several typed checks for the same object. They
+therefore use the strongest confirmed burden for each object instead of
+stacking check count:
+
+\[
+B_m=\sum_o\max_{e\rightarrow o}P_o(e),
+\qquad m\in\{\mathrm{Functional},\mathrm{Placement}\}.
+\]
+
+The raw event sum remains in the audit ledger, while the effective burden uses
+the formula above. Thus two independent `0.4` checks on one object contribute
+`0.4`, and a later `1.0` finding replaces rather than adds to an earlier
+`0.4`. This preserves check-level evidence without rewarding a workflow for
+inventing more obligations. `1.0` burden means one fully invalid
+object-equivalent.
 
 ### 4.1 Attribution and relation burden
 
@@ -147,9 +175,15 @@ at most `1.0` to one metric, even if several findings affect it.
   underlying defect merge into one scored event.
 - Stable defect identity and ownership references MUST be retained in the
   burden ledger.
-- A Functional ownership event suppresses only the exact same causal failure
-  from Placement scoring. An independent Placement failure on the same object
-  remains scoreable.
+- Function and Placement claims are typed and judged independently. A Function
+  verdict, shared object identity, similar wording, or role overlap never
+  suppresses a Placement check by itself.
+- After the static Placement claim has independently been found invalid, its
+  duplicate burden may be excluded only when the Placement row cites one
+  supplied final Function `event_id` as `function_event_ref` and explicitly
+  confirms `same_physical_event=true`. This exact-event exclusion changes no
+  Function verdict and is recorded in both ledgers. Independent Placement
+  failures on the same object remain scoreable.
 - Physical violations belong to L1; wrong scene or ensemble membership belongs
   to Object Pairing; impaired ordinary use belongs to Functional; remaining
   implausible position or orientation belongs to Placement.
@@ -171,8 +205,9 @@ not used.
 | Placement | 2 |
 
 These coefficients are explicit saturation parameters and also affect local
-score sensitivity. Every audit report MUST therefore expose both the nominal
-weight `W_m` and the effective local factor `W_m n_m`.
+score sensitivity. Every audit report MUST therefore expose the nominal
+weight `W_m`, the base local factor `W_m n_m`, and the multiplier-adjusted
+local factor.
 
 The prevalence deduction is:
 
@@ -191,30 +226,51 @@ D_{\mathrm{floor},m}=0.25P_{\max,m},
 where `P_max,m` is the largest confirmed event burden before responsibility is
 split across relation endpoints.
 
-The final metric deduction and score are:
+First compute the base metric deduction:
 
 \[
-D_m=\max\left(D_{\mathrm{prevalence},m},D_{\mathrm{floor},m}\right),
+D_{\mathrm{base},m}=\max\left(
+D_{\mathrm{prevalence},m},D_{\mathrm{floor},m}\right).
+\]
+
+The versioned `deduction_multiplier` parameter defaults to `2.0`. It applies
+to Collision, Support, OOB, Scale, Style, and Object Pairing. Functional and
+Placement retain an applied multiplier of `1.0`:
+
+\[
+\alpha_m=
+\begin{cases}
+\texttt{deduction\_multiplier},&m\in\{Collision,Support,OOB,Scale,Style,Pairing\},\\
+1,&m\in\{Functional,Placement\}.
+\end{cases}
+\]
+
+\[
+D_m=\min\left(1,\alpha_m D_{\mathrm{base},m}\right),
 \qquad S_m=1-D_m.
 \]
+
+The public runner parameter is `--deduction-multiplier`; setting it to `1.0`
+reproduces the unscaled deduction projection without changing evidence,
+verdicts, severity, ownership, or metric weights.
 
 The two deductions are combined with `max`, not addition, so the same event is
 not charged twice. A metric can lose all of its own weight but cannot consume
 another metric's allocation.
 
-Under `intrinsic_validity_v1`, one maximum-severity event has the following
+Under `intrinsic_validity_v2`, one maximum-severity event has the following
 minimum final-score effect from the floor:
 
 | Metric | Minimum final-point deduction |
 | --- | ---: |
-| Collision | 2.5 |
-| Support | 2.5 |
-| OOB | 2.5 |
-| Scale | 2.1 |
-| Style | 2.1 |
-| Object pairing | 2.1 |
-| Functional | 7.7 |
-| Placement | 3.5 |
+| Collision | 5.0 |
+| Support | 5.0 |
+| OOB | 5.0 |
+| Scale | 1.4 |
+| Style | 2.45 |
+| Object pairing | 3.15 |
+| Functional | 9.1 |
+| Placement | 4.9 |
 
 Prevalence can produce a larger deduction in sparse scenes or when several
 independent object-equivalents are invalid.
@@ -384,12 +440,60 @@ Functional.
 | `implausible` | 1.0 |
 
 Only the placement check's subject object is a scoring target. Context IDs are
-used for evidence and explanation, not automatic penalties. A check marked
-`excluded_function_owned` contributes zero Placement burden and MUST reference
-the exact Functional ownership event. Forced invalid with no reliable
-severity uses `atypical=0.4`.
+used for evidence and explanation, not automatic penalties. Placement accepts
+`valid`, `invalid`, internal `unresolved`, or `excluded_function_owned`. The
+last conclusion is legal only for the exact stable-event contract above; it
+requires no Placement defect and cannot be inferred from object overlap alone.
+Forced invalid with no reliable severity uses `atypical=0.4`.
 
-## 7. Terminal-state rules
+Placement Discovery remains a sparse routing prior. Its
+`considered_object_ids` means inspected, not proven normal. The global and
+group-local Judges retain a generic missed-check sweep and may register a
+typed Judge-originated check from current evidence or request evidence through
+the existing bounded loop. Neutral Function prerequisite context may draw
+attention to clearance requirements or admitted binary relations, but carries
+no verdict, severity, geometry decision, suppression instruction, or automatic
+Placement check.
+
+The current canonical profile enables the experimental
+`residual_global_review` only after the typed global/group/target Placement
+passes. It receives one angled global view, one top view, and one identity
+view, and may emit only a novel `scene_zone` or non-operational
+`contextual_anchor` finding. It may not repeat a subject already charged by a
+typed Placement finding. Its compact semantic context contains the broad
+`scene_type`, the complete `object_id`/category/group roster, completed typed
+checks, and stable Function ownership references. `scene_type` is only an
+activity-program prior: aesthetic theme, the full generation prompt,
+stereotypical required contents, and prior metric verdicts are excluded.
+Object presence or shared group membership never proves a relation. The
+adapter verifies that the scene type and complete object roster were delivered
+intact and records a delivery audit. Raw boundary, architecture, center, size,
+and rotation fields may remain as supporting spatial facts, but free-text object
+descriptions are removed and visual layout remains the primary evidence. The
+same Judge episode must first return exactly one non-scoring global-position
+observation for every group, using only its `group_id`/`object_ids`, the three
+global views, and raw spatial facts. Grouping labels, reasons, and formation
+edges are excluded. After every group has been inspected, the Judge synthesizes
+one scene-level verdict; group observations are audit records, not votes or
+independent penalty events. A malformed or missing observation row lowers that
+observation coverage and marks ambiguity without turning the whole metric into
+an infrastructure failure.
+
+The residual review is a separate Placement
+component rather than an additional full-weight penalty path:
+
+\[
+S_{\mathrm{placement}}
+=0.80S_{\mathrm{typed}}+0.20S_{\mathrm{residual\ global}}.
+\]
+
+Each component uses the same canonical burden projection before mixing. Thus
+residual scene-level synthesis can consume at most 20% of the Placement
+metric. The report must expose both component scores, weights, events,
+evidence, and the residual Judge episode. Disabling this policy restores the
+single typed Placement score without changing the public evaluator interface.
+
+## 7. Terminal-state and partial-coverage rules
 
 `need_more_evidence` and ambiguity are internal states, not completed metric
 results. At evidence-budget exhaustion, a scientifically completed Judge path
@@ -403,21 +507,59 @@ must make a forced binary choice and record at least:
 }
 ```
 
-Infrastructure, protocol, schema, rendering, or endpoint failure is not a
-scientific verdict. It fails the affected run or metric and MUST NOT be
-converted into valid, invalid, or zero burden.
+Validation remains strict and fail-closed at each contract boundary, but a
+recoverable malformed auxiliary result MUST have the smallest possible blast
+radius. Each logical VLM call receives at most one same-evidence schema-repair
+retry. After that retry:
+
+- discovery keeps valid object/relation rows and defaults or drops only the
+  malformed atomic rows;
+- a recoverable planner/discovery failure disables only its specialized probes
+  while retained global/group evidence and Judge episodes continue;
+- a recoverable Judge-row failure keeps legal rows and defaults only the
+  affected episode to `valid` with `evidence_ambiguous=true`;
+- Placement permits only two deterministic transport repairs:
+  `placement_check_type -> check_type`, and stable generation/rekeying of a
+  missing or duplicate `proposal_id`. No semantic field may be invented.
+
+Transport/API/auth/rate-limit/timeout failure, irreparable canonical input,
+missing or undecodable evidence, unexpected program failure, or failure of all
+grouping backends remains an infrastructure failure. These failures MUST NOT
+be converted into a scientific verdict.
 
 If an auxiliary camera selector fails after a decodable packet has already
 passed EvidenceGate, the existing packet remains scientifically usable. The
 Controller may make one final forced-binary Judge call on that retained packet
 and MUST record the selector failure as a degraded terminal choice. If no
-validated packet exists, or if the final Judge transport/schema call fails,
-the scope is an infrastructure failure rather than a scientific result.
+validated packet exists, or if the final Judge transport call fails, the scope
+is an infrastructure failure rather than a scientific result. A final schema
+shape failure after the single repair retry follows the item-level policy
+above when legal evidence and rows remain.
 
 Every required global, cross-group relation, group-local, and typed-check
 scope must therefore terminate as `evaluated`, `evaluated_degraded`, or
 `infrastructure_failure`. A final scientific `unresolved` state is a control
 contract violation, not a third verdict.
+
+Function and Placement freeze a score-grounding coverage fraction
+`c = grounded_obligations / eligible_obligations` and an earned score mass over
+the full eligible denominator. A metric, layer, case, or model score is
+publishable only when its total `c >= 0.80`. The published percentage is
+`100 * earned_score_mass / c`, equivalently the score observed on grounded
+obligations. When `c < 0.80`, the public score is `null` and the scope status is
+`failed_coverage_threshold`; the observed score mass and coverage remain in the
+audit record. Missing obligations are excluded from both earned points and the
+normalization denominator, so they are neither zero nor full credit. Observed
+burden is never extrapolated to ungrounded obligations and missing obligations
+are never defaulted valid.
+
+Reports publish the frozen eligible/grounded counts, defaulted units,
+`grounded_score_weight`, and `grounded_score_fraction`. Layer and final score
+outputs are normalized over grounded score weight only after passing the 80%
+publication threshold and MUST always be accompanied by their coverage. UIs
+MUST show the published percentage and coverage, or an explicit coverage-
+threshold failure; they MUST NOT hide missing coverage or silently treat it as
+pass/fail.
 
 ## 8. Required run outputs
 
@@ -447,7 +589,7 @@ raw verdicts, re-run discovery, request evidence, or call the Judge.
 Tests MUST verify:
 
 1. profile weights and internal ratios are normalized and versioned;
-2. no-L2 runs select `intrinsic_validity_v1` without silent renormalization;
+2. no-L2 runs select `intrinsic_validity_v2` without silent renormalization;
 3. L3 is reconstructed from burden rather than binary metric verdicts;
 4. global/local/relation duplicates do not create multiple penalties;
 5. one object contributes at most one object-equivalent per metric;

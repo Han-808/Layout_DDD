@@ -23,6 +23,20 @@ import sys
 import time
 from pathlib import Path
 
+try:
+    from .saved_blend_view import (
+        configure_textured_inspection_view,
+        embed_available_shader_images,
+    )
+except ImportError:  # Blender launches this file as a top-level script module.
+    worker_dir = str(Path(__file__).resolve().parent)
+    if worker_dir not in sys.path:
+        sys.path.insert(0, worker_dir)
+    from saved_blend_view import (  # type: ignore[no-redef]
+        configure_textured_inspection_view,
+        embed_available_shader_images,
+    )
+
 try:  # pragma: no cover - bpy/mathutils only exist inside Blender
     import bpy
     from mathutils import Euler, Vector
@@ -148,6 +162,13 @@ def main() -> None:
         }
     _record_progress(progress_path, "render_completed", view_count=len(views))
     blend_path = out_dir / "scene.blend"
+    shader_images = embed_available_shader_images(bpy)
+    inspection_view = configure_textured_inspection_view(bpy)
+    bpy.context.scene["benchmark_saved_inspection_view"] = json.dumps(
+        inspection_view,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
     bpy.ops.wm.save_as_mainfile(filepath=str(blend_path))
     _record_progress(progress_path, "blend_saved", path=str(blend_path))
 
@@ -160,6 +181,8 @@ def main() -> None:
         "render_engine": args.render_engine,
         "render_config": render_config,
         "blend_file": str(blend_path),
+        "saved_inspection_view": inspection_view,
+        "shader_image_embedding": shader_images,
         "views": views,
         "identity_legend": identity_legend,
         "identity_palette": identity_palette,

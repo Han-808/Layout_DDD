@@ -199,6 +199,7 @@ def _validate_metric_flags(
         )
     if metric_name == "semantic_placement_consistency":
         _validate_placement_severity_policy(metric_config)
+        _validate_residual_global_placement_policy(metric_config)
     if metric_name == "functional_consistency":
         granularity = metric_config.get(
             "group_local_check_granularity"
@@ -273,6 +274,53 @@ def _validate_placement_severity_policy(
     if policy.get("affects_existing_metric_score") is not True:
         raise SceneQualityInterfaceConfigError(
             "semantic-placement severity must control post-hoc burden scoring"
+        )
+
+
+def _validate_residual_global_placement_policy(
+    metric_config: dict[str, Any],
+) -> None:
+    policy = metric_config.get("residual_global_review")
+    if not isinstance(policy, dict):
+        raise SceneQualityInterfaceConfigError(
+            "semantic_placement_consistency.residual_global_review must be "
+            "a JSON object"
+        )
+    if not isinstance(policy.get("enabled"), bool):
+        raise SceneQualityInterfaceConfigError(
+            "semantic_placement_consistency.residual_global_review.enabled "
+            "must be boolean"
+        )
+    weight = policy.get("placement_weight")
+    if (
+        isinstance(weight, bool)
+        or not isinstance(weight, (int, float))
+        or not math.isfinite(float(weight))
+        or not 0.0 < float(weight) < 1.0
+    ):
+        raise SceneQualityInterfaceConfigError(
+            "semantic_placement_consistency.residual_global_review."
+            "placement_weight must be a finite number strictly between 0 "
+            "and 1"
+        )
+    image_budget = policy.get("image_budget")
+    if (
+        isinstance(image_budget, bool)
+        or not isinstance(image_budget, int)
+        or image_budget < 1
+    ):
+        raise SceneQualityInterfaceConfigError(
+            "semantic_placement_consistency.residual_global_review."
+            "image_budget must be a positive integer"
+        )
+    if policy.get("allowed_check_types") != [
+        "scene_zone",
+        "contextual_anchor",
+    ]:
+        raise SceneQualityInterfaceConfigError(
+            "semantic_placement_consistency.residual_global_review."
+            "allowed_check_types must remain ['scene_zone', "
+            "'contextual_anchor']"
         )
 
 

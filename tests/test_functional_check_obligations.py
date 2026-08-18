@@ -15,17 +15,25 @@ from benchmark.evaluator.scene_quality.functional_checks import (
     canonicalize_typed_invalid_envelope,
     checks_for_group,
     forced_group_ids_from_checks,
+    salvage_functional_judge_response,
     update_functional_check_evidence,
     validate_functional_check_results,
 )
 from benchmark.evaluator.scene_quality.cross_group_relations import (
     _cross_group_relation_episode_specs,
+    _evaluate_cross_group_relation_scopes,
+    reconcile_directional_relation_conflicts,
 )
 from benchmark.evaluator.scene_quality.functional_probe import (
     functional_relation_judge_packet,
 )
 from benchmark.evaluator.scene_quality.global_group_first import (
     _bind_architecture_orientation_evidence,
+)
+from benchmark.evaluator.scene_quality.group_scoped import (
+    _expand_functional_check_packets,
+    _functional_visual_preflight,
+    _scope_functional_episode_evidence,
 )
 from benchmark.visual_judge.functional_evidence import (
     FUNCTIONAL_PROBE_MAX_UNITS,
@@ -42,6 +50,158 @@ GROUPS = [
     {"group_id": "seating", "object_ids": ["sofa"]},
     {"group_id": "lighting", "object_ids": ["lamp"]},
 ]
+
+
+def test_cross_group_relation_without_any_visual_returns_defaulted_binary(
+) -> None:
+    result = _evaluate_cross_group_relation_scopes(
+        specs=[
+            {
+                "relation_id": "sofa_tv",
+                "target_ids": ["sofa", "television"],
+                "group_ids": ["seating", "media"],
+                "pair_specific_evidence_available": False,
+                "retained_evidence_forced_choice_available": False,
+                "required_checks": [
+                    {
+                        "check_id": "functional_check_001",
+                        "check_type": "directional_correspondence",
+                        "target_ids": ["sofa", "television"],
+                        "required_observations": [
+                            "joint_visibility",
+                            "front_back_disambiguated",
+                        ],
+                    }
+                ],
+                "required_check_ids": ["functional_check_001"],
+                "acquisition_status": "failed",
+                "acquisition_error": {
+                    "error_type": "RuntimeError",
+                    "error": "no feasible visual candidate",
+                },
+            }
+        ],
+        metric_name="functional_consistency",
+        scene={"objects": []},
+        global_evidence=[],
+        vlm_judge=None,
+        prompt=None,
+        visual_style_spec=None,
+        authorized_deviations=[],
+        build_judge_request=lambda **kwargs: pytest.fail(
+            "Judge request must not be built without any visual"
+        ),
+        call_judge=lambda *args, **kwargs: pytest.fail(
+            "Judge must not be invoked without any visual"
+        ),
+        apply_prompt_exemptions=lambda *args, **kwargs: pytest.fail(
+            "no Judge response exists"
+        ),
+        normalize_judgement=lambda *args, **kwargs: pytest.fail(
+            "no Judge response exists"
+        ),
+    )[0]
+
+    assert result["status"] == "evaluated"
+    assert result["score"] == 1.0
+    assert result["terminal_state"] == "evaluated_degraded"
+    assert result["vlm_invoked"] is False
+    assert result["judgement"]["defaulted"] is True
+    assert result["judgement"]["functional_check_results"] == [
+        {
+            "check_id": "functional_check_001",
+            "target_ids": ["sofa", "television"],
+            "observation_status": "missing",
+            "conclusion": "valid",
+            "reason": (
+                "No visual artifact was available for this required check; "
+                "the terminal policy returned a zero-confidence default "
+                "without claiming evidence coverage."
+            ),
+        }
+    ]
+    assert result["evidence_coverage"]["grounded"] is False
+
+
+def test_batched_functional_salvage_keeps_initial_invalid_and_repairs_bad_row(
+) -> None:
+    checks = [
+        {
+            "check_id": "functional_check_001",
+            "check_type": "architecture_orientation",
+            "target_ids": ["bookshelf"],
+        },
+        {
+            "check_id": "functional_check_002",
+            "check_type": "architecture_orientation",
+            "target_ids": ["television"],
+        },
+    ]
+    defect = {
+        "scope": "functional_access",
+        "target_ids": ["bookshelf"],
+        "relation": "usable_side_orientation",
+        "reason": "The ordinary access side faces the boundary.",
+        "check_refs": ["functional_check_001"],
+    }
+    initial = {
+        "confidence": 0.8,
+        "defects": [defect],
+        "functional_check_results": [
+            {
+                "check_id": "functional_check_001",
+                "target_ids": ["bookshelf"],
+                "observation_status": "observed",
+                "conclusion": "invalid",
+                "reason": "The ordinary access side faces the boundary.",
+            },
+            {
+                "check_id": "functional_check_002",
+                "target_ids": ["television"],
+                "observation_status": "observed",
+                "conclusion": "not_a_conclusion",
+                "reason": "Malformed transport token.",
+            },
+        ],
+    }
+    repair = {
+        "confidence": 0.6,
+        "defects": [],
+        "functional_check_results": [
+            {
+                "check_id": "functional_check_001",
+                "target_ids": ["bookshelf"],
+                "observation_status": "observed",
+                "conclusion": "valid",
+                "reason": "Repair attempted to revise a legal atom.",
+            },
+            {
+                "check_id": "functional_check_002",
+                "target_ids": ["television"],
+                "observation_status": "observed",
+                "conclusion": "valid",
+                "reason": "The second check was repaired.",
+            },
+        ],
+    }
+
+    result = salvage_functional_judge_response(
+        repair,
+        required_checks=checks,
+        fallback_value=initial,
+    )
+
+    rows = {
+        row["check_id"]: row
+        for row in result["functional_check_results"]
+    }
+    assert rows["functional_check_001"]["conclusion"] == "invalid"
+    assert rows["functional_check_002"]["conclusion"] == "valid"
+    assert result["functional_salvage_audit"]["accepted_sources"] == {
+        "functional_check_001": "initial",
+        "functional_check_002": "repair",
+    }
+    assert result["verdict"] == "invalid"
 
 
 def test_multi_check_union_defect_is_split_into_atomic_linkages() -> None:
@@ -1117,6 +1277,41 @@ def test_every_accepted_discovery_source_reaches_a_typed_judge_route() -> None:
     )
 
 
+def test_singleton_confirmation_reuses_existing_directed_check() -> None:
+    discovery = _base_discovery()
+    discovery["directed_surface_targets"] = [
+        {
+            "discovery_id": "bookshelf_surface",
+            "target_id": "bookshelf",
+            "owning_group_id": "storage",
+            "surface_roles": ["access_side"],
+            "need_clearance": False,
+            "observation_goal": "show the accessible shelf frontage",
+        }
+    ]
+    discovery["unusual_unconfirmed"] = [
+        {
+            "discovery_id": "bookshelf_confirmation",
+            "target_ids": ["bookshelf"],
+            "owning_group_id": "storage",
+            "observation_goal": "confirm the local access affordance",
+        }
+    ]
+
+    ledger = build_functional_check_ledger(discovery, groups=GROUPS)
+    checks = checks_for_group(ledger, "storage")
+
+    assert len(checks) == 1
+    assert checks[0]["check_type"] == "architecture_orientation"
+    assert checks[0]["source_discovery_ids"] == [
+        "bookshelf_surface",
+        "bookshelf_confirmation",
+    ]
+    assert "confirm the local access affordance" in checks[0][
+        "observation_goals"
+    ]
+
+
 def test_n021_rendered_relation_is_not_observation_complete() -> None:
     discovery = _base_discovery()
     discovery["directed_surface_targets"] = [
@@ -1819,6 +2014,313 @@ def test_orientation_packet_binds_angled_global_and_reused_side_view() -> None:
     assert binding["reused_by_clearance_check_ids"] == ["clearance"]
     assert binding["status"] == "complete"
     assert policy["need_more_evidence_loop"] == "controller_managed"
+
+
+def test_per_check_packet_excludes_other_object_probes() -> None:
+    check = {
+        "check_id": "chair_01_orientation",
+        "check_type": "architecture_orientation",
+        "target_ids": ["chair_01"],
+        "target_affordances": [
+            {
+                "target_id": "chair_01",
+                "directionality": "directed",
+            }
+        ],
+        "required_observations": [
+            "interaction_side_visible",
+            "front_back_disambiguated",
+        ],
+    }
+    packet = {
+        "paths": [
+            "/tmp/global.png",
+            "/tmp/group.png",
+            "/tmp/chair_01.png",
+            "/tmp/chair_02.png",
+        ],
+        "resolution": {
+            "functional_probe_reuse": {
+                "baseline_packet_paths": [
+                    "/tmp/global.png",
+                    "/tmp/group.png",
+                ],
+                "requested_probe_paths": [
+                    "/tmp/chair_01.png",
+                    "/tmp/chair_02.png",
+                ],
+            }
+        },
+        "functional_probe_evidence": {
+            "required_checks": [check],
+            "image_order": [
+                {
+                    "artifact_id": "/tmp/chair_01.png",
+                    "check_ids": ["chair_01_orientation"],
+                    "target_ids": ["chair_01"],
+                },
+                {
+                    "artifact_id": "/tmp/chair_02.png",
+                    "check_ids": ["chair_02_orientation"],
+                    "target_ids": ["chair_02"],
+                },
+            ],
+        },
+    }
+
+    scoped = _scope_functional_episode_evidence(packet, check=check)
+
+    assert scoped["paths"] == [
+        "/tmp/global.png",
+        "/tmp/group.png",
+        "/tmp/chair_01.png",
+    ]
+    audit = scoped["resolution"]["functional_check_evidence_scope"]
+    assert audit["omitted_unrelated_paths"] == ["/tmp/chair_02.png"]
+
+
+def test_per_check_packets_scope_shared_measurements_to_one_check() -> None:
+    checks = [
+        {
+            "check_id": "functional_check_001",
+            "check_type": "architecture_orientation",
+            "target_ids": ["chair_01"],
+        },
+        {
+            "check_id": "functional_check_002",
+            "check_type": "clearance",
+            "target_ids": ["cabinet_01"],
+        },
+    ]
+    shared_measurements = {
+        "schema_version": "functional_measurement_bank_v1",
+        "status": "complete",
+        "measurement_role": (
+            "deterministic_spatial_evidence_not_verdict"
+        ),
+        "decision_authority": "none",
+        "requested_check_ids": [item["check_id"] for item in checks],
+        "check_measurements": [
+            {
+                "check_id": item["check_id"],
+                "check_type": item["check_type"],
+                "target_ids": item["target_ids"],
+                "status": "complete",
+            }
+            for item in checks
+        ],
+    }
+    expanded = _expand_functional_check_packets(
+        [
+            {
+                "paths": ["/tmp/global.png", "/tmp/group.png"],
+                "resolution": {},
+                "functional_probe_evidence": {
+                    "required_checks": checks,
+                    "functional_measurements": shared_measurements,
+                },
+            }
+        ]
+    )
+
+    assert len(expanded) == 2
+    for episode, expected_check in zip(expanded, checks, strict=True):
+        functional = episode["functional_probe_evidence"]
+        assert functional["required_check_ids"] == [
+            expected_check["check_id"]
+        ]
+        assert [
+            item["check_id"]
+            for item in functional["functional_measurements"][
+                "check_measurements"
+            ]
+        ] == [expected_check["check_id"]]
+
+
+def test_missing_usable_side_requires_prejudge_acquisition() -> None:
+    check = {
+        "check_id": "orientation",
+        "check_type": "architecture_orientation",
+        "target_ids": ["bookshelf"],
+        "target_affordances": [
+            {
+                "target_id": "bookshelf",
+                "directionality": "directed",
+            }
+        ],
+        "required_observations": [
+            "interaction_side_visible",
+            "front_back_disambiguated",
+        ],
+    }
+    packet = {
+        "paths": ["/tmp/global.png", "/tmp/group.png"],
+        "functional_probe_evidence": {
+            "required_checks": [check],
+            "boundary_clearance_evidence": {
+                "usable_surface_hypotheses": [],
+            },
+            "architecture_orientation_policy": {
+                "evidence_bindings": [
+                    {
+                        "check_id": "orientation",
+                        "status": "pending_more_evidence",
+                    }
+                ]
+            },
+        },
+    }
+
+    preflight = _functional_visual_preflight(
+        packet,
+        required_checks=[check],
+    )
+
+    assert preflight is not None
+    assert preflight["target_ids"] == ["bookshelf"]
+    assert preflight["reason_codes"] == [
+        "usable_surface_not_machine_resolved",
+        "side_conditioned_view_not_bound",
+    ]
+
+
+def test_directional_relation_is_rejudged_after_endpoint_conflict() -> None:
+    relation_check = {
+        "check_id": "relation",
+        "check_type": "directional_correspondence",
+        "target_ids": ["sofa", "television"],
+    }
+    orientation_check = {
+        "check_id": "orientation",
+        "check_type": "architecture_orientation",
+        "target_ids": ["television"],
+    }
+    spec = {
+        "relation_id": "sofa_tv",
+        "target_ids": ["sofa", "television"],
+        "group_ids": ["seating", "media"],
+        "groups": [],
+        "relation_predicates": ["directional_correspondence"],
+        "observation_kinds": ["directional_correspondence"],
+        "observation_goals": ["inspect joint viewing orientation"],
+        "evidence_paths": ["/tmp/relation.png"],
+        "pair_specific_evidence_available": True,
+        "required_checks": [relation_check],
+        "required_check_ids": ["relation"],
+        "required_check_id": "relation",
+        "judge_packet": {"required_checks": [relation_check]},
+    }
+    relation_result = {
+        "relation_id": "sofa_tv",
+        "status": "evaluated",
+        "score": 1.0,
+        "vlm_invoked": True,
+        "judge_episode_count": 1,
+        "judgement": {
+            "verdict": "valid",
+            "functional_check_results": [
+                {
+                    "check_id": "relation",
+                    "target_ids": ["sofa", "television"],
+                    "observation_status": "observed",
+                    "conclusion": "valid",
+                    "reason": "The pair appears mutually oriented.",
+                }
+            ],
+        },
+    }
+    group_result = {
+        "group_id": "media",
+        "check_episodes": [
+            {
+                "group_id": "media",
+                "evidence_paths": ["/tmp/tv_side.png"],
+                "functional_probe_evidence": {
+                    "required_checks": [orientation_check]
+                },
+                "judgement": {
+                    "functional_check_results": [
+                        {
+                            "check_id": "orientation",
+                            "target_ids": ["television"],
+                            "observation_status": "observed",
+                            "conclusion": "invalid",
+                            "reason": "The display side faces the boundary.",
+                        }
+                    ]
+                },
+            }
+        ],
+    }
+    requests: list[dict] = []
+
+    def call_judge(_judge, request):
+        requests.append(deepcopy(request))
+        return {
+            "evidence_status": "sufficient",
+            "verdict": "invalid",
+            "confidence": 0.8,
+            "reason": "The combined evidence shows incompatible facing.",
+            "missing_evidence": [],
+            "evidence_request": None,
+            "functional_check_results": [
+                {
+                    "check_id": "relation",
+                    "target_ids": ["sofa", "television"],
+                    "observation_status": "observed",
+                    "conclusion": "invalid",
+                    "reason": "The display and seating sides do not align.",
+                }
+            ],
+            "defects": [
+                {
+                    "scope": "functional_correspondence",
+                    "target_ids": ["television"],
+                    "relation": "directional_correspondence",
+                    "reason": "The television faces away from the sofa.",
+                    "category": "functional_correspondence_failure",
+                    "severity": "impaired",
+                    "attribution_mode": "responsible_endpoint",
+                    "check_refs": ["relation"],
+                }
+            ],
+        }
+
+    reconciled, audit = reconcile_directional_relation_conflicts(
+        specs=[spec],
+        relation_results=[relation_result],
+        group_results=[group_result],
+        metric_name="functional_consistency",
+        scene={"objects": []},
+        global_evidence=["/tmp/global.png"],
+        vlm_judge=object(),
+        prompt=None,
+        visual_style_spec=None,
+        authorized_deviations=[],
+        build_judge_request=lambda **kwargs: kwargs,
+        call_judge=call_judge,
+        apply_prompt_exemptions=lambda value, **_: value,
+        normalize_judgement=lambda value, **_: {
+            "status": "evaluated",
+            "score": 0.0 if value["verdict"] == "invalid" else 1.0,
+            "reason": None,
+        },
+    )
+
+    assert requests[0]["render_evidence"] == [
+        "/tmp/global.png",
+        "/tmp/relation.png",
+        "/tmp/tv_side.png",
+    ]
+    assert reconciled[0]["score"] == 0.0
+    assert reconciled[0]["judge_episode_count"] == 2
+    assert reconciled[0]["judgement"]["defects"][0][
+        "same_physical_event_check_ref"
+    ] == "orientation"
+    assert reconciled[0]["same_physical_event_deduplication"][
+        "link_count"
+    ] == 1
+    assert audit["conflict_count"] == 1
 
 
 def test_empty_functional_inventory_preserves_non_regression_path() -> None:

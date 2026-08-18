@@ -34,6 +34,10 @@ class EndpointHTTPError(OpenAICompatibleModelError):
     """Raised when the endpoint returns a non-success HTTP status."""
 
 
+class EndpointConfigurationError(EndpointHTTPError):
+    """Raised for a non-retryable upstream model-route configuration error."""
+
+
 class EndpointMalformedResponseError(OpenAICompatibleModelError):
     """Raised when the endpoint response does not match OpenAI chat shape."""
 
@@ -288,7 +292,17 @@ class OpenAICompatibleModel:
                     secret=self._resolved_api_key(),
                     body_truncated=len(raw_detail.encode("utf-8")) > MAX_HTTP_ERROR_BODY_BYTES,
                 )
-                last_error = EndpointHTTPError(f"Model endpoint returned HTTP {exc.code}: {detail}")
+                error_class = (
+                    EndpointConfigurationError
+                    if _is_upstream_route_configuration_error(
+                        status_code=exc.code,
+                        detail=detail,
+                    )
+                    else EndpointHTTPError
+                )
+                last_error = error_class(
+                    f"Model endpoint returned HTTP {exc.code}: {detail}"
+                )
                 if exc.code not in self.retry_on_status or attempt == attempts - 1:
                     raise last_error from exc
             except urllib.error.URLError as exc:
@@ -352,6 +366,36 @@ def _validate_api_key_env_name(value: Any) -> None:
             "api_key_env must be an environment-variable name such as OPENAI_API_KEY; "
             "literal API-key values are not accepted"
         )
+
+
+def _is_upstream_route_configuration_error(
+    *,
+    status_code: int,
+    detail: str,
+) -> bool:
+    """Recognize permanent provider-route failures that retries cannot repair.
+
+    Bedrock rejects some foundation-model IDs for on-demand invocation and
+    requires an inference-profile ID or ARN instead.  Retrying the same model
+    alias only consumes calls; the proxy/service configuration must change.
+    """
+
+    if int(status_code) != 400:
+        return False
+    normalized = (
+        str(detail)
+        .casefold()
+        .replace("\\u2019", "'")
+        .replace("’", "'")
+    )
+    return (
+        "on-demand throughput" in normalized
+        and (
+            "isn't supported" in normalized
+            or "is not supported" in normalized
+        )
+        and "inference profile" in normalized
+    )
 
 
 def _is_loopback_hostname(hostname: str) -> bool:

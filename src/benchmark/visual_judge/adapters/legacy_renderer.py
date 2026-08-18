@@ -606,6 +606,7 @@ def _provider_request(request: EvidenceRenderRequest) -> dict[str, Any]:
         }
     for key in (
         "group_scope",
+        "target_scope",
         "grouping_role",
         "member_ids",
         "target_bounds",
@@ -619,6 +620,8 @@ def _provider_request(request: EvidenceRenderRequest) -> dict[str, Any]:
             )
     if isinstance(result.get("group_scope"), dict):
         result["evidence_scope"] = "group_local"
+    elif isinstance(result.get("target_scope"), dict):
+        result["evidence_scope"] = "object_local"
     result["_camera_selection_phase"] = "active_fallback"
     result["_camera_evidence_deficiency"] = deepcopy(
         request.evidence_goal
@@ -792,6 +795,7 @@ def _selection_fingerprint(request: EvidenceRenderRequest) -> str:
             "evidence_round": request.evidence_round,
             "selection": request.selection.to_dict(),
             "group_scope": request.context.get("group_scope"),
+            "target_scope": request.context.get("target_scope"),
         },
         sort_keys=True,
         separators=(",", ":"),

@@ -251,6 +251,46 @@ def build_evaluation_query_graph(
         stage = str(event.get("stage") or "")
         episode_index = assignments.get(position)
         episode = episode_nodes.get(episode_index)
+        if stage == "functional_evidence_readiness":
+            review = builder.node(
+                "evidence_readiness_review",
+                (
+                    "CameraSelector evidence review: "
+                    f"{event.get('status') or 'unknown'}"
+                ),
+                {
+                    "status": event.get("status"),
+                    "source": event.get("source"),
+                    "check_id": event.get("check_id"),
+                    "evidence_round": event.get("evidence_round"),
+                    "result": deepcopy(event.get("result") or {}),
+                    "decision_authority": "none",
+                },
+                node_id=stable_id(
+                    "evidence_readiness_review",
+                    {"graph_id": graph_id, "position": position},
+                ),
+                provenance={
+                    "source": "controller_audit_trace",
+                    "decision_authority": "none",
+                },
+            )
+            builder.edge("reviews_evidence_for", claim, review)
+            for item in event.get("images_used") or []:
+                builder.edge(
+                    "reviews_evidence",
+                    review,
+                    evidence_node(item, "readiness_trace"),
+                )
+            if isinstance(event.get("evidence_request"), Mapping):
+                builder.edge(
+                    "requests_evidence",
+                    review,
+                    evidence_request_node(
+                        event["evidence_request"],
+                        "camera_selector_readiness_trace",
+                    ),
+                )
         if stage == "camera_selector" and episode:
             selection = builder.node(
                 "camera_selection",
@@ -407,6 +447,9 @@ def build_evaluation_query_graph(
                 typed_projection["ownership_nodes"]
             ),
             "evidence_window": evidence_window_projection,
+            "functional_soft_evidence_contract": deepcopy(
+                audit_value.get("functional_soft_evidence_contract")
+            ),
         },
     )
 
@@ -996,6 +1039,10 @@ def _typed_check_result_spec(
             or check.get("function_event_ref")
         ),
         "same_physical_event": row.get("same_physical_event"),
+        "grounded": check.get("grounded"),
+        "obligation_lifecycle": deepcopy(
+            check.get("obligation_lifecycle") or []
+        ),
     }
     return {
         key: deepcopy(value)
@@ -1076,6 +1123,18 @@ def _workflow_phase_ref(request: JudgeRequest) -> str:
             else ""
         )
         return f"group_local_review:{group_id}" if group_id else phase
+    if phase == "target_local_confirmation":
+        target_scope = request.context.get("target_scope")
+        target_id = (
+            str(target_scope.get("target_id") or "").strip()
+            if isinstance(target_scope, Mapping)
+            else ""
+        )
+        return (
+            f"target_local_confirmation:{target_id}"
+            if target_id
+            else phase
+        )
     return phase
 
 
@@ -1319,6 +1378,45 @@ def _relation_scope_node(
 
 
 def _scope_node(builder: _Builder, request: JudgeRequest) -> str:
+    target = request.context.get("target_scope")
+    if isinstance(target, Mapping) and str(
+        target.get("target_id") or ""
+    ).strip():
+        target_id = str(target["target_id"])
+        context_ids = [
+            str(item) for item in target.get("context_ids") or []
+        ]
+        return builder.node(
+            "scope",
+            f"target scope {target_id}",
+            {
+                "scope_type": "target_centered_context",
+                "scope_id": target.get("scope_id"),
+                "target_id": target_id,
+                "context_ids": context_ids,
+                "framing_ids": list(target.get("framing_ids") or []),
+                "focus_center": target.get("focus_center"),
+                "extent": target.get("extent"),
+                "require_global_anchor": bool(
+                    target.get("require_global_anchor")
+                ),
+                "context_objects_are_defect_owners": False,
+                "group_identity": None,
+            },
+            node_id=stable_id(
+                "scope",
+                {
+                    "metric": request.metric,
+                    "scope": "target_centered_context",
+                    "target_id": target_id,
+                    "context_ids": context_ids,
+                },
+            ),
+            provenance={
+                "source": "trusted_target_scope",
+                "scope_version": target.get("scope_version"),
+            },
+        )
     raw = request.context.get("group_scope")
     if isinstance(raw, Mapping) and str(raw.get("group_id") or "").strip():
         group_id = str(raw["group_id"])
@@ -1358,6 +1456,7 @@ def _validate_request_scope(
 ) -> None:
     """Fail closed when a request claims an untrusted group partition."""
 
+    _validate_target_scope(request, relations)
     if relations is None:
         return
     raw = request.context.get("group_scope")
@@ -1389,6 +1488,79 @@ def _validate_request_scope(
     if members != trusted_members:
         raise ValueError(
             "judge request group_scope does not match the trusted partition"
+        )
+
+
+def _validate_target_scope(
+    request: JudgeRequest,
+    relations: RelationCandidateGraph | None,
+) -> None:
+    raw = request.context.get("target_scope")
+    if raw is None:
+        return
+    if not isinstance(raw, Mapping):
+        raise ValueError("judge request target_scope must be an object")
+    if request.context.get("group_scope") is not None:
+        raise ValueError(
+            "judge request cannot claim group_scope and target_scope together"
+        )
+    target_id = str(raw.get("target_id") or "").strip()
+    if not target_id:
+        raise ValueError("judge request target_scope requires target_id")
+    context_ids = tuple(
+        str(item).strip() for item in raw.get("context_ids") or []
+    )
+    framing_ids = tuple(
+        str(item).strip() for item in raw.get("framing_ids") or []
+    )
+    if (
+        any(not item for item in context_ids)
+        or len(set(context_ids)) != len(context_ids)
+        or target_id in context_ids
+    ):
+        raise ValueError("judge request target_scope has invalid context_ids")
+    if (
+        not framing_ids
+        or framing_ids[0] != target_id
+        or framing_ids != (target_id, *context_ids)
+    ):
+        raise ValueError(
+            "judge request target_scope framing_ids must be target then context"
+        )
+    if len(context_ids) > 3:
+        raise ValueError(
+            "judge request target_scope exceeds bounded context capacity"
+        )
+    if raw.get("group_identity") is not None:
+        raise ValueError("judge request target_scope cannot claim group identity")
+    if raw.get("context_objects_are_defect_owners") not in (None, False):
+        raise ValueError(
+            "judge request target_scope context objects must be non-owning"
+        )
+    allowed_targets = tuple(
+        str(item).strip()
+        for item in request.context.get("target_object_ids") or []
+        if str(item).strip()
+    )
+    if allowed_targets and set(allowed_targets) != {target_id}:
+        raise ValueError(
+            "judge request target_scope attribution must remain target-only"
+        )
+    claimed_targets = {
+        item for item in _target_ids(request) if item != "scene"
+    }
+    if claimed_targets != {target_id}:
+        raise ValueError(
+            "judge request target_scope claim must remain target-only"
+        )
+    known = _known_objects(request, relations)
+    unknown = {
+        item for item in framing_ids if known and item not in known
+    }
+    if unknown:
+        raise ValueError(
+            "judge request target_scope references unknown object IDs: "
+            f"{sorted(unknown)}"
         )
 
 
@@ -1450,6 +1622,9 @@ def _target_ids(request: JudgeRequest) -> tuple[str, ...]:
     scope = request.context.get("group_scope")
     if isinstance(scope, Mapping):
         values.extend(str(item).strip() for item in scope.get("member_ids") or [])
+    target_scope = request.context.get("target_scope")
+    if isinstance(target_scope, Mapping):
+        values.append(str(target_scope.get("target_id") or "").strip())
     return tuple(dict.fromkeys(item for item in values if item))
 
 

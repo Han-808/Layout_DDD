@@ -71,11 +71,14 @@ from benchmark.evaluator.profile import (
     resolve_evaluation_profile,
 )
 from benchmark.evaluator.scoring import (
+    DEFAULT_DEDUCTION_MULTIPLIER,
+    DEDUCTION_MULTIPLIER_METRICS,
     INTRINSIC_VALIDITY_PROFILE_ID,
     LEGACY_SCORING_SPEC_VERSION,
     PROMPT_CONDITIONED_QUALITY_PROFILE_ID,
     SCORING_SPEC_VERSION,
     L3_METRIC_WEIGHTS,
+    MIN_PUBLISHABLE_SCORE_COVERAGE,
     apply_projection,
     canonical_scene_object_ids,
     resolve_scoring_profile,
@@ -84,6 +87,10 @@ from benchmark.evaluator.scoring import (
     score_support_report,
     scoring_reliability_summary,
     scoring_profile_for_run,
+)
+from benchmark.scoring_profiles import (
+    PREVIOUS_INTRINSIC_VALIDITY_PROFILE_ID,
+    PREVIOUS_PROMPT_CONDITIONED_QUALITY_PROFILE_ID,
 )
 from benchmark.evaluator.generic_validity.mesh_geometry import load_collision_geometry_manifest
 from benchmark.grouping import (
@@ -142,6 +149,8 @@ def run_evaluate(
     profile = kwargs.get("evaluation_profile")
     if is_legacy_game_profile(profile):
         kwargs.pop("scoring_profile_id", None)
+        kwargs.pop("deduction_multiplier", None)
+        kwargs.pop("scene_quality_prompt_context", None)
         return _run_legacy_game_evaluate(**kwargs)
     return _run_canonical_evaluate(**kwargs)
 
@@ -168,6 +177,7 @@ def _run_canonical_evaluate(
     grouping_model: object | None = None,
     evaluation_profile: dict | None = None,
     scoring_profile_id: str | None = None,
+    deduction_multiplier: float = DEFAULT_DEDUCTION_MULTIPLIER,
     support_enabled: bool | None = None,
     p0b_official_mode: bool = False,
     p0b_local_view_provider: object | None = None,
@@ -184,6 +194,7 @@ def _run_canonical_evaluate(
     spatial_fidelity_ontology: dict | str | Path | None = None,
     visual_style_spec: dict | str | Path | None = None,
     scene_quality_config: dict | None = None,
+    scene_quality_prompt_context: dict | None = None,
     functional_semantic_config: dict | None = None,
     object_grouping_report: dict | list | None = None,
     authorized_deviations: list | None = None,
@@ -262,15 +273,32 @@ def _run_canonical_evaluate(
         active_l2_metrics=active_l2_metrics,
         resolved_profile=resolved_profile,
     )
+    resolved_deduction_multiplier = _validate_deduction_multiplier(
+        deduction_multiplier
+    )
     if scoring_profile is not None:
+        scoring_profile = deepcopy(scoring_profile)
+        scoring_profile["deduction_multiplier"] = (
+            resolved_deduction_multiplier
+        )
+        scoring_profile["deduction_multiplier_metrics"] = list(
+            DEDUCTION_MULTIPLIER_METRICS
+        )
         resolved_profile = deepcopy(resolved_profile)
         resolved_profile["layer_weights"] = deepcopy(
             scoring_profile["layer_weights"]
         )
-        for metric_name, metric_weight in L3_METRIC_WEIGHTS.items():
+        for metric_name, metric_weight in scoring_profile[
+            "l3_metric_weights"
+        ].items():
             resolved_profile[L3]["metrics"][metric_name]["weight"] = (
                 metric_weight
             )
+    canonical_l3_metric_weights = (
+        deepcopy(scoring_profile["l3_metric_weights"])
+        if scoring_profile is not None
+        else deepcopy(L3_METRIC_WEIGHTS)
+    )
     frozen_object_ids = canonical_scene_object_ids(normalized_scene)
     l3_render_evidence = _normalize_canonical_render_evidence(render_evidence)
     grouping_evidence = prepare_grouping_evidence(
@@ -307,6 +335,7 @@ def _run_canonical_evaluate(
             "scoring_profile_id": "custom_evaluation_profile_compat",
             "scoring_spec_version": LEGACY_SCORING_SPEC_VERSION,
             "layer_weights": deepcopy(resolved_profile["layer_weights"]),
+            "l3_metric_weights": deepcopy(canonical_l3_metric_weights),
         }
     )
 
@@ -400,6 +429,7 @@ def _run_canonical_evaluate(
         _apply_canonical_l1_scoring(
             reports["generic_validity"],
             ordered_object_ids=frozen_object_ids,
+            deduction_multiplier=resolved_deduction_multiplier,
         )
     l1_report = _canonical_l1_report(reports["generic_validity"])
 
@@ -501,8 +531,11 @@ def _run_canonical_evaluate(
         authorized_deviations=resolved_authorized_deviations,
         metric_applicability=scene_quality_applicability(resolved_asset_policy),
         visual_style_spec=resolved_visual_style_spec,
+        scene_quality_prompt_context=scene_quality_prompt_context,
         apply_burden_scoring=scoring_profile is not None,
         strict_metric_inventory=scoring_profile is not None,
+        canonical_metric_weights=canonical_l3_metric_weights,
+        deduction_multiplier=resolved_deduction_multiplier,
     )
     reports["scene_quality"] = scene_quality_report
 
@@ -555,6 +588,12 @@ def _run_canonical_evaluate(
         profile_version=CANONICAL_PROFILE_VERSION,
         scoring_profile_id=resolved_scoring_profile_id,
         scoring_spec_version=resolved_scoring_spec_version,
+        l3_metric_weights=canonical_l3_metric_weights,
+        deduction_multiplier=(
+            resolved_deduction_multiplier
+            if scoring_profile is not None
+            else None
+        ),
     )
     if scoring_profile is not None:
         coverage = _strict_scoring_profile_coverage(
@@ -581,7 +620,7 @@ def _run_canonical_evaluate(
         {
             L1: ["collision", "support", "oob"],
             L2: list(active_l2_metrics),
-            L3: list(L3_METRIC_WEIGHTS),
+            L3: list(canonical_l3_metric_weights),
         }
         if scoring_profile is not None
         else None
@@ -612,7 +651,14 @@ def _run_canonical_evaluate(
         "benchmark_score": benchmark_score,
         "benchmark_score_100": benchmark_score_100,
         "benchmark_score_status": (
-            "complete" if benchmark_score is not None else "insufficient_metric_coverage"
+            "complete"
+            if benchmark_score is not None and coverage.get("complete") is True
+            else "partial_coverage"
+            if benchmark_score is not None
+            else "failed_coverage_threshold"
+            if float(coverage.get("grounded_score_fraction") or 0.0)
+            < MIN_PUBLISHABLE_SCORE_COVERAGE
+            else "insufficient_metric_coverage"
         ),
         "evaluation_plan": evaluation_plan,
         "scoring_profile": (
@@ -622,6 +668,9 @@ def _run_canonical_evaluate(
                 "scoring_profile_id": resolved_scoring_profile_id,
                 "scoring_spec_version": resolved_scoring_spec_version,
                 "layer_weights": deepcopy(layer_weights),
+                "l3_metric_weights": deepcopy(
+                    canonical_l3_metric_weights
+                ),
             }
         ),
         "canonical_object_denominator": {
@@ -639,6 +688,9 @@ def _run_canonical_evaluate(
             "prompt_granularity_resolution_source": granularity_source,
             "asset_policy": resolved_asset_policy,
             "authorized_deviations": resolved_authorized_deviations,
+            "scene_quality_prompt_context": deepcopy(
+                scene_quality_report.get("metric_prompt_context")
+            ),
             "metric_applicability": {
                 L1: l1_applicability,
                 L2: {name: name in active_l2_metrics for name in resolved_profile[L2]["metrics"]},
@@ -1276,6 +1328,14 @@ def main() -> None:
         help="Optional canonical L3 Scene Quality config override (JSON or YAML).",
     )
     parser.add_argument(
+        "--scene-quality-prompt-context",
+        default=None,
+        help=(
+            "Optional l3_metric_prompt_context_v1 JSON. It selects short "
+            "public task-context fields independently for each L3 metric."
+        ),
+    )
+    parser.add_argument(
         "--object-grouping-report",
         default=None,
         help=(
@@ -1357,11 +1417,23 @@ def main() -> None:
         choices=[
             INTRINSIC_VALIDITY_PROFILE_ID,
             PROMPT_CONDITIONED_QUALITY_PROFILE_ID,
+            PREVIOUS_INTRINSIC_VALIDITY_PROFILE_ID,
+            PREVIOUS_PROMPT_CONDITIONED_QUALITY_PROFILE_ID,
         ],
         default=None,
         help=(
             "Explicit leaderboard scoring profile. When omitted, the default "
             "canonical profile selects it from L2 task activation."
+        ),
+    )
+    parser.add_argument(
+        "--deduction-multiplier",
+        type=float,
+        default=DEFAULT_DEDUCTION_MULTIPLIER,
+        help=(
+            "Multiply the final metric deduction for Collision, Support, "
+            "OOB, Scale, Style, and Object Pairing (default: 2.0). "
+            "Use 1.0 to reproduce the unscaled deduction."
         ),
     )
     args = parser.parse_args()
@@ -1601,6 +1673,7 @@ def main() -> None:
         vlm_judge=vlm_judge,
         evaluation_profile=evaluation_profile,
         scoring_profile_id=args.scoring_profile_id,
+        deduction_multiplier=args.deduction_multiplier,
         support_enabled=args.support_enabled,
         p0b_official_mode=args.p0b_official_mode,
         p0b_local_view_provider=local_view_provider,
@@ -1638,6 +1711,11 @@ def main() -> None:
         scene_quality_config=(
             load_yaml(_path_arg(args.scene_quality_config), default={})
             if args.scene_quality_config
+            else None
+        ),
+        scene_quality_prompt_context=(
+            read_json(_path_arg(args.scene_quality_prompt_context))
+            if args.scene_quality_prompt_context
             else None
         ),
         object_grouping_report=(
@@ -2692,22 +2770,74 @@ def _strict_scoring_profile_score(
     reports: dict[str, dict[str, Any]],
     layer_weights: dict[str, float],
 ) -> float | None:
-    """Aggregate a leaderboard profile without dropping missing layers."""
+    """Aggregate scores over grounded layer weight only.
+
+    Coverage is reported separately. Missing layer weight is not interpreted
+    as either zero or full credit.
+    """
 
     required = [
         name
         for name, weight in layer_weights.items()
         if float(weight) > 0.0
     ]
-    if not required or any(
-        not _is_canonical_score((reports.get(name) or {}).get("score"))
-        for name in required
-    ):
+    if not required:
         return None
-    return sum(
-        float(reports[name]["score"]) * float(layer_weights[name])
-        for name in required
+    numerator = 0.0
+    denominator = 0.0
+    required_weight = sum(float(layer_weights[name]) for name in required)
+    for name in required:
+        report = reports.get(name) or {}
+        if report.get("status") in {"not_applicable", "not_implemented"}:
+            # A profile-required layer cannot be silently removed by runtime
+            # applicability. Coverage conditioning is only for attempted
+            # evaluation with partially grounded evidence.
+            return None
+        score = _layer_observed_score_for_aggregate(report)
+        if score is None:
+            continue
+        fraction = _layer_grounding_fraction_for_aggregate(report)
+        grounded_weight = float(layer_weights[name]) * fraction
+        if grounded_weight <= 0.0:
+            continue
+        numerator += float(score) * grounded_weight
+        denominator += grounded_weight
+    coverage = denominator / required_weight if required_weight > 0.0 else 0.0
+    return (
+        numerator / denominator
+        if denominator > 0.0
+        and coverage >= MIN_PUBLISHABLE_SCORE_COVERAGE
+        else None
     )
+
+
+def _layer_observed_score_for_aggregate(
+    report: dict[str, Any],
+) -> float | None:
+    raw = report.get("score")
+    if _is_canonical_score(raw):
+        return float(raw)
+    coverage = report.get("coverage")
+    coverage = coverage if isinstance(coverage, dict) else {}
+    raw = coverage.get("observed_score")
+    return float(raw) if _is_canonical_score(raw) else None
+
+
+def _layer_grounding_fraction_for_aggregate(report: dict[str, Any]) -> float:
+    coverage = report.get("coverage")
+    coverage = coverage if isinstance(coverage, dict) else {}
+    grounding = coverage.get("score_grounding")
+    grounding = grounding if isinstance(grounding, dict) else {}
+    raw = coverage.get("grounded_score_fraction")
+    if not isinstance(raw, (int, float)) or isinstance(raw, bool):
+        raw = grounding.get("fraction")
+    if not isinstance(raw, (int, float)) or isinstance(raw, bool):
+        raw = coverage.get("fraction")
+    if not isinstance(raw, (int, float)) or isinstance(raw, bool):
+        return 1.0
+    if not math.isfinite(float(raw)):
+        return 0.0
+    return min(1.0, max(0.0, float(raw)))
 
 
 def _strict_scoring_profile_coverage(
@@ -2727,10 +2857,40 @@ def _strict_scoring_profile_coverage(
     covered = [
         name
         for name in required
-        if _is_canonical_score((scoring_reports.get(name) or {}).get("score"))
+        if _layer_observed_score_for_aggregate(
+            scoring_reports.get(name) or {}
+        )
+        is not None
     ]
     required_weight = sum(float(layer_weights[name]) for name in required)
     covered_weight = sum(float(layer_weights[name]) for name in covered)
+    score_resolution_complete = bool(required and len(covered) == len(required))
+    layer_grounding_fractions: dict[str, float] = {}
+    for name in required:
+        if name not in covered:
+            layer_grounding_fractions[name] = 0.0
+        else:
+            layer_grounding_fractions[name] = (
+                _layer_grounding_fraction_for_aggregate(
+                    scoring_reports.get(name) or {}
+                )
+            )
+    grounded_score_weight = min(
+        required_weight,
+        max(
+            0.0,
+            sum(
+                float(layer_weights[name])
+                * layer_grounding_fractions[name]
+                for name in required
+            ),
+        ),
+    )
+    grounded_score_fraction = (
+        min(1.0, max(0.0, grounded_score_weight / required_weight))
+        if required_weight > 0.0
+        else 0.0
+    )
     result.update(
         {
             "active_layers": required,
@@ -2741,13 +2901,29 @@ def _strict_scoring_profile_coverage(
             "covered_weight": covered_weight,
             "required_weight": required_weight,
             "complete": bool(
-                required
+                score_resolution_complete
                 and math.isclose(
-                    covered_weight,
+                    grounded_score_weight,
                     required_weight,
                     abs_tol=1.0e-9,
                 )
             ),
+            "score_resolution_complete": score_resolution_complete,
+            "score_grounding_complete": bool(
+                score_resolution_complete
+                and math.isclose(
+                    grounded_score_weight,
+                    required_weight,
+                    abs_tol=1.0e-9,
+                )
+            ),
+            "grounded_score_weight": grounded_score_weight,
+            "grounded_score_fraction": grounded_score_fraction,
+            "minimum_publishable_coverage": MIN_PUBLISHABLE_SCORE_COVERAGE,
+            "coverage_threshold_passed": (
+                grounded_score_fraction >= MIN_PUBLISHABLE_SCORE_COVERAGE
+            ),
+            "layer_grounding_fractions": layer_grounding_fractions,
             "aggregation_denominator": required_weight,
         }
     )
@@ -2758,6 +2934,7 @@ def _apply_canonical_l1_scoring(
     validity: dict[str, Any],
     *,
     ordered_object_ids: tuple[str, ...],
+    deduction_multiplier: float = DEFAULT_DEDUCTION_MULTIPLIER,
 ) -> None:
     metrics = validity.get("metrics")
     if not isinstance(metrics, dict):
@@ -2773,7 +2950,11 @@ def _apply_canonical_l1_scoring(
             continue
         apply_projection(
             metric_report,
-            scorer(metric_report, ordered_object_ids=ordered_object_ids),
+            scorer(
+                metric_report,
+                ordered_object_ids=ordered_object_ids,
+                deduction_multiplier=deduction_multiplier,
+            ),
         )
     canonical_reports = [metrics.get(name) for name in ("collision", "support", "oob")]
     resolved = [
@@ -2787,8 +2968,14 @@ def _apply_canonical_l1_scoring(
         else sum(float(item["score"]) for item in resolved) / len(resolved)
     )
     complete = len(resolved) == 3
+    coverage_fraction = len(resolved) / 3.0
     validity["partial_score"] = partial
-    validity["score"] = partial if complete else None
+    validity["score"] = (
+        partial
+        if partial is not None
+        and coverage_fraction >= MIN_PUBLISHABLE_SCORE_COVERAGE
+        else None
+    )
     validity["status"] = "ok" if complete else "incomplete"
     validity["metric_scores"] = {
         name: (
@@ -2809,7 +2996,24 @@ def _apply_canonical_l1_scoring(
             "oob": 1.0 / 3.0,
         },
         "denominator_policy": "shared_canonical_scene_objects",
+        "deduction_multiplier": deduction_multiplier,
+        "deduction_multiplier_metrics": [
+            name
+            for name in DEDUCTION_MULTIPLIER_METRICS
+            if name in {"collision", "support", "oob"}
+        ],
     }
+
+
+def _validate_deduction_multiplier(value: Any) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise TypeError("deduction_multiplier must be numeric")
+    result = float(value)
+    if not math.isfinite(result) or result <= 0.0:
+        raise ValueError(
+            "deduction_multiplier must be finite and greater than zero"
+        )
+    return result
 
 
 def _strip_canonical_scoring_audit_for_legacy_game(
@@ -2829,9 +3033,12 @@ def _strip_canonical_scoring_audit_for_legacy_game(
 
 def _canonical_l1_report(validity: dict[str, Any]) -> dict[str, Any]:
     score = validity.get("score")
+    numeric_score = isinstance(score, (int, float)) and not isinstance(score, bool)
     status = (
-        "evaluated"
-        if isinstance(score, (int, float)) and not isinstance(score, bool)
+        "partial"
+        if numeric_score and validity.get("status") == "incomplete"
+        else "evaluated"
+        if numeric_score
         else "incomplete"
         if validity.get("status") == "incomplete"
         else "not_applicable"
@@ -2848,11 +3055,23 @@ def _canonical_l1_report(validity: dict[str, Any]) -> dict[str, Any]:
         for name in active_metrics
         if _is_canonical_score(metric_reports[name].get("score"))
     ]
+    coverage_fraction = (
+        len(resolved_metrics) / len(active_metrics)
+        if active_metrics
+        else 0.0
+    )
+    observed_score = validity.get("partial_score")
+    observed_score = (
+        float(observed_score)
+        if isinstance(observed_score, (int, float))
+        and not isinstance(observed_score, bool)
+        else None
+    )
     return {
         "layer": L1,
         "category": "physical_plausibility",
         "status": status,
-        "score": float(score) if status == "evaluated" else None,
+        "score": float(score) if numeric_score else None,
         "partial_score": validity.get("partial_score"),
         "affects_score": status != "not_applicable",
         "metrics": deepcopy(metric_reports),
@@ -2862,10 +3081,25 @@ def _canonical_l1_report(validity: dict[str, Any]) -> dict[str, Any]:
             "+".join(active_metrics) if active_metrics else "none"
         ),
         "coverage": {
-            "active_metric_count": int(validity.get("active_metric_count") or 0),
+            "active_metric_count": len(active_metrics),
+            "eligible_count": len(active_metrics),
+            "resolved_count": len(resolved_metrics),
+            "fraction": coverage_fraction,
+            "grounded_score_fraction": coverage_fraction,
+            "observed_score": observed_score,
+            "earned_score_mass": (
+                observed_score * coverage_fraction
+                if observed_score is not None
+                else None
+            ),
+            "minimum_publishable_coverage": MIN_PUBLISHABLE_SCORE_COVERAGE,
+            "coverage_threshold_passed": (
+                coverage_fraction >= MIN_PUBLISHABLE_SCORE_COVERAGE
+            ),
             "unresolved_metrics": list(validity.get("unresolved_metrics") or []),
             "disabled_metrics": list(validity.get("disabled_metrics") or []),
-            "complete": status == "evaluated",
+            "complete": bool(active_metrics)
+            and len(resolved_metrics) == len(active_metrics),
         },
         "backend_report": validity,
     }
@@ -2873,9 +3107,6 @@ def _canonical_l1_report(validity: dict[str, Any]) -> dict[str, Any]:
 
 def _canonical_layer_envelope(layer: str, report: dict[str, Any]) -> dict[str, Any]:
     score = report.get("score") if isinstance(report, dict) else None
-    partial_score = report.get("partial_score") if isinstance(report, dict) else None
-    if partial_score is None and isinstance(report, dict):
-        partial_score = report.get("resolved_score")
     raw_status = str(report.get("status") or "") if isinstance(report, dict) else ""
     if raw_status in {"not_applicable", "disabled"}:
         status = "not_applicable"
@@ -2916,7 +3147,7 @@ def _canonical_layer_envelope(layer: str, report: dict[str, Any]) -> dict[str, A
         ),
         "status": status,
         "score": float(score) if status == "evaluated" else None,
-        "partial_score": partial_score,
+        "partial_score": None,
         "affects_score": status != "not_applicable",
         "metrics": deepcopy(metric_reports),
         "active_metrics": active_metrics,

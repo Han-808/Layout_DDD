@@ -86,6 +86,7 @@ FOCUS_CAMERA_MODES = {"visibility_ranked", "support_contact_plane", "query_cov"}
 HIGHLIGHTED_GLOBAL_POSE_POLICIES = {"global_top", "legacy_metric"}
 CAMERA_EVIDENCE_CACHE_CONTRACT_VERSION = "camera_evidence_cache_contract_v5"
 _CAMERA_EVIDENCE_IMPLEMENTATION_FILES = (
+    "src/benchmark/assets/facing.py",
     "src/benchmark/rendering/blender.py",
     "src/benchmark/rendering/blender_camera_worker.py",
     "src/benchmark/rendering/blender_collision_mask_worker.py",
@@ -556,7 +557,7 @@ class CameraEvidenceProvider:
                 "source_blend": str(self.blend_file),
                 "source_blend_sha256": self.source_blend_sha256,
                 "surface_source": (
-                    "vlm_trusted_side_decode_or_cache"
+                    "catalog_contract_or_vlm_trusted_side_decode_or_cache"
                 ),
                 "geometry_source": "deterministic",
                 "direction_descriptor_role": "routing_only",
@@ -2121,6 +2122,40 @@ class CameraEvidenceProvider:
             str(item.get("id") or "") for item in selected
         ]
         selection_log["final_view_limit"] = requested_final_views
+        selected_coverage = [
+            {
+                "candidate_id": str(item.get("id") or ""),
+                **deepcopy(
+                    item.get("usable_surface_observability")
+                    if isinstance(
+                        item.get("usable_surface_observability"), dict
+                    )
+                    else {}
+                ),
+            }
+            for item in selected
+            if isinstance(item, dict)
+        ]
+        coverage_states = {
+            str(item.get("coverage_status") or "sufficient")
+            for item in selected_coverage
+        }
+        selected_coverage_status = (
+            "not_covered"
+            if "not_covered" in coverage_states
+            else "partial_but_usable"
+            if "partial_but_usable" in coverage_states
+            else "sufficient"
+        )
+        selection_log["selected_evidence_coverage"] = {
+            "coverage_status": selected_coverage_status,
+            "candidates": deepcopy(selected_coverage),
+            "rule": "predicate_aware_surface_observability_v2",
+        }
+        if self.last_call_usage is not None:
+            self.last_call_usage["functional_evidence_coverage"] = deepcopy(
+                selection_log["selected_evidence_coverage"]
+            )
         final_manifest = self.renderer.render_camera_views(
             blend_file=self.blend_file,
             out_dir=event_dir / "final",
@@ -2326,7 +2361,7 @@ class CameraEvidenceProvider:
             else []
         )
         audit: dict[str, Any] = {
-            "schema_version": "usable_surface_acquisition_v3",
+            "schema_version": "usable_surface_acquisition_v4",
             "evidence_loop_version": (
                 USABLE_SURFACE_EVIDENCE_LOOP_VERSION
             ),
@@ -2336,6 +2371,8 @@ class CameraEvidenceProvider:
             "status": "not_requested" if not targets else "running",
             "decoder_calls": 0,
             "cache_hits": 0,
+            "catalog_contract_hits": 0,
+            "catalog_contract_misses": 0,
             "precomputed_hypotheses": 0,
             "preview_render_count": 0,
             "repair_rounds": 0,
@@ -2344,6 +2381,8 @@ class CameraEvidenceProvider:
             "banks": [],
             "lifecycles": [],
             "failures": [],
+            "decoder_round_failures": [],
+            "catalog_contract_failures": [],
             "scene_access": "read_only",
         }
         if not targets:
@@ -2351,6 +2390,11 @@ class CameraEvidenceProvider:
         detect = getattr(
             self.usable_surface_detector,
             "detect",
+            None,
+        )
+        resolve_without_previews = getattr(
+            self.usable_surface_detector,
+            "resolve_without_previews",
             None,
         )
         if not callable(detect):
@@ -2436,8 +2480,14 @@ class CameraEvidenceProvider:
                 out_dir=preview_dir,
                 camera_views=side_bank,
                 preview=True,
+                allow_blank_views=True,
             )
-            paths_by_id = _views_by_id(preview_manifest)
+            raw_blank_side_ids = _blank_view_ids(preview_manifest)
+            paths_by_id = {
+                side_id: path
+                for side_id, path in _views_by_id(preview_manifest).items()
+                if side_id not in raw_blank_side_ids
+            }
             identity_spec = build_focus_overlay_spec(
                 scene=scene,
                 metric="functional_consistency",
@@ -2456,8 +2506,14 @@ class CameraEvidenceProvider:
                 camera_views=side_bank,
                 overlay_spec=identity_spec,
                 preview=True,
+                allow_blank_views=True,
             )
-            identity_by_id = _views_by_id(identity_manifest)
+            identity_blank_side_ids = _blank_view_ids(identity_manifest)
+            identity_by_id = {
+                side_id: path
+                for side_id, path in _views_by_id(identity_manifest).items()
+                if side_id not in identity_blank_side_ids
+            }
             identity_visibility = {
                 candidate_id: measure_focus_visibility(
                     path,
@@ -2493,6 +2549,9 @@ class CameraEvidenceProvider:
             available_side_ids = [
                 str(item["side_id"]) for item in preview_records
             ]
+            requested_side_ids = [
+                str(item.get("id")) for item in side_bank
+            ]
             bank_complete = set(available_side_ids) == set(
                 USABLE_SURFACE_SIDE_IDS
             )
@@ -2501,13 +2560,20 @@ class CameraEvidenceProvider:
                 "evidence_round": evidence_round,
                 "policy_source": policy_source,
                 "fallback": evidence_round > 1,
-                "requested_side_ids": list(
-                    USABLE_SURFACE_SIDE_IDS
-                ),
+                "requested_side_ids": requested_side_ids,
                 "generated_side_ids": [
                     str(item.get("id")) for item in side_bank
                 ],
                 "available_side_ids": available_side_ids,
+                "raw_blank_side_ids": sorted(raw_blank_side_ids),
+                "identity_blank_side_ids": sorted(
+                    identity_blank_side_ids
+                ),
+                "missing_requested_side_ids": [
+                    side_id
+                    for side_id in requested_side_ids
+                    if side_id not in available_side_ids
+                ],
                 "missing_side_ids": [
                     side_id
                     for side_id in USABLE_SURFACE_SIDE_IDS
@@ -2553,6 +2619,11 @@ class CameraEvidenceProvider:
                 )
                 audit["lifecycles"].append(lifecycle)
                 continue
+            category = str(
+                object_record.get("category")
+                or object_record.get("retrieval_category")
+                or ""
+            )
             identity = usable_surface_cache_identity(
                 object_record,
                 requested_surface_roles=roles,
@@ -2567,8 +2638,103 @@ class CameraEvidenceProvider:
             cached = _read_json_object(cache_path)
             decoded: dict[str, Any] | None = None
             cache_hit = False
+            if callable(resolve_without_previews):
+                try:
+                    contract_result = resolve_without_previews(
+                        {
+                            "scene_id": scene.get("scene_id"),
+                            "target_id": target_id,
+                            "target_category": category,
+                            "surface_roles": list(roles),
+                            "object_record": deepcopy(object_record),
+                            "read_only_provenance": {
+                                "scene_access": "read_only",
+                            },
+                        }
+                    )
+                    if isinstance(contract_result, dict):
+                        contract_available = set(
+                            str(item)
+                            for item in contract_result.get(
+                                "available_side_ids"
+                            )
+                            or []
+                            if str(item)
+                        )
+                        contract_complete = bool(
+                            contract_result.get("bank_complete", False)
+                        )
+                        validated = validate_usable_surface_response(
+                            {
+                                key: deepcopy(contract_result.get(key))
+                                for key in (
+                                    "status",
+                                    "surfaces",
+                                    "reason",
+                                )
+                            },
+                            allowed_surface_roles=set(roles),
+                            available_side_ids=contract_available,
+                            bank_complete=contract_complete,
+                        )
+                        decoded = {
+                            **validated,
+                            "schema_version": contract_result.get(
+                                "schema_version"
+                            ),
+                            "target_id": target_id,
+                            "bank_complete": contract_complete,
+                            "available_side_ids": sorted(
+                                contract_available
+                            ),
+                            "decision_authority": "none",
+                            "detector_implementation_id": (
+                                contract_result.get(
+                                    "detector_implementation_id"
+                                )
+                                or detector_manifest.get(
+                                    "implementation_id"
+                                )
+                            ),
+                            "detector_version": (
+                                contract_result.get("detector_version")
+                                or detector_manifest.get("version")
+                            ),
+                            "provenance": {
+                                **deepcopy(
+                                    contract_result.get("provenance") or {}
+                                ),
+                                "detector": deepcopy(detector_manifest),
+                                "reuse_source": (
+                                    "benchmark_catalog_facing_contract"
+                                ),
+                            },
+                        }
+                        audit["catalog_contract_hits"] += 1
+                        lifecycle["rounds"].append(
+                            {
+                                "round": 0,
+                                "source": (
+                                    "benchmark_catalog_facing_contract"
+                                ),
+                                "status": decoded.get("status"),
+                                "new_visual_evidence": False,
+                            }
+                        )
+                    else:
+                        audit["catalog_contract_misses"] += 1
+                except Exception as exc:
+                    audit["catalog_contract_misses"] += 1
+                    audit["catalog_contract_failures"].append(
+                        {
+                            "target_id": target_id,
+                            "error_type": type(exc).__name__,
+                            "error": str(exc),
+                            "fallback": "vlm_trusted_side_bank",
+                        }
+                    )
             precomputed = target.get("precomputed_hypothesis")
-            if isinstance(precomputed, dict):
+            if decoded is None and isinstance(precomputed, dict):
                 precomputed_available = set(
                     str(item)
                     for item in (
@@ -2643,6 +2809,9 @@ class CameraEvidenceProvider:
                 if (
                     isinstance(raw_result, dict)
                     and raw_result.get("bank_complete", True) is True
+                    and cached.get("verification_state") == "verified"
+                    and isinstance(cached.get("evidence_fingerprint"), str)
+                    and bool(cached.get("evidence_fingerprint"))
                 ):
                     try:
                         cached_available = set(
@@ -2691,6 +2860,10 @@ class CameraEvidenceProvider:
                             "provenance": deepcopy(
                                 raw_result.get("provenance") or {}
                             ),
+                            "cache_verification_state": "verified",
+                            "evidence_fingerprint": cached.get(
+                                "evidence_fingerprint"
+                            ),
                         }
                         audit["cache_hits"] += 1
                         cache_hit = True
@@ -2704,14 +2877,12 @@ class CameraEvidenceProvider:
                         )
             if decoded is None:
                 try:
-                    category = str(
-                        object_record.get("category")
-                        or object_record.get("retrieval_category")
-                        or ""
-                    )
                     pending_decoded: dict[str, Any] | None = None
                     terminal_decoded: dict[str, Any] | None = None
                     terminal_bank_complete = False
+                    accumulated_previews: dict[str, dict[str, Any]] = {}
+                    missing_side_ids = set(USABLE_SURFACE_SIDE_IDS)
+                    repair_target_side_ids = set(USABLE_SURFACE_SIDE_IDS)
                     for evidence_round in range(
                         1,
                         USABLE_SURFACE_MAX_EVIDENCE_ROUNDS + 1,
@@ -2727,6 +2898,15 @@ class CameraEvidenceProvider:
                                 target_id=target_id,
                             )
                         )
+                        if evidence_round > 1:
+                            side_bank = [
+                                candidate
+                                for candidate in side_bank
+                                if str(candidate.get("id"))
+                                in repair_target_side_ids
+                            ]
+                        if not side_bank:
+                            break
                         (
                             preview_records,
                             bank_record,
@@ -2742,11 +2922,30 @@ class CameraEvidenceProvider:
                         )
                         if evidence_round > 1:
                             audit["repair_rounds"] += 1
-                        available_side_ids = list(
-                            bank_record["available_side_ids"]
+                        for record in preview_records:
+                            accumulated_previews[str(record["side_id"])] = record
+                        preview_records = [
+                            accumulated_previews[side_id]
+                            for side_id in USABLE_SURFACE_SIDE_IDS
+                            if side_id in accumulated_previews
+                        ]
+                        available_side_ids = [
+                            str(record["side_id"])
+                            for record in preview_records
+                        ]
+                        missing_side_ids = set(USABLE_SURFACE_SIDE_IDS) - set(
+                            available_side_ids
                         )
-                        bank_complete = bool(
-                            bank_record["bank_complete"]
+                        bank_complete = not missing_side_ids
+                        bank_record["cumulative_available_side_ids"] = list(
+                            available_side_ids
+                        )
+                        bank_record["cumulative_missing_side_ids"] = sorted(
+                            missing_side_ids
+                        )
+                        bank_record["bank_complete"] = bank_complete
+                        evidence_fingerprint = _usable_surface_evidence_fingerprint(
+                            preview_records
                         )
                         if not preview_records:
                             round_decoded = {
@@ -2767,48 +2966,96 @@ class CameraEvidenceProvider:
                                     "backend": "deterministic_adapter",
                                     "decoder_called": False,
                                     "evidence_round": evidence_round,
+                                    "evidence_fingerprint": evidence_fingerprint,
                                 },
                             }
                         else:
                             audit["decoder_calls"] += 1
-                            raw_decoded = detect(
-                                {
-                                    "scene_id": scene.get("scene_id"),
-                                    "target_id": target_id,
-                                    "target_category": category,
-                                    "surface_roles": roles,
-                                    "previews": preview_records,
-                                    "available_side_ids": list(
+                            try:
+                                raw_decoded = detect(
+                                    {
+                                        "scene_id": scene.get("scene_id"),
+                                        "target_id": target_id,
+                                        "target_category": category,
+                                        "surface_roles": roles,
+                                        "previews": preview_records,
+                                        "available_side_ids": list(
+                                            available_side_ids
+                                        ),
+                                        "bank_complete": bank_complete,
+                                        "read_only_provenance": {
+                                            "scene_access": "read_only",
+                                            "trusted_preview_identity": deepcopy(
+                                                preview_identity
+                                            ),
+                                            "evidence_loop_version": (
+                                                USABLE_SURFACE_EVIDENCE_LOOP_VERSION
+                                            ),
+                                            "evidence_round": evidence_round,
+                                        },
+                                    }
+                                )
+                                validated = validate_usable_surface_response(
+                                    {
+                                        key: deepcopy(raw_decoded.get(key))
+                                        for key in (
+                                            "status",
+                                            "surfaces",
+                                            "reason",
+                                        )
+                                    },
+                                    allowed_surface_roles=set(roles),
+                                    available_side_ids=set(
                                         available_side_ids
                                     ),
-                                    "bank_complete": bank_complete,
-                                    "read_only_provenance": {
-                                        "scene_access": "read_only",
-                                        "trusted_preview_identity": deepcopy(
-                                            preview_identity
-                                        ),
-                                        "evidence_loop_version": (
-                                            USABLE_SURFACE_EVIDENCE_LOOP_VERSION
-                                        ),
-                                        "evidence_round": evidence_round,
-                                    },
+                                    bank_complete=bank_complete,
+                                )
+                            except Exception as exc:
+                                round_failure = {
+                                    "target_id": target_id,
+                                    "evidence_round": evidence_round,
+                                    "reason": "usable_surface_decode_failed",
+                                    "error_type": type(exc).__name__,
+                                    "error": str(exc),
+                                    "retryable": evidence_round
+                                    < USABLE_SURFACE_MAX_EVIDENCE_ROUNDS,
                                 }
-                            )
-                            validated = validate_usable_surface_response(
-                                {
-                                    key: deepcopy(raw_decoded.get(key))
-                                    for key in (
-                                        "status",
-                                        "surfaces",
-                                        "reason",
+                                audit["decoder_round_failures"].append(
+                                    round_failure
+                                )
+                                lifecycle["rounds"].append(
+                                    {
+                                        "round": evidence_round,
+                                        "source": bank_record[
+                                            "policy_source"
+                                        ],
+                                        "status": "decode_failed",
+                                        "new_visual_evidence": True,
+                                        "available_side_ids": list(
+                                            available_side_ids
+                                        ),
+                                        "error_type": type(exc).__name__,
+                                    }
+                                )
+                                if (
+                                    evidence_round
+                                    < USABLE_SURFACE_MAX_EVIDENCE_ROUNDS
+                                ):
+                                    # A complete cardinal bank can still be
+                                    # visually inconclusive or schema-invalid.
+                                    # In that case the repair bank must provide
+                                    # alternate poses for every side.  For a
+                                    # technically incomplete bank, repair only
+                                    # the missing sides.
+                                    repair_target_side_ids = (
+                                        set(missing_side_ids)
+                                        if missing_side_ids
+                                        else set(USABLE_SURFACE_SIDE_IDS)
                                     )
-                                },
-                                allowed_surface_roles=set(roles),
-                                available_side_ids=set(
-                                    available_side_ids
-                                ),
-                                bank_complete=bank_complete,
-                            )
+                                    continue
+                                if terminal_decoded is not None:
+                                    break
+                                raise
                             round_decoded = {
                                 **validated,
                                 "schema_version": raw_decoded.get(
@@ -2840,6 +3087,7 @@ class CameraEvidenceProvider:
                                         USABLE_SURFACE_EVIDENCE_LOOP_VERSION
                                     ),
                                     "evidence_round": evidence_round,
+                                    "evidence_fingerprint": evidence_fingerprint,
                                     "side_bank_policy": (
                                         bank_record["policy_source"]
                                     ),
@@ -2865,12 +3113,26 @@ class CameraEvidenceProvider:
                         ):
                             terminal_decoded = round_decoded
                             terminal_bank_complete = bank_complete
-                            break
+                            if (
+                                bank_complete
+                                or evidence_round
+                                >= USABLE_SURFACE_MAX_EVIDENCE_ROUNDS
+                            ):
+                                break
+                            # A partial-bank terminal result is a hypothesis,
+                            # not permanent truth. Repair only missing sides.
+                            repair_target_side_ids = set(missing_side_ids)
+                            continue
                         if (
                             pending_decoded is None
                             or round_decoded["status"] == "ambiguous"
                         ):
                             pending_decoded = round_decoded
+                        repair_target_side_ids = (
+                            set(missing_side_ids)
+                            if missing_side_ids
+                            else set(USABLE_SURFACE_SIDE_IDS)
+                        )
                     decoded = terminal_decoded or pending_decoded
                     if decoded is None:
                         raise RuntimeError(
@@ -2885,12 +3147,27 @@ class CameraEvidenceProvider:
                             cache_path,
                             {
                                 "schema_version": (
-                                    "usable_surface_cache_record_v3"
+                                    "usable_surface_cache_record_v4"
                                 ),
                                 "cache_identity": {
                                     **identity,
                                 },
                                 "result": deepcopy(decoded),
+                                "verification_state": "verified",
+                                "verification_policy": (
+                                    "complete_trusted_side_bank_single_decode_or_repair"
+                                ),
+                                "available_side_ids": list(
+                                    decoded.get("available_side_ids") or []
+                                ),
+                                "detector_version": detector_manifest.get(
+                                    "version"
+                                ),
+                                "evidence_fingerprint": (
+                                    (decoded.get("provenance") or {}).get(
+                                        "evidence_fingerprint"
+                                    )
+                                ),
                             },
                         )
                 except Exception as exc:
@@ -3863,6 +4140,22 @@ def _views_by_id(manifest: dict[str, Any]) -> dict[str, str]:
     return result
 
 
+def _blank_view_ids(manifest: dict[str, Any]) -> set[str]:
+    """Return per-view blank failures without rejecting surviving views."""
+
+    validation = (
+        manifest.get("render_validation")
+        if isinstance(manifest, dict)
+        and isinstance(manifest.get("render_validation"), dict)
+        else {}
+    )
+    return {
+        str(item)
+        for item in validation.get("blank_views") or []
+        if str(item).strip()
+    }
+
+
 def _effective_candidate_count(
     request: dict[str, Any],
     *,
@@ -3906,6 +4199,25 @@ def _canonical_json_sha256(value: Any) -> str:
         default=str,
     )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _usable_surface_evidence_fingerprint(
+    preview_records: list[dict[str, Any]],
+) -> str:
+    """Hash the exact trusted side images used by one decoder hypothesis."""
+
+    payload = [
+        {
+            "side_id": str(record.get("side_id") or ""),
+            "sha256": _content_sha256(
+                Path(str(record.get("image_path") or ""))
+            ),
+        }
+        for record in preview_records
+        if str(record.get("side_id") or "")
+        and Path(str(record.get("image_path") or "")).is_file()
+    ]
+    return _canonical_json_sha256(payload)
 
 
 def _camera_evidence_implementation_contract() -> dict[str, Any]:

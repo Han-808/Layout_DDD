@@ -10,9 +10,11 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from copy import deepcopy
+import math
 from typing import Any
 
 from benchmark.scoring_profiles import (
+    DEFAULT_L3_METRIC_WEIGHTS,
     LEGACY_SCORING_SPEC_VERSION,
     scoring_profile_for_run,
 )
@@ -262,6 +264,7 @@ def build_not_evaluable_evaluation_report(
             "scoring_profile_id": "custom_evaluation_profile_compat",
             "scoring_spec_version": LEGACY_SCORING_SPEC_VERSION,
             "layer_weights": deepcopy(weights),
+            "l3_metric_weights": deepcopy(DEFAULT_L3_METRIC_WEIGHTS),
         }
     layer_reports = _blocked_layer_reports(
         readiness=normalized_readiness,
@@ -276,6 +279,8 @@ def build_not_evaluable_evaluation_report(
         profile_version=resolved_profile_version,
         scoring_profile_id=str(scoring_profile["scoring_profile_id"]),
         scoring_spec_version=str(scoring_profile["scoring_spec_version"]),
+        l3_metric_weights=scoring_profile.get("l3_metric_weights"),
+        deduction_multiplier=scoring_profile.get("deduction_multiplier"),
     )
     evaluation_plan = _evaluation_plan(
         profile=profile,
@@ -831,6 +836,8 @@ def _blocked_coverage(
     profile_version: str,
     scoring_profile_id: str,
     scoring_spec_version: str,
+    l3_metric_weights: Mapping[str, float] | None = None,
+    deduction_multiplier: Any = None,
 ) -> dict[str, Any]:
     active_layers = [
         layer
@@ -853,6 +860,22 @@ def _blocked_coverage(
         f"{layer}:{weights[layer]:.12g}" for layer in SCORING_LAYERS
     )
     required_weight = sum(weights[layer] for layer in active_layers)
+    multiplier_signature = ""
+    if deduction_multiplier is not None:
+        resolved_multiplier = float(deduction_multiplier)
+        if not math.isfinite(resolved_multiplier) or resolved_multiplier <= 0.0:
+            raise ValueError(
+                "deduction_multiplier must be finite and greater than zero"
+            )
+        multiplier_signature = (
+            f"|deduction_multiplier:{resolved_multiplier:.12g}"
+        )
+    l3_metric_signature = ""
+    if l3_metric_weights is not None:
+        l3_metric_signature = "|l3_metric_weights:" + "+".join(
+            f"{name}:{float(l3_metric_weights[name]):.12g}"
+            for name in sorted(l3_metric_weights)
+        )
     return {
         "active_layers": active_layers,
         "covered_layers": [],
@@ -871,10 +894,19 @@ def _blocked_coverage(
             f"{per_layer_signature}"
             f"|scoring_profile:{scoring_profile_id}"
             f"|scoring_spec:{scoring_spec_version}"
+            f"{l3_metric_signature}"
+            f"{multiplier_signature}"
         ),
         "covered_weight": 0.0,
         "required_weight": required_weight,
         "complete": False,
+        "score_resolution_complete": False,
+        "score_grounding_complete": False,
+        "grounded_score_weight": 0.0,
+        "grounded_score_fraction": 0.0,
+        "layer_grounding_fractions": {
+            layer: 0.0 for layer in active_layers
+        },
         "aggregation_denominator": required_weight,
         "case_comparability": (
             "compare_only_with_same_profile_version_layer_weight_signature_"

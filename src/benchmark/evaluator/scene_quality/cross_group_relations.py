@@ -4,7 +4,8 @@ This module owns the complete middle stage between scene-global discovery and
 group-local review:
 
 * project atomic correspondences into one schedule item per exact target set;
-* require successful relation-specific acquisition before a Judge episode;
+* prefer relation-specific acquisition, then force a binary Judge decision
+  from retained global evidence when that acquisition is unavailable;
 * execute one isolated Judge episode with one result row per atomic check; and
 * fail closed when a Judge attributes a defect outside the relation scope.
 
@@ -309,6 +310,10 @@ def _cross_group_relation_episode_specs(
                 "pair_specific_evidence_available": (
                     pair_specific_available
                 ),
+                "retained_global_evidence_available": bool(global_paths),
+                "retained_evidence_forced_choice_available": bool(
+                    not pair_specific_available and global_paths
+                ),
                 "acquisition_status": str(
                     normalized_result.get("status") or "failed"
                 ),
@@ -505,6 +510,10 @@ def _discovered_cross_group_target_sets(
 
 
 def _relation_schedule_audit(spec: dict[str, Any]) -> dict[str, Any]:
+    pair_specific = bool(spec.get("pair_specific_evidence_available"))
+    retained_fallback = bool(
+        spec.get("retained_evidence_forced_choice_available")
+    )
     return {
         "relation_id": spec.get("relation_id"),
         "probe_id": spec.get("probe_id"),
@@ -539,8 +548,10 @@ def _relation_schedule_audit(spec: dict[str, Any]) -> dict[str, Any]:
         "observation_complete": bool(spec.get("observation_complete")),
         "judge_episode": (
             "required"
-            if spec.get("pair_specific_evidence_available") is True
-            else "not_started_pair_specific_evidence_unavailable"
+            if pair_specific
+            else "required_forced_binary_with_retained_global_evidence"
+            if retained_fallback
+            else "defaulted_binary_no_visual_evidence"
         ),
         "decision_authority": "none",
     }
@@ -565,8 +576,48 @@ def _evaluate_cross_group_relation_scopes(
     for episode_index, spec in enumerate(specs, start=1):
         target_ids = list(spec.get("target_ids") or [])
         group_ids = list(spec.get("group_ids") or [])
-        if spec.get("pair_specific_evidence_available") is not True:
+        pair_specific_evidence_available = bool(
+            spec.get("pair_specific_evidence_available")
+        )
+        retained_evidence_forced_choice = bool(
+            not pair_specific_evidence_available and global_evidence
+        )
+        if (
+            not pair_specific_evidence_available
+            and not retained_evidence_forced_choice
+        ):
             empty_ledger = _initial_camera_acquisition_ledger([])
+            required_checks = [
+                deepcopy(check)
+                for check in spec.get("required_checks") or []
+                if isinstance(check, dict)
+            ]
+            missing_observations = list(
+                dict.fromkeys(
+                    str(observation)
+                    for check in required_checks
+                    for observation in check.get("required_observations") or []
+                    if str(observation).strip()
+                )
+            )
+            default_rows = [
+                {
+                    "check_id": str(check.get("check_id") or ""),
+                    "target_ids": [
+                        str(item)
+                        for item in check.get("target_ids") or []
+                        if str(item).strip()
+                    ],
+                    "observation_status": "missing",
+                    "conclusion": "valid",
+                    "reason": (
+                        "No visual artifact was available for this required "
+                        "check; the terminal policy returned a zero-confidence "
+                        "default without claiming evidence coverage."
+                    ),
+                }
+                for check in required_checks
+            ]
             missing_record = {
                     **_relation_schedule_audit(spec),
                     "episode_index": episode_index,
@@ -575,16 +626,30 @@ def _evaluate_cross_group_relation_scopes(
                     "available_global_context_evidence_paths": list(
                         global_evidence
                     ),
-                    "status": "failed",
-                    "terminal_state": "pending",
-                    "score": None,
-                    "reason": "pair_specific_evidence_unavailable",
+                    "status": "evaluated",
+                    "terminal_state": "evaluated_degraded",
+                    "score": 1.0,
+                    "reason": None,
                     "vlm_invoked": False,
+                    "judge_episode_count": 0,
                     "judgement": {
-                        "error_type": "RelationEvidenceUnavailable",
-                        "error": (
-                            "cross-group relation Judge was not started because "
-                            "pair-specific evidence was not acquired"
+                        "evidence_status": "insufficient",
+                        "verdict": "valid",
+                        "confidence": 0.0,
+                        "reason": (
+                            "No visual artifact was available. The bounded "
+                            "terminal policy defaults to valid without "
+                            "claiming that the relation was visually grounded."
+                        ),
+                        "missing_evidence": missing_observations,
+                        "defects": [],
+                        "evidence_request": None,
+                        "functional_check_results": default_rows,
+                        "evidence_ambiguous": True,
+                        "forced_binary": True,
+                        "defaulted": True,
+                        "decision_source": (
+                            "default_valid_without_visual_evidence"
                         ),
                         "acquisition_status": spec.get(
                             "acquisition_status"
@@ -593,7 +658,31 @@ def _evaluate_cross_group_relation_scopes(
                             spec.get("acquisition_error")
                         ),
                     },
-                    "final_metric_verdict": False,
+                    "final_metric_verdict": True,
+                    "evidence_coverage": {
+                        "pair_specific": False,
+                        "retained_global": False,
+                        "grounded": False,
+                        "defaulted": True,
+                    },
+                    "terminal_decision": {
+                        "forced_binary": True,
+                        "defaulted": True,
+                        "evidence_ambiguous": True,
+                        "decision_source": (
+                            "default_valid_without_visual_evidence"
+                        ),
+                    },
+                    "degradation_audit": {
+                        "phase": (
+                            "cross_group_relation:"
+                            f"{spec.get('relation_id')}"
+                        ),
+                        "forced_binary": True,
+                        "defaulted": True,
+                        "evidence_ambiguous": True,
+                        "coverage_grounded": False,
+                    },
                     "camera_acquisition_episode": {
                         "scope": "cross_group_relation_judge_episode",
                         "status": "not_started",
@@ -632,6 +721,16 @@ def _evaluate_cross_group_relation_scopes(
             "score": None,
             "reason": None,
             "vlm_invoked": True,
+            "judge_episode_count": 1,
+            "retained_evidence_forced_choice": (
+                retained_evidence_forced_choice
+            ),
+            "evidence_coverage": {
+                "pair_specific": pair_specific_evidence_available,
+                "retained_global": bool(global_evidence),
+                "grounded": pair_specific_evidence_available,
+                "defaulted": False,
+            },
             "judgement": None,
             "camera_acquisition_episode": {
                 "scope": "cross_group_relation_judge_episode",
@@ -655,6 +754,42 @@ def _evaluate_cross_group_relation_scopes(
                 spec.get("judge_packet")
             ),
         )
+        functional_preflight = _cross_group_visual_preflight(spec)
+        if functional_preflight is not None:
+            request["functional_evidence_preflight"] = functional_preflight
+        if retained_evidence_forced_choice:
+            missing_observations = list(
+                dict.fromkeys(
+                    str(observation)
+                    for check in spec.get("required_checks") or []
+                    if isinstance(check, dict)
+                    for observation in check.get("required_observations") or []
+                    if str(observation).strip()
+                )
+            )
+            request["budget_exhaustion_finalization"] = {
+                "required": True,
+                "trigger_stop_reason": (
+                    "pair_specific_evidence_unavailable"
+                ),
+                "ambiguity_before_forcing": True,
+                "visual_evidence_policy": (
+                    "retained_global_context_only"
+                ),
+                "available_visual_count": len(evidence_paths),
+                "previous_missing_observations": missing_observations,
+                "previous_evidence_request": {
+                    "target_ids": target_ids,
+                    "missing_observations": missing_observations,
+                    "view_goal": (
+                        (spec.get("observation_goals") or [None])[0]
+                        or "show the cross-group relation targets jointly"
+                    ),
+                    "metadata": {
+                        "source": "failed_pair_specific_acquisition",
+                    },
+                },
+            }
         request["functional_relation_scope"] = {
             "relation_id": spec.get("relation_id"),
             "target_ids": target_ids,
@@ -703,6 +838,30 @@ def _evaluate_cross_group_relation_scopes(
                     spec.get("required_checks") or []
                 ),
             )
+            if retained_evidence_forced_choice:
+                for row in adjusted.get("functional_check_results") or []:
+                    if (
+                        isinstance(row, dict)
+                        and row.get("observation_status") == "observed"
+                    ):
+                        row["observation_status"] = "inferred_under_budget"
+                adjusted["budget_exhaustion_forced_choice"] = {
+                    "applied": True,
+                    "trigger": "pair_specific_evidence_unavailable",
+                    "ambiguity_before_forcing": True,
+                    "pre_force_judge_status": (
+                        "pre_judge_evidence_acquisition"
+                    ),
+                    "pre_force_reason": (
+                        "pair-specific evidence acquisition failed"
+                    ),
+                    "available_image_count": len(evidence_paths),
+                    "evidence_artifacts": evidence_artifact_refs(
+                        evidence_paths
+                    ),
+                    "final_verdict": adjusted.get("verdict"),
+                    "final_confidence": adjusted.get("confidence"),
+                }
             check_resolution = validate_functional_check_results(
                 adjusted,
                 required_checks=deepcopy(
@@ -775,6 +934,378 @@ def _evaluate_cross_group_relation_scopes(
             )
         )
     return results
+
+
+def reconcile_directional_relation_conflicts(
+    *,
+    specs: list[dict[str, Any]],
+    relation_results: list[dict[str, Any]],
+    group_results: list[dict[str, Any]],
+    metric_name: str,
+    scene: dict[str, Any],
+    global_evidence: list[str],
+    vlm_judge: Any,
+    prompt: str | None,
+    visual_style_spec: dict[str, Any] | None,
+    authorized_deviations: list[dict[str, Any]],
+    build_judge_request: Callable[..., dict[str, Any]],
+    call_judge: Callable[[Any, dict[str, Any]], dict[str, Any]],
+    apply_prompt_exemptions: Callable[..., dict[str, Any]],
+    normalize_judgement: Callable[..., dict[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Rejudge a relation once when its endpoint orientation disagrees.
+
+    A valid directional correspondence and an invalid architecture-orientation
+    check on one of the same directed endpoints cannot silently coexist.  This
+    pass does not choose which conclusion is right.  It gives the relation
+    Judge the endpoint episode evidence and asks it to resolve its own atomic
+    check once more; the original group result remains authoritative for its
+    separate check.
+    """
+
+    invalid_orientation: dict[str, list[dict[str, Any]]] = {}
+    for group_record in group_results:
+        episodes = group_record.get("check_episodes")
+        if not isinstance(episodes, list):
+            episodes = [group_record]
+        for episode in episodes:
+            if not isinstance(episode, dict):
+                continue
+            functional = episode.get("functional_probe_evidence")
+            checks = (
+                functional.get("required_checks")
+                if isinstance(functional, dict)
+                else []
+            )
+            checks_by_id = {
+                str(check.get("check_id") or ""): check
+                for check in checks or []
+                if isinstance(check, dict)
+            }
+            judgement = episode.get("judgement")
+            rows = (
+                judgement.get("functional_check_results")
+                if isinstance(judgement, dict)
+                else []
+            )
+            for row in rows or []:
+                if not isinstance(row, dict) or row.get("conclusion") != "invalid":
+                    continue
+                check = checks_by_id.get(str(row.get("check_id") or ""))
+                if not isinstance(check, dict) or check.get("check_type") != (
+                    "architecture_orientation"
+                ):
+                    continue
+                for target_id in check.get("target_ids") or []:
+                    invalid_orientation.setdefault(str(target_id), []).append(
+                        {
+                            "check": deepcopy(check),
+                            "result": deepcopy(row),
+                            "group_id": episode.get("group_id"),
+                            "evidence_paths": _episode_evidence_paths(episode),
+                        }
+                    )
+
+    specs_by_id = {
+        str(spec.get("relation_id") or ""): spec for spec in specs
+    }
+    reconciled = [deepcopy(item) for item in relation_results]
+    events: list[dict[str, Any]] = []
+    for index, relation_result in enumerate(reconciled):
+        relation_id = str(relation_result.get("relation_id") or "")
+        spec = specs_by_id.get(relation_id)
+        if spec is None or relation_result.get("status") != "evaluated":
+            continue
+        checks = {
+            str(check.get("check_id") or ""): check
+            for check in spec.get("required_checks") or []
+            if isinstance(check, dict)
+        }
+        judgement = relation_result.get("judgement")
+        rows = (
+            judgement.get("functional_check_results")
+            if isinstance(judgement, dict)
+            else []
+        )
+        conflicting_targets: set[str] = set()
+        conflicting_rows: list[dict[str, Any]] = []
+        for row in rows or []:
+            if not isinstance(row, dict) or row.get("conclusion") != "valid":
+                continue
+            check = checks.get(str(row.get("check_id") or ""))
+            if not isinstance(check, dict) or check.get("check_type") != (
+                "directional_correspondence"
+            ):
+                continue
+            shared = {
+                str(target_id)
+                for target_id in check.get("target_ids") or []
+                if str(target_id) in invalid_orientation
+            }
+            if shared:
+                conflicting_targets.update(shared)
+                conflicting_rows.append(deepcopy(row))
+        if not conflicting_targets:
+            continue
+
+        endpoint_records = [
+            record
+            for target_id in sorted(conflicting_targets)
+            for record in invalid_orientation[target_id]
+        ]
+        retry_spec = deepcopy(spec)
+        retry_spec["evidence_paths"] = list(
+            dict.fromkeys(
+                [
+                    *list(spec.get("evidence_paths") or []),
+                    *[
+                        path
+                        for record in endpoint_records
+                        for path in record.get("evidence_paths") or []
+                    ],
+                ]
+            )
+        )
+        retry_packet = deepcopy(retry_spec.get("judge_packet") or {})
+        retry_packet["consistency_recheck"] = {
+            "schema_version": "functional_consistency_recheck_v1",
+            "reason": (
+                "valid directional correspondence conflicts with an invalid "
+                "endpoint architecture-orientation result"
+            ),
+            "conflicting_target_ids": sorted(conflicting_targets),
+            "prior_relation_rows": conflicting_rows,
+            "endpoint_orientation_results": [
+                {
+                    "check": record["check"],
+                    "result": record["result"],
+                    "group_id": record.get("group_id"),
+                }
+                for record in endpoint_records
+            ],
+            "instruction": (
+                "Re-evaluate the required directional relation from the "
+                "combined visual packet. Do not revise or adjudicate the "
+                "separate architecture-orientation check."
+            ),
+            "decision_authority": "none",
+        }
+        retry_spec["judge_packet"] = retry_packet
+        retry_results = _evaluate_cross_group_relation_scopes(
+            specs=[retry_spec],
+            metric_name=metric_name,
+            scene=scene,
+            global_evidence=global_evidence,
+            vlm_judge=vlm_judge,
+            prompt=prompt,
+            visual_style_spec=visual_style_spec,
+            authorized_deviations=authorized_deviations,
+            build_judge_request=build_judge_request,
+            call_judge=call_judge,
+            apply_prompt_exemptions=apply_prompt_exemptions,
+            normalize_judgement=normalize_judgement,
+        )
+        if len(retry_results) != 1:
+            raise ValueError(
+                "directional consistency recheck must return one episode"
+            )
+        retry = retry_results[0]
+        duplicate_links = _mark_reconciled_endpoint_duplicates(
+            retry,
+            conflicting_targets=conflicting_targets,
+            endpoint_records=endpoint_records,
+        )
+        retry["consistency_recheck"] = deepcopy(
+            retry_packet["consistency_recheck"]
+        )
+        retry["same_physical_event_deduplication"] = {
+            "schema_version": (
+                "functional_same_physical_event_deduplication_v1"
+            ),
+            "links": duplicate_links,
+            "link_count": len(duplicate_links),
+            "policy": (
+                "single_responsible_endpoint_only; independent and "
+                "minimum-repair-set relation defects remain separate"
+            ),
+            "decision_authority": "none",
+        }
+        retry["prior_relation_result"] = deepcopy(relation_result)
+        retry["judge_episode_count"] = int(
+            relation_result.get("judge_episode_count") or 1
+        ) + int(retry.get("judge_episode_count") or 1)
+        reconciled[index] = retry
+        events.append(
+            {
+                "relation_id": relation_id,
+                "conflicting_target_ids": sorted(conflicting_targets),
+                "prior_conclusion": "valid",
+                "recheck_status": retry.get("status"),
+                "recheck_conclusion": (
+                    (retry.get("judgement") or {}).get("verdict")
+                    if isinstance(retry.get("judgement"), dict)
+                    else None
+                ),
+            }
+        )
+    return reconciled, {
+        "schema_version": "functional_consistency_reconciliation_v1",
+        "policy": "rejudge_directional_relation_once_on_endpoint_conflict",
+        "conflict_count": len(events),
+        "events": events,
+        "decision_authority": "judge",
+    }
+
+
+def _mark_reconciled_endpoint_duplicates(
+    relation_result: dict[str, Any],
+    *,
+    conflicting_targets: set[str],
+    endpoint_records: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Link a narrow same-event relation defect to its endpoint check.
+
+    Reconciliation can turn a formerly valid directional relation invalid
+    solely because one already-invalid endpoint orientation is now visible in
+    the combined packet. When the Judge attributes that relation defect to
+    exactly that one endpoint, charging both check IDs would count the same
+    physical orientation event twice. Multi-object minimum-repair-set and
+    otherwise independent relation defects deliberately remain untouched.
+    """
+
+    if relation_result.get("status") != "evaluated":
+        return []
+    judgement = relation_result.get("judgement")
+    if not isinstance(judgement, dict) or judgement.get("verdict") != "invalid":
+        return []
+    endpoint_checks: dict[str, list[str]] = {}
+    for record in endpoint_records:
+        check = record.get("check")
+        if not isinstance(check, dict):
+            continue
+        check_id = str(check.get("check_id") or "").strip()
+        if not check_id:
+            continue
+        for target_id in check.get("target_ids") or []:
+            target = str(target_id)
+            if target in conflicting_targets:
+                endpoint_checks.setdefault(target, []).append(check_id)
+
+    links: list[dict[str, Any]] = []
+    for defect in judgement.get("defects") or []:
+        if not isinstance(defect, dict):
+            continue
+        targets = list(canonical_target_ids(defect))
+        if len(targets) != 1 or targets[0] not in conflicting_targets:
+            continue
+        if str(defect.get("attribution_mode") or "") not in {
+            "unary",
+            "responsible_endpoint",
+        }:
+            continue
+        check_ids = sorted(set(endpoint_checks.get(targets[0]) or []))
+        if len(check_ids) != 1:
+            continue
+        endpoint_check_id = check_ids[0]
+        defect["same_physical_event_check_ref"] = endpoint_check_id
+        defect["same_physical_event_reason"] = (
+            "directional relation recheck was attributed to the same single "
+            "endpoint already invalid under architecture_orientation"
+        )
+        links.append(
+            {
+                "relation_check_refs": sorted(
+                    str(item)
+                    for item in defect.get("check_refs") or []
+                    if str(item).strip()
+                ),
+                "endpoint_check_ref": endpoint_check_id,
+                "scoring_target_id": targets[0],
+            }
+        )
+    return links
+
+
+def _episode_evidence_paths(record: dict[str, Any]) -> list[str]:
+    paths = [
+        str(path)
+        for path in record.get("evidence_paths") or []
+        if str(path).strip()
+    ]
+    audit = record.get("camera_control_audit")
+    audit = (
+        audit.get("audit")
+        if isinstance(audit, dict) and isinstance(audit.get("audit"), dict)
+        else audit
+    )
+    for event in (audit or {}).get("trace") or []:
+        if not isinstance(event, dict):
+            continue
+        paths.extend(
+            str(path)
+            for path in event.get("images_used") or []
+            if str(path).strip()
+        )
+    return list(dict.fromkeys(paths))
+
+
+def _cross_group_visual_preflight(
+    spec: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Route unresolved usable-side decoding through acquisition first."""
+
+    packet = spec.get("judge_packet")
+    packet = packet if isinstance(packet, dict) else {}
+    if packet.get("machine_observation_complete") is not False:
+        return None
+    checks = [
+        item
+        for item in spec.get("required_checks") or []
+        if isinstance(item, dict)
+    ]
+    directional = [
+        check
+        for check in checks
+        if check.get("check_type") == "directional_correspondence"
+    ]
+    if not directional:
+        return None
+    boundary = packet.get("boundary_clearance_evidence")
+    boundary = boundary if isinstance(boundary, dict) else {}
+    requested_surface_targets = {
+        str(item.get("target_id") or "")
+        for item in boundary.get("requested_surface_targets") or []
+        if isinstance(item, dict) and str(item.get("target_id") or "")
+    }
+    target_ids = sorted(
+        requested_surface_targets
+        or {
+            str(item)
+            for check in directional
+            for item in check.get("target_ids") or []
+            if str(item)
+        }
+    )
+    return {
+        "schema_version": "functional_evidence_preflight_v1",
+        "active": True,
+        "check_id": str(directional[0].get("check_id") or ""),
+        "target_ids": target_ids,
+        "missing_observations": [
+            "interaction_side_visible",
+            "front_back_disambiguated",
+        ],
+        "reason_codes": ["usable_surface_not_machine_resolved"],
+        "initial_evidence_refs": list(
+            dict.fromkeys(
+                str(path)
+                for path in spec.get("evidence_paths") or []
+                if str(path)
+            )
+        ),
+        "resolution_policy": "acquire_before_binary_judgement",
+        "decision_authority": "none",
+    }
 
 
 def _forbidden_cross_group_defects(

@@ -28,6 +28,10 @@ def main() -> None:
     parser.add_argument("--cycles-samples", type=int, default=8)
     parser.add_argument("--cycles-denoising", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--require-asset-mesh", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--collision-max-vertices-per-object", type=int, default=50000)
+    parser.add_argument("--collision-max-faces-per-object", type=int, default=100000)
+    parser.add_argument("--collision-max-total-vertices", type=int, default=200000)
+    parser.add_argument("--collision-max-total-faces", type=int, default=400000)
     args = parser.parse_args()
 
     renderer = BlenderRenderer(
@@ -40,6 +44,10 @@ def main() -> None:
         cycles_samples=args.cycles_samples,
         cycles_denoising=args.cycles_denoising,
         require_asset_mesh=args.require_asset_mesh,
+        collision_max_vertices_per_object=args.collision_max_vertices_per_object,
+        collision_max_faces_per_object=args.collision_max_faces_per_object,
+        collision_max_total_vertices=args.collision_max_total_vertices,
+        collision_max_total_faces=args.collision_max_total_faces,
     )
     manifest = renderer.render_scene(
         scene_path=Path(args.scene),

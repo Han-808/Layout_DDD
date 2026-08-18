@@ -258,6 +258,15 @@ def _rendered_view_count(
             pair_id = item.get("pair_id")
             view_id = str(item.get("view_id") or "").strip()
             if (
+                role == "metric_highlighted_global"
+                and view_id not in trusted_ids
+            ):
+                # P0b composite renderers retain one fixed global context
+                # image beside the newly selected local views.  The per-round
+                # camera budget constrains those selected views, not this
+                # unchanged packet anchor.
+                continue
+            if (
                 pair_id is not None
                 and role
                 in {

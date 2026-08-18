@@ -128,10 +128,13 @@ deterministically derived scoring_target_ids in the validated result.
 For semantic placement, resolve every required placement check exactly once.
 Use only support_and_height, scene_zone, or contextual_anchor. A placement
 defect must reference its check_id and may target only that check's subject_id;
-context_ids are never defect owners. Exclude an exact duplicate of a final
-Functional event only with conclusion=excluded_function_owned, the exact
-function_event_ref, and same_physical_event=true. Object identity alone is not
-enough. If baseline review finds a missed placement issue, emit a strictly
+context_ids are never defect owners. First resolve the static-location claim
+independently. Only after finding that same Placement claim invalid may you
+deduplicate its burden against one supplied final Functional event by returning
+conclusion=excluded_function_owned, that exact function_event_ref, and
+same_physical_event=true. Shared object identity, a similar reason, or mere
+role overlap is never sufficient. If baseline review finds a missed placement
+issue, emit a strictly
 typed judge_originated_placement_results item with exactly proposal_id,
 subject_id, context_ids, check_type, observation_goal, observation_status,
 conclusion, reason, and severity. Its defect.check_id must equal proposal_id;
@@ -140,6 +143,20 @@ when current evidence is sufficient; otherwise request evidence and place a
 proposal containing exactly proposal_id, subject_id, context_ids, check_type,
 and observation_goal in evidence_request.metadata.placement_check_proposal.
 Never emit observation_kind or placement_check_type."""
+
+# Appended separately so the generic canonical response envelope remains
+# stable while Residual Placement can require an auditable two-stage synthesis.
+CANONICAL_METRIC_SYSTEM_PROMPT += """
+
+When response_contract requires group_global_observations, inspect every exact
+group once before the final verdict. Return one row per exact group_id with its
+unchanged object_ids, a concise global_position_observation, related_group_ids,
+an inter_group_observation, evidence_sufficiency, and residual_issue_candidate.
+These rows organize visual reasoning and have no independent scoring authority.
+Use only group membership; never infer truth from grouping labels, reasons, or
+formation edges. After all rows are complete, synthesize the final verdict and
+emit only novel scene_zone or contextual_anchor Placement results.
+"""
 
 _BUDGET_EXHAUSTION_FORCED_CHOICE_INSTRUCTION = """This is the terminal
 budget-exhaustion adjudication. No additional visual evidence can be acquired.
@@ -543,6 +560,30 @@ class OpenAICompatibleVLMJudge:
                 required_functional_checks
             )
         )
+        functional_preflight = _functional_preflight_response(
+            request,
+            selected_paths=selected,
+            required_checks=required_functional_checks,
+            allowed_missing_observations=allowed_missing_observations,
+            allowed_target_ids=allowed_evidence_request_target_ids,
+            forced_choice=forced_choice is not None,
+        )
+        if functional_preflight is not None:
+            return self._audit_result(
+                functional_preflight,
+                role=VLMRole.JUDGE,
+                decision_contract=DecisionContract.CANONICAL_METRIC,
+                judge_method=judge_method,
+                images_used=[
+                    str(path.resolve()) for path in selected
+                ],
+                request_metadata={
+                    "functional_evidence_preflight": {
+                        "applied": True,
+                        "model_call_skipped": True,
+                    }
+                },
+            )
         required_placement_checks = (
             _required_placement_checks_from_request(request)
         )
@@ -570,17 +611,54 @@ class OpenAICompatibleVLMJudge:
             functional_ownership_ledger = (
                 validate_functional_ownership_ledger(
                     functional_ownership_ledger,
-                    known_object_ids=_scene_known_ids_for_request(
-                        request
-                    ),
+                    known_object_ids=_scene_known_ids_for_request(request),
                 )
             )
+        raw_functional_probe_context = request.get(
+            "functional_probe_evidence"
+        )
+        raw_functional_measurements_context = (
+            deepcopy(
+                raw_functional_probe_context.get(
+                    "functional_measurements"
+                )
+            )
+            if isinstance(raw_functional_probe_context, dict)
+            and isinstance(
+                raw_functional_probe_context.get(
+                    "functional_measurements"
+                ),
+                dict,
+            )
+            else None
+        )
+        (
+            functional_measurements_context,
+            functional_measurement_scope_audit,
+        ) = _scope_soft_functional_measurements(
+            raw_functional_measurements_context,
+            required_checks=required_functional_checks_context,
+        )
         functional_probe_context = _judge_facing_functional_probe_context(
-            request.get("functional_probe_evidence"),
+            raw_functional_probe_context,
             required_checks_supplied=bool(
                 required_functional_checks_context
             ),
         )
+        residual_placement_phase = bool(
+            metric == "semantic_placement_consistency"
+            and str(request.get("evidence_phase") or "")
+            == "residual_global_placement_review"
+        )
+        canonical_scene_context = request.get("scene_summary")
+        natural_language_request = request.get("prompt")
+        if residual_placement_phase:
+            canonical_scene_context = (
+                _residual_placement_canonical_scene(
+                    request.get("scene_summary")
+                )
+            )
+            natural_language_request = None
         context = {
             **audit,
             "family": family,
@@ -589,18 +667,21 @@ class OpenAICompatibleVLMJudge:
             "metric_boundary_rules": request.get("metric_boundary_rules"),
             "rubric": request.get("metric_rubric") or CATEGORY_RUBRICS[metric],
             "metric_rubric": request.get("metric_rubric"),
-            "natural_language_request": request.get("prompt"),
+            "natural_language_request": natural_language_request,
             "authorized_deviations": request.get("authorized_deviations"),
             "metric_scope": request.get("judgment_scope"),
             "response_contract": request.get("response_contract"),
             "claims": request.get("claims"),
             "components": request.get("components"),
             "object_groups": request.get("object_groups"),
+            "target_scope": request.get("target_scope"),
+            "context_object_ids": request.get("context_object_ids"),
             "defect_attribution": request.get("defect_attribution"),
             "structured_context_policy": request.get(
                 "structured_context_policy"
             ),
             "functional_probe_evidence": functional_probe_context,
+            "functional_measurements": functional_measurements_context,
             "required_functional_checks": (
                 required_functional_checks_context
             ),
@@ -615,6 +696,9 @@ class OpenAICompatibleVLMJudge:
             ),
             "placement_discovery": request.get(
                 "placement_discovery"
+            ),
+            "placement_residual_context": request.get(
+                "placement_residual_context"
             ),
             "functional_ownership_ledger": (
                 _judge_facing_functional_ownership_ledger(
@@ -634,7 +718,7 @@ class OpenAICompatibleVLMJudge:
                 "routed_screen_claims"
             ),
             "visual_style_spec": request.get("visual_style_spec"),
-            "canonical_scene": request.get("scene_summary"),
+            "canonical_scene": canonical_scene_context,
             "deterministic_evidence": request.get("deterministic_evidence"),
             "allowed_missing_observations": list(
                 allowed_missing_observations
@@ -654,6 +738,17 @@ class OpenAICompatibleVLMJudge:
             ),
             "view_names": _generic_view_names(selected),
         }
+        if required_functional_checks_context:
+            context["functional_measurement_policy"] = {
+                "evidence_role": "soft_supporting_evidence",
+                "decision_authority": "none",
+                "missing_or_unavailable_policy": (
+                    "Continue the visual judgement and make the most "
+                    "educated binary choice permitted by the evidence. "
+                    "Do not treat a missing deterministic measurement "
+                    "alone as a reason to refuse judgement."
+                ),
+            }
         if deferred_placement_checks_context:
             context["phase_instruction"] = (
                 str(context["phase_instruction"]).rstrip()
@@ -679,10 +774,13 @@ class OpenAICompatibleVLMJudge:
                 "decision_contract",
                 "judge_method",
                 "metric",
+                "placement_residual_context",
                 "required_functional_checks",
                 "required_placement_checks",
                 "deferred_placement_checks",
                 "response_contract",
+                "functional_measurement_policy",
+                "functional_measurements",
                 "functional_probe_evidence",
                 "metric_prompt_version",
                 "metric_boundary_rules",
@@ -694,6 +792,8 @@ class OpenAICompatibleVLMJudge:
                 "claims",
                 "components",
                 "object_groups",
+                "target_scope",
+                "context_object_ids",
                 "defect_attribution",
                 "structured_context_policy",
                 "functional_relation_scope",
@@ -719,9 +819,25 @@ class OpenAICompatibleVLMJudge:
             context_text,
             required_checks=required_functional_checks_context,
         )
+        functional_measurement_delivery_audit = (
+            _functional_measurement_delivery_audit(
+                context_text,
+                required_checks=required_functional_checks_context,
+                measurements=functional_measurements_context,
+                source_scope_audit=functional_measurement_scope_audit,
+            )
+        )
         _require_placement_checks_in_model_context(
             context_text,
             required_checks=required_placement_checks_context,
+        )
+        placement_residual_context_delivery = (
+            _require_placement_residual_context_in_model_context(
+                context_text,
+                source_context=request.get(
+                    "placement_residual_context"
+                ),
+            )
         )
         _require_functional_ownership_in_model_context(
             context_text,
@@ -814,15 +930,7 @@ class OpenAICompatibleVLMJudge:
                         required_placement_checks
                     ),
                     expected_owner_stage=(
-                        "group_local"
-                        if request.get("evidence_phase")
-                        == "group_local_review"
-                        else "scene_global"
-                        if request.get("evidence_phase") in {
-                            "global_discovery",
-                            "scene_global",
-                        }
-                        else None
+                        _expected_placement_owner_stage(request)
                     ),
                 )
                 result = canonicalize_placement_defect_linkage(
@@ -913,6 +1021,7 @@ class OpenAICompatibleVLMJudge:
             if metric == "semantic_placement_consistency":
                 from benchmark.evaluator.scene_quality.placement_checks import (
                     validate_placement_check_results,
+                    validate_residual_group_global_observations,
                 )
 
                 ownership = request.get(
@@ -933,6 +1042,47 @@ class OpenAICompatibleVLMJudge:
                         or []
                     ),
                 )
+                if residual_placement_phase:
+                    validated_group_coverage = (
+                        validate_residual_group_global_observations(
+                        normalized,
+                        groups=_placement_groups_for_request(request),
+                        )
+                    )
+                    supplied_group_coverage = normalized.get(
+                        "group_global_observation_coverage"
+                    )
+                    if isinstance(supplied_group_coverage, dict) and isinstance(
+                        supplied_group_coverage.get("source_by_group"),
+                        dict,
+                    ):
+                        ungrounded = set(
+                            validated_group_coverage.get(
+                                "ungrounded_group_ids"
+                            )
+                            or []
+                        )
+                        source_by_group = deepcopy(
+                            supplied_group_coverage["source_by_group"]
+                        )
+                        validated_group_coverage[
+                            "source_by_group"
+                        ] = source_by_group
+                        validated_group_coverage[
+                            "defaulted_group_ids"
+                        ] = [
+                            group_id
+                            for group_id, source in source_by_group.items()
+                            if source == "defaulted"
+                            and group_id in ungrounded
+                        ]
+                    normalized[
+                        "group_global_observation_coverage"
+                    ] = validated_group_coverage
+                    if normalized[
+                        "group_global_observation_coverage"
+                    ].get("complete") is not True:
+                        normalized["evidence_ambiguous"] = True
             if forced_choice is not None:
                 if normalized.get("evidence_status") != "sufficient":
                     raise ValueError(
@@ -951,6 +1101,105 @@ class OpenAICompatibleVLMJudge:
                     )
             return normalized
 
+        fail_soft_fallback = None
+        if metric == "functional_consistency" and required_functional_checks:
+            from benchmark.evaluator.scene_quality.functional_checks import (
+                salvage_functional_judge_response,
+            )
+
+            def fail_soft_fallback(
+                value: dict[str, Any],
+                initial_value: dict[str, Any],
+            ) -> dict[str, Any]:
+                candidate = salvage_functional_judge_response(
+                    value,
+                    required_checks=deepcopy(required_functional_checks),
+                    fallback_value=initial_value,
+                    retain_invalid=True,
+                )
+                try:
+                    validate_response(candidate)
+                except (TypeError, ValueError, KeyError):
+                    return salvage_functional_judge_response(
+                        value,
+                        required_checks=deepcopy(
+                            required_functional_checks
+                        ),
+                        fallback_value=initial_value,
+                        retain_invalid=False,
+                    )
+                return candidate
+        elif metric == "semantic_placement_consistency":
+            from benchmark.evaluator.scene_quality.placement_checks import (
+                salvage_residual_group_global_observations,
+                salvage_placement_judge_response,
+            )
+
+            ownership = request.get("functional_ownership_ledger")
+            function_events = list(
+                (
+                    ownership if isinstance(ownership, dict) else {}
+                ).get("events")
+                or []
+            )
+
+            def fail_soft_fallback(
+                value: dict[str, Any],
+                initial_value: dict[str, Any],
+            ) -> dict[str, Any]:
+                candidate = salvage_placement_judge_response(
+                    value,
+                    required_checks=deepcopy(required_placement_checks),
+                    function_events=function_events,
+                    retain_invalid=True,
+                    fallback_value=initial_value,
+                    known_ids=_placement_known_ids_for_request(request),
+                    groups=_placement_groups_for_request(request),
+                    expected_owner_stage=(
+                        _expected_placement_owner_stage(request)
+                    ),
+                )
+                if residual_placement_phase:
+                    candidate = salvage_residual_group_global_observations(
+                        candidate,
+                        groups=_placement_groups_for_request(request),
+                        fallback_value=initial_value,
+                    )
+                try:
+                    validate_response(candidate)
+                except (TypeError, ValueError, KeyError):
+                    candidate = salvage_placement_judge_response(
+                        value,
+                        required_checks=deepcopy(
+                            required_placement_checks
+                        ),
+                        function_events=function_events,
+                        retain_invalid=False,
+                        fallback_value=initial_value,
+                        known_ids=_placement_known_ids_for_request(request),
+                        groups=_placement_groups_for_request(request),
+                        expected_owner_stage=(
+                            _expected_placement_owner_stage(request)
+                        ),
+                    )
+                    if residual_placement_phase:
+                        candidate = (
+                            salvage_residual_group_global_observations(
+                                candidate,
+                                groups=_placement_groups_for_request(
+                                    request
+                                ),
+                                fallback_value=initial_value,
+                            )
+                        )
+                    return candidate
+                # Return the raw atomically salvaged shape.  The generic
+                # repair wrapper validates it exactly once; returning the
+                # already-normalized Placement value here would normalize
+                # judge-originated checks a second time and lose their
+                # derived registration ledger.
+                return candidate
+
         result, schema_audit = repair_canonical_response_schema_once(
             model=self.model,
             messages=messages,
@@ -967,9 +1216,25 @@ class OpenAICompatibleVLMJudge:
             allowed_missing_observations=tuple(
                 str(item) for item in allowed_missing_observations
             ),
+            fail_soft_fallback=fail_soft_fallback,
         )
         request_metadata = dict(self.model.last_request_metadata)
         request_metadata["response_schema_validation"] = schema_audit
+        if required_functional_checks_context:
+            request_metadata["functional_measurement_delivery"] = deepcopy(
+                functional_measurement_delivery_audit
+            )
+            if functional_measurement_delivery_audit.get(
+                "evidence_ambiguous"
+            ):
+                result["evidence_ambiguous"] = True
+                result["functional_measurement_delivery_audit"] = deepcopy(
+                    functional_measurement_delivery_audit
+                )
+        if placement_residual_context_delivery is not None:
+            request_metadata[
+                "placement_residual_context_delivery"
+            ] = deepcopy(placement_residual_context_delivery)
         if forced_choice is not None:
             request_metadata["budget_exhaustion_finalization"] = {
                 **forced_choice,
@@ -1701,6 +1966,32 @@ def _canonical_phase_instruction(
             "scene-global defect to exact target IDs. "
             + acquire_more
         )
+    if (
+        metric == "semantic_placement_consistency"
+        and phase == "residual_global_placement_review"
+    ):
+        stage_emphasis = L3_METRIC_PHASE_PROMPTS[metric][phase]
+        return (
+            "This is the final residual scene-global Placement pass. The "
+            "typed global, group-local, and target-local passes have already "
+            "run; their results are neutral suppression context, not a "
+            "validity prior. Use the angled overview for appearance and the "
+            "top/identity views for scene-scale organization and object "
+            "grounding. scene_program gives only the broad room program; "
+            "do not turn it into a style or inventory stereotype. Treat the "
+            "complete object_inventory as an identity roster, not as proof "
+            "that any two objects form a relation. Visual layout remains the "
+            "primary decision evidence. Complete one concise "
+            "group_global_observations row for every exact group before "
+            "synthesizing the final verdict; those rows are audit-only, not "
+            "independent votes or defects. "
+            + stage_emphasis
+            + " Return a judge-originated typed result only for a concrete "
+            "new scene_zone or contextual_anchor failure. If the current "
+            "global packet is missing a necessary observable fact, use the "
+            "normal evidence-request loop; otherwise make a binary choice. "
+            + acquire_more
+        )
     if metric == "style_consistency" and phase == "global_discovery":
         stage_emphasis = L3_METRIC_PHASE_PROMPTS[metric][phase]
         return (
@@ -1731,6 +2022,15 @@ def _canonical_phase_instruction(
             "not restate cross-group claims with missing participants. "
             + stage_emphasis
             + " "
+            + acquire_more
+        )
+    if phase == "target_local_confirmation":
+        return (
+            "This is an independent target-centred confirmation episode, "
+            "not a group judgement. The target object is the only default "
+            "defect owner; nearby context objects are included only to make "
+            "the local scene relationship legible. Do not infer group "
+            "membership from the framing. "
             + acquire_more
         )
     if (
@@ -2131,7 +2431,8 @@ def _project_group_local_defects_to_scope(
     if projected.get("verdict") == "invalid" and not retained:
         if typed_invalid:
             # A typed invalid without its exact authorized defect is a real
-            # contract failure and must proceed to schema repair/fail closed.
+            # contract failure and must proceed to schema repair or the
+            # metric-specific atomic-row fallback.
             return projected
         projected["verdict"] = "valid"
         projected["reason"] = (
@@ -2155,19 +2456,26 @@ def _validate_pending_placement_proposal(
     proposal = metadata.get("placement_check_proposal")
     if proposal is None:
         return
-    if not isinstance(proposal, dict) or not str(
-        proposal.get("proposal_id") or ""
-    ).strip():
-        raise ValueError(
-            "placement_check_proposal requires a canonical proposal_id"
-        )
     from benchmark.evaluator.scene_quality.placement_checks import (
         build_pending_placement_check,
+        canonicalize_placement_proposal_transport,
     )
+
+    known_ids = _placement_known_ids_for_request(request)
+    proposal, warnings = canonicalize_placement_proposal_transport(
+        proposal,
+        known_ids=known_ids,
+    )
+    metadata["placement_check_proposal"] = proposal
+    if warnings:
+        metadata["placement_transport_normalization"] = {
+            "policy": "narrow_transport_only_v1",
+            "warnings": warnings,
+        }
 
     pending = build_pending_placement_check(
         proposal,
-        known_ids=_placement_known_ids_for_request(request),
+        known_ids=known_ids,
         groups=_placement_groups_for_request(request),
         source_ref=str(proposal["proposal_id"]),
     )
@@ -2288,6 +2596,8 @@ def _judge_facing_required_functional_checks(
                 "allowed_causal_object_ids",
                 "acquisition_status",
                 "artifact_rendered",
+                "machine_view_coverage_status",
+                "machine_view_coverage_usable",
             )
             if key in check
         }
@@ -2384,10 +2694,12 @@ def _judge_facing_functional_ownership_ledger(
                 key: deepcopy(event[key])
                 for key in (
                     "event_id",
+                    "owning_metric",
                     "affected_object_ids",
                     "cause_kind",
                     "causal_object_ids",
                     "scoring_target_ids",
+                    "counterpart_object_ids",
                     "scope",
                     "relation",
                     "reason",
@@ -2403,6 +2715,26 @@ def _judge_facing_functional_ownership_ledger(
         "event_count": len(events),
         "decision_authority": "none",
     }
+
+
+def _expected_placement_owner_stage(
+    request: dict[str, Any],
+) -> str | None:
+    if isinstance(request.get("target_scope"), dict):
+        return "target_local"
+    if isinstance(request.get("group_scope"), dict):
+        return "group_local"
+    phase = str(request.get("evidence_phase") or "")
+    if phase in {
+        "global_discovery",
+        "scene_global",
+        "residual_global_placement_review",
+    }:
+        return "scene_global"
+    # Direct adapter callers may use the group-local phase without supplying
+    # a trusted group.  In that case owner assignment is derived from the
+    # available group map and may legitimately become target-local.
+    return None
 
 
 def _placement_known_ids_for_request(
@@ -2482,12 +2814,137 @@ def _judge_facing_functional_probe_context(
     if not isinstance(value, dict):
         return deepcopy(value)
     result = deepcopy(value)
+    if isinstance(result.pop("functional_measurements", None), dict):
+        # The compact bank is a separately budget-protected top-level field.
+        # Keeping a second copy inside this potentially large packet can force
+        # both copies through lossy JSON-prefix compaction.
+        result["functional_measurements_reference"] = (
+            "functional_measurements"
+        )
     if required_checks_supplied:
         result.pop("required_checks", None)
         result["required_checks_reference"] = (
             "required_functional_checks"
         )
     return result
+
+
+def _functional_preflight_response(
+    request: dict[str, Any],
+    *,
+    selected_paths: list[Path],
+    required_checks: list[dict[str, Any]],
+    allowed_missing_observations: tuple[str, ...],
+    allowed_target_ids: tuple[str, ...],
+    forced_choice: bool,
+) -> dict[str, Any] | None:
+    """Emit one controller-visible evidence request before binary judging.
+
+    A failed usable-side decode is machine-observable.  Letting the semantic
+    Judge immediately return a confident binary answer in that state defeats
+    the evidence loop.  The preflight therefore requests one replacement view
+    without consuming a model call.  Once the active packet contains an
+    artifact not present in the initial packet, ordinary Judge authority
+    resumes.  Terminal forced choice also bypasses this guard by design.
+    """
+
+    value = request.get("functional_evidence_preflight")
+    if (
+        forced_choice
+        or not isinstance(value, dict)
+        or value.get("active") is not True
+        or not required_checks
+    ):
+        return None
+
+    def artifact_key(raw: Any) -> str:
+        try:
+            return str(Path(str(raw)).expanduser().resolve())
+        except (OSError, RuntimeError, ValueError):
+            return str(raw)
+
+    initial = {
+        artifact_key(item)
+        for item in value.get("initial_evidence_refs") or []
+        if str(item).strip()
+    }
+    current = {artifact_key(path) for path in selected_paths}
+    if current - initial:
+        return None
+
+    allowed_missing = set(allowed_missing_observations)
+    missing = list(
+        dict.fromkeys(
+            str(item)
+            for item in value.get("missing_observations") or []
+            if str(item) in allowed_missing
+        )
+    )
+    if not missing:
+        missing = [
+            item
+            for item in (
+                "interaction_side_visible",
+                "front_back_disambiguated",
+                "target_visible",
+            )
+            if item in allowed_missing
+        ][:1]
+    allowed_targets = set(allowed_target_ids)
+    targets = list(
+        dict.fromkeys(
+            str(item)
+            for item in value.get("target_ids") or []
+            if str(item) in allowed_targets
+        )
+    )
+    if not targets:
+        targets = list(allowed_target_ids[:1]) or ["scene"]
+    rows = [
+        {
+            "check_id": str(check.get("check_id") or ""),
+            "target_ids": [
+                str(item) for item in check.get("target_ids") or []
+            ],
+            "observation_status": "missing",
+            "conclusion": "unresolved",
+            "reason": (
+                "The deterministic visual preflight could not bind the "
+                "required directed-side observation; acquire a replacement "
+                "view before binary judgement."
+            ),
+        }
+        for check in required_checks
+    ]
+    return {
+        "evidence_status": "insufficient",
+        "verdict": "ambiguous",
+        "confidence": 0.0,
+        "reason": (
+            "Required directed-side evidence was not machine-resolved in "
+            "the initial packet."
+        ),
+        "missing_evidence": missing,
+        "defects": [],
+        "evidence_request": {
+            "target_ids": targets,
+            "missing_observations": missing,
+            "view_goal": (
+                "show the directed usable or interaction side with enough "
+                "front/back context to resolve the requested check"
+            ),
+            "metadata": {
+                "source": "functional_evidence_preflight_v1",
+                "check_id": value.get("check_id"),
+                "reason_codes": deepcopy(value.get("reason_codes") or []),
+            },
+        },
+        "functional_check_results": rows,
+        "functional_evidence_preflight": {
+            "applied": True,
+            "reason_codes": deepcopy(value.get("reason_codes") or []),
+        },
+    }
 
 
 def _require_functional_checks_in_model_context(
@@ -2535,6 +2992,181 @@ def _require_functional_checks_in_model_context(
         )
 
 
+def _scope_soft_functional_measurements(
+    measurements: dict[str, Any] | None,
+    *,
+    required_checks: list[dict[str, Any]],
+) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+    """Project non-authoritative measurements onto the exact Judge scope."""
+
+    expected_ids = list(
+        dict.fromkeys(
+            str(check.get("check_id") or "")
+            for check in required_checks
+            if str(check.get("check_id") or "").strip()
+        )
+    )
+    if not expected_ids:
+        return None, {
+            "schema_version": "functional_measurement_scope_audit_v1",
+            "status": "not_applicable",
+            "expected_check_ids": [],
+            "source_check_ids": [],
+            "source_unexpected_check_ids": [],
+            "source_duplicate_check_ids": [],
+            "missing_check_ids": [],
+            "evidence_role": "soft_supporting_evidence",
+            "decision_authority": "none",
+        }
+
+    source = deepcopy(measurements) if isinstance(measurements, dict) else {}
+    rows = [
+        deepcopy(item)
+        for item in source.get("check_measurements") or []
+        if isinstance(item, dict)
+        and str(item.get("check_id") or "").strip()
+    ]
+    source_ids = [str(item.get("check_id")) for item in rows]
+    expected = set(expected_ids)
+    source_unexpected = list(
+        dict.fromkeys(item for item in source_ids if item not in expected)
+    )
+    source_duplicates = sorted(
+        {
+            item
+            for item in source_ids
+            if source_ids.count(item) > 1
+        }
+    )
+    by_id: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        check_id = str(row["check_id"])
+        if check_id in expected and check_id not in by_id:
+            by_id[check_id] = row
+    scoped_rows = [
+        by_id[check_id]
+        for check_id in expected_ids
+        if check_id in by_id
+    ]
+    missing = [
+        check_id for check_id in expected_ids if check_id not in by_id
+    ]
+    scoped = source
+    scoped.pop("_truncated", None)
+    scoped["status"] = (
+        "complete"
+        if not missing
+        else "partial"
+        if scoped_rows
+        else "unavailable"
+    )
+    scoped["measurement_role"] = (
+        "deterministic_spatial_evidence_not_verdict"
+    )
+    scoped["decision_authority"] = "none"
+    scoped["requested_check_ids"] = list(expected_ids)
+    scoped["check_measurements"] = scoped_rows
+    audit = {
+        "schema_version": "functional_measurement_scope_audit_v1",
+        "status": scoped["status"],
+        "expected_check_ids": list(expected_ids),
+        "source_check_ids": source_ids,
+        "source_unexpected_check_ids": source_unexpected,
+        "source_duplicate_check_ids": source_duplicates,
+        "missing_check_ids": missing,
+        "evidence_role": "soft_supporting_evidence",
+        "decision_authority": "none",
+    }
+    return scoped, audit
+
+
+def _functional_measurement_delivery_audit(
+    context_text: str,
+    *,
+    required_checks: list[dict[str, Any]],
+    measurements: dict[str, Any] | None,
+    source_scope_audit: dict[str, Any],
+) -> dict[str, Any]:
+    """Audit soft-evidence delivery without blocking a visual verdict."""
+
+    expected_ids = list(
+        dict.fromkeys(
+            str(check.get("check_id") or "")
+            for check in required_checks
+            if str(check.get("check_id") or "").strip()
+        )
+    )
+    if not expected_ids:
+        return {
+            "schema_version": "functional_measurement_delivery_audit_v1",
+            "status": "not_applicable",
+            "expected_check_ids": [],
+            "delivered_check_ids": [],
+            "missing_check_ids": [],
+            "unexpected_check_ids": [],
+            "truncated": False,
+            "evidence_ambiguous": False,
+            "blocks_judge": False,
+            "evidence_role": "soft_supporting_evidence",
+            "decision_authority": "none",
+        }
+    parsed = json.loads(context_text)
+    delivered = parsed.get("functional_measurements")
+    truncated = bool(
+        isinstance(delivered, dict)
+        and delivered.get("_truncated") is True
+    )
+    delivered_ids = (
+        [
+            str(item.get("check_id") or "")
+            for item in delivered.get("check_measurements") or []
+            if isinstance(item, dict)
+            and str(item.get("check_id") or "").strip()
+        ]
+        if isinstance(delivered, dict) and not truncated
+        else []
+    )
+    expected = set(expected_ids)
+    missing = [
+        check_id for check_id in expected_ids if check_id not in delivered_ids
+    ]
+    unexpected = list(
+        dict.fromkeys(
+            check_id
+            for check_id in delivered_ids
+            if check_id not in expected
+        )
+    )
+    source_duplicates = list(
+        source_scope_audit.get("source_duplicate_check_ids") or []
+    )
+    ambiguous = bool(
+        missing or unexpected or truncated or source_duplicates
+    )
+    status = (
+        "complete"
+        if not ambiguous
+        else "partial"
+        if delivered_ids
+        else "unavailable"
+    )
+    return {
+        "schema_version": "functional_measurement_delivery_audit_v1",
+        "status": status,
+        "expected_check_ids": expected_ids,
+        "delivered_check_ids": delivered_ids,
+        "missing_check_ids": missing,
+        "unexpected_check_ids": unexpected,
+        "truncated": truncated,
+        "source_measurements_present": isinstance(measurements, dict),
+        "source_scope_audit": deepcopy(source_scope_audit),
+        "evidence_ambiguous": ambiguous,
+        "blocks_judge": False,
+        "evidence_role": "soft_supporting_evidence",
+        "decision_authority": "none",
+    }
+
+
 def _require_placement_checks_in_model_context(
     context_text: str,
     *,
@@ -2580,6 +3212,155 @@ def _require_placement_checks_in_model_context(
             "required placement checks exceed the model context budget; "
             "partial check delivery is forbidden"
         )
+
+
+def _require_placement_residual_context_in_model_context(
+    context_text: str,
+    *,
+    source_context: Any,
+) -> dict[str, Any] | None:
+    if not isinstance(source_context, dict):
+        return None
+    parsed = json.loads(context_text)
+    delivered = parsed.get("placement_residual_context")
+    if not isinstance(delivered, dict):
+        raise ValueError(
+            "residual Placement context exceeds the model context budget"
+        )
+    source_program = source_context.get("scene_program")
+    delivered_program = delivered.get("scene_program")
+    source_program = (
+        source_program if isinstance(source_program, dict) else {}
+    )
+    delivered_program = (
+        delivered_program if isinstance(delivered_program, dict) else {}
+    )
+    source_inventory = source_context.get("object_inventory")
+    delivered_inventory = delivered.get("object_inventory")
+    source_inventory = (
+        source_inventory if isinstance(source_inventory, list) else []
+    )
+    delivered_inventory = (
+        delivered_inventory
+        if isinstance(delivered_inventory, list)
+        else []
+    )
+    expected_ids = [
+        str(item.get("object_id") or "")
+        for item in source_inventory
+        if isinstance(item, dict)
+    ]
+    delivered_ids = [
+        str(item.get("object_id") or "")
+        for item in delivered_inventory
+        if isinstance(item, dict)
+    ]
+    expected_scene_type = str(source_program.get("scene_type") or "")
+    delivered_scene_type = str(
+        delivered_program.get("scene_type") or ""
+    )
+    source_groups = source_context.get("groups")
+    delivered_groups = delivered.get("groups")
+    top_level_groups = parsed.get("object_groups")
+    source_groups = source_groups if isinstance(source_groups, list) else []
+    delivered_groups = (
+        delivered_groups if isinstance(delivered_groups, list) else []
+    )
+    top_level_groups = (
+        top_level_groups if isinstance(top_level_groups, list) else []
+    )
+
+    def group_roster(value: list[Any]) -> list[dict[str, Any]]:
+        return [
+            {
+                "group_id": str(item.get("group_id") or ""),
+                "object_ids": list(item.get("object_ids") or []),
+            }
+            for item in value
+            if isinstance(item, dict)
+        ]
+
+    expected_groups = group_roster(source_groups)
+    delivered_group_roster = group_roster(delivered_groups)
+    top_level_group_roster = group_roster(top_level_groups)
+    leaked_group_semantics = any(
+        isinstance(item, dict)
+        and set(item) - {"group_id", "object_ids"}
+        for item in top_level_groups
+    )
+    canonical_scene = parsed.get("canonical_scene")
+    canonical_objects = (
+        canonical_scene.get("objects")
+        if isinstance(canonical_scene, dict)
+        and isinstance(canonical_scene.get("objects"), list)
+        else []
+    )
+    leaked_description = any(
+        isinstance(item, dict)
+        and any(key in item for key in ("description", "desc"))
+        for item in canonical_objects
+    )
+    if (
+        delivered_scene_type != expected_scene_type
+        or delivered_ids != expected_ids
+        or delivered.get("object_inventory_complete") is not True
+        or parsed.get("natural_language_request") not in (None, "")
+        or parsed.get("visual_style_spec") is not None
+        or leaked_description
+        or delivered_group_roster != expected_groups
+        or top_level_group_roster != expected_groups
+        or leaked_group_semantics
+    ):
+        raise ValueError(
+            "residual Placement scene program or complete object inventory "
+            "was not delivered intact, or excluded theme/prompt context "
+            "leaked into the model input"
+        )
+    return {
+        "schema_version": "placement_residual_context_delivery_audit_v2",
+        "scene_type": delivered_scene_type,
+        "expected_object_count": len(expected_ids),
+        "delivered_object_count": len(delivered_ids),
+        "object_ids_complete": True,
+        "group_ids": [item["group_id"] for item in expected_groups],
+        "group_roster_complete": True,
+        "group_semantic_metadata_delivered": False,
+        "aesthetic_theme_delivered": False,
+        "generation_prompt_delivered": False,
+    }
+
+
+def _residual_placement_canonical_scene(value: Any) -> dict[str, Any]:
+    """Retain raw spatial facts while removing style/prompt descriptions."""
+
+    source = value if isinstance(value, dict) else {}
+    objects = [
+        {
+            key: deepcopy(item.get(key))
+            for key in (
+                "id",
+                "category",
+                "center",
+                "size",
+                "rotation",
+            )
+            if key in item
+        }
+        for item in source.get("objects") or []
+        if isinstance(item, dict)
+    ]
+    return {
+        key: deepcopy(source.get(key))
+        for key in (
+            "scene_id",
+            "scene_type",
+            "boundary",
+            "scene_height",
+            "architecture",
+            "object_count",
+        )
+        if key in source
+    } | {"objects": objects}
 
 
 def _require_functional_ownership_in_model_context(

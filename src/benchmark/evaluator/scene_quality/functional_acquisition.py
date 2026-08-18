@@ -11,6 +11,15 @@ from benchmark.evaluator.scene_quality.functional_checks import (
     functional_relation_required_observations,
     route_functional_check_ledger,
 )
+from benchmark.evaluator.scene_quality.functional_clearance import (
+    apply_directional_clearance_profiles_to_ledger,
+    build_directional_clearance_extensions,
+)
+from benchmark.evaluator.scene_quality.functional_measurements import (
+    attach_functional_measurement_extension,
+    build_functional_measurement_bank,
+    compact_functional_measurements_for_checks,
+)
 from benchmark.visual_judge.functional_discovery_contract import (
     normalized_functional_relation_predicates,
 )
@@ -18,7 +27,7 @@ from benchmark.visual_judge.functional_evidence import (
     FUNCTIONAL_PROBE_MAX_UNITS,
 )
 
-FUNCTIONAL_ACQUISITION_PLAN_VERSION = "functional_acquisition_plan_v11"
+FUNCTIONAL_ACQUISITION_PLAN_VERSION = "functional_acquisition_plan_v12"
 
 _FRONTAGE_OBSERVATIONS = (
     "target_visible",
@@ -78,6 +87,32 @@ def build_functional_acquisition_plan(
         discovery,
         groups=groups,
         scene=scene,
+    )
+    # Measurements belong to accepted checks, not rendered probes. Build one
+    # deterministic record per accepted check before candidate construction or
+    # camera-budget scheduling so an unscheduled check retains the same spatial
+    # facts as a scheduled one.
+    functional_measurement_bank = build_functional_measurement_bank(
+        scene=scene,
+        functional_check_ledger=functional_check_ledger,
+        discovery=discovery,
+    )
+    directional_clearance_extensions = (
+        build_directional_clearance_extensions(
+            scene=scene,
+            discovery=discovery,
+            functional_check_ledger=functional_check_ledger,
+        )
+    )
+    functional_measurement_bank = attach_functional_measurement_extension(
+        functional_measurement_bank,
+        namespace="directional_clearance",
+        by_check_id=directional_clearance_extensions,
+        source="deterministic_usable_side_forward_corridor_v1",
+    )
+    functional_check_ledger = apply_directional_clearance_profiles_to_ledger(
+        functional_check_ledger,
+        by_check_id=directional_clearance_extensions,
     )
     check_type_by_id = {
         str(item.get("check_id") or ""): str(
@@ -159,6 +194,12 @@ def build_functional_acquisition_plan(
                 "surface_targets": surface_targets,
                 "discovery_ids": list(discovery_ids),
                 "check_ids": check_ids,
+                "functional_measurements": (
+                    compact_functional_measurements_for_checks(
+                        functional_measurement_bank,
+                        check_ids,
+                    )
+                ),
                 "check_types": _stable_unique(
                     [
                         check_type_by_id[check_id]
@@ -327,6 +368,12 @@ def build_functional_acquisition_plan(
             *candidate["target_ids"],
             *candidate["related_target_ids"],
         ]
+        candidate["functional_measurements"] = (
+            compact_functional_measurements_for_checks(
+                functional_measurement_bank,
+                list(candidate.get("check_ids") or []),
+            )
+        )
         needs_directional_surface = bool(
             candidate.get("kind") != "functional_correspondence"
             or "directional_correspondence"
@@ -552,7 +599,9 @@ def build_functional_acquisition_plan(
                     "one_angled_global_view",
                     "same_side_conditioned_local_view",
                 ],
-                "deterministic_direction_descriptor": "routing_only",
+                "deterministic_direction_descriptor": (
+                    "camera_routing_and_measurement_bank_judge_evidence"
+                ),
             },
             "clearance": {
                 "directed": (
@@ -592,6 +641,7 @@ def build_functional_acquisition_plan(
         "backfill_probe_units": backfill,
         "group_confirmations": group_confirmations,
         "functional_check_ledger": functional_check_ledger,
+        "functional_measurement_bank": functional_measurement_bank,
         "unscheduled_discovery_items": unscheduled,
         "scheduled_probe_count": len(selected),
         "coverage_complete": not any(

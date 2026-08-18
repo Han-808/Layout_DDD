@@ -27,6 +27,8 @@ from benchmark.visual_judge.camera_targets import (
 from benchmark.visual_judge.interfaces.camera import (
     CameraSelectionRequest,
     CameraSelectionResult,
+    EvidenceReadinessRequest,
+    EvidenceReadinessResult,
 )
 
 
@@ -107,6 +109,9 @@ class ActiveVLMCameraSelector:
         max_repair_plans_source: str | None = None,
     ) -> None:
         self._call, self.method_name = _selector_call(selector)
+        self._readiness_call = getattr(
+            selector, "review_evidence_readiness", None
+        )
         self.selector = selector
         self.selection_mode = validate_vlm_selection_mode(
             selection_mode,
@@ -151,6 +156,46 @@ class ActiveVLMCameraSelector:
             raise TypeError(
                 "freeform_pose mode requires CameraPoseValidator.validate"
             )
+
+    @property
+    def supports_evidence_readiness(self) -> bool:
+        return callable(self._readiness_call)
+
+    def review_evidence_readiness(
+        self,
+        request: EvidenceReadinessRequest,
+    ) -> EvidenceReadinessResult:
+        """Delegate one camera-only packet review to the VLM transport."""
+
+        self.last_call_usage = {"vlm_call_count": 0}
+        if not isinstance(request, EvidenceReadinessRequest):
+            raise TypeError(
+                "ActiveVLMCameraSelector requires "
+                "EvidenceReadinessRequest"
+            )
+        if not callable(self._readiness_call):
+            raise TypeError(
+                "configured VLM camera selector does not support evidence "
+                "readiness review"
+            )
+        self.last_call_usage = {"vlm_call_count": 1}
+        raw = self._readiness_call(request.to_dict())
+        result = EvidenceReadinessResult.from_value(
+            raw,
+            request=request,
+            backend=self.backend,
+        )
+        provenance = {
+            **deepcopy(result.provenance),
+            "adapter_version": ACTIVE_VLM_CAMERA_SELECTOR_VERSION,
+            "selection_mode": "evidence_readiness",
+            "transport": _qualified_name(self.selector),
+        }
+        return replace(
+            result,
+            backend=self.backend,
+            provenance=provenance,
+        )
 
     def select(
         self, request: CameraSelectionRequest
@@ -480,6 +525,7 @@ def _base_payload(
     # target scope again from the full scene.
     for field in (
         "group_scope",
+        "target_scope",
         "member_ids",
         "target_bounds",
         "focus_center",

@@ -90,6 +90,12 @@
         "functional_ownership_ledger": {
           "$ref": "#/$defs/functionalOwnershipLedger"
         },
+        "functional_measurement_bank": {
+          "$ref": "#/$defs/functionalMeasurementBank"
+        },
+        "functional_spatial_context": {
+          "$ref": "#/$defs/functionalSpatialContext"
+        },
         "placement_check_ledger": {
           "$ref": "#/$defs/placementCheckLedger"
         },
@@ -99,6 +105,98 @@
         "cross_metric_ownership_audit": {
           "$ref": "#/$defs/crossMetricOwnershipAudit"
         }
+      }
+    },
+    "functionalMeasurementBank": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "generation_stage",
+        "measurement_role",
+        "decision_authority",
+        "accepted_check_count",
+        "check_measurement_count",
+        "coverage",
+        "check_measurements"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "functional_measurement_bank_v1"
+        },
+        "generation_stage": {
+          "const": "accepted_checks_before_camera_scheduling"
+        },
+        "measurement_role": {
+          "type": "string"
+        },
+        "decision_authority": {
+          "const": "none"
+        },
+        "accepted_check_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "check_measurement_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "coverage": {
+          "type": "object"
+        },
+        "check_measurements": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "check_id",
+              "check_type",
+              "target_ids",
+              "status",
+              "measurement_extensions",
+              "decision_authority"
+            ],
+            "properties": {
+              "check_id": {"type": "string", "minLength": 1},
+              "check_type": {"type": "string", "minLength": 1},
+              "target_ids": {
+                "type": "array",
+                "items": {"type": "string", "minLength": 1},
+                "minItems": 1,
+                "uniqueItems": true
+              },
+              "status": {
+                "enum": ["complete", "partial", "unavailable"]
+              },
+              "measurement_extensions": {"type": "object"},
+              "decision_authority": {"const": "none"}
+            }
+          }
+        }
+      }
+    },
+    "functionalSpatialContext": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "context_role",
+        "decision_authority",
+        "clearance_requirements",
+        "related_pairs",
+        "projection_audit"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "functional_spatial_context_v3"
+        },
+        "context_role": {
+          "const": "attention_only"
+        },
+        "decision_authority": {
+          "const": "none"
+        },
+        "clearance_requirements": {"type": "array"},
+        "related_pairs": {"type": "array"},
+        "projection_audit": {"type": "object"}
       }
     },
     "functionalOwnershipLedger": {
@@ -113,7 +211,7 @@
       ],
       "properties": {
         "schema_version": {
-          "const": "functional_ownership_ledger_v1"
+          "const": "functional_ownership_ledger_v2"
         },
         "source_metric": {
           "const": "functional_consistency"
@@ -128,6 +226,8 @@
               "cause_kind",
               "causal_object_ids",
               "scoring_target_ids",
+              "counterpart_object_ids",
+              "owning_metric",
               "decision_ref",
               "lifecycle_status",
               "decision_authority"
@@ -154,6 +254,14 @@
                 "items": {"type": "string", "minLength": 1},
                 "minItems": 1,
                 "uniqueItems": true
+              },
+              "counterpart_object_ids": {
+                "type": "array",
+                "items": {"type": "string", "minLength": 1},
+                "uniqueItems": true
+              },
+              "owning_metric": {
+                "const": "functional_consistency"
               },
               "decision_ref": {"type": "string", "minLength": 1},
               "lifecycle_status": {"const": "final"},
@@ -245,17 +353,19 @@
       "required": [
         "schema_version",
         "functional_event_count",
-        "excluded_placement_checks",
+        "potential_overlaps",
         "independent_invalid_placement_check_ids",
+        "runtime_cross_metric_suppression",
         "object_identity_alone_suppresses_placement",
+        "placement_claims_judged_independently",
         "decision_authority"
       ],
       "properties": {
         "schema_version": {
-          "const": "cross_metric_ownership_audit_v1"
+          "const": "cross_metric_ownership_audit_v2"
         },
         "functional_event_count": {"type": "integer", "minimum": 0},
-        "excluded_placement_checks": {"type": "array"},
+        "potential_overlaps": {"type": "array"},
         "independent_invalid_placement_check_ids": {
           "type": "array",
           "items": {"type": "string", "minLength": 1},
@@ -264,6 +374,8 @@
         "object_identity_alone_suppresses_placement": {
           "const": false
         },
+        "runtime_cross_metric_suppression": {"const": false},
+        "placement_claims_judged_independently": {"const": true},
         "decision_authority": {"const": "none"}
       }
     },
@@ -341,6 +453,8 @@
         "benchmark_score_status": {
           "enum": [
             "complete",
+            "partial_coverage",
+            "failed_coverage_threshold",
             "insufficient_metric_coverage",
             "not_evaluable"
           ]
@@ -359,9 +473,37 @@
             "scoring_profile_id": {"type": "string"},
             "scoring_spec_version": {"type": "string"},
             "layer_weights": {"$ref": "#/$defs/canonicalLayerWeights"},
-            "requires_l2_task": {"type": "boolean"}
+            "l3_metric_weights": {
+              "$ref": "#/$defs/canonicalL3MetricWeights"
+            },
+            "requires_l2_task": {"type": "boolean"},
+            "deduction_multiplier": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "deduction_multiplier_metrics": {
+              "type": "array",
+              "items": {"type": "string"},
+              "uniqueItems": true
+            }
           },
-          "additionalProperties": false
+          "additionalProperties": false,
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "scoring_profile_id": {
+                    "enum": [
+                      "intrinsic_validity_v2",
+                      "prompt_conditioned_quality_v2"
+                    ]
+                  }
+                },
+                "required": ["scoring_profile_id"]
+              },
+              "then": {"required": ["l3_metric_weights"]}
+            }
+          ]
         },
         "canonical_object_denominator": {
           "type": "object",
@@ -685,6 +827,40 @@
           "type": "integer",
           "minimum": 0
         },
+        "eligible_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "resolved_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "fraction": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "grounded_score_fraction": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "observed_score": {
+          "$ref": "#/$defs/score"
+        },
+        "earned_score_mass": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "maximum": 1
+        },
+        "minimum_publishable_coverage": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "coverage_threshold_passed": {
+          "type": "boolean"
+        },
         "unresolved_metrics": {
           "type": "array",
           "items": {
@@ -853,6 +1029,11 @@
         "covered_weight",
         "required_weight",
         "complete",
+        "score_resolution_complete",
+        "score_grounding_complete",
+        "grounded_score_weight",
+        "grounded_score_fraction",
+        "layer_grounding_fractions",
         "aggregation_denominator",
         "case_comparability"
       ],
@@ -895,6 +1076,37 @@
           "maximum": 1
         },
         "complete": {"type": "boolean"},
+        "score_resolution_complete": {"type": "boolean"},
+        "score_grounding_complete": {"type": "boolean"},
+        "grounded_score_weight": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "grounded_score_fraction": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "minimum_publishable_coverage": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "coverage_threshold_passed": {
+          "type": "boolean"
+        },
+        "layer_grounding_fractions": {
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/canonicalScoringLayerName"
+          },
+          "additionalProperties": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          }
+        },
         "aggregation_denominator": {
           "type": "number",
           "minimum": 0,
@@ -1245,6 +1457,24 @@
         "l4_downstream_task_functionality": {"const": 0.0}
       }
     },
+    "canonicalL3MetricWeights": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scale_consistency",
+        "style_consistency",
+        "object_pairing_consistency",
+        "functional_consistency",
+        "semantic_placement_consistency"
+      ],
+      "properties": {
+        "scale_consistency": {"type": "number", "minimum": 0, "maximum": 1},
+        "style_consistency": {"type": "number", "minimum": 0, "maximum": 1},
+        "object_pairing_consistency": {"type": "number", "minimum": 0, "maximum": 1},
+        "functional_consistency": {"type": "number", "minimum": 0, "maximum": 1},
+        "semantic_placement_consistency": {"type": "number", "minimum": 0, "maximum": 1}
+      }
+    },
     "canonicalPlanLayers": {
       "type": "object",
       "additionalProperties": false,
@@ -1309,6 +1539,10 @@
         },
         "authorized_deviations": {
           "type": ["array", "null"]
+        },
+        "scene_quality_prompt_context": {
+          "type": ["object", "null"],
+          "description": "Resolved metric-scoped public context supplied to L3 Judge prompts."
         },
         "metric_applicability": {
           "$ref": "#/$defs/canonicalMetricApplicability"

@@ -11,7 +11,7 @@ from copy import deepcopy
 from typing import Any
 
 
-FUNCTIONAL_GEOMETRY_VERSION = "functional_geometry_v2"
+FUNCTIONAL_GEOMETRY_VERSION = "functional_geometry_v3"
 _LOCAL_SIDE_AXES = {
     "local_pos_x": (1.0, 0.0, 0.0),
     "local_neg_x": (-1.0, 0.0, 0.0),
@@ -63,6 +63,7 @@ def build_functional_geometry_observations(
         else []
     )
     surfaces: list[dict[str, Any]] = []
+    relation_observations: list[dict[str, Any]] = []
     for hypothesis in probe.get("usable_surface_hypotheses") or []:
         if not isinstance(hypothesis, dict):
             continue
@@ -111,25 +112,71 @@ def build_functional_geometry_observations(
                 direction=(direction[0], direction[1]),
                 boundary=boundary,
             )
-            surfaces.append(
-                {
-                    "target_id": target_id,
-                    "status": str(hypothesis.get("status") or ""),
-                    "surface_role": surface.get("surface_role"),
-                    "side_id": side_id,
-                    "descriptor_kind": (
-                        "usable_side_world_direction"
-                    ),
-                    "routing_only": True,
-                    "architecture_orientation_applicable": True,
-                    "clearance_applicable": clearance_applicable,
-                    "world_outward_direction": list(direction),
-                    "object_center_xy": [center[0], center[1]],
-                    "frontage_origin_xy": list(frontage_origin),
-                    "frontage_support_extent_m": support_extent,
-                    **boundary_facts,
-                }
-            )
+            surface_observation = {
+                "target_id": target_id,
+                "status": str(hypothesis.get("status") or ""),
+                "surface_role": surface.get("surface_role"),
+                "side_id": side_id,
+                "surface_confidence": surface.get("confidence"),
+                "descriptor_kind": "usable_side_world_direction",
+                "routing_only": True,
+                "architecture_orientation_applicable": True,
+                "clearance_applicable": clearance_applicable,
+                "world_outward_direction": list(direction),
+                "object_center_xy": [center[0], center[1]],
+                "frontage_origin_xy": list(frontage_origin),
+                "frontage_support_extent_m": support_extent,
+                **boundary_facts,
+            }
+            surfaces.append(surface_observation)
+            for counterpart_id in target_ids:
+                if counterpart_id == target_id:
+                    continue
+                counterpart = objects.get(counterpart_id)
+                if counterpart is None:
+                    continue
+                counterpart_center = _vector3(counterpart.get("center"))
+                delta = (
+                    counterpart_center[0] - center[0],
+                    counterpart_center[1] - center[1],
+                )
+                distance = math.hypot(*delta)
+                if distance <= 1.0e-12:
+                    counterpart_direction = None
+                    facing_angle = None
+                else:
+                    counterpart_direction = [
+                        delta[0] / distance,
+                        delta[1] / distance,
+                        0.0,
+                    ]
+                    cosine = max(
+                        -1.0,
+                        min(
+                            1.0,
+                            direction[0] * counterpart_direction[0]
+                            + direction[1] * counterpart_direction[1],
+                        ),
+                    )
+                    facing_angle = math.degrees(math.acos(cosine))
+                relation_observations.append(
+                    {
+                        "endpoint_id": target_id,
+                        "counterpart_id": counterpart_id,
+                        "surface_role": surface.get("surface_role"),
+                        "side_id": side_id,
+                        "surface_hypothesis_status": str(
+                            hypothesis.get("status") or ""
+                        ),
+                        "surface_confidence": surface.get("confidence"),
+                        "endpoint_world_outward_direction": list(direction),
+                        "endpoint_to_counterpart_direction": counterpart_direction,
+                        "center_distance_m": float(distance),
+                        "facing_angle_to_counterpart_degrees": facing_angle,
+                        "routing_only": True,
+                        "decision_authority": "none",
+                    }
+                )
     return {
         "schema_version": FUNCTIONAL_GEOMETRY_VERSION,
         "decision_authority": "none",
@@ -156,6 +203,7 @@ def build_functional_geometry_observations(
         ),
         "logical_boundary_available": bool(boundary),
         "surface_observations": surfaces,
+        "relation_observations": relation_observations,
         "observation_status": (
             "available"
             if surfaces

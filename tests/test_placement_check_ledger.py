@@ -13,13 +13,16 @@ from benchmark.evaluator.scene_quality.placement_checks import (
     build_pending_placement_check,
     build_placement_check_ledger,
     canonicalize_placement_defect_linkage,
+    canonicalize_placement_proposal_transport,
     forced_group_ids_from_placement_checks,
     merge_placement_checks,
     normalize_judge_originated_placement_results,
     placement_checks_for_group,
     placement_global_checks,
+    salvage_placement_judge_response,
     validate_placement_check_results,
 )
+from benchmark.evaluator.scoring import score_l3_metric_report
 
 
 OBJECT_IDS = ["chair", "table", "pendant", "wardrobe"]
@@ -326,7 +329,7 @@ def test_exact_result_rows_and_subject_only_defect_ownership() -> None:
         )
 
 
-def test_function_owned_exclusion_requires_exact_event_reference() -> None:
+def test_exact_function_event_reference_deduplicates_same_physical_event() -> None:
     ledger = build_placement_check_ledger(
         _discovery(
             _candidate(subject="chair", check_type="scene_zone")
@@ -362,16 +365,73 @@ def test_function_owned_exclusion_requires_exact_event_reference() -> None:
     assert resolution["excluded_function_owned_check_ids"] == [
         check["check_id"]
     ]
-    wrong_ref = deepcopy(result)
-    wrong_ref["placement_check_results"][0][
-        "function_event_ref"
-    ] = "functional_event:other"
-    with pytest.raises(ValueError, match="unknown functional ownership"):
-        validate_placement_check_results(
-            wrong_ref,
-            required_checks=[check],
-            function_events=[event],
-        )
+    assert resolution["invalid_check_ids"] == []
+    updated, coverage = apply_placement_check_judgements(
+        ledger,
+        global_record=result,
+        group_results=[],
+    )
+    audit = build_cross_metric_ownership_audit(
+        functional_ownership_ledger={"events": [event]},
+        placement_check_ledger=updated,
+    )
+    assert coverage["invalid_check_ids"] == []
+    assert coverage["excluded_function_owned_check_ids"] == [
+        check["check_id"]
+    ]
+    assert audit["excluded_placement_checks"] == [
+        {
+            "placement_check_id": check["check_id"],
+            "function_event_ref": event["event_id"],
+            "subject_id": "chair",
+            "same_physical_event": True,
+            "deduplication_basis": "explicit_stable_event_reference",
+            "decision_authority": "none",
+        }
+    ]
+    assert audit["runtime_cross_metric_suppression"] is True
+
+
+def test_object_overlap_without_explicit_event_reference_never_deduplicates(
+) -> None:
+    ledger = build_placement_check_ledger(
+        _discovery(_candidate(subject="chair", check_type="scene_zone")),
+        groups=GROUPS,
+    )
+    check = ledger["checks"][0]
+    event = {
+        "event_id": "functional_event:blocker",
+        "affected_object_ids": ["wardrobe"],
+        "causal_object_ids": ["chair"],
+        "scoring_target_ids": ["chair"],
+    }
+    result = {
+        "verdict": "invalid",
+        "defects": [
+            {
+                "check_id": check["check_id"],
+                "check_type": "scene_zone",
+                "target_ids": ["chair"],
+                "relation": "scene_zone",
+                "reason": "The chair has an independent zone mismatch.",
+            }
+        ],
+        "placement_check_results": [
+            {
+                **_valid_row(check),
+                "conclusion": "invalid",
+                "reason": "The chair has an independent zone mismatch.",
+            }
+        ],
+    }
+
+    resolution = validate_placement_check_results(
+        result,
+        required_checks=[check],
+        function_events=[event],
+    )
+    assert resolution["invalid_check_ids"] == [check["check_id"]]
+    assert resolution["excluded_function_owned_check_ids"] == []
 
 
 def test_placement_invalid_row_keeps_acquisition_open_for_unresolved_check() -> None:
@@ -474,6 +534,215 @@ def test_judge_originated_check_is_typed_and_phase_scoped() -> None:
             existing_checks=[],
             expected_owner_stage="group_local",
         )
+
+
+def test_placement_transport_repairs_only_alias_and_missing_proposal_id() -> None:
+    normalized, warnings = canonicalize_placement_proposal_transport(
+        {
+            "subject_id": "chair",
+            "context_ids": ["table"],
+            "placement_check_type": "contextual_anchor",
+            "observation_goal": "Inspect the chair relative to the table.",
+        },
+        known_ids=set(OBJECT_IDS),
+    )
+
+    assert normalized["check_type"] == "contextual_anchor"
+    assert normalized["proposal_id"].startswith("placement_proposal_")
+    assert [item["code"] for item in warnings] == [
+        "placement_check_type_alias_canonicalized",
+        "missing_proposal_id_generated",
+    ]
+    with pytest.raises(ValueError, match="conflicts"):
+        canonicalize_placement_proposal_transport(
+            {
+                **normalized,
+                "placement_check_type": "scene_zone",
+            },
+            known_ids=set(OBJECT_IDS),
+        )
+
+
+def test_duplicate_proposal_ids_are_rekeyed_without_changing_findings() -> None:
+    raw = {
+        "verdict": "invalid",
+        "defects": [
+            {
+                "scope": "semantically_inappropriate_scene_zone",
+                "target_ids": ["chair"],
+                "relation": "scene_zone",
+                "reason": "The chair is in an implausible room zone.",
+                "severity": "material_contextual_mismatch",
+                "check_id": "duplicate-proposal",
+            },
+            {
+                "scope": "semantically_inappropriate_scene_zone",
+                "target_ids": ["pendant"],
+                "relation": "scene_zone",
+                "reason": "The pendant is in an implausible room zone.",
+                "severity": "material_contextual_mismatch",
+                "check_id": "duplicate-proposal",
+            },
+        ],
+        "judge_originated_placement_results": [
+            {
+                "proposal_id": "duplicate-proposal",
+                "subject_id": subject,
+                "context_ids": [],
+                "check_type": "scene_zone",
+                "observation_goal": f"Inspect {subject}'s room zone.",
+                "observation_status": "observed",
+                "conclusion": "invalid",
+                "reason": f"{subject} is in an implausible room zone.",
+                "severity": "material_contextual_mismatch",
+            }
+            for subject in ("chair", "pendant")
+        ],
+    }
+
+    adjusted, checks = normalize_judge_originated_placement_results(
+        raw,
+        known_ids=set(OBJECT_IDS),
+        groups=GROUPS,
+        existing_checks=[],
+        expected_owner_stage="scene_global",
+    )
+
+    assert len(checks) == 2
+    assert len({item["check_id"] for item in checks}) == 2
+    assert {
+        (item["target_ids"][0], item["check_id"])
+        for item in adjusted["defects"]
+    } == {
+        (check["subject_id"], check["check_id"]) for check in checks
+    }
+    assert any(
+        item["code"] == "duplicate_proposal_id_regenerated"
+        for item in adjusted["placement_transport_normalization"][
+            "warnings"
+        ]
+    )
+
+
+def test_placement_item_salvage_preserves_legal_row_and_defaults_bad_row() -> None:
+    ledger = build_placement_check_ledger(
+        _discovery(
+            _candidate(subject="chair", check_type="scene_zone"),
+            _candidate(subject="pendant", check_type="scene_zone"),
+        ),
+        groups=GROUPS,
+    )
+    chair, pendant = placement_global_checks(ledger)
+    salvaged = salvage_placement_judge_response(
+        {
+            "verdict": "valid",
+            "confidence": 0.6,
+            "defects": [],
+            "placement_check_results": [
+                _valid_row(chair),
+                {**_valid_row(pendant), "conclusion": "unknown"},
+            ],
+        },
+        required_checks=[chair, pendant],
+    )
+
+    rows = {item["check_id"]: item for item in salvaged["placement_check_results"]}
+    assert rows[chair["check_id"]]["observation_status"] == "observed"
+    assert rows[pendant["check_id"]]["observation_status"] == (
+        "inferred_under_budget"
+    )
+    assert salvaged["placement_salvage_audit"]["defaulted_check_ids"] == [
+        pendant["check_id"]
+    ]
+    assert salvaged["evidence_ambiguous"] is True
+
+
+def test_placement_salvage_keeps_initial_judge_originated_invalid_atom() -> None:
+    item = {
+        "proposal_id": "proposal-zone",
+        "subject_id": "chair",
+        "context_ids": [],
+        "check_type": "scene_zone",
+        "observation_goal": "Inspect the chair's room zone.",
+        "observation_status": "observed",
+        "conclusion": "invalid",
+        "reason": "The chair is in an implausible room zone.",
+        "severity": "material_contextual_mismatch",
+    }
+    defect = {
+        "scope": "semantically_inappropriate_scene_zone",
+        "target_ids": ["chair"],
+        "relation": "scene_zone",
+        "reason": "The chair is in an implausible room zone.",
+        "severity": "material_contextual_mismatch",
+        "check_id": "proposal-zone",
+    }
+
+    salvaged = salvage_placement_judge_response(
+        {
+            "confidence": 0.4,
+            "defects": [],
+            "judge_originated_placement_results": [
+                {**item, "conclusion": "valid"}
+            ],
+        },
+        fallback_value={
+            "confidence": 0.9,
+            "defects": [defect],
+            "judge_originated_placement_results": [item],
+        },
+        required_checks=[],
+        known_ids=set(OBJECT_IDS),
+        groups=GROUPS,
+        expected_owner_stage="scene_global",
+    )
+
+    assert salvaged["verdict"] == "invalid"
+    assert salvaged["judge_originated_placement_results"] == [item]
+    assert salvaged["placement_salvage_audit"][
+        "accepted_judge_originated_count"
+    ] == 1
+    assert salvaged["placement_salvage_audit"]["coverage"][
+        "complete"
+    ] is True
+
+
+def test_dropped_judge_candidate_marks_forced_ambiguous_default() -> None:
+    malformed = {
+        "proposal_id": "proposal-zone",
+        "subject_id": "chair",
+        "context_ids": [],
+        "check_type": "scene_zone",
+        # Missing observation_goal leaves a valid identity anchor but no
+        # admissible finding atom after the one repair quota.
+        "observation_status": "observed",
+        "conclusion": "invalid",
+        "reason": "The chair is in an implausible room zone.",
+        "severity": "material_contextual_mismatch",
+    }
+
+    salvaged = salvage_placement_judge_response(
+        {"defects": [], "judge_originated_placement_results": []},
+        fallback_value={
+            "defects": [],
+            "judge_originated_placement_results": [malformed],
+        },
+        required_checks=[],
+        known_ids=set(OBJECT_IDS),
+        groups=GROUPS,
+        expected_owner_stage="scene_global",
+    )
+
+    assert salvaged["verdict"] == "valid"
+    assert salvaged["evidence_ambiguous"] is True
+    assert salvaged["forced_binary"] is True
+    assert salvaged["defaulted"] is True
+    assert salvaged["placement_salvage_audit"][
+        "dropped_judge_originated_count"
+    ] == 1
+    assert salvaged["placement_salvage_audit"]["coverage"][
+        "complete"
+    ] is False
 
 
 def test_pending_proposal_can_force_singleton_group() -> None:
@@ -705,10 +974,10 @@ def test_placement_lifecycle_and_cross_metric_audit_preserve_independent_defect(
         "placement_check_results": [
             {
                 **_valid_row(chair_check),
-                "conclusion": "excluded_function_owned",
-                "function_event_ref": function_event["event_id"],
-                "same_physical_event": True,
-                "reason": "Exact blocker event already belongs to Function.",
+                "conclusion": "valid",
+                "reason": (
+                    "Placement independently finds no static location defect."
+                ),
             },
             {
                 **_valid_row(pendant_check),
@@ -730,22 +999,144 @@ def test_placement_lifecycle_and_cross_metric_audit_preserve_independent_defect(
     )
 
     assert coverage["complete"] is True
-    assert coverage["excluded_function_owned_check_ids"] == [
-        chair_check["check_id"]
-    ]
     assert coverage["invalid_check_ids"] == [pendant_check["check_id"]]
-    assert audit["excluded_placement_checks"] == [
-        {
-            "placement_check_id": chair_check["check_id"],
-            "function_event_ref": function_event["event_id"],
-            "subject_id": "chair",
-            "same_physical_event": True,
-            "decision_authority": "none",
-        }
-    ]
+    assert audit["runtime_cross_metric_suppression"] is False
+    assert audit["excluded_placement_checks"] == []
     assert audit["independent_invalid_placement_check_ids"] == [
         pendant_check["check_id"]
     ]
+
+
+def test_function_to_placement_exact_event_chain_scores_only_independent_defect() -> None:
+    """Cover ownership creation, handoff, exclusion, audit, and scoring."""
+
+    functional_check_id = "direction:chair-table"
+    ownership = build_functional_ownership_ledger(
+        scene_object_ids=OBJECT_IDS,
+        global_record=None,
+        relation_results=[],
+        group_results=[
+            {
+                "group_id": "dining",
+                "score": 0.0,
+                "judgement": {
+                    "verdict": "invalid",
+                    "confidence": 0.9,
+                    "reason": "The chair faces away from the table.",
+                    "defects": [
+                        {
+                            "scope": "functional_relation",
+                            "target_ids": ["chair"],
+                            "relation": "directional_correspondence",
+                            "reason": "The chair faces away from the table.",
+                            "check_refs": [functional_check_id],
+                        }
+                    ],
+                },
+            }
+        ],
+        functional_check_ledger={
+            "schema_version": "functional_check_ledger_v5",
+            "checks": [
+                {
+                    "check_id": functional_check_id,
+                    "check_type": "directional_correspondence",
+                    "target_ids": ["chair", "table"],
+                    "check_conclusion": "invalid",
+                    "judge_result_ref": "group_local_review:dining",
+                    "result_row": {
+                        "check_id": functional_check_id,
+                        "target_ids": ["chair", "table"],
+                        "observation_status": "observed",
+                        "conclusion": "invalid",
+                        "reason": "The chair faces away from the table.",
+                    },
+                }
+            ],
+        },
+    )
+    function_event = ownership["events"][0]
+
+    ledger = build_placement_check_ledger(
+        _discovery(
+            _candidate(
+                subject="chair",
+                check_type="contextual_anchor",
+                context=["table"],
+            ),
+            _candidate(
+                subject="pendant",
+                check_type="contextual_anchor",
+                context=["table"],
+            ),
+        ),
+        groups=GROUPS,
+    )
+    chair_check = next(
+        check for check in ledger["checks"]
+        if check["subject_id"] == "chair"
+    )
+    pendant_check = next(
+        check for check in ledger["checks"]
+        if check["subject_id"] == "pendant"
+    )
+    placement_rows = [
+        {
+            **_valid_row(chair_check),
+            "conclusion": "excluded_function_owned",
+            "reason": "Exact duplicate of the Function-owned event.",
+            "function_event_ref": function_event["event_id"],
+            "same_physical_event": True,
+        },
+        {
+            **_valid_row(pendant_check),
+            "conclusion": "invalid",
+            "reason": "The pendant is independently outside its anchor.",
+        },
+    ]
+    updated, coverage = apply_placement_check_judgements(
+        ledger,
+        global_record={"placement_check_results": placement_rows},
+        group_results=[],
+    )
+    audit = build_cross_metric_ownership_audit(
+        functional_ownership_ledger=ownership,
+        placement_check_ledger=updated,
+    )
+    scoring = score_l3_metric_report(
+        "semantic_placement_consistency",
+        {
+            "judgement": {
+                "verdict": "invalid",
+                "placement_check_results": placement_rows,
+                "defects": [
+                    {
+                        "check_id": pendant_check["check_id"],
+                        "category": "zone_placement_mismatch",
+                        "severity": "atypical",
+                        "target_ids": ["pendant"],
+                        "scope": "contextual_anchor",
+                        "relation": "pendant_offset_from_table",
+                        "reason": "Independent contextual-anchor failure.",
+                    }
+                ],
+            }
+        },
+        ordered_object_ids=OBJECT_IDS,
+    )
+
+    assert coverage["excluded_function_owned_check_ids"] == [
+        chair_check["check_id"]
+    ]
+    assert [
+        item["placement_check_id"]
+        for item in audit["excluded_placement_checks"]
+    ] == [chair_check["check_id"]]
+    assert audit["independent_invalid_placement_check_ids"] == [
+        pendant_check["check_id"]
+    ]
+    assert scoring["event_count"] == 1
+    assert scoring["events"][0]["affected_object_ids"] == ["pendant"]
 
 
 def test_normal_scene_resolves_every_typed_placement_check_valid() -> None:
@@ -785,7 +1176,6 @@ def test_normal_scene_resolves_every_typed_placement_check_valid() -> None:
     assert coverage["resolved_check_count"] == 3
     assert coverage["complete"] is True
     assert coverage["invalid_check_ids"] == []
-    assert coverage["excluded_function_owned_check_ids"] == []
     assert all(
         check["lifecycle_status"] == "resolved"
         and check["check_conclusion"] == "valid"

@@ -8,10 +8,13 @@ semantics.
 from __future__ import annotations
 
 
-L3_METRIC_PROMPT_VERSION = "l3_burden_categories_v25"
+L3_METRIC_PROMPT_VERSION = "l3_burden_categories_v29"
 
 L3_METRIC_BOUNDARY_RULES = (
     "Additional visual evidence can be acquired.",
+    "Metric-scoped public task context is disambiguating context, not a "
+    "defect prior or a required answer. Do not require stereotypical contents "
+    "or penalize plausible multi-purpose use from room type alone.",
     "Judge the current authored scene. Ordinary articulation or handling "
     "intrinsic to use is allowed; rearranging the scene to repair orientation, "
     "access, category, scale, or placement is not.",
@@ -45,6 +48,14 @@ L3_METRIC_BOUNDARY_RULES = (
     "boundary constrains access and operating space even when wall meshes are "
     "hidden. Boundary measurements and usable-side hypotheses are evidence, "
     "not universal validity thresholds.",
+    "For functional consistency, check-scoped deterministic measurements are "
+    "generated before camera scheduling. Once a trusted usable-side hypothesis "
+    "is bound, its world heading, counterpart bearing, facing angle, and "
+    "distance are canonical spatial evidence rather than camera-dependent "
+    "estimates. Images establish visible side semantics and usage context. If "
+    "those sources appear inconsistent, identify the unresolved semantic side "
+    "or context instead of silently replacing the deterministic geometry. The "
+    "measurements still do not impose a universal pass/fail threshold.",
     "For functional consistency, architecture orientation and clearance are "
     "independent predicates. Architecture orientation asks only whether a "
     "directed usable side points toward plausible accessible interior space; "
@@ -57,7 +68,8 @@ L3_METRIC_BOUNDARY_RULES = (
     "size, and camera distance do not establish a scale defect.",
     "Style consistency owns visible design language. Category, physical size, "
     "position, orientation, and function alone do not establish a style "
-    "defect.",
+    "defect. Room type alone does not prescribe a visual style; only an "
+    "explicit supplied style descriptor may define intended style.",
     "Collision, penetration, support, floating, and out-of-bounds conditions "
     "are owned by L1. An L1 defect alone must not produce an L3 defect. The same "
     "arrangement may also fail an L3 metric only when that L3 criterion "
@@ -168,8 +180,13 @@ L3_METRIC_RUBRICS = {
         "ordinary use requires approach, opening, or operating room, resolve "
         "clearance by testing the amount of free space in front of the usable "
         "side for directed objects or around a non-directed object. "
-        "Establish usable sides from visible geometry and affordances, not from "
-        "category, transform metadata, or the side facing the camera. Treat an "
+        "Establish usable sides from visible geometry and affordances by "
+        "confirming the supplied trusted usable-side hypothesis; do not infer "
+        "the usable side merely from "
+        "category or from whichever side faces the camera. After the side is "
+        "bound, use the supplied deterministic heading, bearing, angle, and "
+        "distance as canonical spatial evidence rather than visually guessing "
+        "the transform. Treat an "
         "enabled logical room boundary as an access constraint, not as a "
         "standalone defect threshold. Ordinary articulation intrinsic to use is "
         "allowed, but do not move, rotate, resize, remove, or replace authored "
@@ -292,8 +309,12 @@ L3_METRIC_PHASE_PROMPTS = {
         "global_discovery": (
             "Inspect scene zones, architecture, circulation, and contextual "
             "anchors. A placement-discovery subject is the only potential "
-            "defect owner; its context IDs only frame the observation. Leave "
-            "fine local support, height, and adjacency to local review."
+            "defect owner; its context IDs only frame the observation. "
+            "considered_object_ids means inspected by Discovery, not proven "
+            "normal. Before returning valid, perform one concise typed omission "
+            "sweep for a visible scene-zone or cross-group non-operational "
+            "contextual-anchor issue that Discovery missed. Leave fine local "
+            "support, height, and adjacency to local review."
         ),
         "group_local_review": (
             "Inspect each routed subject's support-surface meaning, height, "
@@ -302,9 +323,44 @@ L3_METRIC_PHASE_PROMPTS = {
             "atypical or implausible. Do "
             "not convert orientation or operability, action-required "
             "adjacency, access, or clearance into placement defects. Any final "
-            "verdict requires every routed check to resolve. If an invalid row "
+            "Before returning valid, inspect every visible group member once "
+            "for a concrete omitted support_and_height, scene_zone, or "
+            "non-operational contextual_anchor issue. Register a typed "
+            "judge-originated result only for a concrete issue; request the "
+            "existing evidence loop when the necessary fact is not visible. "
+            "A final verdict requires every routed check to resolve. If an invalid row "
             "coexists with an unresolved row, keep acquisition open with an "
             "insufficient/ambiguous response and no final defects."
+        ),
+        "residual_global_placement_review": (
+            "This is a residual scene-global synthesis after all typed "
+            "Placement checks have run. Inspect only material scene-level "
+            "semantic organization that the prior typed passes did not "
+            "already capture: coherent activity-zone formation, compatibility "
+            "and separation of distinct zones, and scene-scale anchoring of "
+            "major furnishings or companion sets. Mere sparsity, asymmetry, "
+            "open-plan zoning, aesthetic preference, or unexplained oddness "
+            "is not a defect. Use scene_program.scene_type only as a broad "
+            "room-activity prior, never as a style template or a requirement "
+            "for stereotypical contents. object_inventory is the complete "
+            "identity roster; object presence and shared group membership do "
+            "not by themselves establish an anchor relation. First inspect "
+            "every exact group once and complete its "
+            "group_global_observations row using only the ID roster, global "
+            "images, and raw scene geometry. Describe its room-level position "
+            "and any material relation to other groups; the row is audit-only, "
+            "not an independent defect or vote. Only after every group row is "
+            "complete, synthesize the final scene verdict. A scored finding "
+            "must name exactly one misplaced "
+            "subject, optional non-owning context IDs, and map to scene_zone "
+            "or contextual_anchor. It must pass the relocation-only test and "
+            "remain independently abnormal after granting ordinary function, "
+            "orientation, access, and clearance. Do not repeat a subject "
+            "already carrying a typed Placement defect, and do not restate "
+            "any supplied Function ownership event. If a holistic impression "
+            "cannot be projected into one of those exact typed claims, return "
+            "valid rather than scoring taste. support_and_height is out of "
+            "scope in this phase."
         ),
     },
 }

@@ -196,6 +196,10 @@ def test_only_literal_public_slot_is_allowed_and_never_repairs_wrong_asset() -> 
     assert "uniform_scale" in serialized_method_input
     assert "target_size_m" not in serialized_method_input
     assert "slot_id is required" in serialized_method_input
+    assert method_input["catalog_facing_contract"][
+        "default_directed_functional_side"
+    ] == "local_neg_y"
+    assert "yaw 0 faces world -Y" in serialized_method_input
 
     placement = {
         "instances": [
@@ -212,6 +216,9 @@ def test_only_literal_public_slot_is_allowed_and_never_repairs_wrong_asset() -> 
     assert obj["category"] == "lamp"
     assert obj["description"] == "a frozen brass floor lamp"
     assert obj["metadata"]["catalog_placement"]["slot_id"] == "public_chair_slot"
+    assert scene["metadata"]["catalog_facing_contract"][
+        "contract_version"
+    ] == "imaginarium_catalog_facing_v1"
     assert obj["metadata"]["task_slot"] == {
         "slot_id": "public_chair_slot",
         "intended_category": "chair",
