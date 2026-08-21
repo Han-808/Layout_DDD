@@ -30,7 +30,7 @@ from benchmark.evaluation_campaign.dataset_identity import (
 CAMPAIGN_STATE_SCHEMA_VERSION = "scene_evaluation_campaign_state_v1"
 ROUND_RECORD_SCHEMA_VERSION = "scene_evaluation_campaign_round_v1"
 SELECTION_PROVENANCE_SCHEMA_VERSION = (
-    "scene_evaluation_campaign_selection_provenance_v1"
+    "scene_evaluation_campaign_selection_provenance_v2"
 )
 
 
@@ -328,6 +328,10 @@ def validate_prior_attempt(
         l1_report = case_root / "l1_report.json"
         l3_report = case_root / "scene_quality_report.json"
         diagnostics = case_root / "l1_diagnostics.json"
+        if manifest.is_file():
+            case_manifest = read_json(manifest)
+            if case_manifest.get("case_id") != case_id:
+                raise ValueError(f"prior attempt case identity mismatch: {case_id}")
         report_rows.append(
             {
                 "case_id": case_id,
@@ -418,6 +422,7 @@ def write_selection_provenance(
         if not isinstance(source_case_value, str):
             raise ValueError(f"selection source_case is unavailable: {case_id}")
         source_case = Path(source_case_value).resolve()
+        snapshot_case = final_root / "cases" / case_id
         source_run = (
             Path(source_run_value).resolve()
             if isinstance(source_run_value, str)
@@ -435,11 +440,12 @@ def write_selection_provenance(
                 "source_case_relative": f"cases/{case_id}",
                 "judge_profile_id": profile_id,
                 "case_manifest_sha256": file_sha256(
-                    source_case / "case_run_manifest.json"
+                    snapshot_case / "case_run_manifest.json"
                 ),
                 "evaluation_report_sha256": file_sha256(
-                    source_case / "evaluation_report.json"
+                    snapshot_case / "evaluation_report.json"
                 ),
+                "snapshot_tree_sha256": raw["snapshot_tree_sha256"],
             }
         )
     result = {
@@ -500,7 +506,7 @@ def validate_final_selection(
     }
     if not required_selection_fields.issubset(selection):
         raise ValueError("final selection schema fields are incomplete")
-    if selection.get("schema_version") != "scene_level_first_publishable_selection_v1":
+    if selection.get("schema_version") != "scene_level_first_publishable_selection_v2":
         raise ValueError("final selection schema mismatch")
     expected_ids = campaign.case_plan.selection_case_ids
     if selection.get("status") != "complete" or selection.get("case_count") != len(expected_ids):
@@ -543,10 +549,14 @@ def validate_final_selection(
         or tuple(Path(str(path)).resolve() for path in raw_roots) != ordered_roots
     ):
         raise ValueError("final selection attempt root order mismatch")
-    links_root = final_root / "cases"
-    link_names = sorted(path.name for path in links_root.iterdir()) if links_root.is_dir() else []
-    if link_names != sorted(expected_ids):
-        raise ValueError("final selection link inventory mismatch")
+    snapshots_root = final_root / "cases"
+    snapshot_names = (
+        sorted(path.name for path in snapshots_root.iterdir())
+        if snapshots_root.is_dir()
+        else []
+    )
+    if snapshot_names != sorted(expected_ids):
+        raise ValueError("final selection snapshot inventory mismatch")
     selected_scores: list[float] = []
     selected_coverages: list[float] = []
     retry_case_count = 0
@@ -558,6 +568,9 @@ def validate_final_selection(
             "source_run",
             "source_case",
             "storage",
+            "snapshot_case",
+            "snapshot_file_count",
+            "snapshot_tree_sha256",
             "status",
             "final_decision_status",
             "benchmark_score_100",
@@ -572,7 +585,7 @@ def validate_final_selection(
         }
         if not required_row_fields.issubset(row):
             raise ValueError(f"selection case schema is incomplete: {case_id}")
-        if row.get("storage") != "absolute_directory_symlink":
+        if row.get("storage") != "self_contained_directory_copy_v1":
             raise ValueError(f"selection storage policy mismatch: {case_id}")
         source_run = Path(str(row.get("source_run") or "")).resolve()
         source_case = Path(str(row.get("source_case") or "")).resolve()
@@ -595,20 +608,39 @@ def validate_final_selection(
         )
         if earliest is None or earliest.resolve() != source_case:
             raise ValueError(f"selection violates chronological first-publishable policy: {case_id}")
-        link = links_root / case_id
-        if not link.is_symlink() or link.resolve() != source_case:
-            raise ValueError(f"selection link target mismatch: {case_id}")
-        files = {
+        snapshot_case = snapshots_root / case_id
+        if row.get("snapshot_case") != f"cases/{case_id}":
+            raise ValueError(f"selection snapshot relation mismatch: {case_id}")
+        if not snapshot_case.is_dir() or snapshot_case.is_symlink():
+            raise ValueError(f"selection snapshot is not self-contained: {case_id}")
+        snapshot_file_count, snapshot_tree_sha256 = _directory_tree_identity(
+            snapshot_case
+        )
+        if (
+            row.get("snapshot_file_count") != snapshot_file_count
+            or row.get("snapshot_tree_sha256") != snapshot_tree_sha256
+        ):
+            raise ValueError(f"selection snapshot tree identity mismatch: {case_id}")
+        source_files = {
             "case_manifest_sha256": source_case / "case_run_manifest.json",
             "evaluation_report_sha256": source_case / "evaluation_report.json",
             "l1_report_sha256": source_case / "l1_report.json",
             "l3_report_sha256": source_case / "scene_quality_report.json",
         }
-        for field, path in files.items():
+        snapshot_files = {
+            "case_manifest_sha256": snapshot_case / "case_run_manifest.json",
+            "evaluation_report_sha256": snapshot_case / "evaluation_report.json",
+            "l1_report_sha256": snapshot_case / "l1_report.json",
+            "l3_report_sha256": snapshot_case / "scene_quality_report.json",
+        }
+        for field, path in source_files.items():
             if not path.is_file() or row.get(field) != file_sha256(path):
                 raise ValueError(f"selection source hash mismatch: {case_id}:{field}")
-        manifest = read_json(files["case_manifest_sha256"])
-        report = read_json(files["evaluation_report_sha256"])
+        for field, path in snapshot_files.items():
+            if not path.is_file() or row.get(field) != file_sha256(path):
+                raise ValueError(f"selection snapshot hash mismatch: {case_id}:{field}")
+        manifest = read_json(snapshot_files["case_manifest_sha256"])
+        report = read_json(snapshot_files["evaluation_report_sha256"])
         score = report.get("benchmark_score_100")
         coverage = (
             report.get("coverage", {}).get("grounded_score_fraction")
@@ -620,7 +652,8 @@ def validate_final_selection(
                 raise ValueError(f"selection coverage is non-finite: {case_id}")
             selected_coverages.append(float(coverage))
         if not (
-            manifest.get("status") == "complete"
+            manifest.get("case_id") == case_id
+            and manifest.get("status") == "complete"
             and manifest.get("final_decision_status") == "resolved"
             and manifest.get("l1_engineering_failure") is False
             and report.get("evaluation_status") == "complete"
@@ -668,7 +701,7 @@ def validate_final_selection(
         )
     )
     if (
-        summary.get("schema_version") != "selected_scene_level_summary_v1"
+        summary.get("schema_version") != "selected_scene_level_summary_v2"
         or summary.get("status") != "complete"
         or summary.get("model_label") != campaign.model_label
         or summary.get("evaluator_model") != selection.get("evaluator_model")
@@ -710,7 +743,8 @@ def _publishable_case(case_root: Path) -> bool:
         return False
     score = report.get("benchmark_score_100")
     return (
-        manifest.get("status") == "complete"
+        manifest.get("case_id") == case_root.name
+        and manifest.get("status") == "complete"
         and manifest.get("final_decision_status") == "resolved"
         and manifest.get("l1_engineering_failure") is False
         and report.get("evaluation_status") == "complete"
@@ -719,6 +753,23 @@ def _publishable_case(case_root: Path) -> bool:
         and not isinstance(score, bool)
         and math.isfinite(float(score))
     )
+
+
+def _directory_tree_identity(root: Path) -> tuple[int, str]:
+    rows: list[dict[str, Any]] = []
+    for path in sorted(root.rglob("*"), key=lambda item: item.as_posix()):
+        if path.is_symlink():
+            raise ValueError(f"selection snapshot contains a symlink: {path}")
+        if not path.is_file():
+            continue
+        rows.append(
+            {
+                "path": path.relative_to(root).as_posix(),
+                "bytes": path.stat().st_size,
+                "sha256": file_sha256(path),
+            }
+        )
+    return len(rows), json_sha256(rows)
 
 
 def atomic_write_json(path: Path, value: Any) -> None:

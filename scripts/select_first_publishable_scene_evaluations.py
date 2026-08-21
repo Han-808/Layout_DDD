@@ -7,7 +7,6 @@ import argparse
 import hashlib
 import json
 import math
-import os
 from pathlib import Path
 import shutil
 import sys
@@ -107,22 +106,34 @@ def write_selection(
     (building / "cases").mkdir()
     try:
         for case_id in case_ids:
-            source_case = selections[case_id]
+            source_case = selections[case_id].resolve()
             source_run = source_case.parent.parent
+            if source_run not in attempt_indices:
+                raise ValueError(f"selection source is not an attempt root: {case_id}")
+            if source_case != source_run / "cases" / case_id:
+                raise ValueError(f"selection source identity relation mismatch: {case_id}")
+            if not _is_publishable(source_case):
+                raise ValueError(f"selection source is not publishable: {case_id}")
             report = _read_json(source_case / "evaluation_report.json")
             manifest = _read_json(source_case / "case_run_manifest.json")
             coverage = report.get("coverage")
             coverage = coverage if isinstance(coverage, dict) else {}
             target = building / "cases" / case_id
-            os.symlink(source_case, target, target_is_directory=True)
-            selected_summaries.append(_case_summary(source_case))
+            shutil.copytree(source_case, target, symlinks=False)
+            snapshot_file_count, snapshot_tree_sha256 = _directory_tree_identity(
+                target
+            )
+            selected_summaries.append(_case_summary(target))
             case_records.append(
                 {
                     "case_id": case_id,
                     "selected_attempt_index": attempt_indices[source_run],
                     "source_run": str(source_run),
                     "source_case": str(source_case),
-                    "storage": "absolute_directory_symlink",
+                    "storage": "self_contained_directory_copy_v1",
+                    "snapshot_case": f"cases/{case_id}",
+                    "snapshot_file_count": snapshot_file_count,
+                    "snapshot_tree_sha256": snapshot_tree_sha256,
                     "status": manifest.get("status"),
                     "final_decision_status": manifest.get("final_decision_status"),
                     "benchmark_score_100": report.get("benchmark_score_100"),
@@ -153,7 +164,7 @@ def write_selection(
             1 for row in case_records if row["selected_attempt_index"] > 0
         )
         selection_manifest = {
-            "schema_version": "scene_level_first_publishable_selection_v1",
+            "schema_version": "scene_level_first_publishable_selection_v2",
             "status": "complete",
             "model_label": model_label,
             "evaluator_model": "gpt-5.6-sol",
@@ -172,7 +183,7 @@ def write_selection(
             "cases": case_records,
         }
         summary = {
-            "schema_version": "selected_scene_level_summary_v1",
+            "schema_version": "selected_scene_level_summary_v2",
             "status": "complete",
             "model_label": model_label,
             "evaluator_model": "gpt-5.6-sol",
@@ -220,7 +231,8 @@ def _is_publishable(case_dir: Path) -> bool:
         return False
     score = report.get("benchmark_score_100")
     return (
-        manifest.get("status") == "complete"
+        manifest.get("case_id") == case_dir.name
+        and manifest.get("status") == "complete"
         and manifest.get("final_decision_status") == "resolved"
         and manifest.get("l1_engineering_failure") is False
         and report.get("evaluation_status") == "complete"
@@ -243,6 +255,30 @@ def _case_summary(case_dir: Path) -> dict[str, Any]:
             else {}
         ),
     )
+
+
+def _directory_tree_identity(root: Path) -> tuple[int, str]:
+    rows: list[dict[str, Any]] = []
+    for path in sorted(root.rglob("*"), key=lambda item: item.as_posix()):
+        if path.is_symlink():
+            raise ValueError(f"selection snapshot contains a symlink: {path}")
+        if not path.is_file():
+            continue
+        rows.append(
+            {
+                "path": path.relative_to(root).as_posix(),
+                "bytes": path.stat().st_size,
+                "sha256": _sha256(path),
+            }
+        )
+    payload = json.dumps(
+        rows,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    return len(rows), hashlib.sha256(payload).hexdigest()
 
 
 def _read_json(path: Path) -> dict[str, Any]:

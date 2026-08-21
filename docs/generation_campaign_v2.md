@@ -101,15 +101,17 @@ projection:
 - public in `run_manifest.json`: model/profile values, timeouts, retry counts,
   route/source hashes, and `transport_binding=private-redacted-v1`.
 
-The source manifest records registry/content hashes and logical contract IDs.
+The static source manifest records registry/content hashes and logical contract IDs.
 It contains no endpoint, binding path, credential environment name, headers,
 request/response body, prompt text, reasoning, or dynamic request ID. Existing
-Existing v1/v2 artifact files are not rewritten; new campaign runs opt into v3.
+v1/v2 artifact files are not rewritten; new campaign runs opt into v3.
 The controller also verifies the frozen core's declared run/case schema before
 execution and re-reads `run_manifest.json` plus every written
-`case.result.json` after termination. The
-sanitized preflight report is embedded in source provenance and returned by the
-CLI; raw provider content is never copied into it.
+`case.result.json` after termination. The sanitized binding identity and
+preflight report are recorded separately under execution-policy
+`run_provenance`; they do not change the static source-manifest hash. The CLI
+also returns the preflight report, and raw provider content is never copied
+into it.
 
 ## Public registry safety and evidence
 

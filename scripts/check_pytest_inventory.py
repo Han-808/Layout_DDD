@@ -27,6 +27,7 @@ DEFAULT_MANIFEST = REPO_ROOT / "configs" / "testing" / "pytest_suites_v1.json"
 EXPECTED_SCHEMA_VERSION = "pytest_suites_v1"
 EXPECTED_ENVIRONMENT_MARKERS = {
     "requires_blender",
+    "requires_git_history",
     "requires_local_data",
     "requires_loopback",
 }

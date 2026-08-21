@@ -419,8 +419,25 @@ def gate_resources(
     return GatedRetrieverAdapter(runtime, report), dict(report)
 
 
-def _normalize_model(value: str) -> str:
-    return "".join(character for character in value.lower() if character.isalnum())
+def _model_identity_tokens(value: str) -> tuple[str, ...]:
+    return tuple(re.findall(r"[a-z]+|[0-9]+", value.lower()))
+
+
+def _model_identity_matches(expected: str, returned: Any) -> bool:
+    """Match an exact model identity with optional provider namespace prefixes.
+
+    Provider responses may prepend route namespaces, but a neighboring model
+    version or an unreviewed suffix must not satisfy the preflight contract.
+    """
+
+    if not isinstance(returned, str):
+        return False
+    expected_tokens = _model_identity_tokens(expected)
+    returned_tokens = _model_identity_tokens(returned)
+    return (
+        bool(expected_tokens)
+        and returned_tokens[-len(expected_tokens) :] == expected_tokens
+    )
 
 
 def _preflight_report(
@@ -487,8 +504,13 @@ def _preflight_report(
         expected_identity = prepared.model.response_model_identity
         if expected_identity is None:
             raise ValueError("model identity contract was not resolved")
-        requested = _normalize_model(expected_identity)
-        model_matches = isinstance(returned_model, str) and requested in _normalize_model(returned_model)
+        model_matches = any(
+            _model_identity_matches(candidate, returned_model)
+            for candidate in {
+                expected_identity,
+                prepared.model.wire_model,
+            }
+        )
     else:
         model_matches = True
     report["model_identity_matches"] = model_matches
@@ -588,16 +610,19 @@ def preflight_campaign(
     ), retriever
 
 
-def _bound_source_manifest(
+def _run_execution_provenance(
     prepared: PreparedCampaign,
     binding: PrivateRouteBinding,
     preflight: Mapping[str, Any],
 ) -> dict[str, Any]:
-    value = dict(prepared.source_manifest)
-    value.pop("manifest_sha256", None)
-    value["route_binding"] = binding.public_dict()
-    value["preflight"] = dict(preflight)
-    return {**value, "manifest_sha256": _manifest_sha(value)}
+    return {
+        "schema_version": "generation_campaign_run_provenance_v1",
+        "static_source_manifest_sha256": prepared.source_manifest[
+            "manifest_sha256"
+        ],
+        "route_binding": binding.public_dict(),
+        "preflight": dict(preflight),
+    }
 
 
 def _generation_spec(
@@ -606,14 +631,15 @@ def _generation_spec(
     binding: PrivateRouteBinding,
     preflight: Mapping[str, Any],
 ) -> GenerationRunSpec:
-    source_manifest = _bound_source_manifest(prepared, binding, preflight)
+    source_manifest = dict(prepared.source_manifest)
     execution_policy = {
-        "schema_version": "generation_campaign_execution_policy_v3",
+        "schema_version": "generation_campaign_execution_policy_v4",
         "campaign_id": prepared.campaign.campaign_id,
         "workflow_profile_id": prepared.workflow.workflow_profile_id,
         "execution_policy_id": prepared.execution.execution_policy_id,
         "artifact_contract_id": prepared.artifact.artifact_contract_id,
         "expected_brief_ids": list(prepared.campaign.ordered_brief_ids),
+        "run_provenance": _run_execution_provenance(prepared, binding, preflight),
         **prepared.retry_policy.to_public_dict(),
     }
     return GenerationRunSpec(

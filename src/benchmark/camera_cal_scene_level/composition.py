@@ -98,6 +98,7 @@ def _provenance_dependencies() -> provenance.ProvenanceDependencies:
             planning.CAMERA_SELECTOR_COMPLETION_MAX_TOKENS
         ),
         l1_binary_failure_policy=planning.L1_BINARY_FAILURE_POLICY,
+        runtime_implementation_files=provenance.CASE_RUNTIME_IMPLEMENTATION_FILES,
         functional_probe_implementation_files=(
             FUNCTIONAL_PROBE_IMPLEMENTATION_FILES
         ),

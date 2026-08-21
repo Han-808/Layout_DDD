@@ -6,6 +6,8 @@ from pathlib import Path
 import subprocess
 from types import ModuleType
 
+import pytest
+
 from benchmark.camera_cal_scene_level import comparison, provenance, reports
 from scripts import run_camera_cal_scene_level as runner
 
@@ -14,6 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 E0_CONTRACT = (
     ROOT / "tests/fixtures/camera_cal_scene_level_e0_contract.json"
 )
+pytestmark = pytest.mark.requires_git_history
 
 
 def _historical_runner() -> ModuleType:
@@ -97,7 +100,10 @@ def test_comparison_and_summary_match_the_frozen_e0_runner() -> None:
     )
 
 
-def test_case_fingerprint_matches_the_frozen_e0_runner(tmp_path: Path) -> None:
+def test_case_fingerprint_versions_the_extracted_runtime_sources(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     historical = _historical_runner()
     paths: dict[str, Path] = {}
     for name in (
@@ -138,9 +144,22 @@ def test_case_fingerprint_matches_the_frozen_e0_runner(tmp_path: Path) -> None:
         "control_config": {"policy": "fixture"},
         "l3_only": False,
     }
-    assert runner.case_input_fingerprint(**kwargs) == (
-        historical.case_input_fingerprint(**kwargs)
-    )
+    current = runner.case_input_fingerprint(**kwargs)
+    historical_value = historical.case_input_fingerprint(**kwargs)
+    assert current != historical_value
+
+    runtime_source = (
+        ROOT / "src/benchmark/camera_cal_scene_level/case_runtime.py"
+    ).resolve()
+    original_file_sha256 = runner.file_sha256
+
+    def changed_runtime_hash(path: Path) -> str:
+        if Path(path).resolve() == runtime_source:
+            return "0" * 64
+        return original_file_sha256(path)
+
+    monkeypatch.setattr(runner, "file_sha256", changed_runtime_hash)
+    assert runner.case_input_fingerprint(**kwargs) != current
 
 
 def test_route_and_resolution_facades_match_the_frozen_e0_runner() -> None:

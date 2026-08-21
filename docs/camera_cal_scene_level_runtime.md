@@ -38,7 +38,8 @@ The package modules own the following boundaries:
   the public scene-generation leaderboard. It applies the provisional web
   weights and deduction multipliers to frozen metric ledgers without changing
   evaluator reports, Judge behavior, cameras, or publishability;
-- `provenance.py`: route projection and case-input fingerprints;
+- `provenance.py`: route projection and case-input fingerprints, including the
+  concrete extracted runtime source hashes that prevent cross-version resume;
 - `observability.py`: API/evidence/render observation wrappers;
 - `adapters.py`: injected external model, judge, selector, renderer, and
   evidence-provider construction;

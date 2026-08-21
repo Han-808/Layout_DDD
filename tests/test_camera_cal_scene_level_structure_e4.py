@@ -29,6 +29,7 @@ REQUIRED_CASE_OUTPUTS = (
     "scene_comparison.json",
     "control_manifest.json",
 )
+pytestmark = pytest.mark.requires_git_history
 EXTERNAL_RUNTIME_NAMES = (
     "BlenderRenderer",
     "CameraEvidenceProvider",
@@ -548,6 +549,13 @@ def _canonical_json(value: Any) -> bytes:
     ).encode("utf-8")
 
 
+def _normalized_resume_identity(value: Any) -> Any:
+    normalized = deepcopy(value)
+    if isinstance(normalized, dict) and "input_fingerprint" in normalized:
+        normalized["input_fingerprint"] = "<versioned-runtime-identity>"
+    return normalized
+
+
 PARITY_ARTIFACTS = (
     "case_run_manifest.json",
     "evaluation_report.json",
@@ -795,10 +803,9 @@ def test_e4_current_facade_matches_e0_inline_run_case_artifacts(
 ) -> None:
     """Replay both implementations with identical injected runtime behavior.
 
-    The only normalization is canonical JSON serialization (sorted keys and
-    compact separators) for the semantic comparison.  No semantic field is
-    removed: fixed clocks and one shared output path make the raw bytes
-    comparable as well.
+    Evaluator outputs remain byte-identical. The one deliberate compatibility
+    change is the opaque resume fingerprint, which now includes the extracted
+    runtime source identity and therefore differs from E0.
     """
 
     historical = _historical_runner()
@@ -827,16 +834,29 @@ def test_e4_current_facade_matches_e0_inline_run_case_artifacts(
         historical_result = historical.run_case(**historical_kwargs)
     historical_snapshot = _artifact_snapshot(output_root)
 
-    assert _canonical_json(current_result) == _canonical_json(
-        historical_result
+    assert current_result["input_fingerprint"] != historical_result[
+        "input_fingerprint"
+    ]
+    assert _canonical_json(
+        _normalized_resume_identity(current_result)
+    ) == _canonical_json(
+        _normalized_resume_identity(historical_result)
     )
     assert current_trace == historical_trace
     assert set(current_snapshot) == set(historical_snapshot)
     for name in PARITY_ARTIFACTS + ("progress.jsonl",):
         current_raw, current_canonical = current_snapshot[name]
         historical_raw, historical_canonical = historical_snapshot[name]
-        assert current_canonical == historical_canonical, name
-        assert current_raw == historical_raw, name
+        if name == "case_run_manifest.json":
+            assert _canonical_json(
+                _normalized_resume_identity(json.loads(current_raw))
+            ) == _canonical_json(
+                _normalized_resume_identity(json.loads(historical_raw))
+            )
+            assert current_raw != historical_raw
+        else:
+            assert current_canonical == historical_canonical, name
+            assert current_raw == historical_raw, name
 
 
 def test_e4_case_runtime_has_only_injected_runtime_dependencies() -> None:

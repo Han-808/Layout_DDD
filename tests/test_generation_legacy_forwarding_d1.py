@@ -9,6 +9,8 @@ from typing import Iterable
 
 import pytest
 
+pytestmark = pytest.mark.requires_git_history
+
 from benchmark.scene_generation.legacy_cutover.forwarding import (
     BindingParityReport,
     LegacyCutoverBlocked,

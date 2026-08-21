@@ -21,6 +21,24 @@ PolicyBuilder = Callable[[], Mapping[str, Any]]
 SceneQualityConfigBuilder = Callable[..., Mapping[str, Any]]
 
 
+CASE_RUNTIME_IMPLEMENTATION_FILES = (
+    "src/benchmark/api/evaluation.py",
+    "src/benchmark/camera_cal_scene_level/adapters.py",
+    "src/benchmark/camera_cal_scene_level/audit.py",
+    "src/benchmark/camera_cal_scene_level/case_runtime.py",
+    "src/benchmark/camera_cal_scene_level/comparison.py",
+    "src/benchmark/camera_cal_scene_level/io.py",
+    "src/benchmark/camera_cal_scene_level/observability.py",
+    "src/benchmark/camera_cal_scene_level/planning.py",
+    "src/benchmark/camera_cal_scene_level/policy.py",
+    "src/benchmark/camera_cal_scene_level/progress.py",
+    "src/benchmark/camera_cal_scene_level/provenance.py",
+    "src/benchmark/camera_cal_scene_level/reports.py",
+    "src/benchmark/camera_cal_scene_level/resume.py",
+    "src/benchmark/camera_cal_scene_level/telemetry.py",
+)
+
+
 @dataclass(frozen=True)
 class ProvenanceDependencies:
     """Frozen runner-owned inputs required to build a case fingerprint.
@@ -39,6 +57,7 @@ class ProvenanceDependencies:
     judge_completion_max_tokens: int
     camera_selector_completion_max_tokens: int
     l1_binary_failure_policy: Mapping[str, Any]
+    runtime_implementation_files: Sequence[str]
     functional_probe_implementation_files: Sequence[str]
     prompt_path: str
     prompt_context_path: str
@@ -176,6 +195,10 @@ def case_input_fingerprint(
         "l3_prompt_context_source_sha256": dependencies.file_sha256(
             prompt_context_path
         ),
+        "runtime_implementation_sha256": {
+            relative: dependencies.file_sha256(project_root / relative)
+            for relative in dependencies.runtime_implementation_files
+        },
         "scoring_implementation_sha256": {
             str(relative): dependencies.file_sha256(path)
             for relative, path in zip(
@@ -204,6 +227,7 @@ def case_input_fingerprint(
 
 
 __all__ = [
+    "CASE_RUNTIME_IMPLEMENTATION_FILES",
     "ProvenanceDependencies",
     "case_input_fingerprint",
     "safe_route_manifest",

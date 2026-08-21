@@ -21,6 +21,7 @@ from scripts import run_camera_cal_scene_level as runner
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE_ROOT = ROOT / "src/benchmark/camera_cal_scene_level"
 E0_CONTRACT = ROOT / "tests/fixtures/camera_cal_scene_level_e0_contract.json"
+pytestmark = pytest.mark.requires_git_history
 RUN_ARTIFACTS = (
     "experiment_plan.json",
     "endpoint_preflight.json",

@@ -27,6 +27,7 @@ from benchmark.scene_generation.campaign.loader import (
 )
 from benchmark.scene_generation.campaign.bindings import (
     LocalRouteBindings,
+    PrivateRouteBinding,
     select_binding_path as select_generation_binding_path,
 )
 from benchmark.scene_generation.campaign.cli import main as campaign_main
@@ -44,6 +45,7 @@ from benchmark.scene_generation.retrieval import RetrievalCatalog
 from benchmark.scene_generation.frozen_two_stage.config import load_run_config
 from benchmark.scene_generation.frozen_two_stage.compatibility.loader import load_frozen_core
 from benchmark.scene_generation.frozen_two_stage.providers.base import ProviderRoute
+from benchmark.scene_generation.frozen_two_stage.spec import thaw_json
 from tools.api3_anthropic_runner_v2.transport import TransportResult
 
 
@@ -509,6 +511,65 @@ def test_preflight_behavior_has_no_campaign_or_model_name_heuristics() -> None:
     )
     assert 'startswith("api2-")' not in source
     assert "removesuffix" not in source
+
+
+@pytest.mark.parametrize(
+    ("returned", "expected"),
+    [
+        ("claude-opus-5", True),
+        ("anthropic/api_aws.claude-opus-5", True),
+        ("claude-opus-5-1", False),
+        ("claude-opus-50", False),
+        ("prefix-claude-opus-5-preview", False),
+        (None, False),
+    ],
+)
+def test_preflight_model_identity_requires_an_exact_token_suffix(
+    returned: Any,
+    expected: bool,
+) -> None:
+    assert (
+        campaign_execution._model_identity_matches(
+            "claude-opus-5", returned
+        )
+        is expected
+    )
+
+
+def test_dynamic_preflight_is_run_provenance_not_static_source_identity(
+    tmp_path: Path,
+) -> None:
+    prepared = prepare_campaign("api3-opus48-high-scene10-v2")
+    binding = PrivateRouteBinding(
+        route_profile_id=prepared.route.route_profile_id,
+        endpoint="https://private.example.invalid/v1/chat/completions",
+        credential_env="PRIVATE_API3_KEY",
+        binding_sha256="a" * 64,
+    )
+    first = campaign_execution._generation_spec(
+        prepared,
+        tmp_path / "first",
+        binding,
+        {"ok": True, "reasoning_tokens": 10},
+    )
+    second = campaign_execution._generation_spec(
+        prepared,
+        tmp_path / "second",
+        binding,
+        {"ok": True, "reasoning_tokens": 20},
+    )
+
+    assert thaw_json(first.source_manifest) == dict(prepared.source_manifest)
+    assert thaw_json(second.source_manifest) == dict(prepared.source_manifest)
+    assert thaw_json(first.provenance_hashes) == thaw_json(
+        second.provenance_hashes
+    )
+    first_policy = thaw_json(first.execution_policy)
+    second_policy = thaw_json(second.execution_policy)
+    assert first_policy["schema_version"] == "generation_campaign_execution_policy_v4"
+    assert first_policy["run_provenance"]["preflight"] != second_policy[
+        "run_provenance"
+    ]["preflight"]
 
 
 def test_campaign_binding_resolution_accepts_shared_resource_registry_superset(

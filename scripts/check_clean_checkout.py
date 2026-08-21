@@ -521,7 +521,7 @@ def _default_steps(
                     "-p",
                     "no:cacheprovider",
                     "-m",
-                    "not requires_blender and not requires_loopback and not requires_local_data",
+                    "not requires_blender and not requires_git_history and not requires_loopback and not requires_local_data",
                 ),
             )
         )

@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 from typing import Any
 
 import pytest
@@ -48,6 +49,7 @@ from benchmark.evaluation_campaign.orchestrator import (
     _round_directories,
 )
 from benchmark.evaluation_campaign.provenance import (
+    _directory_tree_identity,
     _python_dependency_closure,
     evaluation_source_manifest,
     protocol_manifest,
@@ -71,6 +73,19 @@ def _sha(data: bytes) -> str:
 def _write_json(path: Path, value: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
+
+
+def _copy_selection_snapshot(final: Path, row: dict[str, Any]) -> None:
+    case_id = str(row["case_id"])
+    target = final / "cases" / case_id
+    shutil.copytree(Path(row["source_case"]), target)
+    file_count, tree_sha256 = _directory_tree_identity(target)
+    row.update(
+        storage="self_contained_directory_copy_v1",
+        snapshot_case=f"cases/{case_id}",
+        snapshot_file_count=file_count,
+        snapshot_tree_sha256=tree_sha256,
+    )
 
 
 def _selection_aggregate(rows: list[dict[str, Any]]) -> dict[str, Any]:
@@ -380,6 +395,7 @@ def _strict_final_fixture(
         _write_json(
             case / "case_run_manifest.json",
             {
+                "case_id": case_id,
                 "status": "complete",
                 "final_decision_status": "resolved",
                 "l1_engineering_failure": False,
@@ -401,7 +417,6 @@ def _strict_final_fixture(
                 "selected_attempt_index": index,
                 "source_run": str(root.resolve()),
                 "source_case": str(case.resolve()),
-                "storage": "absolute_directory_symlink",
                 "status": "complete",
                 "final_decision_status": "resolved",
                 "benchmark_score_100": 50 + index,
@@ -419,12 +434,10 @@ def _strict_final_fixture(
     final.mkdir(parents=True)
     (final / "cases").mkdir()
     for row in records:
-        (final / "cases" / row["case_id"]).symlink_to(
-            row["source_case"], target_is_directory=True
-        )
+        _copy_selection_snapshot(final, row)
     provider_route = "profiles:" + ",".join(dict.fromkeys(routes.values()))
     selection = {
-        "schema_version": "scene_level_first_publishable_selection_v1",
+        "schema_version": "scene_level_first_publishable_selection_v2",
         "status": "complete",
         "model_label": campaign.model_label,
         "evaluator_model": "gpt-5.6-sol",
@@ -447,7 +460,7 @@ def _strict_final_fixture(
     _write_json(
         final / "summary.json",
         {
-            "schema_version": "selected_scene_level_summary_v1",
+            "schema_version": "selected_scene_level_summary_v2",
             "status": "complete",
             "model_label": campaign.model_label,
             "evaluator_model": "gpt-5.6-sol",
@@ -932,7 +945,10 @@ def test_campaign_rounds_only_pending_and_selects_chronological_first(
             for case_id in case_ids:
                 case = out / "cases" / case_id
                 case.mkdir(parents=True, exist_ok=True)
-                _write_json(case / "case_run_manifest.json", {"status": "complete"})
+                _write_json(
+                    case / "case_run_manifest.json",
+                    {"case_id": case_id, "status": "complete"},
+                )
                 _write_json(case / "evaluation_report.json", {"score": 1})
             _write_json(out / "run_manifest.json", {"status": "complete"})
             return ExecutionResult(0, "", "", 200 + len(invocations))
@@ -1080,7 +1096,7 @@ def test_resume_preserves_interrupted_round_and_uses_new_round(
             for case_id in ("S100", "S101"):
                 case = out / "cases" / case_id
                 case.mkdir(parents=True, exist_ok=True)
-                _write_json(case / "case_run_manifest.json", {})
+                _write_json(case / "case_run_manifest.json", {"case_id": case_id})
                 _write_json(case / "evaluation_report.json", {})
             _write_json(out / "run_manifest.json", {"status": "complete"})
             return ExecutionResult(0, "", "", 2)
@@ -1277,6 +1293,7 @@ def test_selection_provenance_preserves_mixed_api1_api2_profile_ids(
         _write_json(
             case / "case_run_manifest.json",
             {
+                "case_id": case_id,
                 "status": "complete",
                 "final_decision_status": "resolved",
                 "l1_engineering_failure": False,
@@ -1298,7 +1315,6 @@ def test_selection_provenance_preserves_mixed_api1_api2_profile_ids(
                 "selected_attempt_index": index,
                 "source_run": str(root.resolve()),
                 "source_case": str(case.resolve()),
-                "storage": "absolute_directory_symlink",
                 "status": "complete",
                 "final_decision_status": "resolved",
                 "benchmark_score_100": 50,
@@ -1316,11 +1332,9 @@ def test_selection_provenance_preserves_mixed_api1_api2_profile_ids(
     final.mkdir(parents=True)
     (final / "cases").mkdir()
     for row in records:
-        (final / "cases" / row["case_id"]).symlink_to(
-            row["source_case"], target_is_directory=True
-        )
+        _copy_selection_snapshot(final, row)
     selection = {
-        "schema_version": "scene_level_first_publishable_selection_v1",
+        "schema_version": "scene_level_first_publishable_selection_v2",
         "status": "complete",
         "model_label": campaign.model_label,
         "evaluator_model": "gpt-5.6-sol",
@@ -1346,7 +1360,7 @@ def test_selection_provenance_preserves_mixed_api1_api2_profile_ids(
     _write_json(
         final / "summary.json",
         {
-            "schema_version": "selected_scene_level_summary_v1",
+            "schema_version": "selected_scene_level_summary_v2",
             "status": "complete",
             "model_label": campaign.model_label,
             "evaluator_model": "gpt-5.6-sol",
@@ -1804,7 +1818,7 @@ def test_owned_proxy_launcher_consumes_config_host_and_port(tmp_path: Path) -> N
     launcher = ROOT / "src/benchmark/evaluation_campaign/owned_proxy_launcher.py"
     completed = subprocess.run(
         [
-            str(ROOT / ".venv/bin/python"),
+            sys.executable,
             str(launcher),
             "--config",
             str(config),
@@ -1848,7 +1862,10 @@ def test_legacy_prior_adoption_is_nonempty_complete_and_immutable(
         {"status": "complete", "experiment_plan_sha256": "a" * 64},
     )
     for case_id in dataset.ordered_case_ids:
-        _write_json(prior_root / "cases" / case_id / "case_run_manifest.json", {"status": "complete"})
+        _write_json(
+            prior_root / "cases" / case_id / "case_run_manifest.json",
+            {"case_id": case_id, "status": "complete"},
+        )
         _write_json(prior_root / "cases" / case_id / "evaluation_report.json", {"score": 1})
     prior = PriorAttemptRoot(
         root=prior_root,
@@ -1887,7 +1904,7 @@ def test_legacy_prior_adoption_is_nonempty_complete_and_immutable(
     [
         ("duplicate", "case order/inventory"),
         ("hash", "source hash mismatch"),
-        ("link", "link target mismatch"),
+        ("snapshot", "snapshot tree identity mismatch"),
         ("summary", "summary status/totals"),
     ],
 )
@@ -1910,10 +1927,11 @@ def test_existing_final_adoption_rejects_false_green(
         value = json.loads(source.read_text())
         value["benchmark_score_100"] = 99
         _write_json(source, value)
-    elif mutation == "link":
-        link = final / "cases/S100"
-        link.unlink()
-        link.symlink_to(roots[1][0] / "cases/S101", target_is_directory=True)
+    elif mutation == "snapshot":
+        snapshot = final / "cases/S100/evaluation_report.json"
+        value = json.loads(snapshot.read_text())
+        value["benchmark_score_100"] = 99
+        _write_json(snapshot, value)
     else:
         value = json.loads((final / "summary.json").read_text())
         value["totals"]["successful"] = 1
@@ -1937,7 +1955,12 @@ def test_round_100_resume_and_attempt_accounting_fail_closed(tmp_path: Path) -> 
 
 def test_resume_rejects_state_row_whose_round_directory_is_missing(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(
+        "benchmark.evaluation_campaign.orchestrator.git_state",
+        lambda root: {"commit": "test", "dirty": False},
+    )
     dataset_root = _dataset(tmp_path / "dataset")
     identity = inspect_evaluation_dataset(
         dataset_root, expected_case_ids=("S100", "S101")
@@ -1977,7 +2000,12 @@ def test_resume_rejects_state_row_whose_round_directory_is_missing(
 
 def test_unstarted_round_is_excluded_and_terminal_artifacts_are_rejected(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(
+        "benchmark.evaluation_campaign.orchestrator.git_state",
+        lambda root: {"commit": "test", "dirty": False},
+    )
     dataset_root = _dataset(tmp_path / "dataset")
     identity = inspect_evaluation_dataset(
         dataset_root, expected_case_ids=("S100", "S101")
@@ -1990,7 +2018,7 @@ def test_unstarted_round_is_excluded_and_terminal_artifacts_are_rejected(
         _profile(),
         None,
         repo_root=ROOT,
-        python_executable=ROOT / ".venv/bin/python",
+        python_executable=Path(sys.executable),
     )
     excluded = {
         "round_index": 0,
@@ -2067,7 +2095,7 @@ def test_check_rejects_selector_incompatible_judge_alias(tmp_path: Path) -> None
         changed_profile,
         None,
         repo_root=ROOT,
-        python_executable=ROOT / ".venv/bin/python",
+        python_executable=Path(sys.executable),
     )
     with pytest.raises(CampaignConfigError, match="requires one gpt-5.6-sol"):
         orchestrator.check()

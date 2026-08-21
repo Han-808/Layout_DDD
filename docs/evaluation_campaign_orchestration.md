@@ -193,7 +193,10 @@ portable attempt indices and repository-relative identifiers; endpoints,
 credential environment names, absolute paths, PIDs, and dirty path lists are
 kept out. Existing final selections are adopted only after strict validation
 of selection/run/summary schemas, case order and uniqueness, publishability,
-source relations and hashes, and symlink inventory.
+source relations and hashes, case identity, and the self-contained snapshot
+inventory. Final cases are regular copied directories with a complete tree
+hash, so deleting attempt roots after successful finalization does not break
+the selected collection.
 
 Campaign configs reject overlapping dataset/attempt/final/prior roots.
 `l3_only=true` is intentionally rejected by this layer: L3 recovery is a

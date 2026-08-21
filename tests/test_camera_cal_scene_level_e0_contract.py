@@ -7,6 +7,8 @@ from pathlib import Path
 import subprocess
 import sys
 
+import pytest
+
 from scripts import run_camera_cal_scene_level as runner
 
 
@@ -33,6 +35,7 @@ def _public_top_level_names(path: Path) -> dict[str, list[str]]:
     return {"classes": classes, "functions": functions}
 
 
+@pytest.mark.requires_git_history
 def test_runner_blob_public_surface_and_schema_versions_are_pinned() -> None:
     contract = _contract()
     runner_path = PROJECT_ROOT / contract["runner"]["path"]

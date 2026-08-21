@@ -21,6 +21,8 @@ from typing import Any
 
 import pytest
 
+pytestmark = pytest.mark.requires_git_history
+
 
 ROOT = Path(__file__).resolve().parents[1]
 HISTORICAL_REF = "73cabb8"
