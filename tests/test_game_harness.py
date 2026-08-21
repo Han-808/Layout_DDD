@@ -173,6 +173,7 @@ def test_malformed_import_map_is_rejected_rather_than_ignored() -> None:
         rewrite_entry_html(broken)
 
 
+@pytest.mark.requires_loopback
 def test_server_serves_the_rewritten_entry_over_http(tmp_path: Path) -> None:
     root = _game_dir(tmp_path, _IMPORT_MAP_GAME)
 
@@ -188,6 +189,7 @@ def test_server_serves_the_rewritten_entry_over_http(tmp_path: Path) -> None:
     assert HARNESS_SCRIPT_PATH in body
 
 
+@pytest.mark.requires_loopback
 def test_server_publishes_the_harness_and_shim_assets(tmp_path: Path) -> None:
     root = _game_dir(tmp_path, _IMPORT_MAP_GAME)
 
@@ -203,6 +205,7 @@ def test_server_publishes_the_harness_and_shim_assets(tmp_path: Path) -> None:
     assert THREE_SOURCE_SPECIFIER in shim_body
 
 
+@pytest.mark.requires_loopback
 def test_server_streams_ordinary_game_files_untouched(tmp_path: Path) -> None:
     root = _game_dir(tmp_path, _SCRIPT_TAG_GAME)
 
@@ -213,6 +216,7 @@ def test_server_streams_ordinary_game_files_untouched(tmp_path: Path) -> None:
     assert body == "// game source\n"
 
 
+@pytest.mark.requires_loopback
 def test_server_refuses_paths_that_escape_the_game_root(tmp_path: Path) -> None:
     secret = tmp_path / "secret.txt"
     secret.write_text("private", encoding="utf-8")
@@ -225,6 +229,7 @@ def test_server_refuses_paths_that_escape_the_game_root(tmp_path: Path) -> None:
     assert excinfo.value.code == 404
 
 
+@pytest.mark.requires_loopback
 def test_server_can_substitute_a_local_three_for_a_cdn_url(tmp_path: Path) -> None:
     root = _game_dir(tmp_path, _CDN_SCRIPT_GAME)
 

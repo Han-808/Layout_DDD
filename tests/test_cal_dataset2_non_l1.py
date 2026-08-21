@@ -282,6 +282,7 @@ def test_non_l1_response_contract_requires_abstention_when_insufficient() -> Non
         )
 
 
+@pytest.mark.requires_local_data
 @pytest.mark.skipif(
     not (DATASET_ROOT / "dataset_manifest.json").is_file(),
     reason="cal_dataset2 has not been constructed yet",

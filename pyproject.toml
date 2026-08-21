@@ -104,6 +104,11 @@ testpaths = [
 ]
 pythonpath = ["src", "."]
 addopts = "-q"
+markers = [
+  "requires_blender: requires a validated external Blender runtime",
+  "requires_loopback: opens a loopback HTTP server",
+  "requires_local_data: requires frozen local datasets or assets",
+]
 
 [dependency-groups]
 dev = [

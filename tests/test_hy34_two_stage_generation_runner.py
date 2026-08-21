@@ -198,6 +198,7 @@ class _Retriever:
         }
 
 
+@pytest.mark.requires_loopback
 def test_two_stage_case_is_exactly_one_plan_one_retrieval_one_placement(tmp_path: Path) -> None:
     plan_text = json.dumps(_plan(), separators=(",", ":"))
     placement_text = json.dumps(_placement(), separators=(",", ":"))
@@ -236,6 +237,7 @@ def test_two_stage_case_is_exactly_one_plan_one_retrieval_one_placement(tmp_path
         assert "Test Model" not in sent["messages"][1]["content"]
 
 
+@pytest.mark.requires_loopback
 def test_invalid_placement_is_preserved_without_regeneration(tmp_path: Path) -> None:
     plan_text = json.dumps(_plan(), separators=(",", ":"))
     invalid_text = json.dumps(_placement(asset_id="replacement_asset"), separators=(",", ":"))
@@ -262,6 +264,7 @@ def test_invalid_placement_is_preserved_without_regeneration(tmp_path: Path) -> 
     assert audit["eligible_for_strict_one_shot_evaluation"] is False
 
 
+@pytest.mark.requires_loopback
 def test_http_infrastructure_retry_reuses_request_but_not_session_id(tmp_path: Path) -> None:
     content = json.dumps(_plan(), separators=(",", ":"))
     with _Context([(503, b'{"error":"busy"}', 0.0), (200, _api_body(content), 0.0)]) as (
@@ -281,6 +284,7 @@ def test_http_infrastructure_retry_reuses_request_but_not_session_id(tmp_path: P
     assert handler.headers_seen[0]["SessionID"] != handler.headers_seen[1]["SessionID"]
 
 
+@pytest.mark.requires_loopback
 def test_schema_invalid_object_plan_is_not_retried(tmp_path: Path) -> None:
     invalid_plan = json.dumps({"schema_version": "hy34_object_plan_v1", "objects": []})
     retriever = _Retriever()
@@ -361,6 +365,7 @@ def test_hy3_hy4_requests_differ_only_in_model_identity() -> None:
     assert left_request == right_request
 
 
+@pytest.mark.requires_loopback
 def test_timeout_after_request_delivery_is_ambiguous() -> None:
     with _Context([(200, b"{}", 0.2)]) as (endpoint, handler):
         result = post_once(

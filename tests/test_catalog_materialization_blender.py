@@ -233,6 +233,7 @@ class _Judge:
         }
 
 
+@pytest.mark.requires_blender
 @pytest.mark.skipif(
     not BLENDER.is_file() or not ASSET_CSV.is_file(),
     reason="requires the bundled local Blender and frozen Imaginarium catalog",
@@ -633,6 +634,7 @@ def test_real_blender_materializes_and_independently_inspects_frozen_asset(
     } <= set(rejected_inspection["reason_codes"])
 
 
+@pytest.mark.requires_blender
 @pytest.mark.skipif(
     not BLENDER.is_file(),
     reason="requires the bundled local Blender",
@@ -864,6 +866,7 @@ print(
     assert result["asset_assembly_changed"] is True
 
 
+@pytest.mark.requires_blender
 @pytest.mark.skipif(
     not BLENDER.is_file(),
     reason="requires the bundled local Blender",
@@ -1135,6 +1138,7 @@ def architecture_allowlist_fixture(tmp_path_factory):
     }
 
 
+@pytest.mark.requires_blender
 @pytest.mark.parametrize(
     ("mutation", "inspection_reason"),
     [
