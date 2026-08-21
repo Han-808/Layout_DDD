@@ -2,8 +2,10 @@
 
 ## Current interface
 
-`benchmark.scene_generation.campaign` is the current model-agnostic entrypoint
-for API2 and API3 scene generation. It composes reviewed protocol grammars with
+`python -m benchmark.scene_generation` is the canonical model-agnostic
+entrypoint for API2 and API3 scene generation. The historical explicit module
+path, `python -m benchmark.scene_generation.campaign`, remains an equivalent
+compatibility spelling. The command composes reviewed protocol grammars with
 public model/campaign profiles, Phase A retrieval profiles, ignored local
 bindings, and the unchanged frozen two-stage kernel.
 
@@ -13,11 +15,11 @@ brief/prompt bundle. Invoking the campaign command outside a Layout_DDD source
 checkout therefore fails explicitly instead of guessing a repository root.
 
 ```bash
-python -m benchmark.scene_generation.campaign check --campaign api2-kimi-k3-scene10-v2
-python -m benchmark.scene_generation.campaign resolve --campaign api2-kimi-k3-scene10-v2
-python -m benchmark.scene_generation.campaign resource-gate --campaign api2-kimi-k3-scene10-v2
-python -m benchmark.scene_generation.campaign preflight --campaign api2-kimi-k3-scene10-v2
-python -m benchmark.scene_generation.campaign run \
+python -m benchmark.scene_generation check --campaign api2-kimi-k3-scene10-v2
+python -m benchmark.scene_generation resolve --campaign api2-kimi-k3-scene10-v2
+python -m benchmark.scene_generation resource-gate --campaign api2-kimi-k3-scene10-v2
+python -m benchmark.scene_generation preflight --campaign api2-kimi-k3-scene10-v2
+python -m benchmark.scene_generation run \
   --campaign api2-kimi-k3-scene10-v2 --output-dir /new/write-once/output
 ```
 

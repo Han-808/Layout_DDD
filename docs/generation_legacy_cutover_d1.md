@@ -2,7 +2,8 @@
 
 ## Decision
 
-The model-agnostic generation campaign is the owner for new API2/API3 runs.
+The model-agnostic generation campaign, invoked canonically as
+`python -m benchmark.scene_generation`, is the owner for new API2/API3 runs.
 The existing Kimi-K3, GLM-5.3, and Opus 4.8 commands remain compatibility
 entrypoints for now. D1 does not rename them to “shims” and does not silently
 change their output or artifact contracts.

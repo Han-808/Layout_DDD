@@ -48,7 +48,7 @@
       "state": "compatibility",
       "owner": "scene-generation",
       "replacement": "generation_campaign_runtime_v2",
-      "reason": "Tracked retry and recovery entrypoints retained for existing launchers while orchestration moves to the shared compatibility runtime.",
+      "reason": "Tracked selected-brief and fresh-chance retry entrypoints retained because campaign v2 does not reproduce their timeout-ambiguity and independent semantic-retry contracts.",
       "tracked_policy": "all_tracked",
       "entrypoints": [
         "tools/api2_generation_recovery_v1/recovery_runner.py",
@@ -69,7 +69,7 @@
       "state": "compatibility",
       "owner": "scene-generation",
       "replacement": "generation_campaign_runtime_v2",
-      "reason": "Legacy Kimi launcher surface retained as a thin typed API2 route adapter.",
+      "reason": "Legacy Kimi launcher and import surface retained for existing callers; it is not a thin forwarder until terminal and artifact parity with campaign v2 are attested.",
       "tracked_policy": "all_tracked",
       "entrypoints": [
         "tools/api2_kimi_k3_runner_v1/kimi_k3_generation_runner.py"
@@ -89,7 +89,7 @@
       "state": "compatibility",
       "owner": "scene-generation",
       "replacement": "generation_campaign_runtime_v2",
-      "reason": "Legacy GLM launcher surface retained as a thin typed API2 route adapter.",
+      "reason": "Legacy GLM launcher and import surface retained for existing callers; it is not a thin forwarder until terminal and artifact parity with campaign v2 are attested.",
       "tracked_policy": "all_tracked",
       "entrypoints": [
         "tools/api2_glm53_runner_v1/glm53_generation_runner.py"
@@ -109,7 +109,7 @@
       "state": "compatibility",
       "owner": "scene-generation",
       "replacement": "frozen_two_stage_compatibility_runtime_v1",
-      "reason": "Legacy Opus 4.8 launcher and preflight surface retained as a typed API3 adaptive-thinking adapter.",
+      "reason": "Legacy Opus 4.8 launcher, import, reasoning-signal preflight, and historical retry surfaces remain compatibility code; they are not thin forwarders.",
       "tracked_policy": "all_tracked",
       "entrypoints": [
         "tools/api3_opus48_thinking_runner_v1/generation_runner.py",
@@ -174,6 +174,25 @@
         "frozen_two_stage_compatibility_runtime_v1",
         "generation_retrieval_runtime_v2",
         "generation_retrieval_profiles_v2"
+      ],
+      "quarantine_evidence": []
+    },
+    {
+      "component_id": "scene_generation_canonical_cli_v1",
+      "root": "src/benchmark/scene_generation/__main__.py",
+      "state": "active",
+      "owner": "scene-generation",
+      "replacement": null,
+      "reason": "Canonical top-level Python module entrypoint delegating directly to the model-agnostic generation campaign CLI.",
+      "tracked_policy": "all_tracked",
+      "entrypoints": [
+        "src/benchmark/scene_generation/__main__.py"
+      ],
+      "sources": [
+        "src/benchmark/scene_generation/__main__.py"
+      ],
+      "dependencies": [
+        "generation_campaign_runtime_v2"
       ],
       "quarantine_evidence": []
     },

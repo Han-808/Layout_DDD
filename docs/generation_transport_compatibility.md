@@ -229,8 +229,10 @@ The lower-level frozen compatibility `run` command remains post-preflight.
 Existing Kimi, GLM, and Opus launchers retain their original preflight/replay
 surface for compatibility.
 
-The active higher-level entry is now
-`python -m benchmark.scene_generation.campaign`. It compiles the declarative
+The canonical higher-level entry is
+`python -m benchmark.scene_generation`. The explicit
+`benchmark.scene_generation.campaign` module remains a compatibility spelling.
+The canonical command compiles the declarative
 workflow, brief, retry, artifact and preflight contracts, executes the Phase A
 resource gate, performs the live route preflight, and then invokes the same
 frozen orchestrator. See `docs/generation_campaign_v2.md`.

@@ -3,8 +3,11 @@ from __future__ import annotations
 from dataclasses import FrozenInstanceError, replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import os
 from pathlib import Path
 import shutil
+import subprocess
+import sys
 import threading
 from typing import Any, Mapping
 from urllib.parse import parse_qsl, urlencode
@@ -888,6 +891,35 @@ def test_cli_check_is_an_executable_single_entrypoint(capsys: pytest.CaptureFixt
     assert value["valid"] is True
     assert value["credential_loaded"] is False
     assert value["trust"]["schema_version"] == "generation_campaign_trust_report_v1"
+
+
+def test_top_level_scene_generation_module_delegates_to_campaign_cli() -> None:
+    environment = {
+        **os.environ,
+        "PYTHONPATH": f"{REPO_ROOT / 'src'}:{REPO_ROOT}",
+    }
+
+    def invoke(module: str) -> dict[str, Any]:
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                module,
+                "check",
+                "--campaign",
+                "api2-kimi-k3-scene10-v2",
+            ],
+            cwd=REPO_ROOT,
+            env=environment,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return json.loads(completed.stdout)
+
+    assert invoke("benchmark.scene_generation") == invoke(
+        "benchmark.scene_generation.campaign"
+    )
 
 
 def test_cli_error_surface_never_echoes_private_paths(
