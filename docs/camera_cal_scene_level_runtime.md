@@ -1,51 +1,86 @@
 # Camera-cal scene-level runtime structure
 
-Status: E4 mechanical extraction. The authoritative compatibility command
-remains `scripts/run_camera_cal_scene_level.py`.
+Status: E5 final structure. The historical compatibility command remains
+`scripts/run_camera_cal_scene_level.py`; the package entrypoint is
+`python -m benchmark.camera_cal_scene_level`.
 
-The package `benchmark.camera_cal_scene_level` owns only leaf mechanics:
+The complete package-owned execution chain is:
 
-- `io.py`: JSON/YAML reads, atomic JSON writes, hashes, and UTC timestamps;
-- `progress.py`: progress JSONL persistence and terminal formatting;
-- `telemetry.py`: API-call accounting, token normalization, metric telemetry,
-  and the mechanical API-call tracker.
-- `cli.py`: the frozen argument surface and validation helpers;
-- `discovery.py`: ready-case discovery and evaluator input path resolution;
-- `planning.py`: route, renderer, control, and experiment-plan construction;
+```text
+benchmark.camera_cal_scene_level.__main__
+  -> composition.orchestrator_dependencies()
+  -> orchestrator.run_main(deps=...)
+  -> case_runtime.run_case_impl(deps=...)
+  -> adapters.build_adapters(factories=...)
+  -> benchmark.api.evaluation.run_evaluate(...)
+```
+
+Run-level discovery, planning, endpoint preflight, scheduling, reports, and
+artifact writes remain in the shared package orchestrator. Each case passes
+through the explicit `CaseRuntimeDeps` groups (`io`, `resume`, `policy`, and
+`external`); adapter construction receives fresh `AdapterFactories`. No
+module-level runtime dependency snapshot is used.
+
+The package modules own the following boundaries:
+
+- `cli.py`: frozen argument surface and validation helpers;
+- `discovery.py`: ready-case discovery and input-path resolution;
+- `planning.py`: route, renderer, control, model, and experiment-plan logic;
+- `policy.py`: promptless request/profile, scene-quality, and asset policy;
 - `resume.py`: strict completed-case resume eligibility;
-- `scheduling.py`: parallel scheduling and the shared route-abort signal.
-- `comparison.py`: pure human/model scene-level comparison projections;
-- `reports.py`: terminal case records, resolution audits, and run summaries;
-- `provenance.py`: redacted route projection and case-input fingerprints.
-- `adapters.py`: external model, judge, selector, renderer, and evidence
-  provider construction only; all concrete builders and the observed-wrapper
-  factories are injected by the compatibility façade;
-- `case_runtime.py`: the single-case runtime implementation and its explicit
-  dependency groups. It owns orchestration around the existing evaluator but
-  does not redefine prompts, camera policy, metric policy, scoring, or
-  `run_evaluate` semantics.
+- `scheduling.py`: parallel scheduling and route-abort signaling;
+- `comparison.py`: pure human/model scene-level comparison;
+- `reports.py`: terminal records, resolution audits, and summaries;
+- `provenance.py`: route projection and case-input fingerprints;
+- `observability.py`: API/evidence/render observation wrappers;
+- `adapters.py`: injected external model, judge, selector, renderer, and
+  evidence-provider construction;
+- `audit.py`: optional post-hoc audit-graph projection;
+- `case_runtime.py`: single-case orchestration and the one
+  `run_evaluate` call;
+- `composition.py`: package defaults for concrete evaluator/runtime wiring;
+- `orchestrator.py`: package run-level composition and execution;
+- `__main__.py`: package CLI entrypoint.
 
-The historical runner keeps the same public class/function names as dynamic
-compatibility facades. Existing imports and monkeypatch points therefore
-continue to work: each `run_case` call reads the current runner globals and
-constructs fresh runtime dependencies and adapter factories. No package
-module may import `scripts.run_camera_cal_scene_level`; the dependency
-direction is package runtime → injected concrete implementations, with the
-script façade remaining the compatibility boundary.
+The script remains a dynamic compatibility façade. Its public symbols,
+signatures, CLI behavior, and monkeypatch points remain available. On every
+call it reads current runner globals to construct orchestration dependencies,
+`CaseRuntimeDeps`, and `AdapterFactories`; the package never imports
+`scripts.run_camera_cal_scene_level`.
 
-E1–E4 do not change Judge prompts, camera selection, rendering, metric weights,
-deductions, evaluation order, retry policy, report schemas, output paths, or
-the `run_evaluate` kwargs/call contract. The adapter construction order is
-also frozen: model configs, grouping observe, judge build/observe, selector
-build/observe, renderer, L1 provider, L3 provider, functional probe,
-deterministic selector, final renderer, and preview renderer.
-The frozen E0 contract records the pre-extraction runner blob and semantic
-source hashes; focused tests compare the facade and leaf implementations.
-Evaluation Campaign source identity explicitly hashes every tracked Python
-module under this package. Adding or changing a runtime leaf therefore changes
-the campaign protocol fingerprint and makes an older resume fail closed.
+The adapter construction order is frozen:
 
-Promptless evaluation, camera acquisition, metric/scoring policy, and the
-single `run_evaluate` call remain semantic contracts rather than new package
-implementations. Any later change to those sources or to dependency wiring
-requires the corresponding parity trace and provenance/hash gates.
+```text
+model configs
+-> grouping build/observe
+-> judge build/observe
+-> selector build/observe
+-> renderer
+-> L1 provider
+-> L3 provider
+-> functional probe
+-> deterministic selector
+-> final renderer
+-> preview renderer
+```
+
+Judge prompts, camera acquisition, metric/scoring policy, retry behavior,
+`run_evaluate` kwargs and call count, report schemas, output paths, and write
+ordering are semantic contracts. E0 parity fixtures and fixed-clock trace
+tests remain the gate for any change to those contracts.
+
+Source-checkout behavior is the full E5 runtime gate: both the historical
+script and package entrypoint must execute the same orchestration and produce
+the same canonical artifacts under the same injected/fixed runtime. An
+installed wheel has a narrower packaging gate in E5: package import and
+`python -m benchmark.camera_cal_scene_level --help` must work without a
+checkout or `scripts/` tree. A real installed-wheel evaluation additionally
+requires externally supplied dataset, Blender, credentials, and compatible
+source/provenance resources; that environment-dependent execution is not
+claimed by the help/import gate and must fail closed when those resources are
+absent.
+
+Evaluation Campaign source identity hashes the tracked runtime package and
+its dependency closure. Any runtime-leaf, composition, policy, or provenance
+change therefore changes the protocol fingerprint and makes an older resume
+fail closed.

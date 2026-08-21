@@ -15,6 +15,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
+from benchmark.camera_cal_scene_level.adapters import AdapterBundle
+
 
 @dataclass(frozen=True)
 class CaseRuntimeIO:
@@ -66,26 +68,7 @@ class CaseRuntimePolicy:
     scoring_profile_id: str
 
 
-@dataclass(frozen=True)
-class RuntimeAdapters:
-    """Objects returned by the injected adapter builder.
-
-    The builder owns concrete constructor order and observed wrappers.  The
-    runtime only consumes these named interfaces, which keeps the migration
-    independent of whether the façade uses a future ``adapters.py`` module or
-    a compatibility closure.
-    """
-
-    grouping_model: Any
-    raw_judge: Any
-    vlm_selector: Any
-    renderer: Any
-    l1_provider: Any
-    l3_provider: Any
-    functional_probe_provider: Any
-    deterministic_selector: Any
-    evidence_renderer: Any
-    preview_renderer: Any
+RuntimeAdapters = AdapterBundle
 
 
 @dataclass(frozen=True)

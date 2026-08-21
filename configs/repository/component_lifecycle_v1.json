@@ -373,7 +373,7 @@
       "state": "active",
       "owner": "evaluation-runtime",
       "replacement": null,
-      "reason": "Behavior-preserving camera-cal runtime for CLI, discovery, planning, resume, scheduling, comparison, reporting, case provenance, I/O, progress, telemetry, external adapter wiring, and single-case execution; the compatibility runner remains the dynamic dependency-injection façade and semantic prompts, camera policy, metric/scoring policy, and run_evaluate contract remain unchanged.",
+      "reason": "Final behavior-preserving camera-cal package runtime for the __main__ entrypoint, composition, orchestration, CLI, discovery, planning, policy, resume, scheduling, comparison, reporting, provenance, observability, audit projection, external adapter wiring, and single-case execution; the compatibility runner remains a dynamic dependency-injection façade, package modules never import the script, and semantic prompts, camera policy, metric/scoring policy, and run_evaluate contract remain unchanged.",
       "tracked_policy": "all_tracked",
       "entrypoints": [
         "src/benchmark/camera_cal_scene_level/io.py",
@@ -387,7 +387,13 @@
         "src/benchmark/camera_cal_scene_level/provenance.py",
         "src/benchmark/camera_cal_scene_level/reports.py",
         "src/benchmark/camera_cal_scene_level/adapters.py",
-        "src/benchmark/camera_cal_scene_level/case_runtime.py"
+        "src/benchmark/camera_cal_scene_level/case_runtime.py",
+        "src/benchmark/camera_cal_scene_level/__main__.py",
+        "src/benchmark/camera_cal_scene_level/composition.py",
+        "src/benchmark/camera_cal_scene_level/orchestrator.py",
+        "src/benchmark/camera_cal_scene_level/policy.py",
+        "src/benchmark/camera_cal_scene_level/observability.py",
+        "src/benchmark/camera_cal_scene_level/audit.py"
       ],
       "sources": [
         "src/benchmark/camera_cal_scene_level/__init__.py",
@@ -873,7 +879,7 @@
       "path": "docs/camera_cal_scene_level_runtime.md",
       "state": "active",
       "owner": "evaluation-runtime",
-      "reason": "E4 adapter and case-runtime ownership, dynamic dependency-injection compatibility-facade boundary, package import direction, and explicit prompt/camera/metric/run_evaluate semantic exclusions."
+      "reason": "E5 final package entrypoint, composition/orchestration ownership, dynamic dependency-injection compatibility-facade boundary, package import direction, source-checkout execution contract, installed-wheel help/import gate, and explicit prompt/camera/metric/run_evaluate semantic exclusions."
     },
     {
       "artifact_id": "camera_cal_scene_level_leaf_runtime_tests_v1",
@@ -902,6 +908,13 @@
       "state": "active",
       "owner": "evaluation-tests",
       "reason": "E4 parity coverage for adapter construction order, resume-before-external gating, dynamic dependency injection, run_evaluate and artifact-write traces, exception telemetry, and package import direction."
+    },
+    {
+      "artifact_id": "camera_cal_scene_level_structure_e5_tests_v1",
+      "path": "tests/test_camera_cal_scene_level_structure_e5.py",
+      "state": "active",
+      "owner": "evaluation-tests",
+      "reason": "E5 parity coverage for package __main__, composition/orchestrator delegation, dynamic script façade, source-checkout package help/runtime, package import direction, and installed-wheel help/import boundaries."
     },
     {
       "artifact_id": "evaluation_campaign_tests_v1",

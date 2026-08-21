@@ -612,15 +612,29 @@ def _wheel_steps(
         "assert pathlib.Path(resource).is_file(); "
         "print({'origins': origins, 'resource': str(resource)})"
     )
-    results.append(
-        _run_step(
-            "wheel_import",
-            (python, "-c", import_code),
-            cwd=isolated,
-            environ=wheel_env,
-            timeout_seconds=timeout_seconds,
-        )
+    wheel_import = _run_step(
+        "wheel_import",
+        (python, "-c", import_code),
+        cwd=isolated,
+        environ=wheel_env,
+        timeout_seconds=timeout_seconds,
     )
+    results.append(wheel_import)
+    if wheel_import.ok:
+        results.append(
+            _run_step(
+                "wheel_camera_cal_help",
+                (
+                    python,
+                    "-m",
+                    "benchmark.camera_cal_scene_level",
+                    "--help",
+                ),
+                cwd=isolated,
+                environ=wheel_env,
+                timeout_seconds=timeout_seconds,
+            )
+        )
     return results
 
 
@@ -732,7 +746,12 @@ def verify_clean_checkout(
     )
     wheel_checked = (
         not skip_wheel
-        and {"wheel_build", "wheel_install", "wheel_import"}
+        and {
+            "wheel_build",
+            "wheel_install",
+            "wheel_import",
+            "wheel_camera_cal_help",
+        }
         <= successful_names
     )
     return {

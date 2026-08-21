@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Sequence
 
 from benchmark.rendering.blender import CYCLES_DEVICES, RENDER_ENGINES
+from benchmark.resources import runtime_resource_path
 from benchmark.scoring_profiles import DEFAULT_DEDUCTION_MULTIPLIER
 
 
@@ -35,11 +36,18 @@ ANNOTATED_L3_METRICS = (
 DEFAULT_DATASET_ROOT = (
     PROJECT_ROOT / "Support" / "datasets" / "camera_cal_scenesets"
 )
-DEFAULT_GROUPING_CONFIG = (
+_CHECKOUT_GROUPING_CONFIG = (
     PROJECT_ROOT
     / "configs"
     / "grouping"
     / "vlm_visual_evidence_scope_v2.yaml"
+)
+DEFAULT_GROUPING_CONFIG = (
+    _CHECKOUT_GROUPING_CONFIG
+    if _CHECKOUT_GROUPING_CONFIG.is_file()
+    else runtime_resource_path(
+        "configs/grouping/vlm_visual_evidence_scope_v2.yaml"
+    )
 )
 DEFAULT_BLENDER_BIN = Path(
     os.environ.get(
@@ -85,6 +93,7 @@ def _parse_args_impl(
     """
 
     parser = argparse.ArgumentParser(
+        prog="run_camera_cal_scene_level.py",
         description=__doc__ if description is None else description
     )
     parser.add_argument(
