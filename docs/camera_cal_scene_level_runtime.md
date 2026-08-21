@@ -31,6 +31,9 @@ The package modules own the following boundaries:
 - `scheduling.py`: parallel scheduling and route-abort signaling;
 - `comparison.py`: pure human/model scene-level comparison;
 - `reports.py`: terminal records, resolution audits, and summaries;
+- `persisted_scoring.py`: read-only case/run score projections from persisted
+  reports for selection, merge, comparison, and viewer consumers; it never
+  invokes the evaluator or fills missing coverage;
 - `provenance.py`: route projection and case-input fingerprints;
 - `observability.py`: API/evidence/render observation wrappers;
 - `adapters.py`: injected external model, judge, selector, renderer, and
@@ -83,4 +86,6 @@ absent.
 Evaluation Campaign source identity hashes the tracked runtime package and
 its dependency closure. Any runtime-leaf, composition, policy, or provenance
 change therefore changes the protocol fingerprint and makes an older resume
-fail closed.
+fail closed. HTML viewer rendering is not evaluation or selection logic and
+is intentionally outside that identity; the package-owned persisted-scoring
+projection used by selection remains inside it.

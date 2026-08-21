@@ -373,7 +373,7 @@
       "state": "active",
       "owner": "evaluation-runtime",
       "replacement": null,
-      "reason": "Final behavior-preserving camera-cal package runtime for the __main__ entrypoint, composition, orchestration, CLI, discovery, planning, policy, resume, scheduling, comparison, reporting, provenance, observability, audit projection, external adapter wiring, and single-case execution; the compatibility runner remains a dynamic dependency-injection façade, package modules never import the script, and semantic prompts, camera policy, metric/scoring policy, and run_evaluate contract remain unchanged.",
+      "reason": "Final behavior-preserving camera-cal package runtime for the __main__ entrypoint, composition, orchestration, CLI, discovery, planning, policy, resume, scheduling, comparison, reporting, persisted-score projection, provenance, observability, audit projection, external adapter wiring, and single-case execution; the compatibility runner remains a dynamic dependency-injection façade, package modules never import the script, and semantic prompts, camera policy, metric/scoring policy, and run_evaluate contract remain unchanged.",
       "tracked_policy": "all_tracked",
       "entrypoints": [
         "src/benchmark/camera_cal_scene_level/io.py",
@@ -393,7 +393,8 @@
         "src/benchmark/camera_cal_scene_level/orchestrator.py",
         "src/benchmark/camera_cal_scene_level/policy.py",
         "src/benchmark/camera_cal_scene_level/observability.py",
-        "src/benchmark/camera_cal_scene_level/audit.py"
+        "src/benchmark/camera_cal_scene_level/audit.py",
+        "src/benchmark/camera_cal_scene_level/persisted_scoring.py"
       ],
       "sources": [
         "src/benchmark/camera_cal_scene_level/__init__.py",
@@ -915,6 +916,13 @@
       "state": "active",
       "owner": "evaluation-tests",
       "reason": "E5 parity coverage for package __main__, composition/orchestrator delegation, dynamic script façade, source-checkout package help/runtime, package import direction, and installed-wheel help/import boundaries."
+    },
+    {
+      "artifact_id": "persisted_scoring_projection_tests_v1",
+      "path": "tests/test_persisted_scoring_projection.py",
+      "state": "active",
+      "owner": "evaluation-tests",
+      "reason": "Historical byte-parity, coverage-boundary, viewer compatibility, selector import, and campaign source-identity gates for the package-owned persisted-score projection."
     },
     {
       "artifact_id": "evaluation_campaign_tests_v1",

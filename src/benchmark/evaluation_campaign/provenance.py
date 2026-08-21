@@ -82,11 +82,13 @@ def execution_manifest(campaign: EvaluationCampaignSpec) -> dict[str, Any]:
 
 
 def evaluation_source_manifest(repo_root: Path) -> dict[str, Any]:
+    # The selection entrypoint pulls in the package-owned persisted-scoring
+    # projection through static import closure.  HTML viewer/rendering code is
+    # deliberately excluded because it cannot affect evaluation or selection.
     roots = (
         Path("scripts/run_camera_cal_scene_level.py"),
         Path("scripts/select_first_publishable_scene_evaluations.py"),
         Path("scripts/check_model_endpoint.py"),
-        Path("scripts/build_vlm_evidence_viewer.py"),
         Path("src/benchmark/evaluation_campaign"),
         Path("src/benchmark/camera_cal_scene_level"),
         Path("src/benchmark/api/evaluation.py"),

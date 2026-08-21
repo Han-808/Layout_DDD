@@ -10,9 +10,18 @@ import math
 import os
 from pathlib import Path
 import shutil
+import sys
 from typing import Any
 
-from build_vlm_evidence_viewer import case_scoring_summary, run_scoring_aggregate
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+SRC_ROOT = PROJECT_ROOT / "src"
+if str(SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(SRC_ROOT))
+
+from benchmark.camera_cal_scene_level.persisted_scoring import (  # noqa: E402
+    case_scoring_summary,
+    run_scoring_aggregate,
+)
 
 
 DEFAULT_CASE_IDS = tuple(f"S{index:03d}" for index in range(100, 110))

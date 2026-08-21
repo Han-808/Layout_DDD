@@ -152,6 +152,12 @@ runner/selector dependency closure, the campaign package, packaging contract,
 and evaluation/grouping YAML resources; missing or symlink-substituted sources
 fail closed.
 
+The first-publishable selector imports its persisted-score projection from
+`benchmark.camera_cal_scene_level.persisted_scoring`, so that projection is
+part of the protocol source identity. The read-only HTML evidence viewer is a
+separate presentation consumer: changing viewer markup or CSS cannot affect
+selection and therefore does not invalidate a campaign protocol fingerprint.
+
 ## Run and resume
 
 Set the credential variables named by the ignored local binding in the current
