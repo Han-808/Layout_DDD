@@ -132,7 +132,9 @@ class FrozenTwoStageOrchestrator:
             results.append(result)
 
             failed = result["status"] != "complete"
-            stop_requested = failed and not spec.retry_policy.continue_after_case_failure
+            stop_requested = bool(result["stop_batch"]) or (
+                failed and not spec.retry_policy.continue_after_case_failure
+            )
             continued = not stop_requested and index < len(selected_briefs)
             self._emit(
                 progress,

@@ -423,12 +423,12 @@ def test_retry_policy_and_run_spec_reject_secret_or_raw_content_fields(
 
 
 class _FakeCore:
-    def __init__(self, root: Path, statuses: list[str]) -> None:
+    def __init__(self, root: Path, outcomes: list[tuple[str, bool]]) -> None:
         self.DEFAULT_STAGE_A_PROMPT = root / "stage_a.txt"
         self.DEFAULT_STAGE_C_PROMPT = root / "stage_c.txt"
         self.DEFAULT_STAGE_A_PROMPT.write_text("stage A", encoding="utf-8")
         self.DEFAULT_STAGE_C_PROMPT.write_text("stage C", encoding="utf-8")
-        self.statuses = iter(statuses)
+        self.outcomes = iter(outcomes)
         self.calls: list[str] = []
 
     def write_json_exclusive(self, path: Path, value: Any) -> None:
@@ -451,11 +451,11 @@ class _FakeCore:
         assert kwargs["stage_c_prompt"] == "stage C"
         assert kwargs["provider_route"].key == "fake-route"
         assert isinstance(kwargs["retry_policy"], RetryPolicy)
-        status = next(self.statuses)
+        status, stop_batch = next(self.outcomes)
         return {
             "brief_id": brief_id,
             "status": status,
-            "stop_batch": status != "complete",
+            "stop_batch": stop_batch,
             "eligible_for_strict_one_shot_evaluation": status == "complete",
         }
 
@@ -465,17 +465,33 @@ class _FakeCore:
 
 
 @pytest.mark.parametrize(
-    ("continue_after_failure", "expected_processed", "expected_stopped"),
-    [(False, 1, True), (True, 2, False)],
+    (
+        "first_status",
+        "first_stop_batch",
+        "continue_after_failure",
+        "expected_processed",
+        "expected_stopped",
+    ),
+    [
+        ("stage_a_failed", False, False, 1, True),
+        ("stage_a_failed", False, True, 2, False),
+        ("retrieval_failed", True, False, 1, True),
+        ("retrieval_failed", True, True, 1, True),
+    ],
 )
-def test_orchestrator_preserves_order_summary_and_continue_policy(
+def test_orchestrator_honors_stop_batch_before_continue_policy(
     tmp_path: Path,
+    first_status: str,
+    first_stop_batch: bool,
     continue_after_failure: bool,
     expected_processed: int,
     expected_stopped: bool,
 ) -> None:
     root = tmp_path / f"run-{continue_after_failure}"
-    core = _FakeCore(tmp_path, ["stage_a_failed", "complete"])
+    core = _FakeCore(
+        tmp_path,
+        [(first_status, first_stop_batch), ("complete", False)],
+    )
     retry_policy = RetryPolicy(
         max_infrastructure_retries=1,
         retry_delay_seconds=0,
@@ -497,7 +513,7 @@ def test_orchestrator_preserves_order_summary_and_continue_policy(
     assert summary["complete"] == expected_processed - 1
     assert summary["stopped_early"] is expected_stopped
     expected_case_calls = ["case:brief_00"]
-    if continue_after_failure:
+    if expected_processed == 2:
         expected_case_calls.append("case:brief_01")
     assert [item for item in core.calls if item.startswith("case:")] == expected_case_calls
     assert core.calls.index("initialize") < core.calls.index("case:brief_00")
@@ -509,7 +525,8 @@ def test_orchestrator_preserves_order_summary_and_continue_policy(
         if event["event"] == "case_terminal"
         and event["brief_id"] == "brief_00"
     )
-    assert first_terminal["continued_after_case"] is continue_after_failure
+    assert first_terminal["stop_batch"] is first_stop_batch
+    assert first_terminal["continued_after_case"] is (expected_processed == 2)
 
 
 def _imported_names(path: Path) -> list[str]:

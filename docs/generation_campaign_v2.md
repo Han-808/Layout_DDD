@@ -68,6 +68,10 @@ prefixes nor model-name suffix heuristics.
 The declared retry contract includes the exact retryable transport/HTTP
 statuses, delivery-ambiguity policy, retry count/delay, and continue/stop policy.
 Semantic and schema retries remain zero inside a one-shot case.
+An explicit `stop_batch=true` returned by the frozen case core is always a hard
+stop (for example, non-retryable transport ambiguity or retrieval failure).
+`continue_after_case_failure` applies only to ordinary failed cases whose
+result explicitly permits the batch to continue.
 
 ## Local binding boundary
 
