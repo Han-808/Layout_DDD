@@ -126,54 +126,60 @@ def run_retry(output_root: Path, brief_ids: tuple[str, ...]) -> dict[str, Any]:
     model = runner._load_model_config(adapter.MODELS_PATH, adapter.MODEL_KEY)
     briefs = selected_briefs(adapter, brief_ids)
     retriever = runner.RetrieverAdapter(adapter.CORE_ROOT)
-    runner.initialize_run(
-        output_root=output_root,
-        model=model,
+    route = adapter.provider_route()
+    retry_policy = adapter.RetryPolicy(
+        max_infrastructure_retries=model.max_infrastructure_retries,
+        retryable_transport_statuses=frozenset({"transport_failure"}),
+        retryable_http_statuses=runner.RETRYABLE_HTTP_STATUSES,
+        retry_delay_seconds=model.retry_delay_seconds,
+        retry_ambiguous_timeouts=False,
+        continue_after_case_failure=True,
+    )
+    execution_policy = {
+        "schema_version": "api3_opus48_high_selected_retry_policy_v1",
+        "source_full10_root": str(SOURCE_FULL10_ROOT),
+        "selected_brief_ids": list(brief_ids),
+        "selection_rule": "schema_invalid_in_source_full10",
+        "case_failure_policy": "record_and_continue_next_brief",
+        "thinking": {"type": "adaptive"},
+        "reasoning_effort": model.reasoning_effort,
+        "preserved_thinking": model.preserved_thinking,
+        "max_tokens": model.max_tokens,
+        "maximum_infrastructure_retries": model.max_infrastructure_retries,
+        "maximum_attempts_per_stage": model.max_infrastructure_retries + 1,
+        "schema_invalid_retry_within_case": False,
+        "preflight_requires_reasoning_signal": False,
+        "preflight_records_reasoning_signal_diagnostic": True,
+        "retry_runner_sha256": runner.sha256_file(Path(__file__).resolve()),
+    }
+    spec = adapter.GenerationRunSpec(
+        provider_key=route.key,
+        model_key=model.key,
+        wire_model=model.wire_model,
+        ordered_brief_ids=brief_ids,
         briefs_path=adapter.CORE_ROOT / "briefs.json",
         models_path=adapter.MODELS_PATH,
-        retriever=retriever,
-    )
-    runner.write_json_exclusive(
-        output_root / "execution_policy.json",
-        {
-            "schema_version": "api3_opus48_high_selected_retry_policy_v1",
+        output_root=output_root,
+        retry_policy=retry_policy,
+        execution_policy=execution_policy,
+        summary_schema_version="api3_opus48_high_selected_retry_summary_v1",
+        summary_extra={
             "source_full10_root": str(SOURCE_FULL10_ROOT),
-            "selected_brief_ids": list(brief_ids),
-            "selection_rule": "schema_invalid_in_source_full10",
-            "case_failure_policy": "record_and_continue_next_brief",
             "thinking": {"type": "adaptive"},
             "reasoning_effort": model.reasoning_effort,
-            "preserved_thinking": model.preserved_thinking,
-            "max_tokens": model.max_tokens,
-            "maximum_infrastructure_retries": model.max_infrastructure_retries,
-            "maximum_attempts_per_stage": model.max_infrastructure_retries + 1,
-            "schema_invalid_retry_within_case": False,
-            "preflight_requires_reasoning_signal": False,
-            "preflight_records_reasoning_signal_diagnostic": True,
-            "retry_runner_sha256": runner.sha256_file(Path(__file__).resolve()),
         },
+        source_manifest=adapter._runner_source_manifest(),
     )
-    stage_a_prompt = runner.DEFAULT_STAGE_A_PROMPT.read_text(encoding="utf-8")
-    stage_c_prompt = runner.DEFAULT_STAGE_C_PROMPT.read_text(encoding="utf-8")
-    results: list[dict[str, Any]] = []
-    for brief in briefs:
-        result = runner.run_case(
-            output_root=output_root,
-            model=model,
-            brief=brief,
-            retriever=retriever,
-            stage_a_prompt=stage_a_prompt,
-            stage_c_prompt=stage_c_prompt,
-        )
-        results.append(result)
+
+    def progress(record: dict[str, Any]) -> None:
+        if record.get("event") != "case_terminal":
+            return
         print(
             json.dumps(
                 {
-                    "brief_id": brief["brief_id"],
-                    "status": result.get("status"),
-                    "eligible": result.get(
-                        "eligible_for_strict_one_shot_evaluation"
-                    ),
+                    "brief_id": record["brief_id"],
+                    "status": record["status"],
+                    "eligible": record["eligible"],
                     "continued_after_case": True,
                 },
                 ensure_ascii=False,
@@ -181,26 +187,14 @@ def run_retry(output_root: Path, brief_ids: tuple[str, ...]) -> dict[str, Any]:
             ),
             flush=True,
         )
-    summary = {
-        "schema_version": "api3_opus48_high_selected_retry_summary_v1",
-        "model_key": model.key,
-        "model_label": model.label,
-        "source_full10_root": str(SOURCE_FULL10_ROOT),
-        "requested_briefs": len(briefs),
-        "processed_briefs": len(results),
-        "complete": sum(item["status"] == "complete" for item in results),
-        "failed": sum(item["status"] != "complete" for item in results),
-        "eligible": sum(
-            bool(item["eligible_for_strict_one_shot_evaluation"])
-            for item in results
-        ),
-        "stopped_early": False,
-        "thinking": {"type": "adaptive"},
-        "reasoning_effort": model.reasoning_effort,
-        "results": results,
-        "completed_at": runner.utc_now(),
-    }
-    runner.write_json_exclusive(output_root / "summary.json", summary)
+
+    summary, _ = adapter.FrozenTwoStageOrchestrator(runner, route).run(
+        spec=spec,
+        model=model,
+        briefs=briefs,
+        retriever=retriever,
+        progress=progress,
+    )
     return summary
 
 

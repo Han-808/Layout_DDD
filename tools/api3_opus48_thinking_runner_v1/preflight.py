@@ -52,6 +52,7 @@ def main() -> int:
     )
     args = parser.parse_args()
     runner = adapter.configure_core()
+    route = adapter.provider_route()
     model = runner._load_model_config(adapter.MODELS_PATH, adapter.MODEL_KEY)
     request = {
         "model": model.wire_model,
@@ -77,7 +78,7 @@ def main() -> int:
         ),
         connect_timeout=30.0,
         read_timeout=min(model.timeout_seconds, 600.0),
-        request_headers=runner._request_headers(model, str(uuid.uuid4())),
+        request_headers=route.request_headers(model, str(uuid.uuid4())),
     )
     report: dict[str, object] = {
         "transport_status": result.status,
@@ -95,9 +96,9 @@ def main() -> int:
     assert result.response_body is not None
     try:
         envelope = json.loads(result.response_body.decode("utf-8", errors="strict"))
-        content, reasoning, reasoning_content, usage = runner._extract_api_message(
+        content, reasoning, reasoning_content, usage = route.extract_api_message(
             result.response_body
-        )
+        ).as_legacy_tuple()
     except (UnicodeError, ValueError, json.JSONDecodeError) as exc:
         report.update(
             {

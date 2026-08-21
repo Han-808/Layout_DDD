@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import importlib.util
 import json
 from pathlib import Path
 import sys
@@ -13,30 +12,39 @@ from typing import Any, Iterable, Mapping
 
 RUNNER_ROOT = Path(__file__).resolve().parent
 REPO_ROOT = RUNNER_ROOT.parents[1]
+SRC_ROOT = REPO_ROOT / "src"
 CORE_ROOT = REPO_ROOT / "tools" / "api3_anthropic_runner_v2"
 MODELS_PATH = RUNNER_ROOT / "models.pod.json"
 MODEL_KEY = "api3-claude-opus-4-8-high"
 EXPECTED_BRIEF_IDS = tuple(f"brief_{index:02d}" for index in range(10))
 
-sys.path.insert(0, str(CORE_ROOT))
-
-# This adapter is also named ``generation_runner.py``.  A normal
-# ``import generation_runner`` therefore resolves to this file when it is
-# executed directly (and is already present under that name when imported by
-# preflight.py).  Load the frozen core runner from its exact path under a
-# private module name so the adapter can never import itself.
-_CORE_MODULE_NAME = "_api3_anthropic_runner_v2_generation_runner"
-_CORE_MODULE_PATH = CORE_ROOT / "generation_runner.py"
-_CORE_SPEC = importlib.util.spec_from_file_location(
-    _CORE_MODULE_NAME, _CORE_MODULE_PATH
+sys.path.insert(0, str(SRC_ROOT))
+from benchmark.scene_generation.frozen_two_stage import (  # noqa: E402
+    ChatOptionPolicy,
+    FrozenTwoStageOrchestrator,
+    GenerationRunSpec,
+    RetryPolicy,
+    compatibility_source_manifest,
+    make_api3_chat_route,
 )
-if _CORE_SPEC is None or _CORE_SPEC.loader is None:
-    raise ImportError(f"cannot load core runner from {_CORE_MODULE_PATH}")
-core = importlib.util.module_from_spec(_CORE_SPEC)
-sys.modules[_CORE_MODULE_NAME] = core
-_CORE_SPEC.loader.exec_module(core)
+from benchmark.scene_generation.frozen_two_stage.compatibility import (  # noqa: E402
+    load_frozen_core,
+)
 
+core = load_frozen_core(CORE_ROOT)
 _CORE_SOURCE_MANIFEST = core._runner_source_manifest
+
+
+def provider_route() -> Any:
+    """Build the explicit Opus 4.8 High route from typed compatibility parts."""
+
+    return make_api3_chat_route(
+        option_policy=ChatOptionPolicy.adaptive_thinking(
+            reasoning_effort="high"
+        ),
+        route_key="api3-opus48-high-chat-v1",
+        runner_version=core.RUNNER_VERSION,
+    )
 
 
 def _request_value(
@@ -45,20 +53,26 @@ def _request_value(
     system_prompt: str,
     user_value: Mapping[str, Any],
 ) -> dict[str, Any]:
-    return {
-        "model": model.wire_model,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {
-                "role": "user",
-                "content": core.canonical_json_bytes(user_value).decode("utf-8"),
-            },
-        ],
-        "max_tokens": model.max_tokens,
-        "stream": False,
-        "thinking": {"type": "adaptive"},
-        "reasoning_effort": "high",
-    }
+    return provider_route().request_value(
+        model=model,
+        system_prompt=system_prompt,
+        user_value=user_value,
+        canonical_json_bytes=core.canonical_json_bytes,
+    )
+
+
+def _request_headers(model: core.ModelConfig, session_id: str) -> dict[str, str]:
+    """Compatibility alias for the shared API3 gateway policy."""
+
+    return provider_route().request_headers(model, session_id)
+
+
+def _extract_api_message(
+    response_body: bytes,
+) -> tuple[bytes, bytes | None, bytes | None, Mapping[str, Any] | None]:
+    """Compatibility alias for the shared Chat response codec."""
+
+    return provider_route().extract_api_message(response_body).as_legacy_tuple()
 
 
 def _runner_source_manifest() -> dict[str, Any]:
@@ -75,6 +89,8 @@ def _runner_source_manifest() -> dict[str, Any]:
         "runner_version": "api3_opus48_high_runner_v1",
         "thinking": {"type": "adaptive"},
         "reasoning_effort": "high",
+        "compatibility_layer_source_manifest": compatibility_source_manifest(),
+        "provider_route": provider_route().public_dict(),
         "files": files,
         "core_source_manifest": _CORE_SOURCE_MANIFEST(),
     }
@@ -85,8 +101,8 @@ def _runner_source_manifest() -> dict[str, Any]:
 
 
 def configure_core() -> Any:
-    core._request_value = _request_value
-    core._runner_source_manifest = _runner_source_manifest
+    """Return the frozen core without mutating its module-global hooks."""
+
     return core
 
 
@@ -96,6 +112,7 @@ def check() -> dict[str, Any]:
         briefs_path=CORE_ROOT / "briefs.json",
         models_path=MODELS_PATH,
         retriever_root=CORE_ROOT,
+        source_manifest=_runner_source_manifest(),
     )
     model = runner._load_model_config(MODELS_PATH, MODEL_KEY)
     if model.reasoning_effort != "high" or model.preserved_thinking is not True:
@@ -131,50 +148,55 @@ def run_full10(output_root: Path) -> dict[str, Any]:
     if brief_ids != EXPECTED_BRIEF_IDS:
         raise ValueError(f"unexpected frozen brief set: {brief_ids}")
     retriever = runner.RetrieverAdapter(CORE_ROOT)
-    runner.initialize_run(
-        output_root=output_root,
-        model=model,
+    route = provider_route()
+    retry_policy = RetryPolicy(
+        max_infrastructure_retries=model.max_infrastructure_retries,
+        retryable_transport_statuses=frozenset({"transport_failure"}),
+        retryable_http_statuses=runner.RETRYABLE_HTTP_STATUSES,
+        retry_delay_seconds=model.retry_delay_seconds,
+        retry_ambiguous_timeouts=False,
+        continue_after_case_failure=True,
+    )
+    execution_policy = {
+        "schema_version": "api3_opus48_high_full10_policy_v1",
+        "case_failure_policy": "record_and_continue_next_brief",
+        "expected_brief_ids": list(EXPECTED_BRIEF_IDS),
+        "request_protocol": "openai_chat_completions",
+        "thinking": {"type": "adaptive"},
+        "reasoning_effort": model.reasoning_effort,
+        "preserved_thinking": model.preserved_thinking,
+        "max_tokens": model.max_tokens,
+        "maximum_infrastructure_retries": model.max_infrastructure_retries,
+        "preflight_requires_reasoning_signal": False,
+        "preflight_records_reasoning_signal_diagnostic": True,
+    }
+    spec = GenerationRunSpec(
+        provider_key=route.key,
+        model_key=model.key,
+        wire_model=model.wire_model,
+        ordered_brief_ids=EXPECTED_BRIEF_IDS,
         briefs_path=CORE_ROOT / "briefs.json",
         models_path=MODELS_PATH,
-        retriever=retriever,
-    )
-    runner.write_json_exclusive(
-        output_root / "execution_policy.json",
-        {
-            "schema_version": "api3_opus48_high_full10_policy_v1",
-            "case_failure_policy": "record_and_continue_next_brief",
-            "expected_brief_ids": list(EXPECTED_BRIEF_IDS),
-            "request_protocol": "openai_chat_completions",
+        output_root=output_root,
+        retry_policy=retry_policy,
+        execution_policy=execution_policy,
+        summary_schema_version="api3_opus48_high_full10_summary_v1",
+        summary_extra={
             "thinking": {"type": "adaptive"},
             "reasoning_effort": model.reasoning_effort,
-            "preserved_thinking": model.preserved_thinking,
-            "max_tokens": model.max_tokens,
-            "maximum_infrastructure_retries": model.max_infrastructure_retries,
-            "preflight_requires_reasoning_signal": False,
-            "preflight_records_reasoning_signal_diagnostic": True,
         },
+        source_manifest=_runner_source_manifest(),
     )
-    stage_a_prompt = runner.DEFAULT_STAGE_A_PROMPT.read_text(encoding="utf-8")
-    stage_c_prompt = runner.DEFAULT_STAGE_C_PROMPT.read_text(encoding="utf-8")
-    results: list[dict[str, Any]] = []
-    for brief in briefs:
-        result = runner.run_case(
-            output_root=output_root,
-            model=model,
-            brief=brief,
-            retriever=retriever,
-            stage_a_prompt=stage_a_prompt,
-            stage_c_prompt=stage_c_prompt,
-        )
-        results.append(result)
+
+    def progress(record: Mapping[str, Any]) -> None:
+        if record.get("event") != "case_terminal":
+            return
         print(
             json.dumps(
                 {
-                    "brief_id": brief["brief_id"],
-                    "status": result.get("status"),
-                    "eligible": result.get(
-                        "eligible_for_strict_one_shot_evaluation"
-                    ),
+                    "brief_id": record["brief_id"],
+                    "status": record["status"],
+                    "eligible": record["eligible"],
                     "continued_after_case": True,
                 },
                 ensure_ascii=False,
@@ -182,25 +204,14 @@ def run_full10(output_root: Path) -> dict[str, Any]:
             ),
             flush=True,
         )
-    summary = {
-        "schema_version": "api3_opus48_high_full10_summary_v1",
-        "model_key": model.key,
-        "model_label": model.label,
-        "requested_briefs": len(briefs),
-        "processed_briefs": len(results),
-        "complete": sum(item["status"] == "complete" for item in results),
-        "failed": sum(item["status"] != "complete" for item in results),
-        "eligible": sum(
-            bool(item["eligible_for_strict_one_shot_evaluation"])
-            for item in results
-        ),
-        "stopped_early": False,
-        "thinking": {"type": "adaptive"},
-        "reasoning_effort": model.reasoning_effort,
-        "results": results,
-        "completed_at": runner.utc_now(),
-    }
-    runner.write_json_exclusive(output_root / "summary.json", summary)
+
+    summary, _ = FrozenTwoStageOrchestrator(runner, route).run(
+        spec=spec,
+        model=model,
+        briefs=briefs,
+        retriever=retriever,
+        progress=progress,
+    )
     return summary
 
 

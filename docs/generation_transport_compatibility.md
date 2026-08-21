@@ -1,7 +1,8 @@
 # Generation Transport Compatibility Layer
 
-Status: proposed architecture; documentation only. Implementation requires a
-separate approval.
+Status: implemented on `codex/pipeline-refinement` on 2026-08-21. The legacy
+entrypoints remain compatibility shims; removal still requires a separate
+approval.
 
 ## Decision summary
 
@@ -31,9 +32,9 @@ wire codec with a gateway/authentication policy:
 Consequently, Kimi-K3, GLM-5.3, Claude Opus 4.8, and future models should not
 each require a new copy of the generation runner.
 
-## Current state
+## Pre-migration state
 
-The current active runners already share most workflow behavior through
+Before this change, the active runners already shared most workflow behavior through
 `tools/api3_anthropic_runner_v2/generation_runner.py`. That core owns the
 following sequence:
 
@@ -46,7 +47,7 @@ following sequence:
 7. validate the first Stage C emission;
 8. write the case result, audit manifest, run manifest, and summary.
 
-The model-specific runners currently adapt the core by importing it from an
+The model-specific runners adapted the core by importing it from an
 exact filesystem path and replacing module-level functions:
 
 - `tools/api2_kimi_k3_runner_v1/kimi_k3_generation_runner.py` replaces request
@@ -57,10 +58,10 @@ exact filesystem path and replacing module-level functions:
   construction to add the frozen adaptive-thinking settings on the API3
   OpenAI-compatible Chat Completions route.
 
-This proves that a shared workflow boundary already exists. The structural
-problem is that the boundary is implicit: it uses `sys.path`, dynamic imports,
-module-global mutation, and model-specific runner copies. The proposed layer
-makes that boundary explicit and testable.
+That proved a shared workflow boundary already existed. The structural problem
+was that the boundary was implicit: it used import-path manipulation,
+module-global mutation, and model-specific runner copies. The implemented layer
+makes that boundary explicit, instance-scoped, and testable.
 
 Kimi and Opus illustrate why "same protocol" needs a precise definition. Both
 use a Chat Completions-shaped body, but API2 and API3 use different auth/header,
@@ -74,6 +75,18 @@ The initial route matrix is:
 | Kimi-K3 | OpenAI Chat Completions | API2 | Config and fixtures only |
 | GLM-5.3 | OpenAI Responses | API2 | Config and fixtures only |
 | Claude Opus 4.8 High | OpenAI Chat Completions | API3 | Config and fixtures only |
+
+These three campaigns are parity fixtures, not a model allowlist. API2/API3 may
+expose additional model aliases. A config may select any model key and gateway
+model that use an already-supported codec, gateway/auth policy, request option
+grammar, response grammar, retry policy, and artifact policy. Provider/model
+names are data; the implementation does not branch on Kimi, GLM, Opus, Qwen, or
+another model-name substring.
+
+Repository API notes and provider model-discovery responses are useful evidence,
+but they are not compiled into a permanent capability allowlist. Capability
+claims remain explicit configuration plus fixtures, because gateway aliases and
+upstream model behavior can change independently.
 
 ## System boundary
 
@@ -108,6 +121,11 @@ briefs + model config
 The compatibility layer ends when canonical generation artifacts have been
 written. It is not part of evaluation.
 
+Evaluation may independently use API1 or API2 for Judge/VLM calls. Those routes
+remain owned by the existing evaluator model adapters, multimodal preflight,
+retry, and evidence workflow. They are not imported into this generation
+orchestrator, even when a gateway happens to use an OpenAI-compatible envelope.
+
 The following evaluation components are explicitly out of scope:
 
 - `scripts/run_camera_cal_scene_level.py`;
@@ -132,7 +150,7 @@ generation runner shims. The public generation adapter registry is also out of
 scope. A change to an evaluator, visual-judge, camera, scoring, or
 evaluation-prompt file is a scope violation for this proposal.
 
-## Proposed package structure
+## Implemented package structure
 
 The new implementation should live under the existing scene-generation domain
 rather than introduce a second top-level workflow system:
@@ -141,10 +159,15 @@ rather than introduce a second top-level workflow system:
 src/benchmark/scene_generation/
   interfaces.py                 # existing public interface; unchanged here
   frozen_two_stage/
-    spec.py                     # immutable GenerationRunSpec and model config
+    __main__.py                 # generic config-only CLI
+    cli.py                      # static check and configured run entrypoints
+    config.py                   # strict allowlisted run-config loader
+    spec.py                     # immutable GenerationRunSpec
     orchestrator.py             # frozen Stage A -> retrieval -> Stage C graph
     retry_policy.py             # explicit retry classification and limits
     artifact_layout.py          # canonical paths, manifests, and provenance
+    provenance.py               # shared runtime source inventory
+    trust.py                    # hash-verified core/config/model trust inventory
     providers/
       base.py                   # codec, gateway, and composed-route contracts
       codecs/
@@ -153,15 +176,56 @@ src/benchmark/scene_generation/
       gateways/
         api2.py                 # API2 auth/header/session policy
         api3.py                 # API3 auth/header/session policy
-      routes.py                 # typed codec + gateway + option/preflight profile
+      routes.py                 # typed codec + gateway + request-option profile
     compatibility/
-      legacy_runner.py          # helpers for existing CLI/Bash entrypoints
+      loader.py                 # exact-path isolated frozen-core loader
 ```
 
 The existing `SceneGenerator` interface and public generation adapters remain
 unchanged in this phase. The new internal package may later expose a compatible
 facade, but it must not be registered into `layout-ddd-generate` as part of this
 proposal.
+
+## Config-only operation
+
+The generic CLI is deliberately separate from `layout-ddd-generate`:
+
+```bash
+PYTHONPATH=src:. .venv/bin/python -m \
+  benchmark.scene_generation.frozen_two_stage check \
+  --run-config configs/generation/api2_kimi_k3_scene10_v1.json
+
+PYTHONPATH=src:. .venv/bin/python -m \
+  benchmark.scene_generation.frozen_two_stage run \
+  --run-config path/to/model-run-config.json \
+  --output-dir path/to/new-output-root
+```
+
+`check` is static: it does not import the configurable core, read a credential
+value, initialize the retriever, or use the network. Before parsing those inputs
+it verifies the run config, core, model config, briefs, and retriever bundle
+against `configs/runners/active_generation_bundles_v1.json`. Outside a source
+checkout, callers must explicitly provide an equivalent reviewed trust manifest
+with `--trust-manifest`.
+
+`run` performs the same trust/static validation and constructs the complete
+`GenerationRunSpec` before it imports the core, reads the credential named by
+the trusted model config, or initializes the trusted retriever. Runtime model
+and brief values are then compared with the static trusted view before the
+first provider request.
+
+The generic `run` command is post-preflight: callers must complete the
+route/model-specific preflight before invoking it. Existing Kimi, GLM, and Opus
+launchers retain their current preflight behavior. A generic declarative
+preflight registry is not implemented in this change and must not be inferred
+from a successful static `check`.
+
+Checked-in parity configs are provided for the three migrated campaigns under
+`configs/generation/`. To add another model on an existing route, add or select
+its entry in a model config and point a run config at that `model_key`. No Python
+runner is required. The changed/new config files must be reviewed and added to
+the active source trust inventory. A new codec or gateway policy is code and
+still requires review and fixtures.
 
 ## Component responsibilities
 
@@ -189,8 +253,8 @@ A provider route is the typed composition of:
 - a codec that owns the request and response envelope;
 - a gateway policy that owns authentication, endpoint, header, and session
   behavior;
-- an allowlisted option/preflight profile for fields such as thinking or
-  reasoning effort.
+- an allowlisted request-option profile for fields such as thinking or reasoning
+  effort.
 
 Together they own only provider-specific behavior:
 
@@ -200,9 +264,7 @@ Together they own only provider-specific behavior:
   environment variable at runtime;
 - send one request through the existing transport primitive;
 - normalize a provider response into content, optional reasoning metadata,
-  usage metadata, HTTP status, and a safe transport classification;
-- perform protocol/model-identity preflight checks that do not change the
-  generation stage graph.
+  usage metadata, HTTP status, and a safe transport classification.
 
 A route must not own briefs, prompts, retrieval, placement validation, artifact
 eligibility, scoring, or evaluation logic.
@@ -278,9 +340,9 @@ Use the following decision table when adding a model:
 
 | Change | Required work | New model-specific runner? |
 | --- | --- | --- |
-| New model ID on an existing codec + gateway + option/preflight profile | Add a model config entry and fixtures | No |
+| New model ID on an existing codec + gateway + request-option profile | Add a model config entry, preflight evidence, and fixtures | No |
 | Different token limit, effort, or supported optional field already declared by that route | Change config | No |
-| Different preflight expectation but identical codec/gateway behavior | Add an allowlisted declarative preflight profile | No |
+| Different preflight expectation but identical codec/gateway behavior | Use a reviewed preflight outside the generic runner | No generation runner |
 | New request/response envelope | Add one codec and fixtures | No copied workflow runner |
 | New gateway or authentication contract | Add one gateway policy and fixtures | No copied workflow runner |
 | Different Stage A/retrieval/Stage C semantics | Add a separately versioned workflow after explicit review | Possibly a new workflow, not a transport runner |
@@ -290,9 +352,9 @@ belong in configuration. Provider selection is explicit; it must not be inferred
 from a model-name substring.
 
 "Configuration only" is valid only when codec, gateway/auth behavior, request
-option grammar, response grammar, retry policy, preflight policy, and artifact
-policy are already supported. Configuration must not become an unrestricted
-request-template language that hides new protocol code.
+option grammar, response grammar, retry policy, artifact policy, and an external
+preflight path are already supported. Configuration must not become an
+unrestricted request-template language that hides new protocol code.
 
 ## Frozen compatibility invariants
 
@@ -351,11 +413,11 @@ Required tests:
 Tests must use local fixtures and fake transports. They must not consume a live
 API merely to establish structural parity.
 
-## Known compatibility traps
+## Compatibility traps and resolutions
 
-- The current adapters patch module-global hooks. Loading two routes in one
-  process can overwrite behavior, so the new API must be instance-scoped before
-  any concurrent registry is introduced.
+- The old adapters patched module-global hooks. The migrated adapters now pass
+  an instance-scoped `ProviderRoute`; the exact-path loader isolates the frozen
+  core and avoids import-order contamination.
 - The shared core currently recognizes more retryable HTTP statuses than the
   Kimi/GLM execution-policy files and preflight summaries declare. Migration
   must first characterize and preserve the actual runtime decisions. Aligning
@@ -371,20 +433,22 @@ API merely to establish structural parity.
   semantics differ. The provider layer must initially retain the frozen
   transport behavior.
 
-## Migration sequence
+## Implemented migration sequence
 
-1. Characterize and freeze the current request, response, retry, and artifact
+1. Characterized and froze the current request, response, retry, and artifact
    behavior for Kimi-K3, GLM-5.3, and Opus 4.8.
-2. Add immutable specs and the provider protocol without changing legacy
+2. Added immutable specs and the provider protocol without changing legacy
    entrypoints.
-3. Move the shared Stage A -> retrieval -> Stage C logic behind the typed
+3. Moved the shared Stage A -> retrieval -> Stage C logic behind the typed
    orchestrator while retaining byte-parity tests against the frozen core.
-4. Implement the three protocol providers and pass fixture parity.
-5. Convert each existing runner into a thin compatibility shim, one route at a
+4. Implemented reusable Chat/Responses codecs and API2/API3 gateway policies.
+5. Converted each existing runner into a thin compatibility shim, one route at a
    time.
-6. Run existing runner checks, local fixture tests, and end-to-end artifact
+6. Added the config-only CLI, strict run configs, hash trust inventory,
+   evaluator dependency guard, and local parity tests.
+7. Run existing runner checks, local fixture tests, and end-to-end artifact
    parity gates.
-7. Keep old entrypoints and source bundles for at least one compatibility
+8. Keep old entrypoints and source bundles for at least one compatibility
    cycle. Deletion or deprecation requires a separate decision.
 
 At every step, the old path remains available until the corresponding new path
@@ -405,8 +469,8 @@ This refactor does not:
 
 ## Expected outcome
 
-After migration, adding a model that uses one of the supported provider routes
-is a configuration change plus fixture coverage. The repository retains one
+Adding a model that uses one of the supported provider routes is now a
+configuration change plus fixture coverage. The repository retains one
 versioned two-stage generation workflow, reusable wire codecs and gateway
 policies, stable legacy launchers, canonical artifacts, and the same independent
 evaluation pipeline.

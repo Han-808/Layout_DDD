@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify the immutable source inventory for active generation runners."""
+"""Verify the immutable source inventory for active generation runtimes."""
 
 from __future__ import annotations
 
@@ -21,6 +21,10 @@ EXPECTED_SCHEMA_VERSION = "active_generation_bundles_v1"
 IGNORED_NAMES = {".DS_Store"}
 IGNORED_SUFFIXES = {".pyc"}
 IGNORED_PARTS = {"__pycache__"}
+SHARED_RUNTIME_ROOTS = {
+    "configs/generation",
+    "src/benchmark/scene_generation/frozen_two_stage",
+}
 
 
 class RunnerInventoryError(RuntimeError):
@@ -105,7 +109,9 @@ def validate_manifest(
         if bundle_id in bundle_ids:
             raise RunnerInventoryError(f"duplicate bundle_id: {bundle_id}")
         bundle_ids.add(bundle_id)
-        if not isinstance(root_text, str) or not root_text.startswith("tools/"):
+        if not isinstance(root_text, str) or not (
+            root_text.startswith("tools/") or root_text in SHARED_RUNTIME_ROOTS
+        ):
             raise RunnerInventoryError(f"invalid root for {bundle_id}: {root_text!r}")
         if root_text in roots:
             raise RunnerInventoryError(f"duplicate bundle root: {root_text}")
@@ -120,10 +126,15 @@ def validate_manifest(
             raise RunnerInventoryError(f"files are invalid for {bundle_id}")
 
         root = (REPO_ROOT / root_text).resolve()
-        tools_root = (REPO_ROOT / "tools").resolve()
-        if root.parent != tools_root:
+        if root_text.startswith("tools/"):
+            tools_root = (REPO_ROOT / "tools").resolve()
+            if root.parent != tools_root:
+                raise RunnerInventoryError(
+                    f"tool bundle root must be a direct child of tools/: {root_text}"
+                )
+        elif root_text not in SHARED_RUNTIME_ROOTS:
             raise RunnerInventoryError(
-                f"bundle root must be a direct child of tools/: {root_text}"
+                f"shared runtime root is not allowlisted: {root_text}"
             )
         if not root.is_dir():
             raise RunnerInventoryError(f"bundle root does not exist: {root_text}")

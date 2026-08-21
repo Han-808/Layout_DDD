@@ -77,66 +77,67 @@ def run_selected(
 ) -> dict[str, Any]:
     if output_root.exists():
         raise FileExistsError(f"refusing to overwrite existing output: {output_root}")
-
     adapter = load_adapter(adapter_name)
     runner = adapter.configure_core()
-    runner.RETRY_TRANSPORT_AMBIGUOUS = True
     model = runner._load_model_config(adapter.MODELS_PATH, adapter.MODEL_KEY)
     if model.max_infrastructure_retries != 3:
         raise ValueError("recovery runner requires exactly three retries")
     briefs = selected_briefs(adapter, ids)
     retriever = runner.RetrieverAdapter(adapter.FROZEN_CORE_ROOT)
     briefs_path = adapter.FROZEN_CORE_ROOT / "briefs.json"
-    runner.initialize_run(
-        output_root=output_root,
-        model=model,
+    route = adapter.provider_route()
+    retry_policy = adapter.RetryPolicy(
+        max_infrastructure_retries=model.max_infrastructure_retries,
+        retryable_transport_statuses=frozenset(
+            {"transport_failure", "transport_ambiguous"}
+        ),
+        retryable_http_statuses=runner.RETRYABLE_HTTP_STATUSES,
+        retry_delay_seconds=model.retry_delay_seconds,
+        retry_ambiguous_timeouts=True,
+        continue_after_case_failure=True,
+    )
+    execution_policy = {
+        "schema_version": "api2_selected_brief_timeout_recovery_v1",
+        "adapter": adapter_name,
+        "case_failure_policy": "record_and_continue_next_brief",
+        "selected_brief_ids": list(ids),
+        "maximum_infrastructure_retries": model.max_infrastructure_retries,
+        "maximum_attempts_per_stage": model.max_infrastructure_retries + 1,
+        "retryable_conditions": [
+            "transport_failure",
+            "transport_ambiguous",
+            "http_429",
+            "http_500",
+        ],
+        "timeout_retry_warning": (
+            "An ambiguous timeout may have reached the provider; a retry can "
+            "produce a duplicate upstream request."
+        ),
+    }
+    spec = adapter.GenerationRunSpec(
+        provider_key=route.key,
+        model_key=model.key,
+        wire_model=model.wire_model,
+        ordered_brief_ids=ids,
         briefs_path=briefs_path,
         models_path=adapter.MODELS_PATH,
-        retriever=retriever,
-    )
-    runner.write_json_exclusive(
-        output_root / "execution_policy.json",
-        {
-            "schema_version": "api2_selected_brief_timeout_recovery_v1",
-            "adapter": adapter_name,
-            "case_failure_policy": "record_and_continue_next_brief",
-            "selected_brief_ids": list(ids),
-            "maximum_infrastructure_retries": model.max_infrastructure_retries,
-            "maximum_attempts_per_stage": model.max_infrastructure_retries + 1,
-            "retryable_conditions": [
-                "transport_failure",
-                "transport_ambiguous",
-                "http_429",
-                "http_500",
-            ],
-            "timeout_retry_warning": (
-                "An ambiguous timeout may have reached the provider; a retry can "
-                "produce a duplicate upstream request."
-            ),
-        },
+        output_root=output_root,
+        retry_policy=retry_policy,
+        execution_policy=execution_policy,
+        summary_schema_version="api2_selected_brief_timeout_recovery_summary_v1",
+        summary_extra={"adapter": adapter_name},
+        source_manifest=adapter._source_manifest(),
     )
 
-    stage_a_prompt = runner.DEFAULT_STAGE_A_PROMPT.read_text(encoding="utf-8")
-    stage_c_prompt = runner.DEFAULT_STAGE_C_PROMPT.read_text(encoding="utf-8")
-    results: list[dict[str, Any]] = []
-    for brief in briefs:
-        result = runner.run_case(
-            output_root=output_root,
-            model=model,
-            brief=brief,
-            retriever=retriever,
-            stage_a_prompt=stage_a_prompt,
-            stage_c_prompt=stage_c_prompt,
-        )
-        results.append(result)
+    def progress(record: dict[str, Any]) -> None:
+        if record.get("event") != "case_terminal":
+            return
         print(
             json.dumps(
                 {
-                    "brief_id": brief["brief_id"],
-                    "status": result.get("status"),
-                    "eligible": result.get(
-                        "eligible_for_strict_one_shot_evaluation"
-                    ),
+                    "brief_id": record["brief_id"],
+                    "status": record["status"],
+                    "eligible": record["eligible"],
                     "continued_after_case": True,
                 },
                 ensure_ascii=False,
@@ -145,24 +146,13 @@ def run_selected(
             flush=True,
         )
 
-    summary = {
-        "schema_version": "api2_selected_brief_timeout_recovery_summary_v1",
-        "adapter": adapter_name,
-        "model_key": model.key,
-        "model_label": model.label,
-        "requested_briefs": len(briefs),
-        "processed_briefs": len(results),
-        "complete": sum(item["status"] == "complete" for item in results),
-        "failed": sum(item["status"] != "complete" for item in results),
-        "eligible": sum(
-            bool(item["eligible_for_strict_one_shot_evaluation"])
-            for item in results
-        ),
-        "stopped_early": False,
-        "results": results,
-        "completed_at": runner.utc_now(),
-    }
-    runner.write_json_exclusive(output_root / "summary.json", summary)
+    summary, _ = adapter.FrozenTwoStageOrchestrator(runner, route).run(
+        spec=spec,
+        model=model,
+        briefs=briefs,
+        retriever=retriever,
+        progress=progress,
+    )
     return summary
 
 

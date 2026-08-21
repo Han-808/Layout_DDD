@@ -183,7 +183,7 @@
         },
         {
           "path": "generation_runner.py",
-          "sha256": "53f3ca95207e9d6e28b745bcd99763eee35ea3e89083aa5a57d86df6594d2496",
+          "sha256": "6121d37f23b45a088318557b581387f01390c7d7ca82157bf633379fb22b13c1",
           "mode": "0755"
         },
         {
@@ -339,7 +339,7 @@
         },
         {
           "path": "recovery_runner.py",
-          "sha256": "c9ac64654d8eb730bdb04c3f84f065645fd4280d6dbb8fe2240176933f97f686",
+          "sha256": "31182a1bd364a2eda056ef9a0d494ac9cf7d6d08e29a43b4e61aed06dfd42778",
           "mode": "0644"
         }
       ]
@@ -354,7 +354,7 @@
       "files": [
         {
           "path": "kimi_k3_generation_runner.py",
-          "sha256": "33e732227bf3daac36a47f27c998883ffa4e4595319ef6ddee58f99e96ac3f22",
+          "sha256": "a21d123c8f67302379c9e006ae86712b9d3ec6f0f971a13c305fcc7c987dfcd5",
           "mode": "0755"
         },
         {
@@ -374,7 +374,7 @@
       "files": [
         {
           "path": "glm53_generation_runner.py",
-          "sha256": "6f974b49bd58e744057c4d0c88628c6d5fce541c4c5dab821610b7ac90f49b41",
+          "sha256": "d8548871da2b516a1435c718ef0bd1cb6bfd894d32b825279952c06e47555b32",
           "mode": "0755"
         },
         {
@@ -396,7 +396,7 @@
       "files": [
         {
           "path": "generation_runner.py",
-          "sha256": "bf390ec7e6102641fa093f573879615aeb0d887c17f0e37b70be422ba57d5c11",
+          "sha256": "059855d43ba015507d523e70978ccf93eab2d13d47d18c3a5d5f1a9c71b99433",
           "mode": "0644"
         },
         {
@@ -406,12 +406,157 @@
         },
         {
           "path": "preflight.py",
-          "sha256": "af3bb98a57e92a5be9e127c74f574411a1ad90052354ff1d052ace2d10de4b53",
+          "sha256": "6f56cf80525eaf2350c05709b46e11fbf80b37b183a94f17899c6ee9ff8d5a3c",
           "mode": "0644"
         },
         {
           "path": "retry_runner.py",
-          "sha256": "2b28b0ee8e7018c6b79249ae72d7c680ed24450422acf15ca94469d217cf407e",
+          "sha256": "6a0c3dce619cc768c12941d3c69540e3c50eebf7430fad0f4be36c8fa98cc7fb",
+          "mode": "0644"
+        }
+      ]
+    },
+    {
+      "bundle_id": "frozen_two_stage_compatibility_runtime_v1",
+      "root": "src/benchmark/scene_generation/frozen_two_stage",
+      "role": "shared_generation_compatibility_runtime",
+      "entrypoints": [
+        "__main__.py",
+        "cli.py",
+        "orchestrator.py",
+        "providers/routes.py"
+      ],
+      "files": [
+        {
+          "path": "__init__.py",
+          "sha256": "9d7fc113ae84b87506056059c47a482288a5dab2fa13dda8f7f49c78aa5307b5",
+          "mode": "0644"
+        },
+        {
+          "path": "__main__.py",
+          "sha256": "611cfa26942bb85eca3ea55d9739c9a8689f9b081c5cf3ce1a3b348ebf12d501",
+          "mode": "0644"
+        },
+        {
+          "path": "artifact_layout.py",
+          "sha256": "26ff6fbe97ecf491d16b542458ade65920932ddfc6813a4c64993cfe7d954fb0",
+          "mode": "0644"
+        },
+        {
+          "path": "cli.py",
+          "sha256": "5bb68d6886b18eff6934706dee4f86f38e2f01c17ec591c1444f941cb6088169",
+          "mode": "0644"
+        },
+        {
+          "path": "compatibility/__init__.py",
+          "sha256": "7f8cabf749222a9c7381e6c0e2466280ce24d19e5cf356c427276e8de2104c54",
+          "mode": "0644"
+        },
+        {
+          "path": "compatibility/loader.py",
+          "sha256": "0d9af1dbbdfde2db2a83202e86452b7c4128e38812864022ea73f568dd877623",
+          "mode": "0644"
+        },
+        {
+          "path": "config.py",
+          "sha256": "d103972f789dd9f9ef5441992257092bbb4534239c6e9a30bcc2762ff49e4c1b",
+          "mode": "0644"
+        },
+        {
+          "path": "orchestrator.py",
+          "sha256": "2b01827a86ca0487c3dd1b12a56eac75b65cb49320c4371e739c628e7c31f248",
+          "mode": "0644"
+        },
+        {
+          "path": "provenance.py",
+          "sha256": "cd8ffe7e4be30a3daadec803e9c9f7ea7733f97e064cfb0cce8ca711272f5664",
+          "mode": "0644"
+        },
+        {
+          "path": "providers/__init__.py",
+          "sha256": "2081f472c67de4f353691d440e30abc302c68f710b8cb64075983ecd2cadddd9",
+          "mode": "0644"
+        },
+        {
+          "path": "providers/base.py",
+          "sha256": "3926d3896954f1ec2630076c969adc005f5873f603c1922e1ebbe32bc3e276f1",
+          "mode": "0644"
+        },
+        {
+          "path": "providers/codecs/__init__.py",
+          "sha256": "2722dd9d92fcbadb07580524c17d2de059a01ea65cb187b9f6c92f4abcd9748a",
+          "mode": "0644"
+        },
+        {
+          "path": "providers/codecs/openai_chat.py",
+          "sha256": "4b35f37b5561831d9bb1b3d043fdd69c9c1521b6641786b56fe764143df8a60f",
+          "mode": "0644"
+        },
+        {
+          "path": "providers/codecs/openai_responses.py",
+          "sha256": "9bde689732bc4781e7856dfe4c5055dd199c2db3e1eacfa31942071fc3a166f6",
+          "mode": "0644"
+        },
+        {
+          "path": "providers/gateways/__init__.py",
+          "sha256": "95945a48e1ac48af6fd7df8e07f02e11746d49802cf734e8a3f0a6032a59d23a",
+          "mode": "0644"
+        },
+        {
+          "path": "providers/gateways/api2.py",
+          "sha256": "070d89fdcb869bf105657a8b08a8fde8be14a3fde5983595a9d7af6cdd647c8e",
+          "mode": "0644"
+        },
+        {
+          "path": "providers/gateways/api3.py",
+          "sha256": "95ecb136fcf20f18c366f83d4aecc5449f7739693f5cb66909a4e0ecd87eae71",
+          "mode": "0644"
+        },
+        {
+          "path": "providers/routes.py",
+          "sha256": "27e793d67413abf5838caac8590ac6293282ab9ef614bfe7793cf8f0ce9ef407",
+          "mode": "0644"
+        },
+        {
+          "path": "retry_policy.py",
+          "sha256": "4501285bf5bdc9e63fbcfe782778e7e646adc12f143b6de984fadf7b40a67777",
+          "mode": "0644"
+        },
+        {
+          "path": "spec.py",
+          "sha256": "dc9a044e2ca76911581b4e4aec78dd4600220f3901951015a239962b2ade8f23",
+          "mode": "0644"
+        },
+        {
+          "path": "trust.py",
+          "sha256": "323df238455f331caa1250f103691e5b7f0a22d06f8a4b67b1c15b86aff356d9",
+          "mode": "0644"
+        }
+      ]
+    },
+    {
+      "bundle_id": "frozen_two_stage_generation_configs_v1",
+      "root": "configs/generation",
+      "role": "config_only_generation_routes",
+      "entrypoints": [
+        "api2_glm53_scene10_v1.json",
+        "api2_kimi_k3_scene10_v1.json",
+        "api3_opus48_high_scene10_v1.json"
+      ],
+      "files": [
+        {
+          "path": "api2_glm53_scene10_v1.json",
+          "sha256": "39208e820d97636bf1228342dee933bcaefc8db1dd4a566ed8edd907d75be1c1",
+          "mode": "0644"
+        },
+        {
+          "path": "api2_kimi_k3_scene10_v1.json",
+          "sha256": "01d74913501264651bcd761ff272aea659677b7d6bf6aa3d6f44f5eb13278abe",
+          "mode": "0644"
+        },
+        {
+          "path": "api3_opus48_high_scene10_v1.json",
+          "sha256": "93f27ebd48e07c7d4d054cc830e64edfb7f2d33a4f2997ae1a7fa9325ff66ce1",
           "mode": "0644"
         }
       ]

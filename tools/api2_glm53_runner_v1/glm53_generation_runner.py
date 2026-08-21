@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 from pathlib import Path
 import sys
@@ -14,24 +13,49 @@ from typing import Any, Iterable, Mapping
 
 RUNNER_ROOT = Path(__file__).resolve().parent
 REPO_ROOT = RUNNER_ROOT.parents[1]
+SRC_ROOT = REPO_ROOT / "src"
 FROZEN_CORE_ROOT = REPO_ROOT / "tools" / "api3_anthropic_runner_v2"
 MODELS_PATH = RUNNER_ROOT / "models.pod.json"
 MODEL_KEY = "api2-glm-5-3"
 EXPECTED_BRIEF_IDS = tuple(f"brief_{index:02d}" for index in range(10))
 
-sys.path.insert(0, str(FROZEN_CORE_ROOT))
-import generation_runner as core  # noqa: E402
+sys.path.insert(0, str(SRC_ROOT))
+from benchmark.scene_generation.frozen_two_stage import (  # noqa: E402
+    FrozenTwoStageOrchestrator,
+    GenerationRunSpec,
+    RetryPolicy,
+    compatibility_source_manifest,
+    make_api2_responses_route,
+)
+from benchmark.scene_generation.frozen_two_stage.compatibility import (  # noqa: E402
+    load_frozen_core,
+)
+from benchmark.scene_generation.frozen_two_stage.providers.gateways import (  # noqa: E402
+    parse_api2_credential,
+)
 
 
+core = load_frozen_core(FROZEN_CORE_ROOT)
 _CORE_SOURCE_MANIFEST = core._runner_source_manifest
 
 
 def _credential_parts(value: str) -> tuple[str, str]:
-    credential = value.split("?", 1)[0]
-    app_id, separator, app_key = credential.partition(":")
-    if not separator or not app_id or not app_key:
-        raise ValueError("API2_APP_CREDENTIAL must have APP_ID:APP_KEY form")
-    return app_id, app_key
+    """Compatibility alias for the shared API2 credential parser."""
+
+    return parse_api2_credential(value)
+
+
+def provider_route() -> Any:
+    """Build the instance-scoped GLM route described by the architecture doc."""
+
+    return make_api2_responses_route(
+        provider="zhipu",
+        gateway_model="glm-5.3",
+        user_agent_suffix="api2-glm53-v1",
+        default_reasoning_effort="max",
+        route_key="api2-glm53-responses-v1",
+        runner_version=core.RUNNER_VERSION,
+    )
 
 
 def _request_value(
@@ -40,85 +64,22 @@ def _request_value(
     system_prompt: str,
     user_value: Mapping[str, Any],
 ) -> dict[str, Any]:
-    return {
-        "model": model.wire_model,
-        "instructions": system_prompt,
-        "input": [
-            {
-                "role": "user",
-                "content": core.canonical_json_bytes(user_value).decode("utf-8"),
-            }
-        ],
-        "reasoning": {"effort": model.reasoning_effort or "max"},
-        "max_output_tokens": model.max_tokens,
-        "text": {"format": {"type": "json_object"}},
-        "store": False,
-        "stream": False,
-    }
+    return provider_route().request_value(
+        model=model,
+        system_prompt=system_prompt,
+        user_value=user_value,
+        canonical_json_bytes=core.canonical_json_bytes,
+    )
 
 
 def _request_headers(model: core.ModelConfig, session_id: str) -> dict[str, str]:
-    app_id, app_key = _credential_parts(model.api_key)
-    cache_task_id = hashlib.md5(
-        f"{time.time()}{app_id}{session_id}".encode("utf-8")
-    ).hexdigest()
-    authorization = (
-        f"Bearer {app_id}:{app_key}"
-        f"?provider=zhipu&model=glm-5.3&timeout=600"
-        f"&cache_task_id={cache_task_id}"
-    )
-    return {
-        "Content-Type": "application/json; charset=utf-8",
-        "Accept": "application/json",
-        "User-Agent": f"hy34-two-stage-generator/{core.RUNNER_VERSION} api2-glm53-v1",
-        "Authorization": authorization,
-    }
+    return provider_route().request_headers(model, session_id)
 
 
 def _extract_api_message(
     response_body: bytes,
 ) -> tuple[bytes, bytes | None, bytes | None, dict[str, Any] | None]:
-    payload = json.loads(response_body.decode("utf-8", errors="strict"))
-    if not isinstance(payload, dict):
-        raise ValueError("GLM-5.3 response must be a JSON object")
-    if payload.get("error"):
-        raise ValueError("GLM-5.3 response contains an error object")
-    status = str(payload.get("status") or "")
-    if status != "completed":
-        incomplete = payload.get("incomplete_details")
-        incomplete = incomplete if isinstance(incomplete, dict) else {}
-        reason = str(incomplete.get("reason") or status or "unknown")
-        raise ValueError(f"GLM-5.3 response is not complete: {reason}")
-
-    message_texts: list[str] = []
-    reasoning_texts: list[str] = []
-    output = payload.get("output")
-    output = output if isinstance(output, list) else []
-    for item in output:
-        if not isinstance(item, dict):
-            continue
-        item_type = item.get("type")
-        content = item.get("content")
-        content = content if isinstance(content, list) else []
-        for part in content:
-            if not isinstance(part, dict) or not isinstance(part.get("text"), str):
-                continue
-            if item_type == "message" and part.get("type") == "output_text":
-                message_texts.append(part["text"])
-            elif item_type == "reasoning" and part.get("type") == "reasoning_text":
-                reasoning_texts.append(part["text"])
-    content_text = "\n".join(message_texts).strip()
-    if not content_text:
-        raise ValueError("GLM-5.3 completed response has no output_text message")
-    reasoning = "\n".join(reasoning_texts).strip()
-    usage = payload.get("usage")
-    usage = usage if isinstance(usage, dict) else None
-    return (
-        content_text.encode("utf-8"),
-        reasoning.encode("utf-8") if reasoning else None,
-        None,
-        usage,
-    )
+    return provider_route().extract_api_message(response_body).as_legacy_tuple()
 
 
 def _source_manifest() -> dict[str, Any]:
@@ -137,6 +98,8 @@ def _source_manifest() -> dict[str, Any]:
         "adapter_version": "api2-glm53-responses-v1",
         "frozen_core_root": str(FROZEN_CORE_ROOT),
         "frozen_core_source_manifest": _CORE_SOURCE_MANIFEST(),
+        "compatibility_layer_source_manifest": compatibility_source_manifest(),
+        "provider_route": provider_route().public_dict(),
         "adapter_files": files,
     }
     return {
@@ -146,17 +109,15 @@ def _source_manifest() -> dict[str, Any]:
 
 
 def configure_core() -> Any:
-    core._request_value = _request_value
-    core._request_headers = _request_headers
-    core._extract_api_message = _extract_api_message
-    core._runner_source_manifest = _source_manifest
+    """Return the frozen core without mutating its module-global hooks."""
+
     return core
 
 
 def preflight() -> dict[str, Any]:
     runner = configure_core()
     model = runner._load_model_config(MODELS_PATH, MODEL_KEY)
-    request = runner._request_value(
+    request = _request_value(
         model=model,
         system_prompt="Return one JSON object and no surrounding text.",
         user_value={"preflight": "reply with exactly {\"ok\":true}"},
@@ -172,7 +133,7 @@ def preflight() -> dict[str, Any]:
             request_body,
             connect_timeout=30.0,
             read_timeout=min(model.timeout_seconds, 600.0),
-            request_headers=runner._request_headers(
+            request_headers=_request_headers(
                 model, f"glm53-preflight-{attempt_number}"
             ),
         )
@@ -205,7 +166,7 @@ def preflight() -> dict[str, Any]:
         }
     assert result.response_body is not None
     try:
-        content, _, _, usage = runner._extract_api_message(result.response_body)
+        content, _, _, usage = _extract_api_message(result.response_body)
         parsed = json.loads(content.decode("utf-8"))
     except (UnicodeError, ValueError, json.JSONDecodeError) as exc:
         return {
@@ -215,7 +176,11 @@ def preflight() -> dict[str, Any]:
         }
     return {
         "ok": bool(isinstance(parsed, dict) and parsed.get("ok") is True),
-        "status": "passed" if isinstance(parsed, dict) and parsed.get("ok") is True else "unexpected_content",
+        "status": (
+            "passed"
+            if isinstance(parsed, dict) and parsed.get("ok") is True
+            else "unexpected_content"
+        ),
         "http_status": result.http_status,
         "model": model.wire_model,
         "reasoning_effort": model.reasoning_effort,
@@ -237,47 +202,47 @@ def run_scene10(output_root: Path) -> dict[str, Any]:
     if brief_ids != EXPECTED_BRIEF_IDS:
         raise ValueError(f"unexpected frozen brief set: {brief_ids}")
     retriever = runner.RetrieverAdapter(FROZEN_CORE_ROOT)
-    runner.initialize_run(
-        output_root=output_root,
-        model=model,
+    route = provider_route()
+    retry_policy = RetryPolicy(
+        max_infrastructure_retries=model.max_infrastructure_retries,
+        retryable_transport_statuses=frozenset({"transport_failure"}),
+        retryable_http_statuses=runner.RETRYABLE_HTTP_STATUSES,
+        retry_delay_seconds=model.retry_delay_seconds,
+        retry_ambiguous_timeouts=False,
+        continue_after_case_failure=True,
+    )
+    execution_policy = {
+        "schema_version": "glm53_scene10_execution_policy_v1",
+        "case_failure_policy": "record_and_continue_next_brief",
+        "expected_brief_ids": list(EXPECTED_BRIEF_IDS),
+        "request_protocol": "openai_responses_api",
+        "reasoning_effort": model.reasoning_effort,
+        "max_output_tokens": model.max_tokens,
+        "maximum_infrastructure_retries": model.max_infrastructure_retries,
+        "required_http_retry_statuses": [429, 500],
+    }
+    spec = GenerationRunSpec(
+        provider_key=route.key,
+        model_key=model.key,
+        wire_model=model.wire_model,
+        ordered_brief_ids=EXPECTED_BRIEF_IDS,
         briefs_path=FROZEN_CORE_ROOT / "briefs.json",
         models_path=MODELS_PATH,
-        retriever=retriever,
+        output_root=output_root,
+        retry_policy=retry_policy,
+        execution_policy=execution_policy,
+        source_manifest=_source_manifest(),
     )
-    runner.write_json_exclusive(
-        output_root / "execution_policy.json",
-        {
-            "schema_version": "glm53_scene10_execution_policy_v1",
-            "case_failure_policy": "record_and_continue_next_brief",
-            "expected_brief_ids": list(EXPECTED_BRIEF_IDS),
-            "request_protocol": "openai_responses_api",
-            "reasoning_effort": model.reasoning_effort,
-            "max_output_tokens": model.max_tokens,
-            "maximum_infrastructure_retries": model.max_infrastructure_retries,
-            "required_http_retry_statuses": [429, 500],
-        },
-    )
-    stage_a_prompt = runner.DEFAULT_STAGE_A_PROMPT.read_text(encoding="utf-8")
-    stage_c_prompt = runner.DEFAULT_STAGE_C_PROMPT.read_text(encoding="utf-8")
-    results: list[dict[str, Any]] = []
-    for brief in briefs:
-        result = runner.run_case(
-            output_root=output_root,
-            model=model,
-            brief=brief,
-            retriever=retriever,
-            stage_a_prompt=stage_a_prompt,
-            stage_c_prompt=stage_c_prompt,
-        )
-        results.append(result)
+
+    def progress(record: Mapping[str, Any]) -> None:
+        if record.get("event") != "case_terminal":
+            return
         print(
             json.dumps(
                 {
-                    "brief_id": brief["brief_id"],
-                    "status": result.get("status"),
-                    "eligible": result.get(
-                        "eligible_for_strict_one_shot_evaluation"
-                    ),
+                    "brief_id": record["brief_id"],
+                    "status": record["status"],
+                    "eligible": record["eligible"],
                     "continued_after_case": True,
                 },
                 ensure_ascii=False,
@@ -285,22 +250,14 @@ def run_scene10(output_root: Path) -> dict[str, Any]:
             ),
             flush=True,
         )
-    summary = {
-        "schema_version": "hy34_two_stage_run_summary_v2",
-        "model_key": model.key,
-        "model_label": model.label,
-        "requested_briefs": len(briefs),
-        "processed_briefs": len(results),
-        "complete": sum(item["status"] == "complete" for item in results),
-        "failed": sum(item["status"] != "complete" for item in results),
-        "eligible": sum(
-            item["eligible_for_strict_one_shot_evaluation"] for item in results
-        ),
-        "stopped_early": False,
-        "results": results,
-        "completed_at": runner.utc_now(),
-    }
-    runner.write_json_exclusive(output_root / "summary.json", summary)
+
+    summary, _ = FrozenTwoStageOrchestrator(runner, route).run(
+        spec=spec,
+        model=model,
+        briefs=briefs,
+        retriever=retriever,
+        progress=progress,
+    )
     return summary
 
 
@@ -323,6 +280,7 @@ def main(argv: Iterable[str] | None = None) -> int:
                 briefs_path=FROZEN_CORE_ROOT / "briefs.json",
                 models_path=MODELS_PATH,
                 retriever_root=FROZEN_CORE_ROOT,
+                source_manifest=_source_manifest(),
             )
             print(json.dumps(report, ensure_ascii=False, sort_keys=True))
             return 0

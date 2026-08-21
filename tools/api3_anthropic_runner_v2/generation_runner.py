@@ -230,6 +230,17 @@ def _runner_source_manifest() -> dict[str, Any]:
     return {**payload, "manifest_sha256": sha256_bytes(canonical_json_bytes(payload))}
 
 
+def _resolve_source_manifest(source_manifest: Any | None) -> dict[str, Any]:
+    """Resolve an adapter-owned manifest without replacing the core global."""
+
+    if source_manifest is None:
+        return _runner_source_manifest()
+    value = source_manifest() if callable(source_manifest) else source_manifest
+    if not isinstance(value, Mapping):
+        raise ValueError("source_manifest must be a mapping or zero-argument callable")
+    return dict(value)
+
+
 def _request_value(
     *,
     model: ModelConfig,
@@ -299,6 +310,59 @@ def _extract_api_message(response_body: bytes) -> tuple[bytes, bytes | None, byt
     )
 
 
+def _provider_request_value(
+    *,
+    provider_route: Any | None,
+    model: ModelConfig,
+    system_prompt: str,
+    user_value: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Dispatch request encoding without module-global adapter mutation.
+
+    The instance-scoped compatibility boundary is documented in
+    ``docs/generation_transport_compatibility.md``. Keeping the legacy branch
+    explicit preserves the default runner's request bytes and behavior.
+    """
+
+    if provider_route is None:
+        return _request_value(
+            model=model,
+            system_prompt=system_prompt,
+            user_value=user_value,
+        )
+    return provider_route.request_value(
+        model=model,
+        system_prompt=system_prompt,
+        user_value=user_value,
+        canonical_json_bytes=canonical_json_bytes,
+    )
+
+
+def _provider_request_headers(
+    *,
+    provider_route: Any | None,
+    model: ModelConfig,
+    session_id: str,
+) -> dict[str, str]:
+    """Dispatch route-local headers, or preserve the frozen legacy default."""
+
+    if provider_route is None:
+        return _request_headers(model, session_id)
+    return provider_route.request_headers(model, session_id)
+
+
+def _provider_extract_api_message(
+    *,
+    provider_route: Any | None,
+    response_body: bytes,
+) -> tuple[bytes, bytes | None, bytes | None, dict[str, Any]]:
+    """Dispatch route-local response decoding without changing stage logic."""
+
+    if provider_route is None:
+        return _extract_api_message(response_body)
+    return provider_route.extract_api_message(response_body).as_legacy_tuple()
+
+
 def _save_transport_response(attempt_dir: Path, result: TransportResult) -> str | None:
     request_id = None
     if result.response_headers is not None:
@@ -330,17 +394,51 @@ def call_model_stage(
     model: ModelConfig,
     system_prompt: str,
     user_value: Mapping[str, Any],
+    provider_route: Any | None = None,
+    retry_policy: Any | None = None,
 ) -> StageCapture:
     request_body = canonical_json_bytes(
-        _request_value(model=model, system_prompt=system_prompt, user_value=user_value)
+        _provider_request_value(
+            provider_route=provider_route,
+            model=model,
+            system_prompt=system_prompt,
+            user_value=user_value,
+        )
     )
     request_hash = sha256_bytes(request_body)
     max_attempts = model.max_infrastructure_retries + 1
+    retry_ambiguous_timeouts = (
+        RETRY_TRANSPORT_AMBIGUOUS
+        if retry_policy is None
+        else bool(retry_policy.retry_ambiguous_timeouts)
+    )
+    retryable_transport_statuses = (
+        frozenset(
+            {"transport_failure"}
+            | ({"transport_ambiguous"} if RETRY_TRANSPORT_AMBIGUOUS else set())
+        )
+        if retry_policy is None
+        else retry_policy.retryable_transport_statuses
+    )
+    retryable_http_statuses = (
+        RETRYABLE_HTTP_STATUSES
+        if retry_policy is None
+        else retry_policy.retryable_http_statuses
+    )
+    retry_delay_seconds = (
+        model.retry_delay_seconds
+        if retry_policy is None
+        else float(retry_policy.retry_delay_seconds)
+    )
     for attempt_number in range(1, max_attempts + 1):
         attempt_dir = stage_dir / f"attempt_{attempt_number:02d}"
         attempt_dir.mkdir(parents=True, exist_ok=False)
         session_id = str(uuid.uuid4())
-        headers = _request_headers(model, session_id)
+        headers = _provider_request_headers(
+            provider_route=provider_route,
+            model=model,
+            session_id=session_id,
+        )
         started = utc_now()
         write_exclusive(attempt_dir / "request.json", request_body)
         write_json_exclusive(
@@ -387,37 +485,47 @@ def call_model_stage(
         if result.status == "transport_ambiguous":
             status = "transport_ambiguous"
             write_json_exclusive(attempt_dir / "attempt.result.json", {"status": status, **detail})
-            if RETRY_TRANSPORT_AMBIGUOUS and attempt_number < max_attempts:
-                if model.retry_delay_seconds:
-                    time.sleep(model.retry_delay_seconds)
+            if (
+                retry_ambiguous_timeouts
+                and status in retryable_transport_statuses
+                and attempt_number < max_attempts
+            ):
+                if retry_delay_seconds:
+                    time.sleep(retry_delay_seconds)
                 continue
             return StageCapture(
                 status,
                 attempt_number,
                 attempt_number - 1,
                 None,
-                not RETRY_TRANSPORT_AMBIGUOUS,
+                not retry_ambiguous_timeouts,
                 result.stage,
             )
         if result.status == "transport_failure":
             status = "transport_failure"
             write_json_exclusive(attempt_dir / "attempt.result.json", {"status": status, **detail})
-            if attempt_number < max_attempts:
-                if model.retry_delay_seconds:
-                    time.sleep(model.retry_delay_seconds)
+            if (
+                status in retryable_transport_statuses
+                and attempt_number < max_attempts
+            ):
+                if retry_delay_seconds:
+                    time.sleep(retry_delay_seconds)
                 continue
             return StageCapture(status, attempt_number, attempt_number - 1, None, False, result.stage)
         assert result.response_body is not None and result.http_status is not None
         if not 200 <= result.http_status < 300:
             status = "http_error"
             write_json_exclusive(attempt_dir / "attempt.result.json", {"status": status, **detail})
-            if result.http_status in RETRYABLE_HTTP_STATUSES and attempt_number < max_attempts:
-                if model.retry_delay_seconds:
-                    time.sleep(model.retry_delay_seconds)
+            if result.http_status in retryable_http_statuses and attempt_number < max_attempts:
+                if retry_delay_seconds:
+                    time.sleep(retry_delay_seconds)
                 continue
             return StageCapture(status, attempt_number, attempt_number - 1, None, False, str(result.http_status))
         try:
-            content, reasoning, reasoning_content, usage = _extract_api_message(result.response_body)
+            content, reasoning, reasoning_content, usage = _provider_extract_api_message(
+                provider_route=provider_route,
+                response_body=result.response_body,
+            )
         except (UnicodeError, ValueError) as exc:
             status = "invalid_api_response"
             write_json_exclusive(
@@ -564,6 +672,8 @@ def run_case(
     retriever: Any,
     stage_a_prompt: str,
     stage_c_prompt: str,
+    provider_route: Any | None = None,
+    retry_policy: Any | None = None,
 ) -> dict[str, Any]:
     case_dir = output_root / str(brief["brief_id"])
     case_dir.mkdir(parents=False, exist_ok=False)
@@ -604,6 +714,8 @@ def run_case(
         model=model,
         system_prompt=stage_a_prompt,
         user_value={"brief": brief},
+        provider_route=provider_route,
+        retry_policy=retry_policy,
     )
     if stage_a.status != "captured" or stage_a.content is None:
         return _finalize_case(
@@ -783,6 +895,8 @@ def run_case(
         model=model,
         system_prompt=stage_c_prompt,
         user_value=generation_input,
+        provider_route=provider_route,
+        retry_policy=retry_policy,
     )
     if stage_c.status != "captured" or stage_c.content is None:
         return _finalize_case(
@@ -852,6 +966,7 @@ def initialize_run(
     briefs_path: Path,
     models_path: Path,
     retriever: RetrieverAdapter,
+    source_manifest: Any | None = None,
 ) -> None:
     output_root.mkdir(parents=True, exist_ok=False)
     stage_a_prompt = DEFAULT_STAGE_A_PROMPT.read_bytes()
@@ -875,7 +990,7 @@ def initialize_run(
             ),
             "state_machine": "stage_a_once -> top1_once_per_slot -> stage_c_once -> terminal",
             "concurrency": "none; briefs run sequentially",
-            "source_manifest": _runner_source_manifest(),
+            "source_manifest": _resolve_source_manifest(source_manifest),
         },
     )
 
@@ -886,6 +1001,7 @@ def verify_resume(
     model: ModelConfig,
     briefs_path: Path,
     models_path: Path,
+    source_manifest: Any | None = None,
 ) -> None:
     manifest_path = output_root / "run_manifest.json"
     if not manifest_path.is_file():
@@ -898,7 +1014,9 @@ def verify_resume(
         "models_config_sha256": sha256_file(models_path),
         "stage_a_prompt_sha256": sha256_file(DEFAULT_STAGE_A_PROMPT),
         "stage_c_prompt_sha256": sha256_file(DEFAULT_STAGE_C_PROMPT),
-        "source_manifest_sha256": _runner_source_manifest()["manifest_sha256"],
+        "source_manifest_sha256": _resolve_source_manifest(source_manifest)[
+            "manifest_sha256"
+        ],
     }
     actual = {
         "runner_version": manifest.get("runner_version"),
@@ -924,6 +1042,9 @@ def run_model(
     retriever_root: Path,
     selected_briefs: set[str] | None = None,
     resume: bool = False,
+    provider_route: Any | None = None,
+    retry_policy: Any | None = None,
+    source_manifest: Any | None = None,
 ) -> tuple[dict[str, Any], bool]:
     model = _load_model_config(models_path, model_key)
     briefs = _load_briefs(briefs_path)
@@ -941,6 +1062,7 @@ def run_model(
             model=model,
             briefs_path=briefs_path,
             models_path=models_path,
+            source_manifest=source_manifest,
         )
         if (output_root / "summary.json").exists():
             raise ArtifactError("run already has a terminal summary; refusing resume")
@@ -951,6 +1073,7 @@ def run_model(
             briefs_path=briefs_path,
             models_path=models_path,
             retriever=retriever,
+            source_manifest=source_manifest,
         )
     stage_a_prompt = DEFAULT_STAGE_A_PROMPT.read_text(encoding="utf-8")
     stage_c_prompt = DEFAULT_STAGE_C_PROMPT.read_text(encoding="utf-8")
@@ -979,6 +1102,8 @@ def run_model(
             retriever=retriever,
             stage_a_prompt=stage_a_prompt,
             stage_c_prompt=stage_c_prompt,
+            provider_route=provider_route,
+            retry_policy=retry_policy,
         )
         results.append(result)
         if result["stop_batch"]:
@@ -1006,6 +1131,7 @@ def check_runner(
     briefs_path: Path,
     models_path: Path,
     retriever_root: Path | None,
+    source_manifest: Any | None = None,
 ) -> dict[str, Any]:
     briefs = _load_briefs(briefs_path)
     model_keys = list(json.loads(models_path.read_text(encoding="utf-8"))["models"])
@@ -1022,7 +1148,7 @@ def check_runner(
         "model_keys": model_keys,
         "stage_a_prompt_sha256": sha256_file(DEFAULT_STAGE_A_PROMPT),
         "stage_c_prompt_sha256": sha256_file(DEFAULT_STAGE_C_PROMPT),
-        "source_manifest": _runner_source_manifest(),
+        "source_manifest": _resolve_source_manifest(source_manifest),
         "retriever_gate": None,
     }
     if retriever_root is not None:
