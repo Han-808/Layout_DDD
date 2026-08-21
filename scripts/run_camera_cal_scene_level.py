@@ -97,6 +97,9 @@ from benchmark.visual_judge.graphs import (  # noqa: E402
     AUDIT_GRAPH_EXPORT_VERSION,
     export_case_audit_graphs,
 )
+from benchmark.camera_cal_scene_level import io as _runtime_io  # noqa: E402
+from benchmark.camera_cal_scene_level import progress as _runtime_progress  # noqa: E402
+from benchmark.camera_cal_scene_level import telemetry as _runtime_telemetry  # noqa: E402
 
 
 RUNNER_SCHEMA_VERSION = "camera_cal_scene_level_runner_v9"
@@ -184,36 +187,16 @@ _TOKEN_FIELDS = (
 )
 
 
-class ProgressReporter:
-    """Persist concise progress events and optionally mirror them to stdout."""
+class ProgressReporter(_runtime_progress.ProgressReporter):
+    """Compatibility facade over the extracted progress implementation."""
 
     def __init__(self, path: Path, *, terminal: bool = True) -> None:
-        self.path = path.expanduser().resolve()
-        self.terminal = bool(terminal)
-        self._lock = threading.Lock()
-
-    def emit(
-        self,
-        event: str,
-        *,
-        case_id: str | None = None,
-        **details: Any,
-    ) -> dict[str, Any]:
-        record = {
-            "schema_version": PROGRESS_SCHEMA_VERSION,
-            "timestamp": utc_now(),
-            "event": str(event),
-            "case_id": str(case_id) if case_id else None,
-            "details": deepcopy(details),
-        }
-        encoded = json.dumps(record, ensure_ascii=False)
-        with self._lock:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            with self.path.open("a", encoding="utf-8") as stream:
-                stream.write(encoded + "\n")
-            if self.terminal:
-                print(_format_progress_record(record), flush=True)
-        return record
+        super().__init__(
+            path,
+            terminal=terminal,
+            clock=lambda: utc_now(),
+            formatter=lambda record: _format_progress_record(record),
+        )
 
 
 class ModelRouteAbortSignal:
@@ -251,8 +234,8 @@ class ModelRouteAbortSignal:
             }
 
 
-class APICallTracker:
-    """Record actual logical chat-completions calls and reported token usage."""
+class APICallTracker(_runtime_telemetry.APICallTracker):
+    """Compatibility facade over the extracted API-call implementation."""
 
     def __init__(
         self,
@@ -263,111 +246,19 @@ class APICallTracker:
         progress: ProgressReporter,
         model_route_abort_signal: ModelRouteAbortSignal | None = None,
     ) -> None:
-        self.case_id = str(case_id)
-        self.calls_path = calls_path.expanduser().resolve()
-        self.usage_path = usage_path.expanduser().resolve()
-        self.progress = progress
-        self.model_route_abort_signal = model_route_abort_signal
-        self._lock = threading.Lock()
-        self._records = read_api_call_records(self.calls_path)
-        self._next_call_number = len(self._records) + 1
-        atomic_write_json(self.usage_path, api_usage_summary(self._records))
-
-    def observe_model(self, model: Any, *, role: str) -> Any:
-        if not callable(getattr(model, "chat_messages", None)):
-            return model
-        return _ObservedChatModel(model, role=role, tracker=self)
-
-    def begin_call(
-        self,
-        *,
-        role: str,
-        call_type: str,
-        messages: Any,
-    ) -> tuple[int, str, float]:
-        with self._lock:
-            call_number = self._next_call_number
-            self._next_call_number += 1
-        call_id = f"{self.case_id}-{call_number:05d}"
-        self.progress.emit(
-            "api_call_started",
-            case_id=self.case_id,
-            api_call_number=call_number,
-            api_call_id=call_id,
-            role=role,
-            call_type=call_type,
-            image_count=_message_image_count(messages),
+        super().__init__(
+            case_id=case_id,
+            calls_path=calls_path,
+            usage_path=usage_path,
+            progress=progress,
+            model_route_abort_signal=model_route_abort_signal,
+            observed_model_factory=_ObservedChatModel,
+            read_records=lambda path: read_api_call_records(path),
+            write_json=lambda path, value: atomic_write_json(path, value),
+            usage_summary=lambda records: api_usage_summary(records),
+            clock=lambda: utc_now(),
+            monotonic=lambda: time.monotonic(),
         )
-        return call_number, call_id, time.monotonic()
-
-    def finish_call(
-        self,
-        *,
-        call_number: int,
-        call_id: str,
-        role: str,
-        call_type: str,
-        started: float,
-        request_metadata: dict[str, Any],
-        error: Exception | None,
-    ) -> dict[str, Any]:
-        duration = max(0.0, time.monotonic() - started)
-        usage = _normalized_token_usage(request_metadata.get("usage"))
-        record = {
-            "schema_version": API_CALL_SCHEMA_VERSION,
-            "api_call_number": int(call_number),
-            "api_call_id": str(call_id),
-            "case_id": self.case_id,
-            "role": str(role),
-            "call_type": str(call_type),
-            "status": "failed" if error is not None else "complete",
-            "completed_at": utc_now(),
-            "duration_seconds": duration,
-            "model": request_metadata.get("model"),
-            "endpoint": request_metadata.get("endpoint"),
-            "message_count": _nonnegative_int_or_none(
-                request_metadata.get("message_count")
-            ),
-            "image_count": _nonnegative_int_or_none(
-                request_metadata.get("image_count")
-            ),
-            "prompt_chars": _nonnegative_int_or_none(
-                request_metadata.get("prompt_chars")
-            ),
-            "finish_reason": request_metadata.get("finish_reason"),
-            "tokens_usage": usage,
-            "error_type": type(error).__name__ if error is not None else None,
-            "error": _bounded_error(error) if error is not None else None,
-        }
-        with self._lock:
-            self._records.append(record)
-            self.calls_path.parent.mkdir(parents=True, exist_ok=True)
-            with self.calls_path.open("a", encoding="utf-8") as stream:
-                stream.write(json.dumps(record, ensure_ascii=False) + "\n")
-            cumulative = api_usage_summary(self._records)
-            atomic_write_json(self.usage_path, cumulative)
-        self.progress.emit(
-            (
-                "api_call_failed"
-                if error is not None
-                else "api_call_completed"
-            ),
-            case_id=self.case_id,
-            api_call_number=call_number,
-            api_call_id=call_id,
-            role=role,
-            call_type=call_type,
-            duration_seconds=round(duration, 3),
-            tokens_usage=usage,
-            cumulative_api_calls=cumulative["api_calls_number"],
-            cumulative_tokens_usage=cumulative["tokens_usage"],
-            error_type=record["error_type"],
-        )
-        return record
-
-    def summary(self) -> dict[str, Any]:
-        with self._lock:
-            return api_usage_summary(self._records)
 
 
 class _ObservedChatModel:
@@ -3441,482 +3332,71 @@ def build_summary(
 
 
 def empty_metric_summary(*, total: int) -> dict[str, Any]:
-    return {
-        "total": total,
-        "evaluated": 0,
-        "unresolved": 0,
-        "infrastructure_failure": 0,
-        "excluded_unclear": 0,
-        "correct": 0,
-        "incorrect": 0,
-        "accuracy": None,
-        "accuracy_scope": "scene_level_metric_verdict",
-        "anomaly_object_cases": 0,
-        "anomaly_object_exact_correct": 0,
-        "anomaly_object_exact_incorrect": 0,
-        "anomaly_object_exact_accuracy": None,
-        "anomaly_object_true_positive": 0,
-        "anomaly_object_false_negative": 0,
-        "anomaly_object_false_positive": 0,
-        "anomaly_object_precision": None,
-        "anomaly_object_recall": None,
-        "anomaly_object_f1": None,
-        "predicted_distribution": {"valid": 0, "invalid": 0},
-        "human_distribution": {"valid": 0, "invalid": 0},
-        "grouping_failures": 0,
-        "diagnostic_only_cases": 0,
-        "case_failures": 0,
-        "camera_render_failures": 0,
-        "judge_failures": 0,
-        "judge_calls": 0,
-        "vlm_selector_calls": 0,
-        "initial_image_count": 0,
-        "final_image_count": 0,
-        "preview_image_count": 0,
-        "evidence_repair_count": 0,
-        "evidence_recovery_count": 0,
-    }
+    return _runtime_telemetry.empty_metric_summary(total=total)
 
 
 def telemetry_by_metric(control_manifest: dict[str, Any]) -> dict[str, dict[str, int]]:
-    integration = control_manifest.get("integration")
-    integration = integration if isinstance(integration, dict) else {}
-    runtime = integration.get("runtime")
-    runtime = runtime if isinstance(runtime, dict) else {}
-    calls = runtime.get("controlled_calls")
-    calls = calls if isinstance(calls, list) else []
-    result: dict[str, dict[str, int]] = {}
-    for call in calls:
-        if not isinstance(call, dict):
-            continue
-        metric = str(call.get("metric") or "")
-        if not metric:
-            continue
-        target = result.setdefault(
-            metric,
-            {
-                "judge_calls": 0,
-                "vlm_selector_calls": 0,
-                "preview_image_count": 0,
-                "final_image_count": 0,
-                "evidence_repair_count": 0,
-                "evidence_recovery_count": 0,
-            },
-        )
-        audit = call.get("audit")
-        audit = audit if isinstance(audit, dict) else {}
-        telemetry = audit.get("experiment_telemetry")
-        telemetry = telemetry if isinstance(telemetry, dict) else {}
-        target["judge_calls"] += int(telemetry.get("judge_calls") or 0)
-        target["vlm_selector_calls"] += int(
-            telemetry.get("vlm_selector_calls") or 0
-        )
-        target["preview_image_count"] += int(
-            telemetry.get("preview_render_count") or 0
-        )
-        target["final_image_count"] += int(
-            telemetry.get("final_render_count") or 0
-        )
-        if int(audit.get("rounds_used") or 0) > 0:
-            target["evidence_repair_count"] += 1
-        evaluation = audit.get("evaluation")
-        evaluation = evaluation if isinstance(evaluation, dict) else {}
-        if evaluation.get("evidence_recovery_outcome") in {
-            "recovered",
-            "recovered_after_repair",
-        }:
-            target["evidence_recovery_count"] += 1
-    return result
+    return _runtime_telemetry.telemetry_by_metric(control_manifest)
 
 
 def initial_image_count(metric_report: dict[str, Any]) -> int:
-    group_results = metric_report.get("group_results")
-    if isinstance(group_results, list):
-        return sum(
-            len(item.get("evidence_paths") or [])
-            for item in group_results
-            if isinstance(item, dict)
-        )
-    paths = metric_report.get("evidence_paths")
-    return len(paths) if isinstance(paths, list) else 0
+    return _runtime_telemetry.initial_image_count(metric_report)
 
 
 def metric_failure_counts(metric_report: dict[str, Any]) -> dict[str, int]:
-    camera_failures = 0
-    judge_failures = 0
-    group_results = metric_report.get("group_results")
-    group_results = group_results if isinstance(group_results, list) else []
-    for item in group_results:
-        if not isinstance(item, dict):
-            continue
-        resolution = item.get("evidence_resolution")
-        resolution = resolution if isinstance(resolution, dict) else {}
-        if resolution.get("provider_status") == "failed":
-            camera_failures += 1
-        if item.get("reason") == "vlm_judge_failed":
-            judge_failures += 1
-    if metric_report.get("reason") == "vlm_judge_failed":
-        judge_failures += 1
-    return {
-        "camera_render_failures": camera_failures,
-        "judge_failures": judge_failures,
-    }
+    return _runtime_telemetry.metric_failure_counts(metric_report)
 
 
 def read_api_call_records(path: Path) -> list[dict[str, Any]]:
-    if not path.is_file():
-        return []
-    records: list[dict[str, Any]] = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if not line.strip():
-            continue
-        try:
-            value = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(value, dict):
-            records.append(value)
-    return records
+    return _runtime_telemetry.read_api_call_records(path)
 
 
 def api_usage_summary(
     records: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    safe_records = [
-        item for item in records if isinstance(item, dict)
-    ]
-    overall = _api_usage_bucket(safe_records)
-    roles = sorted(
-        {
-            str(item.get("role") or "unknown")
-            for item in safe_records
-        }
-    )
-    call_types = sorted(
-        {
-            str(item.get("call_type") or "chat")
-            for item in safe_records
-        }
-    )
-    functional_affordance_type = (
-        "vlm_camera_pose.functional_discovery.affordance"
-    )
-    functional_relation_type = (
-        "vlm_camera_pose.functional_discovery.relations"
-    )
-    placement_discovery_type = (
-        "vlm_camera_pose.placement_discovery"
-    )
-    usable_surface_type = "vlm_camera_pose.usable_surface_decode"
-    camera_selector_types = {
-        call_type
-        for call_type in call_types
-        if call_type.startswith("camera_selector_")
-        or call_type
-        in {
-            "vlm_camera_pose.active_fallback",
-            "vlm_camera_pose.query_cov",
-        }
-    }
-
-    def _matches_call_family(
-        item: dict[str, Any],
-        base_call_type: str,
-    ) -> bool:
-        actual = str(item.get("call_type") or "chat")
-        return (
-            actual == base_call_type
-            or actual.startswith(base_call_type + ".schema_repair")
-        )
-
-    return {
-        "schema_version": API_USAGE_SCHEMA_VERSION,
-        "api_call_definition": (
-            "logical OpenAI-compatible chat-completions invocation"
-        ),
-        "transport_retries_counted_separately": False,
-        "token_usage_source": "endpoint_response_usage",
-        "token_usage_estimated": False,
-        "operation_calls": {
-            "functional_discovery": sum(
-                _matches_call_family(item, functional_affordance_type)
-                or _matches_call_family(item, functional_relation_type)
-                for item in safe_records
-            ),
-            "functional_affordance": sum(
-                _matches_call_family(item, functional_affordance_type)
-                for item in safe_records
-            ),
-            "functional_relation": sum(
-                _matches_call_family(item, functional_relation_type)
-                for item in safe_records
-            ),
-            "placement_discovery": sum(
-                str(item.get("call_type") or "chat")
-                == placement_discovery_type
-                for item in safe_records
-            ),
-            "usable_surface_decoder": sum(
-                str(item.get("call_type") or "chat")
-                == usable_surface_type
-                for item in safe_records
-            ),
-            "camera_selector": sum(
-                str(item.get("call_type") or "chat")
-                in camera_selector_types
-                for item in safe_records
-            ),
-            "judge": sum(
-                str(item.get("role") or "unknown") == "judge"
-                for item in safe_records
-            ),
-        },
-        **overall,
-        "by_role": {
-            role: _api_usage_bucket(
-                [
-                    item
-                    for item in safe_records
-                    if str(item.get("role") or "unknown") == role
-                ]
-            )
-            for role in roles
-        },
-        "by_call_type": {
-            call_type: _api_usage_bucket(
-                [
-                    item
-                    for item in safe_records
-                    if str(item.get("call_type") or "chat")
-                    == call_type
-                ]
-            )
-            for call_type in call_types
-        },
-    }
+    return _runtime_telemetry.api_usage_summary(records)
 
 
 def _api_usage_bucket(
     records: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    api_calls = len(records)
-    successful = sum(
-        item.get("status") == "complete" for item in records
-    )
-    failed = sum(item.get("status") == "failed" for item in records)
-    usage_records = [
-        item["tokens_usage"]
-        for item in records
-        if isinstance(item.get("tokens_usage"), dict)
-    ]
-    token_totals: dict[str, int] = {}
-    for field in _TOKEN_FIELDS:
-        values = [
-            usage[field]
-            for usage in usage_records
-            if _nonnegative_int_or_none(usage.get(field)) is not None
-        ]
-        if values:
-            token_totals[field] = sum(int(value) for value in values)
-    if not api_calls:
-        coverage = "not_applicable"
-    elif len(usage_records) == api_calls:
-        coverage = "complete"
-    elif usage_records:
-        coverage = "partial"
-    else:
-        coverage = "unavailable"
-    return {
-        "api_calls_number": api_calls,
-        "successful_api_calls": successful,
-        "failed_api_calls": failed,
-        "token_usage_reported_calls": len(usage_records),
-        "token_usage_missing_calls": api_calls - len(usage_records),
-        "token_usage_coverage": coverage,
-        "tokens_usage": token_totals or None,
-    }
+    return _runtime_telemetry.api_usage_bucket(records)
 
 
 def _normalized_token_usage(value: Any) -> dict[str, int] | None:
-    if not isinstance(value, dict):
-        return None
-    result: dict[str, int] = {}
-    aliases = {
-        "prompt_tokens": ("prompt_tokens", "input_tokens"),
-        "completion_tokens": (
-            "completion_tokens",
-            "output_tokens",
-        ),
-        "total_tokens": ("total_tokens",),
-    }
-    for target, candidates in aliases.items():
-        for source in candidates:
-            parsed = _nonnegative_int_or_none(value.get(source))
-            if parsed is not None:
-                result[target] = parsed
-                break
-    prompt_details = value.get("prompt_tokens_details")
-    if isinstance(prompt_details, dict):
-        cached = _nonnegative_int_or_none(
-            prompt_details.get("cached_tokens")
-        )
-        if cached is not None:
-            result["cached_prompt_tokens"] = cached
-    completion_details = value.get("completion_tokens_details")
-    if isinstance(completion_details, dict):
-        reasoning = _nonnegative_int_or_none(
-            completion_details.get("reasoning_tokens")
-        )
-        if reasoning is not None:
-            result["reasoning_tokens"] = reasoning
-    if (
-        "total_tokens" not in result
-        and "prompt_tokens" in result
-        and "completion_tokens" in result
-    ):
-        result["total_tokens"] = (
-            result["prompt_tokens"] + result["completion_tokens"]
-        )
-    return result or None
+    return _runtime_telemetry.normalized_token_usage(value)
 
 
 def _safe_request_metadata(model: Any) -> dict[str, Any]:
-    value = getattr(model, "last_request_metadata", None)
-    if not isinstance(value, dict):
-        return {}
-    allowed = {
-        "endpoint",
-        "model",
-        "message_count",
-        "image_count",
-        "prompt_chars",
-        "finish_reason",
-        "usage",
-    }
-    return {
-        key: deepcopy(item)
-        for key, item in value.items()
-        if key in allowed
-    }
+    return _runtime_telemetry.safe_request_metadata(model)
 
 
 def _message_image_count(messages: Any) -> int:
-    if not isinstance(messages, list):
-        return 0
-    total = 0
-    for message in messages:
-        if not isinstance(message, dict):
-            continue
-        content = message.get("content")
-        if isinstance(content, list):
-            total += sum(
-                isinstance(item, dict)
-                and item.get("type") == "image_url"
-                for item in content
-            )
-    return total
+    return _runtime_telemetry.message_image_count(messages)
 
 
 def _request_scope(request: Any) -> tuple[str, str]:
-    if not isinstance(request, dict):
-        return "unknown", "scene"
-    metric = str(request.get("metric") or "unknown")
-    group_scope = request.get("group_scope")
-    if isinstance(group_scope, dict) and group_scope.get("group_id"):
-        return metric, str(group_scope["group_id"])
-    object_ids = request.get("object_ids")
-    if isinstance(object_ids, list) and object_ids:
-        return metric, "+".join(str(value) for value in object_ids)
-    event = request.get("event")
-    if isinstance(event, dict):
-        event_ids = event.get("object_ids")
-        if isinstance(event_ids, list) and event_ids:
-            return metric, "+".join(str(value) for value in event_ids)
-        pair = [
-            event.get("object_a_id"),
-            event.get("object_b_id"),
-        ]
-        pair = [str(value) for value in pair if value]
-        if pair:
-            return metric, "+".join(pair)
-    return metric, "scene"
+    return _runtime_telemetry.request_scope(request)
 
 
 def _evidence_count(value: Any) -> int | None:
-    if isinstance(value, (list, tuple)):
-        return len(value)
-    if isinstance(value, dict):
-        for key in (
-            "visual_evidence",
-            "render_evidence_items",
-            "render_evidence",
-            "paths",
-            "candidates",
-        ):
-            items = value.get(key)
-            if isinstance(items, (list, tuple)):
-                return len(items)
-        return None
-    for name in ("visual_evidence", "candidates"):
-        items = getattr(value, name, None)
-        if isinstance(items, (list, tuple)):
-            return len(items)
-    return None
+    return _runtime_telemetry.evidence_count(value)
 
 
 def _nonnegative_int_or_none(value: Any) -> int | None:
-    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-        return None
-    return value
+    return _runtime_telemetry.nonnegative_int_or_none(value)
 
 
 def _bounded_error(error: Exception) -> str:
-    value = str(error)
-    return value if len(value) <= 1000 else value[:997] + "..."
+    return _runtime_telemetry.bounded_error(error)
 
 
 def _format_progress_record(record: dict[str, Any]) -> str:
-    timestamp = str(record.get("timestamp") or "")
-    clock = timestamp[11:19] if len(timestamp) >= 19 else timestamp
-    case_id = str(record.get("case_id") or "run")
-    event = str(record.get("event") or "progress")
-    details = record.get("details")
-    details = details if isinstance(details, dict) else {}
-    preferred = (
-        "phase",
-        "metric",
-        "group_id",
-        "role",
-        "call_type",
-        "status",
-        "api_call_number",
-        "cumulative_api_calls",
-        "duration_seconds",
-        "evidence_count",
-        "error_type",
-    )
-    fragments: list[str] = []
-    for key in preferred:
-        value = details.get(key)
-        if value is not None:
-            fragments.append(f"{key}={_progress_value(value)}")
-    if isinstance(details.get("tokens_usage"), dict):
-        fragments.append(
-            "tokens="
-            + _progress_value(details["tokens_usage"])
-        )
-    suffix = " " + " ".join(fragments) if fragments else ""
-    return f"[{clock}] [{case_id}] {event}{suffix}"
+    return _runtime_progress.format_progress_record(record)
 
 
 def _progress_value(value: Any) -> str:
-    if isinstance(value, (dict, list, tuple)):
-        return json.dumps(
-            value,
-            ensure_ascii=False,
-            separators=(",", ":"),
-        )
-    return str(value).replace("\n", " ")
+    return _runtime_progress.progress_value(value)
 
 
 def safe_route_manifest(route: dict[str, Any]) -> dict[str, Any]:
@@ -3936,51 +3416,27 @@ def safe_route_manifest(route: dict[str, Any]) -> dict[str, Any]:
 
 
 def read_json(path: Path) -> dict[str, Any]:
-    value = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(value, dict):
-        raise ValueError(f"expected a JSON object: {path}")
-    return value
+    return _runtime_io.read_json(path)
 
 
 def read_yaml_object(path: Path) -> dict[str, Any]:
-    value = yaml.safe_load(path.read_text(encoding="utf-8"))
-    if not isinstance(value, dict):
-        raise ValueError(f"expected a YAML object: {path}")
-    return value
+    return _runtime_io.read_yaml_object(path)
 
 
 def atomic_write_json(path: Path, value: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(
-        f".{path.name}.{os.getpid()}.{threading.get_ident()}.{time.time_ns()}.tmp"
-    )
-    temporary.write_text(
-        json.dumps(value, indent=2, ensure_ascii=False) + "\n",
-        encoding="utf-8",
-    )
-    temporary.replace(path)
+    _runtime_io.atomic_write_json(path, value)
 
 
 def file_sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+    return _runtime_io.file_sha256(path)
 
 
 def json_sha256(value: Any) -> str:
-    encoded = json.dumps(
-        value,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-    ).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
+    return _runtime_io.json_sha256(value)
 
 
 def utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return _runtime_io.utc_now()
 
 
 if __name__ == "__main__":

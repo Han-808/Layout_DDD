@@ -368,6 +368,25 @@
       "quarantine_evidence": []
     },
     {
+      "component_id": "camera_cal_scene_level_leaf_runtime_v1",
+      "root": "src/benchmark/camera_cal_scene_level",
+      "state": "active",
+      "owner": "evaluation-runtime",
+      "replacement": null,
+      "reason": "Behavior-preserving E1 leaf mechanics for camera-cal JSON/YAML I/O, progress reporting, API-call accounting, and telemetry; semantic evaluation remains in the compatibility runner.",
+      "tracked_policy": "all_tracked",
+      "entrypoints": [
+        "src/benchmark/camera_cal_scene_level/io.py",
+        "src/benchmark/camera_cal_scene_level/progress.py",
+        "src/benchmark/camera_cal_scene_level/telemetry.py"
+      ],
+      "sources": [
+        "src/benchmark/camera_cal_scene_level/__init__.py"
+      ],
+      "dependencies": [],
+      "quarantine_evidence": []
+    },
+    {
       "component_id": "metric_profile_canonical_v2",
       "root": "configs/evaluation/metric_profile_canonical_v2.yaml",
       "state": "active",
@@ -838,6 +857,20 @@
       "state": "active",
       "owner": "evaluation-tests",
       "reason": "Offline validation of the historical runner blob, compatibility surface, schemas, frozen semantic sources, and CLI help contract."
+    },
+    {
+      "artifact_id": "camera_cal_scene_level_runtime_documentation_v1",
+      "path": "docs/camera_cal_scene_level_runtime.md",
+      "state": "active",
+      "owner": "evaluation-runtime",
+      "reason": "E1 leaf-runtime ownership, compatibility-facade boundary, and explicit semantic exclusions."
+    },
+    {
+      "artifact_id": "camera_cal_scene_level_leaf_runtime_tests_v1",
+      "path": "tests/test_camera_cal_scene_level_leaf_runtime.py",
+      "state": "active",
+      "owner": "evaluation-tests",
+      "reason": "Deep-equality coverage for runner facades and extracted I/O, progress, and telemetry leaves."
     },
     {
       "artifact_id": "evaluation_campaign_tests_v1",
