@@ -1,6 +1,6 @@
 # Camera-cal scene-level runtime structure
 
-Status: E2 mechanical extraction. The authoritative compatibility command
+Status: E3 mechanical extraction. The authoritative compatibility command
 remains `scripts/run_camera_cal_scene_level.py`.
 
 The package `benchmark.camera_cal_scene_level` owns only leaf mechanics:
@@ -14,13 +14,16 @@ The package `benchmark.camera_cal_scene_level` owns only leaf mechanics:
 - `planning.py`: route, renderer, control, and experiment-plan construction;
 - `resume.py`: strict completed-case resume eligibility;
 - `scheduling.py`: parallel scheduling and the shared route-abort signal.
+- `comparison.py`: pure human/model scene-level comparison projections;
+- `reports.py`: terminal case records, resolution audits, and run summaries;
+- `provenance.py`: redacted route projection and case-input fingerprints.
 
 The historical runner keeps the same public class/function names as
 compatibility facades. Existing imports and monkeypatch points therefore
 continue to work. The runner still owns run-level orchestration, model and
-renderer wiring, `run_case`, report construction, and every semantic policy.
+renderer wiring, `run_case`, and every semantic evaluation policy.
 
-E1/E2 do not change Judge prompts, camera selection, rendering, metric weights,
+E1–E3 do not change Judge prompts, camera selection, rendering, metric weights,
 deductions, evaluation order, retry policy, report schemas, or output paths.
 The frozen E0 contract records the pre-extraction runner blob and semantic
 source hashes; focused tests compare the facade and leaf implementations.

@@ -373,7 +373,7 @@
       "state": "active",
       "owner": "evaluation-runtime",
       "replacement": null,
-      "reason": "Behavior-preserving camera-cal runtime for CLI parsing, discovery, planning, resume, scheduling, JSON/YAML I/O, progress, API-call accounting, and telemetry; semantic evaluation remains in the compatibility runner.",
+      "reason": "Behavior-preserving camera-cal runtime for CLI, discovery, planning, resume, scheduling, comparison, reporting, case provenance, I/O, progress, and telemetry; semantic evaluation remains in the compatibility runner.",
       "tracked_policy": "all_tracked",
       "entrypoints": [
         "src/benchmark/camera_cal_scene_level/io.py",
@@ -382,7 +382,10 @@
         "src/benchmark/camera_cal_scene_level/cli.py",
         "src/benchmark/camera_cal_scene_level/discovery.py",
         "src/benchmark/camera_cal_scene_level/planning.py",
-        "src/benchmark/camera_cal_scene_level/scheduling.py"
+        "src/benchmark/camera_cal_scene_level/scheduling.py",
+        "src/benchmark/camera_cal_scene_level/comparison.py",
+        "src/benchmark/camera_cal_scene_level/provenance.py",
+        "src/benchmark/camera_cal_scene_level/reports.py"
       ],
       "sources": [
         "src/benchmark/camera_cal_scene_level/__init__.py",
@@ -883,6 +886,13 @@
       "state": "active",
       "owner": "evaluation-tests",
       "reason": "Frozen-E0 parity coverage for extracted CLI, discovery, planning, resume, scheduling, compatibility facades, and import direction."
+    },
+    {
+      "artifact_id": "camera_cal_scene_level_structure_e3_tests_v1",
+      "path": "tests/test_camera_cal_scene_level_structure_e3.py",
+      "state": "active",
+      "owner": "evaluation-tests",
+      "reason": "Frozen-E0 parity coverage for comparison, report aggregation, case provenance, route redaction, resolution policy, and import direction."
     },
     {
       "artifact_id": "evaluation_campaign_tests_v1",
