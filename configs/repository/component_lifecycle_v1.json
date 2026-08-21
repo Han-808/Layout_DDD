@@ -47,7 +47,7 @@
       "root": "tools/api2_generation_recovery_v1",
       "state": "compatibility",
       "owner": "scene-generation",
-      "replacement": "frozen_two_stage_compatibility_runtime_v1",
+      "replacement": "generation_campaign_runtime_v2",
       "reason": "Tracked retry and recovery entrypoints retained for existing launchers while orchestration moves to the shared compatibility runtime.",
       "tracked_policy": "all_tracked",
       "entrypoints": [
@@ -68,7 +68,7 @@
       "root": "tools/api2_kimi_k3_runner_v1",
       "state": "compatibility",
       "owner": "scene-generation",
-      "replacement": "frozen_two_stage_compatibility_runtime_v1",
+      "replacement": "generation_campaign_runtime_v2",
       "reason": "Legacy Kimi launcher surface retained as a thin typed API2 route adapter.",
       "tracked_policy": "all_tracked",
       "entrypoints": [
@@ -88,7 +88,7 @@
       "root": "tools/api2_glm53_runner_v1",
       "state": "compatibility",
       "owner": "scene-generation",
-      "replacement": "frozen_two_stage_compatibility_runtime_v1",
+      "replacement": "generation_campaign_runtime_v2",
       "reason": "Legacy GLM launcher surface retained as a thin typed API2 route adapter.",
       "tracked_policy": "all_tracked",
       "entrypoints": [
@@ -151,6 +151,33 @@
       "quarantine_evidence": []
     },
     {
+      "component_id": "generation_campaign_runtime_v2",
+      "root": "src/benchmark/scene_generation/campaign",
+      "state": "active",
+      "owner": "scene-generation",
+      "replacement": null,
+      "reason": "Single model-agnostic API2/API3 campaign entrypoint with strict public contracts, private bindings, preflight, retry, trust, and artifact verification.",
+      "tracked_policy": "all_tracked",
+      "entrypoints": [
+        "src/benchmark/scene_generation/campaign/__main__.py",
+        "src/benchmark/scene_generation/campaign/cli.py",
+        "src/benchmark/scene_generation/campaign/execution.py"
+      ],
+      "sources": [
+        "src/benchmark/scene_generation/campaign/bindings.py",
+        "src/benchmark/scene_generation/campaign/loader.py",
+        "src/benchmark/scene_generation/campaign/profiles.py",
+        "src/benchmark/scene_generation/campaign/runtime.py"
+      ],
+      "dependencies": [
+        "api3_anthropic_runner_v2",
+        "frozen_two_stage_compatibility_runtime_v1",
+        "generation_retrieval_runtime_v2",
+        "generation_retrieval_profiles_v2"
+      ],
+      "quarantine_evidence": []
+    },
+    {
       "component_id": "generation_retrieval_runtime_v2",
       "root": "src/benchmark/scene_generation/retrieval",
       "state": "active",
@@ -200,17 +227,23 @@
       "state": "active",
       "owner": "scene-generation",
       "replacement": null,
-      "reason": "Reviewed route declarations for the active config-driven API2 and API3 generation paths.",
+      "reason": "Reviewed legacy compatibility declarations and active model-agnostic generation campaign contracts for API2 and API3.",
       "tracked_policy": "all_tracked",
       "entrypoints": [
         "configs/generation/api2_glm53_scene10_v2.json",
         "configs/generation/api2_kimi_k3_scene10_v2.json",
-        "configs/generation/api3_opus48_high_scene10_v2.json"
+        "configs/generation/api3_opus48_high_scene10_v2.json",
+        "configs/generation/campaign_v2/campaigns_v2.json"
       ],
       "sources": [
         "configs/generation/api2_glm53_scene10_v2.json",
         "configs/generation/api2_kimi_k3_scene10_v2.json",
-        "configs/generation/api3_opus48_high_scene10_v2.json"
+        "configs/generation/api3_opus48_high_scene10_v2.json",
+        "configs/generation/campaign_v2/campaigns_v2.json",
+        "configs/generation/campaign_v2/contracts_v2.json",
+        "configs/generation/campaign_v2/generation_bindings.local.example.json",
+        "configs/generation/campaign_v2/model_profiles_v2.json",
+        "configs/generation/campaign_v2/route_profiles_v2.json"
       ],
       "dependencies": [
         "api3_anthropic_runner_v2",
@@ -218,6 +251,7 @@
         "api2_kimi_k3_runner_v1",
         "api3_opus48_thinking_runner_v1",
         "frozen_two_stage_compatibility_runtime_v1",
+        "generation_campaign_runtime_v2",
         "generation_retrieval_runtime_v2",
         "generation_retrieval_profiles_v2"
       ],
@@ -671,6 +705,20 @@
       "owner": "package-resources",
       "reason": "Packaged byte-identical mirror of the current retrieval golden suite.",
       "mirror_of": "configs/retrieval/golden/imaginarium_qwen3_0_6b_v2.json"
+    },
+    {
+      "artifact_id": "generation_campaign_documentation_v2",
+      "path": "docs/generation_campaign_v2.md",
+      "state": "active",
+      "owner": "scene-generation",
+      "reason": "Current operational contract and source-checkout boundary for the model-agnostic generation campaign."
+    },
+    {
+      "artifact_id": "generation_campaign_tests_v2",
+      "path": "tests/test_generation_campaign_v2.py",
+      "state": "active",
+      "owner": "scene-generation-tests",
+      "reason": "Canonical contract, trust, preflight, retry, artifact, redaction, and loopback coverage for Generation Campaign v2."
     },
     {
       "artifact_id": "pytest_suites_v1",

@@ -197,7 +197,7 @@
         },
         {
           "path": "generation_runner.py",
-          "sha256": "a5814f6096645d3f564671cbfa11460faee0a626889020a1854bc00044fc6e61",
+          "sha256": "c5bd82c9cf5b1cf38a8e53c4a199c357134f438685b42d9728f034811200950a",
           "mode": "0755"
         },
         {
@@ -543,7 +543,7 @@
         },
         {
           "path": "trust.py",
-          "sha256": "d9376a421854fdd796d12b71b6fe56534b52141e635ade1774ac44c5c254fce7",
+          "sha256": "e306f7f98a45f46c8805bcf291236d079367b629795e7ce706bf9e23e12ac0cf",
           "mode": "0644"
         }
       ]
@@ -555,7 +555,8 @@
       "entrypoints": [
         "api2_glm53_scene10_v2.json",
         "api2_kimi_k3_scene10_v2.json",
-        "api3_opus48_high_scene10_v2.json"
+        "api3_opus48_high_scene10_v2.json",
+        "campaign_v2/campaigns_v2.json"
       ],
       "files": [
         {
@@ -587,6 +588,88 @@
           "path": "api3_opus48_high_scene10_v2.json",
           "sha256": "0895b49ec5d866c5481c65bf512553e777e55e9732fafb2101dd9a4a53f0999d",
           "mode": "0644"
+        },
+        {
+          "path": "campaign_v2/campaigns_v2.json",
+          "sha256": "7d1fb1c0304d2df16da786ea09047ba31af59e077c76c7b45d66171e6be2fa6a",
+          "mode": "0644"
+        },
+        {
+          "path": "campaign_v2/contracts_v2.json",
+          "sha256": "ae4452aa3f13ad621fd87f0db5dc067466aabbee58d3d508543ea0677905c386",
+          "mode": "0644"
+        },
+        {
+          "path": "campaign_v2/generation_bindings.local.example.json",
+          "sha256": "03f7d18cf8ff651d28f67c467df3ded07485672cc254aba54ca3abd96a80dbee",
+          "mode": "0644"
+        },
+        {
+          "path": "campaign_v2/model_profiles_v2.json",
+          "sha256": "173797231a7322e9d5cc1438db4a67156f8a942bccd918a8d55c050027e3692f",
+          "mode": "0644"
+        },
+        {
+          "path": "campaign_v2/route_profiles_v2.json",
+          "sha256": "a3914519c06dcda561073e8ad9b49efae440fdad126d06cdc668ae8200e0aeb9",
+          "mode": "0644"
+        }
+      ]
+    },
+    {
+      "bundle_id": "generation_campaign_runtime_v2",
+      "root": "src/benchmark/scene_generation/campaign",
+      "role": "generation_campaign_runtime",
+      "entrypoints": [
+        "__main__.py",
+        "cli.py",
+        "execution.py"
+      ],
+      "files": [
+        {
+          "path": "__init__.py",
+          "sha256": "c7094278b81747dc69a7eb9b0bb24cc07d5df526e1de403851b400127aec39ff",
+          "mode": "0644"
+        },
+        {
+          "path": "__main__.py",
+          "sha256": "411e5cc0d736ca9d9a9ac56cf38aa1a36f4313c540ab9ca8e4e65c026822cecc",
+          "mode": "0644"
+        },
+        {
+          "path": "bindings.py",
+          "sha256": "90e1bab3e5b0994d4a2e50b88fd4e13e3994673286b738ab81739c12891b8118",
+          "mode": "0644"
+        },
+        {
+          "path": "cli.py",
+          "sha256": "19af87042274a96143ac91f825417aa4c8237c6455aa8f3c60ff330c11985957",
+          "mode": "0644"
+        },
+        {
+          "path": "execution.py",
+          "sha256": "89eec07d604a5552e875831354de365a2394e654508c7da8c019534ffd641a66",
+          "mode": "0644"
+        },
+        {
+          "path": "legacy_v1.py",
+          "sha256": "133540e7184b558bc3813ee737a24cf446b21ee68cdc77f01e96e49c42c79e96",
+          "mode": "0644"
+        },
+        {
+          "path": "loader.py",
+          "sha256": "dc1c2c5f5c80b3a2c71939b8c47b0ed849440e869b12f948c16aeed4a5460793",
+          "mode": "0644"
+        },
+        {
+          "path": "profiles.py",
+          "sha256": "8a8de3ea7a917a77fe511b39b415cfb80f15e2be291242ad9cd47813098f6d2e",
+          "mode": "0644"
+        },
+        {
+          "path": "runtime.py",
+          "sha256": "e261b98878ecdc7f4deb21357b92de74321930f484bf63e093a24ca187ce78c7",
+          "mode": "0644"
         }
       ]
     },
@@ -617,7 +700,7 @@
         },
         {
           "path": "bindings.py",
-          "sha256": "ef025d9c0089b4769d9446fbbaa63e535486e0b07b2df5092f9802b03dac9814",
+          "sha256": "57b07d1b2052abbb8ff2853ee1336ab00be2a3d2f8acf9bccada998ad10b05ea",
           "mode": "0644"
         },
         {

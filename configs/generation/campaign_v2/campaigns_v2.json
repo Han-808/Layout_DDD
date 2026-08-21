@@ -1,0 +1,68 @@
+{
+  "schema_version": "generation_campaign_registry_v2",
+  "campaigns": [
+    {
+      "campaign_id": "api2-kimi-k3-scene10-v2",
+      "workflow_profile_id": "frozen-two-stage-generation-v2",
+      "model_profile_id": "api2-kimi-k3",
+      "retrieval_profile_id": "imaginarium-qwen3-embedding-0.6b-stable-top1-v2",
+      "brief_set_id": "hy34-paired-briefs-v1",
+      "ordered_brief_ids": [
+        "brief_00",
+        "brief_01",
+        "brief_02",
+        "brief_03",
+        "brief_04",
+        "brief_05",
+        "brief_06",
+        "brief_07",
+        "brief_08",
+        "brief_09"
+      ],
+      "execution_policy_id": "api2-scene10-retry3-continue-v1",
+      "artifact_contract_id": "hy34-two-stage-artifacts-v3"
+    },
+    {
+      "campaign_id": "api2-glm53-scene10-v2",
+      "workflow_profile_id": "frozen-two-stage-generation-v2",
+      "model_profile_id": "api2-glm-5-3",
+      "retrieval_profile_id": "imaginarium-qwen3-embedding-0.6b-stable-top1-v2",
+      "brief_set_id": "hy34-paired-briefs-v1",
+      "ordered_brief_ids": [
+        "brief_00",
+        "brief_01",
+        "brief_02",
+        "brief_03",
+        "brief_04",
+        "brief_05",
+        "brief_06",
+        "brief_07",
+        "brief_08",
+        "brief_09"
+      ],
+      "execution_policy_id": "api2-scene10-retry3-continue-v1",
+      "artifact_contract_id": "hy34-two-stage-artifacts-v3"
+    },
+    {
+      "campaign_id": "api3-opus48-high-scene10-v2",
+      "workflow_profile_id": "frozen-two-stage-generation-v2",
+      "model_profile_id": "api3-claude-opus-4-8-high",
+      "retrieval_profile_id": "imaginarium-qwen3-embedding-0.6b-stable-top1-v2",
+      "brief_set_id": "hy34-paired-briefs-v1",
+      "ordered_brief_ids": [
+        "brief_00",
+        "brief_01",
+        "brief_02",
+        "brief_03",
+        "brief_04",
+        "brief_05",
+        "brief_06",
+        "brief_07",
+        "brief_08",
+        "brief_09"
+      ],
+      "execution_policy_id": "api3-scene10-retry2-continue-v1",
+      "artifact_contract_id": "hy34-two-stage-artifacts-v3"
+    }
+  ]
+}

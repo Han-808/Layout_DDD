@@ -25,6 +25,7 @@ SHARED_RUNTIME_ROOTS = {
     "configs/generation",
     "src/benchmark/scene_generation/frozen_two_stage",
     "src/benchmark/scene_generation/retrieval",
+    "src/benchmark/scene_generation/campaign",
     "configs/retrieval",
 }
 

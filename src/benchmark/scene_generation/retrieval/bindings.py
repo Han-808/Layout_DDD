@@ -29,8 +29,11 @@ class LocalResourceBindings:
 
     @classmethod
     def load(cls, path: str | Path) -> "LocalResourceBindings":
-        binding_path = Path(path).expanduser().resolve()
-        if not binding_path.is_file() or binding_path.is_symlink():
+        selected = Path(path).expanduser().absolute()
+        if selected.is_symlink():
+            raise RetrievalContractError("resource binding must not be a symlink")
+        binding_path = selected.resolve()
+        if not binding_path.is_file():
             raise RetrievalContractError("resource binding must be a regular JSON file")
         raw = strict_json_object(binding_path, maximum_bytes=200_000)
         exact_keys(raw, label="resource bindings", required=("schema_version", "bindings"))
@@ -82,15 +85,15 @@ def select_binding_path(
     """
 
     if explicit_path is not None:
-        return Path(explicit_path).expanduser().resolve()
+        return Path(explicit_path).expanduser().absolute()
     environment = os.environ if environ is None else environ
     selected = environment.get(BINDINGS_ENV)
     if selected:
-        return Path(selected).expanduser().resolve()
+        return Path(selected).expanduser().absolute()
     catalog_root = catalog_path.parent
     repo_root = (
         catalog_root.parent.parent
         if catalog_root.parent.name == "configs"
         else catalog_root
     )
-    return (repo_root / DEFAULT_LOCAL_RELATIVE).resolve()
+    return (repo_root / DEFAULT_LOCAL_RELATIVE).absolute()

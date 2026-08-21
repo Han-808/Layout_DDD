@@ -456,3 +456,80 @@ class TrustInventory:
             run_config_bundle=run_config_bundle,
             run_config_file=run_config_file,
         )
+
+    def verify_campaign_inputs(
+        self,
+        *,
+        core_root: str | Path,
+        campaign_runtime_root: str | Path,
+        campaign_profile_path: str | Path,
+        retrieval_runtime_root: str | Path,
+        retrieval_catalog_path: str | Path,
+    ) -> dict[str, Any]:
+        """Hash-verify the complete executable/config surface of Campaign v2.
+
+        The returned projection is path-free and safe to embed in generation
+        provenance.  Every bundle is checked as an exact inventory, not merely
+        by hashing one entrypoint.
+        """
+
+        core_bundle = self._bundle_for_root(Path(core_root), purpose="core_root")
+        if core_bundle.role != "frozen_generation_core":
+            raise TrustError("core_root is not declared as a frozen generation core")
+        campaign_runtime_bundle = self._bundle_for_root(
+            Path(campaign_runtime_root), purpose="campaign_runtime_root"
+        )
+        if campaign_runtime_bundle.role != "generation_campaign_runtime":
+            raise TrustError(
+                "campaign_runtime_root is not declared as a generation campaign runtime"
+            )
+        campaign_profile_bundle, campaign_profile_file = self._bundle_for_file(
+            Path(campaign_profile_path), purpose="campaign_profile_path"
+        )
+        if campaign_profile_bundle.role != "config_only_generation_routes":
+            raise TrustError(
+                "campaign profile is not declared in the generation config bundle"
+            )
+        retrieval_runtime_bundle = self._bundle_for_root(
+            Path(retrieval_runtime_root), purpose="retrieval_runtime_root"
+        )
+        if retrieval_runtime_bundle.role != "shared_generation_retrieval_runtime":
+            raise TrustError(
+                "retrieval_runtime_root is not declared as a shared retrieval runtime"
+            )
+        retrieval_catalog_bundle, retrieval_catalog_file = self._bundle_for_file(
+            Path(retrieval_catalog_path), purpose="retrieval_catalog_path"
+        )
+        if retrieval_catalog_bundle.role != "generation_retrieval_profiles":
+            raise TrustError(
+                "retrieval catalog is not declared in a retrieval-profile bundle"
+            )
+        unique_bundles = {
+            bundle.bundle_id: bundle
+            for bundle in (
+                core_bundle,
+                campaign_runtime_bundle,
+                campaign_profile_bundle,
+                retrieval_runtime_bundle,
+                retrieval_catalog_bundle,
+            )
+        }
+        for bundle in unique_bundles.values():
+            self._verify_bundle(bundle)
+        return {
+            "schema_version": "generation_campaign_trust_report_v1",
+            "trust_manifest_sha256": self.manifest_sha256,
+            "core_bundle": core_bundle.to_public_dict(),
+            "campaign_runtime_bundle": campaign_runtime_bundle.to_public_dict(),
+            "campaign_profile_bundle": campaign_profile_bundle.to_public_dict(),
+            "campaign_profile_file": {
+                "path": campaign_profile_file.relative_path,
+                "sha256": campaign_profile_file.sha256,
+            },
+            "retrieval_runtime_bundle": retrieval_runtime_bundle.to_public_dict(),
+            "retrieval_catalog_bundle": retrieval_catalog_bundle.to_public_dict(),
+            "retrieval_catalog_file": {
+                "path": retrieval_catalog_file.relative_path,
+                "sha256": retrieval_catalog_file.sha256,
+            },
+        }

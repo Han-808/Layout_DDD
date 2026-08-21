@@ -55,6 +55,7 @@ except ImportError:  # direct script execution on the Pod
 
 RUNNER_VERSION = "2.0.0"
 RUN_MANIFEST_SCHEMA_VERSION = "hy34_two_stage_run_manifest_v3"
+CASE_RESULT_SCHEMA_VERSION = "hy34_case_result_v2"
 RUNNER_ROOT = Path(__file__).resolve().parent
 REPO_ROOT = RUNNER_ROOT.parents[1]
 DEFAULT_RETRIEVAL_CATALOG = REPO_ROOT / "configs" / "retrieval" / "profiles_v2.json"
@@ -72,6 +73,19 @@ RETRY_TRANSPORT_AMBIGUOUS = False
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+def _artifact_safe_transport_error(
+    error_type: str | None,
+    stage: str | None,
+) -> str | None:
+    """Return a stable transport diagnostic without endpoint/header text."""
+
+    if error_type is None and stage is None:
+        return None
+    safe_type = error_type or "TransportError"
+    safe_stage = stage or "transport"
+    return f"{safe_type} during {safe_stage}"
 
 
 @dataclass(frozen=True)
@@ -506,7 +520,9 @@ def call_model_stage(
             "http_status": result.http_status,
             "http_reason": result.http_reason,
             "error_type": result.error_type,
-            "error_message": result.error_message,
+            "error_message": _artifact_safe_transport_error(
+                result.error_type, result.stage
+            ),
             "x_request_id": request_id,
         }
         if result.status == "transport_ambiguous":
@@ -555,11 +571,12 @@ def call_model_stage(
             )
         except (UnicodeError, ValueError) as exc:
             status = "invalid_api_response"
+            safe_message = "provider response failed the configured response contract"
             write_json_exclusive(
                 attempt_dir / "attempt.result.json",
-                {"status": status, **detail, "error_type": type(exc).__name__, "error_message": str(exc)},
+                {"status": status, **detail, "error_type": type(exc).__name__, "error_message": safe_message},
             )
-            return StageCapture(status, attempt_number, attempt_number - 1, None, False, str(exc))
+            return StageCapture(status, attempt_number, attempt_number - 1, None, False, safe_message)
         write_exclusive(attempt_dir / "raw-content.txt", content)
         if reasoning is not None:
             write_exclusive(attempt_dir / "logs" / "reasoning.txt", reasoning)
@@ -677,7 +694,7 @@ def _finalize_case(
     }
     write_json_exclusive(case_dir / "audit_manifest.json", manifest)
     result = {
-        "schema_version": "hy34_case_result_v2",
+        "schema_version": CASE_RESULT_SCHEMA_VERSION,
         "brief_id": brief["brief_id"],
         "model_key": model.key,
         "model_label": model.label,

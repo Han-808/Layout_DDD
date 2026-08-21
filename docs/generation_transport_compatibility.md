@@ -193,7 +193,7 @@ unchanged in this phase. The new internal package may later expose a compatible
 facade, but it must not be registered into `layout-ddd-generate` as part of this
 proposal.
 
-## Config-only operation
+## Config-only compatibility operation
 
 The generic CLI is deliberately separate from `layout-ddd-generate`:
 
@@ -225,18 +225,21 @@ compared to the static trusted declaration before credential loading; runtime
 model and brief values are then compared with the static trusted view before
 the first provider request.
 
-The generic `run` command is post-preflight: callers must complete the
-route/model-specific preflight before invoking it. Existing Kimi, GLM, and Opus
-launchers retain their current preflight behavior. A generic declarative
-preflight registry is not implemented in this change and must not be inferred
-from a successful static `check`.
+The lower-level frozen compatibility `run` command remains post-preflight.
+Existing Kimi, GLM, and Opus launchers retain their original preflight/replay
+surface for compatibility.
 
-Checked-in parity configs are provided for the three migrated campaigns under
-`configs/generation/`. To add another model on an existing route, add or select
-its entry in a model config and point a run config at that `model_key`. No Python
-runner is required. The changed/new config files must be reviewed and added to
-the active source trust inventory. A new codec or gateway policy is code and
-still requires review and fixtures.
+The active higher-level entry is now
+`python -m benchmark.scene_generation.campaign`. It compiles the declarative
+workflow, brief, retry, artifact and preflight contracts, executes the Phase A
+resource gate, performs the live route preflight, and then invokes the same
+frozen orchestrator. See `docs/generation_campaign_v2.md`.
+
+Checked-in parity campaigns are provided under
+`configs/generation/campaign_v2/`. To add another model on an existing grammar,
+add a reviewed model profile and campaign; no Python runner is required. The
+changed profiles must be added to the exact active source trust inventory. A
+new codec or gateway policy is code and still requires review and fixtures.
 
 ## Component responsibilities
 

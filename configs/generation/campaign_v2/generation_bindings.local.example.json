@@ -1,0 +1,21 @@
+{
+  "schema_version": "generation_route_bindings_v2",
+  "bindings": {
+    "api2-chat-top-level-reasoning-v1": {
+      "endpoint": "https://api2.example.invalid/v1/chat/completions",
+      "credential_env": "SET_API2_CREDENTIAL_IN_LOCAL_COPY"
+    },
+    "api2-responses-reasoning-v1": {
+      "endpoint": "https://api2.example.invalid/v1/responses",
+      "credential_env": "SET_API2_CREDENTIAL_IN_LOCAL_COPY"
+    },
+    "api3-chat-adaptive-thinking-v1": {
+      "endpoint": "https://api3.example.invalid/v1/chat/completions",
+      "credential_env": "SET_API3_KEY_IN_LOCAL_COPY"
+    },
+    "api3-chat-legacy-core-v1": {
+      "endpoint": "https://api3.example.invalid/v1/chat/completions",
+      "credential_env": "SET_API3_KEY_IN_LOCAL_COPY"
+    }
+  }
+}

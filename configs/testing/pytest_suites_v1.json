@@ -91,6 +91,7 @@
     "tests/test_experiment_config.py",
     "tests/test_feedback_builder.py",
     "tests/test_frozen_two_stage_generation_compatibility.py",
+    "tests/test_generation_campaign_v2.py",
     "tests/test_functional_check_obligations.py",
     "tests/test_functional_clearance.py",
     "tests/test_functional_group_evidence.py",
