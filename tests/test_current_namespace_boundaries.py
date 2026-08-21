@@ -1,11 +1,41 @@
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 
 from benchmark.models import OpenAICompatibleModel
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def _runtime_import_targets(tree: ast.AST) -> set[str]:
+    targets: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            targets.update(alias.name for alias in node.names)
+            continue
+        if isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            targets.add(node.module)
+            continue
+        if not isinstance(node, ast.Call) or not node.args:
+            continue
+        function = node.func
+        is_dynamic_import = (
+            isinstance(function, ast.Name)
+            and function.id in {"__import__", "import_module"}
+        ) or (
+            isinstance(function, ast.Attribute)
+            and function.attr == "import_module"
+        )
+        first_argument = node.args[0]
+        if (
+            is_dynamic_import
+            and isinstance(first_argument, ast.Constant)
+            and isinstance(first_argument.value, str)
+        ):
+            targets.add(first_argument.value)
+    return targets
 
 
 def test_current_runtime_does_not_import_legend_modules() -> None:
@@ -21,12 +51,39 @@ def test_current_runtime_does_not_import_legend_modules() -> None:
         if "legend" not in path.relative_to(ROOT / "src" / "benchmark").parts
     )
 
-    violations = []
+    violations: list[str] = []
     for path in current_files:
-        if "benchmark.legend" in path.read_text(encoding="utf-8"):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        if any(
+            module == "benchmark.legend"
+            or module.startswith("benchmark.legend.")
+            for module in _runtime_import_targets(tree)
+        ):
             violations.append(path.relative_to(ROOT).as_posix())
 
     assert violations == []
+
+
+def test_runtime_import_scanner_catches_constant_dynamic_imports() -> None:
+    tree = ast.parse(
+        "\n".join(
+            [
+                "import benchmark.legend.data",
+                "from benchmark.legend import workflow",
+                "importlib.import_module('benchmark.legend.judge')",
+                "import_module('benchmark.legend.metrics')",
+                "__import__('benchmark.legend.adapters')",
+                "importlib.util.find_spec('benchmark.legend')",
+            ]
+        )
+    )
+    assert _runtime_import_targets(tree) == {
+        "benchmark.legend.data",
+        "benchmark.legend",
+        "benchmark.legend.judge",
+        "benchmark.legend.metrics",
+        "benchmark.legend.adapters",
+    }
 
 
 def test_retired_main_namespace_surfaces_are_absent() -> None:

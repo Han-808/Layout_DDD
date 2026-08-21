@@ -8,19 +8,19 @@ from pathlib import Path
 
 import pytest
 
-from tools.hy34_retrieval_conditioned_runner_v2.contracts import (
+from tools.api3_anthropic_runner_v2.contracts import (
     ContractError,
     build_retrieval_request,
     validate_brief,
     validate_object_plan,
 )
-from tools.hy34_retrieval_conditioned_runner_v2.generation_runner import (
+from tools.api3_anthropic_runner_v2.generation_runner import (
     ModelConfig,
     _request_value,
     call_model_stage,
     run_case,
 )
-from tools.hy34_retrieval_conditioned_runner_v2.transport import post_once
+from tools.api3_anthropic_runner_v2.transport import post_once
 
 
 def _api_body(content: str) -> bytes:
@@ -357,7 +357,7 @@ def test_semantic_retrieval_preserves_planned_size_without_using_it_for_rank() -
 
 
 def test_static_prompts_exclude_agent_concurrency_and_model_identity() -> None:
-    root = Path("tools/hy34_retrieval_conditioned_runner_v2")
+    root = Path("tools/api3_anthropic_runner_v2")
     prompts = [
         (root / "stage_a_prompt.txt").read_text(),
         (root / "stage_c_prompt.txt").read_text(),
@@ -376,16 +376,6 @@ def test_static_prompts_exclude_agent_concurrency_and_model_identity() -> None:
     for prompt in prompts:
         lowered = prompt.lower()
         assert all(token not in lowered for token in banned)
-
-
-def test_pod_config_exposes_only_requested_hy4_model() -> None:
-    config = json.loads(
-        Path("tools/hy34_retrieval_conditioned_runner_v2/models.pod.json").read_text()
-    )
-    assert set(config["models"]) == {"hy4-sft0812"}
-    model = config["models"]["hy4-sft0812"]
-    assert model["configured_model"] == "openai/HY4.0_A49B_770B_SFT0812_HF"
-    assert model["wire_model"] == "HY4.0_A49B_770B_SFT0812_HF"
 
 
 @pytest.mark.requires_loopback

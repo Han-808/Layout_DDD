@@ -1,0 +1,717 @@
+{
+  "schema_version": "component_lifecycle_v1",
+  "components": [
+    {
+      "component_id": "sceneeval_hy4_runner_v050",
+      "root": "tools/sceneeval_hy4_runner_v050",
+      "state": "active",
+      "owner": "scene-generation",
+      "replacement": null,
+      "reason": "Canonical tracked SceneEval generation runner retained by the active source inventory.",
+      "tracked_policy": "all_tracked",
+      "entrypoints": [
+        "tools/sceneeval_hy4_runner_v050/run.py",
+        "tools/sceneeval_hy4_runner_v050/sceneeval_hy4/cli.py"
+      ],
+      "sources": [
+        "tools/sceneeval_hy4_runner_v050/sceneeval_hy4/runner.py",
+        "tools/sceneeval_hy4_runner_v050/sceneeval_hy4/transport.py"
+      ],
+      "dependencies": [],
+      "quarantine_evidence": []
+    },
+    {
+      "component_id": "api3_anthropic_runner_v2",
+      "root": "tools/api3_anthropic_runner_v2",
+      "state": "active",
+      "owner": "scene-generation",
+      "replacement": null,
+      "reason": "Frozen two-stage generation core used by the active API2 and API3 compatibility routes.",
+      "tracked_policy": "all_tracked",
+      "entrypoints": [
+        "tools/api3_anthropic_runner_v2/generation_runner.py",
+        "tools/api3_anthropic_runner_v2/run_generation.sh"
+      ],
+      "sources": [
+        "tools/api3_anthropic_runner_v2/contracts.py",
+        "tools/api3_anthropic_runner_v2/retriever_runtime.py"
+      ],
+      "dependencies": [],
+      "quarantine_evidence": []
+    },
+    {
+      "component_id": "api2_generation_recovery_v1",
+      "root": "tools/api2_generation_recovery_v1",
+      "state": "compatibility",
+      "owner": "scene-generation",
+      "replacement": "frozen_two_stage_compatibility_runtime_v1",
+      "reason": "Tracked retry and recovery entrypoints retained for existing launchers while orchestration moves to the shared compatibility runtime.",
+      "tracked_policy": "all_tracked",
+      "entrypoints": [
+        "tools/api2_generation_recovery_v1/recovery_runner.py",
+        "tools/api2_generation_recovery_v1/fresh_case_retry_runner.py"
+      ],
+      "sources": [
+        "tools/api2_generation_recovery_v1/recovery_runner.py"
+      ],
+      "dependencies": [
+        "api2_kimi_k3_runner_v1",
+        "api2_glm53_runner_v1"
+      ],
+      "quarantine_evidence": []
+    },
+    {
+      "component_id": "api2_kimi_k3_runner_v1",
+      "root": "tools/api2_kimi_k3_runner_v1",
+      "state": "compatibility",
+      "owner": "scene-generation",
+      "replacement": "frozen_two_stage_compatibility_runtime_v1",
+      "reason": "Legacy Kimi launcher surface retained as a thin typed API2 route adapter.",
+      "tracked_policy": "all_tracked",
+      "entrypoints": [
+        "tools/api2_kimi_k3_runner_v1/kimi_k3_generation_runner.py"
+      ],
+      "sources": [
+        "tools/api2_kimi_k3_runner_v1/models.pod.json"
+      ],
+      "dependencies": [
+        "api3_anthropic_runner_v2",
+        "frozen_two_stage_compatibility_runtime_v1"
+      ],
+      "quarantine_evidence": []
+    },
+    {
+      "component_id": "api2_glm53_runner_v1",
+      "root": "tools/api2_glm53_runner_v1",
+      "state": "compatibility",
+      "owner": "scene-generation",
+      "replacement": "frozen_two_stage_compatibility_runtime_v1",
+      "reason": "Legacy GLM launcher surface retained as a thin typed API2 route adapter.",
+      "tracked_policy": "all_tracked",
+      "entrypoints": [
+        "tools/api2_glm53_runner_v1/glm53_generation_runner.py"
+      ],
+      "sources": [
+        "tools/api2_glm53_runner_v1/models.pod.json"
+      ],
+      "dependencies": [
+        "api3_anthropic_runner_v2",
+        "frozen_two_stage_compatibility_runtime_v1"
+      ],
+      "quarantine_evidence": []
+    },
+    {
+      "component_id": "api3_opus48_thinking_runner_v1",
+      "root": "tools/api3_opus48_thinking_runner_v1",
+      "state": "compatibility",
+      "owner": "scene-generation",
+      "replacement": "frozen_two_stage_compatibility_runtime_v1",
+      "reason": "Legacy Opus 4.8 launcher and preflight surface retained as a typed API3 adaptive-thinking adapter.",
+      "tracked_policy": "all_tracked",
+      "entrypoints": [
+        "tools/api3_opus48_thinking_runner_v1/generation_runner.py",
+        "tools/api3_opus48_thinking_runner_v1/preflight.py",
+        "tools/api3_opus48_thinking_runner_v1/retry_runner.py"
+      ],
+      "sources": [
+        "tools/api3_opus48_thinking_runner_v1/models.pod.json"
+      ],
+      "dependencies": [
+        "api3_anthropic_runner_v2",
+        "frozen_two_stage_compatibility_runtime_v1"
+      ],
+      "quarantine_evidence": []
+    },
+    {
+      "component_id": "frozen_two_stage_compatibility_runtime_v1",
+      "root": "src/benchmark/scene_generation/frozen_two_stage",
+      "state": "active",
+      "owner": "scene-generation",
+      "replacement": null,
+      "reason": "Config-driven provider, transport, retry, trust, provenance, and orchestration compatibility layer for API2 and API3 generation.",
+      "tracked_policy": "all_tracked",
+      "entrypoints": [
+        "src/benchmark/scene_generation/frozen_two_stage/__main__.py",
+        "src/benchmark/scene_generation/frozen_two_stage/cli.py",
+        "src/benchmark/scene_generation/frozen_two_stage/orchestrator.py",
+        "src/benchmark/scene_generation/frozen_two_stage/providers/routes.py"
+      ],
+      "sources": [
+        "src/benchmark/scene_generation/frozen_two_stage/config.py",
+        "src/benchmark/scene_generation/frozen_two_stage/trust.py"
+      ],
+      "dependencies": [
+        "api3_anthropic_runner_v2"
+      ],
+      "quarantine_evidence": []
+    },
+    {
+      "component_id": "frozen_two_stage_generation_configs_v1",
+      "root": "configs/generation",
+      "state": "active",
+      "owner": "scene-generation",
+      "replacement": null,
+      "reason": "Reviewed route declarations for the active config-driven API2 and API3 generation paths.",
+      "tracked_policy": "all_tracked",
+      "entrypoints": [
+        "configs/generation/api2_glm53_scene10_v1.json",
+        "configs/generation/api2_kimi_k3_scene10_v1.json",
+        "configs/generation/api3_opus48_high_scene10_v1.json"
+      ],
+      "sources": [
+        "configs/generation/api2_glm53_scene10_v1.json",
+        "configs/generation/api2_kimi_k3_scene10_v1.json",
+        "configs/generation/api3_opus48_high_scene10_v1.json"
+      ],
+      "dependencies": [
+        "api3_anthropic_runner_v2",
+        "api2_glm53_runner_v1",
+        "api2_kimi_k3_runner_v1",
+        "api3_opus48_thinking_runner_v1",
+        "frozen_two_stage_compatibility_runtime_v1"
+      ],
+      "quarantine_evidence": []
+    },
+    {
+      "component_id": "metric_profile_canonical_v2",
+      "root": "configs/evaluation/metric_profile_canonical_v2.yaml",
+      "state": "active",
+      "owner": "evaluation",
+      "replacement": null,
+      "reason": "Current canonical metric profile; lifecycle registration does not modify evaluator loading or scoring behavior.",
+      "tracked_policy": "all_tracked",
+      "entrypoints": [
+        "configs/evaluation/metric_profile_canonical_v2.yaml"
+      ],
+      "sources": [
+        "configs/evaluation/metric_profile_canonical_v2.yaml"
+      ],
+      "dependencies": [],
+      "quarantine_evidence": []
+    },
+    {
+      "component_id": "metric_profile_canonical_v1",
+      "root": "configs/evaluation/metric_profile_canonical_v1.yaml",
+      "state": "frozen_replay",
+      "content_sha256": "2faf4ebd5b079bec9b942b5b35bcb2d67461216726579930a915fde54b7ebdd3",
+      "owner": "evaluation",
+      "replacement": "metric_profile_canonical_v2",
+      "reason": "Historical scientific definition retained byte-for-byte for replay; it is not inferred safe to delete from static reference counts.",
+      "tracked_policy": "all_tracked",
+      "entrypoints": [
+        "configs/evaluation/metric_profile_canonical_v1.yaml"
+      ],
+      "sources": [
+        "configs/evaluation/metric_profile_canonical_v1.yaml"
+      ],
+      "dependencies": [],
+      "quarantine_evidence": []
+    },
+    {
+      "component_id": "hy34_retrieval_conditioned_runner_v1_local",
+      "root": "tools/hy34_retrieval_conditioned_runner_v1",
+      "state": "local_only",
+      "owner": "scene-generation",
+      "replacement": null,
+      "reason": "Untracked historical implementation currently present only in the working tree; tracked tests must not rely on it.",
+      "tracked_policy": "no_tracked_files",
+      "entrypoints": [
+        "tools/hy34_retrieval_conditioned_runner_v1/generation_runner.py"
+      ],
+      "sources": [
+        "tools/hy34_retrieval_conditioned_runner_v1/contracts.py"
+      ],
+      "dependencies": [],
+      "quarantine_evidence": []
+    },
+    {
+      "component_id": "hy34_retrieval_conditioned_runner_v2_local",
+      "root": "tools/hy34_retrieval_conditioned_runner_v2",
+      "state": "local_only",
+      "owner": "scene-generation",
+      "replacement": null,
+      "reason": "Untracked prototype implementation currently present only in the working tree; it requires an explicit migration or replay decision.",
+      "tracked_policy": "no_tracked_files",
+      "entrypoints": [
+        "tools/hy34_retrieval_conditioned_runner_v2/generation_runner.py"
+      ],
+      "sources": [
+        "tools/hy34_retrieval_conditioned_runner_v2/contracts.py"
+      ],
+      "dependencies": [],
+      "quarantine_evidence": []
+    },
+    {
+      "component_id": "hy3_my_bench_retrieval_conditioned_runner_v2_local",
+      "root": "tools/hy3_my_bench_retrieval_conditioned_runner_v2",
+      "state": "local_only",
+      "owner": "scene-generation",
+      "replacement": "frozen_two_stage_compatibility_runtime_v1",
+      "reason": "Untracked model-specific clone of the v2 two-stage runner; migrate its model and route data before considering removal.",
+      "tracked_policy": "no_tracked_files",
+      "entrypoints": [
+        "tools/hy3_my_bench_retrieval_conditioned_runner_v2/generation_runner.py"
+      ],
+      "sources": [
+        "tools/hy3_my_bench_retrieval_conditioned_runner_v2/models.pod.json"
+      ],
+      "dependencies": [],
+      "quarantine_evidence": []
+    },
+    {
+      "component_id": "hy4_sft0730_opus5_runner_v2_local",
+      "root": "tools/hy4_sft0730_opus5_runner_v2",
+      "state": "local_only",
+      "owner": "scene-generation",
+      "replacement": "frozen_two_stage_compatibility_runtime_v1",
+      "reason": "Untracked model-specific clone of the v2 two-stage runner; migrate its model and route data before considering removal.",
+      "tracked_policy": "no_tracked_files",
+      "entrypoints": [
+        "tools/hy4_sft0730_opus5_runner_v2/generation_runner.py"
+      ],
+      "sources": [
+        "tools/hy4_sft0730_opus5_runner_v2/models.pod.json"
+      ],
+      "dependencies": [],
+      "quarantine_evidence": []
+    },
+    {
+      "component_id": "hy4_sft0730_opus5_aw_runner_v2_local",
+      "root": "tools/hy4_sft0730_opus5_aw_runner_v2",
+      "state": "local_only",
+      "owner": "scene-generation",
+      "replacement": "frozen_two_stage_compatibility_runtime_v1",
+      "reason": "Untracked model-specific clone of the v2 two-stage runner; migrate its model and route data before considering removal.",
+      "tracked_policy": "no_tracked_files",
+      "entrypoints": [
+        "tools/hy4_sft0730_opus5_aw_runner_v2/generation_runner.py"
+      ],
+      "sources": [
+        "tools/hy4_sft0730_opus5_aw_runner_v2/models.pod.json"
+      ],
+      "dependencies": [],
+      "quarantine_evidence": []
+    },
+    {
+      "component_id": "api1_gpt56sol_kimik3_runner_v2_local",
+      "root": "tools/api1_gpt56sol_kimik3_runner_v2",
+      "state": "local_only",
+      "owner": "scene-generation",
+      "replacement": null,
+      "reason": "Untracked API1 generation campaign bundle; generation compatibility currently targets API2 and API3, so this remains explicitly outside the active runtime.",
+      "tracked_policy": "no_tracked_files",
+      "entrypoints": [
+        "tools/api1_gpt56sol_kimik3_runner_v2/api1_generation_runner.py"
+      ],
+      "sources": [
+        "tools/api1_gpt56sol_kimik3_runner_v2/models.pod.json"
+      ],
+      "dependencies": [],
+      "quarantine_evidence": []
+    },
+    {
+      "component_id": "legacy_benchmark_legend_python",
+      "root": "src/benchmark/legend",
+      "state": "frozen_replay",
+      "content_sha256": "9c964de52eeb6bd991dca16dfe7bd5b8e2553a13f67ac7f2ad8610e9ee01e60f",
+      "owner": "legacy-evaluation",
+      "replacement": null,
+      "reason": "Retired Python compatibility namespace excluded from the installed wheel and forbidden from the current runtime; retained for explicit historical tests only. Its default local asset/scene root resolver historically points below src, so replay callers must pass an explicit repository root.",
+      "tracked_policy": "all_tracked",
+      "entrypoints": [
+        "src/benchmark/legend/__init__.py"
+      ],
+      "sources": [
+        "src/benchmark/legend/pipeline.py",
+        "src/benchmark/legend/workflow/evaluate.py"
+      ],
+      "dependencies": [],
+      "quarantine_evidence": []
+    },
+    {
+      "component_id": "legacy_benchmark_legend_resources",
+      "root": "Support/legacy/legend",
+      "state": "frozen_replay",
+      "content_sha256": "1be3ea020b7e35cb769dcdd674cc0b04dc9e990b2108fe139f38ec8c03a1ae6a",
+      "owner": "legacy-evaluation",
+      "replacement": null,
+      "reason": "Retired schemas, configs, and viewer resources retained for historical benchmark replay outside the current package.",
+      "tracked_policy": "all_tracked",
+      "entrypoints": [
+        "Support/legacy/legend/README.md"
+      ],
+      "sources": [
+        "Support/legacy/legend/schemas/legend_layout.schema.json"
+      ],
+      "dependencies": [],
+      "quarantine_evidence": []
+    },
+    {
+      "component_id": "metric_profile_game_canonical_v1",
+      "root": "configs/evaluation/metric_profile_game_canonical_v1.yaml",
+      "state": "active",
+      "owner": "game-evaluation",
+      "replacement": null,
+      "reason": "Current canonical game evaluation profile packaged as a runtime resource.",
+      "tracked_policy": "all_tracked",
+      "entrypoints": [
+        "configs/evaluation/metric_profile_game_canonical_v1.yaml"
+      ],
+      "sources": [
+        "configs/evaluation/metric_profile_game_canonical_v1.yaml"
+      ],
+      "dependencies": [],
+      "quarantine_evidence": []
+    },
+    {
+      "component_id": "metric_profile_game_v1",
+      "root": "configs/evaluation/metric_profile_game_v1.yaml",
+      "state": "frozen_replay",
+      "content_sha256": "e211e5984e39ea56a0cb304272eb8c550bf46fd54dce39e100b55ca978e7c3ee",
+      "owner": "game-evaluation",
+      "replacement": "metric_profile_game_canonical_v1",
+      "reason": "Retired four-category game profile retained only as a pinned regression fixture.",
+      "tracked_policy": "all_tracked",
+      "entrypoints": [
+        "configs/evaluation/metric_profile_game_v1.yaml"
+      ],
+      "sources": [
+        "configs/evaluation/metric_profile_game_v1.yaml"
+      ],
+      "dependencies": [],
+      "quarantine_evidence": []
+    },
+    {
+      "component_id": "sceneeval_local_workflow",
+      "root": "SceneEval",
+      "state": "local_only",
+      "owner": "scene-eval-experiment",
+      "replacement": null,
+      "reason": "Complete untracked workflow with its own environment, vendor tree, tests, and configs; it requires a separate-repository or migration decision.",
+      "tracked_policy": "no_tracked_files",
+      "entrypoints": [
+        "SceneEval/sceneeval_workflow/cli.py",
+        "SceneEval/scripts/run.py"
+      ],
+      "sources": [
+        "SceneEval/sceneeval_workflow/__init__.py",
+        "SceneEval/configs/workflow_v050.json"
+      ],
+      "dependencies": [],
+      "quarantine_evidence": []
+    },
+    {
+      "component_id": "vlm_audit_ui_nested_repo",
+      "root": "tools/vlm-audit-ui",
+      "state": "local_only",
+      "owner": "evaluation-tooling",
+      "replacement": null,
+      "reason": "Untracked nested Git repository and generated site workspace; it must become an explicit submodule/separate repository or remain local-only.",
+      "tracked_policy": "no_tracked_files",
+      "entrypoints": [
+        "tools/vlm-audit-ui/package.json"
+      ],
+      "sources": [
+        "tools/vlm-audit-ui/app/page.tsx",
+        "tools/vlm-audit-ui/scripts/export_audit_bundle.py"
+      ],
+      "dependencies": [],
+      "quarantine_evidence": []
+    },
+    {
+      "component_id": "sceneeval_leaderboard_site_local",
+      "root": "tools/sceneeval-leaderboard-site",
+      "state": "local_only",
+      "owner": "evaluation-tooling",
+      "replacement": null,
+      "reason": "Untracked leaderboard snapshot/export server; it remains outside the reproducible benchmark package until separately approved for migration.",
+      "tracked_policy": "no_tracked_files",
+      "entrypoints": [
+        "tools/sceneeval-leaderboard-site/server.py",
+        "tools/sceneeval-leaderboard-site/export_snapshot.py"
+      ],
+      "sources": [
+        "tools/sceneeval-leaderboard-site/README.md"
+      ],
+      "dependencies": [],
+      "quarantine_evidence": []
+    }
+  ],
+  "artifacts": [
+    {
+      "artifact_id": "oob_v2_recalibration_launcher",
+      "path": "Support/bash/local/run_oob_v2_recalibration_gpt56.sh",
+      "state": "active",
+      "owner": "evaluation-experiments",
+      "reason": "Tracked operational replay launcher retained until evaluation campaigns have a single declarative entrypoint."
+    },
+    {
+      "artifact_id": "vlm_as_judge_v1",
+      "path": "configs/evaluation/vlm_as_judge_v1.yaml",
+      "state": "frozen_replay",
+      "owner": "legacy-evaluation",
+      "reason": "Unselected historical VLM-as-Judge configuration retained for explicit replay only.",
+      "content_sha256": "266fd2b78a11688eb1ead58f4de931b5e6bf9236828405199664d29a885e4d50",
+      "git_mode": "100644"
+    },
+    {
+      "artifact_id": "vlm_camera_deterministic_only_v1",
+      "path": "configs/evaluation/vlm_camera_deterministic_only_v1.json",
+      "state": "active",
+      "owner": "evaluation-camera-control",
+      "reason": "Current explicit camera-control policy option."
+    },
+    {
+      "artifact_id": "vlm_camera_deterministic_then_vlm_v1",
+      "path": "configs/evaluation/vlm_camera_deterministic_then_vlm_v1.json",
+      "state": "active",
+      "owner": "evaluation-camera-control",
+      "reason": "Current explicit camera-control policy option."
+    },
+    {
+      "artifact_id": "vlm_camera_fixed_views_v1",
+      "path": "configs/evaluation/vlm_camera_fixed_views_v1.json",
+      "state": "active",
+      "owner": "evaluation-camera-control",
+      "reason": "Current explicit camera-control policy option."
+    },
+    {
+      "artifact_id": "vlm_camera_vlm_only_v1",
+      "path": "configs/evaluation/vlm_camera_vlm_only_v1.json",
+      "state": "active",
+      "owner": "evaluation-camera-control",
+      "reason": "Current explicit camera-control policy option."
+    },
+    {
+      "artifact_id": "grouping_blind30_gpt56_v1",
+      "path": "configs/experiments/grouping_blind30_gpt56_v1.yaml",
+      "state": "frozen_replay",
+      "owner": "grouping-experiments",
+      "reason": "Versioned completed experiment configuration; changes require a new experiment version.",
+      "content_sha256": "c8ac0bf5e70371f3fe01f44b886a72943f100357a013952a133b9f4b0bcf9363",
+      "git_mode": "100644"
+    },
+    {
+      "artifact_id": "grouping_blind30_sample_v1",
+      "path": "configs/experiments/grouping_blind30_sample_v1.yaml",
+      "state": "frozen_replay",
+      "owner": "grouping-experiments",
+      "reason": "Versioned completed experiment configuration; changes require a new experiment version.",
+      "content_sha256": "3833e020d02d5d7304062c3e44530276d170d450cea97ba823e5b795a36b3e5c",
+      "git_mode": "100644"
+    },
+    {
+      "artifact_id": "grouping_vlm20_visual_scope_v2_experiment",
+      "path": "configs/experiments/grouping_vlm20_visual_scope_v2.yaml",
+      "state": "frozen_replay",
+      "owner": "grouping-experiments",
+      "reason": "Versioned completed experiment configuration; changes require a new experiment version.",
+      "content_sha256": "dcdd901297bf0f2bcd9244ca438f57328be7c29554d66adae261965e7aed5a8a",
+      "git_mode": "100644"
+    },
+    {
+      "artifact_id": "l3_mutation90_v1",
+      "path": "configs/experiments/l3_mutation90_v1.yaml",
+      "state": "frozen_replay",
+      "owner": "evaluation-experiments",
+      "reason": "Versioned completed mutation experiment configuration; changes require a new experiment version.",
+      "content_sha256": "97efbf6fa736203e70d5865e079d26fa76b1b5ae216f3c2d5af3250563c06f4c",
+      "git_mode": "100644"
+    },
+    {
+      "artifact_id": "counter_strike_benchmark_v1",
+      "path": "configs/game/counter_strike/benchmark_v1.yaml",
+      "state": "active",
+      "owner": "game-evaluation",
+      "reason": "Current Counter-Strike benchmark configuration."
+    },
+    {
+      "artifact_id": "counter_strike_static_arena_style_v1",
+      "path": "configs/game/counter_strike_static_arena_style_v1.json",
+      "state": "active",
+      "owner": "game-evaluation",
+      "reason": "Current packaged game visual-style specification."
+    },
+    {
+      "artifact_id": "game_mode_canonical_v1",
+      "path": "configs/game/game_mode_canonical_v1.yaml",
+      "state": "active",
+      "owner": "game-evaluation",
+      "reason": "Current canonical game-mode contract."
+    },
+    {
+      "artifact_id": "grouping_anchor_object_v1",
+      "path": "configs/grouping/anchor_object_v1.yaml",
+      "state": "frozen_replay",
+      "owner": "grouping",
+      "reason": "Historical anchor grouping backend retained for replay only.",
+      "content_sha256": "3356f9257282f622366f22f4e4ea55d0aa772931beeec1b4358924bbabea096f",
+      "git_mode": "100644"
+    },
+    {
+      "artifact_id": "grouping_topology_metadata_geometry_v2",
+      "path": "configs/grouping/topology_metadata_geometry_v2.yaml",
+      "state": "frozen_replay",
+      "owner": "grouping",
+      "reason": "Historical topology grouping backend retained for replay only.",
+      "content_sha256": "38898f50fc29921f68ecf7e7f79718490b41a21dc4324282b8c30bbb7ed68bda",
+      "git_mode": "100644"
+    },
+    {
+      "artifact_id": "grouping_vlm_semantic_partition_gpt56_v1",
+      "path": "configs/grouping/vlm_semantic_partition_gpt56_v1.yaml",
+      "state": "frozen_replay",
+      "owner": "grouping",
+      "replacement": "grouping_vlm_visual_evidence_scope_v2",
+      "reason": "Historical semantic partition configuration replaced by the canonical visual-evidence scope backend.",
+      "content_sha256": "f1889673e01d14181351f8b65081a05be2b71fc6c966cdf4346ab3a2e9dba7fd",
+      "git_mode": "100644"
+    },
+    {
+      "artifact_id": "grouping_vlm_semantic_partition_v1",
+      "path": "configs/grouping/vlm_semantic_partition_v1.yaml",
+      "state": "frozen_replay",
+      "owner": "grouping",
+      "replacement": "grouping_vlm_visual_evidence_scope_v2",
+      "reason": "Historical semantic partition configuration replaced by the canonical visual-evidence scope backend.",
+      "content_sha256": "b6eb038fb86054b5c5f45c63c18f7d9d5849bc2bd1968c81528377a4bcecc17e",
+      "git_mode": "100644"
+    },
+    {
+      "artifact_id": "grouping_vlm_visual_evidence_scope_v2",
+      "path": "configs/grouping/vlm_visual_evidence_scope_v2.yaml",
+      "state": "active",
+      "owner": "grouping",
+      "reason": "Current canonical grouping backend configuration."
+    },
+    {
+      "artifact_id": "component_lifecycle_registry_v1",
+      "path": "configs/repository/component_lifecycle_v1.json",
+      "state": "active",
+      "owner": "repository-governance",
+      "reason": "Authoritative component and version lifecycle registry."
+    },
+    {
+      "artifact_id": "runtime_resources_v1",
+      "path": "configs/resources/runtime_resources_v1.json",
+      "state": "active",
+      "owner": "package-resources",
+      "reason": "Current source-to-package runtime resource inventory."
+    },
+    {
+      "artifact_id": "active_generation_bundles_v1",
+      "path": "configs/runners/active_generation_bundles_v1.json",
+      "state": "active",
+      "owner": "scene-generation",
+      "reason": "Current hash inventory for active generation bundles."
+    },
+    {
+      "artifact_id": "pytest_suites_v1",
+      "path": "configs/testing/pytest_suites_v1.json",
+      "state": "active",
+      "owner": "test-governance",
+      "reason": "Current complete tracked pytest inventory."
+    },
+    {
+      "artifact_id": "generator_catalog_placement_schema_v1",
+      "path": "schemas/generator_catalog_placement_v1.schema.json",
+      "state": "active",
+      "owner": "scene-generation-contracts",
+      "reason": "Current public generator placement schema."
+    },
+    {
+      "artifact_id": "generator_layout_schema_v1",
+      "path": "schemas/generator_layout_v1.schema.json",
+      "state": "active",
+      "owner": "scene-generation-contracts",
+      "reason": "Current public generator layout schema."
+    },
+    {
+      "artifact_id": "public_native_instance_mapping_schema_v1",
+      "path": "schemas/public_native_instance_mapping_v1.schema.json",
+      "state": "active",
+      "owner": "submission-contracts",
+      "reason": "Current public native instance mapping schema."
+    },
+    {
+      "artifact_id": "counter_strike_run_benchmark_v1",
+      "path": "scripts/game/counter_strike/run_benchmark_v1.sh",
+      "state": "active",
+      "owner": "game-evaluation",
+      "reason": "Tracked shell entrypoint retained for the current game benchmark CLI."
+    },
+    {
+      "artifact_id": "packaged_metric_profile_canonical_v2",
+      "path": "src/benchmark/_resources/configs/evaluation/metric_profile_canonical_v2.yaml",
+      "state": "active",
+      "owner": "package-resources",
+      "reason": "Packaged byte-identical mirror of the current canonical profile.",
+      "mirror_of": "configs/evaluation/metric_profile_canonical_v2.yaml"
+    },
+    {
+      "artifact_id": "packaged_metric_profile_game_canonical_v1",
+      "path": "src/benchmark/_resources/configs/evaluation/metric_profile_game_canonical_v1.yaml",
+      "state": "active",
+      "owner": "package-resources",
+      "reason": "Packaged byte-identical mirror of the current game profile.",
+      "mirror_of": "configs/evaluation/metric_profile_game_canonical_v1.yaml"
+    },
+    {
+      "artifact_id": "packaged_counter_strike_benchmark_v1",
+      "path": "src/benchmark/_resources/configs/game/counter_strike/benchmark_v1.yaml",
+      "state": "active",
+      "owner": "package-resources",
+      "reason": "Packaged byte-identical mirror of the Counter-Strike benchmark configuration.",
+      "mirror_of": "configs/game/counter_strike/benchmark_v1.yaml"
+    },
+    {
+      "artifact_id": "packaged_counter_strike_static_arena_style_v1",
+      "path": "src/benchmark/_resources/configs/game/counter_strike_static_arena_style_v1.json",
+      "state": "active",
+      "owner": "package-resources",
+      "reason": "Packaged byte-identical mirror of the game visual-style specification.",
+      "mirror_of": "configs/game/counter_strike_static_arena_style_v1.json"
+    },
+    {
+      "artifact_id": "packaged_game_mode_canonical_v1",
+      "path": "src/benchmark/_resources/configs/game/game_mode_canonical_v1.yaml",
+      "state": "active",
+      "owner": "package-resources",
+      "reason": "Packaged byte-identical mirror of the canonical game-mode contract.",
+      "mirror_of": "configs/game/game_mode_canonical_v1.yaml"
+    },
+    {
+      "artifact_id": "packaged_grouping_vlm_visual_evidence_scope_v2",
+      "path": "src/benchmark/_resources/configs/grouping/vlm_visual_evidence_scope_v2.yaml",
+      "state": "active",
+      "owner": "package-resources",
+      "reason": "Packaged byte-identical mirror of the canonical grouping configuration.",
+      "mirror_of": "configs/grouping/vlm_visual_evidence_scope_v2.yaml"
+    },
+    {
+      "artifact_id": "packaged_generator_catalog_placement_schema_v1",
+      "path": "src/benchmark/_resources/schemas/generator_catalog_placement_v1.schema.json",
+      "state": "active",
+      "owner": "package-resources",
+      "reason": "Packaged byte-identical mirror of the public placement schema.",
+      "mirror_of": "schemas/generator_catalog_placement_v1.schema.json"
+    },
+    {
+      "artifact_id": "packaged_generator_layout_schema_v1",
+      "path": "src/benchmark/_resources/schemas/generator_layout_v1.schema.json",
+      "state": "active",
+      "owner": "package-resources",
+      "reason": "Packaged byte-identical mirror of the public layout schema.",
+      "mirror_of": "schemas/generator_layout_v1.schema.json"
+    },
+    {
+      "artifact_id": "hy34_legacy_contract_fixture_v1",
+      "path": "tests/fixtures/hy34_legacy_v1_contract.json",
+      "state": "frozen_replay",
+      "owner": "scene-generation-tests",
+      "reason": "SHA-pinned non-executable historical v1 contract fixture.",
+      "content_sha256": "71fa0acb13dac5a854ee8c7eb60ccf20cf3dc9ee34247ea96ad3036d1251ad92",
+      "git_mode": "100644"
+    }
+  ]
+}

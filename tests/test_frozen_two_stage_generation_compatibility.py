@@ -819,7 +819,7 @@ def test_shared_core_uses_injected_route_for_request_response_and_retry(
 def test_shared_core_full_case_preserves_stage_order_and_frozen_placement(
     tmp_path: Path,
 ) -> None:
-    from tests.test_hy34_two_stage_generation_runner_v2 import (
+    from tests.test_frozen_two_stage_generation_core import (
         _Retriever,
         _brief,
         _placement,

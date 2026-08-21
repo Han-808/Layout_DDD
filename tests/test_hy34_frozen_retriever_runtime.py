@@ -8,7 +8,7 @@ import numpy as np
 
 
 def _runtime_module():
-    from tools.hy34_retrieval_conditioned_runner_v1 import retriever_runtime
+    from tools.api3_anthropic_runner_v2 import retriever_runtime
 
     return retriever_runtime
 

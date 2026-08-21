@@ -82,6 +82,7 @@ def _write_scene(
     return path
 
 
+@pytest.mark.requires_local_data
 def test_reference_config_is_fixed_30_scene_three_backend_experiment() -> None:
     config, paths = load_experiment_config(
         ROOT
@@ -113,6 +114,7 @@ def test_reference_config_is_fixed_30_scene_three_backend_experiment() -> None:
     )
 
 
+@pytest.mark.requires_local_data
 def test_checked_in_frozen_sample_reproduces_exact_30_cases(
     tmp_path: Path,
 ) -> None:
