@@ -1,6 +1,6 @@
 # Camera-cal scene-level runtime structure
 
-Status: E3 mechanical extraction. The authoritative compatibility command
+Status: E4 mechanical extraction. The authoritative compatibility command
 remains `scripts/run_camera_cal_scene_level.py`.
 
 The package `benchmark.camera_cal_scene_level` owns only leaf mechanics:
@@ -17,20 +17,35 @@ The package `benchmark.camera_cal_scene_level` owns only leaf mechanics:
 - `comparison.py`: pure human/model scene-level comparison projections;
 - `reports.py`: terminal case records, resolution audits, and run summaries;
 - `provenance.py`: redacted route projection and case-input fingerprints.
+- `adapters.py`: external model, judge, selector, renderer, and evidence
+  provider construction only; all concrete builders and the observed-wrapper
+  factories are injected by the compatibility façade;
+- `case_runtime.py`: the single-case runtime implementation and its explicit
+  dependency groups. It owns orchestration around the existing evaluator but
+  does not redefine prompts, camera policy, metric policy, scoring, or
+  `run_evaluate` semantics.
 
-The historical runner keeps the same public class/function names as
+The historical runner keeps the same public class/function names as dynamic
 compatibility facades. Existing imports and monkeypatch points therefore
-continue to work. The runner still owns run-level orchestration, model and
-renderer wiring, `run_case`, and every semantic evaluation policy.
+continue to work: each `run_case` call reads the current runner globals and
+constructs fresh runtime dependencies and adapter factories. No package
+module may import `scripts.run_camera_cal_scene_level`; the dependency
+direction is package runtime → injected concrete implementations, with the
+script façade remaining the compatibility boundary.
 
-E1–E3 do not change Judge prompts, camera selection, rendering, metric weights,
-deductions, evaluation order, retry policy, report schemas, or output paths.
+E1–E4 do not change Judge prompts, camera selection, rendering, metric weights,
+deductions, evaluation order, retry policy, report schemas, output paths, or
+the `run_evaluate` kwargs/call contract. The adapter construction order is
+also frozen: model configs, grouping observe, judge build/observe, selector
+build/observe, renderer, L1 provider, L3 provider, functional probe,
+deterministic selector, final renderer, and preview renderer.
 The frozen E0 contract records the pre-extraction runner blob and semantic
 source hashes; focused tests compare the facade and leaf implementations.
 Evaluation Campaign source identity explicitly hashes every tracked Python
 module under this package. Adding or changing a runtime leaf therefore changes
 the campaign protocol fingerprint and makes an older resume fail closed.
 
-Later structural phases must remain separately approved. In particular, E1
-does not authorize moving `run_case` or the promptless/camera/scene-quality
-policy functions.
+Promptless evaluation, camera acquisition, metric/scoring policy, and the
+single `run_evaluate` call remain semantic contracts rather than new package
+implementations. Any later change to those sources or to dependency wiring
+requires the corresponding parity trace and provenance/hash gates.

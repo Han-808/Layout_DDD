@@ -108,6 +108,8 @@ from benchmark.camera_cal_scene_level import scheduling as _runtime_scheduling  
 from benchmark.camera_cal_scene_level import comparison as _runtime_comparison  # noqa: E402
 from benchmark.camera_cal_scene_level import provenance as _runtime_provenance  # noqa: E402
 from benchmark.camera_cal_scene_level import reports as _runtime_reports  # noqa: E402
+from benchmark.camera_cal_scene_level import adapters as _runtime_adapters  # noqa: E402
+from benchmark.camera_cal_scene_level import case_runtime as _runtime_case  # noqa: E402
 
 
 RUNNER_SCHEMA_VERSION = "camera_cal_scene_level_runner_v9"
@@ -830,6 +832,89 @@ def _reports_dependencies() -> _runtime_reports.ReportsDependencies:
     )
 
 
+def _adapter_factories() -> _runtime_adapters.AdapterFactories:
+    """Read current runner globals for every adapter construction."""
+
+    return _runtime_adapters.AdapterFactories(
+        model_config=model_config,
+        build_grouping_model=build_grouping_model,
+        build_openai_compatible_vlm_judge=(
+            build_openai_compatible_vlm_judge
+        ),
+        build_openai_compatible_camera_selector=(
+            build_openai_compatible_camera_selector
+        ),
+        BlenderRenderer=BlenderRenderer,
+        CameraEvidenceProvider=CameraEvidenceProvider,
+        DeterministicLocalCameraSelector=DeterministicLocalCameraSelector,
+        CameraViewEvidenceRenderer=CameraViewEvidenceRenderer,
+        CameraCandidatePreviewRenderer=CameraCandidatePreviewRenderer,
+        ObservedEvidenceProvider=_ObservedEvidenceProvider,
+        ObservedRenderer=_ObservedRenderer,
+    )
+
+
+def _build_runtime_adapters(**kwargs: Any) -> _runtime_adapters.AdapterBundle:
+    return _runtime_adapters.build_adapters(
+        **kwargs,
+        factories=_adapter_factories(),
+    )
+
+
+def _case_runtime_dependencies() -> _runtime_case.CaseRuntimeDeps:
+    """Build fresh dependencies so historical monkeypatch points stay live."""
+
+    return _runtime_case.CaseRuntimeDeps(
+        io=_runtime_case.CaseRuntimeIO(
+            read_json=read_json,
+            read_yaml_object=read_yaml_object,
+            atomic_write_json=atomic_write_json,
+            utc_now=utc_now,
+            monotonic=time.monotonic,
+        ),
+        resume=_runtime_case.CaseRuntimeResume(
+            case_paths=case_paths,
+            case_input_fingerprint=case_input_fingerprint,
+            resumable_case=resumable_case,
+        ),
+        policy=_runtime_case.CaseRuntimePolicy(
+            safe_route_manifest=safe_route_manifest,
+            identity_legend_from_manifest=identity_legend_from_manifest,
+            grouping_evidence_packet=grouping_evidence_packet,
+            promptless_scene_request=promptless_scene_request,
+            promptless_l1_l3_profile=promptless_l1_l3_profile,
+            promptless_l3_only_profile=promptless_l3_only_profile,
+            scene_quality_config=scene_quality_config,
+            camera_cal_asset_policy=camera_cal_asset_policy,
+            collect_l1_engineering_failures=collect_l1_engineering_failures,
+            binary_schema_validation_summary=(
+                binary_schema_validation_summary
+            ),
+            l3_resolution_audit=l3_resolution_audit,
+            build_scene_comparison=build_scene_comparison,
+            maybe_export_audit_graphs=_maybe_export_audit_graphs,
+            case_schema_version=CASE_SCHEMA_VERSION,
+            l1_layer=L1,
+            l2_layer=L2,
+            l3_layer=L3,
+            l4_layer=L4,
+            l1_binary_failure_policy=L1_BINARY_FAILURE_POLICY,
+            scoring_profile_id=INTRINSIC_VALIDITY_PROFILE_ID,
+        ),
+        external=_runtime_case.CaseRuntimeExternal(
+            api_call_tracker_factory=APICallTracker,
+            api_usage_summary=api_usage_summary,
+            read_api_call_records=read_api_call_records,
+            load_collision_geometry_manifest=(
+                load_collision_geometry_manifest
+            ),
+            adapter_builder=_build_runtime_adapters,
+            run_evaluate=run_evaluate,
+            progress_factory=ProgressReporter,
+        ),
+    )
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return _runtime_cli._parse_args_impl(
         argv,
@@ -975,24 +1060,16 @@ def run_case(
     progress: ProgressReporter | None = None,
     model_route_abort_signal: ModelRouteAbortSignal | None = None,
 ) -> dict[str, Any]:
-    del dataset_root
-    case_id = str(case["case_id"])
-    progress = progress or ProgressReporter(
-        output_root / "progress.jsonl",
-        terminal=False,
-    )
-    source_root = Path(str(case["case_root"])).resolve()
-    case_manifest = read_json(source_root / "case_manifest.json")
-    paths = case_paths(source_root, case_manifest)
-    annotation = read_json(paths["annotation"])
-    scene = read_json(paths["scene"])
-    grouping_config = read_yaml_object(grouping_config_path)
-    fingerprint = case_input_fingerprint(
+    return _runtime_case.run_case_impl(
         case=case,
-        case_manifest=case_manifest,
-        paths=paths,
+        dataset_root=dataset_root,
+        output_root=output_root,
+        grouping_config_path=grouping_config_path,
         route=route,
         metrics=metrics,
+        renderer_config=renderer_config,
+        control_config=control_config,
+        resume=resume,
         functional_group_local_granularity=(
             functional_group_local_granularity
         ),
@@ -1000,547 +1077,12 @@ def run_case(
             functional_group_local_evidence_policy
         ),
         deduction_multiplier=deduction_multiplier,
-        grouping_config=grouping_config,
-        renderer_config=renderer_config,
-        control_config=control_config,
+        export_audit_graphs=export_audit_graphs,
         l3_only=l3_only,
-    )
-    case_out = output_root / "cases" / case_id
-    existing_manifest_path = case_out / "case_run_manifest.json"
-    if existing_manifest_path.is_file():
-        existing = read_json(existing_manifest_path)
-        if resume and resumable_case(
-            existing,
-            expected_fingerprint=fingerprint,
-            case_out=case_out,
-        ):
-            audit_graph_export = _maybe_export_audit_graphs(
-                enabled=export_audit_graphs,
-                case_id=case_id,
-                case_out=case_out,
-                grouping_report=read_json(case_out / "grouping.json"),
-                scene_quality_report=read_json(
-                    case_out / "scene_quality_report.json"
-                ),
-                progress=progress,
-            )
-            api_calls_path = case_out / "api_calls.jsonl"
-            api_usage = api_usage_summary(
-                read_api_call_records(api_calls_path)
-            )
-            progress.emit(
-                "case_resumed",
-                case_id=case_id,
-                elapsed_seconds=float(
-                    existing.get("elapsed_seconds") or 0.0
-                ),
-                api_usage=api_usage,
-            )
-            return {
-                "case_id": case_id,
-                "status": "resumed",
-                "input_fingerprint": fingerprint,
-                "elapsed_seconds": float(existing.get("elapsed_seconds") or 0.0),
-                "grouping_status": existing.get("grouping_status"),
-                "l1_status": existing.get("l1_status"),
-                "l3_status": existing.get("l3_status"),
-                "final_decision_status": existing.get(
-                    "final_decision_status"
-                ),
-                "l1_decision_status": existing.get(
-                    "l1_decision_status",
-                    existing.get("final_decision_status"),
-                ),
-                "l3_decision_status": existing.get(
-                    "l3_decision_status",
-                    "resolved"
-                    if existing.get("l3_status") == "evaluated"
-                    else None,
-                ),
-                "l3_unresolved_metrics": list(
-                    existing.get("l3_unresolved_metrics") or []
-                ),
-                "l1_engineering_failure": bool(
-                    existing.get("l1_engineering_failure")
-                ),
-                "l1_engineering_failure_count": int(
-                    existing.get("l1_engineering_failure_count") or 0
-                ),
-                "binary_response_schema_validation": deepcopy(
-                    existing.get("binary_response_schema_validation") or {}
-                ),
-                "scene_comparison_path": str(
-                    (case_out / "scene_comparison.json").resolve()
-                ),
-                "scene_quality_report_path": str(
-                    (case_out / "scene_quality_report.json").resolve()
-                ),
-                "l1_report_path": str((case_out / "l1_report.json").resolve()),
-                "control_manifest_path": str(
-                    (case_out / "control_manifest.json").resolve()
-                ),
-                "api_calls_path": str(api_calls_path.resolve()),
-                "api_usage_path": str(
-                    (case_out / "api_usage.json").resolve()
-                ),
-                "api_usage": api_usage,
-                "audit_graph_export": audit_graph_export,
-            }
-        if resume:
-            raise RuntimeError(
-                f"{case_id} existing output fingerprint does not match; "
-                "use a new --output-root"
-            )
-        raise FileExistsError(
-            f"{case_id} output already exists; use --resume or a new --output-root"
-        )
-
-    case_out.mkdir(parents=True, exist_ok=True)
-    api_tracker = APICallTracker(
-        case_id=case_id,
-        calls_path=case_out / "api_calls.jsonl",
-        usage_path=case_out / "api_usage.json",
         progress=progress,
         model_route_abort_signal=model_route_abort_signal,
+        deps=_case_runtime_dependencies(),
     )
-    started = time.monotonic()
-    case_run_manifest = {
-        "schema_version": CASE_SCHEMA_VERSION,
-        "case_id": case_id,
-        "status": "running",
-        "started_at": utc_now(),
-        "completed_at": None,
-        "elapsed_seconds": None,
-        "input_fingerprint": fingerprint,
-        "source_case_root": str(source_root),
-        "source_case_read_only": True,
-        "source_prompt_used": False,
-        "model_route": safe_route_manifest(route),
-        "selected_l3_metrics": list(metrics),
-        "layers_executed": [L3] if l3_only else [L1, L3],
-        "layers_not_executed": [L1, L2, L4] if l3_only else [L2, L4],
-        "recovery_mode": "l3_only" if l3_only else None,
-        "deduction_multiplier": deduction_multiplier,
-        "l1_binary_failure_policy": deepcopy(
-            L1_BINARY_FAILURE_POLICY
-        ),
-        "progress_path": str(progress.path),
-        "api_calls_path": str(api_tracker.calls_path),
-        "api_usage_path": str(api_tracker.usage_path),
-        "api_usage": api_tracker.summary(),
-        "audit_graph_export": {
-            "enabled": bool(export_audit_graphs),
-            "status": "pending" if export_audit_graphs else "disabled",
-            "decision_authority": "none",
-        },
-    }
-    atomic_write_json(existing_manifest_path, case_run_manifest)
-    progress.emit(
-        "case_setup_started",
-        case_id=case_id,
-        selected_l3_metrics=list(metrics),
-    )
-
-    collision_geometry = load_collision_geometry_manifest(
-        paths["collision_geometry"]
-    )
-    collision_geometry["manifest_path"] = str(
-        paths["collision_geometry"].resolve()
-    )
-    identity_legend = identity_legend_from_manifest(paths["render_manifest"])
-    grouping_evidence = grouping_evidence_packet(
-        paths=paths,
-        identity_legend=identity_legend,
-    )
-    overview_evidence = {
-        "global": [
-            str(paths["perspective"].resolve()),
-            str(paths["top"].resolve()),
-        ]
-    }
-
-    judge_config = model_config(route, role="judge")
-    selector_config = model_config(route, role="camera-selector")
-    grouping_model = api_tracker.observe_model(
-        build_grouping_model(route),
-        role="grouping",
-    )
-    raw_judge = build_openai_compatible_vlm_judge(judge_config)
-    if callable(
-        getattr(getattr(raw_judge, "model", None), "chat_messages", None)
-    ):
-        raw_judge.model = api_tracker.observe_model(
-            raw_judge.model,
-            role="judge",
-        )
-    vlm_selector = build_openai_compatible_camera_selector(selector_config)
-    if callable(
-        getattr(getattr(vlm_selector, "model", None), "chat_messages", None)
-    ):
-        vlm_selector.model = api_tracker.observe_model(
-            vlm_selector.model,
-            role="camera_selector",
-        )
-    renderer = BlenderRenderer(**renderer_config)
-    l1_provider = _ObservedEvidenceProvider(
-        CameraEvidenceProvider(
-            renderer=renderer,
-            blend_file=paths["blend"],
-            out_dir=case_out / "l1_camera",
-            mode="auto",
-            selector=None,
-            max_views=2,
-            max_steps=1,
-            candidate_count=6,
-            collision_overlay=True,
-            collision_contour=True,
-            collision_geometry=collision_geometry,
-        ),
-        phase="l1_initial_evidence",
-        case_id=case_id,
-        progress=progress,
-    )
-    l3_provider = _ObservedEvidenceProvider(
-        CameraEvidenceProvider(
-            renderer=renderer,
-            blend_file=paths["blend"],
-            out_dir=case_out / "l3_initial_camera",
-            mode="visibility_ranked",
-            selector=None,
-            max_views=2,
-            max_steps=1,
-            candidate_count=6,
-            collision_overlay=False,
-            collision_contour=False,
-            collision_geometry=collision_geometry,
-            active_repair=False,
-        ),
-        phase="l3_initial_evidence",
-        case_id=case_id,
-        progress=progress,
-    )
-    functional_probe_provider = _ObservedEvidenceProvider(
-        CameraEvidenceProvider(
-            renderer=renderer,
-            blend_file=paths["blend"],
-            out_dir=case_out / "l3_functional_probes",
-            mode="query_cov",
-            selector=vlm_selector,
-            max_views=1,
-            max_steps=0,
-            candidate_count=6,
-            collision_overlay=False,
-            collision_contour=False,
-            collision_geometry=collision_geometry,
-            active_repair=False,
-            usable_surface_cache_dir=(
-                output_root / "_usable_surface_cache"
-            ),
-        ),
-        phase="l3_functional_probe",
-        case_id=case_id,
-        progress=progress,
-    )
-    deterministic_selector = DeterministicLocalCameraSelector(
-        candidate_policy=l3_provider.candidate_policy
-    )
-    evidence_renderer = _ObservedRenderer(
-        CameraViewEvidenceRenderer(
-            renderer=renderer,
-            blend_file=paths["blend"],
-            out_dir=case_out / "repair_camera",
-        ),
-        phase="final_evidence",
-        case_id=case_id,
-        progress=progress,
-    )
-    preview_renderer = _ObservedRenderer(
-        CameraCandidatePreviewRenderer(
-            renderer=renderer,
-            blend_file=paths["blend"],
-            out_dir=case_out / "repair_camera",
-        ),
-        phase="candidate_preview",
-        case_id=case_id,
-        progress=progress,
-    )
-
-    progress.emit(
-        "evaluation_started",
-        case_id=case_id,
-        layers=[L3] if l3_only else [L1, L3],
-        metrics=list(metrics),
-    )
-    try:
-        report = run_evaluate(
-            scene=scene,
-            out=case_out / "evaluation_report.json",
-            scene_request=promptless_scene_request(scene, case),
-            collision_geometry=collision_geometry,
-            render_evidence=overview_evidence,
-            grouping_visual_evidence=grouping_evidence,
-            grouping_identity_legend=identity_legend,
-            vlm_judge=raw_judge,
-            grouping_model=grouping_model,
-            evaluation_profile=(
-                promptless_l3_only_profile()
-                if l3_only
-                else promptless_l1_l3_profile()
-            ),
-            scoring_profile_id=INTRINSIC_VALIDITY_PROFILE_ID,
-            deduction_multiplier=deduction_multiplier,
-            p0b_official_mode=L1_BINARY_FAILURE_POLICY["p0b_official_mode"],
-            p0b_local_view_provider=l1_provider,
-            l3_initial_evidence_provider=l3_provider,
-            functional_evidence_planner=vlm_selector,
-            functional_probe_evidence_provider=(
-                functional_probe_provider
-            ),
-            camera_selector=vlm_selector,
-            deterministic_camera_selector=deterministic_selector,
-            vlm_camera_selector=vlm_selector,
-            evidence_renderer=evidence_renderer,
-            candidate_preview_renderer=preview_renderer,
-            scene_quality_config=scene_quality_config(
-                metrics,
-                functional_group_local_granularity=(
-                    functional_group_local_granularity
-                ),
-                functional_group_local_evidence_policy=(
-                    functional_group_local_evidence_policy
-                ),
-            ),
-            asset_policy=camera_cal_asset_policy(),
-            specification_contract=None,
-            authorized_deviations=[],
-            vlm_evaluation_control=control_config,
-        )
-    except Exception as exc:
-        api_usage = api_tracker.summary()
-        atomic_write_json(api_tracker.usage_path, api_usage)
-        progress.emit(
-            "evaluation_failed",
-            case_id=case_id,
-            duration_seconds=round(
-                max(0.0, time.monotonic() - started),
-                3,
-            ),
-            error_type=type(exc).__name__,
-            api_usage=api_usage,
-        )
-        raise
-    api_usage = api_tracker.summary()
-    progress.emit(
-        "evaluation_completed",
-        case_id=case_id,
-        duration_seconds=round(
-            max(0.0, time.monotonic() - started),
-            3,
-        ),
-        api_usage=api_usage,
-    )
-    grouping_report = deepcopy(report["reports"]["object_grouping"])
-    l1_report = deepcopy(report["layer_reports"][L1])
-    l3_report = deepcopy(report["reports"]["scene_quality"])
-    control_manifest = deepcopy(
-        report["evaluation_config"]["vlm_evaluation_control"]
-    )
-    l1_failures = collect_l1_engineering_failures(l1_report)
-    schema_validation = binary_schema_validation_summary(l1_report)
-    l1_decision_status = (
-        "not_executed"
-        if l3_only
-        else "resolved"
-        if l1_report.get("status") == "evaluated" and not l1_failures
-        else "infrastructure_failure"
-        if l1_failures
-        else "unresolved"
-    )
-    l3_resolution = l3_resolution_audit(
-        l3_report,
-        metrics=metrics,
-    )
-    l3_decision_status = str(l3_resolution["status"])
-    final_decision_status = (
-        l3_decision_status
-        if l3_only
-        else "resolved"
-        if l1_decision_status == "resolved"
-        and l3_decision_status == "resolved"
-        else "infrastructure_failure"
-        if "infrastructure_failure"
-        in {l1_decision_status, l3_decision_status}
-        else "unresolved"
-    )
-    diagnostic_reason = (
-        "l1_engineering_failure"
-        if l1_failures
-        else "l3_infrastructure_failure"
-        if l3_decision_status == "infrastructure_failure"
-        else "l1_unresolved"
-        if l1_decision_status == "unresolved"
-        else "l3_unresolved"
-        if l3_decision_status == "unresolved"
-        else None
-    )
-    comparison = build_scene_comparison(
-        case_id=case_id,
-        annotation=annotation,
-        scene_quality_report=l3_report,
-        metrics=metrics,
-    )
-    comparison["diagnostic_only"] = (
-        final_decision_status != "resolved"
-    )
-    comparison["diagnostic_reason"] = diagnostic_reason
-    l1_diagnostics = {
-        "policy": deepcopy(L1_BINARY_FAILURE_POLICY),
-        "recovery_mode": "l3_only" if l3_only else None,
-        "l1_executed": not l3_only,
-        "final_decision_status": l1_decision_status,
-        "l1_decision_status": l1_decision_status,
-        "combined_final_decision_status": final_decision_status,
-        "engineering_failure_count": len(l1_failures),
-        "engineering_failures": l1_failures,
-        "response_schema_validation": schema_validation,
-        "l3_diagnostics_completed": True,
-    }
-    report["runner_outcome"] = {
-        "final_decision_status": final_decision_status,
-        "l1_decision_status": l1_decision_status,
-        "l3_decision_status": l3_decision_status,
-        "l3_resolution_audit": deepcopy(l3_resolution),
-        "l1_engineering_failure": bool(l1_failures),
-        "l3_results_are_diagnostic_only": (
-            final_decision_status != "resolved"
-        ),
-        "l1_diagnostics_path": str(
-            (case_out / "l1_diagnostics.json").resolve()
-        ),
-    }
-    elapsed = time.monotonic() - started
-
-    atomic_write_json(case_out / "evaluation_report.json", report)
-    atomic_write_json(case_out / "grouping.json", grouping_report)
-    atomic_write_json(case_out / "l1_report.json", l1_report)
-    atomic_write_json(case_out / "l1_diagnostics.json", l1_diagnostics)
-    atomic_write_json(case_out / "scene_quality_report.json", l3_report)
-    atomic_write_json(case_out / "scene_comparison.json", comparison)
-    atomic_write_json(case_out / "control_manifest.json", control_manifest)
-    audit_graph_export = _maybe_export_audit_graphs(
-        enabled=export_audit_graphs,
-        case_id=case_id,
-        case_out=case_out,
-        grouping_report=grouping_report,
-        scene_quality_report=l3_report,
-        progress=progress,
-    )
-    case_run_manifest.update(
-        status="complete",
-        completed_at=utc_now(),
-        elapsed_seconds=elapsed,
-        grouping_status=grouping_report.get("status"),
-        l1_status=l1_report.get("status"),
-        l3_status=l3_report.get("status"),
-        final_decision_status=final_decision_status,
-        l1_decision_status=l1_decision_status,
-        l3_decision_status=l3_decision_status,
-        l3_unresolved_metrics=list(
-            l3_resolution.get("unresolved_metrics") or []
-        ),
-        l3_infrastructure_failure_metrics=list(
-            l3_resolution.get("infrastructure_failure_metrics") or []
-        ),
-        l3_partial_coverage_metrics=list(
-            l3_resolution.get("partial_coverage_metrics") or []
-        ),
-        l3_below_coverage_threshold_metrics=list(
-            l3_resolution.get("below_coverage_threshold_metrics") or []
-        ),
-        l1_engineering_failure=bool(l1_failures),
-        l1_engineering_failure_count=len(l1_failures),
-        binary_response_schema_validation=schema_validation,
-        scoring_profile=deepcopy(report.get("scoring_profile")),
-        canonical_object_denominator=deepcopy(
-            report.get("canonical_object_denominator")
-        ),
-        benchmark_score=report.get("benchmark_score"),
-        benchmark_score_100=report.get("benchmark_score_100"),
-        benchmark_score_status=report.get("benchmark_score_status"),
-        scoring_reliability=deepcopy(
-            report.get("scoring_reliability")
-        ),
-        api_usage=api_usage,
-        audit_graph_export=audit_graph_export,
-        paths={
-            "evaluation_report": str(
-                (case_out / "evaluation_report.json").resolve()
-            ),
-            "grouping": str((case_out / "grouping.json").resolve()),
-            "l1_report": str((case_out / "l1_report.json").resolve()),
-            "l1_diagnostics": str(
-                (case_out / "l1_diagnostics.json").resolve()
-            ),
-            "scene_quality_report": str(
-                (case_out / "scene_quality_report.json").resolve()
-            ),
-            "scene_comparison": str(
-                (case_out / "scene_comparison.json").resolve()
-            ),
-            "control_manifest": str(
-                (case_out / "control_manifest.json").resolve()
-            ),
-            "api_calls": str(api_tracker.calls_path),
-            "api_usage": str(api_tracker.usage_path),
-            "audit_graph_manifest": (
-                str((case_out / "audit_graphs" / "manifest.json").resolve())
-                if export_audit_graphs
-                else None
-            ),
-        },
-    )
-    atomic_write_json(existing_manifest_path, case_run_manifest)
-    return {
-        "case_id": case_id,
-        "status": "complete",
-        "input_fingerprint": fingerprint,
-        "elapsed_seconds": elapsed,
-        "grouping_status": grouping_report.get("status"),
-        "l1_status": l1_report.get("status"),
-        "l3_status": l3_report.get("status"),
-        "final_decision_status": final_decision_status,
-        "l1_decision_status": l1_decision_status,
-        "l3_decision_status": l3_decision_status,
-        "l3_unresolved_metrics": list(
-            l3_resolution.get("unresolved_metrics") or []
-        ),
-        "l3_infrastructure_failure_metrics": list(
-            l3_resolution.get("infrastructure_failure_metrics") or []
-        ),
-        "l3_partial_coverage_metrics": list(
-            l3_resolution.get("partial_coverage_metrics") or []
-        ),
-        "l3_below_coverage_threshold_metrics": list(
-            l3_resolution.get("below_coverage_threshold_metrics") or []
-        ),
-        "l1_engineering_failure": bool(l1_failures),
-        "l1_engineering_failure_count": len(l1_failures),
-        "binary_response_schema_validation": schema_validation,
-        "scene_comparison_path": str(
-            (case_out / "scene_comparison.json").resolve()
-        ),
-        "scene_quality_report_path": str(
-            (case_out / "scene_quality_report.json").resolve()
-        ),
-        "l1_report_path": str((case_out / "l1_report.json").resolve()),
-        "control_manifest_path": str(
-            (case_out / "control_manifest.json").resolve()
-        ),
-        "api_calls_path": str(api_tracker.calls_path),
-        "api_usage_path": str(api_tracker.usage_path),
-        "api_usage": api_usage,
-        "audit_graph_export": audit_graph_export,
-    }
 
 
 def _maybe_export_audit_graphs(
