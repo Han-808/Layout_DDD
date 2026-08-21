@@ -53,6 +53,7 @@ def selected_briefs(adapter: Any, ids: tuple[str, ...]) -> list[dict[str, Any]]:
 def check(adapter_name: str, ids: tuple[str, ...]) -> dict[str, Any]:
     adapter = load_adapter(adapter_name)
     runner = adapter.configure_core()
+    runner.RetrieverAdapter(adapter.FROZEN_CORE_ROOT)
     model = runner._load_model_config(adapter.MODELS_PATH, adapter.MODEL_KEY)
     briefs = selected_briefs(adapter, ids)
     if model.max_infrastructure_retries != 3:
@@ -79,11 +80,11 @@ def run_selected(
         raise FileExistsError(f"refusing to overwrite existing output: {output_root}")
     adapter = load_adapter(adapter_name)
     runner = adapter.configure_core()
+    retriever = runner.RetrieverAdapter(adapter.FROZEN_CORE_ROOT)
     model = runner._load_model_config(adapter.MODELS_PATH, adapter.MODEL_KEY)
     if model.max_infrastructure_retries != 3:
         raise ValueError("recovery runner requires exactly three retries")
     briefs = selected_briefs(adapter, ids)
-    retriever = runner.RetrieverAdapter(adapter.FROZEN_CORE_ROOT)
     briefs_path = adapter.FROZEN_CORE_ROOT / "briefs.json"
     route = adapter.provider_route()
     retry_policy = adapter.RetryPolicy(

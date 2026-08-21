@@ -1,0 +1,53 @@
+{
+  "schema_version": "frozen_two_stage_run_config_v2",
+  "core_root": "../../tools/api3_anthropic_runner_v2",
+  "models_path": "../../tools/api3_opus48_thinking_runner_v1/models.pod.json",
+  "model_key": "api3-claude-opus-4-8-high",
+  "retrieval": {
+    "runtime_root": "../../src/benchmark/scene_generation/retrieval",
+    "catalog_path": "../retrieval/profiles_v2.json",
+    "profile_id": "imaginarium-qwen3-embedding-0.6b-stable-top1-v2"
+  },
+  "ordered_brief_ids": [
+    "brief_00", "brief_01", "brief_02", "brief_03", "brief_04",
+    "brief_05", "brief_06", "brief_07", "brief_08", "brief_09"
+  ],
+  "route": {
+    "kind": "api3_chat",
+    "key": "api3-opus48-high-chat-v1",
+    "runner_version": "2.0.0",
+    "chat_options": {
+      "style": "adaptive_thinking",
+      "reasoning_effort": "high"
+    }
+  },
+  "retry": {
+    "retryable_transport_statuses": ["transport_failure"],
+    "retryable_http_statuses": [408, 409, 425, 429, 500, 502, 503, 504],
+    "retry_ambiguous_timeouts": false,
+    "continue_after_case_failure": true
+  },
+  "execution_policy": {
+    "schema_version": "api3_opus48_high_full10_policy_v1",
+    "case_failure_policy": "record_and_continue_next_brief",
+    "expected_brief_ids": [
+      "brief_00", "brief_01", "brief_02", "brief_03", "brief_04",
+      "brief_05", "brief_06", "brief_07", "brief_08", "brief_09"
+    ],
+    "request_protocol": "openai_chat_completions",
+    "thinking": {"type": "adaptive"},
+    "reasoning_effort": "high",
+    "preserved_thinking": true,
+    "max_tokens": 65536,
+    "maximum_infrastructure_retries": 2,
+    "preflight_requires_reasoning_signal": false,
+    "preflight_records_reasoning_signal_diagnostic": true
+  },
+  "summary": {
+    "schema_version": "api3_opus48_high_full10_summary_v1",
+    "extra": {
+      "thinking": {"type": "adaptive"},
+      "reasoning_effort": "high"
+    }
+  }
+}

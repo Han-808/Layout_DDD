@@ -10,6 +10,13 @@ The compatibility refactor is limited to scene generation. It formalizes the
 boundary between the frozen two-stage generation workflow and model-provider
 wire protocols.
 
+Retrieval resources are now a separate, provider-independent boundary. See
+`docs/generation_retrieval_profiles.md` for the v2 dataset/encoder/index/profile
+composition and local binding rules. Generation run configurations name a
+repo-relative shared retrieval runtime root plus a `retrieval_profile_id`;
+they never contain a machine-local resource path or branch on an
+embedding-model alias.
+
 More specifically, this proposal applies to the standalone frozen runners under
 `tools/` used by the Kimi-K3, GLM-5.3, and Opus 4.8 campaigns. It does not merge
 or replace the separate public `layout-ddd-generate` path, its adapter registry,
@@ -193,7 +200,7 @@ The generic CLI is deliberately separate from `layout-ddd-generate`:
 ```bash
 PYTHONPATH=src:. .venv/bin/python -m \
   benchmark.scene_generation.frozen_two_stage check \
-  --run-config configs/generation/api2_kimi_k3_scene10_v1.json
+  --run-config configs/generation/api2_kimi_k3_scene10_v2.json
 
 PYTHONPATH=src:. .venv/bin/python -m \
   benchmark.scene_generation.frozen_two_stage run \
@@ -203,16 +210,20 @@ PYTHONPATH=src:. .venv/bin/python -m \
 
 `check` is static: it does not import the configurable core, read a credential
 value, initialize the retriever, or use the network. Before parsing those inputs
-it verifies the run config, core, model config, briefs, and retriever bundle
+it verifies the run config, core, model config, briefs, shared retrieval runtime,
+and retrieval-profile bundle
 against `configs/runners/active_generation_bundles_v1.json`. Outside a source
 checkout, callers must explicitly provide an equivalent reviewed trust manifest
 with `--trust-manifest`.
 
 `run` performs the same trust/static validation and constructs the complete
 `GenerationRunSpec` before it imports the core, reads the credential named by
-the trusted model config, or initializes the trusted retriever. Runtime model
-and brief values are then compared with the static trusted view before the
-first provider request.
+the trusted model config, or uses the network. It resolves and strictly gates
+the bound retrieval resources before reading the credential. The loaded
+catalog/profile/resource identities and shared runtime source identity are
+compared to the static trusted declaration before credential loading; runtime
+model and brief values are then compared with the static trusted view before
+the first provider request.
 
 The generic `run` command is post-preflight: callers must complete the
 route/model-specific preflight before invoking it. Existing Kimi, GLM, and Opus

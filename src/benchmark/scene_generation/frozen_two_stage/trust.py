@@ -164,13 +164,16 @@ class TrustReport:
     models_file: TrustedFile
     briefs_bundle: TrustedBundle
     briefs_file: TrustedFile
-    retriever_bundle: TrustedBundle
+    retrieval_runtime_bundle: TrustedBundle
+    retrieval_runtime_source_sha256: str
+    retrieval_catalog_bundle: TrustedBundle
+    retrieval_catalog_file: TrustedFile
     run_config_bundle: TrustedBundle
     run_config_file: TrustedFile
 
     def to_public_dict(self) -> dict[str, Any]:
         return {
-            "schema_version": "frozen_two_stage_trust_report_v1",
+            "schema_version": "frozen_two_stage_trust_report_v3",
             "trust_manifest": {
                 "path": str(self.manifest_path),
                 "sha256": self.manifest_sha256,
@@ -186,7 +189,15 @@ class TrustReport:
                 "file": self.briefs_file.relative_path,
                 "file_sha256": self.briefs_file.sha256,
             },
-            "retriever_bundle": self.retriever_bundle.to_public_dict(),
+            "retrieval_runtime": {
+                **self.retrieval_runtime_bundle.to_public_dict(),
+                "source_manifest_sha256": self.retrieval_runtime_source_sha256,
+            },
+            "retrieval_catalog": {
+                **self.retrieval_catalog_bundle.to_public_dict(),
+                "file": self.retrieval_catalog_file.relative_path,
+                "file_sha256": self.retrieval_catalog_file.sha256,
+            },
             "run_config": {
                 **self.run_config_bundle.to_public_dict(),
                 "file": self.run_config_file.relative_path,
@@ -343,13 +354,43 @@ class TrustInventory:
                     f"expected={item.sha256}, actual={actual_hash}"
                 )
 
+    @staticmethod
+    def _retrieval_source_manifest_sha256(bundle: TrustedBundle) -> str:
+        """Compute the shared runtime identity from trusted declarations.
+
+        The runtime publishes the same path/byte/hash payload after import.
+        Hashes come from the already-verified declaration, rather than a
+        second untrusted read, so a post-gate source mutation cannot produce a
+        matching static identity.
+        """
+
+        files = []
+        for item in sorted(bundle.files, key=lambda child: child.relative_path):
+            if Path(item.relative_path).suffix != ".py":
+                continue
+            path = bundle.root / item.relative_path
+            files.append(
+                {
+                    "path": item.relative_path,
+                    "bytes": path.stat().st_size,
+                    "sha256": item.sha256,
+                }
+            )
+        payload = {
+            "schema_version": "generation_retrieval_source_manifest_v2",
+            "logical_root": "benchmark.scene_generation.retrieval",
+            "files": files,
+        }
+        return hashlib.sha256(_canonical_json_bytes(payload)).hexdigest()
+
     def verify_run_inputs(
         self,
         *,
         core_root: str | Path,
         models_path: str | Path,
         briefs_path: str | Path,
-        retriever_root: str | Path,
+        retrieval_runtime_root: str | Path,
+        retrieval_catalog_path: str | Path,
         run_config_path: str | Path,
     ) -> TrustReport:
         """Hash-verify every executable/data bundle used by a configured run."""
@@ -363,9 +404,20 @@ class TrustInventory:
         briefs_bundle, briefs_file = self._bundle_for_file(
             Path(briefs_path), purpose="briefs_path"
         )
-        retriever_bundle = self._bundle_for_root(
-            Path(retriever_root), purpose="retriever_root"
+        retrieval_runtime_bundle = self._bundle_for_root(
+            Path(retrieval_runtime_root), purpose="retrieval_runtime_root"
         )
+        if retrieval_runtime_bundle.role != "shared_generation_retrieval_runtime":
+            raise TrustError(
+                "retrieval_runtime_root is not declared as a shared retrieval runtime"
+            )
+        retrieval_catalog_bundle, retrieval_catalog_file = self._bundle_for_file(
+            Path(retrieval_catalog_path), purpose="retrieval_catalog_path"
+        )
+        if retrieval_catalog_bundle.role != "generation_retrieval_profiles":
+            raise TrustError(
+                "retrieval_catalog_path is not declared in a retrieval-profile bundle"
+            )
         run_config_bundle, run_config_file = self._bundle_for_file(
             Path(run_config_path), purpose="run_config_path"
         )
@@ -379,12 +431,16 @@ class TrustInventory:
                 core_bundle,
                 models_bundle,
                 briefs_bundle,
-                retriever_bundle,
+                retrieval_runtime_bundle,
+                retrieval_catalog_bundle,
                 run_config_bundle,
             )
         }
         for bundle in unique_bundles.values():
             self._verify_bundle(bundle)
+        retrieval_runtime_source_sha256 = (
+            self._retrieval_source_manifest_sha256(retrieval_runtime_bundle)
+        )
         return TrustReport(
             manifest_path=self.manifest_path,
             manifest_sha256=self.manifest_sha256,
@@ -393,7 +449,10 @@ class TrustInventory:
             models_file=models_file,
             briefs_bundle=briefs_bundle,
             briefs_file=briefs_file,
-            retriever_bundle=retriever_bundle,
+            retrieval_runtime_bundle=retrieval_runtime_bundle,
+            retrieval_runtime_source_sha256=retrieval_runtime_source_sha256,
+            retrieval_catalog_bundle=retrieval_catalog_bundle,
+            retrieval_catalog_file=retrieval_catalog_file,
             run_config_bundle=run_config_bundle,
             run_config_file=run_config_file,
         )

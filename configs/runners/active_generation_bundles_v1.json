@@ -150,6 +150,20 @@
         "generation_runner.py",
         "run_generation.sh"
       ],
+      "compatibility_mirrors": [
+        {
+          "path": "retriever_runtime.pod.json",
+          "state": "frozen_replay",
+          "sha256": "1814be3b7fae3a56b43a310f579a8b9de2dc0ed724892b7ffd77d748770f1831",
+          "replacement": "configs/retrieval/profiles_v2.json"
+        },
+        {
+          "path": "retriever_golden_v1.json",
+          "state": "frozen_replay",
+          "sha256": "28992804c7dd6653dfddbfe95f5d4560039290d16ee38a10384176137a5d28fb",
+          "replacement": "configs/retrieval/golden/imaginarium_qwen3_0_6b_v2.json"
+        }
+      ],
       "files": [
         {
           "path": "README.md",
@@ -183,7 +197,7 @@
         },
         {
           "path": "generation_runner.py",
-          "sha256": "6121d37f23b45a088318557b581387f01390c7d7ca82157bf633379fb22b13c1",
+          "sha256": "a5814f6096645d3f564671cbfa11460faee0a626889020a1854bc00044fc6e61",
           "mode": "0755"
         },
         {
@@ -339,7 +353,7 @@
         },
         {
           "path": "recovery_runner.py",
-          "sha256": "31182a1bd364a2eda056ef9a0d494ac9cf7d6d08e29a43b4e61aed06dfd42778",
+          "sha256": "f4bf9f7aa2362dc45283063d75a9c02e6d55edaa164f18c4d62a337901a13980",
           "mode": "0644"
         }
       ]
@@ -354,7 +368,7 @@
       "files": [
         {
           "path": "kimi_k3_generation_runner.py",
-          "sha256": "a21d123c8f67302379c9e006ae86712b9d3ec6f0f971a13c305fcc7c987dfcd5",
+          "sha256": "25ae25a6ddae36b4e66207d6accf4139a043123b46cb02f2009171264b08a006",
           "mode": "0755"
         },
         {
@@ -374,7 +388,7 @@
       "files": [
         {
           "path": "glm53_generation_runner.py",
-          "sha256": "d8548871da2b516a1435c718ef0bd1cb6bfd894d32b825279952c06e47555b32",
+          "sha256": "56aee6b201335f4f87952924f27a883f4b30732f61b01adc6ac774b018635bee",
           "mode": "0755"
         },
         {
@@ -396,7 +410,7 @@
       "files": [
         {
           "path": "generation_runner.py",
-          "sha256": "059855d43ba015507d523e70978ccf93eab2d13d47d18c3a5d5f1a9c71b99433",
+          "sha256": "427a1e35ddc79b3ddb4742f7d085df8e75e64bb908ee062d7a83d395cd4e39c2",
           "mode": "0644"
         },
         {
@@ -406,12 +420,12 @@
         },
         {
           "path": "preflight.py",
-          "sha256": "6f56cf80525eaf2350c05709b46e11fbf80b37b183a94f17899c6ee9ff8d5a3c",
+          "sha256": "154ffc05b4dc2ffebc88362f8e0ceddb4dcf690d4a154cecf2ef993e4627e03c",
           "mode": "0644"
         },
         {
           "path": "retry_runner.py",
-          "sha256": "6a0c3dce619cc768c12941d3c69540e3c50eebf7430fad0f4be36c8fa98cc7fb",
+          "sha256": "dc795506dce8a97ddebec3d1a02d3f13a539ea9945a8fe6c93aa809bea73e22e",
           "mode": "0644"
         }
       ]
@@ -444,7 +458,7 @@
         },
         {
           "path": "cli.py",
-          "sha256": "5bb68d6886b18eff6934706dee4f86f38e2f01c17ec591c1444f941cb6088169",
+          "sha256": "159c11404738f4fb569c171db380ba7764d56980c2594eb1021aea77fe04e838",
           "mode": "0644"
         },
         {
@@ -454,12 +468,12 @@
         },
         {
           "path": "compatibility/loader.py",
-          "sha256": "0d9af1dbbdfde2db2a83202e86452b7c4128e38812864022ea73f568dd877623",
+          "sha256": "22998beee3b33966c6607773cd4a3631a531ebf56b4d926362a039cceb6ccb74",
           "mode": "0644"
         },
         {
           "path": "config.py",
-          "sha256": "d103972f789dd9f9ef5441992257092bbb4534239c6e9a30bcc2762ff49e4c1b",
+          "sha256": "0b801cabc424de6194d22ec42d7c2612a013292bbaeab1d41ae9ebb9d52ce5d7",
           "mode": "0644"
         },
         {
@@ -529,7 +543,7 @@
         },
         {
           "path": "trust.py",
-          "sha256": "323df238455f331caa1250f103691e5b7f0a22d06f8a4b67b1c15b86aff356d9",
+          "sha256": "d9376a421854fdd796d12b71b6fe56534b52141e635ade1774ac44c5c254fce7",
           "mode": "0644"
         }
       ]
@@ -539,9 +553,9 @@
       "root": "configs/generation",
       "role": "config_only_generation_routes",
       "entrypoints": [
-        "api2_glm53_scene10_v1.json",
-        "api2_kimi_k3_scene10_v1.json",
-        "api3_opus48_high_scene10_v1.json"
+        "api2_glm53_scene10_v2.json",
+        "api2_kimi_k3_scene10_v2.json",
+        "api3_opus48_high_scene10_v2.json"
       ],
       "files": [
         {
@@ -550,13 +564,130 @@
           "mode": "0644"
         },
         {
+          "path": "api2_glm53_scene10_v2.json",
+          "sha256": "74adf98d02e280ccce90cf925ea934a1caf1dc34fb543a2d7ea7fdb4d5fb791b",
+          "mode": "0644"
+        },
+        {
           "path": "api2_kimi_k3_scene10_v1.json",
           "sha256": "01d74913501264651bcd761ff272aea659677b7d6bf6aa3d6f44f5eb13278abe",
           "mode": "0644"
         },
         {
+          "path": "api2_kimi_k3_scene10_v2.json",
+          "sha256": "1976c976af6d90572391c90805065b7b22034cf68f31ad167583133a7e835a25",
+          "mode": "0644"
+        },
+        {
           "path": "api3_opus48_high_scene10_v1.json",
           "sha256": "93f27ebd48e07c7d4d054cc830e64edfb7f2d33a4f2997ae1a7fa9325ff66ce1",
+          "mode": "0644"
+        },
+        {
+          "path": "api3_opus48_high_scene10_v2.json",
+          "sha256": "0895b49ec5d866c5481c65bf512553e777e55e9732fafb2101dd9a4a53f0999d",
+          "mode": "0644"
+        }
+      ]
+    },
+    {
+      "bundle_id": "generation_retrieval_runtime_v2",
+      "root": "src/benchmark/scene_generation/retrieval",
+      "role": "shared_generation_retrieval_runtime",
+      "entrypoints": [
+        "__main__.py",
+        "cli.py",
+        "factory.py"
+      ],
+      "files": [
+        {
+          "path": "__init__.py",
+          "sha256": "b6b1ecdaa7ddbd5600f087d2a9451da2994f99310d75fbed8d7671fb683dec9c",
+          "mode": "0644"
+        },
+        {
+          "path": "__main__.py",
+          "sha256": "0f7d54f3fbb1f79a85eb8110f11793db99da6f3c61ee979de5abe9a1b5f3fdb3",
+          "mode": "0644"
+        },
+        {
+          "path": "_common.py",
+          "sha256": "01adbf2ae7f4588ecd96f6292d312ef304ad0f5daa4938d198e7914fdda387c2",
+          "mode": "0644"
+        },
+        {
+          "path": "bindings.py",
+          "sha256": "ef025d9c0089b4769d9446fbbaa63e535486e0b07b2df5092f9802b03dac9814",
+          "mode": "0644"
+        },
+        {
+          "path": "cli.py",
+          "sha256": "db89e3e2de88bf0fbe1f49d43127d93c0610ce960448f69d57bc67c3aa639ad4",
+          "mode": "0644"
+        },
+        {
+          "path": "dataset.py",
+          "sha256": "aac2b4dff052854c1a4ef17aead6e9f858327dcaf3d5d6d4b5c0bc1324673d3c",
+          "mode": "0644"
+        },
+        {
+          "path": "encoder.py",
+          "sha256": "9f16e8e32b091234b38300b29fe91efb4bf11c0e5f456d1fa77031e105bd0ddb",
+          "mode": "0644"
+        },
+        {
+          "path": "factory.py",
+          "sha256": "83a4f35f36a18240a093a16825017e110e0013a3831998fd067e32d19a5eeeeb",
+          "mode": "0644"
+        },
+        {
+          "path": "index.py",
+          "sha256": "27409c7d8bf3ad13ed9e3662fe365f59a0daa0e3b4d0104c8ef2ebe7478e7095",
+          "mode": "0644"
+        },
+        {
+          "path": "profile.py",
+          "sha256": "73fcef384905f5f7d437667add38e554bae61c8a06b14c542b787bf6368b5c51",
+          "mode": "0644"
+        },
+        {
+          "path": "profiles.py",
+          "sha256": "0386eed9fa6c169889848e957af4c323a7a13640d16ccd805c6b7c3587be7a18",
+          "mode": "0644"
+        },
+        {
+          "path": "provenance.py",
+          "sha256": "70f05ab3595f4f427302cda2942c5bd7ffaf21aa498769ecc184eb3caca4e412",
+          "mode": "0644"
+        },
+        {
+          "path": "runtime.py",
+          "sha256": "433475ae186c3a4c281863254c45b2ae353ef5fa105489bc9e5d424247c8a65b",
+          "mode": "0644"
+        }
+      ]
+    },
+    {
+      "bundle_id": "generation_retrieval_profiles_v2",
+      "root": "configs/retrieval",
+      "role": "generation_retrieval_profiles",
+      "entrypoints": [
+        "profiles_v2.json"
+      ],
+      "files": [
+        {
+          "path": "golden/imaginarium_qwen3_0_6b_v2.json",
+          "sha256": "a9f5bda10f3f60525b708d0364421611d7ee873c065926bde2c08ef844dc900d",
+          "mode": "0644"
+        },
+        {
+          "path": "profiles_v2.json",
+          "sha256": "2f7f8e73aa65bbe30cafe74246512d732c47bc74b4823d6acb3136c4f99ded49",
+          "mode": "0644"
+        },
+        {
+          "path": "resource_bindings.example.json",
+          "sha256": "f2765f2357964aab379ea6c942b5a76f56c831cceabc0ce049a8f5c78847b005",
           "mode": "0644"
         }
       ]

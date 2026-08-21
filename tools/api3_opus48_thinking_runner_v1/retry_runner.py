@@ -89,6 +89,7 @@ def check(brief_ids: tuple[str, ...]) -> dict[str, Any]:
     validate_source_failures(brief_ids)
     adapter = load_adapter()
     runner = adapter.configure_core()
+    runner.RetrieverAdapter(adapter.CORE_ROOT)
     model = runner._load_model_config(adapter.MODELS_PATH, adapter.MODEL_KEY)
     briefs = selected_briefs(adapter, brief_ids)
     if model.reasoning_effort != "high":
@@ -123,9 +124,9 @@ def run_retry(output_root: Path, brief_ids: tuple[str, ...]) -> dict[str, Any]:
     validate_source_failures(brief_ids)
     adapter = load_adapter()
     runner = adapter.configure_core()
+    retriever = runner.RetrieverAdapter(adapter.CORE_ROOT)
     model = runner._load_model_config(adapter.MODELS_PATH, adapter.MODEL_KEY)
     briefs = selected_briefs(adapter, brief_ids)
-    retriever = runner.RetrieverAdapter(adapter.CORE_ROOT)
     route = adapter.provider_route()
     retry_policy = adapter.RetryPolicy(
         max_infrastructure_retries=model.max_infrastructure_retries,

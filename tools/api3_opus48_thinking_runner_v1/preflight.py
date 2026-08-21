@@ -52,6 +52,7 @@ def main() -> int:
     )
     args = parser.parse_args()
     runner = adapter.configure_core()
+    runner.RetrieverAdapter(adapter.CORE_ROOT)
     route = adapter.provider_route()
     model = runner._load_model_config(adapter.MODELS_PATH, adapter.MODEL_KEY)
     request = {

@@ -474,10 +474,50 @@ def load_runtime_inputs(
     briefs_path: str | Path,
     ordered_brief_ids: Sequence[str],
     retriever_root: str | Path,
+    retrieval_catalog_path: str | Path | None = None,
+    retrieval_profile_id: str | None = None,
+    resource_bindings_path: str | Path | None = None,
+    expected_retrieval_identity: Mapping[str, Any] | None = None,
 ) -> FrozenCoreRuntimeInputs:
-    """Load credential-bearing model and retriever only for a real run."""
+    """Gate bound retrieval resources before reading a model credential."""
 
     briefs = load_selected_briefs(core, briefs_path, ordered_brief_ids)
+    retriever = core.RetrieverAdapter(
+        Path(retriever_root),
+        catalog_path=(
+            None
+            if retrieval_catalog_path is None
+            else Path(retrieval_catalog_path)
+        ),
+        retrieval_profile_id=retrieval_profile_id,
+        resource_bindings_path=(
+            None
+            if resource_bindings_path is None
+            else Path(resource_bindings_path)
+        ),
+    )
+    if expected_retrieval_identity is not None:
+        actual_retrieval_identity = getattr(
+            retriever, "public_provenance", None
+        )
+        if not isinstance(actual_retrieval_identity, Mapping):
+            raise ValueError(
+                "retriever did not publish the required runtime identity"
+            )
+        expected = dict(expected_retrieval_identity)
+        actual = {
+            key: actual_retrieval_identity.get(key) for key in expected
+        }
+        if actual != expected:
+            mismatched = sorted(
+                key for key in expected if actual[key] != expected[key]
+            )
+            raise ValueError(
+                "runtime retrieval identity differs from static trust in fields: "
+                f"{mismatched}"
+            )
+    # `_load_model_config` reads the named credential environment value. Keep
+    # this after the complete strict resource/golden gate and the post-import
+    # catalog/profile/source identity comparison.
     model = core._load_model_config(Path(models_path), model_key)
-    retriever = core.RetrieverAdapter(Path(retriever_root))
     return FrozenCoreRuntimeInputs(model=model, briefs=briefs, retriever=retriever)

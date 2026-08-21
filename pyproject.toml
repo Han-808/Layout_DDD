@@ -26,7 +26,9 @@ layout-ddd-evaluate-game = "benchmark.game_scene.route:main"
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
 retrieval = [
-    "sentence-transformers>=5.6.0",
+    "numpy==2.5.0",
+    "sentence-transformers==5.6.0",
+    "transformers==5.13.0",
 ]
 mesh-collision = [
     "trimesh>=4.5.0,<5",
@@ -53,6 +55,8 @@ include-package-data = false
   "configs/game/*.yaml",
   "configs/game/*.json",
   "configs/game/counter_strike/*.yaml",
+  "configs/retrieval/*.json",
+  "configs/retrieval/golden/*.json",
 ]
 
 [tool.pytest.ini_options]

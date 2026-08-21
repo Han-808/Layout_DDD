@@ -24,6 +24,8 @@ IGNORED_PARTS = {"__pycache__"}
 SHARED_RUNTIME_ROOTS = {
     "configs/generation",
     "src/benchmark/scene_generation/frozen_two_stage",
+    "src/benchmark/scene_generation/retrieval",
+    "configs/retrieval",
 }
 
 

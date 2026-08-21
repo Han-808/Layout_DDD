@@ -26,9 +26,8 @@ from benchmark.scene_generation.frozen_two_stage.providers.routes import (
     make_api3_chat_route,
 )
 from benchmark.scene_generation.frozen_two_stage.retry_policy import RetryPolicy
-
-
-RUN_CONFIG_SCHEMA_VERSION = "frozen_two_stage_run_config_v1"
+RUN_CONFIG_SCHEMA_VERSION = "frozen_two_stage_run_config_v2"
+LEGACY_RUN_CONFIG_SCHEMA_VERSION = "frozen_two_stage_run_config_v1"
 _MAX_CONFIG_BYTES = 1_000_000
 _SLUG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
@@ -371,10 +370,13 @@ class FrozenTwoStageRunConfig:
 
     path: Path
     sha256: str
+    source_schema_version: str
     core_root: Path
     briefs_path: Path
     models_path: Path
-    retriever_root: Path
+    retrieval_runtime_root: Path
+    retrieval_catalog_path: Path
+    retrieval_profile_id: str
     model_key: str
     ordered_brief_ids: tuple[str, ...]
     route: RouteConfig
@@ -391,7 +393,11 @@ class FrozenTwoStageRunConfig:
             "core_root": str(self.core_root),
             "briefs_path": str(self.briefs_path),
             "models_path": str(self.models_path),
-            "retriever_root": str(self.retriever_root),
+            "retrieval": {
+                "runtime_root": str(self.retrieval_runtime_root),
+                "catalog_path": str(self.retrieval_catalog_path),
+                "profile_id": self.retrieval_profile_id,
+            },
             "model_key": self.model_key,
             "ordered_brief_ids": list(self.ordered_brief_ids),
             "route": self.route.to_public_dict(),
@@ -575,27 +581,40 @@ def load_run_config(path: str | Path) -> FrozenTwoStageRunConfig:
     if not config_path.is_file():
         raise FileNotFoundError(f"run config does not exist: {config_path}")
     value = _load_json_object(config_path)
-    _keys(
-        value,
-        field_name="run_config",
-        required=frozenset(
-            {
-                "schema_version",
-                "core_root",
-                "model_key",
-                "ordered_brief_ids",
-                "route",
-                "retry",
-                "execution_policy",
-            }
-        ),
-        optional=frozenset(
-            {"briefs_path", "models_path", "retriever_root", "summary"}
-        ),
-    )
-    if value["schema_version"] != RUN_CONFIG_SCHEMA_VERSION:
+    schema_version = value.get("schema_version")
+    if schema_version not in {
+        RUN_CONFIG_SCHEMA_VERSION,
+        LEGACY_RUN_CONFIG_SCHEMA_VERSION,
+    }:
         raise ValueError(
-            f"unsupported run-config schema: {value['schema_version']!r}"
+            f"unsupported run-config schema: {schema_version!r}"
+        )
+    common_required = frozenset(
+        {
+            "schema_version",
+            "core_root",
+            "model_key",
+            "ordered_brief_ids",
+            "route",
+            "retry",
+            "execution_policy",
+        }
+    )
+    if schema_version == RUN_CONFIG_SCHEMA_VERSION:
+        _keys(
+            value,
+            field_name="run_config",
+            required=common_required | frozenset({"retrieval"}),
+            optional=frozenset({"briefs_path", "models_path", "summary"}),
+        )
+    else:
+        _keys(
+            value,
+            field_name="run_config",
+            required=common_required,
+            optional=frozenset(
+                {"briefs_path", "models_path", "retriever_root", "summary"}
+            ),
         )
     config_dir = config_path.parent
     core_root = _resolve_path(
@@ -611,11 +630,6 @@ def load_run_config(path: str | Path) -> FrozenTwoStageRunConfig:
         value.get("models_path", str(core_root / "models.pod.json")),
         field_name="models_path",
     )
-    retriever_root = _resolve_path(
-        config_dir,
-        value.get("retriever_root", str(core_root)),
-        field_name="retriever_root",
-    )
     if not core_root.is_dir():
         raise FileNotFoundError(f"core_root is not a directory: {core_root}")
     for field_name, candidate in (
@@ -624,17 +638,55 @@ def load_run_config(path: str | Path) -> FrozenTwoStageRunConfig:
     ):
         if not candidate.is_file():
             raise FileNotFoundError(f"{field_name} is not a file: {candidate}")
-    if not retriever_root.is_dir():
+    if schema_version == LEGACY_RUN_CONFIG_SCHEMA_VERSION:
+        legacy_retriever_root = _resolve_path(
+            config_dir,
+            value.get("retriever_root", str(core_root)),
+            field_name="retriever_root",
+        )
+        if legacy_retriever_root != core_root:
+            raise ValueError(
+                "legacy retriever_root must equal core_root; the v2 contract "
+                "selects retrieval by logical profile instead"
+            )
+        retrieval_runtime_root = (
+            core_root.parents[1]
+            / "src"
+            / "benchmark"
+            / "scene_generation"
+            / "retrieval"
+        ).resolve()
+        retrieval_catalog_path = core_root.parents[1] / "configs" / "retrieval" / "profiles_v2.json"
+        retrieval_profile_id = "imaginarium-qwen3-embedding-0.6b-stable-top1-v2"
+    else:
+        retrieval_value = _object(value["retrieval"], field_name="retrieval")
+        _keys(
+            retrieval_value,
+            field_name="retrieval",
+            required=frozenset({"runtime_root", "catalog_path", "profile_id"}),
+        )
+        retrieval_runtime_root = _resolve_path(
+            config_dir,
+            retrieval_value["runtime_root"],
+            field_name="retrieval.runtime_root",
+        )
+        retrieval_catalog_path = _resolve_path(
+            config_dir,
+            retrieval_value["catalog_path"],
+            field_name="retrieval.catalog_path",
+        )
+        retrieval_profile_id = _slug(
+            retrieval_value["profile_id"], field_name="retrieval.profile_id"
+        )
+    if not retrieval_runtime_root.is_dir():
         raise FileNotFoundError(
-            f"retriever_root is not a directory: {retriever_root}"
+            "retrieval.runtime_root is not a directory: "
+            f"{retrieval_runtime_root}"
         )
-    if retriever_root != core_root:
-        raise ValueError(
-            "retriever_root must equal core_root for the frozen two-stage "
-            "workflow; alternate retriever implementations require a separately "
-            "versioned workflow"
+    if not retrieval_catalog_path.is_file():
+        raise FileNotFoundError(
+            f"retrieval catalog is not a file: {retrieval_catalog_path}"
         )
-
     brief_ids_value = value["ordered_brief_ids"]
     if not isinstance(brief_ids_value, list) or not brief_ids_value:
         raise ValueError("ordered_brief_ids must be a non-empty array")
@@ -680,10 +732,13 @@ def load_run_config(path: str | Path) -> FrozenTwoStageRunConfig:
     return FrozenTwoStageRunConfig(
         path=config_path,
         sha256=hashlib.sha256(config_path.read_bytes()).hexdigest(),
+        source_schema_version=str(schema_version),
         core_root=core_root,
         briefs_path=briefs_path,
         models_path=models_path,
-        retriever_root=retriever_root,
+        retrieval_runtime_root=retrieval_runtime_root,
+        retrieval_catalog_path=retrieval_catalog_path,
+        retrieval_profile_id=retrieval_profile_id,
         model_key=_slug(value["model_key"], field_name="model_key"),
         ordered_brief_ids=brief_ids,
         route=_parse_route(value["route"]),

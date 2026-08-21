@@ -29,6 +29,8 @@ EXPECTED_RESOURCES = {
     "configs/game/game_mode_canonical_v1.yaml",
     "configs/game/counter_strike_static_arena_style_v1.json",
     "configs/game/counter_strike/benchmark_v1.yaml",
+    "configs/retrieval/profiles_v2.json",
+    "configs/retrieval/golden/imaginarium_qwen3_0_6b_v2.json",
 }
 PACKAGE_PREFIX = "src/benchmark/_resources/"
 

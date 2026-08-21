@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import importlib.util
 import json
 import os
 import shutil
@@ -55,7 +54,11 @@ except ImportError:  # direct script execution on the Pod
 
 
 RUNNER_VERSION = "2.0.0"
+RUN_MANIFEST_SCHEMA_VERSION = "hy34_two_stage_run_manifest_v3"
 RUNNER_ROOT = Path(__file__).resolve().parent
+REPO_ROOT = RUNNER_ROOT.parents[1]
+DEFAULT_RETRIEVAL_CATALOG = REPO_ROOT / "configs" / "retrieval" / "profiles_v2.json"
+DEFAULT_RETRIEVAL_PROFILE_ID = "imaginarium-qwen3-embedding-0.6b-stable-top1-v2"
 DEFAULT_BRIEFS = RUNNER_ROOT / "briefs.json"
 DEFAULT_MODELS = RUNNER_ROOT / "models.pod.json"
 DEFAULT_STAGE_A_PROMPT = RUNNER_ROOT / "stage_a_prompt.txt"
@@ -126,30 +129,54 @@ class StageCapture:
 
 
 class RetrieverAdapter:
-    """Load the separately frozen retriever runtime once per runner process."""
+    """Delegate frozen Top-1 behavior to the single shared v2 runtime."""
 
-    def __init__(self, runtime_root: Path) -> None:
-        module_path = runtime_root / "retriever_runtime.py"
-        config_path = runtime_root / "retriever_runtime.pod.json"
-        if not module_path.is_file() or not config_path.is_file():
-            raise ArtifactError(f"frozen retriever runtime is incomplete: {runtime_root}")
-        spec = importlib.util.spec_from_file_location("hy34_frozen_retriever", module_path)
-        if spec is None or spec.loader is None:
-            raise ArtifactError(f"cannot load frozen retriever module: {module_path}")
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[spec.name] = module
-        spec.loader.exec_module(module)
-        runtime = module.FrozenRetrieverRuntime(module.RuntimeConfig.load(config_path))
-        report = runtime.gate(strict=False, run_golden=True)
+    def __init__(
+        self,
+        runtime_root: Path,
+        *,
+        catalog_path: Path | None = None,
+        retrieval_profile_id: str | None = None,
+        resource_bindings_path: Path | None = None,
+    ) -> None:
+        # Direct Pod execution does not install the source package. This is a
+        # compatibility bridge only; the algorithm lives under ``src/``.
+        src_root = REPO_ROOT / "src"
+        if str(src_root) not in sys.path:
+            sys.path.insert(0, str(src_root))
+        from benchmark.scene_generation.retrieval import build_runtime
+
+        runtime = build_runtime(
+            catalog_path=catalog_path or DEFAULT_RETRIEVAL_CATALOG,
+            retrieval_profile_id=(
+                retrieval_profile_id or DEFAULT_RETRIEVAL_PROFILE_ID
+            ),
+            resource_bindings_path=resource_bindings_path,
+        )
+        # Official profiles are always strict. Missing or drifted resources
+        # therefore fail before any generation provider request is constructed.
+        report = runtime.gate(strict=None, run_golden=True)
         if report["status"] == "failed":
-            raise ArtifactError(f"frozen retriever gate failed: {report['errors']}")
-        self.module = module
+            raise ArtifactError(f"shared retriever gate failed: {report['errors']}")
         self.runtime = runtime
         self.gate_report = report
+        # Retained only as an in-process compatibility attribute. It is not
+        # serialized into public provenance.
         self.runtime_root = runtime_root
+        self.embedding_model_name = runtime.embedding_model_name
+        self.retrieval_profile_id = runtime.profile_id
+        policy = runtime.composed.profile.policy
+        self.retrieval_policy = {
+            "category_argument": policy.category_argument,
+            "size_tolerance": policy.size_tolerance,
+            "top_k": policy.top_k,
+            "min_score": policy.min_score,
+            "tie_order": policy.tie_order,
+        }
+        self.public_provenance = runtime.public_provenance()
 
     def retrieve(self, request: Mapping[str, Any]) -> dict[str, Any]:
-        return self.module.retrieve_batch(self.runtime, request)
+        return self.runtime.retrieve_batch(request)
 
 
 def _load_model_config(path: Path, model_key: str) -> ModelConfig:
@@ -677,17 +704,34 @@ def run_case(
 ) -> dict[str, Any]:
     case_dir = output_root / str(brief["brief_id"])
     case_dir.mkdir(parents=False, exist_ok=False)
+    profile_policy = getattr(retriever, "retrieval_policy", None)
+    if profile_policy is None:
+        # Test doubles and frozen legacy callers do not expose the v2 profile.
+        # These are the only policy values accepted by the shared runtime, so
+        # this compatibility fallback preserves the exact historical bytes.
+        profile_policy = {
+            "category_argument": None,
+            "top_k": 1,
+            "min_score": 0.3,
+        }
     fixed_instruction = {
         "schema_version": "hy34_fixed_instruction_v2",
         "brief": brief,
         "coordinate_frame": "room_min_corner_x_width_y_depth_z_up_meters",
         "catalog_facing_prior": "directed_local_neg_y",
         "retrieval_policy": {
-            "embedding_model": "Qwen/Qwen3-Embedding-0.6B",
-            "category_argument": None,
+            # The fallback preserves existing fake-retriever tests. The
+            # canonical v2 profile returns the exact historical string, so the
+            # current fixed-instruction bytes remain unchanged.
+            "embedding_model": getattr(
+                retriever,
+                "embedding_model_name",
+                "Qwen/Qwen3-Embedding-0.6B",
+            ),
+            "category_argument": profile_policy["category_argument"],
             "size_constraint_used": False,
-            "top_k": 1,
-            "min_score": 0.3,
+            "top_k": profile_policy["top_k"],
+            "min_score": profile_policy["min_score"],
             "query_rewrite_allowed": False,
             "retry_allowed": False,
             "asset_replacement_allowed": False,
@@ -974,7 +1018,7 @@ def initialize_run(
     write_json_exclusive(
         output_root / "run_manifest.json",
         {
-            "schema_version": "hy34_two_stage_run_manifest_v2",
+            "schema_version": RUN_MANIFEST_SCHEMA_VERSION,
             "runner_version": RUNNER_VERSION,
             "created_at": utc_now(),
             "model": model.public_dict(),
@@ -983,7 +1027,7 @@ def initialize_run(
             "models_config_sha256": sha256_file(models_path),
             "stage_a_prompt_sha256": sha256_bytes(stage_a_prompt),
             "stage_c_prompt_sha256": sha256_bytes(stage_c_prompt),
-            "retriever_runtime_root": str(retriever.runtime_root),
+            "retrieval": dict(retriever.public_provenance),
             "retriever_gate_status": retriever.gate_report["status"],
             "retriever_gate_warning_codes": sorted(
                 {item["code"] for item in retriever.gate_report["warnings"]}
@@ -1001,12 +1045,19 @@ def verify_resume(
     model: ModelConfig,
     briefs_path: Path,
     models_path: Path,
+    retriever: RetrieverAdapter,
     source_manifest: Any | None = None,
 ) -> None:
     manifest_path = output_root / "run_manifest.json"
     if not manifest_path.is_file():
         raise ArtifactError("resume requires an existing run_manifest.json")
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if manifest.get("schema_version") != RUN_MANIFEST_SCHEMA_VERSION:
+        raise ArtifactError(
+            "resume requires a run manifest with strict retrieval identity: "
+            f"expected={RUN_MANIFEST_SCHEMA_VERSION!r}, "
+            f"actual={manifest.get('schema_version')!r}"
+        )
     expected = {
         "runner_version": RUNNER_VERSION,
         "model_key": model.key,
@@ -1017,6 +1068,7 @@ def verify_resume(
         "source_manifest_sha256": _resolve_source_manifest(source_manifest)[
             "manifest_sha256"
         ],
+        "retrieval_identity": dict(retriever.public_provenance),
     }
     actual = {
         "runner_version": manifest.get("runner_version"),
@@ -1027,6 +1079,11 @@ def verify_resume(
         "stage_c_prompt_sha256": manifest.get("stage_c_prompt_sha256"),
         "source_manifest_sha256": (manifest.get("source_manifest") or {}).get(
             "manifest_sha256"
+        ),
+        "retrieval_identity": (
+            None
+            if not isinstance(manifest.get("retrieval"), Mapping)
+            else dict(manifest["retrieval"])
         ),
     }
     if actual != expected:
@@ -1046,14 +1103,14 @@ def run_model(
     retry_policy: Any | None = None,
     source_manifest: Any | None = None,
 ) -> tuple[dict[str, Any], bool]:
-    model = _load_model_config(models_path, model_key)
     briefs = _load_briefs(briefs_path)
+    retriever = RetrieverAdapter(retriever_root)
+    model = _load_model_config(models_path, model_key)
     if selected_briefs is not None:
         unknown = selected_briefs - {item["brief_id"] for item in briefs}
         if unknown:
             raise ValueError(f"unknown selected briefs: {sorted(unknown)}")
         briefs = [item for item in briefs if item["brief_id"] in selected_briefs]
-    retriever = RetrieverAdapter(retriever_root)
     if resume:
         if not output_root.is_dir():
             raise ArtifactError("resume output root does not exist")
@@ -1062,6 +1119,7 @@ def run_model(
             model=model,
             briefs_path=briefs_path,
             models_path=models_path,
+            retriever=retriever,
             source_manifest=source_manifest,
         )
         if (output_root / "summary.json").exists():
@@ -1134,6 +1192,7 @@ def check_runner(
     source_manifest: Any | None = None,
 ) -> dict[str, Any]:
     briefs = _load_briefs(briefs_path)
+    retriever = None if retriever_root is None else RetrieverAdapter(retriever_root)
     model_keys = list(json.loads(models_path.read_text(encoding="utf-8"))["models"])
     models = [_load_model_config(models_path, key) for key in model_keys]
     if not models:
@@ -1151,8 +1210,7 @@ def check_runner(
         "source_manifest": _resolve_source_manifest(source_manifest),
         "retriever_gate": None,
     }
-    if retriever_root is not None:
-        retriever = RetrieverAdapter(retriever_root)
+    if retriever is not None:
         report["retriever_gate"] = {
             "status": retriever.gate_report["status"],
             "errors": retriever.gate_report["errors"],
@@ -1160,7 +1218,7 @@ def check_runner(
                 {item["code"] for item in retriever.gate_report["warnings"]}
             ),
             "golden_top1_matches": sum(
-                item["actual_jid"] == item["expected_jid"]
+                item["actual_asset_id"] == item["expected_asset_id"]
                 for item in retriever.gate_report["golden_results"]
             ),
             "golden_count": len(retriever.gate_report["golden_results"]),

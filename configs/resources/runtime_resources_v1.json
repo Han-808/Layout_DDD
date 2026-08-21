@@ -49,6 +49,18 @@
       "source_path": "configs/game/counter_strike/benchmark_v1.yaml",
       "package_path": "src/benchmark/_resources/configs/game/counter_strike/benchmark_v1.yaml",
       "sha256": "f5bcbe7a1cd8094065f5050107b9f714dd0b286760aa1d0927f8ace72c052418"
+    },
+    {
+      "resource": "configs/retrieval/profiles_v2.json",
+      "source_path": "configs/retrieval/profiles_v2.json",
+      "package_path": "src/benchmark/_resources/configs/retrieval/profiles_v2.json",
+      "sha256": "2f7f8e73aa65bbe30cafe74246512d732c47bc74b4823d6acb3136c4f99ded49"
+    },
+    {
+      "resource": "configs/retrieval/golden/imaginarium_qwen3_0_6b_v2.json",
+      "source_path": "configs/retrieval/golden/imaginarium_qwen3_0_6b_v2.json",
+      "package_path": "src/benchmark/_resources/configs/retrieval/golden/imaginarium_qwen3_0_6b_v2.json",
+      "sha256": "a9f5bda10f3f60525b708d0364421611d7ee873c065926bde2c08ef844dc900d"
     }
   ]
 }

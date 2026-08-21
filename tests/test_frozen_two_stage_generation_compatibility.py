@@ -6,6 +6,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import importlib.util
 import json
 from pathlib import Path
+import shutil
+import subprocess
+import sys
 from types import SimpleNamespace
 import threading
 from typing import Any
@@ -545,9 +548,9 @@ def test_evaluation_modules_do_not_import_frozen_generation_layer() -> None:
 
 def test_checked_in_run_configs_are_static_credential_free_and_multi_model_ready() -> None:
     config_paths = (
-        Path("configs/generation/api2_kimi_k3_scene10_v1.json"),
-        Path("configs/generation/api2_glm53_scene10_v1.json"),
-        Path("configs/generation/api3_opus48_high_scene10_v1.json"),
+        Path("configs/generation/api2_kimi_k3_scene10_v2.json"),
+        Path("configs/generation/api2_glm53_scene10_v2.json"),
+        Path("configs/generation/api3_opus48_high_scene10_v2.json"),
     )
     reports = [check_config(load_run_config(path)) for path in config_paths]
     assert [report["model_key"] for report in reports] == [
@@ -558,6 +561,9 @@ def test_checked_in_run_configs_are_static_credential_free_and_multi_model_ready
     assert all(report["credential_loaded"] is False for report in reports)
     assert all(report["retriever_loaded"] is False for report in reports)
     assert all(report["network_used"] is False for report in reports)
+    assert {
+        report["retrieval_profile_id"] for report in reports
+    } == {"imaginarium-qwen3-embedding-0.6b-stable-top1-v2"}
 
     from tools.api2_glm53_runner_v1 import glm53_generation_runner as glm_adapter
     from tools.api2_kimi_k3_runner_v1 import (
@@ -591,13 +597,327 @@ def test_static_check_does_not_import_core_or_initialize_runtime(
     monkeypatch.setattr(configured_cli, "load_runtime_inputs", forbidden)
     report = configured_cli.check_config(
         load_run_config(
-            "configs/generation/api2_kimi_k3_scene10_v1.json"
+            "configs/generation/api2_kimi_k3_scene10_v2.json"
         )
     )
     assert report["credential_loaded"] is False
     assert report["retriever_loaded"] is False
     assert report["network_used"] is False
     assert report["preflight_contract"] == "post_preflight_only"
+
+
+def test_cli_import_does_not_preimport_untrusted_retrieval_package(
+    tmp_path: Path,
+) -> None:
+    """Process startup must reach the trust gate before retrieval import."""
+
+    sentinel = tmp_path / "retrieval-imported"
+    script = "\n".join(
+        (
+            "import importlib.abc",
+            "import pathlib",
+            "import sys",
+            f"sentinel = pathlib.Path({str(sentinel)!r})",
+            "class BlockRetrieval(importlib.abc.MetaPathFinder):",
+            "    def find_spec(self, fullname, path=None, target=None):",
+            "        if fullname == 'benchmark.scene_generation.retrieval' or "
+            "fullname.startswith('benchmark.scene_generation.retrieval.'):",
+            "            sentinel.write_text(fullname, encoding='utf-8')",
+            "            raise RuntimeError('retrieval imported before trust')",
+            "        return None",
+            "sys.meta_path.insert(0, BlockRetrieval())",
+            "import benchmark.scene_generation.frozen_two_stage.cli",
+        )
+    )
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=Path.cwd(),
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert not sentinel.exists()
+
+
+def test_shared_runtime_source_mutation_fails_run_before_import_or_credential(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from benchmark.scene_generation.frozen_two_stage import cli as configured_cli
+
+    repo = tmp_path / "repo"
+    copies = {
+        "tools/api3_anthropic_runner_v2": Path(
+            "tools/api3_anthropic_runner_v2"
+        ),
+        "tools/api3_opus48_thinking_runner_v1": Path(
+            "tools/api3_opus48_thinking_runner_v1"
+        ),
+        "src/benchmark/scene_generation/retrieval": Path(
+            "src/benchmark/scene_generation/retrieval"
+        ),
+        "configs/retrieval": Path("configs/retrieval"),
+    }
+    for relative, source in copies.items():
+        destination = repo / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if relative == "tools/api3_opus48_thinking_runner_v1":
+            destination.mkdir()
+            shutil.copy2(source / "models.pod.json", destination / "models.pod.json")
+        else:
+            shutil.copytree(
+                source,
+                destination,
+                ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+            )
+    generation = repo / "configs" / "generation"
+    generation.mkdir(parents=True)
+    shutil.copy2(
+        "configs/generation/api3_opus48_high_scene10_v2.json",
+        generation / "api3_opus48_high_scene10_v2.json",
+    )
+
+    def bundle(bundle_id: str, role: str, root_text: str) -> dict[str, Any]:
+        root = repo / root_text
+        return {
+            "bundle_id": bundle_id,
+            "role": role,
+            "root": root_text,
+            "files": [
+                {
+                    "path": path.relative_to(root).as_posix(),
+                    "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                }
+                for path in sorted(root.rglob("*"))
+                if path.is_file()
+                and path.suffix != ".pyc"
+                and "__pycache__" not in path.parts
+            ],
+        }
+
+    trust_path = repo / "configs" / "runners" / "test_trust.json"
+    trust_path.parent.mkdir()
+    trust_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "active_generation_bundles_v1",
+                "bundles": [
+                    bundle(
+                        "core",
+                        "frozen_generation_core",
+                        "tools/api3_anthropic_runner_v2",
+                    ),
+                    bundle(
+                        "model",
+                        "generation_model_config",
+                        "tools/api3_opus48_thinking_runner_v1",
+                    ),
+                    bundle(
+                        "runtime",
+                        "shared_generation_retrieval_runtime",
+                        "src/benchmark/scene_generation/retrieval",
+                    ),
+                    bundle(
+                        "profiles",
+                        "generation_retrieval_profiles",
+                        "configs/retrieval",
+                    ),
+                    bundle(
+                        "run-config",
+                        "config_only_generation_routes",
+                        "configs/generation",
+                    ),
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    config = load_run_config(
+        generation / "api3_opus48_high_scene10_v2.json"
+    )
+    runtime_source = repo / "src/benchmark/scene_generation/retrieval/runtime.py"
+    runtime_source.write_text(
+        runtime_source.read_text(encoding="utf-8") + "\n# untrusted mutation\n",
+        encoding="utf-8",
+    )
+
+    def forbidden(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError("runtime import/credential path was reached")
+
+    monkeypatch.setattr(configured_cli, "load_frozen_core", forbidden)
+    monkeypatch.setattr(configured_cli, "load_runtime_inputs", forbidden)
+    with pytest.raises(TrustError, match="trusted hash mismatch"):
+        configured_cli.run_config(
+            config,
+            output_root=tmp_path / "must-not-exist",
+            trust_manifest=trust_path,
+        )
+
+
+def test_legacy_v1_run_config_normalizes_to_current_retrieval_profile() -> None:
+    loaded = load_run_config("configs/generation/api2_kimi_k3_scene10_v1.json")
+    assert loaded.source_schema_version == "frozen_two_stage_run_config_v1"
+    assert loaded.to_public_dict()["schema_version"] == "frozen_two_stage_run_config_v2"
+    assert loaded.retrieval_profile_id == (
+        "imaginarium-qwen3-embedding-0.6b-stable-top1-v2"
+    )
+
+
+def test_runtime_resources_are_gated_before_credential_loading(tmp_path: Path) -> None:
+    from benchmark.scene_generation.frozen_two_stage.compatibility.loader import (
+        load_runtime_inputs,
+    )
+
+    events: list[str] = []
+
+    class Core:
+        @staticmethod
+        def _load_briefs(_path: Path) -> list[dict[str, str]]:
+            return [{"brief_id": "brief_00"}]
+
+        class RetrieverAdapter:
+            def __init__(self, *_args: Any, **_kwargs: Any) -> None:
+                events.append("retrieval_gate")
+
+        @staticmethod
+        def _load_model_config(_path: Path, _key: str) -> object:
+            events.append("credential")
+            return object()
+
+    load_runtime_inputs(
+        Core,
+        models_path=tmp_path / "models.json",
+        model_key="model",
+        briefs_path=tmp_path / "briefs.json",
+        ordered_brief_ids=("brief_00",),
+        retriever_root=tmp_path,
+        retrieval_catalog_path=tmp_path / "profiles.json",
+        retrieval_profile_id="profile-v2",
+        resource_bindings_path=tmp_path / "bindings.json",
+    )
+    assert events == ["retrieval_gate", "credential"]
+
+
+def test_runtime_retrieval_identity_drift_fails_before_credential_loading(
+    tmp_path: Path,
+) -> None:
+    from benchmark.scene_generation.frozen_two_stage.compatibility.loader import (
+        load_runtime_inputs,
+    )
+
+    events: list[str] = []
+
+    class Core:
+        @staticmethod
+        def _load_briefs(_path: Path) -> list[dict[str, str]]:
+            return [{"brief_id": "brief_00"}]
+
+        class RetrieverAdapter:
+            def __init__(self, *_args: Any, **_kwargs: Any) -> None:
+                events.append("retrieval_gate")
+                self.public_provenance = {
+                    "retrieval_profile_id": "profile-v2",
+                    "catalog_sha256": "changed-after-static-trust",
+                    "runtime_source_sha256": "runtime-v2",
+                }
+
+        @staticmethod
+        def _load_model_config(_path: Path, _key: str) -> object:
+            events.append("credential")
+            return object()
+
+    with pytest.raises(ValueError, match="catalog_sha256"):
+        load_runtime_inputs(
+            Core,
+            models_path=tmp_path / "models.json",
+            model_key="model",
+            briefs_path=tmp_path / "briefs.json",
+            ordered_brief_ids=("brief_00",),
+            retriever_root=tmp_path,
+            retrieval_catalog_path=tmp_path / "profiles.json",
+            retrieval_profile_id="profile-v2",
+            resource_bindings_path=tmp_path / "bindings.json",
+            expected_retrieval_identity={
+                "retrieval_profile_id": "profile-v2",
+                "catalog_sha256": "trusted-catalog",
+                "runtime_source_sha256": "runtime-v2",
+            },
+        )
+    assert events == ["retrieval_gate"]
+
+
+def test_resume_requires_v3_manifest_and_exact_retrieval_identity(
+    tmp_path: Path,
+) -> None:
+    output_root = tmp_path / "run"
+    output_root.mkdir()
+    briefs = tmp_path / "briefs.json"
+    models = tmp_path / "models.json"
+    briefs.write_text("briefs", encoding="utf-8")
+    models.write_text("models", encoding="utf-8")
+    retrieval_identity = {
+        "schema_version": "generation_retrieval_provenance_v2",
+        "retrieval_profile_id": "profile-v2",
+        "catalog_sha256": "catalog",
+        "profile_sha256": "profile",
+        "runtime_source_sha256": "runtime",
+    }
+    source_manifest = {"manifest_sha256": "source-manifest"}
+    model = SimpleNamespace(key="model")
+    retriever = SimpleNamespace(public_provenance=retrieval_identity)
+    manifest = {
+        "schema_version": shared_core.RUN_MANIFEST_SCHEMA_VERSION,
+        "runner_version": shared_core.RUNNER_VERSION,
+        "model": {"key": "model"},
+        "briefs_sha256": hashlib.sha256(briefs.read_bytes()).hexdigest(),
+        "models_config_sha256": hashlib.sha256(models.read_bytes()).hexdigest(),
+        "stage_a_prompt_sha256": hashlib.sha256(
+            shared_core.DEFAULT_STAGE_A_PROMPT.read_bytes()
+        ).hexdigest(),
+        "stage_c_prompt_sha256": hashlib.sha256(
+            shared_core.DEFAULT_STAGE_C_PROMPT.read_bytes()
+        ).hexdigest(),
+        "source_manifest": source_manifest,
+        "retrieval": retrieval_identity,
+    }
+    manifest_path = output_root / "run_manifest.json"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    shared_core.verify_resume(
+        output_root=output_root,
+        model=model,
+        briefs_path=briefs,
+        models_path=models,
+        retriever=retriever,
+        source_manifest=source_manifest,
+    )
+
+    old = dict(manifest)
+    old["schema_version"] = "hy34_two_stage_run_manifest_v2"
+    old.pop("retrieval")
+    manifest_path.write_text(json.dumps(old), encoding="utf-8")
+    with pytest.raises(shared_core.ArtifactError, match="strict retrieval identity"):
+        shared_core.verify_resume(
+            output_root=output_root,
+            model=model,
+            briefs_path=briefs,
+            models_path=models,
+            retriever=retriever,
+            source_manifest=source_manifest,
+        )
+
+    missing = dict(manifest)
+    missing.pop("retrieval")
+    manifest_path.write_text(json.dumps(missing), encoding="utf-8")
+    with pytest.raises(shared_core.ArtifactError, match="provenance mismatch"):
+        shared_core.verify_resume(
+            output_root=output_root,
+            model=model,
+            briefs_path=briefs,
+            models_path=models,
+            retriever=retriever,
+            source_manifest=source_manifest,
+        )
 
 
 def test_config_only_onboarding_does_not_use_a_model_name_allowlist(

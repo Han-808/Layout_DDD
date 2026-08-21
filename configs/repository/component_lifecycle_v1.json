@@ -26,7 +26,7 @@
       "state": "active",
       "owner": "scene-generation",
       "replacement": null,
-      "reason": "Frozen two-stage generation core used by the active API2 and API3 compatibility routes.",
+      "reason": "Frozen two-stage generation core used by active API2/API3 routes. The retriever_runtime.py, run_retriever.sh, retriever_runtime.pod.json, and retriever_golden_v1.json interfaces remain exact frozen v1 replay surfaces; current generation uses the separately trusted shared v2 runtime directly.",
       "tracked_policy": "all_tracked",
       "entrypoints": [
         "tools/api3_anthropic_runner_v2/generation_runner.py",
@@ -36,7 +36,10 @@
         "tools/api3_anthropic_runner_v2/contracts.py",
         "tools/api3_anthropic_runner_v2/retriever_runtime.py"
       ],
-      "dependencies": [],
+      "dependencies": [
+        "generation_retrieval_runtime_v2",
+        "generation_retrieval_profiles_v2"
+      ],
       "quarantine_evidence": []
     },
     {
@@ -141,7 +144,53 @@
         "src/benchmark/scene_generation/frozen_two_stage/trust.py"
       ],
       "dependencies": [
-        "api3_anthropic_runner_v2"
+        "api3_anthropic_runner_v2",
+        "generation_retrieval_runtime_v2",
+        "generation_retrieval_profiles_v2"
+      ],
+      "quarantine_evidence": []
+    },
+    {
+      "component_id": "generation_retrieval_runtime_v2",
+      "root": "src/benchmark/scene_generation/retrieval",
+      "state": "active",
+      "owner": "scene-generation",
+      "replacement": null,
+      "reason": "Single path-independent retrieval runtime composed from dataset, encoder, index, profile, and local logical-resource contracts.",
+      "tracked_policy": "all_tracked",
+      "entrypoints": [
+        "src/benchmark/scene_generation/retrieval/__main__.py",
+        "src/benchmark/scene_generation/retrieval/cli.py",
+        "src/benchmark/scene_generation/retrieval/factory.py"
+      ],
+      "sources": [
+        "src/benchmark/scene_generation/retrieval/dataset.py",
+        "src/benchmark/scene_generation/retrieval/encoder.py",
+        "src/benchmark/scene_generation/retrieval/index.py",
+        "src/benchmark/scene_generation/retrieval/profile.py",
+        "src/benchmark/scene_generation/retrieval/runtime.py"
+      ],
+      "dependencies": [],
+      "quarantine_evidence": []
+    },
+    {
+      "component_id": "generation_retrieval_profiles_v2",
+      "root": "configs/retrieval",
+      "state": "active",
+      "owner": "scene-generation",
+      "replacement": null,
+      "reason": "Path-free dataset, encoder, index, and retrieval-profile catalog plus tracked golden and local-binding contract.",
+      "tracked_policy": "all_tracked",
+      "entrypoints": [
+        "configs/retrieval/profiles_v2.json"
+      ],
+      "sources": [
+        "configs/retrieval/profiles_v2.json",
+        "configs/retrieval/golden/imaginarium_qwen3_0_6b_v2.json",
+        "configs/retrieval/resource_bindings.example.json"
+      ],
+      "dependencies": [
+        "generation_retrieval_runtime_v2"
       ],
       "quarantine_evidence": []
     },
@@ -154,21 +203,23 @@
       "reason": "Reviewed route declarations for the active config-driven API2 and API3 generation paths.",
       "tracked_policy": "all_tracked",
       "entrypoints": [
-        "configs/generation/api2_glm53_scene10_v1.json",
-        "configs/generation/api2_kimi_k3_scene10_v1.json",
-        "configs/generation/api3_opus48_high_scene10_v1.json"
+        "configs/generation/api2_glm53_scene10_v2.json",
+        "configs/generation/api2_kimi_k3_scene10_v2.json",
+        "configs/generation/api3_opus48_high_scene10_v2.json"
       ],
       "sources": [
-        "configs/generation/api2_glm53_scene10_v1.json",
-        "configs/generation/api2_kimi_k3_scene10_v1.json",
-        "configs/generation/api3_opus48_high_scene10_v1.json"
+        "configs/generation/api2_glm53_scene10_v2.json",
+        "configs/generation/api2_kimi_k3_scene10_v2.json",
+        "configs/generation/api3_opus48_high_scene10_v2.json"
       ],
       "dependencies": [
         "api3_anthropic_runner_v2",
         "api2_glm53_runner_v1",
         "api2_kimi_k3_runner_v1",
         "api3_opus48_thinking_runner_v1",
-        "frozen_two_stage_compatibility_runtime_v1"
+        "frozen_two_stage_compatibility_runtime_v1",
+        "generation_retrieval_runtime_v2",
+        "generation_retrieval_profiles_v2"
       ],
       "quarantine_evidence": []
     },
@@ -604,6 +655,22 @@
       "state": "active",
       "owner": "scene-generation",
       "reason": "Current hash inventory for active generation bundles."
+    },
+    {
+      "artifact_id": "packaged_generation_retrieval_profiles_v2",
+      "path": "src/benchmark/_resources/configs/retrieval/profiles_v2.json",
+      "state": "active",
+      "owner": "package-resources",
+      "reason": "Packaged byte-identical mirror of the current path-free retrieval catalog.",
+      "mirror_of": "configs/retrieval/profiles_v2.json"
+    },
+    {
+      "artifact_id": "packaged_generation_retrieval_golden_v2",
+      "path": "src/benchmark/_resources/configs/retrieval/golden/imaginarium_qwen3_0_6b_v2.json",
+      "state": "active",
+      "owner": "package-resources",
+      "reason": "Packaged byte-identical mirror of the current retrieval golden suite.",
+      "mirror_of": "configs/retrieval/golden/imaginarium_qwen3_0_6b_v2.json"
     },
     {
       "artifact_id": "pytest_suites_v1",

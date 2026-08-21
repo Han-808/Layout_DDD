@@ -1,0 +1,47 @@
+{
+  "schema_version": "frozen_two_stage_run_config_v2",
+  "core_root": "../../tools/api3_anthropic_runner_v2",
+  "models_path": "../../tools/api2_kimi_k3_runner_v1/models.pod.json",
+  "model_key": "api2-kimi-k3",
+  "retrieval": {
+    "runtime_root": "../../src/benchmark/scene_generation/retrieval",
+    "catalog_path": "../retrieval/profiles_v2.json",
+    "profile_id": "imaginarium-qwen3-embedding-0.6b-stable-top1-v2"
+  },
+  "ordered_brief_ids": [
+    "brief_00", "brief_01", "brief_02", "brief_03", "brief_04",
+    "brief_05", "brief_06", "brief_07", "brief_08", "brief_09"
+  ],
+  "route": {
+    "kind": "api2_chat",
+    "key": "api2-kimi-k3-chat-completions-v1",
+    "provider": "moonshot",
+    "gateway_model": "kimi-k3",
+    "user_agent_suffix": "api2-kimi-k3-v1",
+    "runner_version": "2.0.0",
+    "timeout_seconds": 600,
+    "chat_options": {
+      "style": "top_level_reasoning",
+      "default_reasoning_effort": "max"
+    }
+  },
+  "retry": {
+    "retryable_transport_statuses": ["transport_failure"],
+    "retryable_http_statuses": [408, 409, 425, 429, 500, 502, 503, 504],
+    "retry_ambiguous_timeouts": false,
+    "continue_after_case_failure": true
+  },
+  "execution_policy": {
+    "schema_version": "kimi_k3_api2_scene10_execution_policy_v1",
+    "case_failure_policy": "record_and_continue_next_brief",
+    "expected_brief_ids": [
+      "brief_00", "brief_01", "brief_02", "brief_03", "brief_04",
+      "brief_05", "brief_06", "brief_07", "brief_08", "brief_09"
+    ],
+    "request_protocol": "openai_chat_completions",
+    "reasoning_effort": "max",
+    "max_tokens": 65536,
+    "maximum_infrastructure_retries": 3,
+    "required_http_retry_statuses": [429, 500]
+  }
+}

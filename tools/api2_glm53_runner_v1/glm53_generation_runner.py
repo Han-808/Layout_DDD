@@ -116,6 +116,7 @@ def configure_core() -> Any:
 
 def preflight() -> dict[str, Any]:
     runner = configure_core()
+    runner.RetrieverAdapter(FROZEN_CORE_ROOT)
     model = runner._load_model_config(MODELS_PATH, MODEL_KEY)
     request = _request_value(
         model=model,
@@ -194,6 +195,7 @@ def run_scene10(output_root: Path) -> dict[str, Any]:
     if output_root.exists():
         raise FileExistsError(f"refusing to overwrite existing output: {output_root}")
     runner = configure_core()
+    retriever = runner.RetrieverAdapter(FROZEN_CORE_ROOT)
     model = runner._load_model_config(MODELS_PATH, MODEL_KEY)
     if model.max_infrastructure_retries != 3:
         raise ValueError("GLM-5.3 runner must provide exactly three retries")
@@ -201,7 +203,6 @@ def run_scene10(output_root: Path) -> dict[str, Any]:
     brief_ids = tuple(str(brief["brief_id"]) for brief in briefs)
     if brief_ids != EXPECTED_BRIEF_IDS:
         raise ValueError(f"unexpected frozen brief set: {brief_ids}")
-    retriever = runner.RetrieverAdapter(FROZEN_CORE_ROOT)
     route = provider_route()
     retry_policy = RetryPolicy(
         max_infrastructure_retries=model.max_infrastructure_retries,

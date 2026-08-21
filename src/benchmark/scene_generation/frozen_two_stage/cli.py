@@ -42,8 +42,6 @@ from benchmark.scene_generation.frozen_two_stage.trust import (
     TrustInventory,
     TrustReport,
 )
-
-
 def _canonical_json_bytes(value: Any) -> bytes:
     return json.dumps(
         value,
@@ -61,7 +59,7 @@ def _source_manifest(
     trust_report: TrustReport,
 ) -> dict[str, Any]:
     payload = {
-        "schema_version": "frozen_two_stage_configured_source_manifest_v1",
+        "schema_version": "frozen_two_stage_configured_source_manifest_v3",
         "run_config": {
             "path": str(config.path),
             "sha256": config.sha256,
@@ -76,7 +74,17 @@ def _source_manifest(
                 trust_report.core_bundle.declaration_sha256
             ),
         },
-        "retriever": trust_report.retriever_bundle.to_public_dict(),
+        "retriever": {
+            "runtime_bundle": (
+                trust_report.retrieval_runtime_bundle.to_public_dict()
+            ),
+            "runtime_source_sha256": (
+                trust_report.retrieval_runtime_source_sha256
+            ),
+            "catalog_bundle": trust_report.retrieval_catalog_bundle.to_public_dict(),
+            "catalog_sha256": trust_report.retrieval_catalog_file.sha256,
+            "retrieval_profile_id": config.retrieval_profile_id,
+        },
         "provider_route": route.source_manifest(),
         "preflight_contract": "post_preflight_only",
     }
@@ -115,6 +123,7 @@ def _generation_spec(
             "run_config_schema": config.to_public_dict()["schema_version"],
             "run_config_sha256": config.sha256,
             "route_kind": config.route.kind,
+            "retrieval_profile_id": config.retrieval_profile_id,
         },
         source_manifest=source_manifest,
     )
@@ -161,7 +170,52 @@ class _StaticPreparedRun:
     route: Any
     retry_policy: Any
     source_manifest: Mapping[str, Any]
+    retrieval_identity: Mapping[str, Any]
     spec: GenerationRunSpec
+
+
+def _static_retrieval_identity(
+    config: FrozenTwoStageRunConfig,
+    trust_report: TrustReport,
+) -> dict[str, Any]:
+    """Build the path-free identity that runtime must reproduce pre-key."""
+
+    # This import is deliberately after ``TrustInventory.verify_run_inputs``.
+    # Config parsing and CLI module import must never execute configurable
+    # retrieval code before its complete bundle has been hash-verified.
+    from benchmark.scene_generation.retrieval import RetrievalCatalog
+
+    composed = RetrievalCatalog.load(config.retrieval_catalog_path).compose(
+        config.retrieval_profile_id
+    )
+    return {
+        "retrieval_profile_id": composed.profile.retrieval_profile_id,
+        "catalog_sha256": composed.catalog_sha256,
+        "profile_sha256": composed.profile_sha256,
+        "dataset_id": composed.dataset.dataset_id,
+        "asset_namespace": composed.dataset.asset_namespace,
+        "encoder_id": composed.encoder.encoder_id,
+        "embedding_model": composed.encoder.upstream_model_id,
+        "encoder_revision": composed.encoder.revision,
+        "index_id": composed.index.index_id,
+        "resource_content_sha256": {
+            composed.index.metadata_file.resource_id: (
+                composed.index.metadata_file.sha256
+            ),
+            composed.index.matrix_file.resource_id: (
+                composed.index.matrix_file.sha256
+            ),
+            composed.encoder.model_resource_id: (
+                composed.encoder.snapshot_manifest_sha256
+            ),
+            f"golden:{composed.profile.retrieval_profile_id}": (
+                composed.profile.golden_suite.sha256
+            ),
+        },
+        "runtime_source_sha256": (
+            trust_report.retrieval_runtime_source_sha256
+        ),
+    }
 
 
 def _prepare_static(
@@ -177,7 +231,8 @@ def _prepare_static(
         core_root=config.core_root,
         models_path=config.models_path,
         briefs_path=config.briefs_path,
-        retriever_root=config.retriever_root,
+        retrieval_runtime_root=config.retrieval_runtime_root,
+        retrieval_catalog_path=config.retrieval_catalog_path,
         run_config_path=config.path,
     )
     if trust_report.run_config_file.sha256 != config.sha256:
@@ -189,6 +244,7 @@ def _prepare_static(
         raise ValueError(
             "in-memory run config differs from its trusted on-disk declaration"
         )
+    retrieval_identity = _static_retrieval_identity(config, trust_report)
     static_core = inspect_core_metadata(config.core_root)
     static_model = inspect_model_metadata(config.models_path, config.model_key)
     brief_ids = select_static_brief_ids(
@@ -221,6 +277,7 @@ def _prepare_static(
         route=route,
         retry_policy=retry_policy,
         source_manifest=source_manifest,
+        retrieval_identity=retrieval_identity,
         spec=spec,
     )
 
@@ -239,7 +296,7 @@ def check_config(
     )
     return {
         "valid": True,
-        "schema_version": "frozen_two_stage_config_check_v1",
+        "schema_version": "frozen_two_stage_config_check_v2",
         "run_config_sha256": config.sha256,
         "model_key": prepared.spec.model_key,
         "wire_model": prepared.spec.wire_model,
@@ -252,6 +309,10 @@ def check_config(
             prepared.retry_policy.maximum_attempts_per_stage
         ),
         "source_manifest_sha256": prepared.source_manifest["manifest_sha256"],
+        "retrieval_profile_id": config.retrieval_profile_id,
+        "retrieval_catalog_sha256": hashlib.sha256(
+            config.retrieval_catalog_path.read_bytes()
+        ).hexdigest(),
         "trust": prepared.trust_report.to_public_dict(),
         "credential_loaded": False,
         "retriever_loaded": False,
@@ -266,6 +327,7 @@ def run_config(
     output_root: str | Path,
     progress: SafeProgress | None = None,
     trust_manifest: str | Path | None = None,
+    resource_bindings_path: str | Path | None = None,
 ) -> tuple[dict[str, Any], bool]:
     """Execute an already-preflighted config through the trusted workflow."""
 
@@ -287,7 +349,11 @@ def run_config(
         model_key=config.model_key,
         briefs_path=config.briefs_path,
         ordered_brief_ids=config.ordered_brief_ids,
-        retriever_root=config.retriever_root,
+        retriever_root=config.retrieval_runtime_root,
+        retrieval_catalog_path=config.retrieval_catalog_path,
+        retrieval_profile_id=config.retrieval_profile_id,
+        resource_bindings_path=resource_bindings_path,
+        expected_retrieval_identity=prepared.retrieval_identity,
     )
     validate_runtime_consistency(
         core=core,
@@ -327,6 +393,14 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--run-config", type=Path, required=True)
     run.add_argument("--output-dir", type=Path, required=True)
     run.add_argument("--trust-manifest", type=Path)
+    run.add_argument(
+        "--resource-bindings",
+        type=Path,
+        help=(
+            "local logical resource binding; otherwise use "
+            "LAYOUT_DDD_RETRIEVAL_BINDINGS or the ignored repo-local default"
+        ),
+    )
     return parser
 
 
@@ -348,6 +422,7 @@ def main(argv: Iterable[str] | None = None) -> int:
             output_root=args.output_dir,
             progress=_print_progress,
             trust_manifest=args.trust_manifest,
+            resource_bindings_path=args.resource_bindings,
         )
         print(json.dumps(summary, ensure_ascii=False, sort_keys=True))
         return 2 if stopped or summary["failed"] else 0

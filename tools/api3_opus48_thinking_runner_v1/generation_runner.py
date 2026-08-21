@@ -142,12 +142,12 @@ def run_full10(output_root: Path) -> dict[str, Any]:
     if output_root.exists():
         raise FileExistsError(f"refusing to overwrite existing output: {output_root}")
     runner = configure_core()
+    retriever = runner.RetrieverAdapter(CORE_ROOT)
     model = runner._load_model_config(MODELS_PATH, MODEL_KEY)
     briefs = runner._load_briefs(CORE_ROOT / "briefs.json")
     brief_ids = tuple(str(brief["brief_id"]) for brief in briefs)
     if brief_ids != EXPECTED_BRIEF_IDS:
         raise ValueError(f"unexpected frozen brief set: {brief_ids}")
-    retriever = runner.RetrieverAdapter(CORE_ROOT)
     route = provider_route()
     retry_policy = RetryPolicy(
         max_infrastructure_retries=model.max_infrastructure_retries,
