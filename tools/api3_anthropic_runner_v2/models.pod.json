@@ -1,0 +1,40 @@
+{
+  "schema_version": "hy34_model_transport_config_v1",
+  "endpoint": "http://21.214.33.175:4000/v1/chat/completions",
+  "api_key_env": "API3_API_KEY",
+  "request": {
+    "timeout_seconds": 1800.0,
+    "max_infrastructure_retries": 2,
+    "retry_delay_seconds": 30.0,
+    "temperature": null,
+    "top_p": null,
+    "top_k": null,
+    "max_tokens": 65536,
+    "repetition_penalty": null,
+    "reasoning_effort": null,
+    "preserved_thinking": null,
+    "strategy_type": "ConsistentHash"
+  },
+  "models": {
+    "api3-claude-opus-4-8": {
+      "label": "claude-opus-4-8-aihub",
+      "configured_model": "openai/claude-opus-4-8-aihub",
+      "wire_model": "claude-opus-4-8-aihub"
+    },
+    "api3-claude-sonnet-5": {
+      "label": "claude-sonnet-5-aihub",
+      "configured_model": "openai/claude-sonnet-5-aihub",
+      "wire_model": "claude-sonnet-5-aihub"
+    },
+    "api3-claude-opus-5": {
+      "label": "claude-opus-5-aihub",
+      "configured_model": "openai/claude-opus-5-aihub",
+      "wire_model": "claude-opus-5-aihub"
+    },
+    "api3-claude-fable-5": {
+      "label": "claude-fable-5-aihub",
+      "configured_model": "openai/claude-fable-5-aihub",
+      "wire_model": "claude-fable-5-aihub"
+    }
+  }
+}

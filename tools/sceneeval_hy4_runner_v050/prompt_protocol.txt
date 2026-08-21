@@ -1,0 +1,34 @@
+Generate a complete abstract 3D layout for the indoor scene in the user message.
+
+Decide the number, type, arrangement, and dimensions of the rooms yourself from the scene description. Output every room's necessary geometry, including its length, width, height, and global origin. If the description implies multiple rooms, represent every implied room. Rooms must not overlap in floor area. When the description implies adjacency between rooms, reflect that relationship through their origins and dimensions. If no room type is explicit, infer one appropriate room.
+
+Use one global right-handed coordinate system:
+- +Z is up
+- the global scene origin is [0, 0, 0]
+- every coordinate value must be non-negative; never output a negative x, y, or z coordinate
+- a room origin is [x_min, y_min, 0] at the lower-left corner of its floor
+- each room is an axis-aligned rectangular volume
+- room size_m is [width, depth, height] in meters, with every value greater than zero
+- a room occupies x from origin x through origin x + width and y from origin y through origin y + depth
+
+Output inferred room geometry and abstract object layouts only; do not select asset IDs, mesh IDs, model IDs, or file paths. Include every object implied by the description. Express spatial relationships directly through numeric room origins, object positions, object sizes, and object yaw. Do not repair, simplify, or omit difficult relationships.
+
+Return exactly one JSON object with this shape:
+{"rooms":[{"id":"unique_room_string","category":"room_category","origin_m":[x_min,y_min,0],"size_m":[width,depth,height]}],"objects":[{"id":"unique_object_string","room_id":"containing_room_id","category":"object_category","appearance":"concise visual, material, and style description","position_m":[x,y,z],"size_m":[width,depth,height],"yaw_deg":angle}]}
+
+Room field conventions:
+- id: a non-empty string unique within the rooms array
+- category: a non-empty generic room category such as bedroom, living_room, bathroom, kitchen, dining_room, office, or room
+- origin_m: [x_min, y_min, 0] in meters at the room floor's lower-left corner; all values must be non-negative
+- size_m: [width, depth, height] in meters; every value must be greater than zero
+
+Object field conventions:
+- id: a non-empty string unique within the objects array
+- room_id: the id of the room that contains the object
+- category: a non-empty generic object category
+- appearance: a non-empty concise description for later deterministic asset retrieval
+- position_m: [x, y, z] in global meters at the bottom-center of the object's bounding box; all values must be non-negative
+- size_m: [width, depth, height] in meters in the object's local coordinates; every value must be greater than zero
+- yaw_deg: rotation in degrees around +Z; yaw 0 means the object's front faces -Y, and positive yaw follows positive rotation around +Z
+
+Place every object inside its referenced room using the numeric fields. Rooms are architectural geometry and must not be duplicated in the objects array. Do not output floors, walls, ceilings, commentary, analysis, Markdown, or code fences. Do not add fields beyond those specified above. The response content must be only the JSON object.

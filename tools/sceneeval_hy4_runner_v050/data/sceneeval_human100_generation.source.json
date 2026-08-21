@@ -1,0 +1,23 @@
+{
+  "benchmark_release": "SceneEval-500_v250610",
+  "selection": {
+    "description": "User-approved human-authored subset rule: use ordered IDs 0 through 99",
+    "first_id": 0,
+    "last_id": 99,
+    "row_count": 100
+  },
+  "source": {
+    "file": "SceneEval-500_v250610/annotations.csv",
+    "row_count": 500,
+    "sha256": "d770886e249e7be04cc3e183ddd1b9e23c2aa6a7666226b5fe5da17236286ae3"
+  },
+  "output": {
+    "file": "sceneeval_human100_generation.jsonl",
+    "fields": [
+      "id",
+      "description"
+    ],
+    "annotations_included": false,
+    "sha256": "4f632141aa5539e33a6e5f9b63c26f7d66a1882c48c07ba0fd5036af74fa892f"
+  }
+}

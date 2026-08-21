@@ -1,0 +1,25 @@
+{
+  "schema_version": "hy34_model_transport_config_v1",
+  "endpoint": "http://trpc-gpt-eval.production.polaris:8080/api/v1/responses",
+  "api_key_env": "API2_APP_CREDENTIAL",
+  "request": {
+    "timeout_seconds": 600.0,
+    "max_infrastructure_retries": 3,
+    "retry_delay_seconds": 30.0,
+    "temperature": null,
+    "top_p": null,
+    "top_k": null,
+    "max_tokens": 65536,
+    "repetition_penalty": null,
+    "reasoning_effort": "max",
+    "preserved_thinking": null,
+    "strategy_type": "responses_api2_zhipu"
+  },
+  "models": {
+    "api2-glm-5-3": {
+      "label": "glm-5.3",
+      "configured_model": "zhipu/glm-5.3",
+      "wire_model": "glm-5.3"
+    }
+  }
+}

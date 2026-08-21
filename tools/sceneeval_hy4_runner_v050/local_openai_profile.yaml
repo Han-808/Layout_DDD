@@ -1,0 +1,31 @@
+# Immutable, credential-free profile snapshot for local ForgeAX runs.
+# The real bearer token is entered at runtime and is never written to artifacts.
+openai_compatible_client:
+  base_url: https://llm-proxy.forgeax.com/v1
+  authentication: runtime_bearer_redacted
+  models_in_order:
+    - claude-opus-4-8
+    - kimi-k3
+    - gpt-5.6-luna
+  request:
+    messages: exact_frozen_system_plus_exact_sceneeval_description
+    max_tokens: 65536
+    default_reasoning_effort: high
+    model_reasoning_interfaces:
+      claude-opus-4-8:
+        thinking:
+          type: adaptive
+        output_config:
+          effort: high
+      kimi-k3:
+        reasoning_effort: high
+      gpt-5.6-luna:
+        reasoning_effort: high
+    stream: false
+  omitted:
+    - temperature
+    - top_p
+    - top_k
+    - repetition_penalty
+    - chat_template_kwargs
+    - provider_routing_headers

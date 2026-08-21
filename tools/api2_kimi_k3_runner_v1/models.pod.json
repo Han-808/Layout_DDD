@@ -1,0 +1,25 @@
+{
+  "schema_version": "hy34_model_transport_config_v1",
+  "endpoint": "http://trpc-gpt-eval.production.polaris:8080/v1/chat/completions",
+  "api_key_env": "API2_APP_CREDENTIAL",
+  "request": {
+    "timeout_seconds": 600.0,
+    "max_infrastructure_retries": 3,
+    "retry_delay_seconds": 30.0,
+    "temperature": null,
+    "top_p": null,
+    "top_k": null,
+    "max_tokens": 65536,
+    "repetition_penalty": null,
+    "reasoning_effort": "max",
+    "preserved_thinking": null,
+    "strategy_type": "chat_completions_api2_moonshot"
+  },
+  "models": {
+    "api2-kimi-k3": {
+      "label": "kimi-k3",
+      "configured_model": "moonshot/kimi-k3",
+      "wire_model": "kimi-k3"
+    }
+  }
+}

@@ -59,3 +59,10 @@ downloads/
 !/docs/grouping_blind30_experiment.md
 !/docs/game/
 !/docs/game/counter_strike_benchmark.md
+
+# Active frozen generation bundles are versioned for clean-checkout
+# reproducibility. Keep broad local-data/document ignores everywhere else.
+!/tools/sceneeval_hy4_runner_v050/README.md
+!/tools/sceneeval_hy4_runner_v050/data/
+!/tools/sceneeval_hy4_runner_v050/data/**
+!/tools/api3_anthropic_runner_v2/README.md

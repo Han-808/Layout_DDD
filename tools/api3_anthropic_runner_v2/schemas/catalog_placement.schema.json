@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "catalog_placement_v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "instances"],
+  "properties": {
+    "schema_version": {"const": "catalog_placement_v1"},
+    "instances": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "instance_id", "asset_id", "slot_id", "center_m", "uniform_scale",
+          "rotation_euler_xyz_deg"
+        ],
+        "properties": {
+          "instance_id": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+          "asset_id": {"type": "string", "minLength": 1},
+          "slot_id": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+          "center_m": {
+            "type": "array", "minItems": 3, "maxItems": 3,
+            "items": {"type": "number", "minimum": 0}
+          },
+          "uniform_scale": {"type": "number", "exclusiveMinimum": 0},
+          "rotation_euler_xyz_deg": {
+            "type": "array", "minItems": 3, "maxItems": 3,
+            "items": {"type": "number"}
+          }
+        }
+      }
+    }
+  }
+}
+

@@ -1,0 +1,420 @@
+{
+  "schema_version": "active_generation_bundles_v1",
+  "bundles": [
+    {
+      "bundle_id": "sceneeval_hy4_runner_v050",
+      "root": "tools/sceneeval_hy4_runner_v050",
+      "role": "canonical_sceneeval_runner",
+      "entrypoints": [
+        "run.py",
+        "sceneeval_hy4/cli.py"
+      ],
+      "files": [
+        {
+          "path": "README.md",
+          "sha256": "2c30f93fa36112839a26ec71783a58b218ccb8ceb787c84ce31b8bc184172e76",
+          "mode": "0644"
+        },
+        {
+          "path": "data/sceneeval_human100_generation.jsonl",
+          "sha256": "4f632141aa5539e33a6e5f9b63c26f7d66a1882c48c07ba0fd5036af74fa892f",
+          "mode": "0644"
+        },
+        {
+          "path": "data/sceneeval_human100_generation.source.json",
+          "sha256": "1f21a2b34f84f1c4c1f66c1bf757d23ae992c841e1da7f4d26ff0b9f72847cfe",
+          "mode": "0644"
+        },
+        {
+          "path": "examples/human100.input.example.jsonl",
+          "sha256": "893965499d21dc183af9d6fc742ba2f4034e5bd1a71cb6be424896948b8182f3",
+          "mode": "0644"
+        },
+        {
+          "path": "local_openai_profile.yaml",
+          "sha256": "67f5a5cd1dceb5c38a107080b071872ab25110a074b857a47e03d99d41c094f9",
+          "mode": "0644"
+        },
+        {
+          "path": "openai_clients.yaml",
+          "sha256": "a127bd55896fbefb0063fff2e726b625912cdeab7b8dd816f3074e7200c25e61",
+          "mode": "0644"
+        },
+        {
+          "path": "prompt_protocol.txt",
+          "sha256": "a3106dbbc611a44b8eee39f7f90ce693ed6096bffecb1f420c9b96a97f964ee9",
+          "mode": "0644"
+        },
+        {
+          "path": "run.py",
+          "sha256": "288f688433dc0a8f860e79b19e0bf86f6ce5d66b1ac953ba89b32aaf3f2546d9",
+          "mode": "0644"
+        },
+        {
+          "path": "run_local_multimodel.py",
+          "sha256": "c521fd430c2a37aea1fc299ecba67857d885ec068bd048607d8a42b4c36c2f68",
+          "mode": "0644"
+        },
+        {
+          "path": "sceneeval_hy4/__init__.py",
+          "sha256": "188e9c6beacbfeba7c729da634be85a54b7f644fe60812d348c4524812a365ad",
+          "mode": "0644"
+        },
+        {
+          "path": "sceneeval_hy4/artifacts.py",
+          "sha256": "d9784a6a780ef187026ba4b64da9d978b80ed271fd0b2b0e0c4c4b5a6ddd4738",
+          "mode": "0644"
+        },
+        {
+          "path": "sceneeval_hy4/cli.py",
+          "sha256": "bbc844c0acee593156e7001481c7312a986dccd5b1a26831ed178686b7028f2b",
+          "mode": "0644"
+        },
+        {
+          "path": "sceneeval_hy4/client_config.py",
+          "sha256": "6b5321d28b1da4581c31c67a59ba5d98766f19da09bc5217dee3ea16ae0a7799",
+          "mode": "0644"
+        },
+        {
+          "path": "sceneeval_hy4/constants.py",
+          "sha256": "c5282d8522d9545c408413bf8384ca4a293313bb3915677c378f7ffa42ec6e02",
+          "mode": "0644"
+        },
+        {
+          "path": "sceneeval_hy4/inputs.py",
+          "sha256": "7aead9e95ed83607b51a563eee4dab3d22ea99b6820ccfe418e2001c190e2385",
+          "mode": "0644"
+        },
+        {
+          "path": "sceneeval_hy4/layout_schema.py",
+          "sha256": "339b6e23405f245e15368e432b2b0385674f722003106fd95aa61834c6d0b98f",
+          "mode": "0644"
+        },
+        {
+          "path": "sceneeval_hy4/prompt.py",
+          "sha256": "64ffb72951730a5a919e7d16173a5dc8c7bab98dcea17684c3eebefc25e69517",
+          "mode": "0644"
+        },
+        {
+          "path": "sceneeval_hy4/runner.py",
+          "sha256": "95326c44ec4a483d1f2185a46236675e8008182a0bd6ef28d1d1e693d3f83b0e",
+          "mode": "0644"
+        },
+        {
+          "path": "sceneeval_hy4/strict_json.py",
+          "sha256": "c2e0947c6fbd40f96606311545444489197dcbf34bfeeaab58fb783e23647b40",
+          "mode": "0644"
+        },
+        {
+          "path": "sceneeval_hy4/transport.py",
+          "sha256": "26203ee4293824ab393668fbc6e45bfba10f94bb0f017f697a9c33954cc01632",
+          "mode": "0644"
+        },
+        {
+          "path": "sceneeval_local_multimodel.py",
+          "sha256": "50be2691c1cab6c961015bdb6b133b215fb584e49566cbc73c49e7c908e25491",
+          "mode": "0644"
+        },
+        {
+          "path": "schema/layout.schema.json",
+          "sha256": "5b31966b64a0d1244b66c75a204967b74792fd69d4d1ecfa7ab1d47311840816",
+          "mode": "0644"
+        },
+        {
+          "path": "tests/test_client_config.py",
+          "sha256": "4c7cee7edf6582bcfc1ce652ea1a8f0435cc0b62767fc70bf6ac7cea934c1ec8",
+          "mode": "0644"
+        },
+        {
+          "path": "tests/test_inputs_and_prompt.py",
+          "sha256": "9896296abe833fe5bf6ce7c221f25bf124421426d80bf812b24cf0614b968a00",
+          "mode": "0644"
+        },
+        {
+          "path": "tests/test_strict_json_and_schema.py",
+          "sha256": "8e94828e81ad2ea73330c21bb2d30ae6da97c0c77c9f4fce43424da6e46db13f",
+          "mode": "0644"
+        },
+        {
+          "path": "tests/test_transport_and_runner.py",
+          "sha256": "2d95d2d9dc1dffe8abc4ba0cdd58d18baddc137937f70f4aa91cede66d06af8a",
+          "mode": "0644"
+        }
+      ]
+    },
+    {
+      "bundle_id": "api3_anthropic_runner_v2",
+      "root": "tools/api3_anthropic_runner_v2",
+      "role": "frozen_generation_core",
+      "entrypoints": [
+        "generation_runner.py",
+        "run_generation.sh"
+      ],
+      "files": [
+        {
+          "path": "README.md",
+          "sha256": "284cbcc49bbf1ccdc6001253d2bbf0a58a6fe3463877d6dc7cc250d7bea3bb2c",
+          "mode": "0644"
+        },
+        {
+          "path": "__init__.py",
+          "sha256": "4c90c76c815929ba739f5ae0166c6f7b8a8b02726ebff5308959c4b1f5fc2d6f",
+          "mode": "0644"
+        },
+        {
+          "path": "artifacts.py",
+          "sha256": "c267e56617e5e020de39bef7b33df43b62c57895347c966e9b610b16179cf768",
+          "mode": "0644"
+        },
+        {
+          "path": "briefs.json",
+          "sha256": "c016ed9b926309c2a02278936dbc0e777a46b0bd30a71bcc1f563919418dcb55",
+          "mode": "0644"
+        },
+        {
+          "path": "contracts.py",
+          "sha256": "c214f1237403e08277c750c2b5eebf03e5ec280c0fc3a6d455514bca75f4438e",
+          "mode": "0644"
+        },
+        {
+          "path": "diagnose_api3_compat.py",
+          "sha256": "a3335bcbe58c683b61a9839a24f72272ef917d72c721c2f5e177e53b4eb1e8a6",
+          "mode": "0755"
+        },
+        {
+          "path": "generation_runner.py",
+          "sha256": "53f3ca95207e9d6e28b745bcd99763eee35ea3e89083aa5a57d86df6594d2496",
+          "mode": "0755"
+        },
+        {
+          "path": "launch_all_local_api3_anthropic_scene10.sh",
+          "sha256": "3b2f4b384255bb456c8956ebfd1edfa04fc9dd413c4b0cb4de6707ce470f7df6",
+          "mode": "0755"
+        },
+        {
+          "path": "launch_all_local_api3_failed_retry3.sh",
+          "sha256": "1110e4d7e7c084bdaf499278a3524ad085d722942350c1732cdae4e4e58b2991",
+          "mode": "0755"
+        },
+        {
+          "path": "launch_all_local_api3_failed_retry6.sh",
+          "sha256": "2cf28c6da80f2030a34a5349e932de2e370d1a51ed3bca133af124ee50b24a74",
+          "mode": "0755"
+        },
+        {
+          "path": "launch_all_local_api3_failed_retry_max2.sh",
+          "sha256": "411e5e266ed4d2ae8773b81115285b6202eef1c9572c35a83c36fd335e81a7a3",
+          "mode": "0755"
+        },
+        {
+          "path": "launch_local_api3_opus5_unresolved3_until_valid_or10.sh",
+          "sha256": "4e5d3d2424d59a9001b0a0c9ec2c443d8f0fb027ed36a7a0fbf74b1a3fd4f1cf",
+          "mode": "0755"
+        },
+        {
+          "path": "launch_local_api3_retry3_watchdog.sh",
+          "sha256": "2bba61b065c36aa5328358c48f3470c54f9ed38d11450545bd2ecea2e7c8c540",
+          "mode": "0755"
+        },
+        {
+          "path": "launch_local_api3_retry_watchdog.sh",
+          "sha256": "807f12f9cfc4967ad1bad20d22ec01757bbed3bffb899c16d6ccf3269c07376b",
+          "mode": "0755"
+        },
+        {
+          "path": "models.pod.json",
+          "sha256": "2da772438d77cb6ae401aa4a72d3843c448eadd296e52212e95620b9dc5b26d7",
+          "mode": "0644"
+        },
+        {
+          "path": "preflight_api3.py",
+          "sha256": "3e08b77257d16a43ab53265350ea84295918aae52230d6b94c67284eabc41188",
+          "mode": "0755"
+        },
+        {
+          "path": "retriever_golden_v1.json",
+          "sha256": "28992804c7dd6653dfddbfe95f5d4560039290d16ee38a10384176137a5d28fb",
+          "mode": "0644"
+        },
+        {
+          "path": "retriever_runtime.pod.json",
+          "sha256": "1814be3b7fae3a56b43a310f579a8b9de2dc0ed724892b7ffd77d748770f1831",
+          "mode": "0644"
+        },
+        {
+          "path": "retriever_runtime.py",
+          "sha256": "2ace18795781dac83e884528eb4c343052abd50707f834e103669d873261fe20",
+          "mode": "0644"
+        },
+        {
+          "path": "run_generation.sh",
+          "sha256": "e42b820f17c92a77e38ecc096b892444319112c7a1bd0e055b8194f808584258",
+          "mode": "0755"
+        },
+        {
+          "path": "run_local_api3_failed_retry3.sh",
+          "sha256": "3f2f897c22280d9b1e4ee9f99d31b6e4eff8ff025324bd68a69e2173f70bdcca",
+          "mode": "0755"
+        },
+        {
+          "path": "run_local_api3_failed_retry6.sh",
+          "sha256": "41fddc230e50461efd23661224563cfff0984f273d724e859c2dfb8df2d4cd81",
+          "mode": "0755"
+        },
+        {
+          "path": "run_local_api3_failed_retry_max2.sh",
+          "sha256": "25350052570a2ebd6711c553c7d67ff80abe6f49d9d5876319b3bd5375430eea",
+          "mode": "0755"
+        },
+        {
+          "path": "run_local_api3_model_scene10.sh",
+          "sha256": "e8ebccfbb245b4d55641ed537dfd94c131b61fa3c58dac15c5ff71eea46a1703",
+          "mode": "0755"
+        },
+        {
+          "path": "run_local_api3_opus5_unresolved3_until_valid_or10.py",
+          "sha256": "34ff662717ff76a1d066ca9379ed5a043a5f995b2918330ee537fc38ec31d320",
+          "mode": "0755"
+        },
+        {
+          "path": "run_local_api3_retry3_watchdog.sh",
+          "sha256": "46c9932be0f46c269b9b3da7ccb3207ba6c0ffb28c07d3b5b507052099111e81",
+          "mode": "0755"
+        },
+        {
+          "path": "run_local_api3_retry_watchdog.sh",
+          "sha256": "a1ab82c28fbde23bbfe1bc2a0d4dcef81b03a89304597c9d062f049e916b8825",
+          "mode": "0755"
+        },
+        {
+          "path": "run_retriever.sh",
+          "sha256": "e274e1cc620e62090bcf9c1850b3d530ff88ebc36f803675c82197e529e22b22",
+          "mode": "0755"
+        },
+        {
+          "path": "schemas/catalog_placement.schema.json",
+          "sha256": "89dcb769c92b11bbb86ac899a69394f253210dd9c0baa1e272783e3a75975c08",
+          "mode": "0644"
+        },
+        {
+          "path": "schemas/object_plan.schema.json",
+          "sha256": "83bf270024ac02adf5adf59f200fdd02ed3dd7a151533950e7f599080b93c6b1",
+          "mode": "0644"
+        },
+        {
+          "path": "stage_a_prompt.txt",
+          "sha256": "546d76f6a76e2530f3c18c4b6d85a1bfa094a113352585799c650589664a7754",
+          "mode": "0644"
+        },
+        {
+          "path": "stage_c_prompt.txt",
+          "sha256": "d4a055b01cdbdb3f2548d440bc3bcbdb1aa86c65a76972d32a1d545fc23f4b56",
+          "mode": "0644"
+        },
+        {
+          "path": "strict_json.py",
+          "sha256": "48df502194010aa8162b1fb9615465e39856141a08bfb667d51c55163bad81b3",
+          "mode": "0644"
+        },
+        {
+          "path": "transport.py",
+          "sha256": "c5fb77f09817653637ea18ae9f3344fe3cb725217657ee72fac70b075ca6c532",
+          "mode": "0644"
+        }
+      ]
+    },
+    {
+      "bundle_id": "api2_generation_recovery_v1",
+      "root": "tools/api2_generation_recovery_v1",
+      "role": "api2_recovery",
+      "entrypoints": [
+        "recovery_runner.py",
+        "fresh_case_retry_runner.py"
+      ],
+      "files": [
+        {
+          "path": "fresh_case_retry_runner.py",
+          "sha256": "981d16e2742f20eddaee3f892b0a8405fd78ca07214fe4c7ee8a89be8eaa52a4",
+          "mode": "0755"
+        },
+        {
+          "path": "recovery_runner.py",
+          "sha256": "c9ac64654d8eb730bdb04c3f84f065645fd4280d6dbb8fe2240176933f97f686",
+          "mode": "0644"
+        }
+      ]
+    },
+    {
+      "bundle_id": "api2_kimi_k3_runner_v1",
+      "root": "tools/api2_kimi_k3_runner_v1",
+      "role": "api2_kimi_adapter",
+      "entrypoints": [
+        "kimi_k3_generation_runner.py"
+      ],
+      "files": [
+        {
+          "path": "kimi_k3_generation_runner.py",
+          "sha256": "33e732227bf3daac36a47f27c998883ffa4e4595319ef6ddee58f99e96ac3f22",
+          "mode": "0755"
+        },
+        {
+          "path": "models.pod.json",
+          "sha256": "52d2581601a2c3dd54f998069ad2a3b11189fdf0384e91fe92c3d40fef27f9ae",
+          "mode": "0644"
+        }
+      ]
+    },
+    {
+      "bundle_id": "api2_glm53_runner_v1",
+      "root": "tools/api2_glm53_runner_v1",
+      "role": "api2_glm_adapter",
+      "entrypoints": [
+        "glm53_generation_runner.py"
+      ],
+      "files": [
+        {
+          "path": "glm53_generation_runner.py",
+          "sha256": "6f974b49bd58e744057c4d0c88628c6d5fce541c4c5dab821610b7ac90f49b41",
+          "mode": "0755"
+        },
+        {
+          "path": "models.pod.json",
+          "sha256": "55921c496a8551bbf7d4a485845545a57ae065777a5c34b1db32343c97564b3a",
+          "mode": "0644"
+        }
+      ]
+    },
+    {
+      "bundle_id": "api3_opus48_thinking_runner_v1",
+      "root": "tools/api3_opus48_thinking_runner_v1",
+      "role": "api3_opus48_adapter",
+      "entrypoints": [
+        "generation_runner.py",
+        "preflight.py",
+        "retry_runner.py"
+      ],
+      "files": [
+        {
+          "path": "generation_runner.py",
+          "sha256": "bf390ec7e6102641fa093f573879615aeb0d887c17f0e37b70be422ba57d5c11",
+          "mode": "0644"
+        },
+        {
+          "path": "models.pod.json",
+          "sha256": "e75c29e024e0943eaa574aa3e46b71d4776ea1c2cb2bbf9389dd04fc8a5a0af6",
+          "mode": "0644"
+        },
+        {
+          "path": "preflight.py",
+          "sha256": "af3bb98a57e92a5be9e127c74f574411a1ad90052354ff1d052ace2d10de4b53",
+          "mode": "0644"
+        },
+        {
+          "path": "retry_runner.py",
+          "sha256": "2b28b0ee8e7018c6b79249ae72d7c680ed24450422acf15ca94469d217cf407e",
+          "mode": "0644"
+        }
+      ]
+    }
+  ]
+}
