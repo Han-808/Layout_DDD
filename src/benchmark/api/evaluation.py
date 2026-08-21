@@ -88,6 +88,7 @@ from benchmark.evaluator.scoring import (
     scoring_reliability_summary,
     scoring_profile_for_run,
 )
+from benchmark.resources import runtime_resource_path
 from benchmark.scoring_profiles import (
     PREVIOUS_INTRINSIC_VALIDITY_PROFILE_ID,
     PREVIOUS_PROMPT_CONDITIONED_QUALITY_PROFILE_ID,
@@ -1406,10 +1407,9 @@ def main() -> None:
     parser.add_argument(
         "--evaluation-profile",
         default=str(
-            PROJECT_ROOT
-            / "configs"
-            / "evaluation"
-            / "metric_profile_canonical_v2.yaml"
+            runtime_resource_path(
+                "configs/evaluation/metric_profile_canonical_v2.yaml"
+            )
         ),
     )
     parser.add_argument(
@@ -2448,11 +2448,8 @@ def _resolve_object_grouping_report(
         else:
             result["non_canonical_grouping_input"] = False
         return result
-    grouping_config_path = (
-        PROJECT_ROOT
-        / "configs"
-        / "grouping"
-        / "vlm_visual_evidence_scope_v2.yaml"
+    grouping_config_path = runtime_resource_path(
+        "configs/grouping/vlm_visual_evidence_scope_v2.yaml"
     )
     grouping_config = (
         load_yaml(grouping_config_path, default={})

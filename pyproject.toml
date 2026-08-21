@@ -46,6 +46,14 @@ include-package-data = false
 
 [tool.setuptools.package-data]
 "benchmark.game_scene" = ["*.js", "*.mjs"]
+"benchmark._resources" = [
+  "schemas/*.json",
+  "configs/evaluation/*.yaml",
+  "configs/grouping/*.yaml",
+  "configs/game/*.yaml",
+  "configs/game/*.json",
+  "configs/game/counter_strike/*.yaml",
+]
 
 [tool.pytest.ini_options]
 testpaths = [

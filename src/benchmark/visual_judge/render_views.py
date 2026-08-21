@@ -4292,9 +4292,10 @@ def _usable_surface_evidence_fingerprint(
 
 
 def _camera_evidence_implementation_contract() -> dict[str, Any]:
-    repo_root = Path(__file__).resolve().parents[3]
     hashes = {
-        relative: _content_sha256(repo_root / relative)
+        relative: _content_sha256(
+            _camera_evidence_implementation_path(relative)
+        )
         for relative in _CAMERA_EVIDENCE_IMPLEMENTATION_FILES
     }
     return {
@@ -4302,6 +4303,28 @@ def _camera_evidence_implementation_contract() -> dict[str, Any]:
         "files": hashes,
         "sha256": _canonical_json_sha256(hashes),
     }
+
+
+def _camera_evidence_implementation_path(relative: str) -> Path:
+    """Resolve one fingerprinted module in a checkout or installed wheel."""
+
+    checkout_path = Path(__file__).resolve().parents[3] / relative
+    if checkout_path.is_file():
+        return checkout_path
+    source_prefix = Path("src") / "benchmark"
+    relative_path = Path(relative)
+    try:
+        package_relative = relative_path.relative_to(source_prefix)
+    except ValueError as exc:
+        raise FileNotFoundError(
+            f"camera implementation path is outside benchmark package: {relative}"
+        ) from exc
+    package_path = Path(__file__).resolve().parents[1] / package_relative
+    if package_path.is_file():
+        return package_path
+    raise FileNotFoundError(
+        f"camera implementation file is unavailable: {relative}"
+    )
 
 
 def _collision_geometry_contract(value: dict[str, Any] | None) -> dict[str, Any] | None:

@@ -19,12 +19,13 @@ from benchmark.adapters.layout_json.prompt import (
     ROTATION_UNIT,
 )
 from benchmark.models.json_response import parse_json_object
+from benchmark.resources import runtime_resource_path
 from benchmark.scene_io.validate import ArtifactValidationError, validate_generated_scene
 from benchmark.task_contract import architecture_contract_for_room
 from benchmark.utils.io import load_json_schema
 
 
-SCHEMA_PATH = Path(__file__).resolve().parents[4] / "schemas" / "generator_layout_v1.schema.json"
+SCHEMA_PATH = runtime_resource_path("schemas/generator_layout_v1.schema.json")
 
 
 def validate_layout_json(layout: dict) -> dict:

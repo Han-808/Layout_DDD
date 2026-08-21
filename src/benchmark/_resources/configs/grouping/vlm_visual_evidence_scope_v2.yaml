@@ -1,0 +1,12 @@
+grouping:
+  backend: vlm
+  lifecycle: active
+  policy_id: vlm_visual_evidence_scope_v2
+  scope_definition: downstream_visual_evidence_scope
+  fallback:
+    enabled: true
+    backend: topology
+  vlm:
+    max_images: 4
+    max_context_chars: 50000
+    response_format_json: true

@@ -14,6 +14,7 @@ from benchmark.adapters.catalog_placement.prompt import (
 )
 from benchmark.assets.facing import benchmark_catalog_facing_contract
 from benchmark.nl_scene.generation_input import STRUCTURED_ASSETS_INPUT_MODE
+from benchmark.resources import runtime_resource_path
 from benchmark.scene_io.validate import (
     ArtifactValidationError,
     validate_generated_scene,
@@ -22,10 +23,8 @@ from benchmark.scene_io.validate import (
 from benchmark.utils.io import load_json_schema
 
 
-SCHEMA_PATH = (
-    Path(__file__).resolve().parents[4]
-    / "schemas"
-    / "generator_catalog_placement_v1.schema.json"
+SCHEMA_PATH = runtime_resource_path(
+    "schemas/generator_catalog_placement_v1.schema.json"
 )
 COORDINATE_FRAME = {
     "origin": "room_min_corner_floor",

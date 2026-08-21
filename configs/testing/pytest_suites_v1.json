@@ -130,6 +130,7 @@
     "tests/test_relation_candidate_graph.py",
     "tests/test_repair_workflow.py",
     "tests/test_run_config.py",
+    "tests/test_runtime_resources.py",
     "tests/test_saved_blend_view.py",
     "tests/test_scene_harness_camera_selector_builder.py",
     "tests/test_scene_quality_prompt_context.py",

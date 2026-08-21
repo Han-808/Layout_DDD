@@ -25,6 +25,7 @@ from benchmark.rendering.browser import (
     HeadlessBrowserRenderer,
     UnsupportedBrowserRenderPipelineError,
 )
+from benchmark.resources import runtime_resource_path
 from benchmark.utils.io import read_json, write_json
 from benchmark.visual_judge import build_openai_compatible_vlm_judge
 
@@ -262,7 +263,9 @@ def main() -> None:
     )
     parser.add_argument(
         "--game-mode-config",
-        default="configs/game/game_mode_canonical_v1.yaml",
+        default=str(
+            runtime_resource_path("configs/game/game_mode_canonical_v1.yaml")
+        ),
     )
     parser.add_argument("--game-root", required=True)
     parser.add_argument("--entry-html", default=None)

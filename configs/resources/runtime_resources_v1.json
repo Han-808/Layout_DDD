@@ -1,0 +1,54 @@
+{
+  "schema_version": "runtime_resources_v1",
+  "camera_evidence_implementation_sha256": "457ff95848300defe71e613c24e772aa2f541ee258b66471d894a566499f0929",
+  "resources": [
+    {
+      "resource": "schemas/generator_catalog_placement_v1.schema.json",
+      "source_path": "schemas/generator_catalog_placement_v1.schema.json",
+      "package_path": "src/benchmark/_resources/schemas/generator_catalog_placement_v1.schema.json",
+      "sha256": "b17c67114db8a18c7be3978e492e7b91ec993c2cbc9e4190189e64c02194ad5b"
+    },
+    {
+      "resource": "schemas/generator_layout_v1.schema.json",
+      "source_path": "schemas/generator_layout_v1.schema.json",
+      "package_path": "src/benchmark/_resources/schemas/generator_layout_v1.schema.json",
+      "sha256": "a4bf0f16c24365c13f519d9cf07fafdfb8cbcd48169d594771b5efe312200051"
+    },
+    {
+      "resource": "configs/evaluation/metric_profile_canonical_v2.yaml",
+      "source_path": "configs/evaluation/metric_profile_canonical_v2.yaml",
+      "package_path": "src/benchmark/_resources/configs/evaluation/metric_profile_canonical_v2.yaml",
+      "sha256": "61ab645e2e5989dc61fff8e4193c67af135661991542f2eb56a2bd90e0ed7f9d"
+    },
+    {
+      "resource": "configs/grouping/vlm_visual_evidence_scope_v2.yaml",
+      "source_path": "configs/grouping/vlm_visual_evidence_scope_v2.yaml",
+      "package_path": "src/benchmark/_resources/configs/grouping/vlm_visual_evidence_scope_v2.yaml",
+      "sha256": "701d9b8fe1f46679472a9e732d8eb1874ab39317862d67ff9cb9d442f195d970"
+    },
+    {
+      "resource": "configs/game/game_mode_canonical_v1.yaml",
+      "source_path": "configs/game/game_mode_canonical_v1.yaml",
+      "package_path": "src/benchmark/_resources/configs/game/game_mode_canonical_v1.yaml",
+      "sha256": "01f5ef33735d6b33221661c38335d0ac1a438293f5c9aea31c9537f223d6d781"
+    },
+    {
+      "resource": "configs/evaluation/metric_profile_game_canonical_v1.yaml",
+      "source_path": "configs/evaluation/metric_profile_game_canonical_v1.yaml",
+      "package_path": "src/benchmark/_resources/configs/evaluation/metric_profile_game_canonical_v1.yaml",
+      "sha256": "947aeb34e6a61cc450c22be11c360eb1edbbcb1113fde6c931bd79800aa1296f"
+    },
+    {
+      "resource": "configs/game/counter_strike_static_arena_style_v1.json",
+      "source_path": "configs/game/counter_strike_static_arena_style_v1.json",
+      "package_path": "src/benchmark/_resources/configs/game/counter_strike_static_arena_style_v1.json",
+      "sha256": "2f30b622f7668b7431708bca840d6f80fdf62e4636ae10661f19fe839965b78c"
+    },
+    {
+      "resource": "configs/game/counter_strike/benchmark_v1.yaml",
+      "source_path": "configs/game/counter_strike/benchmark_v1.yaml",
+      "package_path": "src/benchmark/_resources/configs/game/counter_strike/benchmark_v1.yaml",
+      "sha256": "f5bcbe7a1cd8094065f5050107b9f714dd0b286760aa1d0927f8ace72c052418"
+    }
+  ]
+}

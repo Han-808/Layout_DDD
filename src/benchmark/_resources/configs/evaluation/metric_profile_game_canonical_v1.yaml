@@ -1,0 +1,188 @@
+profile_version: canonical_scene_evaluation_v1
+status: frozen
+
+# Game-scene track, on the canonical L0-L4 workflow.
+#
+# This is the migration target for the game track. It replaces the retired
+# four-category profile in metric_profile_game_v1.yaml, which now only exists to
+# pin the legacy adapter's historical behaviour.
+#
+# Three metrics are active for the current Counter-Strike static-arena track:
+# object-object interpenetration, deterministic single-floor navigability, and
+# appearance judged against a frozen visual style spec. Everything else is off
+# for a stated reason rather than by omission; see the comments per layer.
+#
+# The profile alone is not sufficient. A game case bundle must also supply:
+#   * asset_policy declaring the generator as owner of every asset role. Without
+#     it every L3 metric is conservatively 'pending' and the layer never scores.
+#   * scene_request.room authored from the exported level's own bounds, because
+#     the official path checks the submitted scene against the declared room.
+#   * an empty frozen specification_contract, so L2 resolves to 'no_claims'
+#     rather than staying incomplete.
+# benchmark.game_scene.build_game_case_bundle writes all three.
+#
+# Fully resolved on purpose: a trusted case bundle rejects partial profiles that
+# lean on code defaults, so this file can be dropped into a bundle as-is.
+
+layer_weights:
+  l1_physical_plausibility: 0.40
+  l2_specification_fidelity: 0.0
+  l3_scene_quality: 0.60
+  l4_downstream_task_functionality: 0.0
+
+l0_structural_validity:
+  enabled: true
+  scoring: false
+  checks:
+    - schema
+    - normalization
+    - coordinate_and_unit_consistency
+    - required_input_coverage
+
+l1_physical_plausibility:
+  enabled: true
+  backend: deterministic_evidence_plus_conditional_vlm
+  # OOB and accessibility retain room/interaction assumptions that are not
+  # declared by a browser game, and Support would misread deliberately floating
+  # presentation geometry. Navigability is enabled only for this frozen,
+  # single-floor Counter-Strike arena setting and uses a documented 2D
+  # projection. It does not claim to measure routes across multiple storeys.
+  metrics:
+    collision:
+      enabled: true
+      weight: 0.5
+    oob:
+      enabled: false
+      weight: 0.0
+    support:
+      enabled: false
+      weight: 0.0
+    navigability:
+      enabled: true
+      weight: 0.5
+    accessibility:
+      enabled: false
+      weight: 0.0
+  never_vlm_metrics:
+    - navigability
+    - accessibility
+  metric_config:
+    collision:
+      # This threshold is consulted only for positively separated meshes; it
+      # does not exempt a reported surface intersection. Should trimesh/fcl be
+      # unavailable the distance degrades to a lower bound, near-contact pairs
+      # go to the judge, and the report records the degraded backend.
+      separation_threshold_m: 0.05
+      # Complete mesh-in-OBB guards plus a zero-depth SAT tangent plane certify
+      # ordinary coplanar contact without a VLM call.
+      zero_penetration_contact_policy: direct_valid
+      # A CS-only conservative certificate also accepts up to 1 mm of numeric
+      # overlap when an at-most-2 mm plane touches the outside of an object.
+      # The other OBB must stay on one side of the plane centre, so a wall plane
+      # slicing through a box is still sent to the VLM.
+      tangent_plane_contact_policy: direct_valid
+      tangent_plane_max_thickness_m: 0.002
+      tangent_contact_tolerance_m: 0.001
+      # Keep the canonical object-count denominator explicitly.
+      score_mode: invalid_pair_count_over_objects
+    navigability:
+      # Counter-Strike static arenas in the supported corpus are single-floor.
+      # The score is exactly largest_connected_free_area / total_free_area.
+      # The non-flat envelope prevents a decorative oversized ground/sky plane
+      # from inventing walkable space outside the authored arena structure.
+      boundary_source: non_flat_structure_envelope
+      grid_resolution: 0.20
+      max_grid_cells: 250000
+      agent_radius: 0.32
+      clearance_height: 1.80
+      step_over_height: 0.25
+      connectivity: 4
+
+l2_specification_fidelity:
+  # Off as a whole. A game level has no scene-level prompt and the track uses no
+  # benchmark asset database, so there are no frozen specification claims to
+  # score. Leaving this layer weighted without claims would collapse the
+  # benchmark score to null rather than renormalising, so the weight above is
+  # zero and not merely small.
+  enabled: false
+  activation: specification_contract
+  metrics:
+    oor:
+      enabled: false
+      weight: 0.0
+    oar:
+      enabled: false
+      weight: 0.0
+    functional_semantic_fidelity:
+      enabled: false
+      weight: 0.0
+      global_components:
+        - room_scene_type
+        - visual_functional_intent
+        - required_functional_areas
+      local_component: local_functionality
+      local_activation: prompt_specified_only
+      required_area_local_fallback: global_suspicious_or_insufficient
+
+l3_scene_quality:
+  enabled: true
+  # scale_consistency and object_pairing_consistency both reason over benchmark
+  # category labels: real-world size priors for the former, category/role
+  # compatibility for the latter. Probe-exported game objects carry no such
+  # labels, so both would judge a vocabulary the scene never declared.
+  # style_consistency is the one that transfers, because the generator authored
+  # the appearance outright and it is judged against a frozen style spec.
+  metrics:
+    scale_consistency:
+      enabled: false
+      weight: 0.0
+    object_pairing_consistency:
+      enabled: false
+      weight: 0.0
+      requires:
+        - object_grouping_report
+      scope: group_member_category_and_role_compatibility_only
+    style_consistency:
+      enabled: true
+      weight: 1.0
+      evidence_policy:
+        camera_scope: global
+        camera_mode: global_oblique
+        selector: deterministic
+        image_budget: 1
+        presentation: raw
+        image_order: null
+        include_global_context: true
+        camera_pose_mode: null
+      evidence_plan:
+        evidence_strategy: global_discovery_then_group_local
+        global_policy:
+          view_family: canonical_high_oblique_pair_v1
+          image_budget: 1
+          top_down: false
+          perspective_diversity_required: false
+          preserve_boundary_cues: true
+        local_policy:
+          camera_scope: group_local
+          grouping_policy_id: vlm_visual_evidence_scope_v2
+          image_budget: 1
+          global_context_image_budget: 1
+          max_packet_images: 2
+          image_order:
+            - global_context
+            - group_local
+          minimum_group_members: 2
+          force_for_eligible_groups: true
+        router_options: null
+        text_context:
+          - original_prompt
+          - parsed_prompt_requirements
+          - authorized_deviations
+          - asset_policy
+          - scene_metadata
+          - target_ids
+
+l4_downstream_task_functionality:
+  enabled: false
+  implemented: false
+  metrics: {}

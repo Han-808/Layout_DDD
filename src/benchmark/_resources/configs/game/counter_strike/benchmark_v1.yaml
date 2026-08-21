@@ -1,0 +1,168 @@
+profile_version: counter_strike_static_spatial_benchmark_v1
+status: frozen
+scene_family: counter_strike_static_arena
+scope: static_3d_environment_only
+
+# The primary result is the metric vector. The composite is secondary and is
+# emitted only when every active metric resolves; missing results are never
+# reweighted away.
+composite:
+  require_complete_coverage: true
+  layer_weights:
+    l1_physical_plausibility: 0.25
+    l3_scene_quality: 0.15
+    l4_static_spatial_design: 0.60
+  canonical_metric_weights:
+    collision: 0.50
+    navigability: 0.50
+    style_consistency: 1.00
+
+player_profile:
+  agent_radius_m: 0.32
+  standing_height_m: 1.80
+  standing_eye_height_m: 1.62
+  crouching_eye_height_m: 1.05
+  step_over_height_m: 0.25
+  run_speed_mps: 5.0
+
+static_world:
+  grid_resolution_m: 0.35
+  max_grid_cells: 250000
+  connectivity: 8
+  boundary_source: non_flat_structure_envelope
+  spawn_snap_radius_m: 4.0
+  perimeter_band_m: 1.0
+
+visual_evidence:
+  global_view_family: canonical_high_oblique_pair_v1
+  global_image_budget: 2
+  regional_view_family: canonical_style_region_quadrants_v1
+  regional_image_budget: 4
+  active_fallback:
+    enabled: true
+    implementation: frozen_browser_regional_plus_brightness_repair
+    selector_judge_decoupled: true
+    max_extra_views: 2
+    minimum_usable_global_views: 2
+    brightness_repair:
+      enabled: true
+      median_luminance_threshold: 0.10
+      p90_luminance_threshold: 0.25
+      target_median_luminance: 0.24
+      max_gain: 2.50
+    exhaustion_status: unresolved
+  judge:
+    repeats: 3
+    verdict_aggregation: strict_majority
+    score_aggregation: median
+    # Retry only a malformed model-authored response for the same repeat.
+    # Transport failures and evidence-contract failures remain hard failures.
+    response_contract_retries: 1
+    insufficient_evidence_policy: unresolved
+    confidence_is_not_calibration: true
+
+l4_metrics:
+  zone_clarity:
+    weight: 0.20
+    backend: deterministic_topology_plus_vlm
+    interpretation_policy: permissive_functional_legibility_v1
+    # Interpretation policy is intentionally permissive: open but repeatably
+    # locatable functional regions count. Enclosure or a doorway is not a
+    # prerequisite when spawn placement, departure space, route convergence,
+    # and peripheral bypass geometry make the role legible.
+    required_roles:
+      - team_a_spawn
+      - team_b_spawn
+      - preparation
+      - main_engagement
+      - flank
+    score_components:
+      deterministic: 0.55
+      perceptual: 0.45
+    valid_threshold: 0.60
+    # How many of the five roles must be judged `clear` for a valid verdict.
+    # Without this the per-role findings placed no constraint on the verdict at
+    # all, so the same arena could be called valid on one repeat and invalid on
+    # the next while both responses passed validation. The other two visual
+    # metrics have carried a countable bar since the profile was written; this
+    # gives zone_clarity the same kind, leaving one role able to read weakly.
+    min_clear_roles: 4
+    # A single spatial patch cannot be relabelled as several roles to satisfy
+    # the count. Each role must identify its own region.
+    require_non_overlapping_roles: true
+
+  route_structure:
+    weight: 0.20
+    backend: deterministic
+    candidate_path_budget: 8
+    required_main_routes: 2
+    required_flank_routes: 2
+    max_main_detour_ratio: 1.20
+    min_flank_detour_ratio: 1.10
+    max_flank_detour_ratio: 2.50
+    max_route_overlap: 0.72
+    route_separation_m: 2.0
+
+  spawn_balance:
+    weight: 0.20
+    backend: deterministic
+    # Infer the engagement point with a continuous maximin objective over
+    # normalized route-traffic support and two-team distance contestability.
+    # This prevents one arbitrarily tie-broken shortest path from moving the
+    # anchor to one side, while still rejecting a perfectly balanced location
+    # that carries little route traffic.
+    engagement_selection: maximin_traffic_distance_balance
+    travel_ratio_tolerance: 0.18
+    exposure_ratio_tolerance: 0.25
+    contact_distance_ratio_tolerance: 0.20
+    initial_cross_spawn_los_invalid: true
+    exposure_ray_count: 16
+    exposure_ray_length_m: 24.0
+
+  landmark_legibility:
+    weight: 0.20
+    backend: vlm_global_then_regional
+    interpretation_policy: strict_visual_identity_v1
+    # Strict identity policy: position, rotation, or scale of a generic repeated
+    # box/wall is not enough. Each counted cue needs a salient, nameable visual
+    # identity in the original runtime views.
+    required_landmarks: 3
+    require_nameable_visual_cue: true
+    require_spatially_distinct_regions: true
+    valid_threshold: 0.60
+
+  cover_diversity:
+    weight: 0.20
+    backend: deterministic_cover_assemblies_plus_vlm
+    interpretation_policy: strict_archetype_equivalence_v1
+    # Strict archetype policy: merge fragments and repeated instances first.
+    # Size/color/orientation alone cannot turn one generic primitive family
+    # into several visual cover forms.
+    score_components:
+      deterministic: 0.45
+      perceptual: 0.55
+    valid_threshold: 0.60
+    min_cover_assemblies: 4
+    min_cover_forms: 4
+    min_height_bands: 2
+    min_width_bands: 2
+    min_arrangement_types: 2
+    adjacency_distance_m: 1.50
+    minimum_component_height_m: 0.20
+    minimum_occlusion_height_m: 0.60
+    maximum_base_offset_m: 0.20
+    assembly_merge_distance_m: 0.15
+    assembly_vertical_gap_m: 0.12
+    stepped_height_delta_m: 0.35
+    arrangement_neighbor_distance_m: 6.0
+    duplicate_position_tolerance_m: 0.50
+    duplicate_scale_ratio_tolerance: 0.20
+
+failure_semantics:
+  invalid_contract: case_invalid
+  missing_spawn_metadata: case_invalid
+  dynamic_entity_unresolved: unresolved
+  insufficient_visual_evidence: unresolved
+  judge_disagreement: unresolved
+  algorithm_failure: metric_failed
+  computed_design_failure: evaluated_zero_allowed
