@@ -2056,6 +2056,15 @@ class CameraEvidenceProvider:
     ) -> list[dict[str, Any]]:
         """Select with previews, then send only unmodified final RGB onward."""
 
+        probe_context = (
+            request.get("functional_probe")
+            if isinstance(request.get("functional_probe"), dict)
+            else {}
+        )
+        soft_visibility_fallback = (
+            str(probe_context.get("fallback_mode") or "")
+            == "soft_visibility"
+        )
         if not candidates:
             if self.last_call_usage is not None:
                 self.last_call_usage.update(
@@ -2082,7 +2091,7 @@ class CameraEvidenceProvider:
                 candidates,
                 event_dir,
                 overlay_spec=spec,
-                require_visible_targets=True,
+                require_visible_targets=not soft_visibility_fallback,
             )
         else:
             (
@@ -2151,6 +2160,7 @@ class CameraEvidenceProvider:
             "coverage_status": selected_coverage_status,
             "candidates": deepcopy(selected_coverage),
             "rule": "predicate_aware_surface_observability_v2",
+            "identity_grounded": True,
         }
         if self.last_call_usage is not None:
             self.last_call_usage["functional_evidence_coverage"] = deepcopy(
@@ -2162,13 +2172,22 @@ class CameraEvidenceProvider:
             camera_views=selected,
             preview=False,
         )
-        final_identity_manifest = self._render_overlay_views(
-            request=request,
-            out_dir=event_dir / "final_identity_audit",
-            camera_views=selected,
-            overlay_spec=spec,
-            preview=False,
-        )
+        final_identity_error: str | None = None
+        try:
+            final_identity_manifest = self._render_overlay_views(
+                request=request,
+                out_dir=event_dir / "final_identity_audit",
+                camera_views=selected,
+                overlay_spec=spec,
+                preview=False,
+            )
+        except Exception as exc:
+            if not soft_visibility_fallback:
+                raise
+            final_identity_error = (
+                f"{type(exc).__name__}: {exc}"
+            )
+            final_identity_manifest = {"views": []}
         final_identity_by_id = _views_by_id(final_identity_manifest)
         selected_by_id = {
             str(item.get("id")): item for item in selected
@@ -2240,6 +2259,50 @@ class CameraEvidenceProvider:
                     ),
                 }
             )
+        if not items and soft_visibility_fallback:
+            for view in final_manifest.get("views") or []:
+                if not isinstance(view, dict) or not view.get("path"):
+                    continue
+                view_id = str(view.get("id") or "")
+                items.append(
+                    {
+                        "path": str(view["path"]),
+                        "role": "functional_probe_rgb",
+                        "evidence_style": "raw",
+                        "image_transform": "none",
+                        "view_id": view_id,
+                        "pose": deepcopy(
+                            selected_by_id.get(view_id)
+                            or view.get("pose")
+                            or {}
+                        ),
+                        "functional_probe": (
+                            functional_probe_selector_context(
+                                request.get("functional_probe")
+                            )
+                        ),
+                        "identity_visibility": deepcopy(
+                            final_visibility.get(view_id) or {}
+                        ),
+                        "identity_grounded": False,
+                        "fallback_reason": (
+                            "target_identity_not_verified_after_strict_failure"
+                        ),
+                    }
+                )
+            selection_log["selected_evidence_coverage"] = {
+                "coverage_status": "partial_but_usable",
+                "candidates": deepcopy(selected_coverage),
+                "rule": "soft_visibility_fallback_v1",
+                "identity_grounded": False,
+                "identity_validation_error": final_identity_error,
+            }
+            if self.last_call_usage is not None:
+                self.last_call_usage[
+                    "functional_evidence_coverage"
+                ] = deepcopy(
+                    selection_log["selected_evidence_coverage"]
+                )
         if not items:
             if self.last_call_usage is not None:
                 self.last_call_usage.update(
@@ -2249,6 +2312,14 @@ class CameraEvidenceProvider:
             raise RuntimeError(
                 "post_render_insufficient: functional final render lost a "
                 "required target"
+            )
+        if (
+            items
+            and not soft_visibility_fallback
+            and self.last_call_usage is not None
+        ):
+            self.last_call_usage["functional_evidence_coverage"] = (
+                deepcopy(selection_log["selected_evidence_coverage"])
             )
         if self.last_call_usage is not None:
             self.last_call_usage["preview_render_count"] = int(

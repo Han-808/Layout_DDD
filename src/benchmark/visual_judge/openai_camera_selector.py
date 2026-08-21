@@ -684,6 +684,9 @@ def build_openai_compatible_camera_selector(
         retry_backoff_seconds=float(
             config.get("retry_backoff_seconds", 1.0)
         ),
+        min_request_interval_seconds=float(
+            config.get("min_request_interval_seconds", 0.0)
+        ),
         max_tokens_field=str(
             config.get("max_tokens_field", "max_tokens")
         ),

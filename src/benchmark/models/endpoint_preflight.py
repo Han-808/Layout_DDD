@@ -42,6 +42,7 @@ def run_endpoint_stability_preflight(
     concurrency: int = 2,
     timeout_seconds: int = 300,
     max_tokens: int = 64,
+    min_request_interval_seconds: float = 0.0,
     model_factory: Callable[..., Any] = OpenAICompatibleModel,
 ) -> dict[str, Any]:
     """Require every repeated real-image call to succeed before evaluation.
@@ -78,6 +79,7 @@ def run_endpoint_stability_preflight(
             timeout_seconds=int(timeout_seconds),
             response_format_json=False,
             max_retries=0,
+            min_request_interval_seconds=float(min_request_interval_seconds),
             send_temperature=False,
             require_api_key=True,
         )
@@ -162,6 +164,7 @@ def run_endpoint_stability_preflight(
         "image_path": str(resolved_image),
         "attempts_required": resolved_attempts,
         "concurrency": min(resolved_attempts, resolved_concurrency),
+        "min_request_interval_seconds": float(min_request_interval_seconds),
         "completed_attempts": sum(
             item.get("status") == "complete" for item in results
         ),

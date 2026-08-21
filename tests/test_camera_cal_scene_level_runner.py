@@ -78,6 +78,25 @@ def test_promptless_profile_and_request_disable_l2_prompt_use() -> None:
     assert profile[L3]["enabled"] is True
 
 
+def test_l3_only_recovery_profile_disables_l1() -> None:
+    profile = runner.promptless_l3_only_profile()
+    args = runner.parse_args(["--output-root", "/tmp/l3-only", "--l3-only"])
+
+    assert args.l3_only is True
+    assert profile["layer_weights"] == {
+        runner.L1: 0.0,
+        runner.L2: 0.0,
+        runner.L3: 1.0,
+        runner.L4: 0.0,
+    }
+    assert profile[L1]["enabled"] is False
+    assert all(
+        metric["enabled"] is False and metric["weight"] == 0.0
+        for metric in profile[L1]["metrics"].values()
+    )
+    assert profile[L3]["enabled"] is True
+
+
 def test_audit_graph_export_is_explicitly_opt_in(tmp_path: Path) -> None:
     default_args = runner.parse_args(
         ["--output-root", str(tmp_path / "default")]

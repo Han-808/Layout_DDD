@@ -704,6 +704,7 @@ def main() -> None:
         resume=args.resume,
         continue_on_error=args.continue_on_error,
         export_audit_graphs=args.export_audit_graphs,
+        l3_only=args.l3_only,
     )
     atomic_write_json(output_root / "experiment_plan.json", experiment)
 
@@ -718,8 +719,9 @@ def main() -> None:
         "elapsed_seconds": None,
         "experiment_plan_sha256": json_sha256(experiment),
         "source_prompt_used": False,
-        "layers_executed": [L1, L3],
-        "layers_not_executed": [L2, L4],
+        "layers_executed": [L3] if args.l3_only else [L1, L3],
+        "layers_not_executed": [L1, L2, L4] if args.l3_only else [L2, L4],
+        "recovery_mode": "l3_only" if args.l3_only else None,
         "cases": [],
         "progress_path": str(progress.path),
         "api_usage": api_usage_summary([]),
@@ -747,6 +749,9 @@ def main() -> None:
                 args.endpoint_preflight_attempts,
             ),
             timeout_seconds=args.endpoint_preflight_timeout_seconds,
+            min_request_interval_seconds=float(
+                route.get("min_request_interval_seconds") or 0.0
+            ),
         )
     except EndpointStabilityPreflightError as exc:
         endpoint_preflight = exc.report
@@ -811,6 +816,7 @@ def main() -> None:
         case_count=len(cases),
         metrics=list(metrics),
         max_workers=args.max_workers,
+        l3_only=args.l3_only,
         output_root=str(output_root),
     )
 
@@ -832,6 +838,7 @@ def main() -> None:
         "control_config": control.to_dict(),
         "resume": args.resume,
         "export_audit_graphs": args.export_audit_graphs,
+        "l3_only": args.l3_only,
         "progress": progress,
         "model_route_abort_signal": model_route_abort_signal,
     }
@@ -1007,6 +1014,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "unscaled projection)."
         ),
     )
+    parser.add_argument(
+        "--l3-only",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Recovery mode: disable L1 and execute only selected L3 metrics. "
+            "The resulting benchmark score is L3-only and must be merged "
+            "post-hoc with a separately retained L1 result when needed."
+        ),
+    )
     parser.add_argument("--max-cases", type=positive_int, default=None)
     parser.add_argument("--max-workers", type=positive_int, default=1)
     parser.add_argument(
@@ -1143,12 +1160,31 @@ def effective_model_route(
             f"required API credential is not available in this process: "
             f"{api_key_env}"
         )
-    return {
+    route = {
         "endpoint": endpoint,
         "model": model,
         "api_key_env": api_key_env,
         "authorization_configured": True,
     }
+    min_interval_raw = str(
+        env.get("JUDGE_MIN_REQUEST_INTERVAL_SECONDS") or ""
+    ).strip()
+    if min_interval_raw:
+        try:
+            min_request_interval_seconds = float(min_interval_raw)
+        except ValueError as exc:
+            raise ValueError(
+                "JUDGE_MIN_REQUEST_INTERVAL_SECONDS must be numeric"
+            ) from exc
+        if (
+            not math.isfinite(min_request_interval_seconds)
+            or min_request_interval_seconds < 0.0
+        ):
+            raise ValueError(
+                "JUDGE_MIN_REQUEST_INTERVAL_SECONDS must be finite and non-negative"
+            )
+        route["min_request_interval_seconds"] = min_request_interval_seconds
+    return route
 
 
 def normalize_metric_selection(values: Iterable[str]) -> tuple[str, ...]:
@@ -1338,6 +1374,7 @@ def build_experiment_plan(
     resume: bool,
     continue_on_error: bool,
     export_audit_graphs: bool = False,
+    l3_only: bool = False,
 ) -> dict[str, Any]:
     return {
         "schema_version": PLAN_SCHEMA_VERSION,
@@ -1348,6 +1385,7 @@ def build_experiment_plan(
         "source_cases_read_only": True,
         "source_prompt_used": False,
         "prompt_policy": "metric_rubrics_only_no_generation_prompt",
+        "recovery_mode": "l3_only" if l3_only else None,
         "audit_graph_export": {
             "enabled": bool(export_audit_graphs),
             "schema_version": AUDIT_GRAPH_EXPORT_VERSION,
@@ -1363,10 +1401,11 @@ def build_experiment_plan(
         },
         "layers": {
             L1: {
-                "enabled": True,
+                "enabled": not l3_only,
                 "scope": "scene_level",
                 "metrics": list(L1_METRICS),
                 "backend": "deterministic_evidence_plus_conditional_vlm",
+                "reason": "l3_only_recovery" if l3_only else None,
                 "binary_failure_policy": deepcopy(
                     L1_BINARY_FAILURE_POLICY
                 ),
@@ -1517,6 +1556,7 @@ def run_case(
     functional_group_local_evidence_policy: str = "shared_group_bank",
     deduction_multiplier: float = DEFAULT_DEDUCTION_MULTIPLIER,
     export_audit_graphs: bool = False,
+    l3_only: bool = False,
     progress: ProgressReporter | None = None,
     model_route_abort_signal: ModelRouteAbortSignal | None = None,
 ) -> dict[str, Any]:
@@ -1548,6 +1588,7 @@ def run_case(
         grouping_config=grouping_config,
         renderer_config=renderer_config,
         control_config=control_config,
+        l3_only=l3_only,
     )
     case_out = output_root / "cases" / case_id
     existing_manifest_path = case_out / "case_run_manifest.json"
@@ -1661,6 +1702,9 @@ def run_case(
         "source_prompt_used": False,
         "model_route": safe_route_manifest(route),
         "selected_l3_metrics": list(metrics),
+        "layers_executed": [L3] if l3_only else [L1, L3],
+        "layers_not_executed": [L1, L2, L4] if l3_only else [L2, L4],
+        "recovery_mode": "l3_only" if l3_only else None,
         "deduction_multiplier": deduction_multiplier,
         "l1_binary_failure_policy": deepcopy(
             L1_BINARY_FAILURE_POLICY
@@ -1809,7 +1853,7 @@ def run_case(
     progress.emit(
         "evaluation_started",
         case_id=case_id,
-        layers=[L1, L3],
+        layers=[L3] if l3_only else [L1, L3],
         metrics=list(metrics),
     )
     try:
@@ -1823,7 +1867,11 @@ def run_case(
             grouping_identity_legend=identity_legend,
             vlm_judge=raw_judge,
             grouping_model=grouping_model,
-            evaluation_profile=promptless_l1_l3_profile(),
+            evaluation_profile=(
+                promptless_l3_only_profile()
+                if l3_only
+                else promptless_l1_l3_profile()
+            ),
             scoring_profile_id=INTRINSIC_VALIDITY_PROFILE_ID,
             deduction_multiplier=deduction_multiplier,
             p0b_official_mode=L1_BINARY_FAILURE_POLICY["p0b_official_mode"],
@@ -1885,7 +1933,9 @@ def run_case(
     l1_failures = collect_l1_engineering_failures(l1_report)
     schema_validation = binary_schema_validation_summary(l1_report)
     l1_decision_status = (
-        "resolved"
+        "not_executed"
+        if l3_only
+        else "resolved"
         if l1_report.get("status") == "evaluated" and not l1_failures
         else "infrastructure_failure"
         if l1_failures
@@ -1897,7 +1947,9 @@ def run_case(
     )
     l3_decision_status = str(l3_resolution["status"])
     final_decision_status = (
-        "resolved"
+        l3_decision_status
+        if l3_only
+        else "resolved"
         if l1_decision_status == "resolved"
         and l3_decision_status == "resolved"
         else "infrastructure_failure"
@@ -1928,6 +1980,8 @@ def run_case(
     comparison["diagnostic_reason"] = diagnostic_reason
     l1_diagnostics = {
         "policy": deepcopy(L1_BINARY_FAILURE_POLICY),
+        "recovery_mode": "l3_only" if l3_only else None,
+        "l1_executed": not l3_only,
         "final_decision_status": l1_decision_status,
         "l1_decision_status": l1_decision_status,
         "combined_final_decision_status": final_decision_status,
@@ -2150,6 +2204,9 @@ def model_config(route: dict[str, Any], *, role: str) -> dict[str, Any]:
         "response_format_json": False,
         "max_retries": 1,
         "retry_backoff_seconds": 1.0,
+        "min_request_interval_seconds": float(
+            route.get("min_request_interval_seconds") or 0.0
+        ),
         "max_images": max_images,
         "max_preview_images": max_images,
         "max_context_chars": 120000,
@@ -2169,6 +2226,9 @@ def build_grouping_model(route: dict[str, Any]) -> OpenAICompatibleModel:
         response_format_json=False,
         max_retries=1,
         retry_backoff_seconds=1.0,
+        min_request_interval_seconds=float(
+            route.get("min_request_interval_seconds") or 0.0
+        ),
         send_temperature=False,
         require_api_key=True,
     )
@@ -2200,6 +2260,23 @@ def promptless_l1_l3_profile() -> dict[str, Any]:
     }
     profile[L2]["enabled"] = False
     for metric in profile[L2]["metrics"].values():
+        metric["enabled"] = False
+        metric["weight"] = 0.0
+    return profile
+
+
+def promptless_l3_only_profile() -> dict[str, Any]:
+    """Return an audit-explicit recovery profile that executes only L3."""
+
+    profile = promptless_l1_l3_profile()
+    profile["layer_weights"] = {
+        L1: 0.0,
+        L2: 0.0,
+        L3: 1.0,
+        L4: 0.0,
+    }
+    profile[L1]["enabled"] = False
+    for metric in profile[L1]["metrics"].values():
         metric["enabled"] = False
         metric["weight"] = 0.0
     return profile
@@ -2351,6 +2428,7 @@ def case_input_fingerprint(
     grouping_config: dict[str, Any],
     renderer_config: dict[str, Any],
     control_config: dict[str, Any],
+    l3_only: bool = False,
 ) -> str:
     critical = case_manifest.get("critical_artifact_hashes")
     critical = critical if isinstance(critical, dict) else {}
@@ -2394,6 +2472,7 @@ def case_input_fingerprint(
                 "camera_selector": CAMERA_SELECTOR_COMPLETION_MAX_TOKENS,
             },
             "selected_l3_metrics": list(metrics),
+            "recovery_mode": "l3_only" if l3_only else None,
             "deduction_multiplier": deduction_multiplier,
             "source_prompt_used": False,
             "metric_scoped_public_context": {
@@ -2416,7 +2495,11 @@ def case_input_fingerprint(
                 relative: file_sha256(PROJECT_ROOT / relative)
                 for relative in FUNCTIONAL_PROBE_IMPLEMENTATION_FILES
             },
-            "profile": promptless_l1_l3_profile(),
+            "profile": (
+                promptless_l3_only_profile()
+                if l3_only
+                else promptless_l1_l3_profile()
+            ),
             "scene_quality_config": scene_quality_config(
                 metrics,
                 functional_group_local_granularity=(
@@ -3837,7 +3920,7 @@ def _progress_value(value: Any) -> str:
 
 
 def safe_route_manifest(route: dict[str, Any]) -> dict[str, Any]:
-    return {
+    manifest = {
         "endpoint": route["endpoint"],
         "model": route["model"],
         "api_key_env": route["api_key_env"],
@@ -3845,6 +3928,11 @@ def safe_route_manifest(route: dict[str, Any]) -> dict[str, Any]:
             route.get("authorization_configured")
         ),
     }
+    if "min_request_interval_seconds" in route:
+        manifest["min_request_interval_seconds"] = float(
+            route["min_request_interval_seconds"]
+        )
+    return manifest
 
 
 def read_json(path: Path) -> dict[str, Any]:

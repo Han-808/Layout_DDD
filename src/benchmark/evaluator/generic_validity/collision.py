@@ -12,6 +12,7 @@ import numpy as np
 
 from benchmark.evaluator.generic_validity.geometry import (
     footprint_overlap_area,
+    get_obb_corners,
     normalize_objects,
     z_interval_overlap,
 )
@@ -35,7 +36,7 @@ from benchmark.visual_judge.contracts import (
 from benchmark.visual_judge.runtime import EvidenceControlUnresolvedError
 
 
-COLLISION_EVALUATOR_VERSION = "collision_p0b_v2"
+COLLISION_EVALUATOR_VERSION = "collision_p0b_v3"
 DEFAULT_COLLISION_CONFIG = {
     "enabled": True,
     "official_mode": False,
@@ -57,6 +58,19 @@ DEFAULT_COLLISION_CONFIG = {
     "shallow_surface_layer_floor_tolerance_m": 0.005,
     "shallow_surface_layer_max_thinness_ratio": 0.05,
     "shallow_surface_layer_min_horizontal_alignment": 0.98,
+    # Narrow deterministic certificates for geometry artefacts at ordinary
+    # support interfaces.  Neither is a generic small-collision tolerance:
+    # the minimum-overlap axis must be gravity-aligned and the two objects must
+    # form a bottom/top support interface.  Floor-covering relief additionally
+    # requires explicit rug/carpet/mat semantics.
+    "support_interface_contact_policy": "direct_valid",
+    "support_interface_max_penetration_m": 0.005,
+    "support_interface_min_gravity_alignment": 0.98,
+    "compliant_floor_covering_policy": "direct_valid",
+    "compliant_floor_covering_max_thickness_m": 0.15,
+    "compliant_floor_covering_max_overlap_m": 0.15,
+    "compliant_floor_covering_floor_tolerance_m": 0.01,
+    "compliant_floor_covering_min_horizontal_alignment": 0.95,
     "score_mode": "invalid_pair_count_over_objects",
 }
 
@@ -177,6 +191,28 @@ def check_collision(
                 ]
             ),
         },
+        "support_interface_contact_policy": {
+            "policy": str(cfg["support_interface_contact_policy"]),
+            "max_penetration_m": float(
+                cfg["support_interface_max_penetration_m"]
+            ),
+            "min_gravity_alignment": float(
+                cfg["support_interface_min_gravity_alignment"]
+            ),
+            "automatic_exemption": True,
+            "scope": "gravity_aligned_bottom_top_support_interface_only",
+        },
+        "compliant_floor_covering_policy": {
+            "policy": str(cfg["compliant_floor_covering_policy"]),
+            "automatic_exemption": True,
+            "scope": "explicit_floor_covering_semantics_and_bounded_overlap_only",
+            "max_layer_thickness_m": float(
+                cfg["compliant_floor_covering_max_thickness_m"]
+            ),
+            "max_overlap_m": float(
+                cfg["compliant_floor_covering_max_overlap_m"]
+            ),
+        },
         "collision_count": invalid_count,
         "collision_pair_count": invalid_count,
         "collision_object_count": len(collision_object_ids),
@@ -199,6 +235,8 @@ def check_collision(
             "Candidates are proposed by a high-recall detector; selection carries no verdict prior.",
             "Only final invalid pairs count as collisions; candidate overlap alone is not penalized.",
             "Exact coplanar zero-penetration contact may be accepted directly when the frozen profile enables it.",
+            "A definitive gravity-aligned penetration of at most the frozen support-interface tolerance may be accepted only when it occurs at an upper object's base and a lower object's top.",
+            "A thin floor-level rug, carpet, or mat may absorb a bounded vertical overlap without creating a Collision defect; category/description semantics and geometry must both agree.",
             "A bounded shallow overlap at a horizontal floor-layer support interface is surfaced to the VLM as "
             "context, never as an automatic exemption or a generic small-collision tolerance.",
             "Intended decorative attachment or assembly may be Collision-valid after VLM adjudication; relationship claims alone never auto-exempt a pair.",
@@ -349,6 +387,50 @@ def _evaluate_pair(
                 }
             )
             return pair
+        support_interface_certificate = (
+            _support_interface_contact_certificate(
+                obj_a,
+                obj_b,
+                obb=obb,
+                mesh_evidence=mesh_evidence,
+                enclosure_safe=enclosure_safe,
+                config=cfg,
+            )
+        )
+        if support_interface_certificate is not None:
+            pair["support_interface_contact_evidence"] = (
+                support_interface_certificate
+            )
+            pair.update(
+                {
+                    "route": "direct_valid_support_interface_contact",
+                    "final_verdict": "valid",
+                    "affects_collision_score": True,
+                }
+            )
+            return pair
+        floor_covering_certificate = (
+            _compliant_floor_covering_certificate(
+                scene,
+                obj_a,
+                obj_b,
+                obb=obb,
+                mesh_evidence=mesh_evidence,
+                config=cfg,
+            )
+        )
+        if floor_covering_certificate is not None:
+            pair["compliant_floor_covering_evidence"] = (
+                floor_covering_certificate
+            )
+            pair.update(
+                {
+                    "route": "direct_valid_compliant_floor_covering",
+                    "final_verdict": "valid",
+                    "affects_collision_score": True,
+                }
+            )
+            return pair
         shallow_layer_evidence = (
             _shallow_surface_layer_overlap_evidence(
                 scene,
@@ -387,6 +469,12 @@ def _evaluate_pair(
         "mesh_enclosure": pair.get("mesh_enclosure_evidence"),
         "shallow_surface_layer_overlap": pair.get(
             "shallow_surface_layer_overlap_evidence"
+        ),
+        "support_interface_contact": pair.get(
+            "support_interface_contact_evidence"
+        ),
+        "compliant_floor_covering": pair.get(
+            "compliant_floor_covering_evidence"
         ),
         "closest_points": mesh_evidence.get("closest_points") if isinstance(mesh_evidence, dict) else None,
         "focus_region": mesh_evidence.get("focus_region") if isinstance(mesh_evidence, dict) else None,
@@ -551,6 +639,22 @@ def _validate_collision_config(config: dict[str, Any]) -> None:
             "collision.shallow_surface_layer_policy must be "
             "'disabled' or 'route_vlm'"
         )
+    if config.get("support_interface_contact_policy") not in {
+        "disabled",
+        "direct_valid",
+    }:
+        raise ValueError(
+            "collision.support_interface_contact_policy must be "
+            "'disabled' or 'direct_valid'"
+        )
+    if config.get("compliant_floor_covering_policy") not in {
+        "disabled",
+        "direct_valid",
+    }:
+        raise ValueError(
+            "collision.compliant_floor_covering_policy must be "
+            "'disabled' or 'direct_valid'"
+        )
     for name in (
         "tangent_plane_max_thickness_m",
         "tangent_contact_tolerance_m",
@@ -558,6 +662,10 @@ def _validate_collision_config(config: dict[str, Any]) -> None:
         "shallow_surface_layer_max_overlap_m",
         "shallow_surface_layer_floor_tolerance_m",
         "shallow_surface_layer_max_thinness_ratio",
+        "support_interface_max_penetration_m",
+        "compliant_floor_covering_max_thickness_m",
+        "compliant_floor_covering_max_overlap_m",
+        "compliant_floor_covering_floor_tolerance_m",
     ):
         value = float(config.get(name, DEFAULT_COLLISION_CONFIG[name]))
         if not math.isfinite(value) or value < 0.0:
@@ -575,6 +683,38 @@ def _validate_collision_config(config: dict[str, Any]) -> None:
     if not math.isfinite(alignment) or not 0.0 <= alignment <= 1.0:
         raise ValueError(
             "collision.shallow_surface_layer_min_horizontal_alignment "
+            "must be a finite number in [0, 1]"
+        )
+    support_alignment = float(
+        config.get(
+            "support_interface_min_gravity_alignment",
+            DEFAULT_COLLISION_CONFIG[
+                "support_interface_min_gravity_alignment"
+            ],
+        )
+    )
+    if (
+        not math.isfinite(support_alignment)
+        or not 0.0 <= support_alignment <= 1.0
+    ):
+        raise ValueError(
+            "collision.support_interface_min_gravity_alignment must be "
+            "a finite number in [0, 1]"
+        )
+    covering_alignment = float(
+        config.get(
+            "compliant_floor_covering_min_horizontal_alignment",
+            DEFAULT_COLLISION_CONFIG[
+                "compliant_floor_covering_min_horizontal_alignment"
+            ],
+        )
+    )
+    if (
+        not math.isfinite(covering_alignment)
+        or not 0.0 <= covering_alignment <= 1.0
+    ):
+        raise ValueError(
+            "collision.compliant_floor_covering_min_horizontal_alignment "
             "must be a finite number in [0, 1]"
         )
 
@@ -673,6 +813,235 @@ def _tangent_plane_contact_certificate(
             "contact_tolerance_m": tolerance,
         }
     return None
+
+
+def _support_interface_contact_certificate(
+    obj_a: Any,
+    obj_b: Any,
+    *,
+    obb: dict[str, Any],
+    mesh_evidence: dict[str, Any],
+    enclosure_safe: bool,
+    config: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Certify only a tiny vertical overlap at a bottom/top interface.
+
+    Asset meshes frequently include millimetre-scale bevels or fitted contact
+    surfaces.  Treating those as free-space interpenetration creates false
+    positives such as a mug entering a counter by 0.05 mm.  This certificate
+    is intentionally topology-specific: reliable meshes must intersect, the
+    SAT minimum-overlap axis must align with gravity, and one object's bottom
+    must meet the other object's top.  Sideways or deep overlaps still route
+    to the semantic Judge.
+    """
+
+    if config.get("support_interface_contact_policy") != "direct_valid":
+        return None
+    if not enclosure_safe or mesh_evidence.get("surface_intersection") is not True:
+        return None
+    intersection = mesh_evidence.get("intersection")
+    if not isinstance(intersection, dict) or not bool(
+        intersection.get("definitive")
+    ):
+        return None
+    minimum_axis = np.asarray(
+        obb.get("minimum_overlap_axis") or [], dtype=float
+    )
+    if minimum_axis.shape != (3,) or not np.all(np.isfinite(minimum_axis)):
+        return None
+    axis_norm = float(np.linalg.norm(minimum_axis))
+    if axis_norm <= 1.0e-12:
+        return None
+    gravity_alignment = abs(float(minimum_axis[2])) / axis_norm
+    if gravity_alignment < float(
+        config["support_interface_min_gravity_alignment"]
+    ):
+        return None
+    depth = obb.get("minimum_overlap_depth_proxy_m")
+    if depth is None:
+        return None
+    penetration = float(depth)
+    maximum_penetration = float(
+        config["support_interface_max_penetration_m"]
+    )
+    if penetration <= 0.0 or penetration > maximum_penetration:
+        return None
+
+    for lower, upper in ((obj_a, obj_b), (obj_b, obj_a)):
+        lower_corners = np.asarray(get_obb_corners(lower), dtype=float)
+        upper_corners = np.asarray(get_obb_corners(upper), dtype=float)
+        lower_top = float(np.max(lower_corners[:, 2]))
+        lower_bottom = float(np.min(lower_corners[:, 2]))
+        upper_top = float(np.max(upper_corners[:, 2]))
+        upper_bottom = float(np.min(upper_corners[:, 2]))
+        interface_penetration = lower_top - upper_bottom
+        if interface_penetration <= 0.0:
+            continue
+        if interface_penetration > maximum_penetration + 1.0e-9:
+            continue
+        # The putative load must sit predominantly above the support; this
+        # rejects a thin vertical slice through another object's mid-volume.
+        if upper_bottom < lower_bottom or upper_top <= lower_top:
+            continue
+        if float(upper.center[2]) <= float(lower.center[2]):
+            continue
+        xy_overlap = float(footprint_overlap_area(lower, upper))
+        if xy_overlap <= 0.0:
+            continue
+        return {
+            "schema_version": "support_interface_contact_certificate_v1",
+            "certificate": "gravity_aligned_bottom_top_interface",
+            "support_object_id": str(lower.id),
+            "load_object_id": str(upper.id),
+            "interface_penetration_m": interface_penetration,
+            "sat_overlap_depth_proxy_m": penetration,
+            "minimum_overlap_axis_gravity_alignment": gravity_alignment,
+            "xy_overlap_area_m2": xy_overlap,
+            "maximum_allowed_penetration_m": maximum_penetration,
+        }
+    return None
+
+
+def _compliant_floor_covering_certificate(
+    scene: dict[str, Any],
+    obj_a: Any,
+    obj_b: Any,
+    *,
+    obb: dict[str, Any],
+    mesh_evidence: dict[str, Any],
+    config: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Certify bounded relief from an explicit floor-covering asset.
+
+    Some catalog rugs use a folded-fabric proxy whose bounding box is thicker
+    than a physical textile.  That may be a Scale/Placement concern, but an
+    ordinary chair or table resting into that relief is not a rigid-object
+    collision.  The exemption therefore remains semantic *and* geometric:
+    explicit covering semantics, floor contact, horizontal orientation, and
+    vertical-only overlap are all mandatory.
+    """
+
+    if config.get("compliant_floor_covering_policy") != "direct_valid":
+        return None
+    if mesh_evidence.get("surface_intersection") is not True:
+        return None
+    intersection = mesh_evidence.get("intersection")
+    if not isinstance(intersection, dict) or not bool(
+        intersection.get("definitive")
+    ):
+        return None
+    minimum_alignment = float(
+        config["compliant_floor_covering_min_horizontal_alignment"]
+    )
+    minimum_axis = np.asarray(
+        obb.get("minimum_overlap_axis") or [], dtype=float
+    )
+    axis_norm = (
+        float(np.linalg.norm(minimum_axis))
+        if minimum_axis.shape == (3,)
+        and np.all(np.isfinite(minimum_axis))
+        else 0.0
+    )
+    minimum_axis_gravity_alignment = (
+        abs(float(minimum_axis[2])) / axis_norm
+        if axis_norm > 1.0e-12
+        else None
+    )
+    floor_z = _scene_floor_z(scene)
+    maximum_thickness = float(
+        config["compliant_floor_covering_max_thickness_m"]
+    )
+    maximum_overlap = float(
+        config["compliant_floor_covering_max_overlap_m"]
+    )
+    floor_tolerance = float(
+        config["compliant_floor_covering_floor_tolerance_m"]
+    )
+    numerical_eps = max(
+        float(config.get("obb_sat_eps", 1.0e-6)), 1.0e-9
+    )
+
+    for layer, other in ((obj_a, obj_b), (obj_b, obj_a)):
+        if not _is_compliant_floor_covering(layer):
+            continue
+        corners = np.asarray(get_obb_corners(layer), dtype=float)
+        thickness = float(np.max(corners[:, 2]) - np.min(corners[:, 2]))
+        if thickness <= 0.0 or thickness > maximum_thickness:
+            continue
+        full_sizes = 2.0 * np.asarray(layer.half, dtype=float)
+        thin_axis = int(np.argmin(full_sizes))
+        layer_normal = np.asarray(layer.R, dtype=float)[:, thin_axis]
+        layer_normal_alignment = abs(float(layer_normal[2])) / max(
+            float(np.linalg.norm(layer_normal)), 1.0e-12
+        )
+        if layer_normal_alignment < minimum_alignment:
+            continue
+        if abs(float(layer.bottom_z) - floor_z) > floor_tolerance:
+            continue
+        overlap = float(z_interval_overlap(layer, other))
+        if overlap <= 0.0 or overlap > maximum_overlap:
+            continue
+        if overlap > thickness + numerical_eps:
+            continue
+        if float(other.bottom_z) < floor_z - numerical_eps:
+            continue
+        if float(other.bottom_z) > float(layer.top_z) + numerical_eps:
+            continue
+        if float(other.top_z) <= float(layer.top_z) + numerical_eps:
+            continue
+        return {
+            "schema_version": "compliant_floor_covering_certificate_v1",
+            "certificate": "semantic_compliant_floor_covering_relief",
+            "layer_object_id": str(layer.id),
+            "other_object_id": str(other.id),
+            "layer_semantics": _object_semantic_text(layer),
+            "semantic_source": "category_or_description",
+            "layer_thickness_m": thickness,
+            "vertical_overlap_m": overlap,
+            "floor_z_m": floor_z,
+            "layer_bottom_z_m": float(layer.bottom_z),
+            "layer_top_z_m": float(layer.top_z),
+            "other_bottom_z_m": float(other.bottom_z),
+            "minimum_overlap_axis_gravity_alignment": (
+                minimum_axis_gravity_alignment
+            ),
+            "layer_normal_gravity_alignment": layer_normal_alignment,
+            "maximum_considered_layer_thickness_m": maximum_thickness,
+            "maximum_considered_overlap_m": maximum_overlap,
+        }
+    return None
+
+
+def _is_compliant_floor_covering(obj: Any) -> bool:
+    text = _object_semantic_text(obj)
+    tokens = set(text.replace("-", " ").replace("_", " ").split())
+    if tokens & {"rug", "carpet", "doormat"}:
+        return True
+    if "mat" in tokens:
+        return True
+    return any(
+        phrase in text
+        for phrase in (
+            "floor covering",
+            "floor rug",
+            "area rug",
+            "bath mat",
+            "yoga mat",
+        )
+    )
+
+
+def _object_semantic_text(obj: Any) -> str:
+    return " ".join(
+        str(value or "").strip().lower()
+        for value in (
+            getattr(obj, "category", None),
+            getattr(obj, "retrieval_category", None),
+            getattr(obj, "desc", None),
+            getattr(obj, "short_desc", None),
+        )
+        if str(value or "").strip()
+    )
 
 
 def _shallow_surface_layer_overlap_evidence(

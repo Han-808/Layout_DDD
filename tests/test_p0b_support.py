@@ -457,6 +457,113 @@ def test_wall_attachment_routes_to_vlm_with_signed_plane_clearances() -> None:
     assert judge.requests[0]["event"]["architecture_element"] == "floor_walls_ceiling_and_supports"
 
 
+def test_logical_wall_attachment_is_certified_without_physical_wall_mesh() -> None:
+    scene = _scene(
+        [
+            _obj(
+                "upper_cabinet",
+                [0.20, 1.5, 1.8],
+                [0.40, 1.2, 0.7],
+                category="upper_cabinet",
+                description="wall-mounted kitchen upper cabinet",
+            )
+        ]
+    )
+    scene["metadata"]["architecture_contract"] = (
+        architecture_contract_for_room(
+            {
+                "boundary": scene["boundary"],
+                "height": scene["scene_height"],
+            },
+            physical_wall_policy="explicit_only",
+            active_wall_ids=(),
+            policy_source="logical_boundary_test",
+        )
+    )
+
+    report = check_support(scene)
+    cabinet = _by_id(report, "upper_cabinet")
+
+    assert cabinet["route"] == (
+        "direct_valid_logical_architecture_attachment"
+    )
+    assert cabinet["final_verdict"] == "valid"
+    certificate = cabinet["logical_architecture_attachment"]
+    assert certificate["plane"] == "west"
+    assert certificate["physical_plane_active"] is False
+    assert report["certified_logical_attachment_object_ids"] == [
+        "upper_cabinet"
+    ]
+
+
+def test_generic_floating_cabinet_near_logical_wall_is_not_auto_attached() -> None:
+    scene = _scene(
+        [
+            _obj(
+                "cabinet",
+                [0.20, 1.5, 1.8],
+                [0.40, 0.40, 0.7],
+                category="cabinet",
+                description="storage cabinet",
+            )
+        ]
+    )
+    scene["metadata"]["architecture_contract"] = (
+        architecture_contract_for_room(
+            {
+                "boundary": scene["boundary"],
+                "height": scene["scene_height"],
+            },
+            physical_wall_policy="explicit_only",
+            active_wall_ids=(),
+            policy_source="logical_boundary_test",
+        )
+    )
+
+    report = check_support(scene)
+    cabinet = _by_id(report, "cabinet")
+
+    assert cabinet["logical_architecture_attachment"] is None
+    assert cabinet["route"] is None
+    assert cabinet["requires_vlm"] is True
+
+
+def test_logical_attachment_uses_trusted_task_slot_semantics() -> None:
+    hood = _obj(
+        "asset_instance",
+        [2.0, 2.70, 1.45],
+        [0.8, 0.6, 0.5],
+        category="microwave_oven",
+        description="countertop oven asset",
+    )
+    hood["metadata"] = {
+        "task_slot": {
+            "intended_category": "appliance",
+            "intended_role": "ventilation",
+            "description": "Ventilation hood installed above the range.",
+        }
+    }
+    scene = _scene([hood])
+    scene["metadata"]["architecture_contract"] = (
+        architecture_contract_for_room(
+            {
+                "boundary": scene["boundary"],
+                "height": scene["scene_height"],
+            },
+            physical_wall_policy="explicit_only",
+            active_wall_ids=(),
+            policy_source="logical_boundary_test",
+        )
+    )
+
+    record = _by_id(check_support(scene), "asset_instance")
+
+    assert record["route"] == (
+        "direct_valid_logical_architecture_attachment"
+    )
+    assert record["logical_architecture_attachment"]["plane"] == "north"
+
+
 # --------------------------------------------------------------------------- #
 # 7. The injected local-view provider receives the support event and object IDs
 # --------------------------------------------------------------------------- #

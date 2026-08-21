@@ -1043,6 +1043,19 @@ def _generate_feasible_camera_pose_candidates(
             target_bounds=target_bounds,
             requested_count=count,
         )
+    if (
+        functional_probe is not None
+        and not candidates
+        and str(functional_probe.get("fallback_mode") or "")
+        == "soft_visibility"
+    ):
+        candidates = _functional_soft_visibility_fallback_candidates(
+            scene=scene,
+            functional_probe=functional_probe,
+            target_object_ids=target_object_ids,
+            target_bounds=target_bounds,
+            requested_count=count,
+        )
     if functional_probe is not None:
         return candidates
     # ``count`` is a deterministic upper bound, not a feasibility promise.
@@ -1050,6 +1063,125 @@ def _generate_feasible_camera_pose_candidates(
     # that bounded trusted bank lets the acquisition state machine either use
     # it or take its explicit empty-bank route without fabricating candidates.
     return candidates
+
+
+def _functional_soft_visibility_fallback_candidates(
+    *,
+    scene: dict[str, Any],
+    functional_probe: dict[str, Any],
+    target_object_ids: list[str],
+    target_bounds: tuple[np.ndarray, np.ndarray],
+    requested_count: int,
+) -> list[dict[str, Any]]:
+    """Return a bounded broader bank after strict local framing fails.
+
+    This route supplies evidence, not a visibility certificate.  A singleton
+    receives deterministic opposing object-local views; a relation receives
+    the frozen global context poses.  The caller marks the resulting packet as
+    partial whenever target identity cannot be verified.
+    """
+
+    targets = list(
+        dict.fromkeys(
+            str(item)
+            for item in target_object_ids
+            if str(item).strip()
+        )
+    )
+    limit = max(1, int(requested_count))
+    if len(targets) == 1:
+        side_bank = generate_usable_surface_side_repair_bank(
+            scene,
+            target_id=targets[0],
+        )
+        result: list[dict[str, Any]] = []
+        for index, pose in enumerate(side_bank[:limit]):
+            result.append(
+                {
+                    **deepcopy(pose),
+                    "id": (
+                        f"functional_consistency_{index:02d}_"
+                        f"soft_{pose.get('id') or index}"
+                    ),
+                    "target_object_ids": targets,
+                    "target_bounds": [
+                        _vector_list(target_bounds[0]),
+                        _vector_list(target_bounds[1]),
+                    ],
+                    "policy_source": (
+                        "functional_soft_visibility_object_fallback_v1"
+                    ),
+                    "functional_probe_kind": str(
+                        functional_probe.get("kind") or ""
+                    ),
+                    "functional_probe_id": str(
+                        functional_probe.get("probe_id") or ""
+                    ),
+                    "usable_surface_observability": {
+                        "eligible": True,
+                        "coverage_status": "partial_but_usable",
+                        "covered_hypotheses": [],
+                        "required_target_ids": targets,
+                        "fallback_reason": (
+                            "strict_local_candidate_bank_empty"
+                        ),
+                    },
+                    "fallback_reason": (
+                        "strict_local_candidate_bank_empty"
+                    ),
+                }
+            )
+        return result
+
+    ordered = sorted(
+        generate_global_context_poses(scene),
+        key=lambda item: (
+            0 if str(item.get("id")) == "global_perspective" else 1,
+            str(item.get("id") or ""),
+        ),
+    )
+    result = []
+    for index, pose in enumerate(ordered[:limit]):
+        source_id = str(pose.get("id") or f"global_{index:02d}")
+        result.append(
+            {
+                **deepcopy(pose),
+                "id": (
+                    f"functional_consistency_{index:02d}_soft_"
+                    f"{source_id}"
+                ),
+                "name": f"functional_soft_{source_id}",
+                "target_object_ids": targets,
+                "target_bounds": [
+                    _vector_list(target_bounds[0]),
+                    _vector_list(target_bounds[1]),
+                ],
+                "proxy_framing_bounds": [
+                    _vector_list(target_bounds[0]),
+                    _vector_list(target_bounds[1]),
+                ],
+                "policy_source": (
+                    "functional_soft_visibility_global_fallback_v1"
+                ),
+                "functional_probe_kind": str(
+                    functional_probe.get("kind") or ""
+                ),
+                "functional_probe_id": str(
+                    functional_probe.get("probe_id") or ""
+                ),
+                "usable_surface_observability": {
+                    "eligible": True,
+                    "coverage_status": "partial_but_usable",
+                    "covered_hypotheses": [],
+                    "required_target_ids": targets,
+                    "fallback_reason": (
+                        "strict_local_candidate_bank_empty"
+                    ),
+                },
+                "fallback_reason": "strict_local_candidate_bank_empty",
+            }
+        )
+    return result
 
 
 def _functional_cross_group_context_fallback_candidates(

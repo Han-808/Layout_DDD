@@ -44,10 +44,12 @@ from benchmark.visual_judge.contracts import (
 from benchmark.visual_judge.runtime import EvidenceControlUnresolvedError
 
 
-SUPPORT_EVALUATOR_VERSION = "support_p0b_v7"
+SUPPORT_EVALUATOR_VERSION = "support_p0b_v8"
 GRAVITY = [0.0, 0.0, -1.0]
 SUPPORT_CANDIDATE_SELECTION_POLICY = "high_recall_candidate_no_label_prior"
-GROUNDED_SUPPORT_POLICY = "fixed_point_tolerance_contact_path_to_floor_v2"
+GROUNDED_SUPPORT_POLICY = (
+    "fixed_point_contact_path_or_logical_attachment_v3"
+)
 
 # Scale-aware contact thresholds (meters). Small positive clearances within the
 # hard band are treated as ordinary geometry/render fitting tolerance, matching
@@ -83,6 +85,11 @@ DEFAULT_SUPPORT_CONFIG = {
     "max_representative_samples": 8,
     "mesh_bounds_tolerance_m": 0.03,
     "mesh_center_tolerance_m": 0.05,
+    "logical_architecture_attachment_policy": "direct_valid",
+    "logical_wall_attachment_tolerance_m": 0.06,
+    "logical_ceiling_attachment_tolerance_m": 0.08,
+    "logical_wall_attachment_min_bottom_m": 0.08,
+    "logical_wall_attachment_max_depth_ratio": 0.75,
 }
 
 SUPPORT_VLM_INSTRUCTION = (
@@ -114,6 +121,7 @@ SUPPORT_NOTES = [
     "Contact samples come only from the lowest base-contact band, not the full footprint or body envelope.",
     "Any reliable floor contact, or object contact with certified grounded ancestry, establishes non-floating support; contact fraction and the center ray are diagnostic only.",
     "Object contact bypasses VLM only when a fixed-point tolerance-contact graph proves a path to the floor.",
+    "When physical wall meshes are intentionally absent, an elevated object with explicit wall/ceiling-mount semantics and bounded logical-plane contact may seed a deterministic architecture attachment path.",
     "Floating stacks, ungrounded contact components, and contact cycles route to VLM; they are never direct-invalid.",
     "Sparse leg/frame contacts and support split across multiple targets are valid Support evidence; stability is evaluated elsewhere.",
     "Missing contact, attachment/suspension, or degraded geometry requires a binary VLM verdict; "
@@ -245,6 +253,7 @@ def check_support(
         center_tolerance_m=mesh_center_tolerance,
     )
     grounding_analysis = _analyze_grounded_contact_graph(
+        scene=scene,
         objects=objects,
         mesh_cache=mesh_cache,
         boundary=boundary,
@@ -253,6 +262,7 @@ def check_support(
         base_band_tol=base_band_tol,
         minimum_contact_count=minimum_contact_count,
         grid=grid,
+        config=cfg,
     )
 
     records: list[dict[str, Any]] = []
@@ -326,6 +336,25 @@ def check_support(
         "gravity": list(GRAVITY),
         "candidate_selection_policy": SUPPORT_CANDIDATE_SELECTION_POLICY,
         "grounded_support_policy": GROUNDED_SUPPORT_POLICY,
+        "logical_architecture_attachment_policy": {
+            "policy": str(
+                cfg["logical_architecture_attachment_policy"]
+            ),
+            "wall_tolerance_m": float(
+                cfg["logical_wall_attachment_tolerance_m"]
+            ),
+            "ceiling_tolerance_m": float(
+                cfg["logical_ceiling_attachment_tolerance_m"]
+            ),
+            "semantic_and_geometric_certificate_required": True,
+            "decision_authority": "deterministic_support_certificate",
+        },
+        "certified_logical_attachment_object_ids": list(
+            grounding_analysis.get(
+                "certified_logical_attachment_object_ids"
+            )
+            or []
+        ),
         "certified_grounded_object_ids": list(grounding_analysis["certified_grounded_object_ids"]),
         "unresolved_grounding_object_ids": list(grounding_analysis["unresolved_grounding_object_ids"]),
         "support_contact_graph_edges": deepcopy(grounding_analysis["contact_graph_edges"]),
@@ -381,6 +410,7 @@ def check_support(
 
 def _analyze_grounded_contact_graph(
     *,
+    scene: dict[str, Any],
     objects,
     mesh_cache: dict[str, dict[str, Any]],
     boundary: np.ndarray,
@@ -389,6 +419,7 @@ def _analyze_grounded_contact_graph(
     base_band_tol: float,
     minimum_contact_count: int,
     grid: tuple[int, int],
+    config: dict[str, Any],
 ) -> dict[str, Any]:
     """Certify tolerance-contact paths to the floor with an order-independent pass.
 
@@ -396,8 +427,10 @@ def _analyze_grounded_contact_graph(
     the contacted object may itself float, or several penetrating objects may
     form an ungrounded cycle. This fixed-point graph seeds reliable floor
     contacts within the scale-aware hard tolerance, then propagates through
-    equally bounded object contacts. Wall and ceiling attachment never seed the graph because their
-    semantic validity remains VLM-owned.
+    equally bounded object contacts. A narrow logical-wall/ceiling certificate
+    may also seed the graph when the canonical scene intentionally omits a
+    physical wall mesh; that route requires both mount semantics and bounded
+    geometric contact.
     """
 
     snapshots: dict[str, dict[str, Any]] = {}
@@ -434,6 +467,13 @@ def _analyze_grounded_contact_graph(
                 if hit.get("target") not in {None, "floor"}
             }
         )
+        logical_attachment = _logical_architecture_attachment_certificate(
+            scene,
+            obj,
+            boundary=boundary,
+            has_boundary=has_boundary,
+            config=config,
+        )
         snapshots[obj.id] = {
             "local_tolerance_contact_count": len(contact_hits),
             "direct_contact_tolerance_m": direct_contact_tolerance,
@@ -443,12 +483,22 @@ def _analyze_grounded_contact_graph(
             "locally_certifiable_contact": (
                 len(contact_hits) >= minimum_contact_count and not degraded_reasons
             ),
+            "logical_architecture_attachment": logical_attachment,
         }
 
     grounded_paths: dict[str, list[str]] = {}
     for object_id in sorted(snapshots):
         snapshot = snapshots[object_id]
-        if snapshot["locally_certifiable_contact"] and snapshot["floor_contact_hit_count"] > 0:
+        logical_attachment = snapshot.get(
+            "logical_architecture_attachment"
+        )
+        if isinstance(logical_attachment, dict):
+            grounded_paths[object_id] = [
+                object_id,
+                str(logical_attachment["architecture_node_id"]),
+                "architecture",
+            ]
+        elif snapshot["locally_certifiable_contact"] and snapshot["floor_contact_hit_count"] > 0:
             grounded_paths[object_id] = [object_id, "floor"]
 
     changed = True
@@ -482,7 +532,14 @@ def _analyze_grounded_contact_graph(
         cycle_reachable = _contact_cycle_reachable(object_id, contact_edges)
         certified = object_id in grounded_paths
         if certified:
-            grounding_status = "certified_tolerance_contact_path_to_floor"
+            grounding_status = (
+                "certified_logical_architecture_attachment"
+                if isinstance(
+                    snapshot.get("logical_architecture_attachment"),
+                    dict,
+                )
+                else "certified_tolerance_contact_path_to_floor"
+            )
         elif snapshot["geometry_degraded_reasons"]:
             grounding_status = "degraded_geometry_requires_vlm"
         elif snapshot["local_tolerance_contact_count"] < minimum_contact_count:
@@ -503,6 +560,13 @@ def _analyze_grounded_contact_graph(
     return {
         "policy": GROUNDED_SUPPORT_POLICY,
         "certified_grounded_object_ids": sorted(grounded_paths),
+        "certified_logical_attachment_object_ids": sorted(
+            object_id
+            for object_id, snapshot in snapshots.items()
+            if isinstance(
+                snapshot.get("logical_architecture_attachment"), dict
+            )
+        ),
         "unresolved_grounding_object_ids": sorted(set(snapshots) - set(grounded_paths)),
         "contact_graph_edges": [
             {"source_object_id": source_id, "target_object_id": target_id}
@@ -683,6 +747,9 @@ def _evaluate_object(
         architecture_plane_clearances,
         tolerance_m=candidate_tol,
     )
+    logical_attachment = deepcopy(
+        grounding.get("logical_architecture_attachment")
+    )
     lower_envelope_zs = [float(point[2]) for point in lower_envelope_points]
     geometry_degraded_reasons = _geometry_degraded_reasons(
         source_id=obj.id,
@@ -707,6 +774,13 @@ def _evaluate_object(
             routing_reasons.append("ungrounded_contact_cycle")
     if architecture_contact_candidates and contact_hit_count < minimum_contact_count:
         routing_reasons.append("possible_architecture_attachment")
+    if isinstance(logical_attachment, dict):
+        routing_reasons.append(
+            "certified_logical_architecture_attachment"
+        )
+        attachment_mode = str(logical_attachment.get("mode") or "")
+        if attachment_mode and attachment_mode not in measured_support_modes:
+            measured_support_modes.append(attachment_mode)
 
     record: dict[str, Any] = {
         "object_id": obj.id,
@@ -723,7 +797,7 @@ def _evaluate_object(
         "contact_tolerance_m": direct_contact_tolerance,
         "direct_contact_tolerance_m": direct_contact_tolerance,
         # Retained as a report compatibility alias; this is a tolerance band,
-        # not a frozen numerical epsilon in support_p0b_v7.
+        # not a frozen numerical epsilon in support_p0b_v8.
         "direct_contact_epsilon_m": direct_contact_tolerance,
         "support_candidate_tolerance_m": candidate_tol,
         "hard_contact_tolerance_m": hard_contact_tolerance,
@@ -774,6 +848,7 @@ def _evaluate_object(
         "geometry_provenance": geometry_provenance,
         "architecture_plane_clearances_m": architecture_plane_clearances,
         "architecture_contact_candidates": architecture_contact_candidates,
+        "logical_architecture_attachment": logical_attachment,
         "active_physical_wall_ids": active_physical_wall_ids,
         "representative_samples": _representative_samples(hits, center_hit, max_rep),
         "routing_reasons": routing_reasons,
@@ -785,16 +860,25 @@ def _evaluate_object(
         "adjudication_error": None,
     }
 
-    direct_valid = (
+    direct_contact_valid = (
         contact_hit_count >= minimum_contact_count
         and not geometry_degraded_reasons
         and bool(grounding.get("certified_grounded_support"))
     )
-    if direct_valid:
+    logical_attachment_valid = isinstance(logical_attachment, dict)
+    if direct_contact_valid or logical_attachment_valid:
         record.update(
             {
-                "route": "direct_valid_contact",
-                "direct_valid_reason": "reliable_contact_with_certified_ground_path",
+                "route": (
+                    "direct_valid_logical_architecture_attachment"
+                    if logical_attachment_valid
+                    else "direct_valid_contact"
+                ),
+                "direct_valid_reason": (
+                    "semantic_and_geometric_logical_attachment_certificate"
+                    if logical_attachment_valid
+                    else "reliable_contact_with_certified_ground_path"
+                ),
                 "final_verdict": "valid",
                 "affects_support_score": True,
             }
@@ -1042,6 +1126,211 @@ def _architecture_plane_clearances(
             if f"{direction}_wall" in active_wall_ids:
                 result[direction] = clearance
     return result
+
+
+def _logical_architecture_attachment_certificate(
+    scene: dict[str, Any],
+    obj: Any,
+    *,
+    boundary: np.ndarray,
+    has_boundary: bool,
+    config: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Return a narrow wall/ceiling attachment certificate.
+
+    Logical room boundaries remain available even when the benchmark omits
+    physical wall meshes.  A proximity measurement alone is deliberately
+    insufficient: the object must also have category/description semantics
+    that ordinarily permit mounting, and wall attachments must be elevated.
+    """
+
+    if (
+        config.get("logical_architecture_attachment_policy")
+        != "direct_valid"
+    ):
+        return None
+    text = _support_object_semantic_text(obj)
+    if not text:
+        return None
+    corners = np.asarray(get_obb_corners(obj), dtype=float)
+    minimum = np.min(corners, axis=0)
+    maximum = np.max(corners, axis=0)
+    active_wall_ids = set(
+        active_wall_ids_from_contract(
+            architecture_contract_from_scene(scene)
+        )
+    )
+
+    scene_height = get_scene_height(scene)
+    ceiling_clearance = (
+        float(scene_height - maximum[2])
+        if scene_height is not None
+        else None
+    )
+    if (
+        ceiling_clearance is not None
+        and abs(ceiling_clearance)
+        <= float(config["logical_ceiling_attachment_tolerance_m"])
+        and _supports_ceiling_attachment_semantics(text)
+    ):
+        return {
+            "schema_version": "logical_architecture_attachment_v1",
+            "plane": "ceiling",
+            "mode": "ceiling_attachment",
+            "signed_clearance_m": ceiling_clearance,
+            "architecture_node_id": "logical_ceiling",
+            "physical_plane_active": False,
+            "semantic_evidence": text,
+            "certificate_requirements": [
+                "ceiling_mount_semantics",
+                "bounded_logical_plane_contact",
+            ],
+        }
+
+    if not has_boundary or not _supports_wall_attachment_semantics(text):
+        return None
+    if float(minimum[2]) < float(
+        config["logical_wall_attachment_min_bottom_m"]
+    ):
+        return None
+    room_minimum = np.min(boundary[:, :2], axis=0)
+    room_maximum = np.max(boundary[:, :2], axis=0)
+    clearances = {
+        "west": float(minimum[0] - room_minimum[0]),
+        "east": float(room_maximum[0] - maximum[0]),
+        "south": float(minimum[1] - room_minimum[1]),
+        "north": float(room_maximum[1] - maximum[1]),
+    }
+    tolerance = float(config["logical_wall_attachment_tolerance_m"])
+    candidates = sorted(
+        (
+            (abs(clearance), plane, clearance)
+            for plane, clearance in clearances.items()
+            if f"{plane}_wall" not in active_wall_ids
+            and abs(clearance) <= tolerance
+        ),
+        key=lambda item: (item[0], item[1]),
+    )
+    if not candidates:
+        return None
+    _, plane, clearance = candidates[0]
+    horizontal_size = np.maximum(maximum[:2] - minimum[:2], 1.0e-9)
+    normal_depth = float(
+        horizontal_size[0]
+        if plane in {"west", "east"}
+        else horizontal_size[1]
+    )
+    tangential_width = float(
+        horizontal_size[1]
+        if plane in {"west", "east"}
+        else horizontal_size[0]
+    )
+    explicit_mount_phrase = any(
+        phrase in text
+        for phrase in (
+            "wall mount",
+            "wall-mounted",
+            "wall mounted",
+            "upper cabinet",
+            "wall cabinet",
+        )
+    )
+    depth_ratio = normal_depth / max(tangential_width, 1.0e-9)
+    if (
+        not explicit_mount_phrase
+        and depth_ratio
+        > float(config["logical_wall_attachment_max_depth_ratio"])
+    ):
+        return None
+    return {
+        "schema_version": "logical_architecture_attachment_v1",
+        "plane": plane,
+        "mode": "wall_attachment",
+        "signed_clearance_m": float(clearance),
+        "architecture_node_id": f"logical_wall:{plane}",
+        "physical_plane_active": False,
+        "semantic_evidence": text,
+        "object_bottom_m": float(minimum[2]),
+        "wall_normal_depth_m": normal_depth,
+        "wall_tangential_width_m": tangential_width,
+        "wall_depth_ratio": depth_ratio,
+        "certificate_requirements": [
+            "wall_mount_semantics",
+            "elevated_above_floor",
+            "bounded_logical_plane_contact",
+            "wall_like_depth_or_explicit_mount_phrase",
+        ],
+    }
+
+
+def _support_object_semantic_text(obj: Any) -> str:
+    metadata = (
+        getattr(obj, "metadata", None)
+        if isinstance(getattr(obj, "metadata", None), dict)
+        else {}
+    )
+    task_slot = (
+        metadata.get("task_slot")
+        if isinstance(metadata.get("task_slot"), dict)
+        else {}
+    )
+    return " ".join(
+        str(value or "").strip().lower()
+        for value in (
+            getattr(obj, "category", None),
+            getattr(obj, "retrieval_category", None),
+            getattr(obj, "desc", None),
+            getattr(obj, "short_desc", None),
+            task_slot.get("intended_category"),
+            task_slot.get("intended_role"),
+            task_slot.get("description"),
+        )
+        if str(value or "").strip()
+    )
+
+
+def _supports_wall_attachment_semantics(text: str) -> bool:
+    normalized = text.replace("_", " ").replace("-", " ")
+    tokens = set(normalized.split())
+    if tokens & {
+        "mirror",
+        "pegboard",
+        "painting",
+        "picture",
+        "clock",
+        "television",
+        "tv",
+    }:
+        return True
+    return any(
+        phrase in normalized
+        for phrase in (
+            "wall mount",
+            "wall mounted",
+            "wall shelf",
+            "wall cabinet",
+            "upper cabinet",
+            "range hood",
+            "ventilation hood",
+            "extractor hood",
+            "kitchen hood",
+        )
+    )
+
+
+def _supports_ceiling_attachment_semantics(text: str) -> bool:
+    normalized = text.replace("_", " ").replace("-", " ")
+    return any(
+        phrase in normalized
+        for phrase in (
+            "chandelier",
+            "pendant light",
+            "hanging light",
+            "ceiling light",
+            "ceiling lamp",
+            "ceiling fan",
+        )
+    )
 
 
 def _architecture_contact_candidates(
@@ -1576,6 +1865,37 @@ def _validate_support_config(config: dict[str, Any]) -> None:
         raise ValueError("support.mesh_bounds_tolerance_m must be a finite non-negative number")
     if not math.isfinite(mesh_center_tolerance) or mesh_center_tolerance < 0.0:
         raise ValueError("support.mesh_center_tolerance_m must be a finite non-negative number")
+    if config.get("logical_architecture_attachment_policy") not in {
+        "disabled",
+        "direct_valid",
+    }:
+        raise ValueError(
+            "support.logical_architecture_attachment_policy must be "
+            "'disabled' or 'direct_valid'"
+        )
+    for name in (
+        "logical_wall_attachment_tolerance_m",
+        "logical_ceiling_attachment_tolerance_m",
+        "logical_wall_attachment_min_bottom_m",
+    ):
+        value = float(config.get(name, DEFAULT_SUPPORT_CONFIG[name]))
+        if not math.isfinite(value) or value < 0.0:
+            raise ValueError(
+                f"support.{name} must be a finite non-negative number"
+            )
+    depth_ratio = float(
+        config.get(
+            "logical_wall_attachment_max_depth_ratio",
+            DEFAULT_SUPPORT_CONFIG[
+                "logical_wall_attachment_max_depth_ratio"
+            ],
+        )
+    )
+    if not math.isfinite(depth_ratio) or depth_ratio <= 0.0:
+        raise ValueError(
+            "support.logical_wall_attachment_max_depth_ratio must be a "
+            "finite positive number"
+        )
     legacy_threshold = config.get("contact_fraction_threshold")
     if legacy_threshold is not None:
         threshold = float(legacy_threshold)

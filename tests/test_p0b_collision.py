@@ -13,7 +13,9 @@ import pytest
 from benchmark.evaluator.generic_validity.collision import (
     CollisionEvaluationError,
     DEFAULT_COLLISION_CONFIG,
+    _compliant_floor_covering_certificate,
     _shallow_surface_layer_overlap_evidence,
+    _support_interface_contact_certificate,
     _tangent_plane_contact_certificate,
     check_collision,
 )
@@ -291,6 +293,57 @@ def test_thin_plane_slicing_object_never_receives_tangent_certificate() -> None:
     assert certificate is None
 
 
+def test_tiny_gravity_aligned_support_interface_has_safe_certificate() -> None:
+    support = normalize_object(
+        _obj("counter", [1.0, 1.0, 0.45], [2.0, 1.0, 0.9])
+    )
+    load = normalize_object(
+        _obj("mug", [1.0, 1.0, 0.9995], [0.2, 0.2, 0.2])
+    )
+    certificate = _support_interface_contact_certificate(
+        support,
+        load,
+        obb=obb_sat_test(support, load),
+        mesh_evidence={
+            "surface_intersection": True,
+            "intersection": {"definitive": True},
+        },
+        enclosure_safe=True,
+        config=dict(DEFAULT_COLLISION_CONFIG),
+    )
+
+    assert certificate is not None
+    assert certificate["support_object_id"] == "counter"
+    assert certificate["load_object_id"] == "mug"
+    assert certificate["interface_penetration_m"] == pytest.approx(
+        0.0005
+    )
+
+
+def test_lateral_or_deep_overlap_never_receives_support_certificate() -> None:
+    a = normalize_object(
+        _obj("a", [1.0, 1.0, 0.5], [1.0, 1.0, 1.0])
+    )
+    b = normalize_object(
+        _obj("b", [1.8, 1.0, 0.5], [1.0, 1.0, 1.0])
+    )
+
+    assert (
+        _support_interface_contact_certificate(
+            a,
+            b,
+            obb=obb_sat_test(a, b),
+            mesh_evidence={
+                "surface_intersection": True,
+                "intersection": {"definitive": True},
+            },
+            enclosure_safe=True,
+            config=dict(DEFAULT_COLLISION_CONFIG),
+        )
+        is None
+    )
+
+
 def test_shallow_floor_layer_overlap_is_context_not_an_exemption() -> None:
     layer = normalize_object(
         _obj(
@@ -332,6 +385,123 @@ def test_shallow_floor_layer_overlap_is_context_not_an_exemption() -> None:
     ]
     assert policy["max_overlap_m"] == pytest.approx(0.0125)
     assert policy["automatic_exemption"] is False
+
+
+def test_explicit_rug_semantics_upgrade_bounded_floor_overlap() -> None:
+    rug = normalize_object(
+        _obj(
+            "rug",
+            [1.5, 1.5, 0.005],
+            [2.0, 2.0, 0.01],
+            category="area_rug",
+            description="woven area rug",
+        )
+    )
+    chair = normalize_object(
+        _obj(
+            "chair",
+            [1.5, 1.5, 0.5],
+            [1.0, 1.0, 1.0],
+            category="chair",
+        )
+    )
+    shallow = _shallow_surface_layer_overlap_evidence(
+        _scene([]),
+        rug,
+        chair,
+        obb=obb_sat_test(rug, chair),
+        mesh_evidence={
+            "surface_intersection": True,
+            "intersection": {"definitive": True},
+        },
+        config=dict(DEFAULT_COLLISION_CONFIG),
+    )
+
+    certificate = _compliant_floor_covering_certificate(
+        _scene([]),
+        rug,
+        chair,
+        obb=obb_sat_test(rug, chair),
+        mesh_evidence={
+            "surface_intersection": True,
+            "intersection": {"definitive": True},
+        },
+        config=dict(DEFAULT_COLLISION_CONFIG),
+    )
+    assert certificate is not None
+    assert certificate["layer_object_id"] == "rug"
+    assert certificate["certificate"] == (
+        "semantic_compliant_floor_covering_relief"
+    )
+
+
+def test_explicit_rug_overlap_is_direct_valid_without_judge(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    import benchmark.evaluator.generic_validity.collision as collision_module
+
+    rug_center = [1.5, 1.5, 0.005]
+    rug_size = [2.0, 2.0, 0.01]
+    chair_center = [1.5, 1.5, 0.5]
+    chair_size = [1.0, 1.0, 1.0]
+    _box_mesh(tmp_path / "rug.ply", rug_center, rug_size)
+    _box_mesh(tmp_path / "chair.ply", chair_center, chair_size)
+    geometry = _geometry_manifest(
+        tmp_path,
+        {
+            object_id: {
+                "representation": TRIANGLE_MESH_REPRESENTATION,
+                "geometry_path": f"{object_id}.ply",
+                "transform_baked": True,
+                "geometry_source": "test",
+                "complete": True,
+            }
+            for object_id in ("rug", "chair")
+        },
+    )
+    monkeypatch.setattr(
+        collision_module,
+        "evaluate_mesh_pair",
+        lambda *args, **kwargs: {
+            "status": "evaluated",
+            "mesh_state": "surface_intersection",
+            "mesh_reliable_for_separation": False,
+            "surface_intersection": True,
+            "intersection": {"intersects": True, "definitive": True},
+            "closest_points": None,
+            "focus_region": None,
+        },
+    )
+    judge = _Judge("invalid")
+
+    report = check_collision(
+        _scene(
+            [
+                _obj(
+                    "rug",
+                    rug_center,
+                    rug_size,
+                    category="area_rug",
+                    description="woven area rug",
+                ),
+                _obj(
+                    "chair",
+                    chair_center,
+                    chair_size,
+                    category="chair",
+                ),
+            ]
+        ),
+        collision_geometry=geometry,
+        vlm_judge=judge,
+    )
+
+    assert report["pairs"][0]["route"] == (
+        "direct_valid_compliant_floor_covering"
+    )
+    assert report["pairs"][0]["final_verdict"] == "valid"
+    assert judge.calls == 0
 
 
 def test_shallow_floor_layer_context_reaches_collision_judge(

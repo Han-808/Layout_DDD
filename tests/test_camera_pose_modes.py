@@ -1483,6 +1483,82 @@ def test_functional_probe_provider_returns_only_unmodified_rgb(
     }
 
 
+def test_functional_soft_fallback_keeps_raw_rgb_with_truthful_coverage(
+    tmp_path: Path,
+) -> None:
+    class BlankIdentityRenderer(_FakeRenderer):
+        def render_focus_overlay_views(
+            self,
+            *,
+            blend_file,
+            out_dir,
+            camera_views,
+            overlay_spec,
+            preview=False,
+        ):
+            destination = Path(out_dir)
+            destination.mkdir(parents=True, exist_ok=True)
+            self.calls.append(
+                {
+                    "preview": preview,
+                    "views": camera_views,
+                    "blend_file": Path(blend_file),
+                    "pass": "identity",
+                }
+            )
+            views = []
+            for index, pose in enumerate(camera_views):
+                path = destination / f"identity_{index:02d}.png"
+                Image.new("RGB", (64, 48), (20, 20, 20)).save(path)
+                views.append(
+                    {"id": pose["id"], "path": str(path), "pose": pose}
+                )
+            return {"views": views}
+
+    blend = tmp_path / "scene.blend"
+    blend.write_bytes(b"blend")
+    renderer = BlankIdentityRenderer()
+    provider = CameraEvidenceProvider(
+        renderer=renderer,
+        blend_file=blend,
+        out_dir=tmp_path / "functional_soft_fallback",
+        mode="query_cov",
+        selector=_FakeSelector(),
+        max_views=1,
+        max_steps=0,
+        candidate_count=6,
+    )
+    request = _request("functional_consistency")
+    request.update(
+        evidence_scope="pair_local",
+        evidence_policy={
+            "camera_scope": "pair_local",
+            "camera_pose_mode": "query_cov",
+            "presentation": "raw",
+        },
+        functional_probe={
+            "probe_id": "functional_probe_01",
+            "kind": "functional_correspondence",
+            "target_ids": ["bed"],
+            "related_target_ids": ["cabinet"],
+            "target_categories": {"bed": "bed", "cabinet": "cabinet"},
+            "required_observations": ["joint_visibility"],
+            "view_goal": "show both relation endpoints",
+            "fallback_mode": "soft_visibility",
+        },
+    )
+
+    items = provider(request)
+
+    assert len(items) == 1
+    assert items[0]["role"] == "functional_probe_rgb"
+    assert items[0]["identity_grounded"] is False
+    coverage = provider.last_call_usage["functional_evidence_coverage"]
+    assert coverage["coverage_status"] == "partial_but_usable"
+    assert coverage["rule"] == "soft_visibility_fallback_v1"
+    assert coverage["identity_grounded"] is False
+
+
 def test_functional_frontage_probe_uses_four_candidates(
     tmp_path: Path,
 ) -> None:

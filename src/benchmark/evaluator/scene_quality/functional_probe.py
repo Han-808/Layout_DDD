@@ -356,11 +356,100 @@ def acquire_functional_probe_evidence(
     selected_paths: list[str] = []
     failures = 0
     successful_probe_count = 0
+    provider_failure_attempt_count = 0
     attempted_backfill_count = 0
     backfill_attempt_quota: int | None = None
     failed_discovery_items: list[dict[str, Any]] = []
+    partially_grounded_discovery_items: list[dict[str, Any]] = []
+    failed_primary_retry_queue: list[dict[str, Any]] = []
+    successful_primary_identities: set[str] = set()
     candidate_units = [*units, *backfill_units]
     primary_probe_target = len(units)
+
+    def record_available_probe(
+        *,
+        result_record: dict[str, Any],
+        raw: Any,
+        unit: dict[str, Any],
+        is_primary_obligation: bool,
+    ) -> bool:
+        """Attach one provider result and return identity-grounding state."""
+
+        nonlocal successful_probe_count
+        probe_paths = _raw_probe_paths(raw)
+        missing = [
+            path
+            for path in probe_paths
+            if not Path(path).expanduser().is_file()
+        ]
+        if missing:
+            raise FileNotFoundError(
+                "functional probe provider returned missing paths: "
+                f"{missing}"
+            )
+        if not probe_paths:
+            raise RuntimeError(
+                "functional probe provider returned no raw RGB evidence"
+            )
+        path = probe_paths[0]
+        if path not in selected_paths:
+            selected_paths.append(path)
+        successful_probe_count += 1
+        provider_usage = deepcopy(
+            getattr(provider, "last_call_usage", None)
+        )
+        evidence_coverage = deepcopy(
+            (
+                provider_usage.get("functional_evidence_coverage")
+                if isinstance(provider_usage, dict)
+                else None
+            )
+            or {}
+        )
+        identity_grounded = evidence_coverage.get(
+            "identity_grounded"
+        ) is not False
+        result_record.update(
+            status="available",
+            evidence_paths=[path],
+            acquired_artifact_paths=list(
+                dict.fromkeys(
+                    str(item)
+                    for item in (
+                        (
+                            provider_usage.get(
+                                "acquired_artifact_paths"
+                            )
+                            if isinstance(provider_usage, dict)
+                            else None
+                        )
+                        or [path]
+                    )
+                    if str(item).strip()
+                )
+            ),
+            provider_usage=provider_usage,
+            evidence_coverage=evidence_coverage,
+            identity_grounded=identity_grounded,
+            usable_surface_audit=deepcopy(
+                (
+                    getattr(provider, "last_call_usage", None)
+                    or {}
+                ).get("usable_surface")
+            ),
+            functional_geometry=deepcopy(
+                (
+                    getattr(provider, "last_call_usage", None)
+                    or {}
+                ).get("functional_geometry")
+            ),
+        )
+        if is_primary_obligation and identity_grounded:
+            successful_primary_identities.add(
+                repr(_probe_unit_identity_record(unit))
+            )
+        return identity_grounded
+
     for candidate_index, unit in enumerate(candidate_units):
         is_backfill = candidate_index >= len(units)
         if is_backfill:
@@ -619,71 +708,30 @@ def acquire_functional_probe_evidence(
         }
         try:
             raw = provider_call(provider_request)
-            probe_paths = _raw_probe_paths(raw)
-            missing = [
-                path
-                for path in probe_paths
-                if not Path(path).expanduser().is_file()
-            ]
-            if missing:
-                raise FileNotFoundError(
-                    "functional probe provider returned missing paths: "
-                    f"{missing}"
-                )
-            if not probe_paths:
-                raise RuntimeError(
-                    "functional probe provider returned no raw RGB evidence"
-                )
-            path = probe_paths[0]
-            if path not in selected_paths:
-                selected_paths.append(path)
-            successful_probe_count += 1
-            provider_usage = deepcopy(
-                getattr(provider, "last_call_usage", None)
+            identity_grounded = record_available_probe(
+                result_record=result_record,
+                raw=raw,
+                unit=unit,
+                is_primary_obligation=not is_backfill,
             )
-            result_record.update(
-                status="available",
-                evidence_paths=[path],
-                acquired_artifact_paths=list(
-                    dict.fromkeys(
-                        str(item)
-                        for item in (
-                            (
-                                provider_usage.get(
-                                    "acquired_artifact_paths"
-                                )
-                                if isinstance(provider_usage, dict)
-                                else None
-                            )
-                            or [path]
-                        )
-                        if str(item).strip()
-                    )
-                ),
-                provider_usage=provider_usage,
-                evidence_coverage=deepcopy(
-                    (
-                        provider_usage.get("functional_evidence_coverage")
-                        if isinstance(provider_usage, dict)
-                        else None
-                    )
-                    or {}
-                ),
-                usable_surface_audit=deepcopy(
-                    (
-                        getattr(provider, "last_call_usage", None)
-                        or {}
-                    ).get("usable_surface")
-                ),
-                functional_geometry=deepcopy(
-                    (
-                        getattr(provider, "last_call_usage", None)
-                        or {}
-                    ).get("functional_geometry")
-                ),
-            )
+            if not identity_grounded and not is_backfill:
+                partially_grounded_discovery_items.append(
+                    {
+                        "acquisition_identity": (
+                            _probe_unit_identity_record(unit)
+                        ),
+                        "check_ids": deepcopy(
+                            unit.get("check_ids") or []
+                        ),
+                        "target_ids": target_ids,
+                        "route_scope": route_scope,
+                        "owning_group_id": owning_group_id,
+                        "reason": "soft_fallback_identity_unverified",
+                    }
+                )
         except Exception as exc:
             failures += 1
+            provider_failure_attempt_count += 1
             provider_usage = deepcopy(
                 getattr(provider, "last_call_usage", None)
             )
@@ -735,12 +783,165 @@ def acquire_functional_probe_evidence(
                     "error": str(exc),
                 }
             )
+            if not is_backfill:
+                failed_primary_retry_queue.append(
+                    {
+                        "unit": deepcopy(unit),
+                        "provider_request": deepcopy(provider_request),
+                        "result_record": deepcopy(result_record),
+                        "failed_item_index": len(
+                            failed_discovery_items
+                        )
+                        - 1,
+                    }
+                )
         audit["probe_results"].append(result_record)
 
+    retry_budget = max(
+        0,
+        int(max_probe_units) - len(audit["probe_results"]),
+    )
+    attempted_failed_unit_retries = 0
+    recovered_failed_unit_count = 0
+    for retry_item in failed_primary_retry_queue[:retry_budget]:
+        attempted_failed_unit_retries += 1
+        retry_unit = deepcopy(retry_item["unit"])
+        retry_request = deepcopy(retry_item["provider_request"])
+        retry_request["functional_probe"] = {
+            **deepcopy(retry_request.get("functional_probe") or {}),
+            "fallback_mode": "soft_visibility",
+            "fallback_reason": "primary_probe_acquisition_failed",
+        }
+        retry_request["_camera_selection_phase"] = (
+            "functional_soft_fallback"
+        )
+        retry_request["_camera_evidence_deficiency"] = {
+            "reason": "primary_probe_acquisition_failed",
+            "prior_error_type": retry_item["result_record"].get(
+                "error_type"
+            ),
+            "prior_error": retry_item["result_record"].get("error"),
+            "target_ids": list(retry_request.get("object_ids") or []),
+            "required_observations": deepcopy(
+                (
+                    retry_request.get("evidence_goal")
+                    if isinstance(
+                        retry_request.get("evidence_goal"), dict
+                    )
+                    else {}
+                ).get("required_observations")
+                or []
+            ),
+        }
+        retry_record = deepcopy(retry_item["result_record"])
+        retry_record.update(
+            status="failed",
+            evidence_paths=[],
+            acquired_artifact_paths=[],
+            scheduling={
+                "mode": "failed_unit_soft_retry",
+                "retry_of_probe_result_index": int(
+                    retry_item["failed_item_index"]
+                ),
+            },
+            fallback_mode="soft_visibility",
+        )
+        retry_record.pop("error_type", None)
+        retry_record.pop("error", None)
+        retry_identity = repr(
+            _probe_unit_identity_record(retry_unit)
+        )
+        try:
+            raw = provider_call(retry_request)
+            identity_grounded = record_available_probe(
+                result_record=retry_record,
+                raw=raw,
+                unit=retry_unit,
+                is_primary_obligation=True,
+            )
+            recovered_failed_unit_count += 1
+            failed_discovery_items = [
+                item
+                for item in failed_discovery_items
+                if repr(item.get("acquisition_identity"))
+                != retry_identity
+            ]
+            if not identity_grounded:
+                partially_grounded_discovery_items.append(
+                    {
+                        "acquisition_identity": (
+                            _probe_unit_identity_record(retry_unit)
+                        ),
+                        "check_ids": deepcopy(
+                            retry_unit.get("check_ids") or []
+                        ),
+                        "target_ids": list(
+                            retry_request.get("object_ids") or []
+                        ),
+                        "route_scope": (
+                            retry_record.get("route_scope")
+                        ),
+                        "owning_group_id": (
+                            retry_record.get("owning_group_id")
+                        ),
+                        "reason": (
+                            "soft_fallback_identity_unverified"
+                        ),
+                    }
+                )
+        except Exception as exc:
+            provider_failure_attempt_count += 1
+            provider_usage = deepcopy(
+                getattr(provider, "last_call_usage", None)
+            )
+            retry_record.update(
+                error_type=type(exc).__name__,
+                error=str(exc),
+                provider_usage=provider_usage,
+                acquired_artifact_paths=list(
+                    dict.fromkeys(
+                        str(item)
+                        for item in (
+                            (
+                                provider_usage.get(
+                                    "acquired_artifact_paths"
+                                )
+                                if isinstance(provider_usage, dict)
+                                else None
+                            )
+                            or []
+                        )
+                        if str(item).strip()
+                    )
+                ),
+            )
+            for failed_item in failed_discovery_items:
+                if (
+                    repr(failed_item.get("acquisition_identity"))
+                    == retry_identity
+                ):
+                    failed_item["fallback_attempted"] = True
+                    failed_item["fallback_error_type"] = type(exc).__name__
+                    failed_item["fallback_error"] = str(exc)
+        audit["probe_results"].append(retry_record)
+
     audit["failed_discovery_items"] = failed_discovery_items
+    audit["partially_grounded_discovery_items"] = (
+        partially_grounded_discovery_items
+    )
+    audit["failed_unit_retry"] = {
+        "policy": "retry_same_obligation_with_soft_visibility_v1",
+        "attempt_budget": retry_budget,
+        "attempted_count": attempted_failed_unit_retries,
+        "recovered_count": recovered_failed_unit_count,
+        "identity_grounded_recovered_count": len(
+            successful_primary_identities
+        ),
+    }
     audit["acquisition_coverage_complete"] = bool(
         not audit.get("unscheduled_discovery_items")
         and not failed_discovery_items
+        and not partially_grounded_discovery_items
     )
     audit["coverage_complete"] = audit[
         "acquisition_coverage_complete"
@@ -965,7 +1166,17 @@ def acquire_functional_probe_evidence(
     audit["group_probe_packets"] = group_packets
     _summarize_usable_surface_usage(audit)
     audit["rendered_probe_count"] = len(selected_paths)
-    audit["failed_probe_count"] = failures
+    grounded_planned_probe_count = len(
+        successful_primary_identities
+    )
+    final_failed_obligation_count = max(
+        0,
+        len(units) - grounded_planned_probe_count,
+    )
+    audit["failed_probe_count"] = final_failed_obligation_count
+    audit["provider_failure_attempt_count"] = (
+        provider_failure_attempt_count
+    )
     audit["planned_probe_count"] = len(units)
     audit["attempted_probe_count"] = len(audit["probe_results"])
     audit["attempted_backfill_count"] = attempted_backfill_count
@@ -973,20 +1184,28 @@ def acquire_functional_probe_evidence(
         backfill_attempt_quota or 0
     )
     audit["successful_probe_count"] = successful_probe_count
+    audit["grounded_planned_probe_count"] = (
+        grounded_planned_probe_count
+    )
     audit["acquisition_coverage"] = {
         "unit": "planned_functional_probe",
         "eligible_count": len(units),
-        "grounded_count": successful_probe_count,
+        "grounded_count": grounded_planned_probe_count,
         "fraction": (
-            successful_probe_count / len(units) if units else 1.0
+            grounded_planned_probe_count / len(units)
+            if units
+            else 1.0
         ),
-        "complete": successful_probe_count == len(units),
+        "complete": grounded_planned_probe_count == len(units),
+        "grounding_rule": (
+            "exact_planned_obligation_with_verified_target_identity"
+        ),
     }
     audit["status"] = (
         "complete"
         if (
             selected_paths
-            and failures == 0
+            and final_failed_obligation_count == 0
             and audit.get("coverage_complete")
         )
         else "partial"
@@ -999,9 +1218,9 @@ def acquire_functional_probe_evidence(
         None
         if audit["status"] == "complete"
         else "functional_probe_failures_and_budget_exhaustion"
-        if failures and audit.get("budget_exhausted")
+        if final_failed_obligation_count and audit.get("budget_exhausted")
         else "one_or_more_functional_probes_failed"
-        if failures
+        if final_failed_obligation_count
         else "functional_acquisition_budget_exhausted"
         if audit.get("budget_exhausted")
         else "no_functional_probe_evidence_available"

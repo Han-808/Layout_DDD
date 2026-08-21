@@ -42,6 +42,7 @@ from benchmark.evaluator.scene_quality.global_group_first import (
     _functional_probe_budget,
     _registered_placement_checks_from_controller_audit,
     _relation_episode_defect_violations,
+    _score_grounding_coverage,
     _validate_and_tag_residual_placement_result,
 )
 from benchmark.evaluator.scene_quality.functional_probe import (
@@ -323,7 +324,7 @@ def _style_global_then_local_config() -> dict:
 
 
 def test_l3_metric_prompts_have_versioned_generic_boundaries() -> None:
-    assert L3_METRIC_PROMPT_VERSION == "l3_burden_categories_v29"
+    assert L3_METRIC_PROMPT_VERSION == "l3_burden_categories_v30"
     assert set(L3_METRIC_RUBRICS) == {
         "scale_consistency",
         "style_consistency",
@@ -5891,6 +5892,18 @@ def test_residual_global_placement_runs_after_typed_scopes_and_scores_twenty_per
         "generation_prompt_in_scope": False,
         "stereotypical_contents_required": False,
     }
+    assert residual_context["scene_distribution_descriptors"][
+        "status"
+    ] == "available"
+    assert residual_context["scene_distribution_descriptors"][
+        "decision_authority"
+    ] == "none"
+    assert residual_context["collective_scene_zone_contract"][
+        "maximum_scored_findings"
+    ] == 1
+    assert residual_context["collective_scene_zone_contract"][
+        "accounting_subject_ids"
+    ] == ["desk_01"]
     assert residual_context["object_inventory"] == [
         {
             "object_id": "chair_01",
@@ -5952,6 +5965,107 @@ def test_residual_global_placement_cannot_repeat_a_typed_subject() -> None:
                 "typed_defect_subject_ids": ["chair_01"]
             },
         )
+
+
+def test_residual_can_reuse_subject_for_a_distinct_typed_claim() -> None:
+    result = _validate_and_tag_residual_placement_result(
+        {
+            "verdict": "invalid",
+            "defects": [
+                {
+                    "scope": "collective_scene_zone_distribution",
+                    "check_type": "scene_zone",
+                    "target_ids": ["chair_01"],
+                    "context_ids": ["desk_01"],
+                }
+            ],
+            "group_global_observations": [],
+        },
+        residual_context={
+            "typed_defect_subject_ids": ["chair_01"],
+            "typed_defects": [
+                {
+                    "check_type": "support_and_height",
+                    "target_ids": ["chair_01"],
+                    "context_ids": [],
+                }
+            ],
+            "groups": [],
+        },
+    )
+
+    assert result["defects"][0]["collective_scene_zone"] is True
+    assert result["defects"][0]["placement_component"] == (
+        "residual_global_review"
+    )
+
+
+def test_collective_residual_requires_a_routed_major_anchor() -> None:
+    with pytest.raises(ValueError, match="major anchor"):
+        _validate_and_tag_residual_placement_result(
+            {
+                "verdict": "invalid",
+                "defects": [
+                    {
+                        "scope": "collective_scene_zone_distribution",
+                        "check_type": "scene_zone",
+                        "target_ids": ["alarm_clock"],
+                    }
+                ],
+                "group_global_observations": [],
+            },
+            residual_context={
+                "typed_defect_subject_ids": [],
+                "typed_defects": [],
+                "groups": [],
+                "collective_scene_zone_contract": {
+                    "accounting_subject_ids": ["bed", "desk"]
+                },
+            },
+        )
+
+
+def test_functional_grounding_counts_final_checks_once() -> None:
+    coverage = _score_grounding_coverage(
+        global_scope={"status": "evaluated", "score": 1.0},
+        relation_results=[
+            {"relation_id": "r1", "status": "evaluated", "score": 1.0}
+        ],
+        group_results=[],
+        target_results=[],
+        functional_discovery={
+            "coverage": {"eligible_count": 20, "grounded_count": 20}
+        },
+        functional_probe={
+            "acquisition_coverage": {
+                "eligible_count": 6,
+                "grounded_count": 3,
+            }
+        },
+        placement_discovery=None,
+        functional_check_coverage={
+            "required_check_count": 6,
+            "grounded_check_count": 3,
+        },
+        placement_check_coverage=None,
+    )
+
+    assert coverage["eligible_count"] == 7
+    assert coverage["grounded_count"] == 4
+    assert coverage["fraction"] == pytest.approx(4 / 7)
+    component_by_id = {
+        item["component_id"]: item
+        for item in coverage["component_units"]
+    }
+    assert component_by_id["functional_discovery"][
+        "included_in_fraction"
+    ] is False
+    assert component_by_id["functional_probe_acquisition"][
+        "included_in_fraction"
+    ] is False
+    assert component_by_id["functional_check_obligations"][
+        "included_in_fraction"
+    ] is True
 
 
 def test_residual_group_observation_gap_degrades_without_infrastructure(

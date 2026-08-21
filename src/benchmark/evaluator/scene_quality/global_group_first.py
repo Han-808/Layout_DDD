@@ -2426,6 +2426,32 @@ def _validate_and_tag_residual_placement_result(
         )
         if str(item).strip()
     }
+    typed_defects = [
+        item
+        for item in (residual_context or {}).get("typed_defects") or []
+        if isinstance(item, dict)
+    ]
+    typed_claim_identities = {
+        (
+            str(target_id),
+            str(
+                defect.get("check_type")
+                or defect.get("relation")
+                or ""
+            ),
+            tuple(
+                sorted(
+                    str(item)
+                    for item in defect.get("context_ids") or []
+                    if str(item).strip()
+                )
+            ),
+        )
+        for defect in typed_defects
+        for target_id in defect.get("target_ids") or []
+        if str(target_id).strip()
+    }
+    collective_scene_zone_count = 0
     for defect in result.get("defects") or []:
         if not isinstance(defect, dict):
             raise ValueError(
@@ -2448,12 +2474,62 @@ def _validate_and_tag_residual_placement_result(
             raise ValueError(
                 "residual Placement defects require exactly one subject"
             )
-        if target_ids[0] in typed_subject_ids:
-            raise ValueError(
-                "residual Placement cannot score a subject that already "
-                "has a typed Placement defect"
+        context_identity = tuple(
+            sorted(
+                str(item)
+                for item in defect.get("context_ids") or []
+                if str(item).strip()
             )
+        )
+        same_typed_claim = (
+            target_ids[0],
+            check_type,
+            context_identity,
+        ) in typed_claim_identities
+        if same_typed_claim or (
+            not typed_claim_identities
+            and target_ids[0] in typed_subject_ids
+        ):
+            raise ValueError(
+                "residual Placement cannot repeat the same typed Placement "
+                "claim; the subject already has a typed Placement defect "
+                "for that exact claim"
+            )
+        if (
+            check_type == "scene_zone"
+            and str(defect.get("scope") or "")
+            == "collective_scene_zone_distribution"
+        ):
+            allowed_accounting_subject_ids = {
+                str(item)
+                for item in (
+                    (
+                        (residual_context or {}).get(
+                            "collective_scene_zone_contract"
+                        )
+                        or {}
+                    ).get("accounting_subject_ids")
+                    or []
+                )
+                if str(item).strip()
+            }
+            if (
+                allowed_accounting_subject_ids
+                and target_ids[0]
+                not in allowed_accounting_subject_ids
+            ):
+                raise ValueError(
+                    "collective residual scene-zone accounting subject must "
+                    "be one of the routed major anchor objects"
+                )
+            collective_scene_zone_count += 1
+            defect["collective_scene_zone"] = True
         defect["placement_component"] = "residual_global_review"
+    if collective_scene_zone_count > 1:
+        raise ValueError(
+            "residual Placement may score at most one collective scene-zone "
+            "distribution finding"
+        )
     observation_coverage = validate_residual_group_global_observations(
         result,
         groups=(residual_context or {}).get("groups") or [],
@@ -3143,6 +3219,10 @@ def _placement_residual_context(
             if str(target_id).strip()
         )
     )
+    distribution_descriptors = _residual_distribution_descriptors(
+        scene,
+        groups=compact_groups,
+    )
     return {
         "schema_version": "placement_residual_context_v3",
         "decision_authority": "none",
@@ -3168,6 +3248,25 @@ def _placement_residual_context(
         "typed_defects": typed_defects,
         "typed_defect_subject_ids": typed_subject_ids,
         "groups": compact_groups,
+        "scene_distribution_descriptors": distribution_descriptors,
+        "collective_scene_zone_contract": {
+            "enabled": True,
+            "check_type": "scene_zone",
+            "maximum_scored_findings": 1,
+            "accounting_owner": (
+                "one_primary_anchor_subject_with_other_materially_involved_"
+                "objects_as_non_owning_context"
+            ),
+            "accounting_subject_ids": list(
+                distribution_descriptors.get(
+                    "major_anchor_object_ids"
+                )
+                or []
+            ),
+            "visual_confirmation_required": True,
+            "deterministic_descriptors_are_routing_evidence_only": True,
+            "decision_authority": "judge",
+        },
         "group_observation_contract": {
             "schema_version": "placement_residual_group_observations_v1",
             "one_row_per_group": True,
@@ -3179,11 +3278,264 @@ def _placement_residual_context(
             "decision_authority": "none",
         },
         "suppression_contract": {
-            "typed_subject_may_not_be_rescored": True,
+            "same_typed_physical_claim_may_not_be_rescored": True,
+            "typed_subject_overlap_alone_suppresses": False,
             "function_event_may_not_be_repeated": True,
             "function_object_overlap_alone_suppresses": False,
             "untyped_holistic_impression_is_audit_only": True,
         },
+    }
+
+
+def _residual_distribution_descriptors(
+    scene: dict[str, Any],
+    *,
+    groups: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Describe scene-scale occupancy without issuing a Placement verdict."""
+
+    raw_boundary = scene.get("boundary")
+    if raw_boundary is None and isinstance(scene.get("room"), dict):
+        raw_boundary = scene["room"].get("boundary")
+    boundary = [
+        [float(point[0]), float(point[1])]
+        for point in raw_boundary or []
+        if isinstance(point, (list, tuple)) and len(point) >= 2
+    ]
+    if len(boundary) < 3:
+        return {
+            "status": "unavailable",
+            "reason": "room_boundary_unavailable",
+            "decision_authority": "none",
+        }
+    x_min = min(point[0] for point in boundary)
+    x_max = max(point[0] for point in boundary)
+    y_min = min(point[1] for point in boundary)
+    y_max = max(point[1] for point in boundary)
+    width = max(x_max - x_min, 1.0e-9)
+    depth = max(y_max - y_min, 1.0e-9)
+    perimeter_band_m = min(1.0, 0.20 * min(width, depth))
+    central_margin_x = 0.25 * width
+    central_margin_y = 0.25 * depth
+    central_box = [
+        x_min + central_margin_x,
+        y_min + central_margin_y,
+        x_max - central_margin_x,
+        y_max - central_margin_y,
+    ]
+    central_area = max(
+        (central_box[2] - central_box[0])
+        * (central_box[3] - central_box[1]),
+        1.0e-9,
+    )
+
+    records: list[dict[str, Any]] = []
+    central_intersection_area = 0.0
+    for item in scene.get("objects") or []:
+        if not isinstance(item, dict):
+            continue
+        center = item.get("center")
+        size = item.get("size")
+        if not (
+            isinstance(center, (list, tuple))
+            and len(center) >= 2
+            and isinstance(size, (list, tuple))
+            and len(size) >= 2
+        ):
+            continue
+        try:
+            x, y = float(center[0]), float(center[1])
+            sx, sy = abs(float(size[0])), abs(float(size[1]))
+        except (TypeError, ValueError):
+            continue
+        boundary_distance = min(
+            x - x_min,
+            x_max - x,
+            y - y_min,
+            y_max - y,
+        )
+        bounds = [
+            x - sx / 2.0,
+            y - sy / 2.0,
+            x + sx / 2.0,
+            y + sy / 2.0,
+        ]
+        intersection_width = max(
+            0.0,
+            min(bounds[2], central_box[2])
+            - max(bounds[0], central_box[0]),
+        )
+        intersection_depth = max(
+            0.0,
+            min(bounds[3], central_box[3])
+            - max(bounds[1], central_box[1]),
+        )
+        central_intersection_area += (
+            intersection_width * intersection_depth
+        )
+        records.append(
+            {
+                "object_id": str(item.get("id") or ""),
+                "category": str(
+                    item.get("category")
+                    or item.get("retrieval_category")
+                    or "unknown"
+                ),
+                "center_xy_m": [x, y],
+                "footprint_area_m2": sx * sy,
+                "distance_to_nearest_boundary_m": boundary_distance,
+                "inside_perimeter_band": (
+                    boundary_distance <= perimeter_band_m
+                ),
+                "footprint_intersects_central_region": bool(
+                    intersection_width > 0.0
+                    and intersection_depth > 0.0
+                ),
+            }
+        )
+
+    object_centers = {
+        record["object_id"]: record["center_xy_m"]
+        for record in records
+        if record["object_id"]
+    }
+    records_by_id = {
+        record["object_id"]: record
+        for record in records
+        if record["object_id"]
+    }
+    anchor_exclusion_tokens = {
+        "rug",
+        "carpet",
+        "mat",
+        "lamp",
+        "clock",
+        "plant",
+        "decor",
+        "book",
+        "cushion",
+        "pillow",
+    }
+
+    def anchor_eligible(record: dict[str, Any]) -> bool:
+        category_tokens = set(
+            str(record.get("category") or "")
+            .lower()
+            .replace("_", " ")
+            .replace("-", " ")
+            .split()
+        )
+        return not bool(category_tokens & anchor_exclusion_tokens)
+
+    eligible_areas = sorted(
+        float(record["footprint_area_m2"])
+        for record in records
+        if anchor_eligible(record)
+    )
+    median_area = (
+        eligible_areas[len(eligible_areas) // 2]
+        if eligible_areas
+        else 0.0
+    )
+    major_anchor_min_area = max(0.25, median_area)
+    group_centroids: list[dict[str, Any]] = []
+    major_anchor_object_ids: list[str] = []
+    for group in groups:
+        points = [
+            object_centers[object_id]
+            for object_id in group.get("object_ids") or []
+            if object_id in object_centers
+        ]
+        if not points:
+            continue
+        anchor_candidates = sorted(
+            (
+                records_by_id[object_id]
+                for object_id in group.get("object_ids") or []
+                if object_id in records_by_id
+                and anchor_eligible(records_by_id[object_id])
+                and float(
+                    records_by_id[object_id]["footprint_area_m2"]
+                )
+                >= major_anchor_min_area
+            ),
+            key=lambda item: (
+                -float(item["footprint_area_m2"]),
+                str(item["object_id"]),
+            ),
+        )
+        if anchor_candidates:
+            major_anchor_object_ids.append(
+                str(anchor_candidates[0]["object_id"])
+            )
+        group_centroids.append(
+            {
+                "group_id": str(group.get("group_id") or ""),
+                "centroid_xy_m": [
+                    sum(point[0] for point in points) / len(points),
+                    sum(point[1] for point in points) / len(points),
+                ],
+                "object_count": len(points),
+            }
+        )
+    if not major_anchor_object_ids:
+        major_anchor_object_ids = [
+            str(record["object_id"])
+            for record in sorted(
+                (
+                    item
+                    for item in records
+                    if anchor_eligible(item)
+                    and float(item["footprint_area_m2"])
+                    >= major_anchor_min_area
+                ),
+                key=lambda item: (
+                    -float(item["footprint_area_m2"]),
+                    str(item["object_id"]),
+                ),
+            )[:8]
+        ]
+    perimeter_count = sum(
+        bool(record["inside_perimeter_band"]) for record in records
+    )
+    return {
+        "status": "available",
+        "schema_version": "scene_distribution_descriptors_v1",
+        "room_aabb_m": [x_min, y_min, x_max, y_max],
+        "room_size_m": [width, depth],
+        "perimeter_band_m": perimeter_band_m,
+        "object_count": len(records),
+        "perimeter_band_object_count": perimeter_count,
+        "perimeter_band_object_ids": [
+            record["object_id"]
+            for record in records
+            if record["object_id"]
+            and record["inside_perimeter_band"]
+        ],
+        "perimeter_band_object_fraction": (
+            perimeter_count / len(records) if records else 0.0
+        ),
+        "central_region_aabb_m": central_box,
+        "central_region_footprint_coverage_fraction": min(
+            1.0,
+            central_intersection_area / central_area,
+        ),
+        "central_region_intersecting_object_ids": [
+            record["object_id"]
+            for record in records
+            if record["object_id"]
+            and record["footprint_intersects_central_region"]
+        ],
+        "group_centroids": group_centroids,
+        "major_anchor_min_footprint_area_m2": major_anchor_min_area,
+        "major_anchor_object_ids": list(
+            dict.fromkeys(major_anchor_object_ids)
+        ),
+        "decision_authority": "none",
+        "measurement_note": (
+            "axis-aligned occupancy descriptors are neutral routing evidence; "
+            "rotation and visual semantics remain Judge-owned"
+        ),
     }
 
 
@@ -4402,6 +4754,65 @@ def _score_grounding_coverage(
             residual_global_scope,
         )
 
+    functional_required_count = max(
+        0,
+        int(
+            (functional_check_coverage or {}).get(
+                "required_check_count", 0
+            )
+            if isinstance(functional_check_coverage, dict)
+            else 0
+        ),
+    )
+    placement_required_count = max(
+        0,
+        int(
+            (placement_check_coverage or {}).get(
+                "required_check_count", 0
+            )
+            if isinstance(placement_check_coverage, dict)
+            else 0
+        ),
+    )
+    if functional_required_count:
+        # Per-check relation/group episodes are execution containers for the
+        # exact Functional obligations below, not additional scientific
+        # obligations.  Retain one baseline group review per group and the
+        # scene-global baseline, then count each typed check exactly once.
+        units = [
+            unit
+            for unit in units
+            if not str(unit.get("unit_id") or "").startswith(
+                "cross_group_relation:"
+            )
+            and ":check:" not in str(unit.get("unit_id") or "")
+        ]
+        existing_ids = {
+            str(unit.get("unit_id") or "") for unit in units
+        }
+        for index, record in enumerate(group_results):
+            if not (
+                isinstance(record, dict)
+                and isinstance(record.get("check_episodes"), list)
+                and record.get("check_episodes")
+            ):
+                continue
+            unit_id = (
+                "group_local:"
+                + str(record.get("group_id") or index)
+                + ":baseline"
+            )
+            if unit_id in existing_ids:
+                continue
+            units.append(
+                {
+                    "unit_id": unit_id,
+                    "unit_type": "judge_episode_baseline",
+                    "grounded": _scope_has_grounded_binary(record),
+                    "defaulted": scope_was_defaulted(record),
+                }
+            )
+
     eligible_count = len(units)
     grounded_count = sum(bool(unit["grounded"]) for unit in units)
     component_records: list[dict[str, Any]] = []
@@ -4464,14 +4875,30 @@ def _score_grounding_coverage(
         eligible = max(0, int(coverage.get("eligible_count") or 0))
         grounded = max(0, int(coverage.get("grounded_count") or 0))
         grounded = min(eligible, grounded)
-        eligible_count += eligible
-        grounded_count += grounded
+        included_in_fraction = True
+        if functional_required_count and component_id in {
+            "functional_discovery",
+            "functional_probe_acquisition",
+            "functional_probe_planner",
+        }:
+            included_in_fraction = False
+        if placement_required_count and component_id == "placement_discovery":
+            included_in_fraction = False
+        if included_in_fraction:
+            eligible_count += eligible
+            grounded_count += grounded
         component_records.append(
             {
                 "component_id": component_id,
                 "eligible_count": eligible,
                 "grounded_count": grounded,
                 "defaulted_count": eligible - grounded,
+                "included_in_fraction": included_in_fraction,
+                "role": (
+                    "authoritative_obligation"
+                    if included_in_fraction
+                    else "diagnostic_lifecycle_stage"
+                ),
             }
         )
 
@@ -4487,7 +4914,7 @@ def _score_grounding_coverage(
             "defaulted_count": item["defaulted_count"],
         }
         for item in component_records
-        if item["defaulted_count"]
+        if item["defaulted_count"] and item["included_in_fraction"]
     )
     fraction = (
         grounded_count / eligible_count if eligible_count else 0.0

@@ -1981,13 +1981,20 @@ def _canonical_phase_instruction(
             "do not turn it into a style or inventory stereotype. Treat the "
             "complete object_inventory as an identity roster, not as proof "
             "that any two objects form a relation. Visual layout remains the "
-            "primary decision evidence. Complete one concise "
+            "primary decision evidence. placement_residual_context."
+            "scene_distribution_descriptors are "
+            "neutral measurements only: use them to focus inspection and "
+            "confirm any claimed distribution failure in the images. Complete "
+            "one concise "
             "group_global_observations row for every exact group before "
             "synthesizing the final verdict; those rows are audit-only, not "
             "independent votes or defects. "
             + stage_emphasis
             + " Return a judge-originated typed result only for a concrete "
-            "new scene_zone or contextual_anchor failure. If the current "
+            "new scene_zone or contextual_anchor failure. At most one "
+            "collective scene-zone distribution finding may be emitted, with "
+            "one accounting subject and other materially involved objects as "
+            "non-owning context. If the current "
             "global packet is missing a necessary observable fact, use the "
             "normal evidence-request loop; otherwise make a binary choice. "
             + acquire_more
@@ -2166,6 +2173,9 @@ def build_openai_compatible_vlm_judge(config: dict[str, Any]) -> OpenAICompatibl
         response_format_json=bool(config.get("response_format_json", True)),
         max_retries=int(config.get("max_retries", 1)),
         retry_backoff_seconds=float(config.get("retry_backoff_seconds", 1.0)),
+        min_request_interval_seconds=float(
+            config.get("min_request_interval_seconds", 0.0)
+        ),
         max_tokens_field=str(config.get("max_tokens_field", "max_tokens")),
         send_temperature=bool(config.get("send_temperature", True)),
         require_api_key=(

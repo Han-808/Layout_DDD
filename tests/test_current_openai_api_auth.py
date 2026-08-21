@@ -14,7 +14,11 @@ from benchmark.models import (
     MissingAPIKeyError,
     OpenAICompatibleModel,
 )
-from benchmark.models.openai_compatible_model import EndpointHTTPError, _RejectRedirectHandler
+from benchmark.models.openai_compatible_model import (
+    EndpointHTTPError,
+    _RejectRedirectHandler,
+    _wait_for_request_slot,
+)
 from benchmark.nl_scene.converter import ObjectPlanConversionError, call_chat_model
 from benchmark.visual_judge import build_openai_compatible_vlm_judge
 
@@ -114,6 +118,50 @@ def test_local_openai_compatible_endpoint_remains_auth_optional(
     assert captured["authorization"] is None
     assert model.api_key_env is None
     assert model.require_api_key is False
+
+
+def test_request_interval_must_be_finite_and_non_negative() -> None:
+    with pytest.raises(ValueError, match="finite and non-negative"):
+        OpenAICompatibleModel(
+            name="invalid-interval",
+            endpoint="http://127.0.0.1:8298/v1",
+            model_id="local-model",
+            min_request_interval_seconds=-0.1,
+        )
+
+    with pytest.raises(ValueError, match="finite and non-negative"):
+        OpenAICompatibleModel(
+            name="invalid-interval",
+            endpoint="http://127.0.0.1:8298/v1",
+            model_id="local-model",
+            min_request_interval_seconds=float("nan"),
+        )
+
+
+def test_request_interval_is_shared_by_endpoint_and_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = {"now": 10.0}
+    sleeps: list[float] = []
+
+    def fake_monotonic() -> float:
+        return clock["now"]
+
+    def fake_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+        clock["now"] += seconds
+
+    openai_compatible_model_module._REQUEST_THROTTLE_NEXT_AT.clear()
+    monkeypatch.setattr(openai_compatible_model_module.time, "monotonic", fake_monotonic)
+    monkeypatch.setattr(openai_compatible_model_module.time, "sleep", fake_sleep)
+
+    _wait_for_request_slot(key="endpoint|model", min_interval_seconds=2.0)
+    _wait_for_request_slot(key="endpoint|model", min_interval_seconds=2.0)
+
+    assert sleeps == [2.0]
+    assert openai_compatible_model_module._REQUEST_THROTTLE_NEXT_AT[
+        "endpoint|model"
+    ] == 14.0
 
 
 def test_explicit_custom_api_key_env_is_required_when_missing(

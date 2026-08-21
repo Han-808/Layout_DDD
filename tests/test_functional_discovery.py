@@ -503,6 +503,183 @@ def test_failed_cross_group_probe_does_not_skip_next_reserved_relation(
     assert relation["decision_authority"] == "none"
 
 
+def test_failed_probe_retries_same_obligation_when_budget_remains(
+    tmp_path: Path,
+) -> None:
+    global_image = tmp_path / "global.png"
+    relation_image = tmp_path / "relation.png"
+    Image.new("RGB", (16, 16), (40, 50, 60)).save(global_image)
+    Image.new("RGB", (16, 16), (70, 80, 90)).save(relation_image)
+    discovery = {
+        "schema_version": "functional_discovery_v3",
+        "inspected_object_ids": ["a", "b", "c", "d"],
+        "directed_surface_targets": [],
+        "within_group_correspondences": [],
+        "cross_group_correspondences": [
+            {
+                "discovery_id": "relation_01",
+                "target_ids": ["a", "b"],
+                "group_ids": ["group_a", "group_b"],
+                "observation_kinds": ["mutual_orientation"],
+                "observation_goal": "show a and b together",
+            },
+            {
+                "discovery_id": "relation_02",
+                "target_ids": ["c", "d"],
+                "group_ids": ["group_c", "group_d"],
+                "observation_kinds": ["mutual_orientation"],
+                "observation_goal": "show c and d together",
+            },
+        ],
+        "approach_clearance_targets": [],
+        "boundary_sensitive_targets": [],
+        "unusual_unconfirmed": [],
+        "reason": "two deterministic candidates",
+        "provenance": {},
+    }
+
+    class Planner:
+        def discover_functional_evidence(self, request: dict) -> dict:
+            return deepcopy(discovery)
+
+    calls: list[dict] = []
+
+    def provider(request: dict) -> list[dict]:
+        calls.append(deepcopy(request))
+        target_ids = list(request["object_ids"])
+        if target_ids == ["a", "b"] and len(calls) == 1:
+            raise RuntimeError("strict identity preview failed")
+        return [
+            {
+                "path": str(relation_image),
+                "role": "functional_probe_rgb",
+                "evidence_style": "raw",
+                "image_transform": "none",
+            }
+        ]
+
+    _, audit = acquire_functional_probe_evidence(
+        planner=Planner(),
+        provider=provider,
+        scene={
+            "scene_id": "scene",
+            "scene_type": "living_room",
+            "objects": [
+                {"id": object_id, "category": "object"}
+                for object_id in ("a", "b", "c", "d")
+            ],
+        },
+        global_image_path=str(global_image),
+        max_probe_units=3,
+        groups=[
+            {"group_id": f"group_{object_id}", "object_ids": [object_id]}
+            for object_id in ("a", "b", "c", "d")
+        ],
+    )
+
+    assert [request["object_ids"] for request in calls] == [
+        ["a", "b"],
+        ["c", "d"],
+        ["a", "b"],
+    ]
+    assert calls[-1]["functional_probe"]["fallback_mode"] == (
+        "soft_visibility"
+    )
+    assert audit["failed_discovery_items"] == []
+    assert audit["failed_unit_retry"]["attempted_count"] == 1
+    assert audit["failed_unit_retry"]["recovered_count"] == 1
+    assert audit["acquisition_coverage"] == {
+        "unit": "planned_functional_probe",
+        "eligible_count": 2,
+        "grounded_count": 2,
+        "fraction": 1.0,
+        "complete": True,
+        "grounding_rule": (
+            "exact_planned_obligation_with_verified_target_identity"
+        ),
+    }
+
+
+def test_soft_retry_evidence_does_not_fake_identity_grounding(
+    tmp_path: Path,
+) -> None:
+    global_image = tmp_path / "global.png"
+    fallback_image = tmp_path / "fallback.png"
+    Image.new("RGB", (16, 16), (40, 50, 60)).save(global_image)
+    Image.new("RGB", (16, 16), (70, 80, 90)).save(fallback_image)
+    discovery = {
+        "schema_version": "functional_discovery_v3",
+        "inspected_object_ids": ["a", "b"],
+        "directed_surface_targets": [],
+        "within_group_correspondences": [],
+        "cross_group_correspondences": [
+            {
+                "discovery_id": "relation_01",
+                "target_ids": ["a", "b"],
+                "group_ids": ["group_a", "group_b"],
+                "observation_kinds": ["mutual_orientation"],
+                "observation_goal": "show a and b together",
+            }
+        ],
+        "approach_clearance_targets": [],
+        "boundary_sensitive_targets": [],
+        "unusual_unconfirmed": [],
+        "reason": "one deterministic candidate",
+        "provenance": {},
+    }
+
+    class Planner:
+        def discover_functional_evidence(self, request: dict) -> dict:
+            return deepcopy(discovery)
+
+    class Provider:
+        def __init__(self) -> None:
+            self.calls = 0
+            self.last_call_usage = None
+
+        def __call__(self, request: dict) -> list[dict]:
+            self.calls += 1
+            if self.calls == 1:
+                raise RuntimeError("strict identity preview failed")
+            assert request["functional_probe"]["fallback_mode"] == (
+                "soft_visibility"
+            )
+            self.last_call_usage = {
+                "functional_evidence_coverage": {
+                    "coverage_status": "partial_but_usable",
+                    "identity_grounded": False,
+                }
+            }
+            return [{"path": str(fallback_image), "role": "functional_probe_rgb"}]
+
+    provider = Provider()
+    paths, audit = acquire_functional_probe_evidence(
+        planner=Planner(),
+        provider=provider,
+        scene={
+            "scene_id": "scene",
+            "scene_type": "living_room",
+            "objects": [
+                {"id": object_id, "category": "object"}
+                for object_id in ("a", "b")
+            ],
+        },
+        global_image_path=str(global_image),
+        max_probe_units=2,
+        groups=[
+            {"group_id": f"group_{object_id}", "object_ids": [object_id]}
+            for object_id in ("a", "b")
+        ],
+    )
+
+    assert paths == [str(fallback_image)]
+    assert audit["failed_discovery_items"] == []
+    assert len(audit["partially_grounded_discovery_items"]) == 1
+    assert audit["acquisition_coverage"]["grounded_count"] == 0
+    assert audit["acquisition_coverage"]["fraction"] == 0.0
+    assert audit["acquisition_coverage_complete"] is False
+
+
 def test_missing_probe_provider_degrades_when_global_base_evidence_exists(
     tmp_path: Path,
 ) -> None:
