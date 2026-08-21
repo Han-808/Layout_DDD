@@ -178,6 +178,47 @@
       "quarantine_evidence": []
     },
     {
+      "component_id": "generation_legacy_cutover_planner_v1",
+      "root": "src/benchmark/scene_generation/legacy_cutover",
+      "state": "compatibility",
+      "owner": "scene-generation",
+      "replacement": "generation_campaign_runtime_v2",
+      "reason": "Fail-closed argv, source-identity, and private-binding parity planner for reviewed legacy full10 entrypoints; it cannot execute a cutover until terminal and artifact parity are attested.",
+      "tracked_policy": "all_tracked",
+      "entrypoints": [
+        "src/benchmark/scene_generation/legacy_cutover/forwarding.py"
+      ],
+      "sources": [
+        "src/benchmark/scene_generation/legacy_cutover/__init__.py"
+      ],
+      "dependencies": [
+        "generation_campaign_runtime_v2",
+        "api2_generation_recovery_v1",
+        "api2_kimi_k3_runner_v1",
+        "api2_glm53_runner_v1",
+        "api3_opus48_thinking_runner_v1"
+      ],
+      "quarantine_evidence": []
+    },
+    {
+      "component_id": "generation_pre_campaign_replay_v1",
+      "root": "Support/legacy/frozen_replay/generation_pre_campaign_v1",
+      "state": "frozen_replay",
+      "content_sha256": "4f1f51b7108906cdc2fc8fc390fc4b4a1ac080884116b9facbe13fb0a109e4a5",
+      "owner": "scene-generation",
+      "replacement": "generation_campaign_runtime_v2",
+      "reason": "Non-executable, commit- and blob-pinned source snapshot for the pre-campaign Kimi, GLM, Opus, recovery, and fresh-chance generation implementations.",
+      "tracked_policy": "all_tracked",
+      "entrypoints": [
+        "Support/legacy/frozen_replay/generation_pre_campaign_v1/README.md"
+      ],
+      "sources": [
+        "Support/legacy/frozen_replay/generation_pre_campaign_v1/replay_manifest.json"
+      ],
+      "dependencies": [],
+      "quarantine_evidence": []
+    },
+    {
       "component_id": "generation_retrieval_runtime_v2",
       "root": "src/benchmark/scene_generation/retrieval",
       "state": "active",
@@ -783,6 +824,20 @@
       "state": "active",
       "owner": "scene-generation-tests",
       "reason": "Canonical contract, trust, preflight, retry, artifact, redaction, and loopback coverage for Generation Campaign v2."
+    },
+    {
+      "artifact_id": "generation_legacy_cutover_documentation_v1",
+      "path": "docs/generation_legacy_cutover_d1.md",
+      "state": "active",
+      "owner": "scene-generation",
+      "reason": "D1 compatibility boundary, explicit blockers, replay preservation, and future thin-forwarder gate."
+    },
+    {
+      "artifact_id": "generation_legacy_cutover_tests_v1",
+      "path": "tests/test_generation_legacy_forwarding_d1.py",
+      "state": "active",
+      "owner": "scene-generation-tests",
+      "reason": "Fail-closed argv, source/blob identity, binding parity, blocker, and replay snapshot coverage for D1."
     },
     {
       "artifact_id": "pytest_suites_v1",

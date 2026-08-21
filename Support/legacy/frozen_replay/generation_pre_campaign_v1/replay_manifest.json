@@ -1,0 +1,77 @@
+{
+  "schema_version": "generation_frozen_replay_manifest_v1",
+  "snapshot_id": "generation-pre-campaign-v1",
+  "source_commit": "d448a2ddc14fd7b7a887110981f97a5927d88328",
+  "execution_policy": "source_snapshot_only_restore_original_layout_before_replay",
+  "files": [
+    {
+      "original_path": "tools/api2_generation_recovery_v1/fresh_case_retry_runner.py",
+      "snapshot_path": "source/tools/api2_generation_recovery_v1/fresh_case_retry_runner.py",
+      "bytes": 6908,
+      "sha256": "981d16e2742f20eddaee3f892b0a8405fd78ca07214fe4c7ee8a89be8eaa52a4",
+      "git_blob": "97b49e2173298976337b7ea566900559a4d1d665"
+    },
+    {
+      "original_path": "tools/api2_generation_recovery_v1/recovery_runner.py",
+      "snapshot_path": "source/tools/api2_generation_recovery_v1/recovery_runner.py",
+      "bytes": 7087,
+      "sha256": "f4bf9f7aa2362dc45283063d75a9c02e6d55edaa164f18c4d62a337901a13980",
+      "git_blob": "fd4f335ed3b56b9a3f563b438d7c9aaf85d33b68"
+    },
+    {
+      "original_path": "tools/api2_glm53_runner_v1/glm53_generation_runner.py",
+      "snapshot_path": "source/tools/api2_glm53_runner_v1/glm53_generation_runner.py",
+      "bytes": 10491,
+      "sha256": "56aee6b201335f4f87952924f27a883f4b30732f61b01adc6ac774b018635bee",
+      "git_blob": "8a12c0296dbe62908dff0ef614140fa86b908ee5"
+    },
+    {
+      "original_path": "tools/api2_kimi_k3_runner_v1/kimi_k3_generation_runner.py",
+      "snapshot_path": "source/tools/api2_kimi_k3_runner_v1/kimi_k3_generation_runner.py",
+      "bytes": 10916,
+      "sha256": "25ae25a6ddae36b4e66207d6accf4139a043123b46cb02f2009171264b08a006",
+      "git_blob": "a68564ef1ab53abb3835afb27c849525e2a6a130"
+    },
+    {
+      "original_path": "tools/api3_opus48_thinking_runner_v1/generation_runner.py",
+      "snapshot_path": "source/tools/api3_opus48_thinking_runner_v1/generation_runner.py",
+      "bytes": 8291,
+      "sha256": "427a1e35ddc79b3ddb4742f7d085df8e75e64bb908ee062d7a83d395cd4e39c2",
+      "git_blob": "f8bfee96c8bdab57a11474e51fb84b1e99088b1e"
+    },
+    {
+      "original_path": "tools/api3_opus48_thinking_runner_v1/preflight.py",
+      "snapshot_path": "source/tools/api3_opus48_thinking_runner_v1/preflight.py",
+      "bytes": 5628,
+      "sha256": "154ffc05b4dc2ffebc88362f8e0ceddb4dcf690d4a154cecf2ef993e4627e03c",
+      "git_blob": "c0c9514dcded07ce55aa80c5375a98833f3b5776"
+    },
+    {
+      "original_path": "tools/api3_opus48_thinking_runner_v1/retry_runner.py",
+      "snapshot_path": "source/tools/api3_opus48_thinking_runner_v1/retry_runner.py",
+      "bytes": 8827,
+      "sha256": "dc795506dce8a97ddebec3d1a02d3f13a539ea9945a8fe6c93aa809bea73e22e",
+      "git_blob": "5407362ff270a462a41c5219dcec2269dcb21499"
+    }
+  ],
+  "external_dependencies": [
+    {
+      "path": "tools/api2_glm53_runner_v1/models.pod.json",
+      "bytes": 669,
+      "sha256": "55921c496a8551bbf7d4a485845545a57ae065777a5c34b1db32343c97564b3a",
+      "git_blob": "58f9dab149629b7401ca9324d0cdbf843d3b1126"
+    },
+    {
+      "path": "tools/api2_kimi_k3_runner_v1/models.pod.json",
+      "bytes": 685,
+      "sha256": "52d2581601a2c3dd54f998069ad2a3b11189fdf0384e91fe92c3d40fef27f9ae",
+      "git_blob": "44c4b9cc5bc1c3b07ab1ecaf63c3784f0ae64257"
+    },
+    {
+      "path": "tools/api3_opus48_thinking_runner_v1/models.pod.json",
+      "bytes": 703,
+      "sha256": "e75c29e024e0943eaa574aa3e46b71d4776ea1c2cb2bbf9389dd04fc8a5a0af6",
+      "git_blob": "34027a33b18c0d90ea9e5bd278607eae60fd6c47"
+    }
+  ]
+}
