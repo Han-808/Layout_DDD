@@ -258,6 +258,56 @@
       "quarantine_evidence": []
     },
     {
+      "component_id": "evaluation_campaign_runtime_v1",
+      "root": "src/benchmark/evaluation_campaign",
+      "state": "active",
+      "owner": "evaluation-orchestration",
+      "replacement": null,
+      "reason": "Declarative API1/API2 evaluation campaign controller around the frozen evaluator, selector, dataset identity, route ownership, retry, adoption, and portable provenance contracts.",
+      "tracked_policy": "all_tracked",
+      "entrypoints": [
+        "src/benchmark/evaluation_campaign/__main__.py",
+        "src/benchmark/evaluation_campaign/cli.py",
+        "src/benchmark/evaluation_campaign/orchestrator.py"
+      ],
+      "sources": [
+        "src/benchmark/evaluation_campaign/config.py",
+        "src/benchmark/evaluation_campaign/dataset_identity.py",
+        "src/benchmark/evaluation_campaign/kernel.py",
+        "src/benchmark/evaluation_campaign/owned_proxy_launcher.py",
+        "src/benchmark/evaluation_campaign/provenance.py",
+        "src/benchmark/evaluation_campaign/routes.py"
+      ],
+      "dependencies": [
+        "sceneeval_hy4_runner_v050",
+        "metric_profile_canonical_v2"
+      ],
+      "quarantine_evidence": []
+    },
+    {
+      "component_id": "evaluation_campaign_configs_v1",
+      "root": "configs/evaluation/campaigns",
+      "state": "active",
+      "owner": "evaluation-orchestration",
+      "replacement": null,
+      "reason": "Deployment-free evaluation campaign and Judge profile contracts plus a redacted local-binding example and nested ignore boundary.",
+      "tracked_policy": "all_tracked",
+      "entrypoints": [
+        "configs/evaluation/campaigns/glm53_api1_full10_v1.json",
+        "configs/evaluation/campaigns/glm53_api2_supplement_v1.json"
+      ],
+      "sources": [
+        "configs/evaluation/campaigns/.gitignore",
+        "configs/evaluation/campaigns/evaluation_bindings.local.example.json",
+        "configs/evaluation/campaigns/judge_profiles_v1.json"
+      ],
+      "dependencies": [
+        "evaluation_campaign_runtime_v1",
+        "metric_profile_canonical_v2"
+      ],
+      "quarantine_evidence": []
+    },
+    {
       "component_id": "metric_profile_canonical_v2",
       "root": "configs/evaluation/metric_profile_canonical_v2.yaml",
       "state": "active",
@@ -705,6 +755,20 @@
       "owner": "package-resources",
       "reason": "Packaged byte-identical mirror of the current retrieval golden suite.",
       "mirror_of": "configs/retrieval/golden/imaginarium_qwen3_0_6b_v2.json"
+    },
+    {
+      "artifact_id": "evaluation_campaign_documentation_v1",
+      "path": "docs/evaluation_campaign_orchestration.md",
+      "state": "active",
+      "owner": "evaluation-orchestration",
+      "reason": "Current frozen-kernel boundary, deployment binding, dataset identity, resume, adoption, and provenance contract for evaluation campaigns."
+    },
+    {
+      "artifact_id": "evaluation_campaign_tests_v1",
+      "path": "tests/test_evaluation_campaign.py",
+      "state": "active",
+      "owner": "evaluation-tests",
+      "reason": "Canonical contract, relocation, resume, adoption, proxy ownership, provenance, and frozen-runner regression coverage for Evaluation Campaign v1."
     },
     {
       "artifact_id": "generation_campaign_documentation_v2",

@@ -1,0 +1,64 @@
+{
+  "schema_version": "scene_evaluation_campaign_v1",
+  "campaign_id": "glm53-api2-gpt56sol-supplement-v1",
+  "model_label": "glm-5.3",
+  "profile_registry": "configs/evaluation/campaigns/judge_profiles_v1.json",
+  "judge_profile_id": "gpt56sol-api2-standard-xhigh-v1",
+  "dataset": {
+    "root": "Support/datasets/api2_glm53_max_scene10_r6",
+    "expected_dataset_id": "api2_glm53_max_scene10_r6",
+    "expected_fingerprint_sha256": "9f0cd6364b15c35eb5568f530a5d7122f8eb3312bdc4f92a77047200ff25b3ad",
+    "expected_case_ids": [
+      "S100", "S101", "S102", "S103", "S104",
+      "S105", "S106", "S107", "S108", "S109"
+    ],
+    "smoke_case_id": "S105"
+  },
+  "case_plan": {
+    "run_case_ids": ["S105", "S107", "S109"],
+    "selection_case_ids": [
+      "S100", "S101", "S102", "S103", "S104",
+      "S105", "S106", "S107", "S108", "S109"
+    ],
+    "prior_attempt_roots": [
+      {
+        "root": "Support/artifacts/outputs/camera_cal_scene_level/api2_glm53_max_api1_gpt56sol_full10_attempts_r1/glm-5.3/round_00",
+        "judge_profile_id": "gpt56sol-api1-direct-v1",
+        "adoption_mode": "legacy_experiment_plan",
+        "expected_experiment_plan_sha256": "7b16eb473ed64eb13479f732d3a98826153d7dd6f2da8e92dc66a198bcbc6658",
+        "expected_protocol_fingerprint_sha256": null
+      }
+    ]
+  },
+  "kernel": {
+    "profile": "camera_cal_scene_level_v9_exact",
+    "grouping_config": "configs/grouping/vlm_visual_evidence_scope_v2.yaml",
+    "metric_selection": {
+      "mode": "runner_default",
+      "metrics": []
+    },
+    "functional_group_local_granularity": "per_check",
+    "functional_group_local_evidence_policy": "shared_group_bank",
+    "deduction_multiplier": 2.0,
+    "l3_only": false,
+    "blender_timeout_seconds": 1800,
+    "continue_on_error": true,
+    "terminal_progress": true,
+    "export_audit_graphs": true
+  },
+  "attempt_policy": {
+    "max_new_attempts_per_case": 10,
+    "retry_delay_seconds": 30,
+    "max_workers": 3,
+    "round0_preflight_attempts": 10,
+    "retry_preflight_attempts": 3,
+    "preflight_timeout_seconds": 3000
+  },
+  "outputs": {
+    "attempt_parent": "Support/artifacts/outputs/camera_cal_scene_level/api2_glm53_max_api2_supplement_campaign_attempts_v3/glm-5.3",
+    "final_selection_root": "Support/artifacts/outputs/camera_cal_scene_level/api2_glm53_max_api1_api2_campaign_full10_v3/glm-5.3"
+  },
+  "selection": {
+    "policy": "first_publishable_v1"
+  }
+}

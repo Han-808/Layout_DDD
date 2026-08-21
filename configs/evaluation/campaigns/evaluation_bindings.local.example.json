@@ -1,0 +1,31 @@
+{
+  "schema_version": "local_evaluation_bindings_v1",
+  "bindings": [
+    {
+      "binding_id": "judge-api1-primary-v1",
+      "adapter": "openai_compatible_direct_v1",
+      "deployment": {
+        "endpoint": "https://judge-proxy.example.invalid/v1",
+        "credential_env": "EXAMPLE_API1_CREDENTIAL"
+      }
+    },
+    {
+      "binding_id": "judge-api2-standard-v1",
+      "adapter": "openai_compatible_managed_proxy_v1",
+      "deployment": {
+        "launcher_path": "src/benchmark/evaluation_campaign/owned_proxy_launcher.py",
+        "launcher_sha256": "9334c53b22bfac7029df5f85d019b013288f9861c348cc871bde0020387cf54b",
+        "adapter_profile_path": "path/to/tracked-proxy-profile.yaml",
+        "adapter_profile_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "upstream_environment": {
+          "UPSTREAM_BASE_URL": "EXAMPLE_API2_BASE_URL",
+          "UPSTREAM_CREDENTIAL": "EXAMPLE_API2_CREDENTIAL"
+        },
+        "local_master_key_env": "EXAMPLE_LOCAL_MASTER_KEY",
+        "local_port_env": "EXAMPLE_LOCAL_PROXY_PORT",
+        "local_port": 4010,
+        "startup_timeout_seconds": 60
+      }
+    }
+  ]
+}

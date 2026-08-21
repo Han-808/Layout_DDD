@@ -88,6 +88,7 @@
     "tests/test_evaluation_query_graph.py",
     "tests/test_evaluation_report.py",
     "tests/test_evidence_config.py",
+    "tests/test_evaluation_campaign.py",
     "tests/test_experiment_config.py",
     "tests/test_feedback_builder.py",
     "tests/test_frozen_two_stage_generation_compatibility.py",
