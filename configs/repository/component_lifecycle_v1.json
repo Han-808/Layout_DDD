@@ -824,6 +824,22 @@
       "reason": "Current frozen-kernel boundary, deployment binding, dataset identity, resume, adoption, and provenance contract for evaluation campaigns."
     },
     {
+      "artifact_id": "camera_cal_scene_level_e0_contract_v1",
+      "path": "tests/fixtures/camera_cal_scene_level_e0_contract.json",
+      "state": "frozen_replay",
+      "owner": "evaluation-tests",
+      "reason": "Pre-E1 runner blob, public surface, schema, CLI, prompt, camera, metric, and functional-probe baseline for behavior-preserving structural extraction.",
+      "content_sha256": "15f7391e9082fb1b5eceeb1c7a5fe2435198cfa8063e46bdeef5f7709689224b",
+      "git_mode": "100644"
+    },
+    {
+      "artifact_id": "camera_cal_scene_level_e0_contract_tests_v1",
+      "path": "tests/test_camera_cal_scene_level_e0_contract.py",
+      "state": "active",
+      "owner": "evaluation-tests",
+      "reason": "Offline validation of the historical runner blob, compatibility surface, schemas, frozen semantic sources, and CLI help contract."
+    },
+    {
       "artifact_id": "evaluation_campaign_tests_v1",
       "path": "tests/test_evaluation_campaign.py",
       "state": "active",

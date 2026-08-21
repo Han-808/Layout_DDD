@@ -67,6 +67,7 @@
     "tests/test_cal_dataset2_non_l1.py",
     "tests/test_camera_ablation.py",
     "tests/test_camera_cal_scene_level_runner.py",
+    "tests/test_camera_cal_scene_level_e0_contract.py",
     "tests/test_camera_cal_scenesets.py",
     "tests/test_canonical_l3_camera_integration.py",
     "tests/test_canonical_metric_scoring.py",
