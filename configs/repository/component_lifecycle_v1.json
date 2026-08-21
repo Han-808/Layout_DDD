@@ -394,7 +394,8 @@
         "src/benchmark/camera_cal_scene_level/policy.py",
         "src/benchmark/camera_cal_scene_level/observability.py",
         "src/benchmark/camera_cal_scene_level/audit.py",
-        "src/benchmark/camera_cal_scene_level/persisted_scoring.py"
+        "src/benchmark/camera_cal_scene_level/persisted_scoring.py",
+        "src/benchmark/camera_cal_scene_level/leaderboard_scoring.py"
       ],
       "sources": [
         "src/benchmark/camera_cal_scene_level/__init__.py",
@@ -416,6 +417,23 @@
       ],
       "sources": [
         "configs/evaluation/metric_profile_canonical_v2.yaml"
+      ],
+      "dependencies": [],
+      "quarantine_evidence": []
+    },
+    {
+      "component_id": "scene_generation_leaderboard_scoring_v1",
+      "root": "configs/evaluation/scene_generation_leaderboard_scoring_v1.json",
+      "state": "active",
+      "owner": "evaluation-presentation",
+      "replacement": null,
+      "reason": "Versioned provisional post-hoc weights and deduction multipliers used by the public scene-generation leaderboard; it does not modify canonical evaluator reports.",
+      "tracked_policy": "all_tracked",
+      "entrypoints": [
+        "configs/evaluation/scene_generation_leaderboard_scoring_v1.json"
+      ],
+      "sources": [
+        "configs/evaluation/scene_generation_leaderboard_scoring_v1.json"
       ],
       "dependencies": [],
       "quarantine_evidence": []
@@ -1001,6 +1019,14 @@
       "owner": "package-resources",
       "reason": "Packaged byte-identical mirror of the current canonical profile.",
       "mirror_of": "configs/evaluation/metric_profile_canonical_v2.yaml"
+    },
+    {
+      "artifact_id": "packaged_scene_generation_leaderboard_scoring_v1",
+      "path": "src/benchmark/_resources/configs/evaluation/scene_generation_leaderboard_scoring_v1.json",
+      "state": "active",
+      "owner": "package-resources",
+      "reason": "Packaged byte-identical mirror of the current scene-generation leaderboard profile.",
+      "mirror_of": "configs/evaluation/scene_generation_leaderboard_scoring_v1.json"
     },
     {
       "artifact_id": "packaged_metric_profile_game_canonical_v1",

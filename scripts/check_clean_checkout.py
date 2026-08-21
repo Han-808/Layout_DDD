@@ -602,15 +602,18 @@ def _wheel_steps(
         "import benchmark.api.generation as generation; "
         "import benchmark.api.evaluation as evaluation; "
         "import benchmark.api.submission as submission; "
+        "import benchmark.camera_cal_scene_level.leaderboard_scoring as leaderboard_scoring; "
         "import benchmark.scene_generation.frozen_two_stage as compatibility; "
         "from benchmark.resources import runtime_resource_path; "
         f"expected=pathlib.Path({str(installed)!r}).resolve(); "
-        "origins=[generation.__file__, evaluation.__file__, submission.__file__, compatibility.__file__]; "
+        "origins=[generation.__file__, evaluation.__file__, submission.__file__, leaderboard_scoring.__file__, compatibility.__file__]; "
         "assert all(pathlib.Path(value).resolve().is_relative_to(expected) for value in origins); "
         "assert importlib.util.find_spec('benchmark.legend') is None; "
         "resource=runtime_resource_path('configs/evaluation/metric_profile_canonical_v2.yaml'); "
         "assert pathlib.Path(resource).is_file(); "
-        "print({'origins': origins, 'resource': str(resource)})"
+        "leaderboard=leaderboard_scoring.load_leaderboard_scoring_profile(); "
+        "assert leaderboard['profile_id']=='scene_generation_leaderboard_web_v1'; "
+        "print({'origins': origins, 'resource': str(resource), 'leaderboard_profile': leaderboard['profile_id']})"
     )
     wheel_import = _run_step(
         "wheel_import",

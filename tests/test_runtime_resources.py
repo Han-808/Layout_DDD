@@ -19,6 +19,7 @@ RUNTIME_RESOURCES = (
     "schemas/generator_catalog_placement_v1.schema.json",
     "schemas/generator_layout_v1.schema.json",
     "configs/evaluation/metric_profile_canonical_v2.yaml",
+    "configs/evaluation/scene_generation_leaderboard_scoring_v1.json",
     "configs/evaluation/metric_profile_game_canonical_v1.yaml",
     "configs/grouping/vlm_visual_evidence_scope_v2.yaml",
     "configs/game/game_mode_canonical_v1.yaml",

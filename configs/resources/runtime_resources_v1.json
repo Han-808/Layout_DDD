@@ -21,6 +21,12 @@
       "sha256": "61ab645e2e5989dc61fff8e4193c67af135661991542f2eb56a2bd90e0ed7f9d"
     },
     {
+      "resource": "configs/evaluation/scene_generation_leaderboard_scoring_v1.json",
+      "source_path": "configs/evaluation/scene_generation_leaderboard_scoring_v1.json",
+      "package_path": "src/benchmark/_resources/configs/evaluation/scene_generation_leaderboard_scoring_v1.json",
+      "sha256": "aebc56f0044cb0d0c7da0b64462b2d9f2cb4f7b00191e45d81b6d1ef26c55e2e"
+    },
+    {
       "resource": "configs/grouping/vlm_visual_evidence_scope_v2.yaml",
       "source_path": "configs/grouping/vlm_visual_evidence_scope_v2.yaml",
       "package_path": "src/benchmark/_resources/configs/grouping/vlm_visual_evidence_scope_v2.yaml",

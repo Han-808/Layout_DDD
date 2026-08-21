@@ -45,6 +45,7 @@
     "tests/test_relationship_mapper.py",
     "tests/test_scene_harness.py",
     "tests/test_sceneeval_hy4_local_runner.py",
+    "tests/test_scene_generation_leaderboard_weights.py",
     "tests/test_scene_quality_interfaces.py",
     "tests/test_coarse_specification_interfaces.py",
     "tests/test_specification_contract.py",

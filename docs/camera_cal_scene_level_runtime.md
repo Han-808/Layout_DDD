@@ -34,6 +34,10 @@ The package modules own the following boundaries:
 - `persisted_scoring.py`: read-only case/run score projections from persisted
   reports for selection, merge, comparison, and viewer consumers; it never
   invokes the evaluator or fills missing coverage;
+- `leaderboard_scoring.py`: the separate versioned post-hoc projection used by
+  the public scene-generation leaderboard. It applies the provisional web
+  weights and deduction multipliers to frozen metric ledgers without changing
+  evaluator reports, Judge behavior, cameras, or publishability;
 - `provenance.py`: route projection and case-input fingerprints;
 - `observability.py`: API/evidence/render observation wrappers;
 - `adapters.py`: injected external model, judge, selector, renderer, and
@@ -89,3 +93,10 @@ change therefore changes the protocol fingerprint and makes an older resume
 fail closed. HTML viewer rendering is not evaluation or selection logic and
 is intentionally outside that identity; the package-owned persisted-scoring
 projection used by selection remains inside it.
+
+The canonical evaluator score and the scene-generation leaderboard score are
+different named projections. `benchmark_score_100` remains the frozen
+evaluator result. The web leaderboard uses
+`scene_generation_leaderboard_web_v1` (36% physical plausibility, 50%
+functional semantics, and 14% visual coherence) and records its own profile
+hash; changing that post-hoc profile does not require re-running evaluation.
