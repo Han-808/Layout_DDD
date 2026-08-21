@@ -69,6 +69,7 @@
     "tests/test_camera_cal_scene_level_runner.py",
     "tests/test_camera_cal_scene_level_e0_contract.py",
     "tests/test_camera_cal_scene_level_leaf_runtime.py",
+    "tests/test_camera_cal_scene_level_structure_e2.py",
     "tests/test_camera_cal_scenesets.py",
     "tests/test_canonical_l3_camera_integration.py",
     "tests/test_canonical_metric_scoring.py",

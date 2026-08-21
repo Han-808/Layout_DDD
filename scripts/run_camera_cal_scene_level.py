@@ -100,6 +100,11 @@ from benchmark.visual_judge.graphs import (  # noqa: E402
 from benchmark.camera_cal_scene_level import io as _runtime_io  # noqa: E402
 from benchmark.camera_cal_scene_level import progress as _runtime_progress  # noqa: E402
 from benchmark.camera_cal_scene_level import telemetry as _runtime_telemetry  # noqa: E402
+from benchmark.camera_cal_scene_level import cli as _runtime_cli  # noqa: E402
+from benchmark.camera_cal_scene_level import discovery as _runtime_discovery  # noqa: E402
+from benchmark.camera_cal_scene_level import planning as _runtime_planning  # noqa: E402
+from benchmark.camera_cal_scene_level import resume as _runtime_resume  # noqa: E402
+from benchmark.camera_cal_scene_level import scheduling as _runtime_scheduling  # noqa: E402
 
 
 RUNNER_SCHEMA_VERSION = "camera_cal_scene_level_runner_v9"
@@ -199,39 +204,14 @@ class ProgressReporter(_runtime_progress.ProgressReporter):
         )
 
 
-class ModelRouteAbortSignal:
-    """Run-shared circuit breaker for permanent endpoint route failures."""
+class ModelRouteAbortSignal(_runtime_scheduling.ModelRouteAbortSignal):
+    """Compatibility facade over the extracted route circuit breaker."""
 
     def __init__(self) -> None:
-        self._event = threading.Event()
-        self._lock = threading.Lock()
-        self._error_type: str | None = None
-        self._error: str | None = None
-
-    def trip(self, error: Exception) -> None:
-        with self._lock:
-            if not self._event.is_set():
-                self._error_type = type(error).__name__
-                self._error = _bounded_error(error)
-                self._event.set()
-
-    def is_set(self) -> bool:
-        return self._event.is_set()
-
-    def raise_if_set(self) -> None:
-        if self._event.is_set():
-            raise EndpointConfigurationError(
-                "model route was disabled after a permanent upstream "
-                "configuration failure"
-            )
-
-    def report(self) -> dict[str, Any]:
-        with self._lock:
-            return {
-                "triggered": self._event.is_set(),
-                "error_type": self._error_type,
-                "error": self._error,
-            }
+        super().__init__(
+            error_formatter=lambda error: _bounded_error(error),
+            abort_error_factory=EndpointConfigurationError,
+        )
 
 
 class APICallTracker(_runtime_telemetry.APICallTracker):
@@ -467,81 +447,18 @@ def run_cases_parallel(
     continue_on_error: bool,
     model_route_abort_signal: ModelRouteAbortSignal | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Run cases concurrently without losing already-started final states."""
-
-    records: list[dict[str, Any]] = []
-    failures: list[dict[str, Any]] = []
-    fail_fast_triggered = False
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        future_to_case: dict[Future[dict[str, Any]], dict[str, Any]] = {
-            executor.submit(run_case, case=case, **case_kwargs): case
-            for case in cases
-        }
-        for completed, future in enumerate(
-            as_completed(future_to_case),
-            start=1,
-        ):
-            case = future_to_case[future]
-            if future.cancelled():
-                cancellation = record_case_cancellation(
-                    case=case,
-                    output_root=output_root,
-                )
-                records.append(cancellation)
-                progress.emit(
-                    "case_cancelled",
-                    case_id=str(case["case_id"]),
-                    completed_count=completed,
-                    case_count=len(cases),
-                    reason=cancellation["reason"],
-                )
-                continue
-            try:
-                record = future.result()
-            except Exception as exc:
-                failure = record_case_failure(
-                    case=case,
-                    output_root=output_root,
-                    error=exc,
-                )
-                failures.append(failure)
-                records.append(failure)
-                progress.emit(
-                    "case_failed",
-                    case_id=str(case["case_id"]),
-                    completed_count=completed,
-                    case_count=len(cases),
-                    error_type=failure["error_type"],
-                )
-                if not continue_on_error and not fail_fast_triggered:
-                    fail_fast_triggered = True
-                    for pending in future_to_case:
-                        if pending is not future:
-                            pending.cancel()
-            else:
-                records.append(record)
-                progress.emit(
-                    "case_completed",
-                    case_id=str(case["case_id"]),
-                    completed_count=completed,
-                    case_count=len(cases),
-                    status=record["status"],
-                    elapsed_seconds=round(
-                        float(record.get("elapsed_seconds") or 0.0),
-                        3,
-                    ),
-                    api_usage=record.get("api_usage"),
-                )
-            route_aborted = bool(
-                model_route_abort_signal is not None
-                and model_route_abort_signal.is_set()
-            )
-            if route_aborted and not fail_fast_triggered:
-                fail_fast_triggered = True
-                for pending in future_to_case:
-                    if pending is not future:
-                        pending.cancel()
-    return records, failures
+    return _runtime_scheduling.run_cases_parallel(
+        cases=cases,
+        case_kwargs=case_kwargs,
+        output_root=output_root,
+        progress=progress,
+        max_workers=max_workers,
+        continue_on_error=continue_on_error,
+        run_case_fn=run_case,
+        failure_recorder=record_case_failure,
+        cancellation_recorder=record_case_cancellation,
+        model_route_abort_signal=model_route_abort_signal,
+    )
 
 
 def main() -> None:
@@ -843,251 +760,46 @@ def main() -> None:
         raise SystemExit(1)
 
 
+def _planning_dependencies() -> _runtime_planning.PlanningDependencies:
+    return _runtime_planning.PlanningDependencies(
+        utc_now=lambda: utc_now(),
+        file_sha256=lambda path: file_sha256(path),
+        safe_route_manifest=lambda route: safe_route_manifest(route),
+        resolve_vlm_evaluation_control=resolve_vlm_evaluation_control,
+        model_class=OpenAICompatibleModel,
+    )
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--dataset-root",
-        type=Path,
-        default=DEFAULT_DATASET_ROOT,
+    return _runtime_cli._parse_args_impl(
+        argv,
+        description=__doc__,
+        default_dataset_root=DEFAULT_DATASET_ROOT,
+        default_grouping_config=DEFAULT_GROUPING_CONFIG,
+        default_blender_bin=DEFAULT_BLENDER_BIN,
+        annotated_l3_metrics=ANNOTATED_L3_METRICS,
+        render_engines=RENDER_ENGINES,
+        cycles_devices=CYCLES_DEVICES,
+        default_deduction_multiplier=DEFAULT_DEDUCTION_MULTIPLIER,
     )
-    parser.add_argument(
-        "--output-root",
-        type=Path,
-        required=True,
-        help="New or resumable run-level output directory.",
-    )
-    parser.add_argument(
-        "--grouping-config",
-        type=Path,
-        default=DEFAULT_GROUPING_CONFIG,
-    )
-    parser.add_argument(
-        "--case-id",
-        action="append",
-        default=[],
-        help="Repeat to select cases. Omit to run every ready case.",
-    )
-    parser.add_argument(
-        "--metric",
-        action="append",
-        choices=ANNOTATED_L3_METRICS,
-        default=[],
-        help="Repeat to select L3 metrics. Omit to run all five annotations.",
-    )
-    parser.add_argument(
-        "--functional-group-local-granularity",
-        choices=("per_check", "batched"),
-        default="per_check",
-        help=(
-            "Functional group-local scheduling: per_check gives every typed "
-            "check an independent Judge episode with the same base group "
-            "evidence; batched judges all checks in one group call."
-        ),
-    )
-    parser.add_argument(
-        "--functional-group-local-evidence-policy",
-        choices=("isolated_episode", "shared_group_bank"),
-        default="shared_group_bank",
-        help=(
-            "Functional per-check evidence sharing: isolated_episode keeps "
-            "camera follow-ups private to each check; shared_group_bank "
-            "is the default and reuses relevant group evidence through a "
-            "bounded six-image active window."
-        ),
-    )
-    parser.add_argument(
-        "--deduction-multiplier",
-        type=positive_float,
-        default=DEFAULT_DEDUCTION_MULTIPLIER,
-        help=(
-            "Multiply final deductions for Collision, Support, OOB, Scale, "
-            "Style, and Object Pairing (default: 2.0; use 1.0 for the "
-            "unscaled projection)."
-        ),
-    )
-    parser.add_argument(
-        "--l3-only",
-        action=argparse.BooleanOptionalAction,
-        default=False,
-        help=(
-            "Recovery mode: disable L1 and execute only selected L3 metrics. "
-            "The resulting benchmark score is L3-only and must be merged "
-            "post-hoc with a separately retained L1 result when needed."
-        ),
-    )
-    parser.add_argument("--max-cases", type=positive_int, default=None)
-    parser.add_argument("--max-workers", type=positive_int, default=1)
-    parser.add_argument(
-        "--endpoint-preflight-attempts",
-        type=positive_int,
-        default=10,
-        help=(
-            "Required consecutive real-image endpoint calls before any case "
-            "starts (default: 10). All attempts must succeed."
-        ),
-    )
-    parser.add_argument(
-        "--endpoint-preflight-timeout-seconds",
-        type=positive_int,
-        default=300,
-        help="Per-call timeout for the pre-run endpoint stability gate.",
-    )
-    parser.add_argument(
-        "--terminal-progress",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help=(
-            "Mirror progress.jsonl events to stdout. Persistent progress "
-            "events are always written."
-        ),
-    )
-    parser.add_argument(
-        "--resume",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-    )
-    parser.add_argument(
-        "--continue-on-error",
-        action=argparse.BooleanOptionalAction,
-        default=False,
-    )
-    parser.add_argument(
-        "--export-audit-graphs",
-        action=argparse.BooleanOptionalAction,
-        default=False,
-        help=(
-            "Post-hoc export RelationCandidateGraph and "
-            "EvaluationQueryGraph artifacts. Disabled by default and never "
-            "used by evaluation or scoring."
-        ),
-    )
-    parser.add_argument(
-        "--blender-bin",
-        type=Path,
-        default=DEFAULT_BLENDER_BIN,
-    )
-    parser.add_argument("--render-width", type=positive_int, default=768)
-    parser.add_argument("--render-height", type=positive_int, default=768)
-    parser.add_argument(
-        "--render-engine",
-        choices=RENDER_ENGINES,
-        default="BLENDER_EEVEE_NEXT",
-    )
-    parser.add_argument(
-        "--cycles-device",
-        choices=CYCLES_DEVICES,
-        default="CPU",
-    )
-    parser.add_argument("--cycles-samples", type=positive_int, default=16)
-    parser.add_argument(
-        "--cycles-denoising",
-        action=argparse.BooleanOptionalAction,
-        default=False,
-    )
-    parser.add_argument(
-        "--preview-render-engine",
-        choices=RENDER_ENGINES,
-        default="BLENDER_EEVEE_NEXT",
-    )
-    parser.add_argument("--preview-width", type=positive_int, default=256)
-    parser.add_argument("--preview-height", type=positive_int, default=256)
-    parser.add_argument(
-        "--preview-cycles-samples",
-        type=positive_int,
-        default=1,
-    )
-    parser.add_argument(
-        "--blender-timeout-seconds",
-        type=positive_int,
-        default=900,
-    )
-    return parser.parse_args(argv)
 
 
 def positive_int(value: str) -> int:
-    parsed = int(value)
-    if parsed < 1:
-        raise argparse.ArgumentTypeError("value must be at least 1")
-    return parsed
+    return _runtime_cli.positive_int(value)
 
 
 def positive_float(value: str) -> float:
-    parsed = float(value)
-    if not math.isfinite(parsed) or parsed <= 0.0:
-        raise argparse.ArgumentTypeError(
-            "value must be finite and greater than zero"
-        )
-    return parsed
+    return _runtime_cli.positive_float(value)
 
 
 def effective_model_route(
     environ: dict[str, str] | os._Environ[str] | None = None,
 ) -> dict[str, Any]:
-    env = os.environ if environ is None else environ
-    required = ("JUDGE_ENDPOINT", "JUDGE_MODEL", "JUDGE_API_KEY_ENV")
-    missing = [name for name in required if not str(env.get(name) or "").strip()]
-    if missing:
-        raise RuntimeError(
-            "explicit runtime model routing is required; missing "
-            + ", ".join(missing)
-        )
-    endpoint = str(env["JUDGE_ENDPOINT"]).strip().rstrip("/")
-    model = str(env["JUDGE_MODEL"]).strip()
-    api_key_env = str(env["JUDGE_API_KEY_ENV"]).strip()
-    if not _ENV_NAME_PATTERN.fullmatch(api_key_env):
-        raise ValueError("JUDGE_API_KEY_ENV must name a valid environment variable")
-    if endpoint in {
-        "http://127.0.0.1:4000",
-        "http://127.0.0.1:4000/v1",
-        "http://localhost:4000",
-        "http://localhost:4000/v1",
-    }:
-        raise RuntimeError(
-            "port 4000 is the stale LiteLLM route; set JUDGE_ENDPOINT "
-            "explicitly to the intended endpoint"
-        )
-    if not str(env.get(api_key_env) or ""):
-        raise RuntimeError(
-            f"required API credential is not available in this process: "
-            f"{api_key_env}"
-        )
-    route = {
-        "endpoint": endpoint,
-        "model": model,
-        "api_key_env": api_key_env,
-        "authorization_configured": True,
-    }
-    min_interval_raw = str(
-        env.get("JUDGE_MIN_REQUEST_INTERVAL_SECONDS") or ""
-    ).strip()
-    if min_interval_raw:
-        try:
-            min_request_interval_seconds = float(min_interval_raw)
-        except ValueError as exc:
-            raise ValueError(
-                "JUDGE_MIN_REQUEST_INTERVAL_SECONDS must be numeric"
-            ) from exc
-        if (
-            not math.isfinite(min_request_interval_seconds)
-            or min_request_interval_seconds < 0.0
-        ):
-            raise ValueError(
-                "JUDGE_MIN_REQUEST_INTERVAL_SECONDS must be finite and non-negative"
-            )
-        route["min_request_interval_seconds"] = min_request_interval_seconds
-    return route
+    return _runtime_planning.effective_model_route(environ)
 
 
 def normalize_metric_selection(values: Iterable[str]) -> tuple[str, ...]:
-    selected = list(dict.fromkeys(str(value) for value in values))
-    if not selected:
-        return ANNOTATED_L3_METRICS
-    unknown = sorted(set(selected) - set(ANNOTATED_L3_METRICS))
-    if unknown:
-        raise ValueError(f"unknown L3 metrics: {unknown}")
-    return tuple(
-        metric for metric in ANNOTATED_L3_METRICS if metric in selected
-    )
+    return _runtime_planning.normalize_metric_selection(values)
 
 
 def discover_cases(
@@ -1096,96 +808,28 @@ def discover_cases(
     case_ids: Iterable[str] = (),
     max_cases: int | None = None,
 ) -> list[dict[str, Any]]:
-    root = dataset_root.expanduser().resolve()
-    if not root.is_dir():
-        raise FileNotFoundError(f"camera-cal dataset does not exist: {root}")
-    selected_ids = list(dict.fromkeys(str(value) for value in case_ids))
-    invalid_ids = [
-        case_id
-        for case_id in selected_ids
-        if not _CASE_ID_PATTERN.fullmatch(case_id)
-    ]
-    if invalid_ids:
-        raise ValueError(f"invalid camera-cal case IDs: {invalid_ids}")
-
-    discovered: dict[str, dict[str, Any]] = {}
-    for case_root in sorted(root.iterdir()):
-        if not case_root.is_dir() or not _CASE_ID_PATTERN.fullmatch(case_root.name):
-            continue
-        manifest_path = case_root / "case_manifest.json"
-        if not manifest_path.is_file():
-            continue
-        manifest = read_json(manifest_path)
-        if manifest.get("status") != "ready":
-            continue
-        case_id = str(manifest.get("case_id") or case_root.name)
-        required = case_paths(case_root, manifest)
-        missing = [
-            name
-            for name, path in required.items()
-            if name != "render_manifest" and not path.is_file()
-        ]
-        if missing:
-            continue
-        discovered[case_id] = {
-            "case_id": case_id,
-            "case_root": str(case_root),
-            "scene_type": manifest.get("scene_type"),
-            "object_count": manifest.get("object_count"),
-            "semantic_content_fingerprint": manifest.get(
-                "semantic_content_fingerprint"
-            ),
-        }
-    if selected_ids:
-        missing_ids = [case_id for case_id in selected_ids if case_id not in discovered]
-        if missing_ids:
-            raise ValueError(f"requested cases are not ready: {missing_ids}")
-        cases = [discovered[case_id] for case_id in selected_ids]
-    else:
-        cases = [discovered[case_id] for case_id in sorted(discovered)]
-    if max_cases is not None:
-        cases = cases[:max_cases]
-    if not cases:
-        raise ValueError("no ready camera-cal cases were selected")
-    return cases
+    return _runtime_discovery._discover_cases_impl(
+        dataset_root,
+        case_ids=case_ids,
+        max_cases=max_cases,
+        read_json_fn=read_json,
+        case_paths_fn=case_paths,
+    )
 
 
 def case_paths(
     case_root: Path,
     manifest: dict[str, Any],
 ) -> dict[str, Path]:
-    paths = manifest.get("paths")
-    paths = paths if isinstance(paths, dict) else {}
-    evidence = paths.get("evidence")
-    evidence = evidence if isinstance(evidence, dict) else {}
-    return {
-        "scene": case_root
-        / str(paths.get("canonical_scene") or "scene/canonical_scene.json"),
-        "blend": case_root / str(paths.get("blend") or "prepared/evaluation.blend"),
-        "annotation": case_root
-        / str(paths.get("annotation") or "annotation.json"),
-        "perspective": case_root
-        / str(evidence.get("perspective") or "evidence/standardized_perspective.png"),
-        "top": case_root
-        / str(evidence.get("top") or "evidence/standardized_top.png"),
-        "identity": case_root
-        / str(evidence.get("identity") or "evidence/standardized_identity_map.png"),
-        "render_manifest": case_root / "evidence" / "prepared_render_manifest.json",
-        "collision_geometry": (
-            case_root / "evidence" / "collision_geometry_manifest.json"
-        ),
-    }
+    return _runtime_discovery.case_paths(case_root, manifest)
 
 
 def _endpoint_preflight_image(case: dict[str, Any]) -> Path:
-    source_root = Path(str(case["case_root"])).expanduser().resolve()
-    manifest = read_json(source_root / "case_manifest.json")
-    image_path = case_paths(source_root, manifest)["perspective"]
-    if not image_path.is_file():
-        raise FileNotFoundError(
-            f"endpoint preflight image does not exist: {image_path}"
-        )
-    return image_path
+    return _runtime_discovery._endpoint_preflight_image_impl(
+        case,
+        read_json_fn=read_json,
+        case_paths_fn=case_paths,
+    )
 
 
 def renderer_config_from_args(
@@ -1193,56 +837,14 @@ def renderer_config_from_args(
     *,
     blender_bin: Path,
 ) -> dict[str, Any]:
-    return {
-        "blender_bin": str(blender_bin),
-        "timeout_seconds": int(args.blender_timeout_seconds),
-        "width": int(args.render_width),
-        "height": int(args.render_height),
-        "render_engine": str(args.render_engine),
-        "cycles_device": str(args.cycles_device),
-        "cycles_samples": int(args.cycles_samples),
-        "cycles_denoising": bool(args.cycles_denoising),
-        "preview_render_engine": str(args.preview_render_engine),
-        "preview_width": int(args.preview_width),
-        "preview_height": int(args.preview_height),
-        "preview_cycles_samples": int(args.preview_cycles_samples),
-    }
+    return _runtime_planning.renderer_config_from_args(
+        args, blender_bin=blender_bin
+    )
 
 
 def resolved_control() -> Any:
-    return resolve_vlm_evaluation_control(
-        {
-            "camera_acquisition": {
-                "policy": "deterministic_then_vlm",
-                "deterministic": {
-                    "max_rounds": 1,
-                    "candidate_budget": 6,
-                    "max_selected_views": 2,
-                },
-                "vlm": {
-                    "max_rounds": 1,
-                    "selection_mode": "repair_plan",
-                    "max_selected_views": 2,
-                },
-                "total": {
-                    "max_evidence_rounds": 3,
-                    "max_total_images": 8,
-                    "max_selector_calls": 4,
-                    "max_camera_actions": 3,
-                },
-            },
-            "budgets": {
-                "max_evidence_rounds": 3,
-                "max_views_per_round": 2,
-                "max_total_images": 8,
-                "max_selector_calls": 4,
-                "max_camera_actions": 3,
-            },
-        },
-        existing_max_views=2,
-        existing_max_steps=1,
-        existing_selector_available=True,
-        judge_max_images=8,
+    return _runtime_planning.resolved_control(
+        dependencies=_planning_dependencies()
     )
 
 
@@ -1267,169 +869,31 @@ def build_experiment_plan(
     export_audit_graphs: bool = False,
     l3_only: bool = False,
 ) -> dict[str, Any]:
-    return {
-        "schema_version": PLAN_SCHEMA_VERSION,
-        "runner_schema_version": RUNNER_SCHEMA_VERSION,
-        "created_at": utc_now(),
-        "dataset_root": str(dataset_root),
-        "output_root": str(output_root),
-        "source_cases_read_only": True,
-        "source_prompt_used": False,
-        "prompt_policy": "metric_rubrics_only_no_generation_prompt",
-        "recovery_mode": "l3_only" if l3_only else None,
-        "audit_graph_export": {
-            "enabled": bool(export_audit_graphs),
-            "schema_version": AUDIT_GRAPH_EXPORT_VERSION,
-            "projection_mode": "posthoc_read_only",
-            "decision_authority": "none",
-        },
-        "l3_metric_prompt_version": L3_METRIC_PROMPT_VERSION,
-        "scoring": {
-            "deduction_multiplier": deduction_multiplier,
-            "deduction_multiplier_metrics": list(
-                DEDUCTION_MULTIPLIER_METRICS
-            ),
-        },
-        "layers": {
-            L1: {
-                "enabled": not l3_only,
-                "scope": "scene_level",
-                "metrics": list(L1_METRICS),
-                "backend": "deterministic_evidence_plus_conditional_vlm",
-                "reason": "l3_only_recovery" if l3_only else None,
-                "binary_failure_policy": deepcopy(
-                    L1_BINARY_FAILURE_POLICY
-                ),
-            },
-            L2: {
-                "enabled": False,
-                "reason": "promptless_camera_cal_experiment",
-            },
-            L3: {
-                "enabled": True,
-                "metrics": list(metrics),
-                "scope": "metric_policy_then_scene_level_aggregation",
-                "functional_group_local_granularity": (
-                    functional_group_local_granularity
-                ),
-                "functional_group_local_evidence_policy": (
-                    functional_group_local_evidence_policy
-                ),
-                "functional_group_local_active_window_max_images": 6,
-                "functional_global_probe_policy": {
-                    "enabled_when_metric_selected": (
-                        "functional_consistency" in metrics
-                    ),
-                    "planner_input": (
-                        "one_global_image_plus_id_category_groups_boundary"
-                    ),
-                    "discovery_schema_version": (
-                        FUNCTIONAL_DISCOVERY_SCHEMA_VERSION
-                    ),
-                    "affordance_schema_version": (
-                        FUNCTIONAL_AFFORDANCE_SCHEMA_VERSION
-                    ),
-                    "relation_schema_version": (
-                        FUNCTIONAL_RELATION_SCHEMA_VERSION
-                    ),
-                    "discovery_outputs": [
-                        "directed_surface_targets",
-                        "within_group_correspondences",
-                        "cross_group_correspondences",
-                        "approach_clearance_targets",
-                        "boundary_sensitive_targets",
-                        "unusual_unconfirmed",
-                    ],
-                    "unusual_confirmation_scope": "group_local",
-                    "usable_surface_decoder": {
-                        "trusted_side_ids": [
-                            "local_pos_x",
-                            "local_neg_x",
-                            "local_pos_y",
-                            "local_neg_y",
-                        ],
-                        "decode_scope": (
-                            "directed_or_uncertain_clearance_targets_"
-                            "before_probe_budget"
-                        ),
-                        "freeform_pose": False,
-                    },
-                    "probe_kinds": [
-                        "functional_frontage",
-                        "functional_correspondence",
-                        "approach_clearance",
-                    ],
-                    "max_probe_units": FUNCTIONAL_PROBE_DEFAULT_UNITS,
-                    "candidate_count_by_probe_kind": {
-                        "functional_frontage": 4,
-                        "functional_correspondence": 4,
-                        "approach_clearance": 4,
-                    },
-                    "selected_raw_views_per_unit": 1,
-                    "preferred_lens_mm": 32.0,
-                    "elevation_range_degrees": [8.0, 16.0],
-                    "source_scene_modified": False,
-                    "judge_presentation": "raw_rgb_only",
-                },
-                "placement_discovery_schema_version": (
-                    PLACEMENT_DISCOVERY_SCHEMA_VERSION
-                ),
-                "placement_check_ledger_schema_version": (
-                    PLACEMENT_CHECK_LEDGER_VERSION
-                ),
-                "placement_check_result_schema_version": (
-                    PLACEMENT_CHECK_RESULT_VERSION
-                ),
-                "functional_ownership_ledger_schema_version": (
-                    FUNCTIONAL_OWNERSHIP_LEDGER_VERSION
-                ),
-                "cross_metric_ownership_audit_schema_version": (
-                    CROSS_METRIC_OWNERSHIP_AUDIT_VERSION
-                ),
-            },
-            L4: {"enabled": False},
-        },
-        "model_route": safe_route_manifest(route),
-        "endpoint_stability_preflight": {
-            "required": True,
-            "attempts": int(endpoint_preflight_attempts),
-            "concurrency": min(
-                int(max_workers),
-                int(endpoint_preflight_attempts),
-            ),
-            "timeout_seconds": int(endpoint_preflight_timeout_seconds),
-            "input": "first_selected_case_standardized_perspective",
-            "success_contract": "all_real_image_calls_complete",
-            "route_configuration_failure_policy": "abort_run",
-        },
-        "grouping": {
-            "config_path": str(grouping_config_path),
-            "config_sha256": file_sha256(grouping_config_path),
-        },
-        "renderer": deepcopy(renderer_config),
-        "control": deepcopy(control),
-        "observability": {
-            "terminal_progress_default": True,
-            "progress_jsonl": str(
-                (output_root / "progress.jsonl").resolve()
-            ),
-            "case_api_calls_jsonl": "cases/<case_id>/api_calls.jsonl",
-            "case_api_usage_json": "cases/<case_id>/api_usage.json",
-            "api_call_definition": (
-                "one logical OpenAI-compatible chat-completions invocation; "
-                "transport retries inside that invocation are not counted "
-                "separately"
-            ),
-            "token_usage_source": (
-                "endpoint response usage fields only; never estimated"
-            ),
-        },
-        "max_workers": max_workers,
-        "resume": resume,
-        "continue_on_error": continue_on_error,
-        "case_count": len(cases),
-        "cases": deepcopy(cases),
-    }
+    return _runtime_planning.build_experiment_plan(
+        dataset_root=dataset_root,
+        output_root=output_root,
+        grouping_config_path=grouping_config_path,
+        route=route,
+        metrics=metrics,
+        functional_group_local_granularity=functional_group_local_granularity,
+        functional_group_local_evidence_policy=(
+            functional_group_local_evidence_policy
+        ),
+        deduction_multiplier=deduction_multiplier,
+        cases=cases,
+        renderer_config=renderer_config,
+        control=control,
+        max_workers=max_workers,
+        endpoint_preflight_attempts=endpoint_preflight_attempts,
+        endpoint_preflight_timeout_seconds=(
+            endpoint_preflight_timeout_seconds
+        ),
+        resume=resume,
+        continue_on_error=continue_on_error,
+        export_audit_graphs=export_audit_graphs,
+        l3_only=l3_only,
+        dependencies=_planning_dependencies(),
+    )
 
 
 def run_case(
@@ -2077,51 +1541,12 @@ def _maybe_export_audit_graphs(
 
 
 def model_config(route: dict[str, Any], *, role: str) -> dict[str, Any]:
-    max_images = 8
-    completion_tokens = (
-        JUDGE_COMPLETION_MAX_TOKENS
-        if role == "judge"
-        else CAMERA_SELECTOR_COMPLETION_MAX_TOKENS
-    )
-    return {
-        "name": f"camera-cal-{role}",
-        "endpoint": route["endpoint"],
-        "model": route["model"],
-        "api_key_env": route["api_key_env"],
-        "temperature": 0.0,
-        "send_temperature": False,
-        "max_tokens": completion_tokens,
-        "timeout_seconds": 3000,
-        "response_format_json": False,
-        "max_retries": 1,
-        "retry_backoff_seconds": 1.0,
-        "min_request_interval_seconds": float(
-            route.get("min_request_interval_seconds") or 0.0
-        ),
-        "max_images": max_images,
-        "max_preview_images": max_images,
-        "max_context_chars": 120000,
-        "require_api_key": True,
-    }
+    return _runtime_planning.model_config(route, role=role)
 
 
 def build_grouping_model(route: dict[str, Any]) -> OpenAICompatibleModel:
-    return OpenAICompatibleModel(
-        name="camera-cal-grouping",
-        endpoint=str(route["endpoint"]),
-        model_id=str(route["model"]),
-        api_key_env=str(route["api_key_env"]),
-        temperature=0.0,
-        max_tokens=GROUPING_COMPLETION_MAX_TOKENS,
-        timeout_seconds=3000,
-        response_format_json=False,
-        max_retries=1,
-        retry_backoff_seconds=1.0,
-        min_request_interval_seconds=float(
-            route.get("min_request_interval_seconds") or 0.0
-        ),
-        send_temperature=False,
-        require_api_key=True,
+    return _runtime_planning.build_grouping_model(
+        route, dependencies=_planning_dependencies()
     )
 
 
@@ -2261,17 +1686,9 @@ def camera_cal_asset_policy() -> dict[str, Any]:
 
 
 def identity_legend_from_manifest(path: Path) -> dict[str, str]:
-    if not path.is_file():
-        return {}
-    manifest = read_json(path)
-    legend = manifest.get("identity_legend")
-    if not isinstance(legend, dict):
-        return {}
-    return {
-        str(alias): str(object_id)
-        for alias, object_id in legend.items()
-        if str(alias).strip() and str(object_id).strip()
-    }
+    return _runtime_discovery._identity_legend_from_manifest_impl(
+        path, read_json_fn=read_json
+    )
 
 
 def grouping_evidence_packet(
@@ -2279,31 +1696,9 @@ def grouping_evidence_packet(
     paths: dict[str, Path],
     identity_legend: dict[str, str],
 ) -> list[dict[str, Any]]:
-    return [
-        {
-            "path": str(paths["perspective"].resolve()),
-            "role": "global_perspective_rgb",
-            "representation": "rgb",
-            "view_id": "global_perspective",
-            "camera_scope": "global",
-        },
-        {
-            "path": str(paths["top"].resolve()),
-            "role": "global_top_rgb",
-            "representation": "rgb",
-            "view_id": "global_top",
-            "camera_scope": "global",
-        },
-        {
-            "path": str(paths["identity"].resolve()),
-            "role": "global_identity_overlay",
-            "representation": "identity_map",
-            "view_id": "global_identity",
-            "camera_scope": "global",
-            "identity_overlay": True,
-            "identity_legend": deepcopy(identity_legend),
-        },
-    ]
+    return _runtime_discovery.grouping_evidence_packet(
+        paths=paths, identity_legend=identity_legend
+    )
 
 
 def case_input_fingerprint(
@@ -2420,16 +1815,10 @@ def resumable_case(
     expected_fingerprint: str,
     case_out: Path,
 ) -> bool:
-    return bool(
-        manifest.get("status") == "complete"
-        and manifest.get("input_fingerprint") == expected_fingerprint
-        and (case_out / "evaluation_report.json").is_file()
-        and (case_out / "grouping.json").is_file()
-        and (case_out / "l1_report.json").is_file()
-        and (case_out / "l1_diagnostics.json").is_file()
-        and (case_out / "scene_quality_report.json").is_file()
-        and (case_out / "scene_comparison.json").is_file()
-        and (case_out / "control_manifest.json").is_file()
+    return _runtime_resume.resumable_case(
+        manifest,
+        expected_fingerprint=expected_fingerprint,
+        case_out=case_out,
     )
 
 
