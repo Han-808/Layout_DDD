@@ -19,6 +19,9 @@ E1 does not change Judge prompts, camera selection, rendering, metric weights,
 deductions, evaluation order, retry policy, report schemas, or output paths.
 The frozen E0 contract records the pre-extraction runner blob and semantic
 source hashes; focused tests compare the facade and leaf implementations.
+Evaluation Campaign source identity explicitly hashes every tracked Python
+module under this package. Adding or changing a runtime leaf therefore changes
+the campaign protocol fingerprint and makes an older resume fail closed.
 
 Later structural phases must remain separately approved. In particular, E1
 does not authorize moving `run_case` or the promptless/camera/scene-quality

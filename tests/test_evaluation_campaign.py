@@ -48,6 +48,7 @@ from benchmark.evaluation_campaign.orchestrator import (
     _round_directories,
 )
 from benchmark.evaluation_campaign.provenance import (
+    _python_dependency_closure,
     evaluation_source_manifest,
     protocol_manifest,
     validate_prior_attempt,
@@ -1537,6 +1538,10 @@ def test_protocol_fingerprint_covers_profile_campaign_package_and_yaml(
         "scripts/check_model_endpoint.py",
         "scripts/build_vlm_evidence_viewer.py",
         "src/benchmark/evaluation_campaign/controller.py",
+        "src/benchmark/camera_cal_scene_level/__init__.py",
+        "src/benchmark/camera_cal_scene_level/io.py",
+        "src/benchmark/camera_cal_scene_level/progress.py",
+        "src/benchmark/camera_cal_scene_level/telemetry.py",
         "src/benchmark/api/evaluation.py",
         "src/benchmark/evaluator/module.py",
         "src/benchmark/models/module.py",
@@ -1568,12 +1573,42 @@ def test_protocol_fingerprint_covers_profile_campaign_package_and_yaml(
     first = protocol_manifest(
         campaign, dataset, repo_root=repo, profile=profile, route_public_manifest=route
     )
+    camera_runtime_paths = {
+        row["path"]
+        for row in first["source_manifest"]["files"]
+        if str(row["path"]).startswith(
+            "src/benchmark/camera_cal_scene_level/"
+        )
+    }
+    expected_camera_runtime_paths = {
+        path.relative_to(repo).as_posix()
+        for path in (
+            repo / "src/benchmark/camera_cal_scene_level"
+        ).rglob("*.py")
+    }
+    assert camera_runtime_paths == expected_camera_runtime_paths
+    leaf = repo / "src/benchmark/camera_cal_scene_level/telemetry.py"
+    leaf.write_text("changed-leaf\n", encoding="utf-8")
+    leaf_changed = protocol_manifest(
+        campaign,
+        dataset,
+        repo_root=repo,
+        profile=profile,
+        route_public_manifest=route,
+    )
+    assert (
+        first["protocol_fingerprint_sha256"]
+        != leaf_changed["protocol_fingerprint_sha256"]
+    )
     source = repo / "src/benchmark/evaluation_campaign/controller.py"
     source.write_text("changed\n", encoding="utf-8")
     second = protocol_manifest(
         campaign, dataset, repo_root=repo, profile=profile, route_public_manifest=route
     )
-    assert first["protocol_fingerprint_sha256"] != second["protocol_fingerprint_sha256"]
+    assert (
+        leaf_changed["protocol_fingerprint_sha256"]
+        != second["protocol_fingerprint_sha256"]
+    )
     changed_profile = replace(profile, fingerprint_sha256="f" * 64)
     third = protocol_manifest(
         campaign,
@@ -1593,6 +1628,55 @@ def test_protocol_fingerprint_covers_profile_campaign_package_and_yaml(
         route_public_manifest=route,
     )
     assert third["protocol_fingerprint_sha256"] != fourth["protocol_fingerprint_sha256"]
+
+
+def test_python_dependency_closure_resolves_imported_submodule_alias(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    entry = repo / "scripts/entry.py"
+    package = repo / "src/benchmark/runtime"
+    entry.parent.mkdir(parents=True)
+    package.mkdir(parents=True)
+    entry.write_text(
+        "from benchmark.runtime import leaf as runtime_leaf\n",
+        encoding="utf-8",
+    )
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    leaf = package / "leaf.py"
+    leaf.write_text("VALUE = 1\n", encoding="utf-8")
+
+    closure = _python_dependency_closure(
+        repo,
+        {entry.resolve()},
+    )
+
+    assert (package / "__init__.py").resolve() in closure
+    assert leaf.resolve() in closure
+
+
+def test_real_source_manifest_covers_all_tracked_camera_runtime_modules() -> None:
+    tracked = {
+        line
+        for line in subprocess.check_output(
+            [
+                "git",
+                "ls-files",
+                "--",
+                "src/benchmark/camera_cal_scene_level",
+            ],
+            cwd=ROOT,
+            text=True,
+        ).splitlines()
+        if line.endswith(".py")
+    }
+    manifest_paths = {
+        str(row["path"])
+        for row in evaluation_source_manifest(ROOT)["files"]
+    }
+
+    assert tracked
+    assert tracked.issubset(manifest_paths)
 
 
 def test_managed_adapter_attestation_rejects_declared_effort_drift(

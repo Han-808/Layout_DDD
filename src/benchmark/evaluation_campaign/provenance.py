@@ -88,6 +88,7 @@ def evaluation_source_manifest(repo_root: Path) -> dict[str, Any]:
         Path("scripts/check_model_endpoint.py"),
         Path("scripts/build_vlm_evidence_viewer.py"),
         Path("src/benchmark/evaluation_campaign"),
+        Path("src/benchmark/camera_cal_scene_level"),
         Path("src/benchmark/api/evaluation.py"),
         Path("src/benchmark/evaluator"),
         Path("src/benchmark/models"),
@@ -190,6 +191,11 @@ def _python_dependency_closure(repo_root: Path, seeds: set[Path]) -> set[Path]:
             elif isinstance(node, ast.ImportFrom):
                 if node.level == 0 and node.module:
                     modules.add(node.module)
+                    modules.update(
+                        f"{node.module}.{alias.name}"
+                        for alias in node.names
+                        if alias.name != "*"
+                    )
                 elif node.level and path.is_relative_to(source_root):
                     relative = path.relative_to(source_root).with_suffix("")
                     package_parts = list(relative.parts[:-1])
@@ -199,6 +205,11 @@ def _python_dependency_closure(repo_root: Path, seeds: set[Path]) -> set[Path]:
                         prefix.extend(node.module.split("."))
                     if prefix:
                         modules.add(".".join(prefix))
+                        modules.update(
+                            ".".join((*prefix, alias.name))
+                            for alias in node.names
+                            if alias.name != "*"
+                        )
         for module in modules:
             candidates: tuple[Path, ...]
             if module.startswith("benchmark"):
