@@ -57,6 +57,8 @@ downloads/
 !/docs/
 !/docs/grouping.md
 !/docs/grouping_blind30_experiment.md
+!/docs/multi_room_evaluation_compatibility_v1.md
+!/docs/multi_room_generation_v1.md
 !/docs/game/
 !/docs/game/counter_strike_benchmark.md
 

@@ -336,6 +336,18 @@ def _gateway_options(
                 item["strategy_type"], field_name=f"{field_name}.strategy_type"
             )
         )
+    if route.gateway_id == "standard_bearer_v1":
+        _exact_keys(
+            item,
+            field_name=field_name,
+            required=frozenset({"user_agent_suffix"}),
+        )
+        return GatewayOptions(
+            user_agent_suffix=_string(
+                item["user_agent_suffix"],
+                field_name=f"{field_name}.user_agent_suffix",
+            )
+        )
     raise ValueError(f"unsupported gateway contract: {route.gateway_id!r}")
 
 

@@ -25,6 +25,13 @@ RUNTIME_RESOURCES = (
     "configs/game/game_mode_canonical_v1.yaml",
     "configs/game/counter_strike_static_arena_style_v1.json",
     "configs/game/counter_strike/benchmark_v1.yaml",
+    "schemas/multi_room/assembly_manifest_v1.schema.json",
+    "schemas/multi_room/compiled_architecture_v1.schema.json",
+    "schemas/multi_room/floor_plan_v1.schema.json",
+    "schemas/multi_room/object_plan_v1.schema.json",
+    "schemas/multi_room/room_evaluation_index_v1.schema.json",
+    "schemas/multi_room/room_evaluation_object_plan_v1.schema.json",
+    "schemas/multi_room/scene_v1.schema.json",
 )
 
 
@@ -41,6 +48,13 @@ def test_packaged_runtime_resource_matches_source_bytes(relative: str) -> None:
     (
         "schemas/generator_catalog_placement_v1.schema.json",
         "schemas/generator_layout_v1.schema.json",
+        "schemas/multi_room/assembly_manifest_v1.schema.json",
+        "schemas/multi_room/compiled_architecture_v1.schema.json",
+        "schemas/multi_room/floor_plan_v1.schema.json",
+        "schemas/multi_room/object_plan_v1.schema.json",
+        "schemas/multi_room/room_evaluation_index_v1.schema.json",
+        "schemas/multi_room/room_evaluation_object_plan_v1.schema.json",
+        "schemas/multi_room/scene_v1.schema.json",
     ),
 )
 def test_packaged_adapter_schema_is_valid_draft_2020_12(relative: str) -> None:

@@ -1,0 +1,263 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://layout-ddd.local/schemas/multi_room_floor_plan_v1.json",
+  "title": "MultiRoomFloorPlanV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "generation_mode",
+    "room_prompt_version",
+    "layout_id",
+    "room_count",
+    "aggregate_shape",
+    "coordinate_frame",
+    "global_envelope",
+    "wall_thickness_m",
+    "generation_order",
+    "shared_walls",
+    "rooms"
+  ],
+  "properties": {
+    "schema_version": {"const": "multi_room_floor_plan_v1"},
+    "generation_mode": {"const": "multi_room_with_architecture_v1"},
+    "room_prompt_version": {"const": "room_generation_prompt_v1"},
+    "layout_id": {"type": "string", "pattern": "^layout_[0-9]{2}$"},
+    "room_count": {"type": "integer", "minimum": 1},
+    "aggregate_shape": {
+      "enum": [
+        "rectangular",
+        "offset_pair",
+        "l_shaped",
+        "t_shaped",
+        "stepped",
+        "notched"
+      ]
+    },
+    "coordinate_frame": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["origin", "axes", "unit", "rotation_unit"],
+      "properties": {
+        "origin": {"const": "shared_global_floor_plan_min_corner"},
+        "axes": {"const": "x_width_y_depth_z_up"},
+        "unit": {"const": "meter"},
+        "rotation_unit": {"const": "degree"}
+      }
+    },
+    "global_envelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["boundary", "dimensions_m"],
+      "properties": {
+        "boundary": {"$ref": "#/$defs/boundary"},
+        "dimensions_m": {"$ref": "#/$defs/positiveVec3"}
+      }
+    },
+    "wall_thickness_m": {"const": 0.08},
+    "generation_order": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"type": "string", "pattern": "^room_[0-9]+$"}
+    },
+    "shared_walls": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/sharedWall"}
+    },
+    "rooms": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/roomSpec"}
+    }
+  },
+  "$defs": {
+    "point2": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "items": {"type": "number", "minimum": 0}
+    },
+    "boundary": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 4,
+      "items": {"$ref": "#/$defs/point2"}
+    },
+    "positiveVec3": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "items": {"type": "number", "exclusiveMinimum": 0}
+    },
+    "nonnegativeVec3": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "items": {"type": "number", "minimum": 0}
+    },
+    "wallId": {
+      "enum": ["north_wall", "south_wall", "east_wall", "west_wall"]
+    },
+    "targetRange": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["min", "max"],
+      "properties": {
+        "min": {"type": "integer", "minimum": 1},
+        "max": {"type": "integer", "minimum": 1}
+      }
+    },
+    "wallAttachmentRequirement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["minimum_count", "maximum_count", "selection_policy"],
+      "properties": {
+        "minimum_count": {"type": "integer", "minimum": 0},
+        "maximum_count": {"type": "integer", "minimum": 0},
+        "selection_policy": {"const": "model_selects_functionally_appropriate_objects"}
+      }
+    },
+    "architecture": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "physical_wall_policy",
+        "wall_thickness_m",
+        "active_wall_ids"
+      ],
+      "properties": {
+        "schema_version": {"const": "rectangular_room_walls_v1"},
+        "physical_wall_policy": {"const": "explicit_only"},
+        "wall_thickness_m": {"const": 0.08},
+        "active_wall_ids": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/wallId"}
+        }
+      }
+    },
+    "roomGeometry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["boundary", "height", "unit", "topology"],
+      "properties": {
+        "boundary": {"$ref": "#/$defs/boundary"},
+        "height": {"type": "number", "exclusiveMinimum": 0},
+        "unit": {"const": "meter"},
+        "topology": {"const": "axis_aligned_rectangle"}
+      }
+    },
+    "runnerProjection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["local_to_global_offset_m", "local_room"],
+      "properties": {
+        "local_to_global_offset_m": {"$ref": "#/$defs/nonnegativeVec3"},
+        "local_room": {"$ref": "#/$defs/roomGeometry"}
+      }
+    },
+    "roomSpec": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "room_id",
+        "generation_index",
+        "room_type",
+        "theme",
+        "object_count_tier",
+        "instruction",
+        "target_instances",
+        "room_dimensions_m",
+        "room",
+        "runner_projection",
+        "architecture",
+        "wall_attachment_requirement"
+      ],
+      "properties": {
+        "room_id": {"type": "string", "pattern": "^room_[0-9]+$"},
+        "generation_index": {"type": "integer", "minimum": 0},
+        "room_type": {"type": "string", "minLength": 1},
+        "theme": {"type": "string", "minLength": 1},
+        "object_count_tier": {
+          "enum": ["compact_7_10", "standard_11_14", "large_15_19"]
+        },
+        "instruction": {"type": "string", "minLength": 1},
+        "target_instances": {"$ref": "#/$defs/targetRange"},
+        "room_dimensions_m": {"$ref": "#/$defs/positiveVec3"},
+        "room": {"$ref": "#/$defs/roomGeometry"},
+        "runner_projection": {"$ref": "#/$defs/runnerProjection"},
+        "architecture": {"$ref": "#/$defs/architecture"},
+        "wall_attachment_requirement": {
+          "$ref": "#/$defs/wallAttachmentRequirement"
+        }
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"object_count_tier": {"const": "compact_7_10"}}},
+          "then": {
+            "properties": {
+              "target_instances": {
+                "properties": {"min": {"const": 7}, "max": {"const": 10}}
+              }
+            }
+          }
+        },
+        {
+          "if": {"properties": {"object_count_tier": {"const": "standard_11_14"}}},
+          "then": {
+            "properties": {
+              "target_instances": {
+                "properties": {"min": {"const": 11}, "max": {"const": 14}}
+              }
+            }
+          }
+        },
+        {
+          "if": {"properties": {"object_count_tier": {"const": "large_15_19"}}},
+          "then": {
+            "properties": {
+              "target_instances": {
+                "properties": {"min": {"const": 15}, "max": {"const": 19}}
+              }
+            }
+          }
+        }
+      ]
+    },
+    "sharedWallEndpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["room_id", "wall_id"],
+      "properties": {
+        "room_id": {"type": "string", "pattern": "^room_[0-9]+$"},
+        "wall_id": {"$ref": "#/$defs/wallId"}
+      }
+    },
+    "sharedWall": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["shared_wall_id", "segment_global_m", "rooms", "opaque", "full_height"],
+      "properties": {
+        "shared_wall_id": {"type": "string", "pattern": "^shared_wall_[0-9]+$"},
+        "segment_global_m": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": {"$ref": "#/$defs/point2"}
+        },
+        "rooms": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": {"$ref": "#/$defs/sharedWallEndpoint"}
+        },
+        "opaque": {"const": true},
+        "full_height": {"const": true}
+      }
+    }
+  }
+}

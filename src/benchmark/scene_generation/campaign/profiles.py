@@ -69,6 +69,13 @@ _GRAMMARS = (
     ),
     ProtocolGrammar(
         codec_id="openai_chat_completions_v1",
+        gateway_id="standard_bearer_v1",
+        option_contract_id="chat_top_level_reasoning_v1",
+        response_contract_id="openai_chat_single_choice_v1",
+        legacy_route_kind="standard_chat",
+    ),
+    ProtocolGrammar(
+        codec_id="openai_chat_completions_v1",
         gateway_id="api3_bearer_session_v1",
         option_contract_id="chat_legacy_core_v1",
         response_contract_id="openai_chat_single_choice_v1",
@@ -242,6 +249,24 @@ class GatewayOptions:
             if present:
                 raise ValueError(
                     f"API3 gateway options contain unsupported fields: {present}"
+                )
+            return
+        if route.gateway_id == "standard_bearer_v1":
+            if self.user_agent_suffix is None:
+                raise ValueError(
+                    "standard Bearer gateway options require user_agent_suffix"
+                )
+            unexpected = {
+                "provider": self.provider,
+                "gateway_model": self.gateway_model,
+                "auth_timeout_seconds": self.auth_timeout_seconds,
+                "strategy_type": self.strategy_type,
+            }
+            present = sorted(key for key, value in unexpected.items() if value is not None)
+            if present:
+                raise ValueError(
+                    "standard Bearer gateway options contain unsupported fields: "
+                    f"{present}"
                 )
             return
         raise ValueError(f"unsupported gateway contract: {route.gateway_id!r}")

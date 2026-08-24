@@ -23,9 +23,11 @@ IGNORED_SUFFIXES = {".pyc"}
 IGNORED_PARTS = {"__pycache__"}
 SHARED_RUNTIME_ROOTS = {
     "configs/generation",
+    "configs/generation_extensions",
     "src/benchmark/scene_generation/frozen_two_stage",
     "src/benchmark/scene_generation/retrieval",
     "src/benchmark/scene_generation/campaign",
+    "src/benchmark/scene_generation/multi_room",
     "configs/retrieval",
 }
 

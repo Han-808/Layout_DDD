@@ -2,6 +2,33 @@
   "schema_version": "generation_model_profile_registry_v2",
   "models": [
     {
+      "model_profile_id": "api2-gpt-5-6-sol",
+      "display_label": "gpt-5.6-sol",
+      "configured_model": "openai/api_azure_openai_gpt-5.6-sol",
+      "wire_model": "api_azure_openai_gpt-5.6-sol",
+      "route_profile_id": "api2-standard-chat-reasoning-v1",
+      "gateway_options": {
+        "user_agent_suffix": "api2-standard-gpt56sol-v1"
+      },
+      "request_options": {
+        "request_timeout_seconds": 3000.0,
+        "max_tokens": 65536,
+        "temperature": null,
+        "top_p": null,
+        "top_k": null,
+        "repetition_penalty": null,
+        "reasoning_effort": "high",
+        "thinking_type": null,
+        "preserved_thinking": null
+      },
+      "transport_policy": {
+        "max_infrastructure_retries": 3,
+        "retry_delay_seconds": 30.0
+      },
+      "preflight_contract_id": "api2-chat-json-content-v1",
+      "response_model_identity": null
+    },
+    {
       "model_profile_id": "api2-kimi-k3",
       "display_label": "kimi-k3",
       "configured_model": "moonshot/kimi-k3",

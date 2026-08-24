@@ -1,0 +1,88 @@
+You are generating the contents of exactly one benchmark room. Return exactly
+one JSON object and no prose, Markdown, code fence, comments, or additional
+value. Do not describe, generate, remove, or alter any other room.
+
+This is Phase A of a strict one-shot room generation. The user message contains
+only the current room's trusted brief: its instruction, theme, inclusive
+expanded-instance range, local rectangular dimensions, active physical wall
+IDs, and wall-attachment range. Other rooms and their model outputs do not
+exist in this call.
+
+Choose the complete object set independently for this room. The expanded
+instance count is the sum of every object count and must fall inside the exact
+target range. Floors and walls are benchmark-owned architecture and never
+count as generated objects. Wall-mounted generated objects do count.
+
+The number of wall-mounted expanded instances must be inside the room's
+declared inclusive wall_attachment_requirement. A wall-mounted object uses an
+active cardinal wall ID as metadata.support. Only active wall IDs exist.
+Floor-supported objects use "floor"; object-supported objects use another
+public slot ID. Never target an inactive or inferred wall.
+
+For every public slot choose its category, role, description, count, estimated
+real-world bbox size, functional zone, support, facing intent, relationships,
+and exactly one natural-language retrieval query. Object membership, counts,
+queries, support, and semantics freeze after this response. IDs are unique
+lowercase snake_case.
+
+RETRIEVAL CONTRACT
+
+- The benchmark invokes deterministic semantic Top-1 retrieval once per slot.
+- top_k is one, category is null, and estimated size is not a retrieval filter.
+- Queries cannot be rewritten, retried, replaced, borrowed, or selected by a
+  VLM. No web retrieval, generation, previews, meshes, renders, evaluator
+  feedback, or prior outputs are available.
+
+ROOM AND FACING CONTRACT
+
+The model works in the current room's local min-corner frame: +X is width, +Y
+is depth, and +Z is up. The logical boundary, floor, and explicitly active
+walls are fixed. Do not place or relate objects across rooms. For a directed
+catalog asset, the canonical functional side is local_neg_y. Non-directed
+objects use null for functional_side.
+
+Required JSON shape, with no additional keys:
+{
+  "schema_version": "multi_room_object_plan_v1",
+  "scene_type": "snake_case room type",
+  "scene_description": "string",
+  "prompt_granularity": "fine_grained",
+  "global_constraints": ["string"],
+  "zones": [
+    {"id": "snake_case", "description": "string", "extent_hint": "string"}
+  ],
+  "relations": [
+    {
+      "family": "string",
+      "type": "string",
+      "subject_id": "public_slot_id",
+      "object_id": "public_slot_id"
+    }
+  ],
+  "objects": [
+    {
+      "id": "snake_case",
+      "category": "string",
+      "role": "string",
+      "description": "string",
+      "count": 1,
+      "estimated_size": [1.0, 1.0, 1.0],
+      "metadata": {
+        "intended_role": "same value as role",
+        "zone": "zone_id",
+        "support": "floor, public_slot_id, or active_wall_id",
+        "directed": true,
+        "functional_side": "local_neg_y or null",
+        "facing_intent": "string or null",
+        "retrieval_query": "string",
+        "requested_count": 1
+      },
+      "placement_intent": {
+        "absolute_relations": ["string"],
+        "relative_relations": ["string"]
+      }
+    }
+  ]
+}
+
+Do not output asset IDs, transforms, rooms, walls, openings, or architecture.

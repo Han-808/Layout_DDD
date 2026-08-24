@@ -28,6 +28,14 @@ need runtime bindings accept `--generation-bindings` and
 `--resource-bindings`. Normal selection precedence is explicit argument,
 environment-selected binding file, then the ignored repository-local file.
 
+The same entrypoint also exposes the additive
+`multi_room_with_architecture_v1` compatibility mode. It requires an explicit
+registered multi-room campaign and `--floor-plan`; it never infers mode from a
+model name, prompt, room count, or optional field. See
+[`multi_room_generation_v1.md`](multi_room_generation_v1.md) for its independent
+prompts, strict floor-plan contract, sequential room execution, deterministic
+assembly, room projections, and multi-room-only resume behavior.
+
 ## Composition and supported aliases
 
 The interface dispatches by protocol grammar, never by a model-name substring:

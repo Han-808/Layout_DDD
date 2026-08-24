@@ -164,8 +164,11 @@
         "src/benchmark/scene_generation/campaign/execution.py"
       ],
       "sources": [
+        "src/benchmark/scene_generation/campaign/api.py",
         "src/benchmark/scene_generation/campaign/bindings.py",
         "src/benchmark/scene_generation/campaign/loader.py",
+        "src/benchmark/scene_generation/campaign/multi_room_execution.py",
+        "src/benchmark/scene_generation/campaign/multi_room_profiles.py",
         "src/benchmark/scene_generation/campaign/profiles.py",
         "src/benchmark/scene_generation/campaign/runtime.py"
       ],
@@ -173,7 +176,8 @@
         "api3_anthropic_runner_v2",
         "frozen_two_stage_compatibility_runtime_v1",
         "generation_retrieval_runtime_v2",
-        "generation_retrieval_profiles_v2"
+        "generation_retrieval_profiles_v2",
+        "multi_room_generation_runtime_v1"
       ],
       "quarantine_evidence": []
     },
@@ -318,6 +322,23 @@
       "quarantine_evidence": []
     },
     {
+      "component_id": "benchmark_case_id_contract_v1",
+      "root": "src/benchmark/case_ids.py",
+      "state": "active",
+      "owner": "evaluation-compatibility",
+      "replacement": null,
+      "reason": "Shared conservative path-safe case-ID validator used by legacy and additive evaluator datasets.",
+      "tracked_policy": "all_tracked",
+      "entrypoints": [
+        "src/benchmark/case_ids.py"
+      ],
+      "sources": [
+        "src/benchmark/case_ids.py"
+      ],
+      "dependencies": [],
+      "quarantine_evidence": []
+    },
+    {
       "component_id": "evaluation_campaign_runtime_v1",
       "root": "src/benchmark/evaluation_campaign",
       "state": "active",
@@ -340,7 +361,8 @@
       ],
       "dependencies": [
         "sceneeval_hy4_runner_v050",
-        "metric_profile_canonical_v2"
+        "metric_profile_canonical_v2",
+        "benchmark_case_id_contract_v1"
       ],
       "quarantine_evidence": []
     },
@@ -401,7 +423,33 @@
         "src/benchmark/camera_cal_scene_level/__init__.py",
         "src/benchmark/camera_cal_scene_level/resume.py"
       ],
-      "dependencies": [],
+      "dependencies": [
+        "benchmark_case_id_contract_v1"
+      ],
+      "quarantine_evidence": []
+    },
+    {
+      "component_id": "multi_room_evaluation_compatibility_v1",
+      "root": "src/benchmark/multi_room_evaluation",
+      "state": "active",
+      "owner": "evaluation-compatibility",
+      "replacement": null,
+      "reason": "Read-only bridge that verifies multi-room generation indexes, materializes independent room projections as ordinary evaluator cases, and builds configs for the unchanged evaluation campaign.",
+      "tracked_policy": "all_tracked",
+      "entrypoints": [
+        "src/benchmark/multi_room_evaluation/__init__.py"
+      ],
+      "sources": [
+        "src/benchmark/multi_room_evaluation/campaign.py",
+        "src/benchmark/multi_room_evaluation/dataset.py",
+        "src/benchmark/multi_room_evaluation/materializer.py",
+        "src/benchmark/multi_room_evaluation/render_profile.py"
+      ],
+      "dependencies": [
+        "benchmark_case_id_contract_v1",
+        "evaluation_campaign_runtime_v1",
+        "multi_room_generation_runtime_v1"
+      ],
       "quarantine_evidence": []
     },
     {
@@ -684,6 +732,88 @@
       ],
       "dependencies": [],
       "quarantine_evidence": []
+    },
+    {
+      "component_id": "multi_room_generation_runtime_v1",
+      "root": "src/benchmark/scene_generation/multi_room",
+      "state": "active",
+      "owner": "scene-generation",
+      "replacement": null,
+      "reason": "Additive multi-room generation runtime that isolates room-wise model calls, composes benchmark-owned architecture, and writes hash-verified resumable artifacts without importing evaluator code.",
+      "tracked_policy": "all_tracked",
+      "entrypoints": [
+        "src/benchmark/scene_generation/multi_room/runtime.py"
+      ],
+      "sources": [
+        "src/benchmark/scene_generation/multi_room/__init__.py",
+        "src/benchmark/scene_generation/multi_room/artifacts.py",
+        "src/benchmark/scene_generation/multi_room/assembly.py",
+        "src/benchmark/scene_generation/multi_room/contracts.py",
+        "src/benchmark/scene_generation/multi_room/floor_plan.py",
+        "src/benchmark/scene_generation/multi_room/prompts/stage_a_prompt_v1.txt",
+        "src/benchmark/scene_generation/multi_room/prompts/stage_c_prompt_v1.txt",
+        "src/benchmark/scene_generation/multi_room/provenance.py",
+        "src/benchmark/scene_generation/multi_room/runtime.py"
+      ],
+      "dependencies": [
+        "frozen_two_stage_compatibility_runtime_v1",
+        "generation_retrieval_runtime_v2",
+        "generation_retrieval_profiles_v2",
+        "multi_room_generation_schemas_v1"
+      ],
+      "quarantine_evidence": []
+    },
+    {
+      "component_id": "multi_room_generation_config_v1",
+      "root": "configs/generation_extensions",
+      "state": "active",
+      "owner": "scene-generation",
+      "replacement": null,
+      "reason": "Additive multi-room generation profile registry and fragment declarations that reuse reviewed campaign model and retrieval profiles without changing the canonical runner manifest.",
+      "tracked_policy": "all_tracked",
+      "entrypoints": [
+        "configs/generation_extensions/additive_registry_manifest_v1.json",
+        "configs/generation_extensions/multi_room_v1/registry_v1.json"
+      ],
+      "sources": [
+        "configs/generation_extensions/additive_registry_manifest_v1.json",
+        "configs/generation_extensions/multi_room_v1/registry_v1.json"
+      ],
+      "dependencies": [
+        "generation_campaign_runtime_v2",
+        "generation_retrieval_profiles_v2",
+        "multi_room_generation_schemas_v1"
+      ],
+      "quarantine_evidence": []
+    },
+    {
+      "component_id": "multi_room_generation_schemas_v1",
+      "root": "schemas/multi_room",
+      "state": "active",
+      "owner": "scene-generation-contracts",
+      "replacement": null,
+      "reason": "Canonical additive multi-room floor-plan, room-plan, room-evaluation object-plan, architecture, scene, evaluation-index, and assembly-manifest schemas owned independently from evaluator behavior.",
+      "tracked_policy": "all_tracked",
+      "entrypoints": [
+        "schemas/multi_room/floor_plan_v1.schema.json",
+        "schemas/multi_room/object_plan_v1.schema.json",
+        "schemas/multi_room/scene_v1.schema.json",
+        "schemas/multi_room/compiled_architecture_v1.schema.json",
+        "schemas/multi_room/room_evaluation_index_v1.schema.json",
+        "schemas/multi_room/assembly_manifest_v1.schema.json",
+        "schemas/multi_room/room_evaluation_object_plan_v1.schema.json"
+      ],
+      "sources": [
+        "schemas/multi_room/floor_plan_v1.schema.json",
+        "schemas/multi_room/object_plan_v1.schema.json",
+        "schemas/multi_room/scene_v1.schema.json",
+        "schemas/multi_room/compiled_architecture_v1.schema.json",
+        "schemas/multi_room/room_evaluation_index_v1.schema.json",
+        "schemas/multi_room/assembly_manifest_v1.schema.json",
+        "schemas/multi_room/room_evaluation_object_plan_v1.schema.json"
+      ],
+      "dependencies": [],
+      "quarantine_evidence": []
     }
   ],
   "artifacts": [
@@ -950,6 +1080,34 @@
       "reason": "Canonical contract, relocation, resume, adoption, proxy ownership, provenance, and frozen-runner regression coverage for Evaluation Campaign v1."
     },
     {
+      "artifact_id": "multi_room_evaluation_materializer_cli_v1",
+      "path": "scripts/prepare_multi_room_evaluation_dataset.py",
+      "state": "active",
+      "owner": "evaluation-compatibility",
+      "reason": "Offline write-once CLI that verifies selected multi-room room projections, renders them through the canonical BlenderRenderer, and emits ordinary evaluator cases without calling generation or evaluation APIs."
+    },
+    {
+      "artifact_id": "multi_room_unified_collection_builder_v1",
+      "path": "Support/scripts/build_multi_room_unified_collection.py",
+      "state": "active",
+      "owner": "evaluation-compatibility",
+      "reason": "Non-destructive selected-view builder that binds collection, selection, assembly-manifest, and room-evaluation-index hashes for downstream evaluation trust."
+    },
+    {
+      "artifact_id": "multi_room_evaluation_compatibility_tests_v1",
+      "path": "tests/test_multi_room_evaluation.py",
+      "state": "active",
+      "owner": "evaluation-tests",
+      "reason": "Reader, ledger, tamper, materialization, self-containment, diagnostic completeness, resume, portable collision, and unchanged-campaign integration coverage."
+    },
+    {
+      "artifact_id": "multi_room_evaluation_compatibility_documentation_v1",
+      "path": "docs/multi_room_evaluation_compatibility_v1.md",
+      "state": "active",
+      "owner": "evaluation-compatibility",
+      "reason": "Operational and scientific contract for treating each successful multi-room projection as one unchanged evaluator case."
+    },
+    {
       "artifact_id": "generation_campaign_documentation_v2",
       "path": "docs/generation_campaign_v2.md",
       "state": "active",
@@ -976,6 +1134,20 @@
       "state": "active",
       "owner": "scene-generation-tests",
       "reason": "Fail-closed argv, source/blob identity, binding parity, blocker, and replay snapshot coverage for D1."
+    },
+    {
+      "artifact_id": "multi_room_generation_documentation_v1",
+      "path": "docs/multi_room_generation_v1.md",
+      "state": "active",
+      "owner": "scene-generation",
+      "reason": "Canonical lifecycle, floor-plan, one-shot room execution, deterministic assembly, projection, resume, provenance, and evaluator-boundary contract for additive multi-room generation."
+    },
+    {
+      "artifact_id": "multi_room_generation_tests_v1",
+      "path": "tests/test_multi_room_generation.py",
+      "state": "active",
+      "owner": "scene-generation-tests",
+      "reason": "Canonical contract, room isolation, deterministic assembly, trust, artifact, resume, and injected-fake coverage for additive multi-room generation."
     },
     {
       "artifact_id": "pytest_suites_v1",
@@ -1083,6 +1255,62 @@
       "owner": "package-resources",
       "reason": "Packaged byte-identical mirror of the public layout schema.",
       "mirror_of": "schemas/generator_layout_v1.schema.json"
+    },
+    {
+      "artifact_id": "packaged_multi_room_assembly_manifest_schema_v1",
+      "path": "src/benchmark/_resources/schemas/multi_room/assembly_manifest_v1.schema.json",
+      "state": "active",
+      "owner": "package-resources",
+      "reason": "Packaged byte-identical mirror of the additive multi-room assembly-manifest schema.",
+      "mirror_of": "schemas/multi_room/assembly_manifest_v1.schema.json"
+    },
+    {
+      "artifact_id": "packaged_multi_room_compiled_architecture_schema_v1",
+      "path": "src/benchmark/_resources/schemas/multi_room/compiled_architecture_v1.schema.json",
+      "state": "active",
+      "owner": "package-resources",
+      "reason": "Packaged byte-identical mirror of the additive multi-room compiled-architecture schema.",
+      "mirror_of": "schemas/multi_room/compiled_architecture_v1.schema.json"
+    },
+    {
+      "artifact_id": "packaged_multi_room_floor_plan_schema_v1",
+      "path": "src/benchmark/_resources/schemas/multi_room/floor_plan_v1.schema.json",
+      "state": "active",
+      "owner": "package-resources",
+      "reason": "Packaged byte-identical mirror of the additive multi-room floor-plan schema.",
+      "mirror_of": "schemas/multi_room/floor_plan_v1.schema.json"
+    },
+    {
+      "artifact_id": "packaged_multi_room_object_plan_schema_v1",
+      "path": "src/benchmark/_resources/schemas/multi_room/object_plan_v1.schema.json",
+      "state": "active",
+      "owner": "package-resources",
+      "reason": "Packaged byte-identical mirror of the additive multi-room object-plan schema.",
+      "mirror_of": "schemas/multi_room/object_plan_v1.schema.json"
+    },
+    {
+      "artifact_id": "packaged_multi_room_room_evaluation_index_schema_v1",
+      "path": "src/benchmark/_resources/schemas/multi_room/room_evaluation_index_v1.schema.json",
+      "state": "active",
+      "owner": "package-resources",
+      "reason": "Packaged byte-identical mirror of the additive multi-room room-evaluation-index schema.",
+      "mirror_of": "schemas/multi_room/room_evaluation_index_v1.schema.json"
+    },
+    {
+      "artifact_id": "packaged_multi_room_room_evaluation_object_plan_schema_v1",
+      "path": "src/benchmark/_resources/schemas/multi_room/room_evaluation_object_plan_v1.schema.json",
+      "state": "active",
+      "owner": "package-resources",
+      "reason": "Packaged byte-identical mirror of the additive multi-room room-evaluation object-plan schema.",
+      "mirror_of": "schemas/multi_room/room_evaluation_object_plan_v1.schema.json"
+    },
+    {
+      "artifact_id": "packaged_multi_room_scene_schema_v1",
+      "path": "src/benchmark/_resources/schemas/multi_room/scene_v1.schema.json",
+      "state": "active",
+      "owner": "package-resources",
+      "reason": "Packaged byte-identical mirror of the additive multi-room scene schema.",
+      "mirror_of": "schemas/multi_room/scene_v1.schema.json"
     },
     {
       "artifact_id": "hy34_legacy_contract_fixture_v1",

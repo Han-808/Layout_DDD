@@ -1,0 +1,96 @@
+{
+  "schema_version": "generation_multi_room_campaign_fragment_v1",
+  "workflow": {
+    "workflow_profile_id": "frozen-two-stage-multi-room-with-architecture-v1",
+    "generation_mode": "multi_room_with_architecture_v1",
+    "core_bundle_id": "api3-anthropic-runner-core-v2",
+    "core_runner_version": "2.0.0",
+    "core_runner_source_sha256": "c5bd82c9cf5b1cf38a8e53c4a199c357134f438685b42d9728f034811200950a",
+    "compatibility_runtime_version": "1.0.3",
+    "compatibility_source_manifest_sha256": "35b45854a4da1ef32f605470dfff9cc2c2c3aa777f5903a2e010c61e3d836413",
+    "stage_a_prompt_sha256": "399470578efae7dcab9fe2698f7300a2be78b2d8296b4a69106a7da2f3d0efba",
+    "stage_c_prompt_sha256": "d5bf9841308a11646b2d5d061897f7ebe7a7cb590ecc24ceb7264b19987ced9f",
+    "floor_plan_schema_sha256": "3b521f056834c66872b506f7f69cd7a20187bb6c3d56c1e799b9556f43eb77b1",
+    "object_plan_schema_sha256": "4070f1dbf141c602029a17c3a0fffde29edab74e187604d8dd1ca466a8afe696",
+    "multi_room_scene_schema_sha256": "9e2072076735b293985e91bd767b8f17f02f6b34fb7f8e17ab2b3609f8b31f00",
+    "compiled_architecture_schema_sha256": "a4a17a7ec22651f15bd18078874bd2e86d2196808132aceda702bf87cf067b2c",
+    "room_evaluation_index_schema_sha256": "ad31217154f76f58d1492c9eda1d805e7547a7200190544d928580fdea5427f5",
+    "assembly_manifest_schema_sha256": "622360d10472bb37b4a5cdc6c89595f193d4c5f29800141ee10bf26340b92d5c"
+  },
+  "artifact_contract": {
+    "artifact_contract_id": "multi-room-generation-artifacts-v1",
+    "run_manifest_schema_version": "multi_room_generation_run_manifest_v1",
+    "room_result_schema_version": "multi_room_room_result_v1",
+    "global_scene_schema_version": "multi_room_scene_v1",
+    "compiled_architecture_schema_version": "compiled_architecture_v1",
+    "room_evaluation_index_schema_version": "room_evaluation_index_v1",
+    "assembly_manifest_schema_version": "assembly_manifest_v1",
+    "summary_schema_version": "multi_room_generation_summary_v1"
+  },
+  "campaigns": [
+    {
+      "campaign_id": "api2-gpt56sol-multi-room-v1",
+      "workflow_profile_id": "frozen-two-stage-multi-room-with-architecture-v1",
+      "model_profile_id": "api2-gpt-5-6-sol",
+      "retrieval_profile_id": "imaginarium-qwen3-embedding-0.6b-stable-top1-v2",
+      "execution_policy_id": "api2-scene10-retry3-continue-v1",
+      "artifact_contract_id": "multi-room-generation-artifacts-v1"
+    },
+    {
+      "campaign_id": "api2-kimi-k3-multi-room-v1",
+      "workflow_profile_id": "frozen-two-stage-multi-room-with-architecture-v1",
+      "model_profile_id": "api2-kimi-k3",
+      "retrieval_profile_id": "imaginarium-qwen3-embedding-0.6b-stable-top1-v2",
+      "execution_policy_id": "api2-scene10-retry3-continue-v1",
+      "artifact_contract_id": "multi-room-generation-artifacts-v1"
+    },
+    {
+      "campaign_id": "api2-glm53-multi-room-v1",
+      "workflow_profile_id": "frozen-two-stage-multi-room-with-architecture-v1",
+      "model_profile_id": "api2-glm-5-3",
+      "retrieval_profile_id": "imaginarium-qwen3-embedding-0.6b-stable-top1-v2",
+      "execution_policy_id": "api2-scene10-retry3-continue-v1",
+      "artifact_contract_id": "multi-room-generation-artifacts-v1"
+    },
+    {
+      "campaign_id": "api3-opus48-high-multi-room-v1",
+      "workflow_profile_id": "frozen-two-stage-multi-room-with-architecture-v1",
+      "model_profile_id": "api3-claude-opus-4-8-high",
+      "retrieval_profile_id": "imaginarium-qwen3-embedding-0.6b-stable-top1-v2",
+      "execution_policy_id": "api3-scene10-retry2-continue-v1",
+      "artifact_contract_id": "multi-room-generation-artifacts-v1"
+    },
+    {
+      "campaign_id": "api3-opus48-multi-room-v1",
+      "workflow_profile_id": "frozen-two-stage-multi-room-with-architecture-v1",
+      "model_profile_id": "api3-claude-opus-4-8",
+      "retrieval_profile_id": "imaginarium-qwen3-embedding-0.6b-stable-top1-v2",
+      "execution_policy_id": "api3-scene10-retry2-continue-v1",
+      "artifact_contract_id": "multi-room-generation-artifacts-v1"
+    },
+    {
+      "campaign_id": "api3-sonnet5-multi-room-v1",
+      "workflow_profile_id": "frozen-two-stage-multi-room-with-architecture-v1",
+      "model_profile_id": "api3-claude-sonnet-5",
+      "retrieval_profile_id": "imaginarium-qwen3-embedding-0.6b-stable-top1-v2",
+      "execution_policy_id": "api3-scene10-retry2-continue-v1",
+      "artifact_contract_id": "multi-room-generation-artifacts-v1"
+    },
+    {
+      "campaign_id": "api3-opus5-multi-room-v1",
+      "workflow_profile_id": "frozen-two-stage-multi-room-with-architecture-v1",
+      "model_profile_id": "api3-claude-opus-5",
+      "retrieval_profile_id": "imaginarium-qwen3-embedding-0.6b-stable-top1-v2",
+      "execution_policy_id": "api3-scene10-retry2-continue-v1",
+      "artifact_contract_id": "multi-room-generation-artifacts-v1"
+    },
+    {
+      "campaign_id": "api3-fable5-multi-room-v1",
+      "workflow_profile_id": "frozen-two-stage-multi-room-with-architecture-v1",
+      "model_profile_id": "api3-claude-fable-5",
+      "retrieval_profile_id": "imaginarium-qwen3-embedding-0.6b-stable-top1-v2",
+      "execution_policy_id": "api3-scene10-retry2-continue-v1",
+      "artifact_contract_id": "multi-room-generation-artifacts-v1"
+    }
+  ]
+}

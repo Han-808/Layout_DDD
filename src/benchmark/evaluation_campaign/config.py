@@ -10,11 +10,12 @@ import re
 from typing import Any, Mapping
 from urllib.parse import urlsplit
 
+from benchmark.case_ids import CaseIdValidationError, validate_case_id
+
 
 CAMPAIGN_SCHEMA_VERSION = "scene_evaluation_campaign_v1"
 PROFILE_REGISTRY_SCHEMA_VERSION = "public_judge_profile_registry_v1"
 LOCAL_BINDINGS_SCHEMA_VERSION = "local_evaluation_bindings_v1"
-_CASE_ID = re.compile(r"[NS][0-9]{3}")
 _IDENTIFIER = re.compile(r"[a-z][a-z0-9_.-]{2,127}")
 _ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 _SHA256 = re.compile(r"[0-9a-f]{64}")
@@ -915,9 +916,10 @@ def _env_name(value: Any, *, field: str) -> str:
 
 def _case_id(value: Any, *, field: str) -> str:
     text = _nonempty_string(value, field=field)
-    if not _CASE_ID.fullmatch(text):
-        raise CampaignConfigError(f"{field} is not a valid case ID")
-    return text
+    try:
+        return validate_case_id(text, field=field)
+    except CaseIdValidationError as exc:
+        raise CampaignConfigError(f"{field} is not a valid case ID") from exc
 
 
 def _case_ids(value: Any, *, field: str) -> tuple[str, ...]:

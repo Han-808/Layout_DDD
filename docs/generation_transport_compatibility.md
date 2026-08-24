@@ -128,6 +128,14 @@ briefs + model config
 The compatibility layer ends when canonical generation artifacts have been
 written. It is not part of evaluation.
 
+The additive `multi_room_with_architecture_v1` mode uses this same transport,
+binding, retry, preflight, and retrieval layer. Its independently versioned
+room contracts call the frozen model-stage primitive once per room, then write
+a distinct global multi-room artifact plus current-compatible room-local
+canonical projections. It does not modify the frozen single-room prompt or
+pretend a non-rectangular global union is one canonical room. See
+`docs/multi_room_generation_v1.md`.
+
 Evaluation may independently use API1 or API2 for Judge/VLM calls. Those routes
 remain owned by the existing evaluator model adapters, multimodal preflight,
 retry, and evidence workflow. They are not imported into this generation

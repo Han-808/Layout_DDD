@@ -1,0 +1,147 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://layout-ddd.local/schemas/multi_room_scene_v1.schema.json",
+  "title": "GlobalMultiRoomSceneV1",
+  "description": "Global shared-coordinate multi-room scene artifact. This is not canonical_scene_v1.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "layout_id",
+    "floor_plan_hash",
+    "assembly_status",
+    "ordered_room_ids",
+    "rooms",
+    "objects",
+    "compiled_architecture_hash"
+  ],
+  "properties": {
+    "schema_version": {"const": "multi_room_scene_v1"},
+    "layout_id": {"type": "string", "pattern": "^layout_[0-9]{2}$"},
+    "floor_plan_hash": {"$ref": "#/$defs/sha256"},
+    "assembly_status": {
+      "enum": ["complete", "incomplete", "failed"]
+    },
+    "ordered_room_ids": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"type": "string", "pattern": "^room_[0-9]+$"}
+    },
+    "rooms": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/room"}
+    },
+    "objects": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/object"}
+    },
+    "compiled_architecture_hash": {"$ref": "#/$defs/sha256"},
+    "provenance": {"$ref": "#/$defs/provenance"}
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "vec3": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "items": {"type": "number"}
+    },
+    "boundary": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 4,
+      "items": {
+        "type": "array",
+        "minItems": 2,
+        "maxItems": 2,
+        "items": {"type": "number"}
+      }
+    },
+    "terminalStatus": {
+      "enum": ["succeeded", "failed", "incomplete", "skipped"]
+    },
+    "room": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "room_id",
+        "generation_index",
+        "terminal_status",
+        "local_to_global_offset_m"
+      ],
+      "properties": {
+        "room_id": {"type": "string", "pattern": "^room_[0-9]+$"},
+        "generation_index": {"type": "integer", "minimum": 0},
+        "terminal_status": {"$ref": "#/$defs/terminalStatus"},
+        "local_to_global_offset_m": {"$ref": "#/$defs/vec3"},
+        "room_type": {"type": "string", "minLength": 1},
+        "theme": {"type": "string", "minLength": 1},
+        "boundary": {"$ref": "#/$defs/boundary"},
+        "height": {"type": "number", "exclusiveMinimum": 0},
+        "active_wall_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/wallId"}
+        },
+        "object_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "source_result_hash": {"$ref": "#/$defs/sha256"},
+        "provenance": {"$ref": "#/$defs/provenance"}
+      }
+    },
+    "object": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "global_instance_id",
+        "local_instance_id",
+        "room_id",
+        "slot_id",
+        "asset_id",
+        "local_center_m",
+        "global_center_m",
+        "uniform_scale",
+        "rotation"
+      ],
+      "properties": {
+        "global_instance_id": {"type": "string", "minLength": 1},
+        "local_instance_id": {"type": "string", "minLength": 1},
+        "room_id": {"type": "string", "pattern": "^room_[0-9]+$"},
+        "slot_id": {"type": "string", "minLength": 1},
+        "asset_id": {"type": "string", "minLength": 1},
+        "local_center_m": {"$ref": "#/$defs/vec3"},
+        "global_center_m": {"$ref": "#/$defs/vec3"},
+        "uniform_scale": {"type": "number", "exclusiveMinimum": 0},
+        "rotation": {"$ref": "#/$defs/vec3"},
+        "category": {"type": "string", "minLength": 1},
+        "description": {"type": "string", "minLength": 1},
+        "size_m": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
+          "items": {"type": "number", "exclusiveMinimum": 0}
+        },
+        "source_artifact_hash": {"$ref": "#/$defs/sha256"},
+        "support": {"type": ["string", "null"]},
+        "facing": {"type": ["string", "null"]},
+        "metadata": {"type": "object", "additionalProperties": true},
+        "provenance": {"$ref": "#/$defs/provenance"}
+      }
+    },
+    "wallId": {
+      "enum": ["north_wall", "south_wall", "east_wall", "west_wall"]
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": true
+    }
+  }
+}

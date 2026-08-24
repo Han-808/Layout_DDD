@@ -23,6 +23,9 @@ from benchmark.scene_generation.frozen_two_stage.providers.gateways.api2 import 
 from benchmark.scene_generation.frozen_two_stage.providers.gateways.api3 import (
     API3GatewayPolicy,
 )
+from benchmark.scene_generation.frozen_two_stage.providers.gateways.standard import (
+    StandardBearerGatewayPolicy,
+)
 
 
 def make_api2_chat_route(
@@ -94,6 +97,26 @@ def make_api3_chat_route(
     return ProviderRoute(
         codec=OpenAIChatCodec(option_policy=option_policy),
         gateway=API3GatewayPolicy(runner_version=runner_version),
+        route_key=route_key,
+        provenance_modules=(__name__,),
+    )
+
+
+def make_standard_chat_route(
+    *,
+    user_agent_suffix: str,
+    option_policy: ChatOptionPolicy,
+    route_key: str = "standard-openai-chat",
+    runner_version: str = "2.0.0",
+) -> ProviderRoute:
+    """Compose the Chat codec with a standard Bearer gateway."""
+
+    return ProviderRoute(
+        codec=OpenAIChatCodec(option_policy=option_policy),
+        gateway=StandardBearerGatewayPolicy(
+            user_agent_suffix=user_agent_suffix,
+            runner_version=runner_version,
+        ),
         route_key=route_key,
         provenance_modules=(__name__,),
     )

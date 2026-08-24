@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from copy import deepcopy
 from pathlib import Path
-import re
 from typing import Any, Callable, Iterable
 
+from benchmark.case_ids import is_safe_case_id, validate_case_id
 from benchmark.camera_cal_scene_level.io import read_json as _read_json
 
 
@@ -14,8 +14,6 @@ from benchmark.camera_cal_scene_level.io import read_json as _read_json
 # operation.  The implementation resolves it at call time rather than taking
 # an import-time snapshot.
 read_json = _read_json
-
-_CASE_ID_PATTERN = re.compile(r"[NS]\d{3}")
 
 
 def case_paths(
@@ -72,18 +70,27 @@ def _discover_cases_impl(
     root = dataset_root.expanduser().resolve()
     if not root.is_dir():
         raise FileNotFoundError(f"camera-cal dataset does not exist: {root}")
-    selected_ids = list(dict.fromkeys(str(value) for value in case_ids))
-    invalid_ids = [
-        case_id
-        for case_id in selected_ids
-        if not _CASE_ID_PATTERN.fullmatch(case_id)
+    materialization_state = root / "materialization_state.json"
+    if materialization_state.exists() or materialization_state.is_symlink():
+        if materialization_state.is_symlink() or not materialization_state.is_file():
+            raise ValueError("dataset materialization state must be a regular file")
+        state = reader(materialization_state)
+        if (
+            state.get("schema_version")
+            != "multi_room_evaluation_build_state_v1"
+            or state.get("status") != "finalized"
+        ):
+            raise ValueError("evaluation dataset materialization is not finalized")
+    selected_ids = [
+        validate_case_id(value, field="camera-cal case ID")
+        for value in case_ids
     ]
-    if invalid_ids:
-        raise ValueError(f"invalid camera-cal case IDs: {invalid_ids}")
+    if len(selected_ids) != len(set(selected_ids)):
+        raise ValueError("camera-cal case IDs must be unique")
 
     discovered: dict[str, dict[str, Any]] = {}
     for case_root in sorted(root.iterdir()):
-        if not case_root.is_dir() or not _CASE_ID_PATTERN.fullmatch(case_root.name):
+        if not case_root.is_dir() or not is_safe_case_id(case_root.name):
             continue
         manifest_path = case_root / "case_manifest.json"
         if not manifest_path.is_file():
@@ -91,7 +98,14 @@ def _discover_cases_impl(
         manifest = reader(manifest_path)
         if manifest.get("status") != "ready":
             continue
-        case_id = str(manifest.get("case_id") or case_root.name)
+        case_id = validate_case_id(
+            manifest.get("case_id") or case_root.name,
+            field=f"{manifest_path} case_id",
+        )
+        if case_id != case_root.name:
+            raise ValueError(
+                f"ready camera-cal case ID differs from its directory: {case_root.name!r}"
+            )
         required = paths_for_case(case_root, manifest)
         missing = [
             name
@@ -100,6 +114,8 @@ def _discover_cases_impl(
         ]
         if missing:
             continue
+        if case_id in discovered:
+            raise ValueError(f"duplicate ready camera-cal case ID: {case_id!r}")
         discovered[case_id] = {
             "case_id": case_id,
             "case_root": str(case_root),

@@ -32,6 +32,13 @@ EXPECTED_RESOURCES = {
     "configs/game/counter_strike/benchmark_v1.yaml",
     "configs/retrieval/profiles_v2.json",
     "configs/retrieval/golden/imaginarium_qwen3_0_6b_v2.json",
+    "schemas/multi_room/assembly_manifest_v1.schema.json",
+    "schemas/multi_room/compiled_architecture_v1.schema.json",
+    "schemas/multi_room/floor_plan_v1.schema.json",
+    "schemas/multi_room/object_plan_v1.schema.json",
+    "schemas/multi_room/room_evaluation_index_v1.schema.json",
+    "schemas/multi_room/room_evaluation_object_plan_v1.schema.json",
+    "schemas/multi_room/scene_v1.schema.json",
 }
 PACKAGE_PREFIX = "src/benchmark/_resources/"
 

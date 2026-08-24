@@ -2,6 +2,14 @@
   "schema_version": "generation_route_profile_registry_v2",
   "routes": [
     {
+      "route_profile_id": "api2-standard-chat-reasoning-v1",
+      "codec_id": "openai_chat_completions_v1",
+      "gateway_id": "standard_bearer_v1",
+      "option_contract_id": "chat_top_level_reasoning_v1",
+      "response_contract_id": "openai_chat_single_choice_v1",
+      "runner_version": "2.0.0"
+    },
+    {
       "route_profile_id": "api2-chat-top-level-reasoning-v1",
       "codec_id": "openai_chat_completions_v1",
       "gateway_id": "api2_bearer_query_v1",

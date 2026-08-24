@@ -513,7 +513,7 @@
         },
         {
           "path": "providers/gateways/__init__.py",
-          "sha256": "95945a48e1ac48af6fd7df8e07f02e11746d49802cf734e8a3f0a6032a59d23a",
+          "sha256": "880247031d8ea61456017e1196e53a3f0c9e2d18b578a4934de0002d017a785b",
           "mode": "0644"
         },
         {
@@ -527,8 +527,13 @@
           "mode": "0644"
         },
         {
+          "path": "providers/gateways/standard.py",
+          "sha256": "b858099e3ca5c68d48cdb8f9a6693b7895899131c20292dbc837d192fbf0a1ed",
+          "mode": "0644"
+        },
+        {
           "path": "providers/routes.py",
-          "sha256": "27e793d67413abf5838caac8590ac6293282ab9ef614bfe7793cf8f0ce9ef407",
+          "sha256": "5e6a5c9fd82937377324b9cef54e4a09a5d38561355650fd9de3930626abb0a2",
           "mode": "0644"
         },
         {
@@ -606,12 +611,12 @@
         },
         {
           "path": "campaign_v2/model_profiles_v2.json",
-          "sha256": "173797231a7322e9d5cc1438db4a67156f8a942bccd918a8d55c050027e3692f",
+          "sha256": "9a00e1086dd6d502a26ee565bf8baaf05211c0ef0a19c9e0bb950f3422e81507",
           "mode": "0644"
         },
         {
           "path": "campaign_v2/route_profiles_v2.json",
-          "sha256": "a3914519c06dcda561073e8ad9b49efae440fdad126d06cdc668ae8200e0aeb9",
+          "sha256": "6fb0c0edc5e5a7a4be2cec97b6e13b603318af3bd68110b17dfba79779bf1bba",
           "mode": "0644"
         }
       ]
@@ -628,12 +633,17 @@
       "files": [
         {
           "path": "__init__.py",
-          "sha256": "c7094278b81747dc69a7eb9b0bb24cc07d5df526e1de403851b400127aec39ff",
+          "sha256": "b50c26eba80fd9fe0fc52a72b69b4aea6b8f1118ab5448dcc7a8b74e8737022b",
           "mode": "0644"
         },
         {
           "path": "__main__.py",
           "sha256": "411e5cc0d736ca9d9a9ac56cf38aa1a36f4313c540ab9ca8e4e65c026822cecc",
+          "mode": "0644"
+        },
+        {
+          "path": "api.py",
+          "sha256": "0ab4946eaf039719521d8849aa454d7c55d03b3d20edad0aec280f796fcde593",
           "mode": "0644"
         },
         {
@@ -643,7 +653,7 @@
         },
         {
           "path": "cli.py",
-          "sha256": "19af87042274a96143ac91f825417aa4c8237c6455aa8f3c60ff330c11985957",
+          "sha256": "c26f7bb8d182a16d82e7302eebb4a0df7477e10e056bd3248fc176d62afd5937",
           "mode": "0644"
         },
         {
@@ -658,17 +668,27 @@
         },
         {
           "path": "loader.py",
-          "sha256": "dc1c2c5f5c80b3a2c71939b8c47b0ed849440e869b12f948c16aeed4a5460793",
+          "sha256": "ec7101c6ab5aa834eccdfe48471c2f432424f7663203d7fc5a9018078e91c647",
+          "mode": "0644"
+        },
+        {
+          "path": "multi_room_execution.py",
+          "sha256": "473f59d11207da7282beb7775ab823c55a7e2b153b687cd54ea8fa93d5c2b3ce",
+          "mode": "0644"
+        },
+        {
+          "path": "multi_room_profiles.py",
+          "sha256": "c2e3cf4c377bf318ebfbc29dc0d166f7e674c7f7627e9b79ef284d81a071e48b",
           "mode": "0644"
         },
         {
           "path": "profiles.py",
-          "sha256": "8a8de3ea7a917a77fe511b39b415cfb80f15e2be291242ad9cd47813098f6d2e",
+          "sha256": "9762e2c6ce0a11982ef7e41dd30565081efe27335fbb9a49b3feec4c95dcf8c9",
           "mode": "0644"
         },
         {
           "path": "runtime.py",
-          "sha256": "e261b98878ecdc7f4deb21357b92de74321930f484bf63e093a24ca187ce78c7",
+          "sha256": "7d1d25466adba9d84fb0698ae55b24bdda4a0c88233d046dc3a9e603e4517133",
           "mode": "0644"
         }
       ]
@@ -771,6 +791,81 @@
         {
           "path": "resource_bindings.example.json",
           "sha256": "f2765f2357964aab379ea6c942b5a76f56c831cceabc0ce049a8f5c78847b005",
+          "mode": "0644"
+        }
+      ]
+    },
+    {
+      "bundle_id": "multi_room_generation_runtime_v1",
+      "root": "src/benchmark/scene_generation/multi_room",
+      "role": "generation_campaign_runtime",
+      "entrypoints": [
+        "runtime.py"
+      ],
+      "files": [
+        {
+          "path": "__init__.py",
+          "sha256": "cd2f10ca6c011b05a8903a5bd0585bbacf3f67b5c171ddd0d0f2ed0397ffe185",
+          "mode": "0644"
+        },
+        {
+          "path": "artifacts.py",
+          "sha256": "1c6ee54e1d01aeb2fb60ef38ad71001aecd82b6cca938709180fa80917c7d58d",
+          "mode": "0644"
+        },
+        {
+          "path": "assembly.py",
+          "sha256": "6d2ba68d81888ae55168af47ec49325aa69bd6e40d9964354747932b0efbc38c",
+          "mode": "0644"
+        },
+        {
+          "path": "contracts.py",
+          "sha256": "607689f173c03e136c917b38ca9c6add71613d7d5da5d3ae4cf2884fb559e84b",
+          "mode": "0644"
+        },
+        {
+          "path": "floor_plan.py",
+          "sha256": "f01c72c67b5be61ec9735f8dfc3d97c464b34d27f5b000b7a9b53748bf0b91f9",
+          "mode": "0644"
+        },
+        {
+          "path": "prompts/stage_a_prompt_v1.txt",
+          "sha256": "399470578efae7dcab9fe2698f7300a2be78b2d8296b4a69106a7da2f3d0efba",
+          "mode": "0644"
+        },
+        {
+          "path": "prompts/stage_c_prompt_v1.txt",
+          "sha256": "d5bf9841308a11646b2d5d061897f7ebe7a7cb590ecc24ceb7264b19987ced9f",
+          "mode": "0644"
+        },
+        {
+          "path": "provenance.py",
+          "sha256": "4e9e886e8639416b67f7e398f12597686012d46b130af58d49f22c70cfeb026a",
+          "mode": "0644"
+        },
+        {
+          "path": "runtime.py",
+          "sha256": "816cf64856029ee8c95ac82deb6f5cbe91e53053b6fdea39bd0cf87ac0e74acc",
+          "mode": "0644"
+        }
+      ]
+    },
+    {
+      "bundle_id": "multi_room_generation_configs_v1",
+      "root": "configs/generation_extensions",
+      "role": "config_only_generation_routes",
+      "entrypoints": [
+        "additive_registry_manifest_v1.json"
+      ],
+      "files": [
+        {
+          "path": "additive_registry_manifest_v1.json",
+          "sha256": "49dd9ee1675174c170f56653011418d0c0899eca17c7e3675c9206f4ef874a21",
+          "mode": "0644"
+        },
+        {
+          "path": "multi_room_v1/registry_v1.json",
+          "sha256": "7d4411040645c9050b5c199c431bee0c2e1576cc6a3f95004a9ca6abe5e7e529",
           "mode": "0644"
         }
       ]

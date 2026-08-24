@@ -88,6 +88,11 @@ def inspect_evaluation_dataset(
         "ordered_case_ids": list(ordered_case_ids),
         "cases": [case.public_dict() for case in identities],
     }
+    multi_room_source = _multi_room_source_identity(
+        manifest, ordered_case_ids=ordered_case_ids
+    )
+    if multi_room_source is not None:
+        portable_payload["multi_room_source_identity"] = multi_room_source
     return EvaluationDatasetIdentity(
         schema_version=DATASET_IDENTITY_SCHEMA_VERSION,
         dataset_id=dataset_id,
@@ -203,6 +208,81 @@ def _inspect_case(case_root: Path, *, case_id: str) -> EvaluationCaseIdentity:
     )
 
 
+def _multi_room_source_identity(
+    manifest: Mapping[str, Any],
+    *,
+    ordered_case_ids: tuple[str, ...],
+) -> dict[str, Any] | None:
+    if manifest.get("schema_version") != (
+        "multi_room_evaluation_dataset_manifest_v1"
+    ):
+        return None
+    source = manifest.get("source_inventory")
+    digest = manifest.get("source_fingerprint_sha256")
+    if (
+        not isinstance(source, dict)
+        or source.get("schema_version")
+        != "multi_room_evaluation_inventory_identity_v1"
+        or not isinstance(digest, str)
+        or len(digest) != 64
+        or any(character not in "0123456789abcdef" for character in digest)
+        or _json_sha256(source) != digest
+    ):
+        raise ValueError("multi-room source inventory fingerprint is invalid")
+    succeeded = source.get("succeeded")
+    failed = source.get("failed")
+    missing = source.get("missing")
+    if (
+        not isinstance(succeeded, list)
+        or not isinstance(failed, list)
+        or not isinstance(missing, list)
+        or succeeded != manifest.get("cases")
+        or failed != manifest.get("failed_rooms")
+        or missing != manifest.get("missing_rooms")
+        or source.get("models") != manifest.get("models")
+        or source.get("collection_manifest_sha256")
+        != manifest.get("source_collection_manifest_sha256")
+        or source.get("selection_manifest_sha256")
+        != manifest.get("source_selection_manifest_sha256")
+        or source.get("evaluation_scope") != manifest.get("evaluation_scope")
+        or source.get("unsupported_scopes")
+        != manifest.get("unsupported_scopes")
+    ):
+        raise ValueError("multi-room source inventory projection is inconsistent")
+    succeeded_ids = [
+        row.get("case_id") if isinstance(row, dict) else None
+        for row in succeeded
+    ]
+    if succeeded_ids != list(ordered_case_ids):
+        raise ValueError("multi-room source case identity/order mismatch")
+    if (
+        manifest.get("succeeded_room_count") != len(succeeded)
+        or manifest.get("failed_room_count") != len(failed)
+        or manifest.get("missing_room_count") != len(missing)
+        or manifest.get("expected_room_count")
+        != len(succeeded) + len(failed) + len(missing)
+    ):
+        raise ValueError("multi-room source room counts are inconsistent")
+    complete = not failed and not missing
+    official = complete and manifest.get("render_profile_id") == (
+        "room_evaluation_official_render_v1"
+    )
+    if (
+        manifest.get("source_collection_complete") is not complete
+        or manifest.get("all_expected_rooms_ready") is not complete
+        or manifest.get("official_full_model_score_eligible") is not official
+        or manifest.get("diagnostic_incomplete") != (not official)
+    ):
+        raise ValueError("multi-room completeness semantics are inconsistent")
+    return {
+        "source_fingerprint_sha256": digest,
+        "evaluation_scope": source.get("evaluation_scope"),
+        "unsupported_scopes": source.get("unsupported_scopes"),
+        "source_collection_complete": complete,
+        "render_profile_id": manifest.get("render_profile_id"),
+    }
+
+
 def _render_manifest_projection(path: Path) -> dict[str, Any]:
     value = _read_object(path)
     return {
@@ -238,7 +318,10 @@ def _collision_bundle_projection(
             if not isinstance(geometry_value, str) or not geometry_value:
                 raise ValueError(f"complete collision record has no geometry: {object_id}")
             geometry_path = _collision_geometry_path(
-                case_root, geometry_value, object_id=str(object_id)
+                case_root,
+                geometry_value,
+                object_id=str(object_id),
+                manifest_parent=path.parent,
             )
             relative = geometry_path.relative_to(case_root.resolve()).as_posix()
             projected["geometry_relative_path"] = relative
@@ -330,8 +413,11 @@ def prepare_portable_dataset_view(source_root: Path, target_root: Path) -> Path:
                     case_root,
                     row.get("geometry_path"),
                     object_id=str(object_id),
+                    manifest_parent=collision_path.parent,
                 )
-                row["geometry_path"] = resolved.relative_to(case_root).as_posix()
+                row["geometry_path"] = resolved.relative_to(
+                    collision_path.parent.resolve()
+                ).as_posix()
             _write_object(collision_path, collision)
         building.replace(target)
         _validate_portable_dataset_view(target)
@@ -371,18 +457,25 @@ def _validate_portable_dataset_view(root: Path) -> None:
             if not isinstance(row, dict) or row.get("complete") is not True:
                 continue
             value = row.get("geometry_path")
-            if not isinstance(value, str) or Path(value).is_absolute() or ".." in Path(value).parts:
+            if (
+                not isinstance(value, str)
+                or Path(value).is_absolute()
+                or ".." in Path(value).parts
+                or "\\" in value
+            ):
                 raise ValueError(
                     f"portable collision path drift: {case_id}:{object_id}"
                 )
-            resolved = (case_root / value).resolve()
+            resolved = (
+                case_root / "evidence" / value
+            ).resolve()
             try:
                 resolved.relative_to(case_root)
             except ValueError as exc:
                 raise ValueError(
                     f"portable collision path escapes: {case_id}:{object_id}"
                 ) from exc
-            if not resolved.is_file():
+            if not resolved.is_file() or resolved.is_symlink():
                 raise FileNotFoundError(resolved)
 
 
@@ -406,22 +499,54 @@ def _within(root: Path, value: Any, *, fallback: str) -> Path:
     return resolved
 
 
-def _collision_geometry_path(case_root: Path, value: Any, *, object_id: str) -> Path:
+def _collision_geometry_path(
+    case_root: Path,
+    value: Any,
+    *,
+    object_id: str,
+    manifest_parent: Path | None = None,
+) -> Path:
     if not isinstance(value, str) or not value:
         raise ValueError(f"complete collision record has no geometry: {object_id}")
     candidate = Path(value).expanduser()
-    resolved = candidate.resolve() if candidate.is_absolute() else (case_root / candidate).resolve()
-    try:
-        resolved.relative_to(case_root.resolve())
-    except ValueError:
-        candidates = sorted(
-            (case_root / "evidence/collision_geometry").rglob(candidate.name)
+    roots = tuple(
+        dict.fromkeys(
+            path.resolve()
+            for path in (
+                manifest_parent,
+                case_root,
+            )
+            if path is not None
         )
-        if len(candidates) != 1:
+    )
+    possible = (
+        (candidate.resolve(),)
+        if candidate.is_absolute()
+        else tuple((root / candidate).resolve() for root in roots)
+    )
+    contained = []
+    for resolved_candidate in possible:
+        try:
+            resolved_candidate.relative_to(case_root.resolve())
+        except ValueError:
+            continue
+        if resolved_candidate.is_file() and not resolved_candidate.is_symlink():
+            contained.append(resolved_candidate)
+    if len(set(contained)) == 1:
+        resolved = contained[0]
+    else:
+        candidates = sorted(
+            path.resolve()
+            for path in (case_root / "evidence/collision_geometry").rglob(
+                candidate.name
+            )
+            if path.is_file() and not path.is_symlink()
+        )
+        if len(set(candidates)) != 1:
             raise ValueError(
                 f"collision geometry cannot be projected into evaluation case: {object_id}"
             )
-        resolved = candidates[0].resolve()
+        resolved = candidates[0]
     if not resolved.is_file() or resolved.is_symlink():
         raise FileNotFoundError(resolved)
     return resolved

@@ -50,6 +50,7 @@ include-package-data = false
 "benchmark.game_scene" = ["*.js", "*.mjs"]
 "benchmark._resources" = [
   "schemas/*.json",
+  "schemas/multi_room/*.json",
   "configs/evaluation/*.yaml",
   "configs/evaluation/*.json",
   "configs/grouping/*.yaml",
@@ -59,6 +60,7 @@ include-package-data = false
   "configs/retrieval/*.json",
   "configs/retrieval/golden/*.json",
 ]
+"benchmark.scene_generation.multi_room" = ["prompts/*.txt"]
 
 [tool.pytest.ini_options]
 testpaths = [
@@ -85,11 +87,13 @@ testpaths = [
   "tests/test_deterministic_local_camera_selector.py",
   "tests/test_evidence_contract.py",
   "tests/test_evaluation_campaign.py",
+  "tests/test_multi_room_evaluation.py",
   "tests/test_functional_discovery.py",
   "tests/test_functional_planner_adapter.py",
   "tests/test_frozen_two_stage_generation_compatibility.py",
   "tests/test_generation_campaign_v2.py",
   "tests/test_generation_legacy_forwarding_d1.py",
+  "tests/test_multi_room_generation.py",
   "tests/test_game_canonical_track.py",
   "tests/test_game_harness.py",
   "tests/test_game_mode.py",

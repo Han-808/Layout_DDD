@@ -67,6 +67,48 @@
       "source_path": "configs/retrieval/golden/imaginarium_qwen3_0_6b_v2.json",
       "package_path": "src/benchmark/_resources/configs/retrieval/golden/imaginarium_qwen3_0_6b_v2.json",
       "sha256": "a9f5bda10f3f60525b708d0364421611d7ee873c065926bde2c08ef844dc900d"
+    },
+    {
+      "resource": "schemas/multi_room/assembly_manifest_v1.schema.json",
+      "source_path": "schemas/multi_room/assembly_manifest_v1.schema.json",
+      "package_path": "src/benchmark/_resources/schemas/multi_room/assembly_manifest_v1.schema.json",
+      "sha256": "622360d10472bb37b4a5cdc6c89595f193d4c5f29800141ee10bf26340b92d5c"
+    },
+    {
+      "resource": "schemas/multi_room/compiled_architecture_v1.schema.json",
+      "source_path": "schemas/multi_room/compiled_architecture_v1.schema.json",
+      "package_path": "src/benchmark/_resources/schemas/multi_room/compiled_architecture_v1.schema.json",
+      "sha256": "a4a17a7ec22651f15bd18078874bd2e86d2196808132aceda702bf87cf067b2c"
+    },
+    {
+      "resource": "schemas/multi_room/floor_plan_v1.schema.json",
+      "source_path": "schemas/multi_room/floor_plan_v1.schema.json",
+      "package_path": "src/benchmark/_resources/schemas/multi_room/floor_plan_v1.schema.json",
+      "sha256": "3b521f056834c66872b506f7f69cd7a20187bb6c3d56c1e799b9556f43eb77b1"
+    },
+    {
+      "resource": "schemas/multi_room/object_plan_v1.schema.json",
+      "source_path": "schemas/multi_room/object_plan_v1.schema.json",
+      "package_path": "src/benchmark/_resources/schemas/multi_room/object_plan_v1.schema.json",
+      "sha256": "4070f1dbf141c602029a17c3a0fffde29edab74e187604d8dd1ca466a8afe696"
+    },
+    {
+      "resource": "schemas/multi_room/room_evaluation_index_v1.schema.json",
+      "source_path": "schemas/multi_room/room_evaluation_index_v1.schema.json",
+      "package_path": "src/benchmark/_resources/schemas/multi_room/room_evaluation_index_v1.schema.json",
+      "sha256": "ad31217154f76f58d1492c9eda1d805e7547a7200190544d928580fdea5427f5"
+    },
+    {
+      "resource": "schemas/multi_room/room_evaluation_object_plan_v1.schema.json",
+      "source_path": "schemas/multi_room/room_evaluation_object_plan_v1.schema.json",
+      "package_path": "src/benchmark/_resources/schemas/multi_room/room_evaluation_object_plan_v1.schema.json",
+      "sha256": "494f53f1ab718ff0719409cc1e3f9e166d872342d3c2d35fba5fab6fccf7f446"
+    },
+    {
+      "resource": "schemas/multi_room/scene_v1.schema.json",
+      "source_path": "schemas/multi_room/scene_v1.schema.json",
+      "package_path": "src/benchmark/_resources/schemas/multi_room/scene_v1.schema.json",
+      "sha256": "9e2072076735b293985e91bd767b8f17f02f6b34fb7f8e17ab2b3609f8b31f00"
     }
   ]
 }

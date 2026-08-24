@@ -1,0 +1,184 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://layout-ddd.local/schemas/compiled_architecture_v1.schema.json",
+  "title": "CompiledMultiRoomArchitectureV1",
+  "description": "Deterministically compiled room and wall graph with deduplicated physical shared walls.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "layout_id",
+    "floor_plan_hash",
+    "wall_thickness_m",
+    "wall_inventory_contract",
+    "rooms",
+    "active_walls",
+    "exterior_walls",
+    "shared_walls"
+  ],
+  "properties": {
+    "schema_version": {"const": "compiled_architecture_v1"},
+    "layout_id": {"type": "string", "pattern": "^layout_[0-9]{2}$"},
+    "floor_plan_hash": {"$ref": "#/$defs/sha256"},
+    "wall_thickness_m": {"type": "number", "exclusiveMinimum": 0},
+    "wall_inventory_contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["logical_support_topology", "physical_inventory"],
+      "properties": {
+        "logical_support_topology": {"const": "active_walls_per_room_v1"},
+        "physical_inventory": {"const": "exterior_walls_plus_deduplicated_shared_walls_v1"}
+      }
+    },
+    "rooms": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/room"}
+    },
+    "active_walls": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/activeWall"}
+    },
+    "exterior_walls": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/exteriorWall"}
+    },
+    "shared_walls": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/sharedWall"}
+    },
+    "provenance": {"$ref": "#/$defs/provenance"}
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "point2": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "items": {"type": "number"}
+    },
+    "boundary": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 4,
+      "items": {"$ref": "#/$defs/point2"}
+    },
+    "vec3": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "items": {"type": "number"}
+    },
+    "wallId": {
+      "enum": ["north_wall", "south_wall", "east_wall", "west_wall"]
+    },
+    "room": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "room_id",
+        "generation_index",
+        "boundary",
+        "height_m",
+        "active_wall_ids"
+      ],
+      "properties": {
+        "room_id": {"type": "string", "pattern": "^room_[0-9]+$"},
+        "generation_index": {"type": "integer", "minimum": 0},
+        "boundary": {"$ref": "#/$defs/boundary"},
+        "dimensions_m": {"$ref": "#/$defs/vec3"},
+        "height_m": {"type": "number", "exclusiveMinimum": 0},
+        "active_wall_ids": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/wallId"}
+        },
+        "exterior_wall_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/wallId"}
+        }
+      }
+    },
+    "wall": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["room_id", "wall_id", "segment_global_m", "height_m", "wall_role"],
+      "properties": {
+        "room_id": {"type": "string", "pattern": "^room_[0-9]+$"},
+        "wall_id": {"$ref": "#/$defs/wallId"},
+        "segment_global_m": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": {"$ref": "#/$defs/point2"}
+        },
+        "height_m": {"type": "number", "exclusiveMinimum": 0},
+        "wall_role": {"enum": ["active", "exterior"]}
+      }
+    },
+    "activeWall": {
+      "allOf": [
+        {"$ref": "#/$defs/wall"},
+        {"properties": {"wall_role": {"const": "active"}}
+        }
+      ]
+    },
+    "exteriorWall": {
+      "allOf": [
+        {"$ref": "#/$defs/wall"},
+        {"properties": {"wall_role": {"const": "exterior"}}
+        }
+      ]
+    },
+    "sharedEndpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["room_id", "wall_id"],
+      "properties": {
+        "room_id": {"type": "string", "pattern": "^room_[0-9]+$"},
+        "wall_id": {"$ref": "#/$defs/wallId"}
+      }
+    },
+    "sharedWall": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "shared_wall_id",
+        "segment_global_m",
+        "rooms",
+        "opaque",
+        "full_height",
+        "deduplicated"
+      ],
+      "properties": {
+        "shared_wall_id": {"type": "string", "pattern": "^shared_wall_[0-9]+$"},
+        "segment_global_m": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": {"$ref": "#/$defs/point2"}
+        },
+        "rooms": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": {"$ref": "#/$defs/sharedEndpoint"}
+        },
+        "opaque": {"const": true},
+        "full_height": {"const": true},
+        "deduplicated": {"const": true}
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": true
+    }
+  }
+}

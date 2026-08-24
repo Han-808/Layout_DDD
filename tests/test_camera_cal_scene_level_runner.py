@@ -16,6 +16,39 @@ from benchmark.visual_judge.contracts import ResponseSchemaRepairError
 from scripts import run_camera_cal_scene_level as runner
 
 
+def _write_ready_discovery_case(
+    root: Path,
+    directory_id: str,
+    *,
+    manifest_id: str | None = None,
+) -> None:
+    case_root = root / directory_id
+    (case_root / "scene").mkdir(parents=True)
+    (case_root / "prepared").mkdir()
+    (case_root / "evidence").mkdir()
+    for path in (
+        case_root / "scene/canonical_scene.json",
+        case_root / "prepared/evaluation.blend",
+        case_root / "annotation.json",
+        case_root / "evidence/standardized_perspective.png",
+        case_root / "evidence/standardized_top.png",
+        case_root / "evidence/standardized_identity_map.png",
+        case_root / "evidence/collision_geometry_manifest.json",
+    ):
+        path.write_bytes(b"{}")
+    (case_root / "case_manifest.json").write_text(
+        json.dumps(
+            {
+                "case_id": manifest_id or directory_id,
+                "status": "ready",
+                "scene_type": "test",
+                "object_count": 1,
+                "paths": {},
+            }
+        )
+    )
+
+
 def test_default_discovery_covers_all_ready_camera_cal_cases() -> None:
     cases = runner.discover_cases(runner.DEFAULT_DATASET_ROOT)
 
@@ -54,6 +87,56 @@ def test_discovery_accepts_s_namespace_cases(tmp_path: Path) -> None:
     cases = runner.discover_cases(tmp_path, case_ids=["S061"])
 
     assert [case["case_id"] for case in cases] == ["S061"]
+
+
+def test_discovery_accepts_flexible_path_safe_case_ids(tmp_path: Path) -> None:
+    case_id = "mr.api2-kimi-k3.layout_01.room_01"
+    _write_ready_discovery_case(tmp_path, case_id)
+
+    discovered = runner.discover_cases(tmp_path)
+    selected = runner.discover_cases(tmp_path, case_ids=[case_id])
+
+    assert [case["case_id"] for case in discovered] == [case_id]
+    assert [case["case_id"] for case in selected] == [case_id]
+
+
+@pytest.mark.parametrize(
+    "case_id",
+    (
+        "",
+        ".",
+        "..",
+        "../escape",
+        "/absolute/escape",
+        "nested/escape",
+        r"nested\escape",
+        r"C:\absolute\escape",
+        "x" * 129,
+    ),
+)
+def test_discovery_rejects_unsafe_selected_case_ids(
+    tmp_path: Path, case_id: str
+) -> None:
+    with pytest.raises(ValueError, match="case ID"):
+        runner.discover_cases(tmp_path, case_ids=[case_id])
+
+
+def test_discovery_rejects_duplicate_selected_case_ids(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="unique"):
+        runner.discover_cases(tmp_path, case_ids=["S001", "S001"])
+
+
+def test_discovery_rejects_ready_manifest_directory_alias(
+    tmp_path: Path,
+) -> None:
+    _write_ready_discovery_case(
+        tmp_path,
+        "source-a",
+        manifest_id="mr.duplicate",
+    )
+
+    with pytest.raises(ValueError, match="differs from its directory"):
+        runner.discover_cases(tmp_path)
 
 
 def test_promptless_profile_and_request_disable_l2_prompt_use() -> None:

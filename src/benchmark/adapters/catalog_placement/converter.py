@@ -403,8 +403,17 @@ def _convert_instance(
     task_slot: dict[str, Any] | None,
 ) -> tuple[dict, dict]:
     asset_id = str(instance["asset_id"])
-    category = _selected_asset_string(selected_asset, "category", asset_id)
-    description = _selected_asset_description(selected_asset, asset_id)
+    category = _selected_asset_string(
+        selected_asset,
+        "category",
+        asset_id,
+        fallback=(task_slot or {}).get("intended_category"),
+    )
+    description = _selected_asset_description(
+        selected_asset,
+        asset_id,
+        fallback=(task_slot or {}).get("description"),
+    )
     asset_ref = _selected_asset_mapping(selected_asset, "asset_ref", asset_id)
     asset_proxy = _selected_asset_mapping(selected_asset, "asset_proxy", asset_id)
     source_bbox_center = _finite_vec3(
@@ -556,9 +565,15 @@ def _selected_asset_catalog(generation_input: dict) -> dict[str, dict[str, Any]]
 
 
 def _selected_asset_string(
-    selected_asset: dict, key: str, asset_id: str
+    selected_asset: dict,
+    key: str,
+    asset_id: str,
+    *,
+    fallback: Any = None,
 ) -> str:
     value = str(selected_asset.get(key) or "").strip()
+    if not value:
+        value = str(fallback or "").strip()
     if not value:
         raise ArtifactValidationError(
             f"selected_asset[{asset_id!r}].{key} must be non-empty"
@@ -566,11 +581,19 @@ def _selected_asset_string(
     return value
 
 
-def _selected_asset_description(selected_asset: dict, asset_id: str) -> str:
+def _selected_asset_description(
+    selected_asset: dict,
+    asset_id: str,
+    *,
+    fallback: Any = None,
+) -> str:
     for key in ("desc", "short_desc", "description"):
         value = str(selected_asset.get(key) or "").strip()
         if value:
             return value
+    value = str(fallback or "").strip()
+    if value:
+        return value
     raise ArtifactValidationError(
         f"selected_asset[{asset_id!r}] must provide desc, short_desc, or description"
     )

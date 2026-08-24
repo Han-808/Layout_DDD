@@ -20,6 +20,7 @@ from benchmark.scene_generation.frozen_two_stage.providers.routes import (
     make_api2_chat_route,
     make_api2_responses_route,
     make_api3_chat_route,
+    make_standard_chat_route,
 )
 
 
@@ -178,6 +179,17 @@ def build_provider_route(
             )
         return make_api3_chat_route(
             option_policy=option_policy,
+            route_key=route.route_profile_id,
+            runner_version=route.runner_version,
+        )
+    if dispatch == "standard_chat":
+        assert gateway.user_agent_suffix is not None
+        assert effort is not None
+        return make_standard_chat_route(
+            user_agent_suffix=gateway.user_agent_suffix,
+            option_policy=ChatOptionPolicy.top_level_reasoning(
+                default_reasoning_effort=effort
+            ),
             route_key=route.route_profile_id,
             runner_version=route.runner_version,
         )

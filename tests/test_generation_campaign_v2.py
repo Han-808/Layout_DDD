@@ -127,8 +127,8 @@ def _write_json(path: Path, value: Any) -> None:
 def test_checked_in_campaign_bundle_is_portable_and_immutable() -> None:
     bundle = load_campaign_profile_bundle(PROFILE_ROOT)
 
-    assert len(bundle.routes.routes) == 4
-    assert len(bundle.models.models) == 7
+    assert len(bundle.routes.routes) == 5
+    assert len(bundle.models.models) == 8
     assert len(bundle.campaigns.campaigns) == 3
     campaign, model, route = bundle.resolve_campaign(
         "api3-opus48-high-scene10-v2"

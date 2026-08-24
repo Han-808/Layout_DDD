@@ -578,6 +578,79 @@ def test_public_configs_reject_deployment_fields_and_unknowns(tmp_path: Path) ->
         load_profile_registry(tmp_path / "profiles.json")
 
 
+def _campaign_config_for_case_ids(
+    tmp_path: Path, case_ids: tuple[str, ...]
+) -> Path:
+    value = json.loads(
+        (
+            ROOT
+            / "configs/evaluation/campaigns/glm53_api1_full10_v1.json"
+        ).read_text()
+    )
+    value["dataset"]["expected_case_ids"] = list(case_ids)
+    value["dataset"]["smoke_case_id"] = case_ids[0] if case_ids else "S001"
+    value["case_plan"]["run_case_ids"] = list(case_ids)
+    value["case_plan"]["selection_case_ids"] = list(case_ids)
+    path = tmp_path / "campaign.json"
+    _write_json(path, value)
+    return path
+
+
+@pytest.mark.parametrize(
+    "case_id",
+    (
+        "S001",
+        "N001",
+        "mr.api2-kimi-k3.layout_01.room_01",
+        "x" * 128,
+    ),
+)
+def test_campaign_config_accepts_legacy_and_flexible_safe_case_ids(
+    tmp_path: Path, case_id: str
+) -> None:
+    campaign = load_campaign(
+        _campaign_config_for_case_ids(tmp_path, (case_id,)),
+        repo_root=ROOT,
+    )
+
+    assert campaign.dataset.expected_case_ids == (case_id,)
+    assert campaign.dataset.smoke_case_id == case_id
+    assert campaign.case_plan.run_case_ids == (case_id,)
+    assert campaign.case_plan.selection_case_ids == (case_id,)
+
+
+@pytest.mark.parametrize(
+    "case_id",
+    (
+        "",
+        ".",
+        "..",
+        "../escape",
+        "/absolute/escape",
+        "nested/escape",
+        r"nested\escape",
+        r"C:\absolute\escape",
+        "x" * 129,
+    ),
+)
+def test_campaign_config_rejects_unsafe_case_ids(
+    tmp_path: Path, case_id: str
+) -> None:
+    with pytest.raises(CampaignConfigError, match="case ID|non-empty"):
+        load_campaign(
+            _campaign_config_for_case_ids(tmp_path, (case_id,)),
+            repo_root=ROOT,
+        )
+
+
+def test_campaign_config_rejects_duplicate_case_ids(tmp_path: Path) -> None:
+    with pytest.raises(CampaignConfigError, match="unique"):
+        load_campaign(
+            _campaign_config_for_case_ids(tmp_path, ("S001", "S001")),
+            repo_root=ROOT,
+        )
+
+
 def test_static_check_allows_missing_dataset_and_does_not_load_binding(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1550,8 +1623,10 @@ def test_protocol_fingerprint_covers_profile_campaign_package_and_yaml(
         "scripts/run_camera_cal_scene_level.py",
         "scripts/select_first_publishable_scene_evaluations.py",
         "scripts/check_model_endpoint.py",
+        "scripts/prepare_multi_room_evaluation_dataset.py",
         "scripts/build_vlm_evidence_viewer.py",
         "src/benchmark/evaluation_campaign/controller.py",
+        "src/benchmark/multi_room_evaluation/dataset.py",
         "src/benchmark/camera_cal_scene_level/__init__.py",
         "src/benchmark/camera_cal_scene_level/io.py",
         "src/benchmark/camera_cal_scene_level/progress.py",
@@ -1566,10 +1641,10 @@ def test_protocol_fingerprint_covers_profile_campaign_package_and_yaml(
         "configs/grouping/policy.yaml",
         "configs/evaluation/policy.yaml",
         "src/benchmark/_resources/configs/evaluation/policy.yaml",
-            "src/benchmark/_resources/configs/grouping/policy.yaml",
-            "pyproject.toml",
-            "uv.lock",
-        ):
+        "src/benchmark/_resources/configs/grouping/policy.yaml",
+        "pyproject.toml",
+        "uv.lock",
+    ):
         path = repo / relative
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(f"fixture:{relative}\n", encoding="utf-8")
@@ -1601,6 +1676,9 @@ def test_protocol_fingerprint_covers_profile_campaign_package_and_yaml(
         ).rglob("*.py")
     }
     assert camera_runtime_paths == expected_camera_runtime_paths
+    source_paths = {row["path"] for row in first["source_manifest"]["files"]}
+    assert "scripts/prepare_multi_room_evaluation_dataset.py" in source_paths
+    assert "src/benchmark/multi_room_evaluation/dataset.py" in source_paths
     leaf = repo / "src/benchmark/camera_cal_scene_level/telemetry.py"
     leaf.write_text("changed-leaf\n", encoding="utf-8")
     leaf_changed = protocol_manifest(

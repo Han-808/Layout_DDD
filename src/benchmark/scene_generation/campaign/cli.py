@@ -8,12 +8,15 @@ from pathlib import Path
 import sys
 from typing import Any, Iterable, Mapping
 
-from benchmark.scene_generation.campaign.execution import (
-    gate_resources,
-    preflight_campaign,
-    prepare_campaign,
-    resolve_bindings,
-    run_campaign,
+from benchmark.scene_generation.campaign.api import (
+    preflight_generation_campaign,
+    prepare_generation_campaign,
+    resolve_generation_campaign,
+    resource_gate_generation_campaign,
+    run_generation_campaign,
+)
+from benchmark.scene_generation.campaign.multi_room_execution import (
+    PreparedMultiRoomCampaign,
 )
 
 
@@ -26,6 +29,11 @@ def _common(parser: argparse.ArgumentParser, *, bindings: bool = False) -> None:
     parser.add_argument("--profile-root", type=Path)
     parser.add_argument("--retrieval-catalog", type=Path)
     parser.add_argument("--trust-manifest", type=Path)
+    parser.add_argument(
+        "--floor-plan",
+        type=Path,
+        help="required only by an explicitly registered multi-room campaign",
+    )
     if bindings:
         parser.add_argument("--generation-bindings", type=Path)
         parser.add_argument("--resource-bindings", type=Path)
@@ -54,19 +62,30 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _common(run, bindings=True)
     run.add_argument("--output-dir", type=Path, required=True)
+    run.add_argument(
+        "--resume",
+        action="store_true",
+        help="resume hash-verified terminal rooms in an additive multi-room run",
+    )
     return parser
 
 
 def _progress(record: Mapping[str, Any]) -> None:
-    if record.get("event") in {"case_terminal", "run_terminal"}:
+    if record.get("event") in {
+        "case_terminal",
+        "room_terminal",
+        "room_resumed_terminal",
+        "run_terminal",
+    }:
         _emit(record)
 
 
 def main(argv: Iterable[str] | None = None) -> int:
     args = build_parser().parse_args(list(argv) if argv is not None else None)
     try:
-        prepared = prepare_campaign(
+        prepared = prepare_generation_campaign(
             args.campaign,
+            floor_plan_path=args.floor_plan,
             profile_root=args.profile_root,
             retrieval_catalog_path=args.retrieval_catalog,
             trust_manifest=args.trust_manifest,
@@ -75,7 +94,7 @@ def main(argv: Iterable[str] | None = None) -> int:
             _emit({"valid": True, **prepared.public_dict()})
             return 0
         if args.command == "resolve":
-            _, _, report = resolve_bindings(
+            _, _, report = resolve_generation_campaign(
                 prepared,
                 generation_bindings_path=args.generation_bindings,
                 resource_bindings_path=args.resource_bindings,
@@ -83,36 +102,42 @@ def main(argv: Iterable[str] | None = None) -> int:
             _emit(report)
             return 0
         if args.command == "resource-gate":
-            _, report = gate_resources(
+            _, report = resource_gate_generation_campaign(
                 prepared,
                 resource_bindings_path=args.resource_bindings,
             )
             _emit(report)
             return 0 if report.get("status") != "failed" else 2
         if args.command == "preflight":
-            report, _ = preflight_campaign(
+            report, _ = preflight_generation_campaign(
                 prepared,
                 generation_bindings_path=args.generation_bindings,
                 resource_bindings_path=args.resource_bindings,
             )
             _emit(report)
             return 0 if report.get("ok") else 2
-        summary, stopped, preflight = run_campaign(
+        summary, stopped, preflight = run_generation_campaign(
             prepared,
             output_root=args.output_dir,
             generation_bindings_path=args.generation_bindings,
             resource_bindings_path=args.resource_bindings,
             progress=_progress,
+            resume=args.resume,
         )
         _emit(
             {
-                "schema_version": "generation_campaign_terminal_v2",
+                "schema_version": (
+                    "generation_campaign_terminal_v3"
+                    if isinstance(prepared, PreparedMultiRoomCampaign)
+                    else "generation_campaign_terminal_v2"
+                ),
                 "preflight_ok": preflight["ok"],
                 "preflight": preflight,
                 "summary": summary,
             }
         )
-        return 2 if stopped or summary["failed"] else 0
+        failed = summary.get("failed", summary.get("failed_rooms", 0))
+        return 2 if stopped or failed else 0
     except Exception as exc:
         # This is a public terminal surface.  Arbitrary dependency exceptions
         # may contain endpoints, binding paths, credential names, headers, or
