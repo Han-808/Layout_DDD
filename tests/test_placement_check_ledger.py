@@ -1182,3 +1182,83 @@ def test_normal_scene_resolves_every_typed_placement_check_valid() -> None:
         and check["result_row"]["reason"]
         for check in updated["checks"]
     )
+
+
+def test_placement_forced_choice_with_retained_visual_is_grounded() -> None:
+    ledger = build_placement_check_ledger(
+        _discovery(_candidate(subject="chair", check_type="scene_zone")),
+        groups=GROUPS,
+    )
+    check = ledger["checks"][0]
+    row = {
+        **_valid_row(check),
+        "observation_status": "inferred_under_budget",
+        "reason": "The retained view supports the required terminal choice.",
+    }
+    record = {
+        "status": "evaluated",
+        "vlm_invoked": True,
+        "judge_episode_count": 1,
+        "evidence_paths": ["/tmp/retained-placement-view.png"],
+        "judgement": {
+            "evidence_status": "sufficient",
+            "verdict": "valid",
+            "placement_check_results": [row],
+            "budget_exhaustion_forced_choice": {
+                "applied": True,
+                "final_verdict": "valid",
+                "evidence_artifacts": [
+                    "/tmp/retained-placement-view.png"
+                ],
+            },
+        },
+    }
+
+    updated, coverage = apply_placement_check_judgements(
+        ledger,
+        global_record=record,
+        group_results=[],
+    )
+
+    assert updated["checks"][0]["grounded"] is True
+    assert coverage["grounded_check_count"] == 1
+    assert coverage["grounding_fraction"] == 1.0
+
+
+def test_placement_forced_choice_without_visual_is_not_grounded() -> None:
+    ledger = build_placement_check_ledger(
+        _discovery(_candidate(subject="chair", check_type="scene_zone")),
+        groups=GROUPS,
+    )
+    check = ledger["checks"][0]
+    row = {
+        **_valid_row(check),
+        "observation_status": "inferred_under_budget",
+        "reason": "No retained visual supports this forced row.",
+    }
+    record = {
+        "status": "evaluated",
+        "vlm_invoked": True,
+        "judge_episode_count": 1,
+        "evidence_paths": [],
+        "judgement": {
+            "evidence_status": "sufficient",
+            "verdict": "valid",
+            "placement_check_results": [row],
+            "budget_exhaustion_forced_choice": {
+                "applied": True,
+                "final_verdict": "valid",
+                "evidence_artifacts": [],
+            },
+        },
+    }
+
+    updated, coverage = apply_placement_check_judgements(
+        ledger,
+        global_record=record,
+        group_results=[],
+    )
+
+    assert updated["checks"][0]["grounded"] is False
+    assert coverage["grounded_check_count"] == 0
+    assert coverage["grounding_fraction"] == 0.0

@@ -340,9 +340,10 @@ def _is_hard_failure(
 def _uses_retained_global_forced_final(record: dict[str, Any]) -> bool:
     """Recognize the explicit target-local global-anchor fallback.
 
-    This does not relabel target-local evidence as satisfied.  It only permits
-    an already retained global anchor to support an audited forced-final Judge
-    while score-grounding remains false for the missing local component.
+    This does not relabel target-local evidence as satisfied. It permits an
+    already retained global anchor to support an audited forced-final Judge;
+    the resulting binary decision is score-grounded under the narrow retained-
+    visual forced-choice policy.
     """
 
     if record.get("retained_global_forced_final") is not True:
@@ -354,7 +355,9 @@ def _uses_retained_global_forced_final(record: dict[str, Any]) -> bool:
         and resolution.get("global_anchor_satisfied") is True
         and resolution.get("local_scope_satisfied") is False
         and isinstance(coverage, dict)
-        and coverage.get("grounded") is False
+        and coverage.get("grounded") is True
+        and coverage.get("grounding_policy")
+        == "real_judge_forced_choice_with_retained_visual_v1"
         and record.get("evidence_paths")
     )
 

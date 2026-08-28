@@ -255,15 +255,20 @@ def evaluate_target_scoped_judgements(
         if retained_global_fallback:
             record["retained_global_forced_final"] = True
             record["evidence_coverage"] = {
-                "grounded": False,
-                "coverage_kind": "retained_global_anchor_only",
+                "grounded": True,
+                "coverage_kind": (
+                    "retained_global_anchor_forced_binary"
+                ),
                 "required_components": [
                     "global_anchor",
                     "target_local",
                 ],
                 "observed_components": ["global_anchor"],
                 "missing_components": ["target_local"],
-                "grounding_fraction": 0.5,
+                "grounding_fraction": 1.0,
+                "grounding_policy": (
+                    "real_judge_forced_choice_with_retained_visual_v1"
+                ),
             }
             record["evidence_degradation"] = {
                 "reason": (

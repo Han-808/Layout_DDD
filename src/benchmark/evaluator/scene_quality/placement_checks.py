@@ -1655,7 +1655,7 @@ def apply_placement_check_judgements(
         for check in result.get("checks") or []
         if isinstance(check, dict) and check.get("check_id")
     }
-    rows_by_id: dict[str, tuple[dict[str, Any], str]] = {}
+    rows_by_id: dict[str, tuple[dict[str, Any], str, bool]] = {}
     records: list[tuple[dict[str, Any], str]] = []
     if isinstance(global_record, dict):
         records.append((global_record, "global_discovery"))
@@ -1684,6 +1684,9 @@ def apply_placement_check_judgements(
         if isinstance(item, dict)
     )
     for record, phase in records:
+        retained_visual_forced_check_ids = (
+            _retained_visual_forced_placement_check_ids(record)
+        )
         judgement = (
             record.get("judgement")
             if isinstance(record.get("judgement"), dict)
@@ -1701,7 +1704,11 @@ def apply_placement_check_judgements(
                 raise ValueError(
                     f"placement check {check_id!r} was judged more than once"
                 )
-            rows_by_id[check_id] = (row, phase)
+            rows_by_id[check_id] = (
+                row,
+                phase,
+                check_id in retained_visual_forced_check_ids,
+            )
         for item in judgement.get(
             "judge_originated_placement_results"
         ) or []:
@@ -1726,13 +1733,14 @@ def apply_placement_check_judgements(
                     "reason": item.get("reason"),
                 },
                 phase,
+                check_id in retained_visual_forced_check_ids,
             )
     for check_id, check in checks_by_id.items():
         routed = rows_by_id.get(check_id)
         if routed is None:
             check["judge_status"] = "pending"
             continue
-        row, phase = routed
+        row, phase, retained_visual_forced_choice = routed
         conclusion = str(row.get("conclusion") or "")
         observation_status = str(row.get("observation_status") or "")
         check["judge_status"] = (
@@ -1742,7 +1750,14 @@ def apply_placement_check_judgements(
         )
         check["judge_result_ref"] = phase
         check["observation_status"] = observation_status
-        check["grounded"] = observation_status == "observed"
+        check["grounded"] = bool(
+            observation_status == "observed"
+            or (
+                observation_status == "inferred_under_budget"
+                and conclusion in {"valid", "invalid"}
+                and retained_visual_forced_choice
+            )
+        )
         check["observation_complete"] = observation_status in {
             "observed",
             "inferred_under_budget",
@@ -1757,7 +1772,7 @@ def apply_placement_check_judgements(
                 row.get("function_event_ref") or ""
             )
             check["same_physical_event"] = True
-        if observation_status == "observed":
+        if check["grounded"]:
             _append_obligation_transition(
                 check,
                 "gate_ready",
@@ -1815,6 +1830,80 @@ def apply_placement_check_judgements(
         "decision_authority": "none",
     }
     return result, coverage
+
+
+def _retained_visual_forced_placement_check_ids(
+    record: Any,
+) -> set[str]:
+    """Return Placement checks forced by a real Judge over retained images.
+
+    This mirrors Functional's narrow grounding rule. A terminal forced choice
+    is grounded only when a Judge was actually invoked and the episode retained
+    at least one visual artifact. Synthetic/default rows never qualify.
+    """
+
+    if not isinstance(record, dict):
+        return set()
+    raw_episodes = record.get("check_episodes")
+    episodes = (
+        [item for item in raw_episodes if isinstance(item, dict)]
+        if isinstance(raw_episodes, list)
+        else [record]
+    )
+    grounded_ids: set[str] = set()
+    for episode in episodes:
+        if episode.get("vlm_invoked") is not True:
+            continue
+        if int(episode.get("judge_episode_count") or 0) < 1:
+            continue
+        judgement = episode.get("judgement")
+        judgement = (
+            judgement if isinstance(judgement, dict) else episode
+        )
+        forced = judgement.get("budget_exhaustion_forced_choice")
+        controller_forced = bool(
+            isinstance(forced, dict)
+            and forced.get("applied") is True
+            and str(forced.get("final_verdict") or "")
+            in {"valid", "invalid"}
+        )
+        target_retained_global_forced = bool(
+            episode.get("retained_global_forced_final") is True
+            and judgement.get("verdict") in {"valid", "invalid"}
+        )
+        if not controller_forced and not target_retained_global_forced:
+            continue
+        evidence_paths = {
+            str(path)
+            for path in episode.get("evidence_paths") or []
+            if str(path).strip()
+        }
+        forced_evidence = {
+            str(path)
+            for path in (
+                forced.get("evidence_artifacts")
+                if isinstance(forced, dict)
+                else []
+            ) or []
+            if str(path).strip()
+        }
+        if not evidence_paths and not forced_evidence:
+            continue
+        rows = [
+            *(judgement.get("placement_check_results") or []),
+            *(judgement.get("judge_originated_placement_results") or []),
+        ]
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            if row.get("observation_status") != "inferred_under_budget":
+                continue
+            if row.get("conclusion") not in {"valid", "invalid"}:
+                continue
+            check_id = str(row.get("check_id") or "")
+            if check_id:
+                grounded_ids.add(check_id)
+    return grounded_ids
 
 
 def _append_obligation_transition(
