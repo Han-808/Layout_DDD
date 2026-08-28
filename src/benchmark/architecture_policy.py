@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import re
 from copy import deepcopy
 from typing import Any, Iterable, Mapping
@@ -8,6 +9,7 @@ from typing import Any, Iterable, Mapping
 ARCHITECTURE_POLICY_VERSION = "explicit_physical_walls_v1"
 ARCHITECTURE_CONTRACT_ID = "bounded_room_explicit_walls_v1"
 DEFAULT_PHYSICAL_WALL_POLICY = "explicit_only"
+DEFAULT_PHYSICAL_WALL_THICKNESS_M = 0.08
 PHYSICAL_WALL_POLICIES = ("explicit_only", "always_enclosed")
 CANONICAL_WALL_IDS = (
     "north_wall",
@@ -210,6 +212,7 @@ def build_architecture_contract(
     active_wall_ids: Iterable[str] = (),
     activation_sources: Iterable[str] = (),
     activation_claims: Iterable[Mapping[str, Any]] = (),
+    physical_wall_thickness_m: float = DEFAULT_PHYSICAL_WALL_THICKNESS_M,
 ) -> dict[str, Any]:
     policy = validate_physical_wall_policy(physical_wall_policy)
     walls = validate_active_wall_ids(active_wall_ids)
@@ -254,6 +257,7 @@ def build_architecture_contract(
             "effective_policy": policy,
             "policy_source": str(policy_source),
             "active_wall_ids": list(walls),
+            "wall_thickness_m": float(physical_wall_thickness_m),
             "activation_sources": list(
                 dict.fromkeys(str(value) for value in activation_sources if str(value))
             ),
@@ -331,6 +335,14 @@ def validate_architecture_contract(contract: Any) -> dict[str, Any]:
             "architecture physical_walls.compatibility_mode conflicts with policy"
         )
     active = validate_active_wall_ids(physical.get("active_wall_ids") or ())
+    raw_wall_thickness = physical.get("wall_thickness_m")
+    if raw_wall_thickness is not None:
+        wall_thickness = float(raw_wall_thickness)
+        if not math.isfinite(wall_thickness) or wall_thickness <= 0.0:
+            raise ValueError(
+                "architecture physical_walls.wall_thickness_m must be a "
+                "finite positive number"
+            )
     if policy == "always_enclosed" and active != CANONICAL_WALL_IDS:
         raise ValueError("always_enclosed architecture must activate all four walls")
     tokens = contract.get("allowed_architecture_tokens")
@@ -409,6 +421,42 @@ def active_wall_ids_from_contract(contract: Mapping[str, Any] | None) -> tuple[s
     if not isinstance(physical, Mapping):
         return ()
     return validate_active_wall_ids(physical.get("active_wall_ids") or ())
+
+
+def physical_wall_thickness_m_from_contract(
+    contract: Mapping[str, Any] | None,
+) -> tuple[float | None, str]:
+    """Return the centered physical-wall thickness and its provenance.
+
+    Current contracts persist the thickness explicitly.  Frozen
+    ``explicit_physical_walls_v1`` scenes predate that field, while their
+    renderer deterministically used an 0.08 m wall centered on the logical
+    boundary.  The version-gated fallback keeps those immutable scenes
+    replayable without treating an arbitrary missing field as wall geometry.
+    """
+
+    if not isinstance(contract, Mapping):
+        return None, "architecture_contract_absent"
+    physical = contract.get("physical_walls")
+    if not isinstance(physical, Mapping):
+        return None, "physical_wall_contract_absent"
+    if not active_wall_ids_from_contract(contract):
+        return None, "no_active_physical_walls"
+    raw = physical.get("wall_thickness_m")
+    if raw is not None:
+        value = float(raw)
+        if not math.isfinite(value) or value <= 0.0:
+            raise ValueError(
+                "architecture physical_walls.wall_thickness_m must be a "
+                "finite positive number"
+            )
+        return value, "architecture_contract"
+    if contract.get("architecture_policy_version") == "explicit_physical_walls_v1":
+        return (
+            DEFAULT_PHYSICAL_WALL_THICKNESS_M,
+            "explicit_physical_walls_v1_centered_renderer_compatibility",
+        )
+    return None, "physical_wall_thickness_unspecified"
 
 
 def architecture_contract_from_scene(

@@ -13,7 +13,6 @@ from benchmark.evaluator.generic_validity.support import (
     DIRECT_CONTACT_TOLERANCE_CAP_M,
     SUPPORT_CANDIDATE_SELECTION_POLICY,
     SUPPORT_EVALUATOR_VERSION,
-    SUPPORT_VLM_INSTRUCTION,
     SupportEvaluationError,
     _hard_contact_tolerance,
     _near_support_tolerance,
@@ -417,10 +416,10 @@ def test_candidate_support_objects_and_evidence_reach_vlm() -> None:
     assert table_obj["description"] == "wooden dining table"
 
     evidence = request["detector_evidence"]
-    assert evidence["support_instruction"] == SUPPORT_VLM_INSTRUCTION
+    assert "support_instruction" not in evidence
     assert evidence["contact_fraction"] == 0.0
     assert evidence["base_contact_fraction"] == 0.0
-    assert evidence["center_ray_affects_route"] is False
+    assert "center_ray_affects_route" not in evidence
     assert "gap_statistics_m" in evidence
     assert set(evidence["architecture_plane_clearances_m"]) == {
         "west", "east", "south", "north", "floor", "ceiling"
@@ -451,13 +450,15 @@ def test_wall_attachment_routes_to_vlm_with_signed_plane_clearances() -> None:
     assert evidence["architecture_plane_clearances_m"]["west"] == pytest.approx(0.0)
     assert evidence["architecture_plane_clearances_m"]["floor"] == pytest.approx(1.2)
     assert evidence["architecture_contact_candidates"] == [
-        {"plane": "west", "signed_clearance_m": 0.0, "mode": "wall_attachment"}
+        {"plane": "west", "signed_clearance_m": 0.0}
     ]
-    assert "possible_architecture_attachment" in evidence["routing_reasons"]
+    assert evidence["nearest_logical_wall_measurement"]["plane"] == "west"
+    assert evidence["nearest_logical_wall_measurement"]["distance_m"] == 0.0
+    assert "routing_reasons" not in evidence
     assert judge.requests[0]["event"]["architecture_element"] == "floor_walls_ceiling_and_supports"
 
 
-def test_logical_wall_attachment_is_certified_without_physical_wall_mesh() -> None:
+def test_logical_wall_attachment_has_no_category_based_auto_valid() -> None:
     scene = _scene(
         [
             _obj(
@@ -481,19 +482,17 @@ def test_logical_wall_attachment_is_certified_without_physical_wall_mesh() -> No
         )
     )
 
-    report = check_support(scene)
+    judge = _Judge("valid")
+    report = check_support(scene, vlm_judge=judge)
     cabinet = _by_id(report, "upper_cabinet")
 
-    assert cabinet["route"] == (
-        "direct_valid_logical_architecture_attachment"
-    )
+    assert cabinet["route"] == "vlm_adjudicated"
     assert cabinet["final_verdict"] == "valid"
-    certificate = cabinet["logical_architecture_attachment"]
-    assert certificate["plane"] == "west"
-    assert certificate["physical_plane_active"] is False
-    assert report["certified_logical_attachment_object_ids"] == [
-        "upper_cabinet"
-    ]
+    assert cabinet["nearest_logical_wall_measurement"]["plane"] == "west"
+    assert cabinet["nearest_logical_wall_measurement"]["distance_m"] == 0.0
+    assert report["logical_architecture_attachment_policy"]["policy"] == (
+        "vlm_only_no_category_allowlist"
+    )
 
 
 def test_generic_floating_cabinet_near_logical_wall_is_not_auto_attached() -> None:
@@ -523,12 +522,34 @@ def test_generic_floating_cabinet_near_logical_wall_is_not_auto_attached() -> No
     report = check_support(scene)
     cabinet = _by_id(report, "cabinet")
 
-    assert cabinet["logical_architecture_attachment"] is None
+    assert cabinet["architecture_contact_candidates"] == []
+    assert cabinet["nearest_logical_wall_measurement"]["distance_m"] == 0.0
     assert cabinet["route"] is None
     assert cabinet["requires_vlm"] is True
 
 
-def test_logical_attachment_uses_trusted_task_slot_semantics() -> None:
+def test_grounded_object_near_wall_does_not_invoke_support_judge() -> None:
+    judge = _Judge("invalid")
+    scene = _scene(
+        [
+            _obj(
+                "floor_cabinet",
+                [0.2, 1.5, 0.35],
+                [0.4, 0.8, 0.7],
+                category="cabinet",
+                description="freestanding floor cabinet",
+            )
+        ]
+    )
+
+    record = _by_id(check_support(scene, vlm_judge=judge), "floor_cabinet")
+
+    assert record["route"] == "direct_valid_contact"
+    assert record["final_verdict"] == "valid"
+    assert judge.requests == []
+
+
+def test_logical_attachment_ignores_generator_task_slot_semantics() -> None:
     hood = _obj(
         "asset_instance",
         [2.0, 2.70, 1.45],
@@ -551,17 +572,60 @@ def test_logical_attachment_uses_trusted_task_slot_semantics() -> None:
                 "height": scene["scene_height"],
             },
             physical_wall_policy="explicit_only",
-            active_wall_ids=(),
-            policy_source="logical_boundary_test",
+            active_wall_ids=("north_wall",),
+            policy_source="declared_wall_test",
         )
     )
 
-    record = _by_id(check_support(scene), "asset_instance")
-
-    assert record["route"] == (
-        "direct_valid_logical_architecture_attachment"
+    judge = _Judge("invalid")
+    record = _by_id(
+        check_support(scene, vlm_judge=judge),
+        "asset_instance",
     )
-    assert record["logical_architecture_attachment"]["plane"] == "north"
+
+    assert record["route"] == "vlm_adjudicated"
+    assert record["final_verdict"] == "invalid"
+    serialized = json.dumps(judge.requests[0], sort_keys=True)
+    assert "Ventilation hood installed above the range" not in serialized
+    assert "intended_role" not in serialized
+
+
+def test_asset_wall_decor_category_does_not_auto_certify_contact() -> None:
+    art = _obj(
+        "framed_art",
+        [3.95, 1.5, 1.8],
+        [0.02, 1.0, 1.2],
+        category="painting",
+        description="dark blue rectangular painting with geometric arcs",
+    )
+    art["metadata"] = {
+        "task_slot": {
+            "intended_category": "wall_art",
+            "intended_role": "wall_decor",
+            "description": "Large framed abstract print above the bookshelf.",
+        }
+    }
+    scene = _scene([art])
+    scene["metadata"]["architecture_contract"] = architecture_contract_for_room(
+        {"boundary": scene["boundary"], "height": scene["scene_height"]},
+        physical_wall_policy="explicit_only",
+        active_wall_ids=(),
+        policy_source="logical_boundary_test",
+    )
+
+    judge = _Judge("valid")
+    record = _by_id(
+        check_support(scene, vlm_judge=judge),
+        "framed_art",
+    )
+
+    assert record["route"] == "vlm_adjudicated"
+    assert record["nearest_logical_wall_measurement"]["plane"] == "east"
+    assert record["nearest_logical_wall_measurement"]["distance_m"] == (
+        pytest.approx(0.04)
+    )
+    serialized = json.dumps(judge.requests[0], sort_keys=True)
+    assert "Large framed abstract print" not in serialized
 
 
 # --------------------------------------------------------------------------- #
@@ -633,6 +697,129 @@ def test_non_official_support_judge_failure_is_not_counted_as_adjudicated() -> N
     assert record["final_verdict"] is None
     assert report["status"] == "requires_vlm"
     assert report["coverage"]["vlm_adjudicated_objects"] == 0
+
+
+class _ZeroVisualProvider:
+    def __init__(self, *, generated_candidates: int = 0) -> None:
+        self.last_call_usage = {
+            "candidate_count_generated": generated_candidates,
+            "evidence_refs": [],
+        }
+
+    def __call__(self, request: dict) -> list[Path]:
+        del request
+        raise ValueError(
+            "bbox_track requires at least one camera candidate"
+        )
+
+
+def _no_wall_scene(objects: list[dict]) -> dict:
+    scene = _scene(objects)
+    scene["metadata"]["architecture_contract"] = (
+        architecture_contract_for_room(
+            {
+                "boundary": scene["boundary"],
+                "height": scene["scene_height"],
+            },
+            physical_wall_policy="explicit_only",
+            active_wall_ids=(),
+            policy_source="zero_visual_wall_distance_test",
+        )
+    )
+    return scene
+
+
+def test_zero_visual_support_uses_distance_without_category_gate_valid() -> None:
+    scene = _no_wall_scene(
+        [
+            _obj(
+                "generic_fixture",
+                [2.0, 2.95, 1.5],
+                [0.5, 0.1, 0.4],
+                category="generic fixture",
+                description="generic fixture",
+            )
+        ]
+    )
+    judge = _Judge("invalid")
+
+    report = check_support(
+        scene,
+        {"official_mode": True},
+        vlm_judge=judge,
+        local_view_provider=_ZeroVisualProvider(),
+    )
+    record = _by_id(report, "generic_fixture")
+
+    assert report["status"] == "checked"
+    assert report["score"] == 1.0
+    assert record["route"] == (
+        "direct_valid_zero_visual_wall_distance"
+    )
+    assert record["final_verdict"] == "valid"
+    assert record["requires_vlm"] is False
+    fallback = record["zero_visual_support_fallback"]
+    assert fallback["available"] == 0
+    assert fallback["nearest_plane"] == "north"
+    assert fallback["distance_m"] == pytest.approx(0.0)
+    assert fallback["threshold_m"] == pytest.approx(0.06)
+    assert judge.requests == []
+
+
+def test_zero_visual_support_uses_distance_without_category_gate_invalid() -> None:
+    scene = _no_wall_scene(
+        [
+            _obj(
+                "floating_fixture",
+                [2.0, 1.5, 1.5],
+                [0.5, 0.5, 0.4],
+                category="generic fixture",
+                description="generic fixture",
+            )
+        ]
+    )
+    judge = _Judge("valid")
+
+    report = check_support(
+        scene,
+        {"official_mode": True},
+        vlm_judge=judge,
+        local_view_provider=_ZeroVisualProvider(),
+    )
+    record = _by_id(report, "floating_fixture")
+
+    assert report["status"] == "checked"
+    assert report["score"] == 0.0
+    assert record["route"] == (
+        "direct_invalid_zero_visual_wall_distance"
+    )
+    assert record["final_verdict"] == "invalid"
+    assert record["requires_vlm"] is False
+    fallback = record["zero_visual_support_fallback"]
+    assert fallback["available"] == 0
+    assert fallback["distance_m"] == pytest.approx(1.25)
+    assert fallback["nearest_plane"] == "north"
+    assert fallback["comparison"] == "distance_m < threshold_m"
+    assert fallback["threshold_m"] == pytest.approx(0.06)
+    assert judge.requests == []
+
+
+def test_nonzero_candidate_camera_failure_remains_infrastructure_failure() -> None:
+    scene = _no_wall_scene(
+        [_obj("floating", [2.0, 1.5, 1.5], [0.5, 0.5, 0.4])]
+    )
+    report = check_support(
+        scene,
+        vlm_judge=_Judge("valid"),
+        local_view_provider=_ZeroVisualProvider(
+            generated_candidates=1
+        ),
+    )
+    record = _by_id(report, "floating")
+
+    assert report["status"] == "requires_vlm"
+    assert record["route"] == "vlm_adjudication_failed"
+    assert record["final_verdict"] is None
 
 
 # --------------------------------------------------------------------------- #
@@ -1252,7 +1439,6 @@ def test_judge_request_includes_policy_and_threshold_context() -> None:
     }
     evidence = request["detector_evidence"]
     for key in (
-        "candidate_selection_policy",
         "grounded_support_policy",
         "grounded_support_required_for_direct_valid",
         "certified_grounded_support",
@@ -1271,6 +1457,7 @@ def test_judge_request_includes_policy_and_threshold_context() -> None:
         "architecture_contact_candidates",
     ):
         assert key in evidence, key
+    assert "candidate_selection_policy" not in evidence
     assert evidence["hard_contact_tolerance_m"] == pytest.approx(_hard_contact_tolerance(0.4))
     assert evidence["near_support_tolerance_m"] == pytest.approx(_near_support_tolerance(0.4))
 

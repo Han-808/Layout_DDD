@@ -56,6 +56,9 @@ from benchmark.evaluator import (
     visual_style_spec_summary,
 )
 from benchmark.evaluator.profile import weighted_benchmark_score
+from benchmark.evaluator.context_projection import (
+    project_scene_for_evaluator_context,
+)
 from benchmark.evaluator.profile import (
     CANONICAL_PROFILE_VERSION,
     L0,
@@ -220,11 +223,13 @@ def _run_canonical_evaluate(
         )
     del eval_oor, eval_oar, eval_generic_validity
 
-    normalized_scene = normalize_scene(
-        scene,
-        asset_csv=asset_csv,
-        asset_root=asset_root,
-        enrich_assets=enrich_assets,
+    normalized_scene = project_scene_for_evaluator_context(
+        normalize_scene(
+            scene,
+            asset_csv=asset_csv,
+            asset_root=asset_root,
+            enrich_assets=enrich_assets,
+        )
     )
     request = scene_request if isinstance(scene_request, dict) else {}
     _require_matching_request_id(request, normalized_scene, artifact_name="scene_request")

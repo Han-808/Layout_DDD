@@ -48,7 +48,7 @@ DEFAULT_GENERIC_VALIDITY_CONFIG = {
         "enabled": True,
         "official_mode": False,
         "detector_only": False,
-        # support_p0b_v8 uses the scale-aware 2-3.5 cm contact tolerance. A
+        # support_p0b_v11 uses the scale-aware 2-3.5 cm contact tolerance. A
         # legacy contact_tolerance_m override may narrow the band, while the
         # deterministic certificate remains capped at 3.5 cm.
         "base_band_tolerance_m": 0.02,
@@ -62,11 +62,11 @@ DEFAULT_GENERIC_VALIDITY_CONFIG = {
 
 GENERIC_VALIDITY_NOTES = [
     "generic_validity_v0 uses canonical OBB proxies for navigability and accessibility.",
-    "Collision uses collision_p0b_v3 with OBB SAT broad phase, guarded mesh/OBB frame contracts, optional mesh narrow phase, and narrow support-interface/floor-covering certificates.",
+    "Collision uses collision_p0b_v3 and remains object-object only.",
     "OOB uses oob_p0b_v2 with exact OBB-vs-six-room-plane evidence and conservative VLM adjudication; the floor "
     "plane uses a separate semantic floor_contact_tolerance_m so ordinary shallow floor sink is not routed, and "
     "raw per-plane penetration is preserved in plane_penetration_m.",
-    "Support uses support_p0b_v8: scale-aware 2-3.5 cm tolerance contact with a fixed-point path to the floor bypasses VLM; explicit logical wall/ceiling attachment can also certify support when physical wall meshes are absent; other gaps and ambiguous attachments route to conservative VLM adjudication.",
+    "Support uses support_p0b_v11: scale-aware 2-3.5 cm tolerance contact with a fixed-point path to the floor bypasses VLM; wall/ceiling attachment has no category allowlist and no deterministic auto-valid path; only an independent missing-support concern routes the object to VLM, where logical-wall distance is evidence rather than a trigger; generator task-slot intent remains excluded; zero-view cases use the final distance-only binary fallback.",
     "Collision, OOB, and support are independent multi-label metrics; a Collision/OOB failure never implies a Support failure.",
     "Collision, OOB, and support never use physics simulation; VLM adjudicates ambiguous geometric events only.",
 ]
