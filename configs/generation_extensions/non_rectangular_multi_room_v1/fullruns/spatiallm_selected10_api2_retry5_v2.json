@@ -1,0 +1,50 @@
+{
+  "schema_version": "non_rectangular_fullrun_profile_v1",
+  "fullrun_id": "spatiallm-selected10-api2-retry5-v2",
+  "provider_family": "api2",
+  "contract_version": "v2",
+  "layout_manifest": "configs/generation_extensions/non_rectangular_multi_room_v1/layouts/spatiallm_selected10_v1/manifest_v1.json",
+  "program_manifest": "configs/generation_extensions/non_rectangular_multi_room_v1/programs/spatiallm_source_types_area_density_v1/manifest_v1.json",
+  "scene_order": [
+    "scene_011760",
+    "scene_012102",
+    "scene_011910",
+    "scene_011351",
+    "scene_012088",
+    "scene_011568",
+    "scene_011388",
+    "scene_011528",
+    "scene_011972",
+    "scene_011400"
+  ],
+  "models": [
+    {
+      "model_key": "glm-5.3",
+      "campaign_id": "api2-glm53-nonrect-global-retry5-v2",
+      "model_profile_id": "api2-glm-5-3-nonrect-global-retry5-v1",
+      "output_name": "glm-5.3"
+    },
+    {
+      "model_key": "gpt-5.6-sol",
+      "campaign_id": "api2-gpt56sol-nonrect-global-retry5-v2",
+      "model_profile_id": "api2-gpt-5-6-sol-nonrect-global-retry5-v1",
+      "output_name": "gpt-5.6-sol"
+    },
+    {
+      "model_key": "kimi-k3",
+      "campaign_id": "api2-kimi-k3-nonrect-global-retry5-v2",
+      "model_profile_id": "api2-kimi-k3-nonrect-global-retry5-v1",
+      "output_name": "kimi-k3"
+    }
+  ],
+  "stage_timeouts_seconds": {
+    "stage_a": 2400.0,
+    "stage_c": 3600.0
+  },
+  "preflight_policy": {
+    "max_total_attempts": 5,
+    "retry_delay_seconds": 30.0
+  },
+  "model_cooldown_seconds": 30.0,
+  "case_failure_delay_seconds": 30.0
+}

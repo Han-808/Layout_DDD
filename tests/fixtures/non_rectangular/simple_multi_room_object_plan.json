@@ -1,0 +1,114 @@
+{
+  "schema_version": "non_rectangular_multi_room_object_plan_v1",
+  "layout_id": "fixture_simple_multi_room",
+  "prompt_granularity": "fine_grained",
+  "room_order": ["room_000", "room_001"],
+  "rooms": [
+    {
+      "room_id": "room_000",
+      "program_id": "kitchen_01",
+      "room_type": "kitchen",
+      "scene_description": "A compact functional kitchen.",
+      "global_constraints": ["Keep all objects inside the assigned room."],
+      "zones": [
+        {"id": "work_zone", "description": "Kitchen work area.", "extent_hint": "Along one wall."}
+      ],
+      "relations": [
+        {"family": "functional", "type": "near", "subject_id": "stool", "object_id": "counter"}
+      ],
+      "objects": [
+        {
+          "id": "counter",
+          "category": "counter",
+          "role": "primary_work_surface",
+          "description": "A kitchen counter.",
+          "count": 1,
+          "estimated_size": [1.2, 0.6, 0.9],
+          "metadata": {
+            "intended_role": "primary_work_surface",
+            "zone": "work_zone",
+            "support": "floor",
+            "directed": false,
+            "functional_side": null,
+            "facing_intent": null,
+            "retrieval_query": "kitchen counter",
+            "requested_count": 1
+          },
+          "placement_intent": {"absolute_relations": [], "relative_relations": []}
+        },
+        {
+          "id": "stool",
+          "category": "stool",
+          "role": "seating",
+          "description": "A counter stool.",
+          "count": 1,
+          "estimated_size": [0.5, 0.5, 0.9],
+          "metadata": {
+            "intended_role": "seating",
+            "zone": "work_zone",
+            "support": "floor",
+            "directed": false,
+            "functional_side": null,
+            "facing_intent": null,
+            "retrieval_query": "counter stool",
+            "requested_count": 1
+          },
+          "placement_intent": {"absolute_relations": [], "relative_relations": ["near counter"]}
+        }
+      ]
+    },
+    {
+      "room_id": "room_001",
+      "program_id": "living_room_01",
+      "room_type": "living_room",
+      "scene_description": "A small living room with conversational seating.",
+      "global_constraints": ["Keep all objects inside the assigned room."],
+      "zones": [
+        {"id": "conversation_zone", "description": "Living-room seating group.", "extent_hint": "In the usable open area."}
+      ],
+      "relations": [
+        {"family": "functional", "type": "faces", "subject_id": "sofa", "object_id": "coffee_table"}
+      ],
+      "objects": [
+        {
+          "id": "sofa",
+          "category": "sofa",
+          "role": "primary_seating",
+          "description": "A compact sofa.",
+          "count": 1,
+          "estimated_size": [1.4, 0.7, 0.8],
+          "metadata": {
+            "intended_role": "primary_seating",
+            "zone": "conversation_zone",
+            "support": "floor",
+            "directed": true,
+            "functional_side": "local_neg_y",
+            "facing_intent": "coffee_table",
+            "retrieval_query": "compact sofa",
+            "requested_count": 1
+          },
+          "placement_intent": {"absolute_relations": [], "relative_relations": ["faces coffee_table"]}
+        },
+        {
+          "id": "coffee_table",
+          "category": "coffee_table",
+          "role": "shared_surface",
+          "description": "A low coffee table.",
+          "count": 1,
+          "estimated_size": [0.8, 0.5, 0.4],
+          "metadata": {
+            "intended_role": "shared_surface",
+            "zone": "conversation_zone",
+            "support": "floor",
+            "directed": false,
+            "functional_side": null,
+            "facing_intent": null,
+            "retrieval_query": "low coffee table",
+            "requested_count": 1
+          },
+          "placement_intent": {"absolute_relations": [], "relative_relations": ["near sofa"]}
+        }
+      ]
+    }
+  ]
+}

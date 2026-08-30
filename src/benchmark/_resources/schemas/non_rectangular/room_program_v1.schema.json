@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://layout-ddd.local/schemas/non_rectangular/room_program_v1.schema.json",
+  "title": "NonRectangularRoomProgramV1",
+  "description": "Benchmark-owned layout-level room-purpose multiset with no pre-bound room assignment.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "layout_id",
+    "target_total_instances",
+    "program_order",
+    "programs"
+  ],
+  "properties": {
+    "schema_version": {"const": "non_rectangular_room_program_v1"},
+    "layout_id": {"$ref": "#/$defs/stableId"},
+    "target_total_instances": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["min", "max"],
+      "properties": {
+        "min": {"type": "integer", "minimum": 1},
+        "max": {"type": "integer", "minimum": 1}
+      }
+    },
+    "program_order": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/stableId"}
+    },
+    "programs": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["program_id", "room_type"],
+        "properties": {
+          "program_id": {"$ref": "#/$defs/stableId"},
+          "room_type": {"type": "string", "minLength": 1, "maxLength": 128}
+        }
+      }
+    }
+  },
+  "$defs": {
+    "stableId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+    }
+  }
+}

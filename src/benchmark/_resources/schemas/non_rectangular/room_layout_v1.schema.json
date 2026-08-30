@@ -1,0 +1,132 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://layout-ddd.local/schemas/non_rectangular/room_layout_v1.schema.json",
+  "title": "NonRectangularRoomLayoutV1",
+  "$comment": "Object-to-room ownership is intentionally outside this geometry-source contract.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "layout_id",
+    "coordinate_frame",
+    "geometry_conventions",
+    "geometry_tolerance_m",
+    "room_count",
+    "room_order",
+    "rooms"
+  ],
+  "properties": {
+    "schema_version": {"const": "non_rectangular_room_layout_v1"},
+    "layout_id": {"$ref": "#/$defs/stableId"},
+    "coordinate_frame": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["origin", "axes", "handedness", "unit", "rotation_unit"],
+      "properties": {
+        "origin": {"const": "shared_scene_global"},
+        "axes": {"const": "x_width_y_depth_z_up"},
+        "handedness": {"const": "right_handed"},
+        "unit": {"const": "meter"},
+        "rotation_unit": {"const": "degree"}
+      }
+    },
+    "geometry_conventions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "polygon_winding",
+        "polygon_closure",
+        "wall_segment_order",
+        "inward_normal"
+      ],
+      "properties": {
+        "polygon_winding": {"const": "counter_clockwise"},
+        "polygon_closure": {"const": "implicit_last_to_first"},
+        "wall_segment_order": {"const": "matches_floor_polygon_edges"},
+        "inward_normal": {"const": "left_of_directed_wall_segment"}
+      }
+    },
+    "geometry_tolerance_m": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "maximum": 0.01
+    },
+    "room_count": {"type": "integer", "minimum": 1},
+    "room_order": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/stableId"}
+    },
+    "rooms": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/room"}
+    }
+  },
+  "$defs": {
+    "stableId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+    },
+    "point2": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "items": {"type": "number"}
+    },
+    "unitVec2": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "items": {"type": "number", "minimum": -1, "maximum": 1}
+    },
+    "wallSegment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "wall_id",
+        "start_xy",
+        "end_xy",
+        "inward_normal_xy",
+        "height_m",
+        "thickness_m"
+      ],
+      "properties": {
+        "wall_id": {"$ref": "#/$defs/stableId"},
+        "start_xy": {"$ref": "#/$defs/point2"},
+        "end_xy": {"$ref": "#/$defs/point2"},
+        "inward_normal_xy": {"$ref": "#/$defs/unitVec2"},
+        "height_m": {"type": "number", "exclusiveMinimum": 0},
+        "thickness_m": {"type": "number", "minimum": 0}
+      }
+    },
+    "room": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "room_id",
+        "floor_z_m",
+        "floor_polygon_xy",
+        "wall_segments"
+      ],
+      "properties": {
+        "room_id": {"$ref": "#/$defs/stableId"},
+        "floor_z_m": {"const": 0.0},
+        "floor_polygon_xy": {
+          "type": "array",
+          "minItems": 3,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/point2"}
+        },
+        "wall_segments": {
+          "type": "array",
+          "minItems": 3,
+          "items": {"$ref": "#/$defs/wallSegment"}
+        }
+      }
+    }
+  }
+}

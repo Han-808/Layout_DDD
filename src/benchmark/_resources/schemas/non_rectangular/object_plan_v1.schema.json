@@ -1,0 +1,144 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://layout-ddd.local/schemas/non_rectangular/object_plan_v1.schema.json",
+  "title": "NonRectangularMultiRoomObjectPlanV1",
+  "description": "One Stage-A plan for all rooms. Program mapping fields may be absent so the mapping policy can apply a linear deduction or terminal zero without schema rejection.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "layout_id", "prompt_granularity", "room_order", "rooms"],
+  "properties": {
+    "schema_version": {"const": "non_rectangular_multi_room_object_plan_v1"},
+    "layout_id": {"$ref": "#/$defs/stableId"},
+    "prompt_granularity": {"const": "fine_grained"},
+    "room_order": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/stableId"}
+    },
+    "rooms": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/roomPlan"}
+    }
+  },
+  "$defs": {
+    "stableId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+    },
+    "positiveVec3": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "items": {"type": "number", "exclusiveMinimum": 0}
+    },
+    "zone": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "description", "extent_hint"],
+      "properties": {
+        "id": {"$ref": "#/$defs/stableId"},
+        "description": {"type": "string", "minLength": 1},
+        "extent_hint": {"type": "string", "minLength": 1}
+      }
+    },
+    "relation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["family", "type", "subject_id", "object_id"],
+      "properties": {
+        "family": {"type": "string", "minLength": 1},
+        "type": {"type": "string", "minLength": 1},
+        "subject_id": {"$ref": "#/$defs/stableId"},
+        "object_id": {"$ref": "#/$defs/stableId"}
+      }
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "intended_role",
+        "zone",
+        "support",
+        "directed",
+        "functional_side",
+        "facing_intent",
+        "retrieval_query",
+        "requested_count"
+      ],
+      "properties": {
+        "intended_role": {"type": "string", "minLength": 1},
+        "zone": {"$ref": "#/$defs/stableId"},
+        "support": {"type": "string", "minLength": 1},
+        "directed": {"type": "boolean"},
+        "functional_side": {"enum": ["local_neg_y", null]},
+        "facing_intent": {"type": ["string", "null"]},
+        "retrieval_query": {"type": "string", "minLength": 1},
+        "requested_count": {"type": "integer", "minimum": 1}
+      }
+    },
+    "placementIntent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["absolute_relations", "relative_relations"],
+      "properties": {
+        "absolute_relations": {"type": "array", "items": {"type": "string", "minLength": 1}},
+        "relative_relations": {"type": "array", "items": {"type": "string", "minLength": 1}}
+      }
+    },
+    "plannedObject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "category",
+        "role",
+        "description",
+        "count",
+        "estimated_size",
+        "metadata",
+        "placement_intent"
+      ],
+      "properties": {
+        "id": {"$ref": "#/$defs/stableId"},
+        "category": {"type": "string", "minLength": 1},
+        "role": {"type": "string", "minLength": 1},
+        "description": {"type": "string", "minLength": 1},
+        "count": {"type": "integer", "minimum": 1},
+        "estimated_size": {"$ref": "#/$defs/positiveVec3"},
+        "metadata": {"$ref": "#/$defs/metadata"},
+        "placement_intent": {"$ref": "#/$defs/placementIntent"}
+      }
+    },
+    "roomPlan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "room_id",
+        "scene_description",
+        "global_constraints",
+        "zones",
+        "relations",
+        "objects"
+      ],
+      "properties": {
+        "room_id": {"$ref": "#/$defs/stableId"},
+        "program_id": {
+          "oneOf": [
+            {"$ref": "#/$defs/stableId"},
+            {"type": "null"}
+          ]
+        },
+        "room_type": {"type": ["string", "null"], "minLength": 1, "maxLength": 128},
+        "scene_description": {"type": "string", "minLength": 1},
+        "global_constraints": {"type": "array", "items": {"type": "string", "minLength": 1}},
+        "zones": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/zone"}},
+        "relations": {"type": "array", "items": {"$ref": "#/$defs/relation"}},
+        "objects": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/plannedObject"}}
+      }
+    }
+  }
+}

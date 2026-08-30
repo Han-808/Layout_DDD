@@ -1,0 +1,91 @@
+{
+  "schema_version": "non_rectangular_generation_campaign_registry_v2",
+  "workflow_profile_id": "non-rectangular-global-two-stage-v2",
+  "generation_mode": "non_rectangular_multi_room_global_v2",
+  "campaigns": [
+    {
+      "campaign_id": "api2-gpt56sol-nonrect-global-v2",
+      "model_profile_id": "api2-gpt-5-6-sol",
+      "retrieval_profile_id": "imaginarium-qwen3-embedding-0.6b-stable-top1-v2",
+      "execution_policy_id": "api2-scene10-retry3-continue-v1"
+    },
+    {
+      "campaign_id": "api2-kimi-k3-nonrect-global-v2",
+      "model_profile_id": "api2-kimi-k3",
+      "retrieval_profile_id": "imaginarium-qwen3-embedding-0.6b-stable-top1-v2",
+      "execution_policy_id": "api2-scene10-retry3-continue-v1"
+    },
+    {
+      "campaign_id": "api2-glm53-nonrect-global-v2",
+      "model_profile_id": "api2-glm-5-3",
+      "retrieval_profile_id": "imaginarium-qwen3-embedding-0.6b-stable-top1-v2",
+      "execution_policy_id": "api2-scene10-retry3-continue-v1"
+    },
+    {
+      "campaign_id": "api3-opus48-high-nonrect-global-v2",
+      "model_profile_id": "api3-claude-opus-4-8-high",
+      "retrieval_profile_id": "imaginarium-qwen3-embedding-0.6b-stable-top1-v2",
+      "execution_policy_id": "api3-scene10-retry2-continue-v1"
+    },
+    {
+      "campaign_id": "api3-opus48-nonrect-global-v2",
+      "model_profile_id": "api3-claude-opus-4-8",
+      "retrieval_profile_id": "imaginarium-qwen3-embedding-0.6b-stable-top1-v2",
+      "execution_policy_id": "api3-scene10-retry2-continue-v1"
+    },
+    {
+      "campaign_id": "api3-sonnet5-nonrect-global-v2",
+      "model_profile_id": "api3-claude-sonnet-5",
+      "retrieval_profile_id": "imaginarium-qwen3-embedding-0.6b-stable-top1-v2",
+      "execution_policy_id": "api3-scene10-retry2-continue-v1"
+    },
+    {
+      "campaign_id": "api3-opus5-nonrect-global-v2",
+      "model_profile_id": "api3-claude-opus-5",
+      "retrieval_profile_id": "imaginarium-qwen3-embedding-0.6b-stable-top1-v2",
+      "execution_policy_id": "api3-scene10-retry2-continue-v1"
+    },
+    {
+      "campaign_id": "api3-fable5-nonrect-global-v2",
+      "model_profile_id": "api3-claude-fable-5",
+      "retrieval_profile_id": "imaginarium-qwen3-embedding-0.6b-stable-top1-v2",
+      "execution_policy_id": "api3-scene10-retry2-continue-v1"
+    },
+    {
+      "campaign_id": "api2-glm53-nonrect-global-retry5-v2",
+      "model_profile_id": "api2-glm-5-3-nonrect-global-retry5-v1",
+      "retrieval_profile_id": "imaginarium-qwen3-embedding-0.6b-stable-top1-v2",
+      "execution_policy_id": "nonrect-global-retry5-continue-v1"
+    },
+    {
+      "campaign_id": "api2-gpt56sol-nonrect-global-retry5-v2",
+      "model_profile_id": "api2-gpt-5-6-sol-nonrect-global-retry5-v1",
+      "retrieval_profile_id": "imaginarium-qwen3-embedding-0.6b-stable-top1-v2",
+      "execution_policy_id": "nonrect-global-retry5-continue-v1"
+    },
+    {
+      "campaign_id": "api2-kimi-k3-nonrect-global-retry5-v2",
+      "model_profile_id": "api2-kimi-k3-nonrect-global-retry5-v1",
+      "retrieval_profile_id": "imaginarium-qwen3-embedding-0.6b-stable-top1-v2",
+      "execution_policy_id": "nonrect-global-retry5-continue-v1"
+    },
+    {
+      "campaign_id": "api3-sonnet5-nonrect-global-retry5-v2",
+      "model_profile_id": "api3-claude-sonnet-5-nonrect-global-retry5-v1",
+      "retrieval_profile_id": "imaginarium-qwen3-embedding-0.6b-stable-top1-v2",
+      "execution_policy_id": "nonrect-global-retry5-continue-v1"
+    },
+    {
+      "campaign_id": "api3-opus5-nonrect-global-retry5-v2",
+      "model_profile_id": "api3-claude-opus-5-nonrect-global-retry5-v1",
+      "retrieval_profile_id": "imaginarium-qwen3-embedding-0.6b-stable-top1-v2",
+      "execution_policy_id": "nonrect-global-retry5-continue-v1"
+    },
+    {
+      "campaign_id": "api3-fable5-nonrect-global-retry5-v2",
+      "model_profile_id": "api3-claude-fable-5-nonrect-global-retry5-v1",
+      "retrieval_profile_id": "imaginarium-qwen3-embedding-0.6b-stable-top1-v2",
+      "execution_policy_id": "nonrect-global-retry5-continue-v1"
+    }
+  ]
+}

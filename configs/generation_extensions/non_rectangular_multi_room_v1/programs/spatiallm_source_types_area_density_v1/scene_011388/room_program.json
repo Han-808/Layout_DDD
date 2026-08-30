@@ -1,0 +1,47 @@
+{
+  "layout_id": "scene_011388",
+  "program_order": [
+    "bathroom_01",
+    "bedroom_01",
+    "bedroom_with_home_office_01",
+    "foyer_01",
+    "living_room_01",
+    "master_bedroom_01",
+    "primary_bathroom_01"
+  ],
+  "programs": [
+    {
+      "program_id": "bathroom_01",
+      "room_type": "bathroom"
+    },
+    {
+      "program_id": "bedroom_01",
+      "room_type": "bedroom"
+    },
+    {
+      "program_id": "bedroom_with_home_office_01",
+      "room_type": "bedroom with home office"
+    },
+    {
+      "program_id": "foyer_01",
+      "room_type": "foyer"
+    },
+    {
+      "program_id": "living_room_01",
+      "room_type": "living room"
+    },
+    {
+      "program_id": "master_bedroom_01",
+      "room_type": "master bedroom"
+    },
+    {
+      "program_id": "primary_bathroom_01",
+      "room_type": "primary bathroom"
+    }
+  ],
+  "schema_version": "non_rectangular_room_program_v1",
+  "target_total_instances": {
+    "max": 65,
+    "min": 53
+  }
+}

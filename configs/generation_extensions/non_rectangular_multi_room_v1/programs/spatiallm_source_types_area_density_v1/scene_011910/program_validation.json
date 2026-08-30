@@ -1,0 +1,41 @@
+{
+  "achieved_objects_per_m2_range": {
+    "max": 0.5733003870199377,
+    "min": 0.45864030961595015
+  },
+  "density_reference_policy_id": "multi_room_sceneboard_area_density_v1",
+  "density_reference_sha256": "0d0263b9702daa0a199ecf1bdd1987f4e603643d1fcc3d6bffed28f9579fef66",
+  "layout_id": "scene_011910",
+  "linked_room_layout_sha256": "d4e58234d3d9ff795575858a77d9ad806b5030a5b83751e6aff2d33f96fec703",
+  "program_count": 4,
+  "program_order_corresponds_to_room_order": false,
+  "room_program_sha256": "03605c4270828815ea3619abb881af251f3d8b8292db4216bb92ec5f967f9d7d",
+  "room_type_multiset": [
+    {
+      "count": 1,
+      "room_type": "bathroom"
+    },
+    {
+      "count": 1,
+      "room_type": "bedroom"
+    },
+    {
+      "count": 1,
+      "room_type": "living room"
+    },
+    {
+      "count": 1,
+      "room_type": "master bedroom"
+    }
+  ],
+  "schema_version": "spatiallm_room_program_validation_v1",
+  "source_room_id_to_type_mapping_emitted": false,
+  "source_room_type_multiplicity_preserved": true,
+  "source_room_type_spelling_preserved": true,
+  "target_total_instances": {
+    "max": 40,
+    "min": 32
+  },
+  "total_floor_area_m2": 69.7714512420326,
+  "valid": true
+}

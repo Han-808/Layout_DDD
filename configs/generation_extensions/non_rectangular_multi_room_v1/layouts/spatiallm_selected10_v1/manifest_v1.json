@@ -1,0 +1,244 @@
+{
+  "cohort_id": "spatiallm_nonrect_selected10_v1",
+  "conversion_policy": {
+    "coordinates_rounded": false,
+    "coordinates_transformed": false,
+    "excluded_entities": [
+      "door",
+      "window",
+      "bbox",
+      "point_cloud",
+      "room_type"
+    ],
+    "geometry_repair_allowed": false,
+    "near_or_partial_shared_wall_pairing_applied": false,
+    "winding_normalization_allowed": true
+  },
+  "manifest_sha256": "76cc11571eb8752f497866089eec68049cd1282823d8a376fc10d8b1eb8885f1",
+  "scenes": [
+    {
+      "adjacency_connected": true,
+      "angled_wall_segment_count": 0,
+      "concave_room_count": 1,
+      "geometry_validation_path": "scene_011760/geometry_validation.json",
+      "geometry_validation_sha256": "6693465cb64422af5e8c21aef46912f071bffb38ac887808a55b9abb46a068c6",
+      "layout_id": "scene_011760",
+      "room_count": 3,
+      "room_layout_path": "scene_011760/room_layout.json",
+      "room_layout_sha256": "7283909d503ba15c9d131ae0b5317b414cbd8f65c6151f84c500755d71d8cb25",
+      "scene_id": "scene_011760",
+      "source_provenance_path": "scene_011760/source_provenance.json",
+      "source_provenance_sha256": "acf391cc84c54da511fb67a15eb502dc69208524fc1a08008e07809f3f212b7d",
+      "wall_segment_count": 14
+    },
+    {
+      "adjacency_connected": true,
+      "angled_wall_segment_count": 0,
+      "concave_room_count": 1,
+      "geometry_validation_path": "scene_012102/geometry_validation.json",
+      "geometry_validation_sha256": "4cbc570cb4e83288d49ce368eece000737c50e514d9cfd4dd467801320562362",
+      "layout_id": "scene_012102",
+      "room_count": 3,
+      "room_layout_path": "scene_012102/room_layout.json",
+      "room_layout_sha256": "8372d249f155840848af822fe68dc23c549a55fee5bebd1658a0992542c5fc1f",
+      "scene_id": "scene_012102",
+      "source_provenance_path": "scene_012102/source_provenance.json",
+      "source_provenance_sha256": "a510a3ce6c5e479ea24b52b56e4108f78e8729d8d5815b8a7df0f623db2b44be",
+      "wall_segment_count": 18
+    },
+    {
+      "adjacency_connected": true,
+      "angled_wall_segment_count": 7,
+      "concave_room_count": 2,
+      "geometry_validation_path": "scene_011910/geometry_validation.json",
+      "geometry_validation_sha256": "cdec6c35342974ae933e1263d5dddca16e061ac0dd7be9f2a77303bee23395c0",
+      "layout_id": "scene_011910",
+      "room_count": 4,
+      "room_layout_path": "scene_011910/room_layout.json",
+      "room_layout_sha256": "d4e58234d3d9ff795575858a77d9ad806b5030a5b83751e6aff2d33f96fec703",
+      "scene_id": "scene_011910",
+      "source_provenance_path": "scene_011910/source_provenance.json",
+      "source_provenance_sha256": "0e1c78a1363225b3a887960e9e70ea55e086bcc4d8416960bb28022b7906522b",
+      "wall_segment_count": 20
+    },
+    {
+      "adjacency_connected": true,
+      "angled_wall_segment_count": 3,
+      "concave_room_count": 2,
+      "geometry_validation_path": "scene_011351/geometry_validation.json",
+      "geometry_validation_sha256": "9ad7e587a61afc9caf1a2566366d6048d73fae6b0105d1be8a513cbfcdd62fed",
+      "layout_id": "scene_011351",
+      "room_count": 4,
+      "room_layout_path": "scene_011351/room_layout.json",
+      "room_layout_sha256": "634a3fb2f0ce141c57f890414e63ee2c8fb8f77d321de22d374ee64645565c3a",
+      "scene_id": "scene_011351",
+      "source_provenance_path": "scene_011351/source_provenance.json",
+      "source_provenance_sha256": "a2a2a00bd0ebf701e345cc00fddceb8d49174d64de4a088767a0dde7e8de00db",
+      "wall_segment_count": 22
+    },
+    {
+      "adjacency_connected": true,
+      "angled_wall_segment_count": 0,
+      "concave_room_count": 1,
+      "geometry_validation_path": "scene_012088/geometry_validation.json",
+      "geometry_validation_sha256": "f7ff58d492c2e1c54530a366bf45a52b6076d0db0d71fd0e857f2b3d627a9a9e",
+      "layout_id": "scene_012088",
+      "room_count": 5,
+      "room_layout_path": "scene_012088/room_layout.json",
+      "room_layout_sha256": "d755a060f4af7fd577a01370a9600911d42c78115333743d55d7bdffd450a132",
+      "scene_id": "scene_012088",
+      "source_provenance_path": "scene_012088/source_provenance.json",
+      "source_provenance_sha256": "1ef6c2ba936abe33cc2970f2d9cfa91f53188396c2a114f10890a244cf5ee784",
+      "wall_segment_count": 26
+    },
+    {
+      "adjacency_connected": true,
+      "angled_wall_segment_count": 1,
+      "concave_room_count": 6,
+      "geometry_validation_path": "scene_011568/geometry_validation.json",
+      "geometry_validation_sha256": "623e7166cfb01f127923093998891b07c17130b7fd485b6a11e9960e31670770",
+      "layout_id": "scene_011568",
+      "room_count": 9,
+      "room_layout_path": "scene_011568/room_layout.json",
+      "room_layout_sha256": "7a7c80167a605cf0408f71e1828831cd5d128f95cc6ba99e45c959fbc1b34734",
+      "scene_id": "scene_011568",
+      "source_provenance_path": "scene_011568/source_provenance.json",
+      "source_provenance_sha256": "f84cebf3850658cd38d14f90a94e22467a9e3a43a9486a86ebbba973011132a7",
+      "wall_segment_count": 61
+    },
+    {
+      "adjacency_connected": true,
+      "angled_wall_segment_count": 0,
+      "concave_room_count": 3,
+      "geometry_validation_path": "scene_011388/geometry_validation.json",
+      "geometry_validation_sha256": "04508d5d0ec7940e6f9b550b296260f266e14aa10f2176a3c26b0aee126439e3",
+      "layout_id": "scene_011388",
+      "room_count": 7,
+      "room_layout_path": "scene_011388/room_layout.json",
+      "room_layout_sha256": "54418899637a3f7c46349c4c6da83bb06fe9c6bdbf8cb580fa61e3df48e2b6dc",
+      "scene_id": "scene_011388",
+      "source_provenance_path": "scene_011388/source_provenance.json",
+      "source_provenance_sha256": "dc1762f0806129ff74bc03c8bd44e026b28c33948134bb37a5775c11d3b5fddb",
+      "wall_segment_count": 42
+    },
+    {
+      "adjacency_connected": true,
+      "angled_wall_segment_count": 0,
+      "concave_room_count": 1,
+      "geometry_validation_path": "scene_011528/geometry_validation.json",
+      "geometry_validation_sha256": "a91b606c59f09775a5dd61011b8996ba1b40b203274172a0421225c852bdd3ac",
+      "layout_id": "scene_011528",
+      "room_count": 5,
+      "room_layout_path": "scene_011528/room_layout.json",
+      "room_layout_sha256": "aa39a6bb2a9083849adbfbc8aecef58d69f592504ea27272fea151608c6dc2f1",
+      "scene_id": "scene_011528",
+      "source_provenance_path": "scene_011528/source_provenance.json",
+      "source_provenance_sha256": "cd5f5720661241fa1d433dc75971ff4e6bd48f58e0c644e1466212583d57b5db",
+      "wall_segment_count": 26
+    },
+    {
+      "adjacency_connected": true,
+      "angled_wall_segment_count": 5,
+      "concave_room_count": 1,
+      "geometry_validation_path": "scene_011972/geometry_validation.json",
+      "geometry_validation_sha256": "d20bd49726b384725c7a8cc1c1d5e3fed037d6abd689f3f0e9414a9ecd0dc71a",
+      "layout_id": "scene_011972",
+      "room_count": 5,
+      "room_layout_path": "scene_011972/room_layout.json",
+      "room_layout_sha256": "a23b4f422e7c84fa0f80b588728aab54b3ed301e6a6c76cdfdcc647981027494",
+      "scene_id": "scene_011972",
+      "source_provenance_path": "scene_011972/source_provenance.json",
+      "source_provenance_sha256": "410678ffb14a3be9e0900ad3808862ebaea2f020ea20476b4c267fac0cc3e2e1",
+      "wall_segment_count": 24
+    },
+    {
+      "adjacency_connected": true,
+      "angled_wall_segment_count": 20,
+      "concave_room_count": 2,
+      "geometry_validation_path": "scene_011400/geometry_validation.json",
+      "geometry_validation_sha256": "35e39df1555e0f9b1db921b932fbfe5c849ab03d33b18e5526d0cb5398453b4e",
+      "layout_id": "scene_011400",
+      "room_count": 5,
+      "room_layout_path": "scene_011400/room_layout.json",
+      "room_layout_sha256": "86b755c1b72a02a5913c52bc2190a59977e70123e381187cf64c96f509d59045",
+      "scene_id": "scene_011400",
+      "source_provenance_path": "scene_011400/source_provenance.json",
+      "source_provenance_sha256": "4a67e8575bac9d59e0199a33679fb17396b536eb9c1c0d2650430ffdfea70d4b",
+      "wall_segment_count": 30
+    }
+  ],
+  "schema_version": "non_rectangular_spatiallm_layout_cohort_v1",
+  "selection": {
+    "scene_count": 10,
+    "scene_order": [
+      "scene_011760",
+      "scene_012102",
+      "scene_011910",
+      "scene_011351",
+      "scene_012088",
+      "scene_011568",
+      "scene_011388",
+      "scene_011528",
+      "scene_011972",
+      "scene_011400"
+    ],
+    "source_room_type_labels_in_output": false,
+    "train_scenes_allowed": false
+  },
+  "source": {
+    "archives": [
+      {
+        "filename": "chunk_099.zip",
+        "sha256": "53901c838b5221f035a7101c6dc4269692d577237c87948b96b70dcef6436acd"
+      },
+      {
+        "filename": "chunk_100.zip",
+        "sha256": "57bcd1a84a28a63e2e359b390be961028451c69939c55659b6d3518d435c8724"
+      },
+      {
+        "filename": "chunk_101.zip",
+        "sha256": "9051c6f78d6b3ed43cfc59a84786803e6fdc70f110b172b70aee40d484e10ea7"
+      },
+      {
+        "filename": "chunk_102.zip",
+        "sha256": "6f7b7c1e6b755d8b8b76e4936fa12ff145915eab816eb8b0a83e5d137917889c"
+      },
+      {
+        "filename": "chunk_103.zip",
+        "sha256": "dc8697e4a9b9071e48ce8ff66a73164b6acecdd5810bf2b5cd2310f4620a5ef7"
+      },
+      {
+        "filename": "chunk_104.zip",
+        "sha256": "6af4714714aec3a117ce8daa581b433fc0b1c816c6bd1d530ea9f584f21eee0a"
+      },
+      {
+        "filename": "chunk_105.zip",
+        "sha256": "91a87dfbec866e35d705896ed8c1f3397a3153252e8ded67eade7a102620ebf8"
+      },
+      {
+        "filename": "chunk_106.zip",
+        "sha256": "a6c608f639e8021d79cfd6e5614b5ec950e440957ea998aab3a8b79ac5400d03"
+      },
+      {
+        "filename": "chunk_107.zip",
+        "sha256": "d9a0eb78ba81aec170fc7620f44bf5d9a5a88d3664db82db59883f153147b498"
+      },
+      {
+        "filename": "chunk_108.zip",
+        "sha256": "d4d96f7b493f87449ab0288b4673330d3e830ca77d20bc98c2a6bae63d20605d"
+      }
+    ],
+    "dataset_id": "manycore-research/SpatialLM-Dataset",
+    "dataset_revision": "ab8de0983f48490a0a8850baa32308982d6fbacc",
+    "dataset_url": "https://huggingface.co/datasets/manycore-research/SpatialLM-Dataset",
+    "layout_path": "layout",
+    "license": "cc-by-nc-4.0",
+    "split_path": "split.csv",
+    "split_sha256": "1f66ade1ac14825a8b1f3468baa43e75a5ed929c8ed26f8965b4f030e5203aa7"
+  },
+  "totals": {
+    "room_count": 50,
+    "scene_count": 10,
+    "wall_segment_count": 283
+  }
+}

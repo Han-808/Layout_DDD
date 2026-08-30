@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://layout-ddd.local/schemas/non_rectangular/global_placement_v1.schema.json",
+  "title": "NonRectangularGlobalCatalogPlacementV1",
+  "description": "One global Stage-C placement emission for every room and frozen Stage-A slot.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "layout_id", "coordinate_frame", "room_order", "rooms"],
+  "properties": {
+    "schema_version": {"const": "non_rectangular_global_catalog_placement_v1"},
+    "layout_id": {"$ref": "#/$defs/stableId"},
+    "coordinate_frame": {"const": "shared_scene_global_x_width_y_depth_z_up_meters"},
+    "room_order": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/stableId"}
+    },
+    "rooms": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/roomPlacement"}
+    }
+  },
+  "$defs": {
+    "stableId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+    },
+    "vec3": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "items": {"type": "number"}
+    },
+    "instance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "instance_id",
+        "asset_id",
+        "slot_id",
+        "center_m",
+        "uniform_scale",
+        "rotation_euler_xyz_deg"
+      ],
+      "properties": {
+        "instance_id": {"$ref": "#/$defs/stableId"},
+        "asset_id": {"type": "string", "minLength": 1},
+        "slot_id": {"$ref": "#/$defs/stableId"},
+        "center_m": {"$ref": "#/$defs/vec3"},
+        "uniform_scale": {"type": "number", "exclusiveMinimum": 0},
+        "rotation_euler_xyz_deg": {"$ref": "#/$defs/vec3"}
+      }
+    },
+    "roomPlacement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["room_id", "instances"],
+      "properties": {
+        "room_id": {"$ref": "#/$defs/stableId"},
+        "program_id": {
+          "oneOf": [{"$ref": "#/$defs/stableId"}, {"type": "null"}]
+        },
+        "room_type": {"type": ["string", "null"], "minLength": 1, "maxLength": 128},
+        "instances": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/instance"}
+        }
+      }
+    }
+  }
+}

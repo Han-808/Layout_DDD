@@ -1,0 +1,50 @@
+{
+  "schema_version": "non_rectangular_fullrun_profile_v1",
+  "fullrun_id": "spatiallm-selected10-api3-retry5-v2",
+  "provider_family": "api3",
+  "contract_version": "v2",
+  "layout_manifest": "configs/generation_extensions/non_rectangular_multi_room_v1/layouts/spatiallm_selected10_v1/manifest_v1.json",
+  "program_manifest": "configs/generation_extensions/non_rectangular_multi_room_v1/programs/spatiallm_source_types_area_density_v1/manifest_v1.json",
+  "scene_order": [
+    "scene_011760",
+    "scene_012102",
+    "scene_011910",
+    "scene_011351",
+    "scene_012088",
+    "scene_011568",
+    "scene_011388",
+    "scene_011528",
+    "scene_011972",
+    "scene_011400"
+  ],
+  "models": [
+    {
+      "model_key": "claude-sonnet-5-aihub",
+      "campaign_id": "api3-sonnet5-nonrect-global-retry5-v2",
+      "model_profile_id": "api3-claude-sonnet-5-nonrect-global-retry5-v1",
+      "output_name": "claude-sonnet-5-aihub"
+    },
+    {
+      "model_key": "claude-opus-5-aihub",
+      "campaign_id": "api3-opus5-nonrect-global-retry5-v2",
+      "model_profile_id": "api3-claude-opus-5-nonrect-global-retry5-v1",
+      "output_name": "claude-opus-5-aihub"
+    },
+    {
+      "model_key": "claude-fable-5-aihub",
+      "campaign_id": "api3-fable5-nonrect-global-retry5-v2",
+      "model_profile_id": "api3-claude-fable-5-nonrect-global-retry5-v1",
+      "output_name": "claude-fable-5-aihub"
+    }
+  ],
+  "stage_timeouts_seconds": {
+    "stage_a": 2400.0,
+    "stage_c": 3600.0
+  },
+  "preflight_policy": {
+    "max_total_attempts": 5,
+    "retry_delay_seconds": 30.0
+  },
+  "model_cooldown_seconds": 30.0,
+  "case_failure_delay_seconds": 30.0
+}

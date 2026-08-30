@@ -1,0 +1,188 @@
+{
+  "conversion": {
+    "all_sample_wall_geometry_must_match": true,
+    "coordinates_rounded": false,
+    "coordinates_transformed": false,
+    "excluded_entities": [
+      "door",
+      "window",
+      "bbox",
+      "point_cloud"
+    ],
+    "excluded_entity_counts_selected_samples": {
+      "bbox": 27,
+      "door": 4,
+      "other": 0,
+      "window": 2
+    },
+    "floor_z_m": 0.0,
+    "floor_z_policy": "require_source_wall_endpoints_at_zero",
+    "geometry_repair_applied": false,
+    "policy": "spatiallm_wall_loops_to_nonrect_room_layout_v1",
+    "polygon_winding_normalized_to_ccw": true,
+    "selected_sample_policy": "lowest_sample_index_per_room",
+    "source_room_type_labels_in_output": false,
+    "source_room_type_labels_read_for_output": false,
+    "wall_height_preserved": true,
+    "wall_thickness_preserved": true,
+    "winding_reversed_room_ids": []
+  },
+  "layout_id": "scene_012102",
+  "output": {
+    "room_layout_sha256": "8372d249f155840848af822fe68dc23c549a55fee5bebd1658a0992542c5fc1f"
+  },
+  "schema_version": "spatiallm_room_layout_provenance_v1",
+  "source": {
+    "archives": [
+      {
+        "filename": "chunk_104.zip",
+        "sha256": "6af4714714aec3a117ce8daa581b433fc0b1c816c6bd1d530ea9f584f21eee0a"
+      },
+      {
+        "filename": "chunk_107.zip",
+        "sha256": "d9a0eb78ba81aec170fc7620f44bf5d9a5a88d3664db82db59883f153147b498"
+      },
+      {
+        "filename": "chunk_108.zip",
+        "sha256": "d4d96f7b493f87449ab0288b4673330d3e830ca77d20bc98c2a6bae63d20605d"
+      }
+    ],
+    "dataset_id": "manycore-research/SpatialLM-Dataset",
+    "dataset_revision": "ab8de0983f48490a0a8850baa32308982d6fbacc",
+    "dataset_url": "https://huggingface.co/datasets/manycore-research/SpatialLM-Dataset",
+    "layout_path": "layout",
+    "license": "cc-by-nc-4.0",
+    "rooms": [
+      {
+        "excluded_entity_counts_selected_sample": {
+          "bbox": 17,
+          "door": 2,
+          "other": 0,
+          "window": 1
+        },
+        "polygon_winding_reversed": false,
+        "room_id": "room_000",
+        "selected_member": "scene_012102_00_0.txt",
+        "selected_member_sha256": "09c98d5d158db4980f6cb2b543eb081e149150ed0b6293fae5564dc6c1e188d5",
+        "selected_sample": 0,
+        "source_room_id": 0,
+        "source_sample_count": 4,
+        "source_samples": [
+          {
+            "archive": "chunk_104.zip",
+            "member": "scene_012102_00_0.txt",
+            "member_sha256": "09c98d5d158db4980f6cb2b543eb081e149150ed0b6293fae5564dc6c1e188d5",
+            "sample": 0
+          },
+          {
+            "archive": "chunk_104.zip",
+            "member": "scene_012102_00_1.txt",
+            "member_sha256": "09c98d5d158db4980f6cb2b543eb081e149150ed0b6293fae5564dc6c1e188d5",
+            "sample": 1
+          },
+          {
+            "archive": "chunk_107.zip",
+            "member": "scene_012102_00_2.txt",
+            "member_sha256": "09c98d5d158db4980f6cb2b543eb081e149150ed0b6293fae5564dc6c1e188d5",
+            "sample": 2
+          },
+          {
+            "archive": "chunk_108.zip",
+            "member": "scene_012102_00_3.txt",
+            "member_sha256": "09c98d5d158db4980f6cb2b543eb081e149150ed0b6293fae5564dc6c1e188d5",
+            "sample": 3
+          }
+        ],
+        "source_wall_count": 10,
+        "wall_geometry_identical_across_samples": true
+      },
+      {
+        "excluded_entity_counts_selected_sample": {
+          "bbox": 6,
+          "door": 1,
+          "other": 0,
+          "window": 0
+        },
+        "polygon_winding_reversed": false,
+        "room_id": "room_001",
+        "selected_member": "scene_012102_01_0.txt",
+        "selected_member_sha256": "9d1488191c9b34ec5f6f2bf60f40c1688e631ec4d036a49c71da70e6f4a0fce3",
+        "selected_sample": 0,
+        "source_room_id": 1,
+        "source_sample_count": 4,
+        "source_samples": [
+          {
+            "archive": "chunk_104.zip",
+            "member": "scene_012102_01_0.txt",
+            "member_sha256": "9d1488191c9b34ec5f6f2bf60f40c1688e631ec4d036a49c71da70e6f4a0fce3",
+            "sample": 0
+          },
+          {
+            "archive": "chunk_104.zip",
+            "member": "scene_012102_01_1.txt",
+            "member_sha256": "9d1488191c9b34ec5f6f2bf60f40c1688e631ec4d036a49c71da70e6f4a0fce3",
+            "sample": 1
+          },
+          {
+            "archive": "chunk_104.zip",
+            "member": "scene_012102_01_2.txt",
+            "member_sha256": "9d1488191c9b34ec5f6f2bf60f40c1688e631ec4d036a49c71da70e6f4a0fce3",
+            "sample": 2
+          },
+          {
+            "archive": "chunk_107.zip",
+            "member": "scene_012102_01_3.txt",
+            "member_sha256": "9d1488191c9b34ec5f6f2bf60f40c1688e631ec4d036a49c71da70e6f4a0fce3",
+            "sample": 3
+          }
+        ],
+        "source_wall_count": 4,
+        "wall_geometry_identical_across_samples": true
+      },
+      {
+        "excluded_entity_counts_selected_sample": {
+          "bbox": 4,
+          "door": 1,
+          "other": 0,
+          "window": 1
+        },
+        "polygon_winding_reversed": false,
+        "room_id": "room_002",
+        "selected_member": "scene_012102_02_0.txt",
+        "selected_member_sha256": "e2e6cae69c62d50da1138cc006600b97eea4259bf4a5954637128276ba04cac5",
+        "selected_sample": 0,
+        "source_room_id": 2,
+        "source_sample_count": 3,
+        "source_samples": [
+          {
+            "archive": "chunk_104.zip",
+            "member": "scene_012102_02_0.txt",
+            "member_sha256": "e2e6cae69c62d50da1138cc006600b97eea4259bf4a5954637128276ba04cac5",
+            "sample": 0
+          },
+          {
+            "archive": "chunk_104.zip",
+            "member": "scene_012102_02_1.txt",
+            "member_sha256": "e2e6cae69c62d50da1138cc006600b97eea4259bf4a5954637128276ba04cac5",
+            "sample": 1
+          },
+          {
+            "archive": "chunk_107.zip",
+            "member": "scene_012102_02_2.txt",
+            "member_sha256": "e2e6cae69c62d50da1138cc006600b97eea4259bf4a5954637128276ba04cac5",
+            "sample": 2
+          }
+        ],
+        "source_wall_count": 4,
+        "wall_geometry_identical_across_samples": true
+      }
+    ],
+    "scene_id": "scene_012102",
+    "split_labels": [
+      "reserved",
+      "val"
+    ],
+    "split_path": "split.csv",
+    "split_sha256": "1f66ade1ac14825a8b1f3468baa43e75a5ed929c8ed26f8965b4f030e5203aa7"
+  }
+}

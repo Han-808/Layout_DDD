@@ -1,0 +1,65 @@
+{
+  "schema_version": "non_rectangular_multi_room_object_plan_v2",
+  "layout_id": "fixture_simple_multi_room",
+  "room_order": ["room_000", "room_001"],
+  "rooms": [
+    {
+      "room_id": "room_000",
+      "program_id": "kitchen_01",
+      "room_type": "kitchen",
+      "objects": [
+        {
+          "id": "counter",
+          "category": "counter",
+          "description": "A compact kitchen counter.",
+          "count": 1,
+          "estimated_size": [1.2, 0.6, 0.9],
+          "retrieval_query": "compact kitchen counter",
+          "support": "floor",
+          "facing_target": "room_interior",
+          "placement_hints": ["near a usable wall", "keep working side clear"]
+        },
+        {
+          "id": "stool",
+          "category": "stool",
+          "description": "A counter stool.",
+          "count": 1,
+          "estimated_size": [0.5, 0.5, 0.9],
+          "retrieval_query": "counter stool",
+          "support": "floor",
+          "facing_target": "counter",
+          "placement_hints": ["near counter", "preserve seating clearance"]
+        }
+      ]
+    },
+    {
+      "room_id": "room_001",
+      "program_id": "living_room_01",
+      "room_type": "living_room",
+      "objects": [
+        {
+          "id": "sofa",
+          "category": "sofa",
+          "description": "A compact sofa.",
+          "count": 1,
+          "estimated_size": [1.4, 0.7, 0.8],
+          "retrieval_query": "compact sofa",
+          "support": "floor",
+          "facing_target": "coffee_table",
+          "placement_hints": ["use the open part of the polygon"]
+        },
+        {
+          "id": "coffee_table",
+          "category": "coffee_table",
+          "description": "A low coffee table.",
+          "count": 1,
+          "estimated_size": [0.8, 0.5, 0.4],
+          "retrieval_query": "low coffee table",
+          "support": "floor",
+          "facing_target": null,
+          "placement_hints": ["near sofa", "leave access around the table"]
+        }
+      ]
+    }
+  ]
+}

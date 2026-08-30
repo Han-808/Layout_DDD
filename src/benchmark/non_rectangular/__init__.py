@@ -1,0 +1,108 @@
+"""Additive geometry contracts for non-rectangular evaluation modes."""
+
+from benchmark.non_rectangular.contracts import (
+    MULTI_ROOM_SCENE_SCHEMA_VERSION,
+    NON_RECTANGULAR_EVALUATION_MODE,
+    OBJECT_PLAN_SCHEMA_VERSION,
+    OBJECT_PLAN_V2_SCHEMA_VERSION,
+    ROOM_PROGRAM_SCHEMA_VERSION,
+    NonRectangularContractError,
+    validate_multi_room_object_plan,
+    validate_multi_room_scene,
+    validate_room_program,
+)
+from benchmark.non_rectangular.room_layout import (
+    ROOM_LAYOUT_SCHEMA_VERSION,
+    RoomLayoutValidationError,
+    validate_room_layout,
+)
+from benchmark.non_rectangular.preflight import (
+    COUNT_COMPLIANCE_FAILURE_THRESHOLD,
+    PROGRAM_COVERAGE_POLICY,
+    NonRectangularEvaluationInput,
+    NonRectangularPreflightError,
+    NonRectangularPreflightResult,
+    object_count_compliance,
+    prepare_non_rectangular_evaluation,
+    program_coverage_compliance,
+    program_mapping_report,
+)
+from benchmark.non_rectangular.room_unit import (
+    ROOM_EVALUATION_UNIT_SCHEMA_VERSION,
+    RoomEvaluationUnit,
+    RoomEvaluationUnitError,
+    build_room_evaluation_units,
+)
+from benchmark.non_rectangular.workflow import (
+    L1_METRICS,
+    L3_METRICS,
+    REQUIRED_METRICS,
+    ROOM_METRIC_EXECUTION_ORDER,
+    ROOM_REPORT_SCHEMA_VERSION,
+    NonRectangularWorkflowExecution,
+    RoomEvaluationInfrastructureFailure,
+    RoomEvaluator,
+    RoomEvaluatorReportError,
+    execute_non_rectangular_workflow,
+    validate_complete_room_report,
+)
+from benchmark.non_rectangular.report import (
+    EVALUATION_REPORT_SCHEMA_VERSION,
+    L1_LAYER,
+    L3_LAYER,
+    SCORING_PROFILE_SCHEMA_VERSION,
+    NonRectangularReportError,
+    build_non_rectangular_evaluation_report,
+    validate_non_rectangular_scoring_profile,
+)
+from benchmark.non_rectangular.runner import (
+    run_internal_non_rectangular_evaluation,
+)
+
+
+__all__ = [
+    "COUNT_COMPLIANCE_FAILURE_THRESHOLD",
+    "EVALUATION_REPORT_SCHEMA_VERSION",
+    "L1_LAYER",
+    "L1_METRICS",
+    "L3_LAYER",
+    "L3_METRICS",
+    "MULTI_ROOM_SCENE_SCHEMA_VERSION",
+    "NON_RECTANGULAR_EVALUATION_MODE",
+    "NonRectangularContractError",
+    "NonRectangularEvaluationInput",
+    "NonRectangularPreflightError",
+    "NonRectangularPreflightResult",
+    "NonRectangularReportError",
+    "NonRectangularWorkflowExecution",
+    "OBJECT_PLAN_SCHEMA_VERSION",
+    "OBJECT_PLAN_V2_SCHEMA_VERSION",
+    "PROGRAM_COVERAGE_POLICY",
+    "REQUIRED_METRICS",
+    "ROOM_METRIC_EXECUTION_ORDER",
+    "ROOM_EVALUATION_UNIT_SCHEMA_VERSION",
+    "ROOM_LAYOUT_SCHEMA_VERSION",
+    "ROOM_PROGRAM_SCHEMA_VERSION",
+    "ROOM_REPORT_SCHEMA_VERSION",
+    "RoomEvaluationInfrastructureFailure",
+    "RoomEvaluationUnit",
+    "RoomEvaluationUnitError",
+    "RoomEvaluator",
+    "RoomEvaluatorReportError",
+    "RoomLayoutValidationError",
+    "SCORING_PROFILE_SCHEMA_VERSION",
+    "build_non_rectangular_evaluation_report",
+    "build_room_evaluation_units",
+    "execute_non_rectangular_workflow",
+    "object_count_compliance",
+    "prepare_non_rectangular_evaluation",
+    "program_coverage_compliance",
+    "program_mapping_report",
+    "run_internal_non_rectangular_evaluation",
+    "validate_complete_room_report",
+    "validate_multi_room_object_plan",
+    "validate_multi_room_scene",
+    "validate_non_rectangular_scoring_profile",
+    "validate_room_layout",
+    "validate_room_program",
+]

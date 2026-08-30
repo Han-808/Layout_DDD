@@ -140,15 +140,26 @@ from benchmark.visual_judge import (
 
 
 def run_evaluate(
+    *,
+    evaluation_mode: str | None = None,
     **kwargs: Any,
 ) -> dict:
     """Evaluate through the single canonical scene workflow.
+
+    ``evaluation_mode`` is an additive interface reserved for explicitly
+    selected workflows. Omitting it (or passing ``None``) preserves the
+    pre-existing evaluator dispatch without forwarding a new keyword.
 
     The checked-in Game profile is the sole compatibility exception. Its
     profile shape and historical report remain isolated in the legacy adapter;
     every ordinary scene uses the same L0--L4 workflow regardless of prompt
     granularity or asset strategy.
     """
+
+    if evaluation_mode is not None:
+        raise NotImplementedError(
+            f"evaluation_mode {evaluation_mode!r} is not implemented"
+        )
 
     profile = kwargs.get("evaluation_profile")
     if is_legacy_game_profile(profile):
