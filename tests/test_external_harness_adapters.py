@@ -325,7 +325,10 @@ def test_exact_only_rejects_conflicting_native_and_binding_ids(tmp_path: Path) -
             "scene_weaver",
             root,
             tmp_path / "conflicting_sceneweaver_ids_out",
-            {"asset_bindings": {"chair_0": {"asset_key": "bound-chair"}}},
+            {
+                "selected_iteration": 0,
+                "asset_bindings": {"chair_0": {"asset_key": "bound-chair"}},
+            },
         )
 
 
@@ -529,23 +532,23 @@ def test_respace_y_up_ssr_converts_axes_bottom_anchor_and_asset_id(
         {
             "room_type": "bedroom",
             "bounds_bottom": [
-                [-2.0, 0.0, 1.5],
-                [2.0, 0.0, 1.5],
-                [2.0, 0.0, -1.5],
-                [-2.0, 0.0, -1.5],
+                [-2.0, 0.0, 2.5],
+                [2.0, 0.0, 2.5],
+                [2.0, 0.0, -2.5],
+                [-2.0, 0.0, -2.5],
             ],
             "bounds_top": [
-                [-2.0, 3.0, 1.5],
-                [2.0, 3.0, 1.5],
-                [2.0, 3.0, -1.5],
-                [-2.0, 3.0, -1.5],
+                [-2.0, 3.0, 2.5],
+                [2.0, 3.0, 2.5],
+                [2.0, 3.0, -2.5],
+                [-2.0, 3.0, -2.5],
             ],
             "objects": [
                 {
                     "id": "nightstand_1",
                     "desc": "wood nightstand",
-                    "sampled_jid": "future-1",
-                    "pos": [-1.0, 0.0, 1.0],
+                    "sampled_asset_jid": "future-1",
+                    "pos": [-1.0, 0.0, 2.0],
                     "rot": [0.0, 0.0, 0.0, 1.0],
                     "size": [0.6, 0.8, 0.5],
                 }
@@ -567,7 +570,7 @@ def test_respace_y_up_ssr_converts_axes_bottom_anchor_and_asset_id(
     )
 
     obj = scene["objects"][0]
-    assert scene["boundary"] == [[0.0, 0.0], [4.0, 0.0], [4.0, 3.0], [0.0, 3.0]]
+    assert scene["boundary"] == [[0.0, 0.0], [4.0, 0.0], [4.0, 5.0], [0.0, 5.0]]
     assert scene["scene_height"] == 3.0
     assert obj["size"] == [0.6, 0.5, 0.8]
     assert obj["center"] == pytest.approx([1.0, 0.5, 0.4])
@@ -600,6 +603,7 @@ def test_scene_weaver_selects_latest_iteration_and_converts_bottom_center(
         root,
         tmp_path / "sceneweaver_out",
         {
+            "iteration_selection_policy": "latest",
             "asset_bindings": {
                 "sofa_0": {
                     "asset_key": "sofa_asset",
@@ -618,7 +622,10 @@ def test_scene_weaver_selects_latest_iteration_and_converts_bottom_center(
     obj = scene["objects"][0]
     assert obj["center"] == pytest.approx([2.0, 2.0, 0.4])
     assert obj["rotation"] == pytest.approx([0.0, 0.0, 90.0])
-    assert scene["metadata"]["harness_compatibility"]["selected_iteration"] == 2
+    compatibility = scene["metadata"]["harness_compatibility"]
+    assert compatibility["selected_iteration"] == 2
+    assert compatibility["available_iterations"] == [0, 2]
+    assert compatibility["iteration_selection_policy"] == "latest_non_strict"
 
 
 @pytest.mark.parametrize("adapter_name", FULL_EVALUATOR_COMPATIBILITY_ADAPTERS)
@@ -678,12 +685,21 @@ def test_respace_rejects_native_nonrectangular_boundary(tmp_path: Path) -> None:
                 [2.0, 0.0, -5.0],
                 [0.0, 0.0, -5.0],
             ],
+            "bounds_top": [
+                [0.0, 3.0, 0.0],
+                [4.0, 3.0, 0.0],
+                [4.0, 3.0, -2.0],
+                [2.0, 3.0, -2.0],
+                [2.0, 3.0, -5.0],
+                [0.0, 3.0, -5.0],
+            ],
             "objects": [],
         },
     )
 
     with pytest.raises(ArtifactValidationError, match="will not approximate or flatten"):
         _materialize("respace", native, tmp_path / "respace_nonrect_out")
+    assert not (tmp_path / "respace_nonrect_out" / "generated_scene.json").exists()
 
 
 def test_scene_weaver_rejects_unpreserved_architecture(tmp_path: Path) -> None:
@@ -698,7 +714,12 @@ def test_scene_weaver_rejects_unpreserved_architecture(tmp_path: Path) -> None:
     )
 
     with pytest.raises(ArtifactValidationError, match="will not discard"):
-        _materialize("scene_weaver", root, tmp_path / "sceneweaver_architecture_out")
+        _materialize(
+            "scene_weaver",
+            root,
+            tmp_path / "sceneweaver_architecture_out",
+            {"selected_iteration": 0},
+        )
 
 
 def test_direct_layout_rejects_multi_room_native_output(tmp_path: Path) -> None:
@@ -774,10 +795,7 @@ def test_full_evaluator_compatibility_uses_canonical_route(
     assert resolution["policy"] == "exact_only"
     assert resolution["native_asset_id"] == resolution["resolved_asset_id"]
     assert obj["asset_ref"]["asset_key"] == resolution["resolved_asset_id"]
-    assert obj["geometry_provenance"] in {
-        "asset_mesh",
-        "bbox_proxy",
-    }
+    assert obj["geometry_provenance"] == "bbox_proxy"
 
     report = run_evaluate(
         scene=scene,
@@ -1063,7 +1081,7 @@ def _full_compatibility_fixture(
                         {
                             "id": "chair_1",
                             "category": "chair",
-                            "sampled_jid": "chair-asset",
+                            "sampled_asset_jid": "chair-asset",
                             "pos": [0.0, 0.0, 0.5],
                             "rot": [0.0, 0.0, 0.0, 1.0],
                             "size": [0.8, 1.0, 0.8],
@@ -1093,6 +1111,7 @@ def _full_compatibility_fixture(
         return (
             native_root,
             {
+                "selected_iteration": 1,
                 "asset_bindings": {
                     "chair_0": {
                         "asset_key": "chair-asset",

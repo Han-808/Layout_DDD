@@ -10,6 +10,8 @@ from benchmark.adapters.common.artifacts import read_json_source
 from benchmark.adapters.common.assets import (
     AssetProvider,
     asset_fields,
+    record_asset_local_bbox_size,
+    record_bbox_center,
     resolve_asset_record,
 )
 from benchmark.adapters.common.geometry import (
@@ -71,23 +73,55 @@ def convert_direct_layout(
             or f"object_{index}"
         ).strip()
         if not object_id:
-            raise ArtifactValidationError(f"DirectLayout output[{index}] has an empty object id")
+            raise ArtifactValidationError(
+                f"DirectLayout output[{index}] has an empty object id"
+            )
         if object_id in seen_ids:
-            raise ArtifactValidationError(f"DirectLayout output contains duplicate id {object_id!r}")
+            raise ArtifactValidationError(
+                f"DirectLayout output contains duplicate id {object_id!r}"
+            )
         seen_ids.add(object_id)
-        size_mapping = entry.get("size_in_meters") or entry.get("size")
-        size = vector3(size_mapping, f"DirectLayout output[{index}].size", positive=True)
-        position = vector3(entry.get("position") or entry.get("center"), f"DirectLayout output[{index}].position")
+        size_field = (
+            "size_in_meters"
+            if entry.get("size_in_meters") is not None
+            else "size"
+        )
+        size_mapping = entry.get(size_field)
+        size = vector3(
+            size_mapping,
+            f"DirectLayout output[{index}].size",
+            positive=True,
+        )
+        position = vector3(
+            entry.get("position") or entry.get("center"),
+            f"DirectLayout output[{index}].position",
+        )
         rotation = entry.get("rotation")
+        has_scalar_rotation = "orientation" in entry or "yaw" in entry
+        if rotation is None and not has_scalar_rotation:
+            raise ArtifactValidationError(
+                f"DirectLayout output[{index}] requires a native rotation"
+            )
         if isinstance(rotation, Mapping):
+            if "z_angle" not in rotation and "z" not in rotation:
+                raise ArtifactValidationError(
+                    f"DirectLayout output[{index}].rotation requires z_angle or z"
+                )
             yaw = finite_float(
-                rotation.get("z_angle", rotation.get("z", 0.0)),
+                rotation.get("z_angle", rotation.get("z")),
                 f"DirectLayout output[{index}].rotation.z_angle",
             )
         elif isinstance(rotation, Sequence) and not isinstance(rotation, (str, bytes)):
+            if len(rotation) != 3:
+                raise ArtifactValidationError(
+                    f"DirectLayout output[{index}].rotation must be a 3-vector"
+                )
             yaw = vector3(rotation, f"DirectLayout output[{index}].rotation")[2]
         else:
-            yaw = finite_float(entry.get("orientation", entry.get("yaw", 0.0)), f"DirectLayout output[{index}].yaw")
+            yaw = finite_float(
+                entry.get("orientation", entry.get("yaw")),
+                f"DirectLayout output[{index}].yaw",
+            )
         category = str(entry.get("category") or category_from_identifier(object_id))
         description = str(entry.get("description") or entry.get("prompt") or category)
         asset_key = str(entry.get("asset_id") or entry.get("jid") or object_id)
@@ -104,6 +138,19 @@ def convert_direct_layout(
                 config.get("asset_resolution_policy") or "exact_only"
             ),
         )
+        asset_local_size = record_asset_local_bbox_size(record)
+        asset_local_center = record_bbox_center(record)
+        geometry_audit: dict[str, Any] = {
+            "evaluated_size_source": f"native.{size_field}",
+            "native_size": size,
+            "native_size_axes": "x_length_y_width_z_height",
+            "native_size_semantics": "placed_bbox_after_directlayout_rescale",
+        }
+        if asset_local_size is not None:
+            geometry_audit["asset_local_bbox_size"] = asset_local_size
+            geometry_audit["asset_local_bbox_source"] = "asset_metadata"
+        if asset_local_center is not None:
+            geometry_audit["asset_local_bbox_center"] = asset_local_center
         fields = asset_fields(
             object_id=object_id,
             target_size=size,
@@ -111,12 +158,16 @@ def convert_direct_layout(
             fallback_category=category,
             fallback_description=description,
             config=config,
+            geometry_provenance="bbox_proxy",
+            evaluated_bbox_center_local=[0.0, 0.0, 0.0],
+            geometry_audit=geometry_audit,
         )
         metadata = dict(fields["metadata"])
         metadata.update(
             {
                 "native_object_id": object_id,
                 "native_asset_id": asset_key,
+                "native_rotation_degrees": yaw,
             }
         )
         objects.append(
@@ -141,6 +192,9 @@ def convert_direct_layout(
             "source": "directlayout",
             "source_axes": "x_width_y_depth_z_up",
             "source_unit": "meter",
+            "source_rotation_encoding": "yaw_z",
+            "source_rotation_unit": "degree",
+            "source_orientation_reference": "native_bbox_axes",
             "position_semantics": "bbox_center",
             "origin_shift": origin_shift,
         },

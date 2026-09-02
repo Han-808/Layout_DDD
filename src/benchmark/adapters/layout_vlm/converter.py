@@ -11,6 +11,8 @@ from benchmark.adapters.common.artifacts import read_json_source
 from benchmark.adapters.common.assets import (
     AssetProvider,
     asset_fields,
+    record_asset_local_bbox_size,
+    record_bbox_center,
     record_bbox_size,
     resolve_asset_record,
 )
@@ -21,6 +23,7 @@ from benchmark.adapters.common.geometry import (
     finite_float,
     reject_unsupported_architecture,
     require_boundary_model,
+    require_room_geometry_match,
     shift_boundary_to_origin,
     shift_center,
     vector3,
@@ -67,25 +70,41 @@ def convert_layout_vlm(
     floor_vertices = native_boundary.get("floor_vertices")
     if isinstance(floor_vertices, Sequence) and not isinstance(floor_vertices, (str, bytes)):
         boundary = []
+        floor_z_values = []
         for index, point in enumerate(floor_vertices):
             coords = vector3(point, f"LayoutVLM boundary.floor_vertices[{index}]")
             boundary.append([coords[0], coords[1]])
+            floor_z_values.append(coords[2])
+        floor_z = floor_z_values[0]
+        if any(abs(value - floor_z) > 1.0e-6 for value in floor_z_values[1:]):
+            raise ArtifactValidationError(
+                "LayoutVLM boundary.floor_vertices must be planar"
+            )
         source_boundary_kind = "layoutvlm_scene_config"
     else:
         boundary = source_boundary
+        floor_z = 0.0
         source_boundary_kind = "generation_input"
     require_boundary_model(
         boundary,
         supported=("axis_aligned_rectangle",),
         path="LayoutVLM boundary.floor_vertices",
     )
-    boundary, origin_shift = shift_boundary_to_origin(boundary)
     scene_height = finite_float(
         native_boundary.get("wall_height", fallback_height),
         "LayoutVLM boundary.wall_height",
     )
     if scene_height <= 0.0:
         raise ArtifactValidationError("LayoutVLM wall height must be positive")
+    require_room_geometry_match(
+        boundary,
+        scene_height,
+        source_boundary,
+        fallback_height,
+        path="LayoutVLM native room",
+    )
+    boundary, origin_shift = shift_boundary_to_origin(boundary)
+    origin_shift[2] = -floor_z
 
     objects: list[dict[str, Any]] = []
     default_source = str(config.get("asset_source_db") or "layoutvlm_objaverse")
@@ -124,13 +143,54 @@ def convert_layout_vlm(
                 config.get("asset_resolution_policy") or "exact_only"
             ),
         )
-        size = record_bbox_size(record)
-        if size is None:
+        native_asset_local_size = record_asset_local_bbox_size(native_asset)
+        asset_local_size = (
+            native_asset_local_size
+            or record_asset_local_bbox_size(record)
+            or record_bbox_size(record)
+        )
+        if asset_local_size is None:
             raise ArtifactValidationError(
-                f"LayoutVLM asset {instance_id!r} requires assetMetadata.boundingBox or provider bbox_size"
+                f"LayoutVLM asset {instance_id!r} requires "
+                "assetMetadata.boundingBox or provider bbox_size"
             )
+        native_scale_value = placement.get("scale")
+        applied_scale = _scale3(
+            native_scale_value,
+            f"LayoutVLM layout.{instance_id}.scale",
+        )
+        size = [
+            asset_local_size[axis] * applied_scale[axis]
+            for axis in range(3)
+        ]
         center = vector3(placement.get("position"), f"LayoutVLM layout.{instance_id}.position")
         rotation = _rotation(placement.get("rotation"), f"LayoutVLM layout.{instance_id}.rotation")
+        asset_local_center = record_bbox_center(record)
+        geometry_audit: dict[str, Any] = {
+            "evaluated_size_source": (
+                "asset_local_bbox_times_native_scale"
+                if native_scale_value is not None
+                else "asset_local_bbox"
+            ),
+            "native_size_semantics": "asset_local_bbox",
+            "asset_local_bbox_size": asset_local_size,
+            "asset_local_bbox_source": (
+                "layoutvlm_scene_config"
+                if native_asset_local_size is not None
+                else "exact_asset_metadata"
+            ),
+            "asset_local_bbox_axes": "processed_asset_xyz",
+            "applied_scale": applied_scale,
+            "scale_source": (
+                "native.scale"
+                if native_scale_value is not None
+                else "implicit_identity"
+            ),
+        }
+        if native_scale_value is not None:
+            geometry_audit["native_scale"] = applied_scale
+        if asset_local_center is not None:
+            geometry_audit["asset_local_bbox_center"] = asset_local_center
         fields = asset_fields(
             object_id=instance_id,
             target_size=size,
@@ -138,8 +198,16 @@ def convert_layout_vlm(
             fallback_category=category,
             fallback_description=description,
             config=config,
+            geometry_provenance="bbox_proxy",
+            evaluated_bbox_center_local=[0.0, 0.0, 0.0],
+            geometry_audit=geometry_audit,
         )
         metadata = dict(fields["metadata"])
+        metadata.setdefault("canonical_front", [1.0, 0.0, 0.0])
+        metadata.setdefault(
+            "canonical_front_source",
+            "layoutvlm_processed_asset_contract",
+        )
         metadata.update(
             {
                 "native_instance_id": instance_id,
@@ -147,6 +215,8 @@ def convert_layout_vlm(
                 "native_placement_index": index,
             }
         )
+        if native_asset.get("frontView") is not None:
+            metadata["native_front_view"] = native_asset["frontView"]
         objects.append(
             {
                 "id": instance_id,
@@ -169,18 +239,25 @@ def convert_layout_vlm(
             "source": "layoutvlm",
             "source_axes": "x_width_y_depth_z_up",
             "source_unit": "meter",
+            "source_rotation_encoding": "euler_xyz_or_yaw",
             "rotation_unit": "degree",
+            "rotation_action": "active",
             "position_semantics": "asset_instance_center",
             "origin_shift": origin_shift,
         },
         extra_metadata={
             "source_artifact": resolved_path.as_posix(),
             "source_boundary": source_boundary_kind,
+            "room_contract_match": "exact_modulo_origin_cycle_winding",
         },
     )
 
 
-def _scene_config(payload: Mapping[str, Any], config: Mapping[str, Any], source_path: Path) -> dict[str, Any]:
+def _scene_config(
+    payload: Mapping[str, Any],
+    config: Mapping[str, Any],
+    source_path: Path,
+) -> dict[str, Any]:
     value = payload.get("scene_config") or config.get("scene_config")
     if isinstance(value, Mapping):
         return dict(value)
@@ -202,8 +279,26 @@ def _rotation(value: Any, path: str) -> list[float]:
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
         if len(value) == 1:
             return [0.0, 0.0, finite_float(value[0], f"{path}[0]")]
-        return vector3(value, path)
+        if len(value) == 3:
+            return vector3(value, path)
     raise ArtifactValidationError(f"{path} must be an angle or Euler vector")
+
+
+def _scale3(value: Any, path: str) -> list[float]:
+    if value is None:
+        return [1.0, 1.0, 1.0]
+    if isinstance(value, (int, float)):
+        scale = finite_float(value, path)
+        if scale <= 0.0:
+            raise ArtifactValidationError(f"{path} must be positive")
+        return [scale, scale, scale]
+    if not (
+        isinstance(value, Sequence)
+        and not isinstance(value, (str, bytes))
+        and len(value) == 3
+    ):
+        raise ArtifactValidationError(f"{path} must be a scalar or 3-vector")
+    return vector3(value, path, positive=True)
 
 
 def _strip_instance_suffix(value: str) -> str:

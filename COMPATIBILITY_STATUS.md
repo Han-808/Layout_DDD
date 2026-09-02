@@ -17,13 +17,16 @@ Adapter provenance is audit metadata and is not an evaluator input signal.
 
 The following adapters have end-to-end tests that materialize a native fixture,
 validate the canonical scene, and run the unchanged canonical L0--L4 evaluator.
+Native representation assumptions were audited against the official upstream
+repositories at DirectLayout `4430535`, LayoutVLM `85d06b4`, ReSpace `ce8e570`,
+and SceneWeaver `7ae54b2`.
 
-| Adapter | Supported scope | Asset identity source | Explicitly rejected |
-| --- | --- | --- | --- |
-| `direct_layout` | One axis-aligned rectangular room; native object OBB poses; optional exact mesh dereference | Native `asset_id`/`jid`, or persisted `new_object_id` binding | Multi-room output, nonrectangular request boundaries, architecture fields |
-| `layout_vlm` | One axis-aligned rectangular room; optimized poses joined to its native asset table; OBB or exact mesh | `scene_config.assets[*].uid`/`asset_id` | Multi-room output, polygon boundaries, architecture fields, missing required asset geometry |
-| `respace` | One axis-aligned rectangular room; Y-up SSR converted to canonical Z-up; native OBB | `sampled_jid`/`jid` | Multi-room output, polygon bounds, architecture fields |
-| `scene_weaver` | One axis-aligned rectangular room; latest selected iteration; bottom-center converted to bbox-center | Native `asset_id`/`jid`, or explicit `asset_bindings` | Multi-room output, nonempty `structure`, walls/openings/topology, missing asset binding |
+| Adapter | Native boundary | Native pose | Asset identity | Geometry source | Supported scope | Remaining caveats |
+| --- | --- | --- | --- | --- | --- | --- |
+| `direct_layout` | Benchmark input room; native output room geometry is rejected | Z-up bbox center and degree yaw | Native `asset_id`/`jid`, or persisted `new_object_id` binding | Native placed OBB after DirectLayout rescaling | One axis-aligned rectangular room | Mesh URI is reference-only; source does not persist a separate scale transform or unambiguous canonical front |
+| `layout_vlm` | `scene_config.boundary`, required to match the benchmark room | Z-up bbox center and degree XYZ Euler/yaw | `scene_config.assets[*].uid`/`asset_id` | Asset-local bbox multiplied by explicit placement scale | One axis-aligned rectangular room | Polygon and architecture output are rejected; processed-asset +X front convention is recorded |
+| `respace` | Y-up `bounds_bottom`/`bounds_top`, required to be planar, aligned, and benchmark-matching | Y-up bottom-center; released default is unitless XYZW quaternion; Euler/yaw require explicit encoding and unit | `sampled_asset_jid` first, then legacy `sampled_jid`/`jid` | SSR placed OBB; sampled asset bbox and native scale are separate audit fields | One axis-aligned rectangular room in the canonical evaluator path | Upstream rectilinear polygons are rejected because `canonical_scene_v1` remains rectangular; they are never flattened |
+| `scene_weaver` | Native `roomsize`, required to match the benchmark room | World bbox bottom-center and Blender XYZ radians | Native `asset_id`/`jid`, or explicit `asset_bindings` | Native placed bbox dimensions | One axis-aligned rectangular room and one explicitly selected iteration | Directory conversion requires `selected_iteration`/`layout_path`; `latest` is explicit non-strict convenience only; nonempty structure is rejected |
 
 `LayoutGPT`, `Holodeck`, and `SceneSmith` also have converters, but they are not
 part of this four-adapter full-compatibility claim.
@@ -62,11 +65,31 @@ Point-cloud-only asset metadata is not promoted to evaluator geometry. A native
 OBB remains the canonical proxy; without required OBB/mesh geometry, conversion
 fails.
 
+A mesh URI alone also does not make evaluator geometry an `asset_mesh`. For the
+four adapters above, canonical `object.size` and `asset_proxy.bbox_size` are the
+audited evaluated OBB. When available, asset-local bbox, local bbox offset,
+native scale, and resulting evaluated dimensions are stored separately under
+`metadata.geometry_audit`.
+
+For bottom-center formats (ReSpace and SceneWeaver), the local half-height
+offset is transformed by the resolved native rotation matrix before producing
+canonical `object.center`; it is not assumed to be a world-Z-only offset.
+
 Multi-room and nonrectangular outputs are not flattened into this canonical
 single-room path. The repository's separately selected nonrectangular evaluation
 mode remains a distinct interface; these four adapters do not claim compatibility
 with it. Walls, openings, and room topology are rejected when they cannot be
 preserved rather than being stored only as metadata or silently discarded.
+
+Native room geometry is compared with the benchmark room modulo deterministic
+origin translation, cyclic vertex start, and winding. Dimension, height,
+top/bottom footprint, multi-room, and unsupported topology conflicts fail before
+canonical output is written.
+
+SceneWeaver directory inputs are strict by default: select an iteration with
+`selected_iteration: N` or provide `layout_path`. Every discovered
+`layout_0 ... layout_K` can therefore be canonicalized and evaluated
+independently. `iteration_selection_policy: latest` must be requested explicitly.
 
 ## Audit provenance
 

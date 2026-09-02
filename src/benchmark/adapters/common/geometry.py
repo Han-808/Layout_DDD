@@ -103,6 +103,80 @@ def require_boundary_model(
     return observed
 
 
+def require_room_geometry_match(
+    native_boundary: Sequence[Sequence[float]],
+    native_height: float,
+    benchmark_boundary: Sequence[Sequence[float]],
+    benchmark_height: float,
+    *,
+    path: str,
+    tolerance: float = 1.0e-6,
+) -> None:
+    """Require the same room modulo origin, cyclic start, and winding."""
+
+    require_boundary_match(
+        native_boundary,
+        benchmark_boundary,
+        path=f"{path}.boundary",
+        allow_translation=True,
+        tolerance=tolerance,
+    )
+    if abs(float(native_height) - float(benchmark_height)) > tolerance:
+        raise ArtifactValidationError(
+            f"{path} height {float(native_height):g} conflicts with benchmark "
+            f"height {float(benchmark_height):g}"
+        )
+
+
+def require_boundary_match(
+    native_boundary: Sequence[Sequence[float]],
+    expected_boundary: Sequence[Sequence[float]],
+    *,
+    path: str,
+    allow_translation: bool,
+    tolerance: float = 1.0e-6,
+) -> None:
+    """Compare polygon rings while allowing only declared normalizations."""
+
+    if allow_translation:
+        native = _origin_normalized_ring(native_boundary, path)
+        expected = _origin_normalized_ring(expected_boundary, f"{path}.expected")
+    else:
+        native = _open_ring(boundary2(native_boundary, path))
+        expected = _open_ring(
+            boundary2(expected_boundary, f"{path}.expected")
+        )
+    if not _rings_equivalent(native, expected, tolerance=tolerance):
+        raise ArtifactValidationError(
+            f"{path} conflicts with the expected boundary; native geometry "
+            "will not be replaced or approximated"
+        )
+
+
+def euler_xyz_to_matrix(
+    value: Sequence[float],
+    path: str,
+    *,
+    unit: str,
+) -> list[list[float]]:
+    """Build an active Rz @ Ry @ Rx rotation from explicit XYZ Euler input."""
+
+    angles = vector3(value, path)
+    if unit == "degree":
+        x, y, z = (math.radians(angle) for angle in angles)
+    elif unit == "radian":
+        x, y, z = angles
+    else:
+        raise ArtifactValidationError(f"{path} unit must be degree or radian")
+    cx, cy, cz = math.cos(x), math.cos(y), math.cos(z)
+    sx, sy, sz = math.sin(x), math.sin(y), math.sin(z)
+    return [
+        [cz * cy, cz * sy * sx - sz * cx, cz * sy * cx + sz * sx],
+        [sz * cy, sz * sy * sx + cz * cx, sz * sy * cx - cz * sx],
+        [-sy, cy * sx, cy * cx],
+    ]
+
+
 def reject_unsupported_architecture(
     payload: Mapping[str, Any],
     *,
@@ -125,6 +199,46 @@ def reject_unsupported_architecture(
             f"{path} contains unsupported architecture fields {present}; "
             "the converter will not discard walls, openings, or room topology"
         )
+
+
+def _origin_normalized_ring(
+    boundary: Sequence[Sequence[float]],
+    path: str,
+) -> list[list[float]]:
+    points = _open_ring(boundary2(boundary, path))
+    minimum_x = min(point[0] for point in points)
+    minimum_y = min(point[1] for point in points)
+    return [
+        [point[0] - minimum_x, point[1] - minimum_y]
+        for point in points
+    ]
+
+
+def _open_ring(points: list[list[float]]) -> list[list[float]]:
+    if len(points) > 3 and points[0] == points[-1]:
+        points.pop()
+    return points
+
+
+def _rings_equivalent(
+    left: Sequence[Sequence[float]],
+    right: Sequence[Sequence[float]],
+    *,
+    tolerance: float,
+) -> bool:
+    if len(left) != len(right):
+        return False
+
+    def points_match(a: Sequence[float], b: Sequence[float]) -> bool:
+        return all(abs(float(a[axis]) - float(b[axis])) <= tolerance for axis in range(2))
+
+    candidates = [list(right), list(reversed(right))]
+    for candidate in candidates:
+        for offset in range(len(candidate)):
+            shifted = candidate[offset:] + candidate[:offset]
+            if all(points_match(a, b) for a, b in zip(left, shifted)):
+                return True
+    return False
 
 
 def shift_boundary_to_origin(
@@ -194,7 +308,13 @@ def matrix_transpose(value: list[list[float]]) -> list[list[float]]:
 
 
 def matrix_vector(value: list[list[float]], vector: Sequence[float]) -> list[float]:
-    return [sum(value[row][column] * float(vector[column]) for column in range(3)) for row in range(3)]
+    return [
+        sum(
+            value[row][column] * float(vector[column])
+            for column in range(3)
+        )
+        for row in range(3)
+    ]
 
 
 def rotation_matrix_to_euler_xyz_degrees(matrix: list[list[float]]) -> list[float]:
@@ -287,13 +407,16 @@ __all__ = [
     "build_scene",
     "canonical_room",
     "category_from_identifier",
+    "euler_xyz_to_matrix",
     "finite_float",
     "matrix_multiply",
     "matrix_transpose",
     "matrix_vector",
     "quaternion_xyzw_to_matrix",
+    "require_boundary_match",
     "reject_unsupported_architecture",
     "require_boundary_model",
+    "require_room_geometry_match",
     "rotation_matrix_to_euler_xyz_degrees",
     "scene_state_matrix",
     "shift_boundary_to_origin",

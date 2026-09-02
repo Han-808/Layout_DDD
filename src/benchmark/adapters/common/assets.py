@@ -77,6 +77,8 @@ class MappingAssetProvider:
             key = _first_text(
                 record.get("asset_key"),
                 record.get("asset_id"),
+                record.get("sampled_asset_jid"),
+                record.get("sampled_jid"),
                 record.get("jid"),
                 record.get("uid"),
                 fallback_key,
@@ -344,7 +346,44 @@ def resolve_asset_record(
                 "exact_only asset resolver changed identity: "
                 f"native={native_asset_key!r}, resolved={resolved_key!r}"
             )
-        record.update(dict(resolved))
+        # Exact dereference may enrich missing fields, but native harness fields
+        # remain authoritative scene content and cannot be repaired by metadata.
+        resolved_record = dict(resolved)
+        native_metadata = record.get("metadata")
+        resolved_metadata = resolved_record.get("metadata")
+        native_asset_ref = record.get("asset_ref")
+        resolved_asset_ref = resolved_record.get("asset_ref")
+        record = {**resolved_record, **record}
+        if isinstance(resolved_metadata, Mapping) or isinstance(
+            native_metadata, Mapping
+        ):
+            record["metadata"] = {
+                **(
+                    dict(resolved_metadata)
+                    if isinstance(resolved_metadata, Mapping)
+                    else {}
+                ),
+                **(
+                    dict(native_metadata)
+                    if isinstance(native_metadata, Mapping)
+                    else {}
+                ),
+            }
+        if isinstance(resolved_asset_ref, Mapping) or isinstance(
+            native_asset_ref, Mapping
+        ):
+            record["asset_ref"] = {
+                **(
+                    dict(resolved_asset_ref)
+                    if isinstance(resolved_asset_ref, Mapping)
+                    else {}
+                ),
+                **(
+                    dict(native_asset_ref)
+                    if isinstance(native_asset_ref, Mapping)
+                    else {}
+                ),
+            }
     if route == "semantic_retrieval":
         chosen_key = resolved_key
     else:
@@ -380,6 +419,9 @@ def asset_fields(
     fallback_category: str | None,
     fallback_description: str | None,
     config: Mapping[str, Any],
+    geometry_provenance: str | None = None,
+    evaluated_bbox_center_local: Sequence[float] | None = None,
+    geometry_audit: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     size = _size(target_size)
     if size is None:
@@ -434,7 +476,26 @@ def asset_fields(
         record.get("metadata_path"),
         nested_ref.get("metadata_uri"),
     )
-    bbox_center = _record_bbox_center(record) or [0.0, 0.0, 0.0]
+    if evaluated_bbox_center_local is None:
+        bbox_center = _record_bbox_center(record) or [0.0, 0.0, 0.0]
+    else:
+        bbox_center = _numeric_vector(evaluated_bbox_center_local)
+        if bbox_center is None:
+            raise ArtifactValidationError(
+                f"object {object_id!r} evaluated bbox center must be a finite 3-vector"
+            )
+    resolved_geometry_provenance = geometry_provenance or (
+        "asset_mesh" if mesh_uri else "bbox_proxy"
+    )
+    if resolved_geometry_provenance not in {
+        "asset_mesh",
+        "bbox_proxy",
+        "generated_mesh",
+    }:
+        raise ArtifactValidationError(
+            f"object {object_id!r} has invalid geometry provenance "
+            f"{resolved_geometry_provenance!r}"
+        )
     asset_ref: dict[str, Any] = {"source_db": source_db, "asset_key": key}
     if mesh_uri:
         asset_ref["mesh_uri"] = mesh_uri
@@ -449,9 +510,32 @@ def asset_fields(
     resolution = record.get("_asset_resolution")
     if isinstance(resolution, Mapping):
         metadata["asset_resolution"] = dict(resolution)
-    canonical_front = record.get("canonical_front") or record.get("front")
+    canonical_front = _canonical_front(record)
     if canonical_front is not None:
-        metadata.setdefault("canonical_front", canonical_front)
+        metadata["canonical_front"] = canonical_front
+        metadata.setdefault("canonical_front_source", "asset_metadata")
+    if geometry_audit is not None:
+        audit = dict(geometry_audit)
+        audit["evaluated_geometry"] = (
+            "triangle_mesh"
+            if resolved_geometry_provenance in {"asset_mesh", "generated_mesh"}
+            else "oriented_bbox"
+        )
+        audit["evaluated_obb_size"] = list(size)
+        audit["evaluated_bbox_center_local"] = list(bbox_center)
+        audit["mesh_uri_available"] = bool(mesh_uri)
+        audit["mesh_used_for_evaluation"] = (
+            resolved_geometry_provenance in {"asset_mesh", "generated_mesh"}
+        )
+        metadata["geometry_audit"] = audit
+    if resolved_geometry_provenance == "asset_mesh":
+        asset_proxy_type = "external_asset_bbox"
+    elif resolved_geometry_provenance == "generated_mesh":
+        asset_proxy_type = "generated_mesh_bbox"
+    elif geometry_provenance is not None:
+        asset_proxy_type = "harness_evaluated_obb"
+    else:
+        asset_proxy_type = "harness_layout_bbox"
     return {
         "jid": key,
         "category": category,
@@ -461,10 +545,10 @@ def asset_fields(
         "short_desc": _first_text(
             record.get("short_description"), record.get("short_desc"), description
         ),
-        "geometry_provenance": "asset_mesh" if mesh_uri else "bbox_proxy",
+        "geometry_provenance": resolved_geometry_provenance,
         "asset_ref": asset_ref,
         "asset_proxy": {
-            "type": "external_asset_bbox" if mesh_uri else "harness_layout_bbox",
+            "type": asset_proxy_type,
             "bbox_center_local": bbox_center,
             "bbox_size": list(size),
         },
@@ -474,6 +558,29 @@ def asset_fields(
 
 def record_bbox_size(record: Mapping[str, Any]) -> list[float] | None:
     return _record_bbox_size(record)
+
+
+def record_asset_local_bbox_size(record: Mapping[str, Any]) -> list[float] | None:
+    """Read only fields that explicitly describe asset-local bbox dimensions."""
+
+    direct = _size(
+        record.get("asset_local_bbox_size")
+        or record.get("bbox_size")
+        or record.get("transformed_size")
+    )
+    if direct:
+        return direct
+    proxy = record.get("asset_proxy")
+    if isinstance(proxy, Mapping):
+        direct = _size(proxy.get("bbox_size"))
+        if direct:
+            return direct
+    asset_metadata = record.get("assetMetadata")
+    if isinstance(asset_metadata, Mapping):
+        bbox = asset_metadata.get("boundingBox")
+        if isinstance(bbox, Mapping):
+            return _size([bbox.get("x"), bbox.get("y"), bbox.get("z")])
+    return None
 
 
 def record_bbox_center(record: Mapping[str, Any]) -> list[float] | None:
@@ -500,6 +607,26 @@ def _record_bbox_size(record: Mapping[str, Any]) -> list[float] | None:
         if isinstance(bbox, Mapping):
             return _size([bbox.get("x"), bbox.get("y"), bbox.get("z")])
     return None
+
+
+def _canonical_front(record: Mapping[str, Any]) -> list[float] | None:
+    nested_metadata = record.get("metadata")
+    nested_metadata = (
+        nested_metadata if isinstance(nested_metadata, Mapping) else {}
+    )
+    value = record.get("canonical_front")
+    if value is None:
+        value = nested_metadata.get("canonical_front")
+    if value is None:
+        value = record.get("front")
+    if value is None:
+        return None
+    result = _numeric_vector(value)
+    if result is None or math.sqrt(sum(component * component for component in result)) <= 1.0e-12:
+        raise ArtifactValidationError(
+            "asset canonical_front must be a finite non-zero 3-vector"
+        )
+    return result
 
 
 def _record_bbox_center(record: Mapping[str, Any]) -> list[float] | None:
@@ -533,7 +660,16 @@ def _asset_aliases(key: str, record: Mapping[str, Any]) -> set[str]:
     aliases = {str(key)}
     if "." in str(key):
         aliases.add(str(key).split(".", 1)[1])
-    for field in ("asset_key", "asset_id", "jid", "uid", "modelId", "model_id"):
+    for field in (
+        "asset_key",
+        "asset_id",
+        "sampled_asset_jid",
+        "sampled_jid",
+        "jid",
+        "uid",
+        "modelId",
+        "model_id",
+    ):
         value = _first_text(record.get(field))
         if value:
             aliases.add(value)
@@ -553,6 +689,8 @@ def _record_asset_key(record: Mapping[str, Any]) -> str:
     return _first_text(
         record.get("asset_key"),
         record.get("asset_id"),
+        record.get("sampled_asset_jid"),
+        record.get("sampled_jid"),
         record.get("jid"),
         record.get("uid"),
         record.get("modelId"),
@@ -632,6 +770,7 @@ __all__ = [
     "asset_fields",
     "asset_resolution_policy",
     "load_asset_provider",
+    "record_asset_local_bbox_size",
     "record_bbox_center",
     "record_bbox_size",
     "resolve_asset_record",
