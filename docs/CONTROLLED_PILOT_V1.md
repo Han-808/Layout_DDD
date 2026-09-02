@@ -61,6 +61,10 @@ retains the true model response, validated native placement, request metadata,
 and hashes. Reusing one exact asset across slots is supported without making the
 frozen asset record slot-dependent.
 
+The model-facing message contains logical asset IDs, descriptions, bbox, and
+protocol hashes but strips host-local mesh/metadata/cache paths. Full locators
+remain available only to the local converter, renderer, and audit manifest.
+
 LayoutVLM is semantically eligible through its native scene asset table. Other
 external methods remain fail-closed unless configured thin runners attest and
 then demonstrate exact inventory, ID, and scale controls. SceneWeaver also needs

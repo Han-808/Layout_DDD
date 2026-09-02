@@ -600,6 +600,12 @@ def test_current_catalog_placement_method_has_frozen_assets_offline_route(
         "fixed_native_scale"
     )
     assert "fixed_native_scale" in method_input["messages"][0]["content"]
+    model_messages = json.dumps(method_input["messages"])
+    assert "/synthetic/chair.glb" not in model_messages
+    assert method_input["generation_comparison"]["method_materialization"][
+        "method_catalog_path"
+    ] not in model_messages
+    assert "chair.asset.001" in model_messages
 
 
 def test_one_frozen_asset_can_bind_multiple_slots_without_metadata_conflict(

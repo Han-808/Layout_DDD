@@ -117,7 +117,7 @@ def build_catalog_placement_method_input(generation_input: dict) -> dict:
         "natural_language": visible["natural_language"],
         "benchmark_environment": visible["benchmark_environment"],
         "structure": visible.get("structure"),
-        "asset_selection": deepcopy(asset_selection),
+        "asset_selection": _model_visible_asset_selection(asset_selection),
         "public_slot_ids": public_slots,
         "catalog_facing_contract": benchmark_catalog_facing_contract(),
     }
@@ -133,7 +133,7 @@ def build_catalog_placement_method_input(generation_input: dict) -> dict:
         }
     comparison = visible.get("generation_comparison")
     if isinstance(comparison, dict):
-        user_payload["generation_comparison"] = deepcopy(comparison)
+        user_payload["generation_comparison"] = _model_visible_comparison(comparison)
 
     user_prompt = (
         "Output-shape example (replace every example value and include every intended instance):\n"
@@ -157,3 +157,42 @@ def build_catalog_placement_method_input(generation_input: dict) -> dict:
             {"role": "user", "content": user_prompt},
         ],
     }
+
+
+def _model_visible_asset_selection(value: dict[str, Any]) -> dict[str, Any]:
+    """Remove host-local locators that cannot help a placement-only model."""
+
+    result = deepcopy(value)
+    private_locator_keys = {
+        "file_path",
+        "glb_path",
+        "mesh_path",
+        "mesh_uri",
+        "metadata_path",
+        "metadata_uri",
+        "path",
+        "pointcloud_uri",
+    }
+
+    def strip(item: Any) -> None:
+        if isinstance(item, dict):
+            for key in list(item):
+                if str(key).casefold() in private_locator_keys:
+                    item.pop(key, None)
+                else:
+                    strip(item[key])
+        elif isinstance(item, list):
+            for child in item:
+                strip(child)
+
+    strip(result)
+    return result
+
+
+def _model_visible_comparison(value: dict[str, Any]) -> dict[str, Any]:
+    result = deepcopy(value)
+    materialization = result.get("method_materialization")
+    if isinstance(materialization, dict):
+        for key in ("comparison_control_path", "method_catalog_path"):
+            materialization.pop(key, None)
+    return result
