@@ -26,6 +26,7 @@ class RoomEvaluationUnit:
     room_id: str
     room_index: int
     coordinate_frame: dict[str, Any]
+    floor_z_m: float
     floor_polygon_xy: tuple[tuple[float, float], ...]
     wall_segments: tuple[dict[str, Any], ...]
     program_id: str | None
@@ -58,7 +59,7 @@ class RoomEvaluationUnit:
             "room_index": self.room_index,
             "coordinate_frame": deepcopy(self.coordinate_frame),
             "geometry": {
-                "floor_z_m": 0.0,
+                "floor_z_m": self.floor_z_m,
                 "floor_polygon_xy": [list(point) for point in self.floor_polygon_xy],
                 "wall_segments": deepcopy(list(self.wall_segments)),
             },
@@ -125,6 +126,7 @@ def build_room_evaluation_units(
                 room_id=room_id,
                 room_index=room_index,
                 coordinate_frame=deepcopy(coordinate_frame),
+                floor_z_m=float(geometry["floor_z_m"]),
                 floor_polygon_xy=tuple(
                     (float(point[0]), float(point[1]))
                     for point in geometry["floor_polygon_xy"]

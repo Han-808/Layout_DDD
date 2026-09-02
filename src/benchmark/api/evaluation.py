@@ -157,9 +157,13 @@ def run_evaluate(
     """
 
     if evaluation_mode is not None:
-        raise NotImplementedError(
-            f"evaluation_mode {evaluation_mode!r} is not implemented"
+        from benchmark.non_rectangular.contracts import (
+            NON_RECTANGULAR_EVALUATION_MODE,
         )
+
+        if evaluation_mode == NON_RECTANGULAR_EVALUATION_MODE:
+            return _run_selected_non_rectangular_evaluate(**kwargs)
+        raise ValueError(f"unknown evaluation_mode {evaluation_mode!r}")
 
     profile = kwargs.get("evaluation_profile")
     if is_legacy_game_profile(profile):
@@ -168,6 +172,96 @@ def run_evaluate(
         kwargs.pop("scene_quality_prompt_context", None)
         return _run_legacy_game_evaluate(**kwargs)
     return _run_canonical_evaluate(**kwargs)
+
+
+def _run_selected_non_rectangular_evaluate(**kwargs: Any) -> dict[str, Any]:
+    """Dispatch only the explicit additive non-rectangular input contract."""
+
+    from benchmark.non_rectangular.preflight import (
+        NonRectangularEvaluationInput,
+    )
+    from benchmark.non_rectangular.runner import (
+        run_non_rectangular_evaluation,
+    )
+
+    values = dict(kwargs)
+    evaluation_input = values.pop("evaluation_input", None)
+    if evaluation_input is None:
+        generated_scene = values.pop(
+            "generated_scene",
+            values.pop("scene", None),
+        )
+        required = {
+            "room_layout": values.pop("room_layout", None),
+            "room_program": values.pop("room_program", None),
+            "object_plan": values.pop("object_plan", None),
+            "generated_scene": generated_scene,
+        }
+        missing = [name for name, value in required.items() if value is None]
+        if missing:
+            raise TypeError(
+                "non-rectangular evaluation requires "
+                f"{', '.join(missing)}"
+            )
+        evaluation_input = NonRectangularEvaluationInput.from_artifacts(
+            **required,
+        )
+    if not isinstance(evaluation_input, NonRectangularEvaluationInput):
+        raise TypeError(
+            "evaluation_input must be NonRectangularEvaluationInput"
+        )
+    out = values.pop("out", None)
+    if out is None:
+        raise TypeError("non-rectangular evaluation requires out")
+    room_evaluator = values.pop("room_evaluator", None)
+    scoring_profile = values.pop("scoring_profile", None)
+    supplied_evaluator_kwargs = values.pop("evaluator_kwargs", None)
+    if supplied_evaluator_kwargs is not None and not isinstance(
+        supplied_evaluator_kwargs,
+        dict,
+    ):
+        raise TypeError("evaluator_kwargs must be a JSON object")
+    evaluator_kwargs = deepcopy(supplied_evaluator_kwargs or {})
+    aliases = {
+        "p0b_local_view_provider": "local_view_provider",
+        "l3_initial_evidence_provider": "l3_camera_evidence_provider",
+    }
+    accepted = {
+        "vlm_judge",
+        "grouping_model",
+        "local_view_provider",
+        "l3_camera_evidence_provider",
+        "render_evidence",
+        "runtime_by_room",
+        "l1_config",
+        "scene_quality_config",
+        "evaluation_profile",
+        "functional_evidence_planner",
+        "functional_probe_evidence_provider",
+        "functional_prejudgement_evidence_source",
+        "scene_quality_evaluator",
+    }
+    for key in list(values):
+        target = aliases.get(key, key)
+        if target not in accepted:
+            continue
+        if target in evaluator_kwargs:
+            raise TypeError(
+                f"non-rectangular evaluator option {target!r} was supplied twice"
+            )
+        evaluator_kwargs[target] = values.pop(key)
+    if values:
+        raise TypeError(
+            "unsupported non-rectangular evaluation options: "
+            f"{sorted(values)}"
+        )
+    return run_non_rectangular_evaluation(
+        evaluation_input,
+        out=out,
+        room_evaluator=room_evaluator,
+        scoring_profile=scoring_profile,
+        evaluator_kwargs=evaluator_kwargs,
+    )
 
 
 def _run_canonical_evaluate(

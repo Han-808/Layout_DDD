@@ -1,0 +1,36 @@
+{
+  "provider": "api2",
+  "blender_bin": "/Applications/Blender.app/Contents/MacOS/Blender",
+  "judge": {
+    "name": "nonrect-api2-judge",
+    "endpoint": "http://127.0.0.1:4010/v1",
+    "model": "gpt-5.6-sol",
+    "api_key_env": "LITELLM_MASTER_KEY",
+    "timeout_seconds": 300,
+    "max_tokens": 8192,
+    "context_length": 114688,
+    "max_images": 8,
+    "response_format_json": true,
+    "retry_backoff_seconds": 30.0
+  },
+  "camera": {
+    "mode": "visibility_ranked",
+    "max_views": 4,
+    "max_steps": 3,
+    "candidate_count": 6,
+    "active_repair": false,
+    "metric_modes": {}
+  },
+  "renderer": {
+    "timeout_seconds": 900,
+    "width": 768,
+    "height": 768,
+    "render_engine": "BLENDER_EEVEE_NEXT",
+    "preview_width": 256,
+    "preview_height": 256,
+    "require_asset_mesh": true
+  },
+  "l1_config": {},
+  "scene_quality_config": {},
+  "evaluation_profile": {}
+}

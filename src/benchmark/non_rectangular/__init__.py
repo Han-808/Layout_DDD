@@ -47,6 +47,7 @@ from benchmark.non_rectangular.workflow import (
     validate_complete_room_report,
 )
 from benchmark.non_rectangular.report import (
+    DEFAULT_NON_RECTANGULAR_SCORING_PROFILE,
     EVALUATION_REPORT_SCHEMA_VERSION,
     L1_LAYER,
     L3_LAYER,
@@ -57,11 +58,35 @@ from benchmark.non_rectangular.report import (
 )
 from benchmark.non_rectangular.runner import (
     run_internal_non_rectangular_evaluation,
+    run_non_rectangular_evaluation,
+)
+from benchmark.non_rectangular.geometry import (
+    POLYGON_ROOM_GEOMETRY_SCHEMA_VERSION,
+    POLYGON_ROOM_METADATA_KEY,
+    PolygonRoomGeometry,
+    PolygonRoomGeometryError,
+    polygon_geometry_from_scene,
+)
+from benchmark.non_rectangular.projection import (
+    ROOM_CANONICAL_PROJECTION_VERSION,
+    project_room_unit_to_canonical_scene,
+    room_scene_quality_prompt_context,
+)
+from benchmark.non_rectangular.oob import (
+    POLYGON_OOB_EVALUATOR_VERSION,
+    PolygonOOBEvaluationError,
+    check_polygon_oob,
+)
+from benchmark.non_rectangular.evaluator import (
+    NON_RECTANGULAR_ROOM_EVALUATOR_VERSION,
+    CanonicalNonRectangularRoomEvaluator,
+    NonRectangularRoomMetricIncomplete,
 )
 
 
 __all__ = [
     "COUNT_COMPLIANCE_FAILURE_THRESHOLD",
+    "DEFAULT_NON_RECTANGULAR_SCORING_PROFILE",
     "EVALUATION_REPORT_SCHEMA_VERSION",
     "L1_LAYER",
     "L1_METRICS",
@@ -69,21 +94,30 @@ __all__ = [
     "L3_METRICS",
     "MULTI_ROOM_SCENE_SCHEMA_VERSION",
     "NON_RECTANGULAR_EVALUATION_MODE",
+    "NON_RECTANGULAR_ROOM_EVALUATOR_VERSION",
     "NonRectangularContractError",
     "NonRectangularEvaluationInput",
     "NonRectangularPreflightError",
     "NonRectangularPreflightResult",
     "NonRectangularReportError",
     "NonRectangularWorkflowExecution",
+    "NonRectangularRoomMetricIncomplete",
     "OBJECT_PLAN_SCHEMA_VERSION",
     "OBJECT_PLAN_V2_SCHEMA_VERSION",
     "PROGRAM_COVERAGE_POLICY",
+    "POLYGON_OOB_EVALUATOR_VERSION",
+    "POLYGON_ROOM_GEOMETRY_SCHEMA_VERSION",
+    "POLYGON_ROOM_METADATA_KEY",
+    "PolygonOOBEvaluationError",
+    "PolygonRoomGeometry",
+    "PolygonRoomGeometryError",
     "REQUIRED_METRICS",
     "ROOM_METRIC_EXECUTION_ORDER",
     "ROOM_EVALUATION_UNIT_SCHEMA_VERSION",
     "ROOM_LAYOUT_SCHEMA_VERSION",
     "ROOM_PROGRAM_SCHEMA_VERSION",
     "ROOM_REPORT_SCHEMA_VERSION",
+    "ROOM_CANONICAL_PROJECTION_VERSION",
     "RoomEvaluationInfrastructureFailure",
     "RoomEvaluationUnit",
     "RoomEvaluationUnitError",
@@ -94,15 +128,21 @@ __all__ = [
     "build_non_rectangular_evaluation_report",
     "build_room_evaluation_units",
     "execute_non_rectangular_workflow",
+    "check_polygon_oob",
     "object_count_compliance",
     "prepare_non_rectangular_evaluation",
     "program_coverage_compliance",
     "program_mapping_report",
+    "project_room_unit_to_canonical_scene",
+    "polygon_geometry_from_scene",
+    "room_scene_quality_prompt_context",
     "run_internal_non_rectangular_evaluation",
+    "run_non_rectangular_evaluation",
     "validate_complete_room_report",
     "validate_multi_room_object_plan",
     "validate_multi_room_scene",
     "validate_non_rectangular_scoring_profile",
     "validate_room_layout",
     "validate_room_program",
+    "CanonicalNonRectangularRoomEvaluator",
 ]

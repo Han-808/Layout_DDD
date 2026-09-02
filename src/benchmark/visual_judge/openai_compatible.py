@@ -1365,6 +1365,10 @@ class OpenAICompatibleVLMJudge:
         if forced_choice is not None:
             call_type += ".forced_choice"
         schema_audit = None
+        nonrect_forced_binary = bool(
+            forced_choice is not None
+            and isinstance(request.get("nonrect_evidence_continuity"), dict)
+        )
         if allow_need_more_evidence:
             result, schema_audit = (
                 repair_binary_response_schema_once(
@@ -1380,6 +1384,19 @@ class OpenAICompatibleVLMJudge:
                         )
                     ),
                 )
+            )
+        elif nonrect_forced_binary:
+            result, schema_audit = repair_binary_response_schema_once(
+                model=self.model,
+                messages=messages,
+                response_format_json=self.response_format_json,
+                call_type=call_type,
+                judge_label="P0b forced-binary judge",
+                validator=lambda value: validate_binary_judge_response(
+                    value,
+                    judge_label="P0b forced-binary judge",
+                    confidence_label="VLM judge",
+                ),
             )
         else:
             raw = self.model.chat_messages(

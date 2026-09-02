@@ -22,6 +22,25 @@ SCORING_PROFILE_SCHEMA_VERSION = "non_rectangular_scoring_profile_v1"
 L1_LAYER = "l1_physical_plausibility"
 L3_LAYER = "l3_scene_quality"
 SCORING_LAYERS = (L1_LAYER, L3_LAYER)
+DEFAULT_NON_RECTANGULAR_SCORING_PROFILE = {
+    "schema_version": SCORING_PROFILE_SCHEMA_VERSION,
+    "profile_id": "non_rectangular_room_weighted_v1",
+    "layer_weights": {L1_LAYER: 0.30, L3_LAYER: 0.70},
+    "metric_weights": {
+        L1_LAYER: {
+            "collision": 1.0 / 3.0,
+            "oob": 1.0 / 3.0,
+            "support": 1.0 / 3.0,
+        },
+        L3_LAYER: {
+            "scale_consistency": 0.04,
+            "style_consistency": 0.07,
+            "object_pairing_consistency": 0.09,
+            "functional_consistency": 0.52,
+            "semantic_placement_consistency": 0.28,
+        },
+    },
+}
 
 
 class NonRectangularReportError(ValueError):
@@ -32,6 +51,7 @@ def build_non_rectangular_evaluation_report(
     execution: NonRectangularWorkflowExecution,
     *,
     scoring_profile: Mapping[str, Any] | None = None,
+    public_route_connected: bool = False,
 ) -> dict[str, Any]:
     """Build the two-level room/scene report without claiming an official score."""
 
@@ -72,7 +92,7 @@ def build_non_rectangular_evaluation_report(
             },
             "provenance": {
                 "artifact_sha256": dict(preflight.artifact_sha256),
-                "public_route_connected": False,
+                "public_route_connected": bool(public_route_connected),
                 "official_scoring_profile_frozen": False,
             },
         }
@@ -158,7 +178,7 @@ def build_non_rectangular_evaluation_report(
         },
         "provenance": {
             "artifact_sha256": dict(preflight.artifact_sha256),
-            "public_route_connected": False,
+            "public_route_connected": bool(public_route_connected),
             "official_scoring_profile_frozen": False,
         },
     }
@@ -427,6 +447,7 @@ def _weight_mapping(
 
 
 __all__ = [
+    "DEFAULT_NON_RECTANGULAR_SCORING_PROFILE",
     "EVALUATION_REPORT_SCHEMA_VERSION",
     "L1_LAYER",
     "L3_LAYER",
