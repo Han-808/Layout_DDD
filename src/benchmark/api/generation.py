@@ -59,7 +59,10 @@ def run_generate(
         iteration=iteration,
     )
     adapter = get_adapter(adapter_name)
-    config = adapter_config or {}
+    config = _resolve_supplied_output_sidecars(
+        dict(adapter_config or {}),
+        method_output=method_output,
+    )
     io_contract = adapter.resolve_io_contract(prepared_generation_input, config=config)
     method_input_path = adapter.prepare_input(prepared_generation_input, generator_dir, config=config)
     generated_scene_path: Path | None = None
@@ -67,7 +70,20 @@ def run_generate(
     generation_validation_failure: str | None = None
 
     if method_output:
-        native_output_path = Path(method_output).expanduser().resolve()
+        supplied_output_path = Path(method_output).expanduser().resolve()
+        preserve_output = getattr(adapter, "preserve_supplied_native_output", None)
+        native_output_path = (
+            Path(
+                preserve_output(
+                    supplied_output_path,
+                    method_input_path,
+                    generator_dir,
+                    config=config,
+                )
+            )
+            if callable(preserve_output)
+            else supplied_output_path
+        )
         if materialize_native_output:
             generated_scene_path = adapter.materialize_output(
                 native_output_path,
@@ -76,6 +92,7 @@ def run_generate(
                 config=config,
                 execution_dir=generator_dir,
             )
+            _verify_preserved_native_output(adapter, generated_scene_path)
             status = {
                 "status": "generated_scene_available",
                 "reason": "native method output was provided",
@@ -118,6 +135,7 @@ def run_generate(
                 config=config,
                 execution_dir=generator_dir,
             )
+            _verify_preserved_native_output(adapter, generated_scene_path)
             status = {
                 "status": "generated_scene_available",
                 "reason": "adapter generation completed",
@@ -155,7 +173,11 @@ def run_generate(
         "adapter_capabilities": adapter.capabilities.as_dict(),
         "io_contract": io_contract.as_dict(),
         "generator_output_schema": getattr(adapter, "output_schema", None),
+        "executable_integration": bool(
+            getattr(adapter, "executable_integration", False)
+        ),
         "method_input_path": method_input_path.as_posix(),
+        "preparation": getattr(adapter, "last_preparation_metadata", None),
         "generator_dir": generator_dir.as_posix(),
         "generated_scene_path": generated_scene_path.as_posix() if generated_scene_path else None,
         "native_output_path": native_output_path.as_posix() if native_output_path else None,
@@ -199,6 +221,10 @@ def _raw_native_artifact_path(
     native_output_path: Path | None,
 ) -> Path | None:
     for metadata, key in (
+        (
+            getattr(adapter, "last_run_metadata", None),
+            "preserved_native_artifact_path",
+        ),
         (getattr(adapter, "last_run_metadata", None), "raw_response_path"),
         (getattr(adapter, "last_parse_metadata", None), "raw_artifact_path"),
     ):
@@ -206,6 +232,41 @@ def _raw_native_artifact_path(
         if path is not None:
             return path
     return provided_method_output or native_output_path
+
+
+def _verify_preserved_native_output(
+    adapter: object,
+    generated_scene_path: Path,
+) -> None:
+    verify = getattr(adapter, "verify_preserved_native_output", None)
+    if callable(verify):
+        verify(Path(generated_scene_path))
+
+
+def _resolve_supplied_output_sidecars(
+    config: dict,
+    *,
+    method_output: str | Path | None,
+) -> dict:
+    if method_output is None:
+        return config
+    source = Path(method_output).expanduser().resolve()
+    base = source if source.is_dir() else source.parent
+    resolved = dict(config)
+    for key in (
+        "asset_manifest_path",
+        "asset_ids_path",
+        "asset_bindings_path",
+        "layout_vlm_scene_config_path",
+        "scene_config_path",
+    ):
+        value = resolved.get(key)
+        if not value:
+            continue
+        path = Path(str(value)).expanduser()
+        if not path.is_absolute():
+            resolved[key] = (base / path).resolve().as_posix()
+    return resolved
 
 
 def _metadata_path(metadata: object, key: str) -> Path | None:

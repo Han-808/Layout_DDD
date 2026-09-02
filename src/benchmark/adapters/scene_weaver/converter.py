@@ -276,7 +276,7 @@ def _select_layout(
         raise ArtifactValidationError(
             "SceneWeaver layout_path and selected_iteration are mutually exclusive"
         )
-    candidates = _layout_candidates(source)
+    candidates = discover_layout_iterations(source)
     available_iterations = sorted(candidates)
 
     if source.is_file():
@@ -332,7 +332,9 @@ def _select_layout(
     }
 
 
-def _layout_candidates(source: Path) -> dict[int, Path]:
+def discover_layout_iterations(source: Path) -> dict[int, Path]:
+    """Return every native layout iteration without selecting or converting it."""
+
     if source.is_file():
         search_roots = [source.parent]
     elif source.is_dir():
@@ -367,4 +369,4 @@ def _iteration_number(value: Any) -> int:
     return number
 
 
-__all__ = ["convert_scene_weaver"]
+__all__ = ["convert_scene_weaver", "discover_layout_iterations"]

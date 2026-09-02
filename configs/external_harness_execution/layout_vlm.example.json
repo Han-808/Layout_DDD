@@ -1,0 +1,27 @@
+{
+  "asset_resolution_policy": "exact_only",
+  "layout_vlm_scene_config_path": "/ABSOLUTE/PATH/TO/public_scene_config.json",
+  "execution": {
+    "repo_path": "/ABSOLUTE/PATH/TO/LayoutVLM",
+    "python_executable": "/ABSOLUTE/PATH/TO/layoutvlm/python",
+    "command": [
+      "{python_executable}",
+      "{repo_path}/main.py",
+      "--scene_json_file",
+      "{native_input}",
+      "--save_dir",
+      "{upstream_output_dir}",
+      "--model",
+      "gpt-4",
+      "--openai_api_key",
+      "{env:OPENAI_API_KEY}",
+      "--asset_dir",
+      "{asset_dir}"
+    ],
+    "template_variables": {
+      "asset_dir": "/ABSOLUTE/PATH/TO/objaverse_processed"
+    },
+    "native_artifact": "{upstream_output_dir}/layout.json",
+    "timeout_seconds": 3600
+  }
+}

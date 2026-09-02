@@ -1,0 +1,24 @@
+{
+  "asset_resolution_policy": "exact_only",
+  "execution": {
+    "repo_path": "/ABSOLUTE/PATH/TO/DirectLayout",
+    "python_executable": "/ABSOLUTE/PATH/TO/directlayout/python",
+    "command": [
+      "{python_executable}",
+      "{repo_path}/demo.py",
+      "--input",
+      "{native_input}",
+      "--output-dir",
+      "{upstream_output_dir}",
+      "--assets-dir",
+      "{assets_dir}",
+      "--render-dir",
+      "{upstream_output_dir}/renders"
+    ],
+    "template_variables": {
+      "assets_dir": "/ABSOLUTE/PATH/TO/DirectLayout/asset_library/SCENE"
+    },
+    "native_artifact_glob": "{upstream_output_dir}/*.json",
+    "timeout_seconds": 3600
+  }
+}

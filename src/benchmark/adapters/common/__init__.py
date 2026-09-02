@@ -15,6 +15,12 @@ from benchmark.adapters.common.assets import (
     load_asset_provider,
     resolve_asset_record,
 )
+from benchmark.adapters.common.execution import (
+    ExternalExecutionError,
+    artifact_sha256,
+    execute_external_harness,
+    preserve_native_artifact,
+)
 from benchmark.adapters.common.scene_state import convert_scene_state
 
 __all__ = [
@@ -22,12 +28,16 @@ __all__ = [
     "ASSET_RESOLUTION_EXACT_ONLY",
     "AssetProvider",
     "DatasetRetrievalAssetProvider",
+    "ExternalExecutionError",
     "HarnessConverterAdapter",
     "MappingAssetProvider",
     "SINGLE_ROOM_HARNESS_CAPABILITIES",
     "asset_fields",
+    "artifact_sha256",
     "asset_resolution_policy",
     "convert_scene_state",
+    "execute_external_harness",
     "load_asset_provider",
+    "preserve_native_artifact",
     "resolve_asset_record",
 ]

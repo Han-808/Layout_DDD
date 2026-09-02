@@ -1843,6 +1843,11 @@ def _run_generation_evaluation_loop(
             p0b_local_view_provider=attempt_local_view_provider,
             spatial_fidelity_ontology=spatial_fidelity_ontology,
         )
+        _record_external_execution_evaluation(
+            generate_result,
+            evaluation_report_path=attempt_dir / "evaluation_report.json",
+            report=report,
+        )
         attempt_record["evaluation_report"] = (attempt_dir / "evaluation_report.json").as_posix()
         attempt_record["benchmark_score"] = report.get("benchmark_score")
         attempt_record["valid"] = _evaluation_is_valid(report)
@@ -1894,6 +1899,50 @@ def _run_generation_evaluation_loop(
             "attempts": attempts,
         },
     }
+
+
+def _record_external_execution_evaluation(
+    generate_result: dict[str, Any],
+    *,
+    evaluation_report_path: Path,
+    report: dict[str, Any],
+) -> None:
+    """Link post-generation evaluation without exposing it to the generator."""
+
+    metadata_value = generate_result.get("adapter_metadata")
+    if not metadata_value:
+        return
+    metadata_path = Path(str(metadata_value))
+    if not metadata_path.is_file():
+        return
+    adapter_metadata = read_json(metadata_path)
+    generation_run = (
+        adapter_metadata.get("generation_run")
+        if isinstance(adapter_metadata, dict)
+        else None
+    )
+    if not isinstance(generation_run, dict):
+        return
+    execution_result_value = generation_run.get("execution_result_path")
+    if not execution_result_value:
+        return
+    execution_result_path = Path(str(execution_result_value))
+    if not execution_result_path.is_file():
+        return
+    evaluation_link = {
+        "evaluation_report_path": evaluation_report_path.resolve().as_posix(),
+        "evaluation_workflow": report.get("workflow"),
+        "benchmark_score": report.get("benchmark_score"),
+        "benchmark_score_status": report.get("benchmark_score_status"),
+        "evaluation_link_recorded_after_generation": True,
+    }
+    execution_result = read_json(execution_result_path)
+    if isinstance(execution_result, dict):
+        execution_result.update(evaluation_link)
+        write_json(execution_result_path, execution_result)
+    generation_run.update(evaluation_link)
+    adapter_metadata["generation_run"] = generation_run
+    write_json(metadata_path, adapter_metadata)
 
 
 def _publish_json_artifact(source: str | None, destination: Path) -> str | None:

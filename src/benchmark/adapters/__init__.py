@@ -18,6 +18,7 @@ from benchmark.adapters.common import (
     ASSET_RESOLUTION_EXACT_ONLY,
     AssetProvider,
     DatasetRetrievalAssetProvider,
+    ExternalExecutionError,
     MappingAssetProvider,
 )
 from benchmark.adapters.direct_layout import DirectLayoutAdapter
@@ -55,6 +56,7 @@ __all__ = [
     "AdapterRegistry",
     "AssetProvider",
     "DatasetRetrievalAssetProvider",
+    "ExternalExecutionError",
     "CatalogPlacementAdapter",
     "DirectLayoutAdapter",
     "GenerationAdapter",

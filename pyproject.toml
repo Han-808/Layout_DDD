@@ -21,6 +21,7 @@ dependencies = [
 layout-ddd-generate = "benchmark.api.generation:main"
 layout-ddd-generate-nonrect = "benchmark.scene_generation.non_rectangular_multi_room.cli:main"
 layout-ddd-evaluate = "benchmark.api.evaluation:main"
+layout-ddd-evaluate-sceneweaver-iterations = "benchmark.api.scene_weaver_iterations:main"
 layout-ddd-evaluate-submission = "benchmark.api.submission:main"
 layout-ddd-evaluate-game = "benchmark.game_scene.route:main"
 
@@ -92,6 +93,7 @@ testpaths = [
   "tests/test_evaluation_campaign.py",
   "tests/test_external_converter_correctness.py",
   "tests/test_external_harness_adapters.py",
+  "tests/test_external_harness_execution.py",
   "tests/test_evaluation_mode_interface.py",
   "tests/test_multi_room_evaluation.py",
   "tests/test_functional_discovery.py",
