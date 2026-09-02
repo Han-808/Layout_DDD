@@ -1,0 +1,37 @@
+{
+  "protocol_id": "generation_comparison_v1",
+  "protocol_version": 1,
+  "mode": "shared_db",
+  "case_id": "pilot_rectangular_room_shared_db",
+  "architecture": {
+    "room_model": "single_room",
+    "boundary_model": "axis_aligned_rectangle",
+    "room": {
+      "boundary": [[0.0, 0.0], [4.0, 0.0], [4.0, 5.0], [0.0, 5.0]],
+      "height": 3.0,
+      "unit": "meter"
+    }
+  },
+  "object_inventory_policy": "frozen",
+  "objects": [
+    {
+      "slot_id": "chair_0",
+      "category": "chair",
+      "description": "wood dining chair"
+    }
+  ],
+  "asset_policy": "shared_catalog",
+  "assets": {
+    "catalog_id": "synthetic_furniture_pilot_v1",
+    "catalog_version": "1",
+    "catalog_sha256": "89b12ffcb34681cd25a8f6739ec4a98a5ec327b07bb30b73d7fba04691fed282"
+  },
+  "scale_policy": "method_native",
+  "retrieval_policy": "method_native_shared_catalog",
+  "generation": {
+    "budget_policy": "method_native_recorded"
+  },
+  "evaluator": {
+    "policy": "same_canonical_run_evaluate"
+  }
+}

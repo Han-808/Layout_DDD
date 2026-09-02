@@ -1,0 +1,14 @@
+{
+  "assets": [
+    {
+      "jid": "REPLACE_WITH_3D_FUTURE_JID",
+      "category": "chair",
+      "description": "wood dining chair",
+      "mesh_path": "/ABSOLUTE/PATH/TO/3D-FUTURE/JID/raw_model.obj",
+      "bbox_size_local": [0.8, 0.7, 1.0],
+      "bbox_center_local": [0.0, 0.0, 0.5],
+      "native_scale": [1.0, 1.0, 1.0],
+      "canonical_front": [0.0, -1.0, 0.0]
+    }
+  ]
+}

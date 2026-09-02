@@ -104,17 +104,20 @@ is retained without a configured Mode B execution profile.
 
 | Adapter | Evaluation compatibility | Executable integration | Real upstream smoke tested | Loop-state support | Asset protocol | Controlled-comparison readiness |
 | --- | --- | --- | --- | --- | --- | --- |
-| `layout_gpt` | YES | IMPLEMENTED_NOT_REAL_SMOKE_TESTED | NO | NOT_IMPLEMENTED | Native LayoutGPT layout plus persisted generation-time `asset_ids` binding | CONDITIONAL: execution provenance exists; SharedDB/Frozen protocols do not |
-| `direct_layout` | YES | IMPLEMENTED_NOT_REAL_SMOKE_TESTED | NO | NOT_IMPLEMENTED | Native asset-library IDs / `new_object_id` and DirectLayout asset-layout workflow | CONDITIONAL |
-| `layout_vlm` | YES | IMPLEMENTED_NOT_REAL_SMOKE_TESTED | NO | NOT_IMPLEMENTED | Native scene config, Objaverse asset table, and optimized layout | CONDITIONAL |
-| `respace` | YES | IMPLEMENTED_NOT_REAL_SMOKE_TESTED | NO | NOT_IMPLEMENTED | Native ReSpace sampling; selected `sampled_asset_jid` remains in SSR | CONDITIONAL |
-| `scene_weaver` | YES | IMPLEMENTED_NOT_REAL_SMOKE_TESTED | NO | YES | Native/procedural assets plus persisted generation-time `asset_bindings` | CONDITIONAL |
+| `layout_gpt` | YES | IMPLEMENTED_NOT_REAL_SMOKE_TESTED | NO | NOT_IMPLEMENTED | Native LayoutGPT layout plus persisted generation-time `asset_ids` binding | SHARED_DB/FROZEN_ASSETS CONDITIONAL on runner-declared controls and post-run gates |
+| `direct_layout` | YES | IMPLEMENTED_NOT_REAL_SMOKE_TESTED | NO | NOT_IMPLEMENTED | Native asset-library IDs / `new_object_id` and DirectLayout asset-layout workflow | SHARED_DB/FROZEN_ASSETS CONDITIONAL on runner-declared controls and post-run gates |
+| `layout_vlm` | YES | IMPLEMENTED_NOT_REAL_SMOKE_TESTED | NO | NOT_IMPLEMENTED | Native scene config, Objaverse asset table, and optimized layout | FROZEN_ASSETS implemented and mock-tested; SHARED_DB selection wrapper CONDITIONAL |
+| `respace` | YES | IMPLEMENTED_NOT_REAL_SMOKE_TESTED | NO | NOT_IMPLEMENTED | Native ReSpace sampling; selected `sampled_asset_jid` remains in SSR | SHARED_DB/FROZEN_ASSETS CONDITIONAL on native cache/sampling controls |
+| `scene_weaver` | YES | IMPLEMENTED_NOT_REAL_SMOKE_TESTED | NO | YES | Native/procedural assets plus persisted generation-time `asset_bindings` | SHARED_DB CONDITIONAL; FROZEN_ASSETS requires inventory/asset locks across all iterations |
 | `holodeck` | YES | COMPATIBILITY_ONLY | NO | NOT_IMPLEMENTED | Existing ProcTHOR/Objathor or SceneState conversion | CONDITIONAL |
 | `scene_smith` | YES | COMPATIBILITY_ONLY | NO | NOT_IMPLEMENTED | Existing generated/native asset state conversion | CONDITIONAL |
 
 No row claims that the five executable methods are already comparable under a
-shared or frozen asset database. The execution records preserve the information
-needed to define those protocols later.
+real shared or frozen asset database without the listed eligibility conditions.
+The versioned generation-side protocol, catalog materializers, validators, and
+mocked five-method route are documented in
+[`docs/GENERATION_COMPARABILITY_PROTOCOL.md`](docs/GENERATION_COMPARABILITY_PROTOCOL.md).
+This does not claim a real-upstream controlled smoke test.
 
 ## Runner architecture and artifacts
 

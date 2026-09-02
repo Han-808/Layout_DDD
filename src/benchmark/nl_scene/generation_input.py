@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import Any
 
 from benchmark.architecture_policy import validate_architecture_contract
@@ -11,6 +12,34 @@ from benchmark.task_contract import architecture_contract_for_room
 STRUCTURED_ASSETS_INPUT_MODE = "structured_assets"
 STRUCTURED_NATURAL_LANGUAGE_INPUT_MODE = "natural_language_structured"
 DIRECT_NATURAL_LANGUAGE_INPUT_MODE = "natural_language_direct"
+GENERATION_COMPARISON_PUBLIC_KEYS = {
+    "schema_version",
+    "protocol_id",
+    "protocol_version",
+    "mode",
+    "case_id",
+    "architecture",
+    "architecture_sha256",
+    "object_inventory_policy",
+    "objects",
+    "object_inventory_sha256",
+    "asset_policy",
+    "scale_policy",
+    "retrieval_policy",
+    "generation",
+    "catalog",
+    "method_materialization",
+}
+GENERATION_COMPARISON_PRIVATE_KEYS = {
+    "reference_annotation",
+    "evaluation_context",
+    "evaluation_report",
+    "previous_evaluation",
+    "benchmark_score",
+    "hidden_metric_weights",
+    "private_vlm_judgments",
+    "private_evidence",
+}
 
 
 def build_scene_request(
@@ -192,7 +221,40 @@ def build_generator_visible_payload(generation_input: dict) -> dict:
         }
     if input_mode == STRUCTURED_ASSETS_INPUT_MODE:
         payload["assistance"] = {"asset_selection": generation_input.get("asset_selection")}
+    comparison = generation_input.get("generation_comparison")
+    if comparison is not None:
+        if not isinstance(comparison, dict):
+            raise ValueError("generation_input.generation_comparison must be a JSON object")
+        _validate_public_comparison_projection(comparison)
+        # This contract is built exclusively from public room/inventory/catalog
+        # inputs. Keeping the explicit projection here prevents adapter configs
+        # or evaluator-private state from leaking into external runners.
+        payload["generation_comparison"] = deepcopy(comparison)
     reflection = generation_input.get("self_reflection")
     if isinstance(reflection, dict) and reflection.get("enabled") is True:
         payload["self_reflection"] = reflection
     return payload
+
+
+def _validate_public_comparison_projection(value: dict) -> None:
+    unknown = sorted(set(value) - GENERATION_COMPARISON_PUBLIC_KEYS)
+    if unknown:
+        raise ValueError(
+            "generation_input.generation_comparison contains non-public fields: "
+            f"{unknown}"
+        )
+
+    def walk(item: Any, path: str) -> None:
+        if isinstance(item, dict):
+            for key, child in item.items():
+                name = str(key)
+                if name.casefold() in GENERATION_COMPARISON_PRIVATE_KEYS:
+                    raise ValueError(
+                        f"{path}.{name} is evaluator-private and cannot be generator-visible"
+                    )
+                walk(child, f"{path}.{name}")
+        elif isinstance(item, (list, tuple)):
+            for index, child in enumerate(item):
+                walk(child, f"{path}[{index}]")
+
+    walk(value, "generation_input.generation_comparison")

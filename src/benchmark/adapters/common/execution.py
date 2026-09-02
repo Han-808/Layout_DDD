@@ -31,6 +31,14 @@ SECRET_KEY = re.compile(
     r"(?:api[_-]?key|password|secret|token|credential)",
     re.IGNORECASE,
 )
+SAFE_TOKEN_COUNT_KEYS = {
+    "tokens",
+    "prompt_tokens",
+    "completion_tokens",
+    "total_tokens",
+    "input_tokens",
+    "output_tokens",
+}
 
 
 class ExternalExecutionError(ArtifactValidationError):
@@ -972,6 +980,14 @@ def _callable_name(value: Any) -> str:
 
 
 def _sanitize(value: Any, *, key: str = "") -> Any:
+    if (
+        key.casefold() in SAFE_TOKEN_COUNT_KEYS
+        and isinstance(value, (int, float))
+        and not isinstance(value, bool)
+    ):
+        # Usage counts are audit data, not bearer credentials. Keep the narrow
+        # numeric allowlist while all token-like strings remain redacted.
+        return value
     if SECRET_KEY.search(key):
         return "<redacted>"
     if isinstance(value, Mapping):
