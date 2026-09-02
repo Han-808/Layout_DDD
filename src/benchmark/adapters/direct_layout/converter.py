@@ -17,6 +17,7 @@ from benchmark.adapters.common.geometry import (
     canonical_room,
     category_from_identifier,
     finite_float,
+    reject_unsupported_architecture,
     shift_boundary_to_origin,
     shift_center,
     vector3,
@@ -35,6 +36,21 @@ def convert_direct_layout(
         candidates=("layout.json", "output_layout.json"),
     )
     if isinstance(payload, Mapping):
+        if payload.get("rooms") or payload.get("room_layouts"):
+            raise ArtifactValidationError(
+                "DirectLayout adapter is single-room only and will not collapse multi-room output"
+            )
+        reject_unsupported_architecture(payload, path="DirectLayout output")
+        native_room_fields = sorted(
+            field
+            for field in ("boundary", "floor_polygon", "roomsize")
+            if payload.get(field)
+        )
+        if native_room_fields:
+            raise ArtifactValidationError(
+                "DirectLayout object output contains unsupported native room geometry "
+                f"{native_room_fields}; the converter uses the declared generation-input room"
+            )
         payload = payload.get("objects") or payload.get("layout") or payload.get("placements")
     if not isinstance(payload, Sequence) or isinstance(payload, (str, bytes)):
         raise ArtifactValidationError("DirectLayout output must be an object placement array")
@@ -84,6 +100,9 @@ def convert_direct_layout(
             size=size,
             hint=entry,
             native_record=entry,
+            resolution_policy=str(
+                config.get("asset_resolution_policy") or "exact_only"
+            ),
         )
         fields = asset_fields(
             object_id=object_id,
@@ -94,7 +113,12 @@ def convert_direct_layout(
             config=config,
         )
         metadata = dict(fields["metadata"])
-        metadata["native_object_id"] = object_id
+        metadata.update(
+            {
+                "native_object_id": object_id,
+                "native_asset_id": asset_key,
+            }
+        )
         objects.append(
             {
                 "id": object_id,

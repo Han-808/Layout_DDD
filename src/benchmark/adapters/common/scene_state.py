@@ -170,6 +170,9 @@ def convert_scene_state(
             size=None,
             hint=native,
             native_record=native_meta,
+            resolution_policy=str(
+                config.get("asset_resolution_policy") or "exact_only"
+            ),
         )
         intrinsic_size = record_bbox_size(record) or _optional_size(native)
         if intrinsic_size is None:

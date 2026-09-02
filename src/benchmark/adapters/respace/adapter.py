@@ -1,4 +1,7 @@
-from benchmark.adapters.common.adapter import HarnessConverterAdapter
+from benchmark.adapters.common.adapter import (
+    SINGLE_ROOM_HARNESS_CAPABILITIES,
+    HarnessConverterAdapter,
+)
 from benchmark.adapters.respace.converter import convert_respace
 
 
@@ -7,6 +10,7 @@ class ReSpaceAdapter(HarnessConverterAdapter):
 
     name = "respace"
     output_schema = "respace_ssr_v1"
+    capabilities = SINGLE_ROOM_HARNESS_CAPABILITIES
     converter = staticmethod(convert_respace)
 
 

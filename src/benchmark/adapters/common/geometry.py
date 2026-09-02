@@ -67,6 +67,66 @@ def boundary2(value: Any, path: str) -> list[list[float]]:
     return result
 
 
+def boundary_model(boundary: Iterable[Sequence[float]]) -> str:
+    """Classify a valid 2D boundary without approximating its geometry."""
+
+    points = [(float(point[0]), float(point[1])) for point in boundary]
+    if len(points) > 3 and points[0] == points[-1]:
+        points.pop()
+    if len(points) != 4:
+        return "polygon"
+    xs = sorted({point[0] for point in points})
+    ys = sorted({point[1] for point in points})
+    if len(xs) != 2 or len(ys) != 2:
+        return "polygon"
+    expected = {(x, y) for x in xs for y in ys}
+    if set(points) != expected:
+        return "polygon"
+    edges = zip(points, points[1:] + points[:1])
+    if any((start[0] == end[0]) == (start[1] == end[1]) for start, end in edges):
+        return "polygon"
+    return "axis_aligned_rectangle"
+
+
+def require_boundary_model(
+    boundary: Iterable[Sequence[float]],
+    *,
+    supported: Sequence[str],
+    path: str,
+) -> str:
+    observed = boundary_model(boundary)
+    if observed not in supported:
+        raise ArtifactValidationError(
+            f"{path} uses unsupported boundary model {observed!r}; "
+            f"supported={list(supported)}. The converter will not approximate or flatten it."
+        )
+    return observed
+
+
+def reject_unsupported_architecture(
+    payload: Mapping[str, Any],
+    *,
+    path: str,
+) -> None:
+    """Reject native architecture that a flat object-state converter would drop."""
+
+    architecture_fields = (
+        "architecture",
+        "doors",
+        "openings",
+        "room_topology",
+        "structure",
+        "walls",
+        "windows",
+    )
+    present = sorted(field for field in architecture_fields if payload.get(field))
+    if present:
+        raise ArtifactValidationError(
+            f"{path} contains unsupported architecture fields {present}; "
+            "the converter will not discard walls, openings, or room topology"
+        )
+
+
 def shift_boundary_to_origin(
     boundary: Iterable[Sequence[float]],
 ) -> tuple[list[list[float]], list[float]]:
@@ -223,6 +283,7 @@ def build_scene(
 
 __all__ = [
     "boundary2",
+    "boundary_model",
     "build_scene",
     "canonical_room",
     "category_from_identifier",
@@ -231,6 +292,8 @@ __all__ = [
     "matrix_transpose",
     "matrix_vector",
     "quaternion_xyzw_to_matrix",
+    "reject_unsupported_architecture",
+    "require_boundary_model",
     "rotation_matrix_to_euler_xyz_degrees",
     "scene_state_matrix",
     "shift_boundary_to_origin",

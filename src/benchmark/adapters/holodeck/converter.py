@@ -124,6 +124,9 @@ def convert_holodeck(
             size=None,
             hint=native,
             native_record=native,
+            resolution_policy=str(
+                config.get("asset_resolution_policy") or "exact_only"
+            ),
         )
         source_size = record_bbox_size(record) or _native_bbox_size(native)
         if source_size is None:

@@ -21,7 +21,9 @@ from benchmark.adapters.common.geometry import (
     matrix_multiply,
     matrix_transpose,
     quaternion_xyzw_to_matrix,
+    reject_unsupported_architecture,
     rotation_matrix_to_euler_xyz_degrees,
+    require_boundary_model,
     shift_boundary_to_origin,
     shift_center,
     vector3,
@@ -51,6 +53,18 @@ def convert_respace(
     scene = payload.get("scene") if isinstance(payload.get("scene"), Mapping) else payload
     if not isinstance(scene, Mapping):
         raise ArtifactValidationError("ReSpace SSR scene must be a JSON object")
+    if (
+        payload.get("rooms")
+        or payload.get("room_layouts")
+        or scene.get("rooms")
+        or scene.get("room_layouts")
+    ):
+        raise ArtifactValidationError(
+            "ReSpace adapter is single-room only and will not collapse multi-room output"
+        )
+    reject_unsupported_architecture(payload, path="ReSpace SSR output")
+    if scene is not payload:
+        reject_unsupported_architecture(scene, path="ReSpace SSR scene")
 
     bottom = scene.get("bounds_bottom")
     top = scene.get("bounds_top")
@@ -75,6 +89,11 @@ def convert_respace(
         if scene_height <= 0.0:
             raise ArtifactValidationError("ReSpace bounds_top must be above bounds_bottom")
         source_boundary = "respace_bounds"
+    require_boundary_model(
+        boundary,
+        supported=("axis_aligned_rectangle",),
+        path="ReSpace bounds_bottom",
+    )
     boundary, origin_shift = shift_boundary_to_origin(boundary)
 
     native_objects = scene.get("objects")
@@ -113,6 +132,9 @@ def convert_respace(
             size=size,
             hint=native,
             native_record=native,
+            resolution_policy=str(
+                config.get("asset_resolution_policy") or "exact_only"
+            ),
         )
         fields = asset_fields(
             object_id=object_id,

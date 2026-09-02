@@ -144,6 +144,9 @@ def convert_scene_smith(
             size=size,
             hint=native,
             native_record=native_record,
+            resolution_policy=str(
+                config.get("asset_resolution_policy") or "exact_only"
+            ),
         )
         fields = asset_fields(
             object_id=object_id,
@@ -158,6 +161,7 @@ def convert_scene_smith(
             {
                 "interactive": object_type in {"manipuland", "furniture"},
                 "native_object_type": object_type,
+                "native_asset_id": asset_key,
                 "native_room_id": room_id,
                 "native_sdf_uri": (
                     _resolve_native_path(asset_base, native["sdf_path"])

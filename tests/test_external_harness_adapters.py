@@ -1,15 +1,22 @@
 from __future__ import annotations
 
+from copy import deepcopy
 import math
 from pathlib import Path
 
 import pytest
 
 from benchmark.adapters import get_adapter, list_adapters
+from benchmark.api.evaluation import run_evaluate
 from benchmark.api.generation import run_generate
+from benchmark.evaluator.profile import CANONICAL_LAYERS, L0
 from benchmark.io_contracts import O1_OBJECT_STATE
 from benchmark.nl_scene.generation_input import (
     build_direct_natural_language_generation_input,
+)
+from benchmark.scene_io.validate import (
+    ArtifactValidationError,
+    validate_generated_scene,
 )
 from benchmark.utils.io import read_json, write_json
 
@@ -23,6 +30,13 @@ EXTERNAL_ADAPTERS = {
     "scene_smith",
     "scene_weaver",
 }
+
+FULL_EVALUATOR_COMPATIBILITY_ADAPTERS = (
+    "direct_layout",
+    "layout_vlm",
+    "respace",
+    "scene_weaver",
+)
 
 
 def test_selected_external_harnesses_are_registered_without_excluded_methods() -> None:
@@ -46,7 +60,28 @@ def test_external_harnesses_share_one_generator_input_contract(
     assert method_input["harness"] == adapter_name
     assert method_input["protocol"] == adapter.output_schema
     assert method_input["io_contract"]["evaluator_output_type"] == O1_OBJECT_STATE
+    assert method_input["asset_resolution_policy"] == "exact_only"
     assert method_input["generator_input"]["natural_language"] == "Design a furnished room."
+    assert method_input["scene_compatibility"] == {
+        "room_models": ["single_room"],
+        "boundary_models": ["axis_aligned_rectangle"],
+        "architecture_features": [],
+        "geometry_fidelity": ["bbox"],
+        "preserves_asset_identity": True,
+    }
+
+
+@pytest.mark.parametrize("adapter_name", FULL_EVALUATOR_COMPATIBILITY_ADAPTERS)
+def test_full_compatibility_adapters_declare_semantic_capabilities(
+    adapter_name: str,
+) -> None:
+    capabilities = get_adapter(adapter_name).capabilities.as_dict()
+
+    assert capabilities["room_models"] == ["single_room"]
+    assert capabilities["boundary_models"] == ["axis_aligned_rectangle"]
+    assert capabilities["architecture_features"] == []
+    assert capabilities["geometry_fidelity"] == ["bbox", "mesh_optional"]
+    assert capabilities["preserves_asset_identity"] is True
 
 
 def test_direct_layout_official_object_array_converts_with_external_asset_manifest(
@@ -101,10 +136,10 @@ def test_python_asset_provider_is_injected_without_evaluator_changes(tmp_path: P
             del hint
             calls.append((asset_key, source_db))
             return {
-                "asset_key": "resolved-chair",
+                "asset_key": "chair_1",
                 "source_db": "remote_asset_service",
                 "category": "chair",
-                "mesh_uri": "/remote-cache/resolved-chair.glb",
+                "mesh_uri": "/remote-cache/chair_1.glb",
             }
 
         def retrieve(self, query, *, category=None, size=None, hint=None):
@@ -132,7 +167,166 @@ def test_python_asset_provider_is_injected_without_evaluator_changes(tmp_path: P
 
     assert calls == [("chair_1", "directlayout")]
     assert scene["objects"][0]["asset_ref"]["source_db"] == "remote_asset_service"
+    assert scene["objects"][0]["asset_ref"]["asset_key"] == "chair_1"
+    assert scene["objects"][0]["metadata"]["asset_resolution"] == {
+        "policy": "exact_only",
+        "route": "exact_resolve",
+        "native_asset_id": "chair_1",
+        "resolved_asset_id": "chair_1",
+    }
     assert result["status"]["status"] == "generated_scene_available"
+
+
+def test_exact_only_rejects_asset_identity_changes(tmp_path: Path) -> None:
+    class Provider:
+        def resolve(self, asset_key, *, source_db=None, hint=None):
+            del asset_key, source_db, hint
+            return {"asset_key": "substitute-chair", "category": "chair"}
+
+        def retrieve(self, query, *, category=None, size=None, hint=None):
+            raise AssertionError((query, category, size, hint))
+
+    with pytest.raises(ArtifactValidationError, match="changed identity"):
+        _materialize(
+            "direct_layout",
+            _direct_layout_artifact(tmp_path / "identity_change.json"),
+            tmp_path / "identity_change_out",
+            {"asset_provider": Provider()},
+        )
+
+
+def test_exact_only_never_falls_back_to_semantic_retrieval(tmp_path: Path) -> None:
+    calls = {"resolve": 0, "retrieve": 0}
+
+    class Provider:
+        def resolve(self, asset_key, *, source_db=None, hint=None):
+            del asset_key, source_db, hint
+            calls["resolve"] += 1
+            return None
+
+        def retrieve(self, query, *, category=None, size=None, hint=None):
+            del query, category, size, hint
+            calls["retrieve"] += 1
+            return {"asset_key": "semantic-substitute"}
+
+    scene = _materialize(
+        "direct_layout",
+        _direct_layout_artifact(tmp_path / "exact_miss.json"),
+        tmp_path / "exact_miss_out",
+        {"asset_provider": Provider()},
+    )
+
+    assert calls == {"resolve": 1, "retrieve": 0}
+    assert scene["objects"][0]["asset_ref"]["asset_key"] == "chair_1"
+    assert scene["objects"][0]["metadata"]["asset_resolution"]["route"] == (
+        "native_identity_only"
+    )
+    assert scene["metadata"]["harness_compatibility"][
+        "asset_resolution_policy"
+    ] == "exact_only"
+
+
+def test_exact_only_missing_required_asset_geometry_fails_closed(
+    tmp_path: Path,
+) -> None:
+    calls = {"resolve": 0, "retrieve": 0}
+
+    class Provider:
+        def resolve(self, asset_key, *, source_db=None, hint=None):
+            del asset_key, source_db, hint
+            calls["resolve"] += 1
+            return None
+
+        def retrieve(self, query, *, category=None, size=None, hint=None):
+            del query, category, size, hint
+            calls["retrieve"] += 1
+            return {"asset_key": "replacement-chair", "bbox_size": [1, 1, 1]}
+
+    native, _ = _full_compatibility_fixture("layout_vlm", tmp_path / "geometry")
+    payload = read_json(native)
+    del payload["scene_config"]["assets"]["chair-asset-0"]["assetMetadata"]
+    write_json(native, payload)
+
+    with pytest.raises(ArtifactValidationError, match="requires assetMetadata"):
+        _materialize(
+            "layout_vlm",
+            native,
+            tmp_path / "missing_geometry_out",
+            {"asset_provider": Provider()},
+        )
+
+    assert calls == {"resolve": 1, "retrieve": 0}
+
+
+def test_exact_only_missing_binding_fails_without_retrieval(tmp_path: Path) -> None:
+    retrieve_calls = 0
+
+    class Provider:
+        def resolve(self, asset_key, *, source_db=None, hint=None):
+            raise AssertionError((asset_key, source_db, hint))
+
+        def retrieve(self, query, *, category=None, size=None, hint=None):
+            nonlocal retrieve_calls
+            del query, category, size, hint
+            retrieve_calls += 1
+            return {"asset_key": "retrieved-bed"}
+
+    native = write_json(
+        tmp_path / "missing_binding.json",
+        {
+            "unit": "m",
+            "object_list": [
+                [
+                    "double_bed",
+                    {
+                        "length": 2.0,
+                        "width": 1.0,
+                        "height": 0.5,
+                        "left": 2.0,
+                        "top": 2.0,
+                        "depth": 0.25,
+                    },
+                ]
+            ],
+        },
+    )
+
+    with pytest.raises(ArtifactValidationError, match="persisted native asset ID"):
+        _materialize(
+            "layout_gpt",
+            native,
+            tmp_path / "missing_binding_out",
+            {"asset_provider": Provider()},
+        )
+
+    assert retrieve_calls == 0
+
+
+def test_exact_only_rejects_conflicting_native_and_binding_ids(tmp_path: Path) -> None:
+    root = tmp_path / "conflicting_sceneweaver_ids"
+    write_json(
+        root / "record_scene" / "layout_0.json",
+        {
+            "roomsize": [4, 5],
+            "structure": {},
+            "objects": {
+                "chair_0": {
+                    "asset_id": "native-chair",
+                    "location": [2.0, 2.0, 0.0],
+                    "rotation": [0.0, 0.0, 0.0],
+                    "size": [0.8, 0.8, 1.0],
+                }
+            },
+        },
+    )
+
+    with pytest.raises(ArtifactValidationError, match="conflicting persisted"):
+        _materialize(
+            "scene_weaver",
+            root,
+            tmp_path / "conflicting_sceneweaver_ids_out",
+            {"asset_bindings": {"chair_0": {"asset_key": "bound-chair"}}},
+        )
 
 
 def test_pointcloud_only_asset_metadata_remains_obb_proxy(tmp_path: Path) -> None:
@@ -217,13 +411,22 @@ def test_existing_dataset_retrieval_runtime_is_a_supported_asset_backend(
         "layout_gpt",
         native,
         tmp_path / "retrieval_layoutgpt_out",
-        {"retrieval_runtime": RetrievalRuntime()},
+        {
+            "asset_resolution_policy": "allow_retrieval",
+            "retrieval_runtime": RetrievalRuntime(),
+        },
     )
 
     assert calls == [("double_bed", [2.0, 1.0, 0.5])]
     assert scene["objects"][0]["asset_ref"] == {
         "source_db": "portable_catalog",
         "asset_key": "retrieved-bed",
+    }
+    assert scene["objects"][0]["metadata"]["asset_resolution"] == {
+        "policy": "allow_retrieval",
+        "route": "semantic_retrieval",
+        "native_asset_id": None,
+        "resolved_asset_id": "retrieved-bed",
     }
 
 
@@ -260,6 +463,7 @@ def test_layout_gpt_parsed_output_scales_official_pixel_coordinates(
         tmp_path / "layoutgpt_out",
         {
             "query_id": "bedroom-case",
+            "asset_ids": {"double_bed_1": "bed_asset"},
             "asset_manifest": {
                 "bed_asset": {
                     "category": "double_bed",
@@ -396,6 +600,12 @@ def test_scene_weaver_selects_latest_iteration_and_converts_bottom_center(
         root,
         tmp_path / "sceneweaver_out",
         {
+            "asset_bindings": {
+                "sofa_0": {
+                    "asset_key": "sofa_asset",
+                    "source_db": "custom_sceneweaver_assets",
+                }
+            },
             "asset_manifest": {
                 "sofa_asset": {
                     "category": "sofa",
@@ -409,6 +619,190 @@ def test_scene_weaver_selects_latest_iteration_and_converts_bottom_center(
     assert obj["center"] == pytest.approx([2.0, 2.0, 0.4])
     assert obj["rotation"] == pytest.approx([0.0, 0.0, 90.0])
     assert scene["metadata"]["harness_compatibility"]["selected_iteration"] == 2
+
+
+@pytest.mark.parametrize("adapter_name", FULL_EVALUATOR_COMPATIBILITY_ADAPTERS)
+def test_semantic_gate_rejects_multi_room_requirements(adapter_name: str) -> None:
+    with pytest.raises(ArtifactValidationError, match="multi_room"):
+        get_adapter(adapter_name).resolve_scene_compatibility(
+            _generation_input(),
+            config={"room_model": "multi_room"},
+        )
+
+
+@pytest.mark.parametrize("adapter_name", FULL_EVALUATOR_COMPATIBILITY_ADAPTERS)
+def test_semantic_gate_rejects_nonrectangular_requirements(adapter_name: str) -> None:
+    generation_input = _generation_input()
+    generation_input["scene_request"]["room"]["boundary"] = [
+        [0, 0],
+        [4, 0],
+        [4, 2],
+        [2, 2],
+        [2, 5],
+        [0, 5],
+    ]
+
+    with pytest.raises(ArtifactValidationError, match="polygon"):
+        get_adapter(adapter_name).resolve_scene_compatibility(generation_input)
+
+
+@pytest.mark.parametrize("adapter_name", FULL_EVALUATOR_COMPATIBILITY_ADAPTERS)
+@pytest.mark.parametrize(
+    ("config", "missing_capability"),
+    [
+        ({"required_architecture_features": ["walls"]}, "walls"),
+        ({"required_geometry_fidelity": ["mesh"]}, "mesh"),
+    ],
+)
+def test_semantic_gate_rejects_unsupported_scene_requirements(
+    adapter_name: str,
+    config: dict,
+    missing_capability: str,
+) -> None:
+    with pytest.raises(ArtifactValidationError, match=missing_capability):
+        get_adapter(adapter_name).resolve_scene_compatibility(
+            _generation_input(),
+            config=config,
+        )
+
+
+def test_respace_rejects_native_nonrectangular_boundary(tmp_path: Path) -> None:
+    native = write_json(
+        tmp_path / "respace_nonrect.json",
+        {
+            "bounds_bottom": [
+                [0.0, 0.0, 0.0],
+                [4.0, 0.0, 0.0],
+                [4.0, 0.0, -2.0],
+                [2.0, 0.0, -2.0],
+                [2.0, 0.0, -5.0],
+                [0.0, 0.0, -5.0],
+            ],
+            "objects": [],
+        },
+    )
+
+    with pytest.raises(ArtifactValidationError, match="will not approximate or flatten"):
+        _materialize("respace", native, tmp_path / "respace_nonrect_out")
+
+
+def test_scene_weaver_rejects_unpreserved_architecture(tmp_path: Path) -> None:
+    root = tmp_path / "sceneweaver_architecture"
+    write_json(
+        root / "record_scene" / "layout_0.json",
+        {
+            "roomsize": [4, 5],
+            "structure": {"wall_0": {"kind": "wall"}},
+            "objects": {},
+        },
+    )
+
+    with pytest.raises(ArtifactValidationError, match="will not discard"):
+        _materialize("scene_weaver", root, tmp_path / "sceneweaver_architecture_out")
+
+
+def test_direct_layout_rejects_multi_room_native_output(tmp_path: Path) -> None:
+    native = write_json(
+        tmp_path / "direct_multi_room.json",
+        {"rooms": [{"id": "room_a"}, {"id": "room_b"}], "objects": []},
+    )
+
+    with pytest.raises(ArtifactValidationError, match="single-room only"):
+        _materialize("direct_layout", native, tmp_path / "direct_multi_room_out")
+
+
+def test_layout_vlm_rejects_native_nonrectangular_boundary(tmp_path: Path) -> None:
+    native = write_json(
+        tmp_path / "layout_vlm_nonrect.json",
+        {
+            "layout": {},
+            "scene_config": {
+                "boundary": {
+                    "floor_vertices": [
+                        [0, 0, 0],
+                        [4, 0, 0],
+                        [4, 2, 0],
+                        [2, 2, 0],
+                        [2, 5, 0],
+                        [0, 5, 0],
+                    ]
+                },
+                "assets": {},
+            },
+        },
+    )
+
+    with pytest.raises(ArtifactValidationError, match="will not approximate or flatten"):
+        _materialize("layout_vlm", native, tmp_path / "layout_vlm_nonrect_out")
+
+
+@pytest.mark.parametrize("adapter_name", FULL_EVALUATOR_COMPATIBILITY_ADAPTERS)
+def test_full_evaluator_compatibility_uses_canonical_route(
+    adapter_name: str,
+    tmp_path: Path,
+) -> None:
+    native_path, config = _full_compatibility_fixture(
+        adapter_name,
+        tmp_path / adapter_name,
+    )
+    scene = _materialize(
+        adapter_name,
+        native_path,
+        tmp_path / f"{adapter_name}_canonical",
+        config,
+    )
+
+    assert validate_generated_scene(scene)
+    assert scene["request_id"] == "external-harness-case"
+    assert scene["metadata"]["output_adapter"] == adapter_name
+    compatibility = scene["metadata"]["harness_compatibility"]
+    assert compatibility["adapter"] == adapter_name
+    assert compatibility["native_schema"]
+    assert compatibility["source_artifact"]
+    assert compatibility["coordinate_conversion"]
+    assert compatibility["asset_resolution_policy"] == "exact_only"
+    assert compatibility["scene_compatibility_requirements"] == {
+        "room_models": ["single_room"],
+        "boundary_models": ["axis_aligned_rectangle"],
+        "architecture_features": [],
+        "geometry_fidelity": ["bbox"],
+        "preserves_asset_identity": True,
+    }
+    obj = scene["objects"][0]
+    assert obj["metadata"]["native_asset_id"]
+    resolution = obj["metadata"]["asset_resolution"]
+    assert resolution["policy"] == "exact_only"
+    assert resolution["native_asset_id"] == resolution["resolved_asset_id"]
+    assert obj["asset_ref"]["asset_key"] == resolution["resolved_asset_id"]
+    assert obj["geometry_provenance"] in {
+        "asset_mesh",
+        "bbox_proxy",
+    }
+
+    report = run_evaluate(
+        scene=scene,
+        out=tmp_path / f"{adapter_name}_evaluation_report.json",
+    )
+
+    assert report["request_id"] == "external-harness-case"
+    assert report["report_schema_version"] == "scene_evaluation_report_v2"
+    assert report["workflow"] == "canonical_l0_l4"
+    assert tuple(report["layer_reports"]) == CANONICAL_LAYERS
+    assert report["category_reports"] == report["layer_reports"]
+    assert report["layer_reports"][L0]["status"] == "passed"
+    assert "generic_validity" in report["reports"]
+
+    provenance_variant = deepcopy(scene)
+    provenance_variant["metadata"]["output_adapter"] = "provenance-only-sentinel"
+    provenance_variant["metadata"]["harness_compatibility"][
+        "adapter"
+    ] = "provenance-only-sentinel"
+    provenance_report = run_evaluate(
+        scene=provenance_variant,
+        out=tmp_path / f"{adapter_name}_provenance_variant_report.json",
+    )
+
+    assert provenance_report == report
 
 
 def test_holodeck_raw_procthor_scene_converts_unity_axes(tmp_path: Path) -> None:
@@ -581,6 +975,133 @@ def _materialize(
         config=config,
     )
     return read_json(generated_path)
+
+
+def _direct_layout_artifact(path: Path) -> Path:
+    return write_json(
+        path,
+        [
+            {
+                "new_object_id": "chair_1",
+                "category": "chair",
+                "rotation": {"z_angle": 0.0},
+                "size_in_meters": {
+                    "length": 0.8,
+                    "width": 0.8,
+                    "height": 1.0,
+                },
+                "position": {"x": 2.0, "y": 2.0, "z": 0.5},
+            }
+        ],
+    )
+
+
+def _full_compatibility_fixture(
+    adapter_name: str,
+    root: Path,
+) -> tuple[Path, dict]:
+    if adapter_name == "direct_layout":
+        return _direct_layout_artifact(root / "direct_layout.json"), {}
+    if adapter_name == "layout_vlm":
+        return (
+            write_json(
+                root / "layout_vlm.json",
+                {
+                    "layout": {
+                        "chair-asset-0": {
+                            "position": [2.0, 2.0, 0.5],
+                            "rotation": [0.0, 0.0, 0.0],
+                        }
+                    },
+                    "scene_config": {
+                        "boundary": {
+                            "floor_vertices": [
+                                [0, 0, 0],
+                                [4, 0, 0],
+                                [4, 5, 0],
+                                [0, 5, 0],
+                            ],
+                            "wall_height": 3.0,
+                        },
+                        "assets": {
+                            "chair-asset-0": {
+                                "uid": "chair-asset",
+                                "category": "chair",
+                                "assetMetadata": {
+                                    "boundingBox": {
+                                        "x": 0.8,
+                                        "y": 0.8,
+                                        "z": 1.0,
+                                    }
+                                },
+                            }
+                        },
+                    },
+                },
+            ),
+            {},
+        )
+    if adapter_name == "respace":
+        return (
+            write_json(
+                root / "respace.json",
+                {
+                    "room_type": "room",
+                    "bounds_bottom": [
+                        [-2.0, 0.0, 2.5],
+                        [2.0, 0.0, 2.5],
+                        [2.0, 0.0, -2.5],
+                        [-2.0, 0.0, -2.5],
+                    ],
+                    "bounds_top": [
+                        [-2.0, 3.0, 2.5],
+                        [2.0, 3.0, 2.5],
+                        [2.0, 3.0, -2.5],
+                        [-2.0, 3.0, -2.5],
+                    ],
+                    "objects": [
+                        {
+                            "id": "chair_1",
+                            "category": "chair",
+                            "sampled_jid": "chair-asset",
+                            "pos": [0.0, 0.0, 0.5],
+                            "rot": [0.0, 0.0, 0.0, 1.0],
+                            "size": [0.8, 1.0, 0.8],
+                        }
+                    ],
+                },
+            ),
+            {},
+        )
+    if adapter_name == "scene_weaver":
+        native_root = root / "scene_weaver"
+        write_json(
+            native_root / "record_scene" / "layout_1.json",
+            {
+                "roomsize": [4, 5],
+                "structure": {},
+                "objects": {
+                    "chair_0": {
+                        "location": [2.0, 2.0, 0.0],
+                        "rotation": [0.0, 0.0, 0.0],
+                        "size": [0.8, 0.8, 1.0],
+                        "parent": [],
+                    }
+                },
+            },
+        )
+        return (
+            native_root,
+            {
+                "asset_bindings": {
+                    "chair_0": {
+                        "asset_key": "chair-asset",
+                        "category": "chair",
+                    }
+                }
+            },
+        )
+    raise AssertionError(f"missing compatibility fixture for {adapter_name}")
 
 
 def _generation_input() -> dict:

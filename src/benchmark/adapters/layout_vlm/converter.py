@@ -19,6 +19,8 @@ from benchmark.adapters.common.geometry import (
     canonical_room,
     category_from_identifier,
     finite_float,
+    reject_unsupported_architecture,
+    require_boundary_model,
     shift_boundary_to_origin,
     shift_center,
     vector3,
@@ -36,13 +38,32 @@ def convert_layout_vlm(
     payload, resolved_path = read_json_source(source_path, candidates=("layout.json",))
     if not isinstance(payload, Mapping):
         raise ArtifactValidationError("LayoutVLM layout output must be a JSON object")
-    layout = payload.get("layout") if isinstance(payload.get("layout"), Mapping) else payload
+    wrapped_layout = isinstance(payload.get("layout"), Mapping)
+    layout = payload["layout"] if wrapped_layout else payload
     scene_config = _scene_config(payload, config, resolved_path)
+    if (
+        (
+            wrapped_layout
+            and (payload.get("rooms") or payload.get("room_layouts"))
+        )
+        or scene_config.get("rooms")
+        or scene_config.get("room_layouts")
+    ):
+        raise ArtifactValidationError(
+            "LayoutVLM adapter is single-room only and will not collapse multi-room output"
+        )
+    if wrapped_layout:
+        reject_unsupported_architecture(payload, path="LayoutVLM output")
+    reject_unsupported_architecture(scene_config, path="LayoutVLM scene_config")
     assets = scene_config.get("assets") if isinstance(scene_config.get("assets"), Mapping) else {}
 
     source_boundary, fallback_height, _ = canonical_room(generation_input)
     native_boundary = scene_config.get("boundary")
     native_boundary = native_boundary if isinstance(native_boundary, Mapping) else {}
+    reject_unsupported_architecture(
+        native_boundary,
+        path="LayoutVLM scene_config.boundary",
+    )
     floor_vertices = native_boundary.get("floor_vertices")
     if isinstance(floor_vertices, Sequence) and not isinstance(floor_vertices, (str, bytes)):
         boundary = []
@@ -53,6 +74,11 @@ def convert_layout_vlm(
     else:
         boundary = source_boundary
         source_boundary_kind = "generation_input"
+    require_boundary_model(
+        boundary,
+        supported=("axis_aligned_rectangle",),
+        path="LayoutVLM boundary.floor_vertices",
+    )
     boundary, origin_shift = shift_boundary_to_origin(boundary)
     scene_height = finite_float(
         native_boundary.get("wall_height", fallback_height),
@@ -94,6 +120,9 @@ def convert_layout_vlm(
             size=None,
             hint=placement,
             native_record=native_asset,
+            resolution_policy=str(
+                config.get("asset_resolution_policy") or "exact_only"
+            ),
         )
         size = record_bbox_size(record)
         if size is None:

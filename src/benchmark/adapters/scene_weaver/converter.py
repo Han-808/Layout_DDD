@@ -19,6 +19,7 @@ from benchmark.adapters.common.geometry import (
     canonical_room,
     category_from_identifier,
     finite_float,
+    reject_unsupported_architecture,
     shift_boundary_to_origin,
     shift_center,
     vector3,
@@ -37,6 +38,19 @@ def convert_scene_weaver(
     payload = read_json(layout_path)
     if not isinstance(payload, Mapping):
         raise ArtifactValidationError("SceneWeaver layout must be a JSON object")
+    if payload.get("rooms") or payload.get("room_layouts"):
+        raise ArtifactValidationError(
+            "SceneWeaver adapter is single-room only and will not collapse multi-room output"
+        )
+    reject_unsupported_architecture(payload, path="SceneWeaver layout")
+    unsupported_boundary_fields = sorted(
+        field for field in ("boundary", "floor_polygon") if payload.get(field)
+    )
+    if unsupported_boundary_fields:
+        raise ArtifactValidationError(
+            "SceneWeaver layout contains unsupported native boundary fields "
+            f"{unsupported_boundary_fields}; only rectangular roomsize is supported"
+        )
     native_objects = payload.get("objects")
     if not isinstance(native_objects, Mapping):
         raise ArtifactValidationError("SceneWeaver layout.objects must be a JSON object")
@@ -110,10 +124,10 @@ def convert_scene_weaver(
             size=size,
             hint=native,
             native_record=native_record,
+            resolution_policy=str(
+                config.get("asset_resolution_policy") or "exact_only"
+            ),
         )
-        if not record.get("asset_key"):
-            record["asset_key"] = f"sceneweaver_proxy:{object_id}"
-            record["source_db"] = "sceneweaver_layout"
         fields = asset_fields(
             object_id=object_id,
             target_size=size,
@@ -126,6 +140,7 @@ def convert_scene_weaver(
         metadata.update(
             {
                 "native_object_index": index,
+                "native_asset_id": asset_key,
                 "native_position_anchor": "bottom_center",
                 "native_parent_relations": native.get("parent") or [],
             }

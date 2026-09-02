@@ -22,14 +22,59 @@ from benchmark.vlm_assistance import VLMAssistanceBudget
 
 
 ASSET_SUPPORT_VALUES = {"required", "optional", "unsupported", "unknown"}
+ROOM_MODEL_VALUES = {"single_room", "multi_room"}
+BOUNDARY_MODEL_VALUES = {"axis_aligned_rectangle", "polygon"}
+ARCHITECTURE_FEATURE_VALUES = {"walls", "openings", "room_topology"}
+GEOMETRY_FIDELITY_VALUES = {"bbox", "mesh_optional", "mesh"}
 
 
-def _validate_values(name: str, values: tuple[str, ...], allowed: set[str]) -> None:
-    if not values:
+def _validate_values(
+    name: str,
+    values: tuple[str, ...],
+    allowed: set[str],
+    *,
+    allow_empty: bool = False,
+) -> None:
+    if not values and not allow_empty:
         raise ValueError(f"{name} must not be empty")
     unknown = sorted(set(values) - allowed)
     if unknown:
         raise ValueError(f"{name} contains unsupported values: {unknown}")
+
+
+@dataclass(frozen=True)
+class SceneCompatibilityRequirements:
+    """Scene semantics required by one evaluator-bound conversion."""
+
+    room_models: tuple[str, ...] = ("single_room",)
+    boundary_models: tuple[str, ...] = ("axis_aligned_rectangle",)
+    architecture_features: tuple[str, ...] = ()
+    geometry_fidelity: tuple[str, ...] = ("bbox",)
+    preserves_asset_identity: bool = True
+
+    def __post_init__(self) -> None:
+        _validate_values("room_models", self.room_models, ROOM_MODEL_VALUES)
+        _validate_values(
+            "boundary_models", self.boundary_models, BOUNDARY_MODEL_VALUES
+        )
+        _validate_values(
+            "architecture_features",
+            self.architecture_features,
+            ARCHITECTURE_FEATURE_VALUES,
+            allow_empty=True,
+        )
+        _validate_values(
+            "geometry_fidelity", self.geometry_fidelity, GEOMETRY_FIDELITY_VALUES
+        )
+
+    def as_dict(self) -> dict:
+        return {
+            "room_models": list(self.room_models),
+            "boundary_models": list(self.boundary_models),
+            "architecture_features": list(self.architecture_features),
+            "geometry_fidelity": list(self.geometry_fidelity),
+            "preserves_asset_identity": self.preserves_asset_identity,
+        }
 
 
 @dataclass(frozen=True)
@@ -42,6 +87,11 @@ class AdapterCapabilities:
     native_output_types: tuple[str, ...] = (O1_OBJECT_STATE,)
     evaluator_output_types: tuple[str, ...] = (O1_OBJECT_STATE,)
     vlm_assistance_stages: tuple[str, ...] = ()
+    room_models: tuple[str, ...] = ("single_room",)
+    boundary_models: tuple[str, ...] = ("axis_aligned_rectangle",)
+    architecture_features: tuple[str, ...] = ()
+    geometry_fidelity: tuple[str, ...] = ("bbox",)
+    preserves_asset_identity: bool = False
 
     def __post_init__(self) -> None:
         if self.asset_support not in ASSET_SUPPORT_VALUES:
@@ -51,6 +101,19 @@ class AdapterCapabilities:
         _validate_values("input_types", self.input_types, INPUT_TYPES)
         _validate_values("native_output_types", self.native_output_types, OUTPUT_TYPES)
         _validate_values("evaluator_output_types", self.evaluator_output_types, EVALUATOR_OUTPUT_TYPES)
+        _validate_values("room_models", self.room_models, ROOM_MODEL_VALUES)
+        _validate_values(
+            "boundary_models", self.boundary_models, BOUNDARY_MODEL_VALUES
+        )
+        _validate_values(
+            "architecture_features",
+            self.architecture_features,
+            ARCHITECTURE_FEATURE_VALUES,
+            allow_empty=True,
+        )
+        _validate_values(
+            "geometry_fidelity", self.geometry_fidelity, GEOMETRY_FIDELITY_VALUES
+        )
 
     def as_dict(self) -> dict:
         return {
@@ -60,6 +123,11 @@ class AdapterCapabilities:
             "native_output_types": list(self.native_output_types),
             "evaluator_output_types": list(self.evaluator_output_types),
             "vlm_assistance_stages": list(self.vlm_assistance_stages),
+            "room_models": list(self.room_models),
+            "boundary_models": list(self.boundary_models),
+            "architecture_features": list(self.architecture_features),
+            "geometry_fidelity": list(self.geometry_fidelity),
+            "preserves_asset_identity": self.preserves_asset_identity,
         }
 
     def accepts(self, contract: GeneratorIOContract) -> bool:
@@ -68,6 +136,33 @@ class AdapterCapabilities:
             and contract.native_output_type in self.native_output_types
             and contract.evaluator_output_type in self.evaluator_output_types
         )
+
+    def require_scene_compatibility(
+        self, requirements: SceneCompatibilityRequirements
+    ) -> None:
+        """Fail when evaluator requirements exceed declared adapter semantics."""
+
+        missing = {
+            "room_models": sorted(set(requirements.room_models) - set(self.room_models)),
+            "boundary_models": sorted(
+                set(requirements.boundary_models) - set(self.boundary_models)
+            ),
+            "architecture_features": sorted(
+                set(requirements.architecture_features)
+                - set(self.architecture_features)
+            ),
+            "geometry_fidelity": sorted(
+                set(requirements.geometry_fidelity) - set(self.geometry_fidelity)
+            ),
+        }
+        missing = {key: value for key, value in missing.items() if value}
+        if requirements.preserves_asset_identity and not self.preserves_asset_identity:
+            missing["preserves_asset_identity"] = [True]
+        if missing:
+            raise ValueError(
+                "scene/evaluation requirements exceed adapter capabilities: "
+                f"missing={missing}; capabilities={self.as_dict()}"
+            )
 
 
 class OutputMaterializationRequired(RuntimeError):

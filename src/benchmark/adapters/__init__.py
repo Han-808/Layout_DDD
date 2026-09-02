@@ -10,9 +10,12 @@ from benchmark.adapters.base import (
     AdapterCapabilities,
     GenerationAdapter,
     OutputMaterializationRequired,
+    SceneCompatibilityRequirements,
 )
 from benchmark.adapters.catalog_placement import CatalogPlacementAdapter
 from benchmark.adapters.common import (
+    ASSET_RESOLUTION_ALLOW_RETRIEVAL,
+    ASSET_RESOLUTION_EXACT_ONLY,
     AssetProvider,
     DatasetRetrievalAssetProvider,
     MappingAssetProvider,
@@ -46,6 +49,8 @@ from benchmark.io_contracts import (
 )
 
 __all__ = [
+    "ASSET_RESOLUTION_ALLOW_RETRIEVAL",
+    "ASSET_RESOLUTION_EXACT_ONLY",
     "AdapterCapabilities",
     "AdapterRegistry",
     "AssetProvider",
@@ -68,6 +73,7 @@ __all__ = [
     "OutputIngestionKind",
     "OutputMaterializationRequired",
     "ReSpaceAdapter",
+    "SceneCompatibilityRequirements",
     "SceneOutputRoute",
     "SceneSmithAdapter",
     "SceneWeaverAdapter",

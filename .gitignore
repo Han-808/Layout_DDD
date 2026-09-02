@@ -51,6 +51,7 @@ downloads/
 
 # Local documentation and operational notes
 *.md
+!/COMPATIBILITY_STATUS.md
 !/metrics.md
 !/experiment_agenda.md
 !/Support/README.md

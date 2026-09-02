@@ -14,6 +14,12 @@ from benchmark.utils.io import read_json
 
 
 MESH_EXTENSIONS = (".glb", ".gltf", ".obj", ".fbx")
+ASSET_RESOLUTION_EXACT_ONLY = "exact_only"
+ASSET_RESOLUTION_ALLOW_RETRIEVAL = "allow_retrieval"
+ASSET_RESOLUTION_POLICIES = {
+    ASSET_RESOLUTION_EXACT_ONLY,
+    ASSET_RESOLUTION_ALLOW_RETRIEVAL,
+}
 
 
 class AssetProvider(Protocol):
@@ -249,6 +255,17 @@ def load_asset_provider(
     return None
 
 
+def asset_resolution_policy(config: Mapping[str, Any]) -> str:
+    policy = str(
+        config.get("asset_resolution_policy") or ASSET_RESOLUTION_EXACT_ONLY
+    ).strip()
+    if policy not in ASSET_RESOLUTION_POLICIES:
+        raise ArtifactValidationError(
+            "asset_resolution_policy must be exact_only or allow_retrieval"
+        )
+    return policy
+
+
 def resolve_asset_record(
     provider: AssetProvider | None,
     *,
@@ -259,29 +276,99 @@ def resolve_asset_record(
     size: Sequence[float] | None,
     hint: Mapping[str, Any] | None = None,
     native_record: Mapping[str, Any] | None = None,
+    resolution_policy: str = ASSET_RESOLUTION_EXACT_ONLY,
 ) -> dict[str, Any]:
+    if resolution_policy not in ASSET_RESOLUTION_POLICIES:
+        raise ArtifactValidationError(
+            "asset resolution policy must be exact_only or allow_retrieval"
+        )
     record = dict(native_record or {})
+    argument_asset_key = _first_text(asset_key)
+    record_asset_key = _record_asset_key(record)
+    if (
+        resolution_policy == ASSET_RESOLUTION_EXACT_ONLY
+        and argument_asset_key
+        and record_asset_key
+        and argument_asset_key != record_asset_key
+    ):
+        raise ArtifactValidationError(
+            "exact_only conversion found conflicting persisted asset identities: "
+            f"argument={argument_asset_key!r}, record={record_asset_key!r}"
+        )
+    native_asset_key = _first_text(argument_asset_key, record_asset_key)
+    if not native_asset_key and resolution_policy == ASSET_RESOLUTION_EXACT_ONLY:
+        raise ArtifactValidationError(
+            "exact_only conversion requires a persisted native asset ID or binding artifact"
+        )
+    if native_asset_key:
+        record["asset_key"] = native_asset_key
     resolved: Mapping[str, Any] | None = None
+    route = "native_identity_only"
     if (
         provider is not None
-        and asset_key
+        and native_asset_key
         and callable(getattr(provider, "resolve", None))
     ):
-        resolved = provider.resolve(asset_key, source_db=source_db, hint=hint)
-    if provider is not None and resolved is None and callable(getattr(provider, "retrieve", None)):
+        resolved = provider.resolve(
+            native_asset_key,
+            source_db=source_db,
+            hint=hint,
+        )
+        if resolved is not None:
+            route = "exact_resolve"
+    if (
+        resolution_policy == ASSET_RESOLUTION_ALLOW_RETRIEVAL
+        and provider is not None
+        and resolved is None
+        and callable(getattr(provider, "retrieve", None))
+    ):
         resolved = provider.retrieve(
-            description or category or asset_key or "object",
+            description or category or native_asset_key or "object",
             category=category,
             size=size,
             hint=hint,
         )
+        if resolved is not None:
+            route = "semantic_retrieval"
+    resolved_key = ""
     if resolved is not None:
         if not isinstance(resolved, Mapping):
             raise TypeError("asset provider must return a mapping or None")
+        resolved_key = _record_asset_key(resolved)
+        if (
+            resolution_policy == ASSET_RESOLUTION_EXACT_ONLY
+            and resolved_key
+            and resolved_key != native_asset_key
+        ):
+            raise ArtifactValidationError(
+                "exact_only asset resolver changed identity: "
+                f"native={native_asset_key!r}, resolved={resolved_key!r}"
+            )
         record.update(dict(resolved))
-    if asset_key:
-        record.setdefault("asset_key", asset_key)
+    if route == "semantic_retrieval":
+        chosen_key = resolved_key
+    else:
+        chosen_key = _record_asset_key(record) or native_asset_key
+    if not chosen_key:
+        raise ArtifactValidationError(
+            "asset retrieval did not persist a concrete asset ID"
+        )
+    if (
+        resolution_policy == ASSET_RESOLUTION_EXACT_ONLY
+        and chosen_key != native_asset_key
+    ):
+        raise ArtifactValidationError(
+            "exact_only conversion detected conflicting native asset identity: "
+            f"native={native_asset_key!r}, chosen={chosen_key!r}"
+        )
+    record["asset_key"] = chosen_key
     record.setdefault("source_db", source_db)
+    record["_asset_resolution"] = {
+        "policy": resolution_policy,
+        "route": route,
+        "native_asset_id": native_asset_key or None,
+        "resolved_asset_id": chosen_key,
+    }
     return record
 
 
@@ -359,6 +446,9 @@ def asset_fields(
         else {}
     )
     metadata.setdefault("interactive", bool(record.get("interactive", False)))
+    resolution = record.get("_asset_resolution")
+    if isinstance(resolution, Mapping):
+        metadata["asset_resolution"] = dict(resolution)
     canonical_front = record.get("canonical_front") or record.get("front")
     if canonical_front is not None:
         metadata.setdefault("canonical_front", canonical_front)
@@ -457,6 +547,20 @@ def _asset_aliases(key: str, record: Mapping[str, Any]) -> set[str]:
     return aliases
 
 
+def _record_asset_key(record: Mapping[str, Any]) -> str:
+    nested_ref = record.get("asset_ref")
+    nested_ref = nested_ref if isinstance(nested_ref, Mapping) else {}
+    return _first_text(
+        record.get("asset_key"),
+        record.get("asset_id"),
+        record.get("jid"),
+        record.get("uid"),
+        record.get("modelId"),
+        record.get("model_id"),
+        nested_ref.get("asset_key"),
+    )
+
+
 def _is_dataset_retrieval_runtime(value: Any) -> bool:
     return (
         callable(getattr(value, "retrieve", None))
@@ -519,10 +623,14 @@ def _first_text(*values: Any) -> str:
 
 
 __all__ = [
+    "ASSET_RESOLUTION_ALLOW_RETRIEVAL",
+    "ASSET_RESOLUTION_EXACT_ONLY",
+    "ASSET_RESOLUTION_POLICIES",
     "AssetProvider",
     "DatasetRetrievalAssetProvider",
     "MappingAssetProvider",
     "asset_fields",
+    "asset_resolution_policy",
     "load_asset_provider",
     "record_bbox_center",
     "record_bbox_size",

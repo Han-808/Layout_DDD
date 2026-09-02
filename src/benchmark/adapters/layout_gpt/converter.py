@@ -93,10 +93,10 @@ def convert_layout_gpt(
             size=size,
             hint=attributes,
             native_record=native_record,
+            resolution_policy=str(
+                config.get("asset_resolution_policy") or "exact_only"
+            ),
         )
-        if not record_asset.get("asset_key"):
-            record_asset["asset_key"] = f"layoutgpt_proxy:{object_id}"
-            record_asset["source_db"] = "layoutgpt_layout"
         fields = asset_fields(
             object_id=object_id,
             target_size=size,
@@ -106,7 +106,13 @@ def convert_layout_gpt(
             config=config,
         )
         metadata = dict(fields["metadata"])
-        metadata.update({"native_category": category, "native_attributes": dict(attributes)})
+        metadata.update(
+            {
+                "native_category": category,
+                "native_attributes": dict(attributes),
+                "native_asset_id": asset_key,
+            }
+        )
         objects.append(
             {
                 "id": object_id,
