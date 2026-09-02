@@ -1,0 +1,89 @@
+{
+  "methods": {
+    "catalog_placement": {
+      "adapter_config": {
+        "endpoint": "https://YOUR-AUTHORIZED-ENDPOINT/v1/chat/completions",
+        "model": "YOUR-MODEL-ID",
+        "api_key_env": "YOUR_AUTHORIZED_API_KEY_ENV",
+        "temperature": 0.0,
+        "max_tokens": 4096,
+        "timeout_seconds": 300,
+        "max_retries": 1,
+        "response_format_json": true
+      }
+    },
+    "layout_gpt": {
+      "adapter_config": {
+        "comparison_support": {
+          "fixed_object_inventory": true,
+          "exact_asset_ids": true,
+          "fixed_native_scale": true
+        },
+        "execution": {
+          "repo_path": "/ABSOLUTE/PATH/TO/LayoutGPT",
+          "python_executable": "/ABSOLUTE/PATH/TO/layoutgpt/python",
+          "command": ["{python_executable}", "{repo_path}/integration_entrypoint.py", "--request", "{native_input}", "--comparison-input", "{comparison_input}", "--comparison-catalog", "{comparison_catalog}", "--output", "{upstream_output_dir}/layoutgpt.json"],
+          "native_artifact": "{upstream_output_dir}/layoutgpt.json"
+        }
+      }
+    },
+    "direct_layout": {
+      "adapter_config": {
+        "comparison_support": {
+          "fixed_object_inventory": true,
+          "exact_asset_ids": true,
+          "fixed_native_scale": true
+        },
+        "execution": {
+          "repo_path": "/ABSOLUTE/PATH/TO/DirectLayout",
+          "python_executable": "/ABSOLUTE/PATH/TO/directlayout/python",
+          "command": ["{python_executable}", "{repo_path}/integration_entrypoint.py", "--input", "{native_input}", "--comparison-input", "{comparison_input}", "--assets-dir", "{comparison_asset_root}", "--output-dir", "{upstream_output_dir}"],
+          "native_artifact_glob": "{upstream_output_dir}/*.json"
+        }
+      }
+    },
+    "layout_vlm": {
+      "adapter_config": {
+        "execution": {
+          "repo_path": "/ABSOLUTE/PATH/TO/LayoutVLM",
+          "python_executable": "/ABSOLUTE/PATH/TO/layoutvlm/python",
+          "command": ["{python_executable}", "{repo_path}/main.py", "--scene_json_file", "{native_input}", "--save_dir", "{upstream_output_dir}"],
+          "native_artifact": "{upstream_output_dir}/layout.json"
+        }
+      }
+    },
+    "respace": {
+      "adapter_config": {
+        "comparison_support": {
+          "fixed_object_inventory": true,
+          "exact_asset_ids": true,
+          "fixed_native_scale": true
+        },
+        "execution": {
+          "repo_path": "/ABSOLUTE/PATH/TO/respace",
+          "python_executable": "/ABSOLUTE/PATH/TO/respace/python",
+          "command": ["{python_executable}", "{repo_path}/integration_entrypoint.py", "--request", "{native_input}", "--comparison-input", "{comparison_input}", "--output", "{upstream_output_dir}/scene.json"],
+          "native_artifact": "{upstream_output_dir}/scene.json"
+        }
+      }
+    },
+    "scene_weaver": {
+      "adapter_config": {
+        "selected_iteration": 0,
+        "comparison_support": {
+          "fixed_object_inventory": true,
+          "exact_asset_ids": true,
+          "fixed_native_scale": true,
+          "frozen_iteration_bindings": true,
+          "no_object_insertion_removal": true
+        },
+        "execution": {
+          "repo_path": "/ABSOLUTE/PATH/TO/SceneWeaver",
+          "python_executable": "/ABSOLUTE/PATH/TO/sceneweaver/python",
+          "command": ["{python_executable}", "{repo_path}/integration_entrypoint.py", "--request", "{native_input}", "--comparison-input", "{comparison_input}", "--output-root", "{upstream_output_dir}/sceneweaver_native"],
+          "native_artifact": "{upstream_output_dir}/sceneweaver_native"
+        }
+      }
+    }
+  }
+}

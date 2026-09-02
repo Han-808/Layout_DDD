@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import time
 from collections.abc import Mapping
 from copy import deepcopy
 from pathlib import Path
@@ -158,6 +159,7 @@ def run_controlled_generation(
         materialization=materialization,
     )
     result: dict[str, Any] | None = None
+    generation_started = time.monotonic()
     try:
         result = run_generate(
             generation_input=controlled_input,
@@ -196,6 +198,10 @@ def run_controlled_generation(
     execution_metadata = adapter_metadata.get("generation_run")
     if not isinstance(execution_metadata, Mapping):
         raise ComparisonRunError("adapter metadata lacks generation_run audit record")
+    execution_metadata = dict(execution_metadata)
+    execution_metadata.setdefault(
+        "runtime_seconds", time.monotonic() - generation_started
+    )
     native_artifact = result.get("raw_native_artifact") or result.get("native_output")
     if not native_artifact:
         raise ComparisonRunError("controlled run lacks a preserved native artifact")
@@ -213,6 +219,8 @@ def run_controlled_generation(
     execution_input = method_input.get("execution_input")
     execution_input = execution_input if isinstance(execution_input, Mapping) else {}
     native_input_path = execution_input.get("path")
+    if not native_input_path and adapter_name == "catalog_placement":
+        native_input_path = result["method_input"]
     if not native_input_path:
         raise ComparisonRunError("controlled run lacks its prepared native input")
     native_input = read_json(native_input_path)
@@ -521,6 +529,9 @@ def _completed_manifest(
     )
     canonical_path = Path(str(result["generated_scene"]))
     canonical_hash, _ = artifact_sha256(canonical_path)
+    native_hash = execution_metadata.get("native_artifact_sha256")
+    if native_hash is None:
+        native_hash, _ = artifact_sha256(Path(str(result["raw_native_artifact"])))
     manifest.update(
         {
             "status": "COMPLETED",
@@ -530,15 +541,23 @@ def _completed_manifest(
             "adapter_metadata": str(result["adapter_metadata"]),
             "execution_result": execution_metadata.get("execution_result_path"),
             "runner": {
-                "kind": execution_metadata.get("runner_kind"),
+                "kind": execution_metadata.get("runner_kind")
+                or execution_metadata.get("provider"),
                 "command": execution_metadata.get("command"),
                 "return_code": execution_metadata.get("return_code"),
                 "timed_out": execution_metadata.get("timed_out"),
                 "stdout": execution_metadata.get("stdout_path"),
                 "stderr": execution_metadata.get("stderr_path"),
+                "raw_model_response": execution_metadata.get("raw_response_path"),
+                "raw_model_response_sha256": execution_metadata.get(
+                    "raw_response_sha256"
+                ),
+                "request_metadata": execution_metadata.get(
+                    "request_metadata_path"
+                ),
             },
             "native_artifact": str(result["raw_native_artifact"]),
-            "native_artifact_sha256": execution_metadata.get("native_artifact_sha256"),
+            "native_artifact_sha256": native_hash,
             "native_selection": native_selection_path.resolve().as_posix(),
             "canonical_scene": canonical_path.resolve().as_posix(),
             "canonical_scene_sha256": canonical_hash,
@@ -609,12 +628,20 @@ def _resource_metadata(
     callback = callback if isinstance(callback, Mapping) else {}
     declared = callback.get("resource_usage")
     declared = dict(declared) if isinstance(declared, Mapping) else {}
+    request_metadata: dict[str, Any] = {}
+    request_metadata_path = execution.get("request_metadata_path")
+    if request_metadata_path:
+        loaded = read_json(request_metadata_path)
+        request_metadata = dict(loaded) if isinstance(loaded, Mapping) else {}
+    usage = request_metadata.get("usage")
+    usage = usage if isinstance(usage, Mapping) else {}
     return {
         "budget_policy": contract.as_dict()["generation"]["budget_policy"],
         "wall_clock_seconds": execution.get("runtime_seconds"),
-        "model": declared.get("model"),
-        "generation_calls": declared.get("generation_calls"),
-        "tokens": declared.get("tokens"),
+        "model": declared.get("model") or execution.get("model"),
+        "generation_calls": declared.get("generation_calls")
+        or (1 if request_metadata else None),
+        "tokens": declared.get("tokens") or usage.get("total_tokens"),
         "iteration_count": declared.get("iteration_count")
         or (
             len(execution.get("sceneweaver_available_iterations") or [])
@@ -662,10 +689,14 @@ def _evaluator_metadata(
     if path is None or report is None:
         return {
             "policy": contract.as_dict()["evaluator"]["policy"],
+            "config_sha256": contract.as_dict()["evaluator"].get(
+                "config_sha256"
+            ),
             "report": None,
         }
     return {
         "policy": contract.as_dict()["evaluator"]["policy"],
+        "config_sha256": contract.as_dict()["evaluator"].get("config_sha256"),
         "entrypoint": "benchmark.api.evaluation.run_evaluate",
         "workflow": report.get("workflow"),
         "profile_version": report.get("evaluation_profile_version")

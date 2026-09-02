@@ -27,6 +27,11 @@ INELIGIBLE = "INELIGIBLE"
 # their thin runner to attest the listed controls. An attestation is persisted;
 # output validation still independently rejects drift.
 BUILTIN_CONTROLS: dict[str, set[str]] = {
+    "catalog_placement": {
+        "fixed_object_inventory",
+        "exact_asset_ids",
+        "fixed_native_scale",
+    },
     "layout_gpt": set(),
     "direct_layout": set(),
     "layout_vlm": {
@@ -120,14 +125,14 @@ def check_method_eligibility(
     configured = _configured_controls(adapter_config)
     builtin = set(BUILTIN_CONTROLS.get(adapter_name, set()))
     if (
-        adapter_name == "layout_vlm"
+        adapter_name in {"catalog_placement", "layout_vlm"}
         and catalog is not None
         and any(
             list(asset.get("native_scale") or []) != [1.0, 1.0, 1.0]
             for asset in catalog.assets
         )
     ):
-        # The released scene table represents unit-scale processed assets. A
+        # These direct scene-table paths use unit-scale processed assets. A
         # wrapper may attest non-unit scale support, but v1 must not assume it.
         builtin.discard("fixed_native_scale")
     available = builtin | configured

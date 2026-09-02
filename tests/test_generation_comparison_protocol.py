@@ -559,6 +559,140 @@ def test_controlled_offline_native_artifact_mode_remains_available(
     assert Path(result["native_artifact"]).resolve() != native.resolve()
 
 
+def test_current_catalog_placement_method_has_frozen_assets_offline_route(
+    tmp_path: Path,
+) -> None:
+    catalog = _catalog()
+    protocol = _protocol(catalog, mode="frozen_assets")
+    native = write_json(
+        tmp_path / "catalog_placement_v1.json",
+        {
+            "schema_version": "catalog_placement_v1",
+            "instances": [
+                {
+                    "instance_id": "current_method_chair",
+                    "asset_id": "chair.asset.001",
+                    "center_m": [2.0, 2.0, 0.5],
+                    "uniform_scale": 1.0,
+                    "rotation_euler_xyz_deg": [0.0, 0.0, 0.0],
+                    "slot_id": "chair_0",
+                }
+            ],
+        },
+    )
+    result = run_controlled_generation(
+        generation_input=_generation_input(),
+        adapter_name="catalog_placement",
+        protocol=protocol,
+        asset_catalog=catalog,
+        out_dir=tmp_path / "catalog_placement",
+        method_output=native,
+        run_generation=False,
+    )
+
+    assert result["valid_comparison_run"] is True
+    assert result["eligibility_status"] == "ELIGIBLE"
+    assert result["selected_asset_ids"] == {"chair_0": "chair.asset.001"}
+    assert result["runner"]["kind"] is None
+    assert Path(result["native_artifact"]).read_bytes() == native.read_bytes()
+    method_input = read_json(result["method_input"])
+    assert method_input["generation_comparison"]["scale_policy"] == (
+        "fixed_native_scale"
+    )
+    assert "fixed_native_scale" in method_input["messages"][0]["content"]
+
+
+def test_one_frozen_asset_can_bind_multiple_slots_without_metadata_conflict(
+    tmp_path: Path,
+) -> None:
+    catalog = _catalog()
+    protocol_value = _protocol(catalog, mode="frozen_assets").as_dict()
+    protocol_value["objects"] = [
+        {
+            "slot_id": f"chair_{index}",
+            "category": "chair",
+            "description": "wood dining chair",
+            "asset_id": "chair.asset.001",
+        }
+        for index in range(2)
+    ]
+    protocol = ComparisonProtocol.from_mapping(protocol_value)
+    native = write_json(
+        tmp_path / "two_chairs.json",
+        {
+            "schema_version": "catalog_placement_v1",
+            "instances": [
+                {
+                    "instance_id": f"chair_instance_{index}",
+                    "asset_id": "chair.asset.001",
+                    "center_m": [1.5 + index, 2.0, 0.5],
+                    "uniform_scale": 1.0,
+                    "rotation_euler_xyz_deg": [0.0, 0.0, 0.0],
+                    "slot_id": f"chair_{index}",
+                }
+                for index in range(2)
+            ],
+        },
+    )
+    result = run_controlled_generation(
+        generation_input=_generation_input(),
+        adapter_name="catalog_placement",
+        protocol=protocol,
+        asset_catalog=catalog,
+        out_dir=tmp_path / "two_chairs",
+        method_output=native,
+        run_generation=False,
+    )
+
+    assert result["valid_comparison_run"] is True
+    assert result["selected_asset_ids"] == {
+        "chair_0": "chair.asset.001",
+        "chair_1": "chair.asset.001",
+    }
+
+
+def test_catalog_placement_rejects_duplicate_native_slot_bindings(
+    tmp_path: Path,
+) -> None:
+    catalog = _catalog()
+    protocol = _protocol(catalog, mode="frozen_assets")
+    native = write_json(
+        tmp_path / "duplicate_slot.json",
+        {
+            "schema_version": "catalog_placement_v1",
+            "instances": [
+                {
+                    "instance_id": f"chair_instance_{index}",
+                    "asset_id": "chair.asset.001",
+                    "center_m": [1.5 + index, 2.0, 0.5],
+                    "uniform_scale": 1.0,
+                    "rotation_euler_xyz_deg": [0.0, 0.0, 0.0],
+                    "slot_id": "chair_0",
+                }
+                for index in range(2)
+            ],
+        },
+    )
+    with pytest.raises(ComparisonRunError, match="fairness validation failed"):
+        run_controlled_generation(
+            generation_input=_generation_input(),
+            adapter_name="catalog_placement",
+            protocol=protocol,
+            asset_catalog=catalog,
+            out_dir=tmp_path / "duplicate_slot_run",
+            method_output=native,
+            run_generation=False,
+        )
+    validation = read_json(
+        tmp_path / "duplicate_slot_run" / "comparison" / "validation.json"
+    )
+    assert any(
+        item["code"] == "object_inventory_mismatch"
+        and "duplicate_slot_bindings" in item["details"]
+        for item in validation["violations"]
+    )
+
+
 def test_pre_run_architecture_mismatch_is_rejected_before_runner(
     tmp_path: Path,
 ) -> None:

@@ -29,7 +29,9 @@ __all__ = [
     "load_asset_catalog",
     "load_comparison_protocol",
     "materialize_method_catalog",
+    "prepare_controlled_pilot",
     "run_controlled_generation",
+    "run_prepared_pilot",
     "validate_comparison_run",
 ]
 
@@ -38,6 +40,11 @@ def __getattr__(name: str):
     if name in {"ComparisonRunError", "run_controlled_generation"}:
         return getattr(
             import_module("benchmark.generation_comparison.execution"),
+            name,
+        )
+    if name in {"prepare_controlled_pilot", "run_prepared_pilot"}:
+        return getattr(
+            import_module("benchmark.generation_comparison.pilot"),
             name,
         )
     raise AttributeError(name)

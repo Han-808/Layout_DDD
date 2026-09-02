@@ -23,6 +23,7 @@ from benchmark.utils.io import read_json, write_json
 
 MATERIALIZATION_SCHEMA_VERSION = "comparison_catalog_materialization_v1"
 SUPPORTED_METHODS = {
+    "catalog_placement",
     "layout_gpt",
     "direct_layout",
     "layout_vlm",
@@ -132,6 +133,19 @@ def architecture_from_native_input(
 ) -> dict[str, Any]:
     """Reverse only the room portion of each released runner input."""
 
+    if adapter_name == "catalog_placement":
+        comparison = (
+            value.get("generation_comparison")
+            if isinstance(value, Mapping)
+            else None
+        )
+        if not isinstance(comparison, Mapping) or not isinstance(
+            comparison.get("architecture"), Mapping
+        ):
+            raise ArtifactValidationError(
+                "catalog_placement method input lacks generation_comparison architecture"
+            )
+        return dict(comparison["architecture"])
     if adapter_name == "layout_gpt":
         dimensions = _vector(value.get("room_dimensions_m"), "LayoutGPT room dimensions")
         return _architecture_from_dimensions(*dimensions)
@@ -216,6 +230,14 @@ def _method_payload(
         "logical_to_native_slot": dict(slot_map),
     }
     assets_by_id = {asset["asset_id"]: asset for asset in catalog.assets}
+    if adapter_name == "catalog_placement":
+        return {
+            **common,
+            "frozen_selected_assets": {
+                slot_map[slot_id]: _scene_weaver_asset(catalog.get(asset_id))
+                for slot_id, asset_id in protocol.bindings.items()
+            },
+        }
     if adapter_name == "layout_gpt":
         return {
             **common,

@@ -32,6 +32,8 @@ the world position of the scaled catalog canonical local-bbox center. uniform_sc
 a finite positive scalar applied exactly and equally on all three local axes of the
 frozen asset. The materializer must not shrink, contain-fit, or otherwise reinterpret
 this generator-owned scale.
+When generation_comparison.scale_policy is "fixed_native_scale", uniform_scale must
+be exactly 1.0 for every instance. Never compensate by changing the frozen bbox.
 rotation_euler_xyz_deg is intrinsic XYZ Euler degrees, applied to column vectors as
 Rz @ Ry @ Rx about the canonical bbox center. Express floor or support placement
 directly through center_m; there is no vertical-anchor field.
@@ -129,6 +131,9 @@ def build_catalog_placement_method_input(generation_input: dict) -> dict:
             "previous_generated_scene": reflection.get("previous_generated_scene"),
             "previous_evaluation": reflection.get("previous_evaluation"),
         }
+    comparison = visible.get("generation_comparison")
+    if isinstance(comparison, dict):
+        user_payload["generation_comparison"] = deepcopy(comparison)
 
     user_prompt = (
         "Output-shape example (replace every example value and include every intended instance):\n"
@@ -144,6 +149,9 @@ def build_catalog_placement_method_input(generation_input: dict) -> dict:
         "request_id": str(generation_input.get("request_id") or "request_001"),
         "public_slot_ids": public_slots,
         "catalog_facing_contract": benchmark_catalog_facing_contract(),
+        "generation_comparison": (
+            deepcopy(comparison) if isinstance(comparison, dict) else None
+        ),
         "messages": [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": user_prompt},

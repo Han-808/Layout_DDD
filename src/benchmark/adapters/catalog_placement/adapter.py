@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 from benchmark.adapters.base import AdapterCapabilities, GenerationAdapter
@@ -35,7 +36,13 @@ class CatalogPlacementAdapter(GenerationAdapter):
         input_types=(I2_NATURAL_LANGUAGE_STRUCTURE,),
         native_output_types=(O1_OBJECT_STATE,),
         evaluator_output_types=(O1_OBJECT_STATE, O3_SCENE_PACKAGE),
+        room_models=("single_room",),
+        boundary_models=("axis_aligned_rectangle",),
+        architecture_features=(),
+        geometry_fidelity=("bbox", "mesh_optional"),
+        preserves_asset_identity=True,
     )
+    executable_integration = True
 
     def __init__(self) -> None:
         self.last_run_metadata: dict = {}
@@ -114,6 +121,11 @@ class CatalogPlacementAdapter(GenerationAdapter):
         raw_response_path = Path(out_dir) / "model_response.txt"
         raw_response_path.parent.mkdir(parents=True, exist_ok=True)
         raw_response_path.write_text(response_text, encoding="utf-8")
+        raw_response_sha256 = hashlib.sha256(raw_response_path.read_bytes()).hexdigest()
+        request_metadata_path = write_json(
+            Path(out_dir) / "model_request_metadata.json",
+            client.last_request_metadata,
+        )
         schema_repair = {
             "attempted": False,
             "attempt_count": 0,
@@ -132,6 +144,8 @@ class CatalogPlacementAdapter(GenerationAdapter):
                 "model": model_id,
                 "output_schema": self.output_schema,
                 "raw_response_path": raw_response_path.as_posix(),
+                "raw_response_sha256": raw_response_sha256,
+                "request_metadata_path": request_metadata_path.as_posix(),
                 "schema_repair": schema_repair,
                 "schema_failure": str(error),
             }
@@ -142,16 +156,16 @@ class CatalogPlacementAdapter(GenerationAdapter):
         output_path = write_json(
             Path(out_dir) / "catalog_placement_output.json", placement
         )
-        request_metadata_path = write_json(
-            Path(out_dir) / "model_request_metadata.json",
-            client.last_request_metadata,
-        )
+        native_artifact_sha256 = hashlib.sha256(output_path.read_bytes()).hexdigest()
         self.last_run_metadata = {
             "provider": "openai_compatible",
             "endpoint": endpoint,
             "model": model_id,
             "output_schema": self.output_schema,
             "raw_response_path": raw_response_path.as_posix(),
+            "raw_response_sha256": raw_response_sha256,
+            "native_artifact_path": output_path.as_posix(),
+            "native_artifact_sha256": native_artifact_sha256,
             "request_metadata_path": request_metadata_path.as_posix(),
             "schema_repair": schema_repair,
         }

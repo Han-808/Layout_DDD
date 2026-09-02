@@ -225,8 +225,8 @@ def _raw_native_artifact_path(
             getattr(adapter, "last_run_metadata", None),
             "preserved_native_artifact_path",
         ),
-        (getattr(adapter, "last_run_metadata", None), "raw_response_path"),
         (getattr(adapter, "last_parse_metadata", None), "raw_artifact_path"),
+        (getattr(adapter, "last_run_metadata", None), "raw_response_path"),
     ):
         path = _metadata_path(metadata, key)
         if path is not None:

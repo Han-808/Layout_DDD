@@ -112,16 +112,35 @@ def validate_comparison_run(
     native_to_logical = {str(native): str(logical) for logical, native in slot_map.items()}
     observed: dict[str, Mapping[str, Any]] = {}
     unexpected_native_ids: list[str] = []
+    duplicate_slot_bindings: dict[str, list[str]] = {}
     for raw in objects:
         if not isinstance(raw, Mapping):
             continue
         native_id = str(raw.get("id") or "")
         logical = native_to_logical.get(native_id)
+        if adapter_name == "catalog_placement":
+            object_metadata = raw.get("metadata")
+            object_metadata = (
+                object_metadata if isinstance(object_metadata, Mapping) else {}
+            )
+            placement_metadata = object_metadata.get("catalog_placement")
+            placement_metadata = (
+                placement_metadata
+                if isinstance(placement_metadata, Mapping)
+                else {}
+            )
+            slot_id = placement_metadata.get("slot_id")
+            logical = str(slot_id) if slot_id is not None else None
         if protocol.inventory_policy != INVENTORY_FROZEN:
             logical = native_id
         if logical is None:
             unexpected_native_ids.append(native_id)
         else:
+            if logical in observed:
+                duplicate_slot_bindings.setdefault(
+                    logical,
+                    [str(observed[logical].get("id") or "")],
+                ).append(native_id)
             observed[logical] = raw
 
     if protocol.inventory_policy == INVENTORY_FROZEN:
@@ -142,6 +161,14 @@ def validate_comparison_run(
                     "unexpected_object_insertion",
                     "generated output contains objects outside the frozen inventory",
                     native_object_ids=unexpected,
+                )
+            )
+        if duplicate_slot_bindings:
+            violations.append(
+                _violation(
+                    "object_inventory_mismatch",
+                    "multiple generated objects bind the same frozen slot",
+                    duplicate_slot_bindings=duplicate_slot_bindings,
                 )
             )
         expected_categories = {
@@ -264,6 +291,12 @@ def validate_comparison_run(
                 object_metadata if isinstance(object_metadata, Mapping) else {}
             )
             provenance = object_metadata.get("comparison_catalog_provenance")
+            asset_metadata = object_metadata.get("asset_metadata")
+            asset_metadata = (
+                asset_metadata if isinstance(asset_metadata, Mapping) else {}
+            )
+            if adapter_name == "catalog_placement":
+                provenance = asset_metadata.get("comparison_catalog_provenance")
             provenance = provenance if isinstance(provenance, Mapping) else {}
             differences: dict[str, Any] = {}
             for field, actual in (
@@ -274,18 +307,23 @@ def validate_comparison_run(
                 if expected is not None and actual != expected:
                     differences[field] = {"expected": expected, "actual": actual}
             expected_front = asset.get("canonical_front")
-            if expected_front is not None and object_metadata.get(
-                "canonical_front"
-            ) != expected_front:
+            actual_front = object_metadata.get("canonical_front")
+            if adapter_name == "catalog_placement":
+                actual_front = asset_metadata.get("canonical_front")
+            if expected_front is not None and actual_front != expected_front:
                 differences["canonical_front"] = {
                     "expected": expected_front,
-                    "actual": object_metadata.get("canonical_front"),
+                    "actual": actual_front,
                 }
             geometry_audit = object_metadata.get("geometry_audit")
+            if adapter_name == "catalog_placement":
+                geometry_audit = object_metadata.get("catalog_placement")
             geometry_audit = (
                 geometry_audit if isinstance(geometry_audit, Mapping) else {}
             )
             audited_local_bbox = geometry_audit.get("asset_local_bbox_size")
+            if adapter_name == "catalog_placement":
+                audited_local_bbox = geometry_audit.get("catalog_bbox_size_m")
             if audited_local_bbox is not None and not _vectors_close(
                 audited_local_bbox,
                 asset["bbox_size_local"],
@@ -354,12 +392,21 @@ def validate_comparison_run(
                 object_metadata if isinstance(object_metadata, Mapping) else {}
             )
             geometry_audit = object_metadata.get("geometry_audit")
+            if adapter_name == "catalog_placement":
+                geometry_audit = object_metadata.get("catalog_placement")
             geometry_audit = (
                 geometry_audit if isinstance(geometry_audit, Mapping) else {}
             )
             audited_scale = geometry_audit.get("native_scale")
             if audited_scale is None:
                 audited_scale = geometry_audit.get("applied_scale")
+            if adapter_name == "catalog_placement":
+                requested = geometry_audit.get("requested_uniform_scale")
+                audited_scale = (
+                    [requested, requested, requested]
+                    if requested is not None
+                    else None
+                )
             if (
                 adapter_name == "respace"
                 and isinstance(audited_scale, Sequence)
@@ -400,7 +447,22 @@ def validate_comparison_run(
     metadata = metadata if isinstance(metadata, Mapping) else {}
     compatibility = metadata.get("harness_compatibility")
     compatibility = compatibility if isinstance(compatibility, Mapping) else {}
-    if compatibility.get("asset_resolution_policy") != "exact_only":
+    if (
+        adapter_name == "catalog_placement"
+        and metadata.get("asset_grounding")
+        != "selected_frozen_catalog_exact_asset_id"
+    ):
+        violations.append(
+            _violation(
+                "converter_retrieval_policy_violation",
+                "catalog_placement must use its frozen selected-asset input",
+                actual=metadata.get("asset_grounding"),
+            )
+        )
+    if (
+        adapter_name != "catalog_placement"
+        and compatibility.get("asset_resolution_policy") != "exact_only"
+    ):
         violations.append(
             _violation(
                 "converter_retrieval_policy_violation",

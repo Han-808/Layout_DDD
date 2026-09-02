@@ -135,6 +135,7 @@ codes and the upstream command is not launched.
 
 | Method | Native | SharedDB | FrozenAssets | Reason / limitation |
 | --- | --- | --- | --- | --- |
+| Current `catalog_placement` | YES | NOT_APPLICABLE | YES | It already receives exact selected assets and slots; controlled input fixes `uniform_scale=1.0` and validates native placement identity. |
 | LayoutGPT | YES | CONDITIONAL | CONDITIONAL | Its released output is prompt-driven and needs a thin runner to consume the shared index; strict freezing additionally requires generation-time exact IDs and fixed inventory/scale. A post-hoc binding does not qualify. |
 | DirectLayout | YES | CONDITIONAL | CONDITIONAL | The native two-list request and asset directory remain intact. The runner must consume the materialized library and demonstrate fixed slots/IDs for FrozenAssets. |
 | LayoutVLM | YES | CONDITIONAL | YES | SharedDB retrieval still needs an upstream selection wrapper. FrozenAssets maps exact slots and UIDs into the native scene config; output scale is independently checked. |

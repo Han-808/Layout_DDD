@@ -177,15 +177,24 @@ def _asset_selection(
                 ),
             },
             "asset_proxy": {
+                "type": "external_asset_bbox",
                 "bbox_size": asset["bbox_size_local"],
                 "bbox_center_local": asset["bbox_center_local"],
             },
             "metadata": {
                 "comparison_protocol": protocol.as_dict()["protocol_id"],
-                "comparison_slot_id": slot["slot_id"],
                 "catalog_sha256": catalog.sha256,
                 "canonical_front": asset.get("canonical_front"),
                 "native_scale": asset["native_scale"],
+                "comparison_catalog_provenance": {
+                    **catalog.identity,
+                    "asset_id": asset["asset_id"],
+                    "bbox_size_local": asset["bbox_size_local"],
+                    "bbox_center_local": asset["bbox_center_local"],
+                    "native_scale": asset["native_scale"],
+                    "physical_dimensions": asset["physical_dimensions"],
+                    "canonical_front": asset.get("canonical_front"),
+                },
             },
         }
         rows.append(

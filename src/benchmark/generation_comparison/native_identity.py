@@ -47,6 +47,8 @@ def inspect_native_asset_selections(
             _auxiliary_mapping(execution_metadata, "asset_ids"),
             adapter_config or {},
         )
+    elif adapter_name == "catalog_placement":
+        objects = _catalog_placement_objects(payload)
     elif adapter_name == "direct_layout":
         objects = _direct_layout_objects(payload)
     elif adapter_name == "layout_vlm":
@@ -88,6 +90,31 @@ def _result(adapter_name: str, iterations: list[dict[str, Any]]) -> dict[str, An
         "adapter": adapter_name,
         "iterations": iterations,
     }
+
+
+def _catalog_placement_objects(payload: Any) -> list[dict[str, Any]]:
+    if not isinstance(payload, Mapping) or not isinstance(
+        payload.get("instances"), Sequence
+    ):
+        raise ArtifactValidationError(
+            "catalog_placement native artifact lacks instances"
+        )
+    result = []
+    for index, raw in enumerate(payload["instances"]):
+        if not isinstance(raw, Mapping):
+            raise ArtifactValidationError(
+                f"catalog_placement instances[{index}] must be an object"
+            )
+        result.append(
+            {
+                "native_object_id": str(raw.get("instance_id") or ""),
+                "slot_id": str(raw.get("slot_id") or ""),
+                "asset_id": _text(raw.get("asset_id")),
+                "category": None,
+                "selection_source": "native_catalog_placement",
+            }
+        )
+    return result
 
 
 def _layout_gpt_objects(
@@ -302,6 +329,10 @@ def _primary_json(source: Path, adapter_name: str) -> tuple[Any, Path]:
     if source.is_file():
         return read_json(source), source
     names = {
+        "catalog_placement": (
+            "catalog_placement_output.json",
+            "catalog_placement_v1.json",
+        ),
         "layout_gpt": ("layoutgpt.json",),
         "direct_layout": ("layout.json", "output_layout.json", "direct.json"),
         "layout_vlm": ("layout.json",),
