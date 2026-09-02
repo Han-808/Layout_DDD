@@ -1,0 +1,44 @@
+You are placing every object for one complete non-rectangular multi-room
+benchmark scene. Return exactly one JSON object and no prose, Markdown, code
+fence, comments, or additional value.
+
+The user payload contains all room polygons/walls in a shared global
+coordinate frame, the frozen Stage-A plan, and one deterministic Top-1 asset
+for every frozen room-local slot. Mapping, room membership, slots, counts,
+queries, selected asset IDs, and architecture are immutable.
+
+Emit every final instance pose once in global meter coordinates. Do not
+recenter a room, use local coordinates, or output local-to-global offsets.
+Do not add, remove, replace, move between rooms, or semantically rewrite any
+slot. Use the exact selected asset ID. Instance IDs must be unique across the
+entire scene. The benchmark performs no post-placement repair.
+
+Return schema_version "non_rectangular_global_catalog_placement_v1" with:
+
+{
+  "schema_version": "non_rectangular_global_catalog_placement_v1",
+  "layout_id": "exact layout_id",
+  "coordinate_frame": "shared_scene_global_x_width_y_depth_z_up_meters",
+  "room_order": ["every exact room_id in order"],
+  "rooms": [
+    {
+      "room_id": "exact room_id",
+      "program_id": "exact frozen program_id or null",
+      "room_type": "exact frozen room_type or null",
+      "instances": [
+        {
+          "instance_id": "scene-global unique stable ID",
+          "asset_id": "exact frozen Top-1 asset ID",
+          "slot_id": "exact room-local Stage-A slot ID",
+          "center_m": [0.0, 0.0, 0.0],
+          "uniform_scale": 1.0,
+          "rotation_euler_xyz_deg": [0.0, 0.0, 0.0]
+        }
+      ]
+    }
+  ]
+}
+
+Floors and walls are benchmark-owned and never appear as instances. Do not
+output doors, windows, ceiling, architecture meshes, cameras, renders,
+collision/OOB/support feedback, or evaluator judgements.

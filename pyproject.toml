@@ -19,6 +19,7 @@ dependencies = [
 
 [project.scripts]
 layout-ddd-generate = "benchmark.api.generation:main"
+layout-ddd-generate-nonrect = "benchmark.scene_generation.non_rectangular_multi_room.cli:main"
 layout-ddd-evaluate = "benchmark.api.evaluation:main"
 layout-ddd-evaluate-submission = "benchmark.api.submission:main"
 layout-ddd-evaluate-game = "benchmark.game_scene.route:main"
@@ -51,6 +52,7 @@ include-package-data = false
 "benchmark._resources" = [
   "schemas/*.json",
   "schemas/multi_room/*.json",
+  "schemas/non_rectangular/*.json",
   "configs/evaluation/*.yaml",
   "configs/evaluation/*.json",
   "configs/grouping/*.yaml",
@@ -61,6 +63,7 @@ include-package-data = false
   "configs/retrieval/golden/*.json",
 ]
 "benchmark.scene_generation.multi_room" = ["prompts/*.txt"]
+"benchmark.scene_generation.non_rectangular_multi_room" = ["prompts/*.txt"]
 
 [tool.pytest.ini_options]
 testpaths = [
@@ -88,6 +91,7 @@ testpaths = [
   "tests/test_evidence_contract.py",
   "tests/test_evaluation_campaign.py",
   "tests/test_external_harness_adapters.py",
+  "tests/test_evaluation_mode_interface.py",
   "tests/test_multi_room_evaluation.py",
   "tests/test_functional_discovery.py",
   "tests/test_functional_planner_adapter.py",
@@ -95,6 +99,22 @@ testpaths = [
   "tests/test_generation_campaign_v2.py",
   "tests/test_generation_legacy_forwarding_d1.py",
   "tests/test_multi_room_generation.py",
+  "tests/test_non_rectangular_generation_contracts.py",
+  "tests/test_non_rectangular_generation_architecture.py",
+  "tests/test_non_rectangular_generation_campaign.py",
+  "tests/test_non_rectangular_generation_runtime.py",
+  "tests/test_non_rectangular_spatiallm_conversion.py",
+  "tests/test_non_rectangular_spatiallm_cohort.py",
+  "tests/test_non_rectangular_spatiallm_programs.py",
+  "tests/test_non_rectangular_density_reference.py",
+  "tests/test_non_rectangular_spatiallm_program_cohort.py",
+  "tests/test_non_rectangular_contracts.py",
+  "tests/test_non_rectangular_preflight.py",
+  "tests/test_non_rectangular_report.py",
+  "tests/test_non_rectangular_room_layout.py",
+  "tests/test_non_rectangular_room_unit.py",
+  "tests/test_non_rectangular_workflow.py",
+  "tests/test_non_rectangular_whole_workflow.py",
   "tests/test_game_canonical_track.py",
   "tests/test_game_harness.py",
   "tests/test_game_mode.py",

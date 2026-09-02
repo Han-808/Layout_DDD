@@ -214,6 +214,27 @@ def generate_camera_pose_candidates(
     """
 
     policy_name = normalize_camera_candidate_policy(policy)
+    scene = request.get("scene") if isinstance(request, dict) else None
+    from benchmark.non_rectangular.geometry import (
+        is_non_rectangular_camera_scene,
+    )
+
+    if is_non_rectangular_camera_scene(scene):
+        from benchmark.non_rectangular.camera import (
+            generate_polygon_camera_pose_candidates,
+        )
+
+        base_generator = (
+            _generate_legacy_camera_pose_candidates
+            if policy_name == "legacy"
+            else _generate_feasible_camera_pose_candidates
+        )
+        return generate_polygon_camera_pose_candidates(
+            request,
+            max_candidates=max_candidates,
+            policy=policy_name,
+            base_generator=base_generator,
+        )
     if policy_name == "legacy":
         return _generate_legacy_camera_pose_candidates(
             request,
@@ -232,6 +253,20 @@ def generate_usable_surface_side_bank(
 ) -> list[dict[str, Any]]:
     """Render-facing, deterministic previews of the four object-local sides."""
 
+    from benchmark.non_rectangular.geometry import (
+        is_non_rectangular_camera_scene,
+    )
+
+    if is_non_rectangular_camera_scene(scene):
+        from benchmark.non_rectangular.camera import (
+            generate_polygon_usable_surface_side_bank,
+        )
+
+        return generate_polygon_usable_surface_side_bank(
+            scene,
+            target_id=target_id,
+            repair=False,
+        )
     return _generate_usable_surface_side_bank(
         scene,
         target_id=target_id,
@@ -256,6 +291,20 @@ def generate_usable_surface_side_repair_bank(
     It remains visual evidence only and never infers a usable side or verdict.
     """
 
+    from benchmark.non_rectangular.geometry import (
+        is_non_rectangular_camera_scene,
+    )
+
+    if is_non_rectangular_camera_scene(scene):
+        from benchmark.non_rectangular.camera import (
+            generate_polygon_usable_surface_side_bank,
+        )
+
+        return generate_polygon_usable_surface_side_bank(
+            scene,
+            target_id=target_id,
+            repair=True,
+        )
     return _generate_usable_surface_side_bank(
         scene,
         target_id=target_id,
@@ -2608,6 +2657,16 @@ def generate_global_context_poses(scene: dict[str, Any]) -> list[dict[str, Any]]
 
     if not isinstance(scene, dict):
         raise TypeError("global camera poses require a canonical scene")
+    from benchmark.non_rectangular.geometry import (
+        is_non_rectangular_camera_scene,
+    )
+
+    if is_non_rectangular_camera_scene(scene):
+        from benchmark.non_rectangular.camera import (
+            generate_polygon_global_context_poses,
+        )
+
+        return generate_polygon_global_context_poses(scene)
     min_x, max_x, min_y, max_y, floor_z, ceiling_z = _room_bounds(scene)
     center_x = (min_x + max_x) / 2.0
     center_y = (min_y + max_y) / 2.0
@@ -2820,6 +2879,16 @@ def apply_camera_action(
     )
     result["active_action_validation"] = validation
     result["policy_source"] = CAMERA_ACTION_PROTOCOL_VERSION
+    from benchmark.non_rectangular.geometry import (
+        is_non_rectangular_camera_scene,
+    )
+
+    if is_non_rectangular_camera_scene(scene):
+        from benchmark.non_rectangular.camera import (
+            revalidate_polygon_camera_pose,
+        )
+
+        return revalidate_polygon_camera_pose(result, scene=scene)
     return result
 
 

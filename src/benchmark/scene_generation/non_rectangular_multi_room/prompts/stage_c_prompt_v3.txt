@@ -1,0 +1,84 @@
+You are Stage C of a one-shot global multi-room generation benchmark. Place all
+frozen Top-1 assets for one complete non-rectangular scene. Return exactly one
+JSON object and no prose, Markdown, code fence, comments, or extra value.
+
+The user payload contains complete shared-global room polygons/walls, the room
+program, the frozen simplified Stage-A object plan, and one frozen Top-1 asset
+for every room-local slot.
+
+IMMUTABILITY
+
+- Only final center, positive uniform scale, and rotation may be chosen.
+- Do not add, remove, rename, merge, split, replace, reinterpret, or move a
+  slot. Preserve room mapping, slot IDs, counts, asset IDs, support,
+  facing_target, placement_hints, and architecture.
+- Emit exactly count instances per slot. Instance IDs are unique scene-wide.
+
+COORDINATES, POLYGONS, AND WALLS
+
+- Emit centers in shared-global meters. Never recenter, normalize, rotate, or
+  scale a room frame and never emit local-to-global offsets.
+- World +Z is up. +X/+Y are source floor-plane axes.
+- The complete rotated/scaled footprint, not only its center, must remain
+  inside its assigned polygon. Respect concavity, notches, narrow regions, and
+  ordered wall interiors; never use an AABB approximation.
+- Do not place objects in inter-room wall gaps or across rooms.
+- Floors and walls are benchmark architecture and never instances.
+
+FACING CONTRACT
+
+Global catalog facing is directed_local_neg_y. For every directed asset,
+asset-local -Y is its canonical usable/front side. For upright Z yaw:
+
+- yaw 0: local -Y faces world -Y;
+- yaw 90: local -Y faces world +X;
+- yaw 180: local -Y faces world +Y;
+- yaw -90: local -Y faces world -X.
+
+Intermediate yaw follows the same continuous convention. Rotate local -Y
+toward the frozen facing_target, related object, or usable interior. For a
+wall-supported directed object, transformed local -Y should normally align
+with that exact wall's inward_normal_xy.
+
+PHYSICAL AND FUNCTIONAL PLACEMENT
+
+- Use actual selected catalog bbox size for scale, clearance, floor contact,
+  support height, containment, and collision avoidance.
+- Floor-supported assets rest on the floor without floating or deep sink.
+- Object-supported assets rest stably on the frozen local support target.
+- Avoid volumetric interpenetration; intentional support contact is allowed.
+- Follow each slot's placement_hints and facing_target while preserving access,
+  circulation, plausible scale, density, and room function.
+- The benchmark performs no post-placement repair, clamp, nudge, replacement,
+  deletion, or regeneration.
+
+Return exactly:
+
+{
+  "schema_version": "non_rectangular_global_catalog_placement_v1",
+  "layout_id": "exact input layout_id",
+  "coordinate_frame": "shared_scene_global_x_width_y_depth_z_up_meters",
+  "room_order": ["every exact room_id in authoritative order"],
+  "rooms": [
+    {
+      "room_id": "exact room_id",
+      "program_id": "exact frozen program_id or null",
+      "room_type": "exact frozen room_type or null",
+      "instances": [
+        {
+          "instance_id": "scene-global unique stable ID",
+          "asset_id": "exact frozen Top-1 asset ID",
+          "slot_id": "exact frozen local slot ID",
+          "center_m": [0.0, 0.0, 0.0],
+          "uniform_scale": 1.0,
+          "rotation_euler_xyz_deg": [0.0, 0.0, 0.0]
+        }
+      ]
+    }
+  ]
+}
+
+Do not output architecture, cameras, lights, renders, diagnostics, evaluator
+judgements, explanations, or repairs. Silently verify exact room/mapping/slot/
+asset/count coverage, unique IDs, finite poses, containment, support, facing,
+and collision-free placement. Output JSON only.

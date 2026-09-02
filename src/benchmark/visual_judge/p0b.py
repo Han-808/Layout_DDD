@@ -155,6 +155,7 @@ def adjudicate_p0b_event(
         raise ValueError("visual_config_policy must be 'metric_default' or 'passthrough'")
 
     scene = project_scene_for_evaluator_context(scene)
+    nonrect_scene = _is_nonrect_scene(scene)
 
     resolved_ids = _event_object_ids(event, object_ids)
     objects = [
@@ -162,7 +163,7 @@ def adjudicate_p0b_event(
         for item in scene.get("objects", [])
         if isinstance(item, dict) and str(item.get("id")) in resolved_ids
     ]
-    architecture = deepcopy(architecture_contract_from_scene(scene))
+    architecture = _observable_architecture_for_scene(scene)
     local_request = build_p0b_local_evidence_request(
         metric=metric_name,
         event=event,
@@ -172,7 +173,30 @@ def adjudicate_p0b_event(
         detector_evidence=detector_evidence,
         object_ids=resolved_ids,
     )
-    local_items = list(local_view_provider(local_request)) if local_view_provider is not None else []
+    local_acquisition_exhaustion: dict[str, Any] | None = None
+    try:
+        local_items = (
+            list(local_view_provider(local_request))
+            if local_view_provider is not None
+            else []
+        )
+    except Exception as exc:
+        if not nonrect_scene:
+            raise
+        from benchmark.non_rectangular.camera import (
+            NonRectangularCameraEvidenceExhausted,
+        )
+
+        if not isinstance(
+            exc,
+            NonRectangularCameraEvidenceExhausted,
+        ):
+            raise
+        local_items = []
+        local_acquisition_exhaustion = {
+            "error_type": type(exc).__name__,
+            "reason": "bounded_nonrect_local_camera_search_exhausted",
+        }
     local_paths, local_metadata = _normalize_local_view_items(local_items)
     overview_paths = list(overview_render_evidence or [])
     applied_visual_config: dict[str, Any] | None = None
@@ -254,7 +278,74 @@ def adjudicate_p0b_event(
         request["collision_evidence_style_guide"] = COLLISION_EVIDENCE_STYLE_GUIDE
     if local_metadata:
         request["local_render_evidence_metadata"] = local_metadata
-    if (
+    local_metric_view_count = _metric_local_view_count(
+        metric=metric_name,
+        local_paths=local_paths,
+        local_metadata=local_metadata,
+    )
+    nonrect_local_exhausted = bool(
+        nonrect_scene
+        and visual_config_policy == "metric_default"
+        and local_metric_view_count == 0
+    )
+    if nonrect_local_exhausted:
+        provider_usage = getattr(local_view_provider, "last_call_usage", None)
+        candidate_audit = (
+            deepcopy(provider_usage.get("nonrect_candidate_audit"))
+            if isinstance(provider_usage, dict)
+            and isinstance(provider_usage.get("nonrect_candidate_audit"), dict)
+            else None
+        )
+        request["nonrect_evidence_continuity"] = {
+            "schema_version": "nonrect_p0b_evidence_continuity_v1",
+            "policy": "retained_visual_plus_geometry_forced_binary",
+            "metric": metric_name,
+            "local_visual_count": 0,
+            "retained_visual_count": len(render_evidence),
+            "geometry_context_available": True,
+            "candidate_generation_audit": candidate_audit,
+            "typed_acquisition_exhaustion": deepcopy(
+                local_acquisition_exhaustion
+            ),
+            "degraded": True,
+        }
+        request["visual_evidence_policy"] = {
+            "schema_version": "nonrect_p0b_visual_fallback_v1",
+            "policy": "retained_global_plus_geometry_forced_choice",
+            "image_order": ["retained_global_or_prior"],
+            "local_view_count": 0,
+            "retained_visual_count": len(render_evidence),
+            "selection_source": "bounded_nonrect_camera_exhaustion",
+        }
+        request["budget_exhaustion_finalization"] = {
+            "required": True,
+            "trigger_stop_reason": (
+                f"nonrect_{metric_name}_local_camera_exhausted"
+            ),
+            "ambiguity_before_forcing": True,
+            "visual_evidence_policy": (
+                "retained_global_plus_geometry_forced_choice"
+            ),
+            "available_visual_count": len(render_evidence),
+            "previous_missing_observations": [
+                "metric_local_view",
+            ],
+            "previous_evidence_request": {
+                "target_ids": list(resolved_ids),
+                "missing_observations": ["metric_local_view"],
+                "view_goal": (
+                    "The bounded non-rectangular local camera search was "
+                    "exhausted. Make the most educated binary choice from "
+                    "retained visuals and authoritative geometry; absence of "
+                    "a local image carries no valid or invalid prior."
+                ),
+                "metadata": {
+                    "evaluation_mode": "non_rectangular_multi_room",
+                    "geometry_only_allowed": True,
+                },
+            },
+        }
+    elif (
         metric_name == "support"
         and visual_config_policy == "metric_default"
         and _support_local_raw_count(
@@ -281,16 +372,51 @@ def adjudicate_p0b_event(
         judge,
         local_view_provider=local_view_provider,
     )
-    call = getattr(runtime_judge, "adjudicate_p0b", runtime_judge)
+    raw_nonrect_forced_call = (
+        getattr(judge, "_adjudicate_p0b_raw", None)
+        if nonrect_local_exhausted
+        else None
+    )
+    call = (
+        raw_nonrect_forced_call
+        if callable(raw_nonrect_forced_call)
+        else getattr(runtime_judge, "adjudicate_p0b", runtime_judge)
+    )
     if not callable(call):
         raise TypeError("P0b judge must be callable or expose adjudicate_p0b(request)")
-    raw = call(request)
+    raw = (
+        call(request, _allow_need_more_evidence=False)
+        if callable(raw_nonrect_forced_call)
+        else call(request)
+    )
     if not isinstance(raw, dict):
         raise ValueError("P0b judge response must be a JSON object")
     verdict = raw.get("verdict")
     if verdict not in P0B_VERDICTS:
         raise ValueError("P0b judge verdict must be exactly 'valid' or 'invalid'")
     confidence = _confidence(raw.get("confidence"))
+    if nonrect_local_exhausted:
+        forced = request["budget_exhaustion_finalization"]
+        raw = deepcopy(raw)
+        raw["budget_exhaustion_forced_choice"] = {
+            "applied": True,
+            "trigger": forced["trigger_stop_reason"],
+            "ambiguity_before_forcing": bool(
+                forced.get("ambiguity_before_forcing")
+            ),
+            "pre_force_judge_status": "not_invoked_without_local_evidence",
+            "pre_force_evidence_request": deepcopy(
+                forced.get("previous_evidence_request")
+            ),
+            "pre_force_reason": "bounded_nonrect_local_camera_exhausted",
+            "available_image_count": len(render_evidence),
+            "final_verdict": verdict,
+            "final_confidence": confidence,
+            "evidence_artifacts": list(render_evidence),
+            "decision_source": (
+                "nonrect_geometry_or_retained_visual_forced_binary"
+            ),
+        }
     return {
         "status": "evaluated",
         "metric": metric_name,
@@ -466,6 +592,54 @@ def _support_local_raw_count(
     )
 
 
+def _metric_local_view_count(
+    *,
+    metric: str,
+    local_paths: list[str],
+    local_metadata: list[dict[str, Any]],
+) -> int:
+    if not local_metadata:
+        return len(_deduplicate_paths(local_paths))
+    metric_name = str(metric).strip().lower()
+    if metric_name == "collision":
+        roles = _SUPPORT_LOCAL_RAW_ROLES | {
+            "metric_local_contour",
+            "collision_pair_overlay",
+        }
+    elif metric_name == "oob":
+        roles = {
+            "metric_local_rgb",
+            "metric_local_highlight",
+            "collision_rgb",
+            "collision_pair_overlay",
+        }
+    else:
+        roles = _SUPPORT_LOCAL_RAW_ROLES | {
+            "metric_local_highlight",
+        }
+    return len(
+        {
+            str(item.get("view_id") or item.get("path") or "")
+            for item in local_metadata
+            if str(item.get("role") or "") in roles
+            and str(item.get("view_id") or item.get("path") or "")
+        }
+    )
+
+
+def _is_nonrect_scene(scene: dict[str, Any]) -> bool:
+    metadata = scene.get("metadata")
+    return bool(
+        isinstance(metadata, dict)
+        and metadata.get("evaluation_mode")
+        == "non_rectangular_multi_room"
+        and isinstance(
+            metadata.get("non_rectangular_room_geometry"),
+            dict,
+        )
+    )
+
+
 def _event_object_ids(event: dict, explicit: list[str] | tuple[str, ...] | None) -> list[str]:
     values: list[Any] = list(explicit or [])
     if not values:
@@ -549,6 +723,9 @@ def _project_architecture_for_judge(
             "z": ceiling.get("z") if isinstance(ceiling, dict) else None,
         },
     }
+    if architecture.get("geometry_type") == "non_rectangular_polygon":
+        projected["geometry_type"] = "non_rectangular_polygon"
+        projected["ceiling"] = {"enabled": False, "z": None}
     if metric not in _PHYSICAL_WALL_METRICS:
         return projected
     physical = architecture.get("physical_walls")
@@ -573,6 +750,10 @@ def _project_architecture_for_judge(
             else None
         ),
     }
+    if architecture.get("geometry_type") == "non_rectangular_polygon":
+        projected["physical_walls"]["wall_segments"] = deepcopy(
+            physical.get("wall_segments") or []
+        )
     return projected
 
 
@@ -616,11 +797,53 @@ def _project_detector_evidence_for_judge(
             {
                 "plane": item.get("plane"),
                 "signed_clearance_m": item.get("signed_clearance_m"),
+                **(
+                    {
+                        "wall_id": item.get("wall_id"),
+                        "distance_m": item.get("distance_m"),
+                        "inward_normal_xy": deepcopy(
+                            item.get("inward_normal_xy")
+                        ),
+                    }
+                    if item.get("wall_id") is not None
+                    else {}
+                ),
             }
             for item in candidates
             if isinstance(item, dict)
         ]
     return projected
+
+
+def _observable_architecture_for_scene(
+    scene: dict[str, Any],
+) -> dict[str, Any]:
+    """Return observable architecture without generator activation claims."""
+
+    from benchmark.non_rectangular.geometry import polygon_geometry_from_scene
+
+    geometry = polygon_geometry_from_scene(scene)
+    if geometry is None:
+        return deepcopy(architecture_contract_from_scene(scene))
+    thicknesses = [wall.thickness_m for wall in geometry.walls]
+    return {
+        "geometry_type": "non_rectangular_polygon",
+        "logical_boundary": {
+            "enabled": True,
+            "boundary": [list(point) for point in geometry.floor_polygon_xy],
+        },
+        "floor": {"enabled": True, "z": geometry.floor_z_m},
+        "ceiling": {"enabled": False, "z": None},
+        "physical_walls": {
+            "active_wall_ids": [wall.wall_id for wall in geometry.walls],
+            "wall_thickness_m": (
+                max(thicknesses) if thicknesses else None
+            ),
+            "wall_segments": [
+                wall.public_dict() for wall in geometry.walls
+            ],
+        },
+    }
 
 
 def _deduplicate_paths(paths: list[str]) -> list[str]:

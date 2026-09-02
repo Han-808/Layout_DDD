@@ -1,0 +1,33 @@
+{
+  "schema_version": "non_rectangular_room_layout_v1",
+  "layout_id": "fixture_angled_single",
+  "coordinate_frame": {
+    "origin": "shared_scene_global",
+    "axes": "x_width_y_depth_z_up",
+    "handedness": "right_handed",
+    "unit": "meter",
+    "rotation_unit": "degree"
+  },
+  "geometry_conventions": {
+    "polygon_winding": "counter_clockwise",
+    "polygon_closure": "implicit_last_to_first",
+    "wall_segment_order": "matches_floor_polygon_edges",
+    "inward_normal": "left_of_directed_wall_segment"
+  },
+  "geometry_tolerance_m": 0.000001,
+  "room_count": 1,
+  "room_order": ["room_000"],
+  "rooms": [
+    {
+      "room_id": "room_000",
+      "floor_z_m": 0.0,
+      "floor_polygon_xy": [[-2.0, -1.0], [2.0, -1.0], [1.2, 2.0], [-2.0, 2.0]],
+      "wall_segments": [
+        {"wall_id": "room_000.wall_000", "start_xy": [-2.0, -1.0], "end_xy": [2.0, -1.0], "inward_normal_xy": [0.0, 1.0], "height_m": 2.7, "thickness_m": 0.08},
+        {"wall_id": "room_000.wall_001", "start_xy": [2.0, -1.0], "end_xy": [1.2, 2.0], "inward_normal_xy": [-0.96623494, -0.257662651], "height_m": 2.7, "thickness_m": 0.08},
+        {"wall_id": "room_000.wall_002", "start_xy": [1.2, 2.0], "end_xy": [-2.0, 2.0], "inward_normal_xy": [0.0, -1.0], "height_m": 2.7, "thickness_m": 0.08},
+        {"wall_id": "room_000.wall_003", "start_xy": [-2.0, 2.0], "end_xy": [-2.0, -1.0], "inward_normal_xy": [1.0, 0.0], "height_m": 2.7, "thickness_m": 0.08}
+      ]
+    }
+  ]
+}

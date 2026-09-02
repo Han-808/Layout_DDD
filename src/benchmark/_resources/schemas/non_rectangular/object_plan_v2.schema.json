@@ -1,0 +1,95 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://layout-ddd.local/schemas/non_rectangular/object_plan_v2.schema.json",
+  "title": "NonRectangularMultiRoomObjectPlanV2",
+  "description": "Simplified one-shot Stage-A plan. Global catalog facing is directed_local_neg_y; per-object facing_target is optional.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "layout_id", "room_order", "rooms"],
+  "properties": {
+    "schema_version": {"const": "non_rectangular_multi_room_object_plan_v2"},
+    "layout_id": {"$ref": "#/$defs/stableId"},
+    "room_order": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/stableId"}
+    },
+    "rooms": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/roomPlan"}
+    }
+  },
+  "$defs": {
+    "stableId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+    },
+    "positiveVec3": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "items": {"type": "number", "exclusiveMinimum": 0}
+    },
+    "plannedObject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "category",
+        "description",
+        "count",
+        "estimated_size",
+        "retrieval_query",
+        "support",
+        "facing_target",
+        "placement_hints"
+      ],
+      "properties": {
+        "id": {"$ref": "#/$defs/stableId"},
+        "category": {"type": "string", "minLength": 1},
+        "description": {"type": "string", "minLength": 1},
+        "count": {"type": "integer", "minimum": 1},
+        "estimated_size": {"$ref": "#/$defs/positiveVec3"},
+        "retrieval_query": {"type": "string", "minLength": 1},
+        "support": {"type": "string", "minLength": 1},
+        "facing_target": {
+          "type": ["string", "null"],
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "placement_hints": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "roomPlan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["room_id", "objects"],
+      "properties": {
+        "room_id": {"$ref": "#/$defs/stableId"},
+        "program_id": {
+          "oneOf": [
+            {"$ref": "#/$defs/stableId"},
+            {"type": "null"}
+          ]
+        },
+        "room_type": {
+          "type": ["string", "null"],
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "objects": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/plannedObject"}
+        }
+      }
+    }
+  }
+}

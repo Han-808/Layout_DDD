@@ -1,0 +1,10 @@
+{
+  "schema_version": "non_rectangular_room_program_v1",
+  "layout_id": "fixture_simple_multi_room",
+  "target_total_instances": {"min": 4, "max": 6},
+  "program_order": ["kitchen_01", "living_room_01"],
+  "programs": [
+    {"program_id": "kitchen_01", "room_type": "kitchen"},
+    {"program_id": "living_room_01", "room_type": "living_room"}
+  ]
+}

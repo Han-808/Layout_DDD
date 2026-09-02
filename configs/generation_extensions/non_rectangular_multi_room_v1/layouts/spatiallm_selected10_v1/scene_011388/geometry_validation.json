@@ -1,0 +1,102 @@
+{
+  "adjacency": {
+    "component_count": 1,
+    "components": [
+      [
+        "room_000",
+        "room_001",
+        "room_002",
+        "room_003",
+        "room_004",
+        "room_005",
+        "room_006"
+      ]
+    ],
+    "connected": true,
+    "edges": [
+      {
+        "polygon_distance_m": 0.145,
+        "room_a": "room_000",
+        "room_b": "room_002"
+      },
+      {
+        "polygon_distance_m": 0.18999999999999997,
+        "room_a": "room_000",
+        "room_b": "room_003"
+      },
+      {
+        "polygon_distance_m": 0.15500000000000003,
+        "room_a": "room_000",
+        "room_b": "room_004"
+      },
+      {
+        "polygon_distance_m": 0.12999999999999998,
+        "room_a": "room_000",
+        "room_b": "room_005"
+      },
+      {
+        "polygon_distance_m": 0.13000000000000003,
+        "room_a": "room_000",
+        "room_b": "room_006"
+      },
+      {
+        "polygon_distance_m": 0.1449999999999998,
+        "room_a": "room_001",
+        "room_b": "room_003"
+      },
+      {
+        "polygon_distance_m": 0.18999999999999997,
+        "room_a": "room_003",
+        "room_b": "room_004"
+      },
+      {
+        "polygon_distance_m": 0.18999999999999997,
+        "room_a": "room_003",
+        "room_b": "room_005"
+      },
+      {
+        "polygon_distance_m": 0.2400000000000002,
+        "room_a": "room_004",
+        "room_b": "room_005"
+      }
+    ],
+    "policy": "polygon_distance_leq_0.35m_v1",
+    "threshold_m": 0.35
+  },
+  "angled_wall_segment_count": 0,
+  "architecture_check": {
+    "compiled": true,
+    "exact_shared_wall_count": 0,
+    "logical_wall_count": 42,
+    "near_or_partial_wall_pairing_applied": false,
+    "physical_wall_count": 42
+  },
+  "concave_room_count": 3,
+  "coordinates_rounded": false,
+  "coordinates_transformed": false,
+  "excluded_from_layout": [
+    "door",
+    "window",
+    "bbox",
+    "point_cloud",
+    "room_type"
+  ],
+  "geometry_repair_applied": false,
+  "layout_id": "scene_011388",
+  "minimum_edge_length_m": 0.24,
+  "room_count": 7,
+  "room_layout_sha256": "54418899637a3f7c46349c4c6da83bb06fe9c6bdbf8cb580fa61e3df48e2b6dc",
+  "schema_version": "spatiallm_room_layout_conversion_report_v1",
+  "strong_concave_room_count": 1,
+  "total_floor_area_m2": 113.29743865056315,
+  "valid": true,
+  "wall_height_m": {
+    "max": 2.6999717629239144,
+    "min": 2.4998766496140785
+  },
+  "wall_segment_count": 42,
+  "wall_thickness_m": {
+    "max": 0.0,
+    "min": 0.0
+  }
+}

@@ -1,0 +1,130 @@
+{
+  "schema_version": "non_rectangular_object_density_reference_v1",
+  "policy_id": "multi_room_sceneboard_area_density_v1",
+  "description": "Approximate the established multi-room benchmark's planned floor-area/object-count envelope, with actual SceneBoard generation density retained as a diagnostic cross-check.",
+  "reference_sceneboard": {
+    "page_url": "http://29.98.161.115:8081/multi_room_sceneboard.html",
+    "page_snapshot_sha256": "866558c453005ef1367cb7f9c1d9a9cc4a54f178dc08b74c1326512d87767aa9",
+    "api_url": "http://29.98.161.115:8081/api/multi-room-scenes",
+    "api_snapshot_sha256": "7e5106546e487e8873a6fe7cd46ee592bfacca51b41b067a6f421d982ef3ff11",
+    "model_keys": [
+      "gpt-5.6-sol",
+      "claude-opus-5-aihub",
+      "claude-fable-5-aihub",
+      "claude-sonnet-5-aihub",
+      "kimi-k3",
+      "glm-5.3"
+    ],
+    "layout_count_per_model": 10,
+    "actual_generation_sample_count": 60,
+    "actual_objects_per_m2": {
+      "min": 0.5120056497175142,
+      "p10": 0.5287247474747475,
+      "median": 0.55239898989899,
+      "p90": 0.5681818181818182,
+      "max": 0.5826271186440678
+    },
+    "actual_m2_per_object": {
+      "min": 1.7163636363636363,
+      "p10": 1.7600000000000002,
+      "median": 1.8102857142857143,
+      "p90": 1.8913432835820896,
+      "max": 1.953103448275862
+    }
+  },
+  "reference_floor_plans": {
+    "source_root": "tools/hy_dev0823_arena_multi_room_floorplans_v2_retry5_v1/floor_plans",
+    "layouts": [
+      {
+        "layout_id": "layout_01",
+        "room_count": 2,
+        "floor_area_m2": 56.64,
+        "target_total_instances": {"min": 26, "max": 33},
+        "source_sha256": "cb8b433578fa39858971d59a0fcc6fd3c3e1fbe7e8f1a861eb1f89f472932995"
+      },
+      {
+        "layout_id": "layout_02",
+        "room_count": 2,
+        "floor_area_m2": 56.64,
+        "target_total_instances": {"min": 26, "max": 33},
+        "source_sha256": "971352ab477eac63b683dec4621ee151239b81a36da1e0bb5e2f942fef52be98"
+      },
+      {
+        "layout_id": "layout_03",
+        "room_count": 2,
+        "floor_area_m2": 56.64,
+        "target_total_instances": {"min": 26, "max": 33},
+        "source_sha256": "63c54f075b973dd5cdcbbb45ddaae08487d4ce32669adcbe202836f8d9375df2"
+      },
+      {
+        "layout_id": "layout_04",
+        "room_count": 3,
+        "floor_area_m2": 102.72,
+        "target_total_instances": {"min": 48, "max": 59},
+        "source_sha256": "5fad2be88f6d5da71996abbe528f737dea0cdec483767e8590a3c7d7ef19ab04"
+      },
+      {
+        "layout_id": "layout_05",
+        "room_count": 3,
+        "floor_area_m2": 102.72,
+        "target_total_instances": {"min": 48, "max": 59},
+        "source_sha256": "61fdcf1cc696ba6b1bfe7c8725737612457715136fcca164633d59d18a3f1434"
+      },
+      {
+        "layout_id": "layout_06",
+        "room_count": 3,
+        "floor_area_m2": 102.72,
+        "target_total_instances": {"min": 48, "max": 59},
+        "source_sha256": "52fdd48c2f73ae760c5fd7264fe3e0551e1f3acc34e1160b757c9fe49a48fe2c"
+      },
+      {
+        "layout_id": "layout_07",
+        "room_count": 4,
+        "floor_area_m2": 126.72,
+        "target_total_instances": {"min": 59, "max": 73},
+        "source_sha256": "9474fe983df713a71625c1e88adcc4b45820527d1b4ff7bcbfc149f4a71da44e"
+      },
+      {
+        "layout_id": "layout_08",
+        "room_count": 4,
+        "floor_area_m2": 126.72,
+        "target_total_instances": {"min": 59, "max": 73},
+        "source_sha256": "635ac3f8ade0be6318006ad430d8763955acdd3fdc1310c6f0c87b738b8643a1"
+      },
+      {
+        "layout_id": "layout_09",
+        "room_count": 4,
+        "floor_area_m2": 126.72,
+        "target_total_instances": {"min": 59, "max": 73},
+        "source_sha256": "7533aa230cbedd4e5f38e779ff93705a849f6cbe0c55914e9a09663123eb546e"
+      },
+      {
+        "layout_id": "layout_10",
+        "room_count": 4,
+        "floor_area_m2": 126.72,
+        "target_total_instances": {"min": 59, "max": 73},
+        "source_sha256": "00ba6b35936a393b25df0c5fac1c6ded3036660d17f11b62dc6dfe3fd007a74b"
+      }
+    ],
+    "weighted_totals": {
+      "floor_area_m2": 984.96,
+      "minimum_target_instances": 458,
+      "maximum_target_instances": 568
+    }
+  },
+  "objects_per_m2_target": {
+    "min": 0.464993502274204,
+    "max": 0.5766731643924626
+  },
+  "m2_per_object_target": {
+    "min": 1.7340845070422535,
+    "max": 2.15056768558952
+  },
+  "derivation": {
+    "minimum": "458 minimum target instances / 984.96 m2",
+    "maximum": "568 maximum target instances / 984.96 m2",
+    "use_planned_envelope_instead_of_actual_percentiles": true,
+    "reason": "The reference floor plans define the intended generation range; SceneBoard actual counts verify that completed generations occupy the same density regime."
+  },
+  "integer_rounding_policy": "floor_x_plus_0.5_v1"
+}

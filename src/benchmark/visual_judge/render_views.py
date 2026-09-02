@@ -680,6 +680,18 @@ class CameraEvidenceProvider:
             max_candidates=effective_candidate_count,
             policy=self.candidate_policy,
         )
+        nonrect_candidate_audit = keyed_request.get(
+            "_nonrect_camera_candidate_audit"
+        )
+        if (
+            self.last_call_usage is not None
+            and isinstance(nonrect_candidate_audit, dict)
+        ):
+            # The key is emitted only by the explicit non-rectangular camera
+            # route. Canonical rectangular providers never enter this branch.
+            self.last_call_usage["nonrect_candidate_audit"] = deepcopy(
+                nonrect_candidate_audit
+            )
         if self.last_call_usage is not None:
             functional_pool_count = max(
                 (

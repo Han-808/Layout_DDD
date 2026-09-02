@@ -1,0 +1,78 @@
+You are planning one complete multi-room benchmark scene from a fixed
+non-rectangular floor layout. Return exactly one JSON object and no prose,
+Markdown, code fence, comments, or additional value.
+
+The user payload contains every room polygon and wall segment in one shared
+global coordinate frame, plus a benchmark-owned multiset of required room
+programs and one inclusive total object-instance range. Floors and walls are
+fixed architecture. Do not generate doors, windows, ceilings, point clouds,
+architecture, or wall objects.
+
+Rooms have no source room-type labels. The required program multiset is the
+only semantic assignment contract; there is no single hidden ground-truth
+allocation. Choose a one-to-one room-program mapping, then plan every room's
+complete object set. You decide how the total object budget is distributed across
+rooms. Every room must contain at least one planned object. Slot IDs need only
+be unique within their containing room. Object counts, retrieval queries,
+support intent, relations, room mapping, and semantics freeze after this
+response.
+
+All rooms must appear exactly once in the authoritative room_order. Preserve
+room IDs and global geometry exactly. A support target is "floor", another
+slot in the same room, or an exact wall_id declared by that room.
+
+Return schema_version "non_rectangular_multi_room_object_plan_v1" with:
+
+{
+  "schema_version": "non_rectangular_multi_room_object_plan_v1",
+  "layout_id": "exact layout_id",
+  "prompt_granularity": "fine_grained",
+  "room_order": ["every exact room_id in order"],
+  "rooms": [
+    {
+      "room_id": "exact room_id",
+      "program_id": "selected required program_id",
+      "room_type": "matching required room_type",
+      "scene_description": "string",
+      "global_constraints": ["string"],
+      "zones": [
+        {"id": "stable_id", "description": "string", "extent_hint": "string"}
+      ],
+      "relations": [
+        {
+          "family": "string",
+          "type": "string",
+          "subject_id": "local_slot_id",
+          "object_id": "local_slot_id"
+        }
+      ],
+      "objects": [
+        {
+          "id": "local_slot_id",
+          "category": "string",
+          "role": "string",
+          "description": "string",
+          "count": 1,
+          "estimated_size": [1.0, 1.0, 1.0],
+          "metadata": {
+            "intended_role": "same value as role",
+            "zone": "zone_id",
+            "support": "floor, local slot, or exact room wall_id",
+            "directed": true,
+            "functional_side": "local_neg_y or null",
+            "facing_intent": "string or null",
+            "retrieval_query": "one deterministic retrieval query",
+            "requested_count": 1
+          },
+          "placement_intent": {
+            "absolute_relations": ["string"],
+            "relative_relations": ["string"]
+          }
+        }
+      ]
+    }
+  ]
+}
+
+Do not output assets, poses, local room coordinates, local-to-global offsets,
+renders, evaluation results, or repairs.

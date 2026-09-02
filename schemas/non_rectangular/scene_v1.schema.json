@@ -1,0 +1,99 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://layout-ddd.local/schemas/non_rectangular/scene_v1.schema.json",
+  "title": "NonRectangularMultiRoomSceneV1",
+  "description": "One shared-global-coordinate Stage-C scene with objects nested exactly once beneath rooms.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "layout_id", "coordinate_frame", "room_order", "rooms"],
+  "properties": {
+    "schema_version": {"const": "non_rectangular_multi_room_scene_v1"},
+    "layout_id": {"$ref": "#/$defs/stableId"},
+    "coordinate_frame": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["origin", "axes", "handedness", "unit", "rotation_unit"],
+      "properties": {
+        "origin": {"const": "shared_scene_global"},
+        "axes": {"const": "x_width_y_depth_z_up"},
+        "handedness": {"const": "right_handed"},
+        "unit": {"const": "meter"},
+        "rotation_unit": {"const": "degree"}
+      }
+    },
+    "room_order": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/stableId"}
+    },
+    "rooms": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/roomScene"}
+    },
+    "provenance": {"type": "object"}
+  },
+  "$defs": {
+    "stableId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+    },
+    "vec3": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "items": {"type": "number"}
+    },
+    "positiveVec3": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "items": {"type": "number", "exclusiveMinimum": 0}
+    },
+    "object": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["id", "slot_id", "category", "size", "center", "rotation"],
+      "properties": {
+        "id": {"$ref": "#/$defs/stableId"},
+        "slot_id": {"$ref": "#/$defs/stableId"},
+        "room_id": false,
+        "category": {"type": "string", "minLength": 1},
+        "description": {"type": "string", "minLength": 1},
+        "size": {"$ref": "#/$defs/positiveVec3"},
+        "center": {"$ref": "#/$defs/vec3"},
+        "rotation": {"$ref": "#/$defs/vec3"},
+        "jid": {"type": "string", "minLength": 1},
+        "geometry_provenance": {
+          "enum": ["bbox_proxy", "asset_mesh", "generated_mesh"]
+        },
+        "asset_ref": {"type": "object"},
+        "asset_proxy": {"type": "object"},
+        "metadata": {"type": "object"}
+      }
+    },
+    "roomScene": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["room_id", "objects"],
+      "properties": {
+        "room_id": {"$ref": "#/$defs/stableId"},
+        "program_id": {
+          "oneOf": [
+            {"$ref": "#/$defs/stableId"},
+            {"type": "null"}
+          ]
+        },
+        "room_type": {"type": ["string", "null"], "minLength": 1, "maxLength": 128},
+        "objects": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/object"}
+        }
+      }
+    }
+  }
+}
