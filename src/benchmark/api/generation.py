@@ -151,6 +151,7 @@ def run_generate(
     workflow_status_path = write_json(output_dir / "workflow_status.json", status)
     metadata = {
         "adapter": adapter.name,
+        "output_ingestion_kind": adapter.scene_output_route().kind,
         "adapter_capabilities": adapter.capabilities.as_dict(),
         "io_contract": io_contract.as_dict(),
         "generator_output_schema": getattr(adapter, "output_schema", None),

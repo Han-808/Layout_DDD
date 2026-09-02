@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from benchmark.adapters.base import AdapterCapabilities, GenerationAdapter
+from benchmark.adapters.output_routing import OUTPUT_LOADER
 from benchmark.io_contracts import (
     I1_NATURAL_LANGUAGE,
     I2_NATURAL_LANGUAGE_STRUCTURE,
@@ -19,6 +20,7 @@ class ScenePackageAdapter(GenerationAdapter):
 
     name = "scene_package"
     output_schema = "scene_package_v1"
+    output_ingestion_kind = OUTPUT_LOADER
     capabilities = AdapterCapabilities(
         input_modes=("natural_language_direct", "natural_language_structured", "structured_assets"),
         asset_support="optional",

@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from benchmark.adapters.base import AdapterCapabilities, GenerationAdapter
+from benchmark.adapters.output_routing import OUTPUT_CONVERTER
 from benchmark.adapters.catalog_placement.converter import (
     build_catalog_instance_registry,
     convert_catalog_placement_to_scene,
@@ -27,6 +28,7 @@ class CatalogPlacementAdapter(GenerationAdapter):
 
     name = "catalog_placement"
     output_schema = CATALOG_PLACEMENT_VERSION
+    output_ingestion_kind = OUTPUT_CONVERTER
     capabilities = AdapterCapabilities(
         input_modes=("structured_assets",),
         asset_support="required",

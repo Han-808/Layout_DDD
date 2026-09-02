@@ -87,6 +87,7 @@ testpaths = [
   "tests/test_deterministic_local_camera_selector.py",
   "tests/test_evidence_contract.py",
   "tests/test_evaluation_campaign.py",
+  "tests/test_external_harness_adapters.py",
   "tests/test_multi_room_evaluation.py",
   "tests/test_functional_discovery.py",
   "tests/test_functional_planner_adapter.py",

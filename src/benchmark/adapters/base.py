@@ -3,12 +3,18 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from benchmark.adapters.output_routing import (
+    OUTPUT_CONVERTER,
+    OUTPUT_LOADER,
+    OutputIngestionKind,
+    SceneOutputRoute,
+)
 from benchmark.io_contracts import (
+    EVALUATOR_OUTPUT_TYPES,
     I1_NATURAL_LANGUAGE,
     INPUT_TYPES,
     O1_OBJECT_STATE,
     OUTPUT_TYPES,
-    EVALUATOR_OUTPUT_TYPES,
     GeneratorIOContract,
     resolve_generation_io_contract,
 )
@@ -73,6 +79,7 @@ class GenerationAdapter:
 
     name: str = "base"
     capabilities = AdapterCapabilities()
+    output_ingestion_kind: OutputIngestionKind | None = None
 
     def prepare_input(self, generation_input: dict, out_dir: Path, config: dict | None = None) -> Path:
         """Convert canonical generation_input into method-specific input."""
@@ -141,14 +148,16 @@ class GenerationAdapter:
                 contract=contract,
                 config=config,
             )
-        canonical_path = self.parse_output(
+        output_route = self.scene_output_route()
+        canonical_path = output_route.materialize(
             materialization_input,
             generation_input,
             Path(out_dir),
-            config=config,
+            config,
         )
         self.last_materialization_metadata = {
             **contract.as_dict(),
+            "output_ingestion_kind": output_route.kind,
             "native_output_path": Path(method_output_path).as_posix(),
             "executed_output_path": materialization_input.as_posix() if contract.requires_execution else None,
             "canonical_output_path": Path(canonical_path).as_posix(),
@@ -171,8 +180,51 @@ class GenerationAdapter:
             f"Adapter {self.name!r} needs an executor to materialize {contract.native_output_type}"
         )
 
+    def scene_output_route(self) -> SceneOutputRoute:
+        """Select exactly one canonicalization route for this adapter.
+
+        Existing adapters retain ``parse_output`` as their implementation hook.
+        New harness adapters may instead override ``load_output`` or
+        ``convert_output`` directly.
+        """
+
+        if self.output_ingestion_kind == OUTPUT_LOADER:
+            return SceneOutputRoute.existing_loader(self.load_output)
+        if self.output_ingestion_kind == OUTPUT_CONVERTER:
+            return SceneOutputRoute.converter(self.convert_output)
+        raise ValueError(
+            f"Adapter {self.name!r} must declare output_ingestion_kind as "
+            f"{OUTPUT_LOADER!r} or {OUTPUT_CONVERTER!r}"
+        )
+
+    def load_output(
+        self,
+        method_output_path: Path,
+        generation_input: dict,
+        out_dir: Path,
+        config: dict | None = None,
+    ) -> Path:
+        """Load an already supported scene representation.
+
+        The delegation preserves current adapters while giving future native
+        loaders a dedicated override point.
+        """
+
+        return self.parse_output(method_output_path, generation_input, out_dir, config)
+
+    def convert_output(
+        self,
+        method_output_path: Path,
+        generation_input: dict,
+        out_dir: Path,
+        config: dict | None = None,
+    ) -> Path:
+        """Convert a harness-native representation to the canonical scene."""
+
+        return self.parse_output(method_output_path, generation_input, out_dir, config)
+
     def parse_output(self, method_output_path: Path, generation_input: dict, out_dir: Path, config: dict | None = None) -> Path:
-        """Convert method-specific output into canonical generated_scene.json."""
+        """Legacy output hook retained for current concrete adapters."""
 
         raise NotImplementedError
 

@@ -8,6 +8,7 @@ from benchmark.adapters.base import (
     GenerationAdapter,
     OutputMaterializationRequired,
 )
+from benchmark.adapters.output_routing import OUTPUT_LOADER
 from benchmark.io_contracts import (
     I1_NATURAL_LANGUAGE,
     I2_NATURAL_LANGUAGE_STRUCTURE,
@@ -43,6 +44,9 @@ class SceneProgramAdapter(GenerationAdapter):
 
     name = "scene_program"
     output_schema = "scene_program_v1"
+    # The native program is executed first; the exported O1/O3 artifact then
+    # enters through the existing canonical loader path.
+    output_ingestion_kind = OUTPUT_LOADER
     capabilities = AdapterCapabilities(
         input_modes=("natural_language_direct", "natural_language_structured", "structured_assets"),
         asset_support="optional",
