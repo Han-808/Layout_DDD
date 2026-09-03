@@ -15,8 +15,11 @@ from benchmark.adapters.common.geometry import (
     build_scene,
     canonical_room,
     category_from_identifier,
+    finite_float,
     matrix_vector,
     quaternion_xyzw_to_matrix,
+    require_boundary_model,
+    require_room_geometry_match,
     rotation_matrix_to_euler_xyz_degrees,
     shift_boundary_to_origin,
     shift_center,
@@ -54,15 +57,21 @@ def convert_scene_smith(
 
     room_id, room_state, layout = _select_room(payload, config)
     geometry = room_state.get("room_geometry")
+    if geometry is not None and not isinstance(geometry, Mapping):
+        raise ArtifactValidationError("SceneSmith room_geometry must be an object")
     geometry = geometry if isinstance(geometry, Mapping) else {}
     fallback_boundary, fallback_height, _ = canonical_room(generation_input)
     length = geometry.get("length")
     width = geometry.get("width")
-    if length is not None and width is not None:
-        length = float(length)
-        width = float(width)
+    if "length" in geometry or "width" in geometry:
+        if length is None or width is None:
+            raise ArtifactValidationError(
+                "SceneSmith room_geometry requires both length and width"
+            )
+        length = finite_float(length, "SceneSmith room_geometry.length")
+        width = finite_float(width, "SceneSmith room_geometry.width")
         if length <= 0.0 or width <= 0.0:
-            raise ArtifactValidationError("SceneSmith room geometry dimensions must be positive")
+            raise ArtifactValidationError("SceneSmith room_geometry dimensions must be positive")
         boundary = [
             [-length / 2.0, -width / 2.0],
             [length / 2.0, -width / 2.0],
@@ -73,10 +82,26 @@ def convert_scene_smith(
     else:
         boundary = fallback_boundary
         boundary_source = "generation_input"
-    boundary, origin_shift = shift_boundary_to_origin(boundary)
-    scene_height = float(geometry.get("wall_height") or layout.get("wall_height") or fallback_height)
+    require_boundary_model(
+        boundary,
+        supported=("axis_aligned_rectangle",),
+        path="SceneSmith room_geometry boundary",
+    )
+    height_source = (
+        "room_geometry" if "wall_height" in geometry
+        else "layout" if "wall_height" in layout else "generation_input"
+    )
+    scene_height = finite_float(
+        geometry.get("wall_height", layout.get("wall_height", fallback_height)),
+        "SceneSmith wall height",
+    )
     if scene_height <= 0.0:
         raise ArtifactValidationError("SceneSmith wall height must be positive")
+    require_room_geometry_match(
+        boundary, scene_height, fallback_boundary, fallback_height,
+        path="SceneSmith native room",
+    )
+    boundary, origin_shift = shift_boundary_to_origin(boundary)
 
     native_objects = room_state.get("objects")
     if not isinstance(native_objects, Mapping):
@@ -201,6 +226,8 @@ def convert_scene_smith(
         extra_metadata={
             "source_artifact": resolved_path.as_posix(),
             "source_boundary": boundary_source,
+            "source_height": height_source,
+            "room_geometry_match": "validated_against_benchmark",
             "room_id": room_id,
         },
     )

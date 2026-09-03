@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import glob
 import hashlib
+import inspect
 import io
 import json
 import os
@@ -116,6 +117,7 @@ def execute_external_harness(
     cwd: Path | None = None
     repo_path: Path | None = None
     upstream_commit: str | None = None
+    runner_provenance: dict[str, Any] = {"status": "NOT_DISCOVERED"}
     callback_metadata: dict[str, Any] = {}
     source_artifact: Path | None = None
     error: BaseException | None = None
@@ -126,6 +128,14 @@ def execute_external_harness(
         if runner is not None:
             if not callable(runner):
                 raise ExternalExecutionError("config.runner must be callable")
+            try:
+                source_file = inspect.getsourcefile(runner)
+            except TypeError:
+                source_file = None
+            runner_provenance = _runner_source_provenance(
+                Path(source_file) if source_file else None,
+                entrypoint=_callable_name(runner),
+            )
             captured_stdout = io.StringIO()
             captured_stderr = io.StringIO()
             try:
@@ -149,6 +159,7 @@ def execute_external_harness(
                     f"{adapter_name} callback returned nonzero code {return_code}"
                 )
         elif raw_output is not None:
+            runner_provenance = {"status": "NOT_EXECUTED"}
             source_artifact = _resolve_configured_path(
                 raw_output,
                 base=Path.cwd(),
@@ -156,13 +167,17 @@ def execute_external_harness(
             )
             return_code = 0
         else:
-            command, command_for_audit, cwd, environment = _subprocess_request(
+            command, command_for_audit, cwd, environment, entrypoint = _subprocess_request(
                 adapter_name=adapter_name,
                 method_input_path=Path(method_input_path),
                 native_input_path=Path(native_input_path),
                 upstream_output_dir=upstream_output_dir,
                 repo_path=repo_path,
                 execution_config=execution_config,
+            )
+            runner_provenance = _runner_source_provenance(
+                entrypoint,
+                entrypoint=entrypoint.as_posix() if entrypoint else None,
             )
             timeout_seconds = _timeout_seconds(execution_config)
             try:
@@ -210,6 +225,7 @@ def execute_external_harness(
 
     stdout_path.write_text(stdout, encoding="utf-8")
     stderr_path.write_text(stderr, encoding="utf-8")
+    _finish_runner_source_provenance(runner_provenance)
     runtime_seconds = time.monotonic() - started_monotonic
     base_result: dict[str, Any] = {
         "schema_version": EXECUTION_RESULT_SCHEMA_VERSION,
@@ -232,6 +248,7 @@ def execute_external_harness(
         "timed_out": timed_out,
         "upstream_repo": repo_path.as_posix() if repo_path is not None else None,
         "upstream_commit": upstream_commit,
+        "runner_provenance": runner_provenance,
         "upstream_output_dir": upstream_output_dir.resolve().as_posix(),
         "source_native_artifact_path": (
             source_artifact.resolve().as_posix()
@@ -393,6 +410,7 @@ def preserve_supplied_native_artifact(
         "timed_out": False,
         "upstream_repo": repo.as_posix() if repo is not None else None,
         "upstream_commit": _discover_git_commit(repo),
+        "runner_provenance": {"status": "NOT_EXECUTED"},
         "source_native_artifact_path": Path(source_path).resolve().as_posix(),
         "preserved_native_artifact_path": preserved.resolve().as_posix(),
         "native_artifact_path": preserved.resolve().as_posix(),
@@ -603,7 +621,7 @@ def _subprocess_request(
     upstream_output_dir: Path,
     repo_path: Path | None,
     execution_config: Mapping[str, Any],
-) -> tuple[list[str], list[str], Path, dict[str, str]]:
+) -> tuple[list[str], list[str], Path, dict[str, str], Path | None]:
     assert repo_path is not None
     python_executable = _python_executable(execution_config)
     variables = _template_variables(
@@ -632,9 +650,9 @@ def _subprocess_request(
         cwd = cwd.resolve()
     if not cwd.is_dir():
         raise ExternalExecutionError(f"configured upstream cwd is missing: {cwd}")
-    _require_executable(command[0], environment)
-    _require_python_entrypoint(command)
-    return command, audit_command, cwd, environment
+    _require_executable(command[0], environment, cwd=cwd)
+    entrypoint = _require_python_entrypoint(command, cwd=cwd)
+    return command, audit_command, cwd, environment, entrypoint
 
 
 def _template_variables(
@@ -746,9 +764,13 @@ def _python_executable(execution_config: Mapping[str, Any]) -> str:
     return candidate
 
 
-def _require_executable(value: str, environment: Mapping[str, str]) -> None:
+def _require_executable(
+    value: str, environment: Mapping[str, str], *, cwd: Path
+) -> None:
     if os.sep in value or (os.altsep and os.altsep in value):
         path = Path(value)
+        if not path.is_absolute():
+            path = cwd / path
         if not path.is_file() or not os.access(path, os.X_OK):
             raise ExternalExecutionError(f"configured executable is missing: {value}")
         return
@@ -756,14 +778,107 @@ def _require_executable(value: str, environment: Mapping[str, str]) -> None:
         raise ExternalExecutionError(f"configured executable is missing: {value}")
 
 
-def _require_python_entrypoint(command: Sequence[str]) -> None:
-    if len(command) < 2 or not command[1].endswith(".py"):
-        return
-    entrypoint = Path(command[1]).expanduser()
+def _require_python_entrypoint(command: Sequence[str], *, cwd: Path) -> Path | None:
+    # Inspect only the script forms we can identify without importing upstream
+    # modules or executing an interpreter. Unknown/module forms stay unaudited.
+    if command[0].endswith(".py"):
+        value = command[0]
+    else:
+        candidates = iter(command[1:])
+        value = next(candidates, "")
+        while value in {"-u", "-B", "-E", "-I", "-s", "-S", "-O", "-OO", "-q"}:
+            value = next(candidates, "")
+        if not value.endswith(".py"):
+            return None
+    entrypoint = Path(value).expanduser()
+    if not entrypoint.is_absolute():
+        entrypoint = cwd / entrypoint
+    entrypoint = entrypoint.resolve()
     if not entrypoint.is_file():
         raise ExternalExecutionError(
             f"configured Python entrypoint is missing: {entrypoint}"
         )
+    return entrypoint
+
+
+def _runner_source_provenance(
+    path: Path | None, *, entrypoint: str | None
+) -> dict[str, Any]:
+    """Fingerprint the real shim/callback, not a user assertion about its version.
+
+    This is source identity only, not proof that declared comparison controls
+    are implemented. Do not import upstream modules to discover their source.
+    """
+
+    result: dict[str, Any] = {
+        "status": "NOT_DISCOVERED",
+        "entrypoint": entrypoint,
+        "scope": "entrypoint_file_only_not_transitive_dependencies",
+        "control_verification": "NOT_VERIFIED",
+    }
+    if path is None or not path.is_file():
+        return result
+    source = path.resolve()
+    result.update(
+        {
+            "status": "SOURCE_FINGERPRINTED",
+            "source_path": source.as_posix(),
+            "source_sha256": _file_sha256(source),
+            "source_git_commit": _discover_git_commit(source.parent),
+            "source_git_tracked": None,
+            "source_git_modified": None,
+        }
+    )
+    if result["source_git_commit"] is not None:
+        try:
+            tracked = subprocess.run(
+                [
+                    "git", "-C", source.parent.as_posix(), "ls-files",
+                    "--error-unmatch", "--", source.name,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+            if tracked.returncode in {0, 1}:
+                result["source_git_tracked"] = tracked.returncode == 0
+            if tracked.returncode == 0:
+                changed = subprocess.run(
+                    [
+                        "git", "-C", source.parent.as_posix(), "diff",
+                        "--quiet", "HEAD", "--", source.name,
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                    check=False,
+                )
+                if changed.returncode in {0, 1}:
+                    result["source_git_modified"] = changed.returncode == 1
+        except (OSError, subprocess.TimeoutExpired):
+            pass  # Unavailable Git evidence remains null, never a clean claim.
+    return result
+
+
+def _finish_runner_source_provenance(provenance: dict[str, Any]) -> None:
+    value = provenance.get("source_path")
+    if value is None:
+        return
+    path = Path(value)
+    try:
+        digest = _file_sha256(path) if path.is_file() else None
+    except OSError as exc:
+        # Do not hide the actual upstream result/failure if it made its source
+        # unreadable. Preserve the unavailable audit evidence explicitly.
+        provenance["source_sha256_after_execution"] = None
+        provenance["source_unchanged_during_execution"] = None
+        provenance["source_verification_error"] = type(exc).__name__
+        return
+    provenance["source_sha256_after_execution"] = digest
+    provenance["source_unchanged_during_execution"] = (
+        digest == provenance["source_sha256"]
+    )
 
 
 def _resolve_repo_path(

@@ -80,6 +80,17 @@ def test_external_subprocess_generation_preserves_and_evaluates_native_output(
     assert run_metadata["ended_at"].endswith("Z")
     assert run_metadata["upstream_repo"] == repo.resolve().as_posix()
     assert len(run_metadata["upstream_commit"]) == 40
+    provenance = run_metadata["runner_provenance"]
+    assert provenance["status"] == "SOURCE_FINGERPRINTED"
+    assert provenance["source_path"] == (repo / "fake_upstream.py").resolve().as_posix()
+    assert provenance["source_sha256"] == hashlib.sha256(
+        (repo / "fake_upstream.py").read_bytes()
+    ).hexdigest()
+    assert provenance["source_git_commit"] == run_metadata["upstream_commit"]
+    assert provenance["source_git_tracked"] is True
+    assert provenance["source_git_modified"] is False
+    assert provenance["source_unchanged_during_execution"] is True
+    assert provenance["control_verification"] == "NOT_VERIFIED"
     assert run_metadata["native_artifact_verified_after_conversion"] is True
     assert run_metadata["auxiliary_artifacts_verified_after_conversion"] is True
     assert Path(run_metadata["canonical_scene_path"]) == Path(
@@ -211,6 +222,7 @@ def test_external_process_failures_persist_execution_evidence(
     assert result["status"] == "failed"
     assert result["return_code"] == return_code
     assert result["timed_out"] is timed_out
+    assert result["runner_provenance"]["status"] == "SOURCE_FINGERPRINTED"
     assert expected_message in result["error"]["message"]
     assert "fake stdout" in Path(result["stdout_path"]).read_text(encoding="utf-8")
     assert "fake stderr" in Path(result["stderr_path"]).read_text(encoding="utf-8")
@@ -337,6 +349,7 @@ def test_offline_method_output_is_snapshotted_before_conversion(tmp_path: Path) 
     assert preserved.read_bytes() == original_bytes
     metadata = read_json(result["adapter_metadata"])["generation_run"]
     assert metadata["runner_kind"] == "offline_supplied_artifact"
+    assert metadata["runner_provenance"] == {"status": "NOT_EXECUTED"}
     assert metadata["source_native_artifact_path"] == native.resolve().as_posix()
     assert metadata["native_artifact_verified_after_conversion"] is True
     assert hashlib.sha256(original_bytes).hexdigest() == metadata[
@@ -407,6 +420,10 @@ def test_callback_runner_uses_same_preservation_boundary(tmp_path: Path) -> None
     metadata = read_json(result["adapter_metadata"])["generation_run"]
     assert calls == [Path(result["method_input"])]
     assert metadata["runner_kind"] == "callback"
+    assert metadata["runner_provenance"]["source_path"] == Path(__file__).resolve().as_posix()
+    assert metadata["runner_provenance"]["source_sha256"] == hashlib.sha256(
+        Path(__file__).read_bytes()
+    ).hexdigest()
     assert metadata["return_code"] == 0
     assert "callback stdout" in Path(metadata["stdout_path"]).read_text(
         encoding="utf-8"
@@ -450,6 +467,103 @@ def test_callback_failure_still_captures_output_and_result(tmp_path: Path) -> No
     assert "callback failed stderr" in Path(result["stderr_path"]).read_text(
         encoding="utf-8"
     )
+
+
+@pytest.mark.parametrize("nested_cwd", [False, True])
+@pytest.mark.parametrize("unbuffered", [False, True])
+def test_relative_entrypoint_uses_upstream_cwd_not_benchmark_cwd(
+    nested_cwd: bool, unbuffered: bool, tmp_path: Path
+) -> None:
+    repo = _fake_upstream_repo(tmp_path / "relative_entrypoint_repo")
+    config = _adapter_config("direct_layout", repo)
+    config["execution"]["command"][1] = "fake_upstream.py"
+    if nested_cwd:
+        (repo / "work").mkdir()
+        config["execution"]["cwd"] = "work"
+        config["execution"]["command"][1] = "../fake_upstream.py"
+    if unbuffered:
+        config["execution"]["command"].insert(1, "-u")
+    result = run_generate(
+        generation_input=_generation_input(), adapter_name="direct_layout",
+        out_dir=tmp_path / "run", adapter_config=config, run_generation=True,
+    )
+    metadata = read_json(result["adapter_metadata"])["generation_run"]
+    assert metadata["return_code"] == 0
+    assert metadata["runner_provenance"]["source_path"] == (
+        repo / "fake_upstream.py"
+    ).resolve().as_posix()
+
+
+@pytest.mark.parametrize("untracked", [False, True])
+def test_shim_fingerprint_does_not_misrepresent_uncommitted_code(
+    untracked: bool, tmp_path: Path
+) -> None:
+    repo = _fake_upstream_repo(tmp_path / "modified_upstream")
+    script = repo / ("custom_bridge.py" if untracked else "fake_upstream.py")
+    script.write_text(_FAKE_UPSTREAM_SCRIPT + "\n# local bridge change\n", encoding="utf-8")
+    config = _adapter_config("direct_layout", repo)
+    config["execution"]["command"][1] = script.name
+    result = run_generate(
+        generation_input=_generation_input(), adapter_name="direct_layout",
+        out_dir=tmp_path / "run", adapter_config=config, run_generation=True,
+    )
+    provenance = read_json(result["adapter_metadata"])["generation_run"]["runner_provenance"]
+    assert provenance["source_git_tracked"] is (not untracked)
+    assert provenance["source_git_modified"] is (None if untracked else True)
+    assert provenance["source_sha256"] == hashlib.sha256(script.read_bytes()).hexdigest()
+    assert provenance["control_verification"] == "NOT_VERIFIED"
+
+
+def test_entrypoint_hash_records_code_changes_during_execution(tmp_path: Path) -> None:
+    repo = _fake_upstream_repo(tmp_path / "self_modifying_upstream")
+    script = repo / "fake_upstream.py"
+    script.write_text(
+        _FAKE_UPSTREAM_SCRIPT + '\nPath(__file__).write_text("# changed by upstream\\n")\n',
+        encoding="utf-8",
+    )
+    initial_digest = hashlib.sha256(script.read_bytes()).hexdigest()
+    result = run_generate(
+        generation_input=_generation_input(), adapter_name="direct_layout",
+        out_dir=tmp_path / "run", adapter_config=_adapter_config("direct_layout", repo),
+        run_generation=True,
+    )
+    provenance = read_json(result["adapter_metadata"])["generation_run"]["runner_provenance"]
+    assert provenance["source_sha256"] == initial_digest
+    assert provenance["source_sha256_after_execution"] == hashlib.sha256(script.read_bytes()).hexdigest()
+    assert provenance["source_unchanged_during_execution"] is False
+
+
+def test_module_execution_does_not_claim_discovered_source_identity(tmp_path: Path) -> None:
+    repo = _fake_upstream_repo(tmp_path / "module_upstream")
+    config = _adapter_config("direct_layout", repo)
+    config["execution"]["command"][1:2] = ["-m", "fake_upstream"]
+    result = run_generate(
+        generation_input=_generation_input(), adapter_name="direct_layout",
+        out_dir=tmp_path / "run", adapter_config=config, run_generation=True,
+    )
+    provenance = read_json(result["adapter_metadata"])["generation_run"]["runner_provenance"]
+    assert provenance["status"] == "NOT_DISCOVERED"
+    assert "source_sha256" not in provenance
+    assert provenance["control_verification"] == "NOT_VERIFIED"
+
+
+def test_unreadable_source_audit_does_not_hide_the_upstream_result(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from benchmark.adapters.common import execution
+
+    source = tmp_path / "runner.py"
+    source.write_text("# test fixture\n", encoding="utf-8")
+    provenance = {"source_path": str(source), "source_sha256": "initial"}
+
+    def unavailable(path):
+        raise PermissionError(path)
+
+    monkeypatch.setattr(execution, "_file_sha256", unavailable)
+    execution._finish_runner_source_provenance(provenance)
+    assert provenance["source_unchanged_during_execution"] is None
+    assert provenance["source_sha256_after_execution"] is None
+    assert provenance["source_verification_error"] == "PermissionError"
 
 
 @pytest.mark.parametrize("adapter_name", ["layout_gpt", "scene_weaver"])

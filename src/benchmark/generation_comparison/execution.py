@@ -543,6 +543,7 @@ def _completed_manifest(
             "runner": {
                 "kind": execution_metadata.get("runner_kind")
                 or execution_metadata.get("provider"),
+                "source_provenance": execution_metadata.get("runner_provenance"),
                 "command": execution_metadata.get("command"),
                 "return_code": execution_metadata.get("return_code"),
                 "timed_out": execution_metadata.get("timed_out"),
@@ -616,6 +617,7 @@ def _base_manifest(
         "retrieval_policy": payload["retrieval_policy"],
         "eligibility": eligibility_path.resolve().as_posix(),
         "eligibility_status": eligibility["status"],
+        "control_evidence": deepcopy(eligibility.get("control_evidence")),
         "materialization": dict(materialization) if materialization is not None else None,
     }
 

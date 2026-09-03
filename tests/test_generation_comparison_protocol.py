@@ -282,6 +282,12 @@ def test_eligibility_is_explicit_and_fail_closed() -> None:
         "incompatible_scale_policy",
     }
     assert scene_weaver["status"] == "ELIGIBLE"
+    for report in (layout_vlm, layout_gpt, scene_weaver):
+        assert report["control_evidence"] == {
+            "pre_run_basis": "capability_declarations",
+            "real_upstream_smoke_test_verified": False,
+            "post_run_validation_required": True,
+        }
 
 
 def test_shared_db_requires_explicit_runner_catalog_control() -> None:
@@ -531,6 +537,11 @@ def test_comparison_manifest_preserves_reported_cost_and_retrieval_provenance(
 
     assert result["generation_resources"]["model"] == "fake-model"
     assert result["generation_resources"]["tokens"] == 123
+    provenance = result["runner"]["source_provenance"]
+    assert provenance["source_path"] == Path(__file__).resolve().as_posix()
+    assert len(provenance["source_sha256"]) == 64
+    assert provenance["control_verification"] == "NOT_VERIFIED"
+    assert result["control_evidence"]["real_upstream_smoke_test_verified"] is False
     assert result["retrieval_selection_provenance"]["upstream_reported"][
         "candidate_ids"
     ] == ["chair.asset.001", "table.asset.001"]

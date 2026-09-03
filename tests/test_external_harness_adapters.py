@@ -71,7 +71,7 @@ def test_external_harnesses_share_one_generator_input_contract(
     }
 
 
-@pytest.mark.parametrize("adapter_name", FULL_EVALUATOR_COMPATIBILITY_ADAPTERS)
+@pytest.mark.parametrize("adapter_name", sorted(EXTERNAL_ADAPTERS))
 def test_full_compatibility_adapters_declare_semantic_capabilities(
     adapter_name: str,
 ) -> None:
@@ -628,7 +628,7 @@ def test_scene_weaver_selects_latest_iteration_and_converts_bottom_center(
     assert compatibility["iteration_selection_policy"] == "latest_non_strict"
 
 
-@pytest.mark.parametrize("adapter_name", FULL_EVALUATOR_COMPATIBILITY_ADAPTERS)
+@pytest.mark.parametrize("adapter_name", sorted(EXTERNAL_ADAPTERS))
 def test_semantic_gate_rejects_multi_room_requirements(adapter_name: str) -> None:
     with pytest.raises(ArtifactValidationError, match="multi_room"):
         get_adapter(adapter_name).resolve_scene_compatibility(
@@ -637,7 +637,7 @@ def test_semantic_gate_rejects_multi_room_requirements(adapter_name: str) -> Non
         )
 
 
-@pytest.mark.parametrize("adapter_name", FULL_EVALUATOR_COMPATIBILITY_ADAPTERS)
+@pytest.mark.parametrize("adapter_name", sorted(EXTERNAL_ADAPTERS))
 def test_semantic_gate_rejects_nonrectangular_requirements(adapter_name: str) -> None:
     generation_input = _generation_input()
     generation_input["scene_request"]["room"]["boundary"] = [
@@ -653,7 +653,7 @@ def test_semantic_gate_rejects_nonrectangular_requirements(adapter_name: str) ->
         get_adapter(adapter_name).resolve_scene_compatibility(generation_input)
 
 
-@pytest.mark.parametrize("adapter_name", FULL_EVALUATOR_COMPATIBILITY_ADAPTERS)
+@pytest.mark.parametrize("adapter_name", sorted(EXTERNAL_ADAPTERS))
 @pytest.mark.parametrize(
     ("config", "missing_capability"),
     [
@@ -969,7 +969,13 @@ def test_scene_smith_native_state_uses_local_bbox_and_geometry_path(
             },
         },
     )
-    scene = _materialize("scene_smith", native, tmp_path / "scenesmith_out")
+    generation_input = _generation_input()
+    generation_input["scene_request"]["room"] = {
+        "boundary": [[0, 0], [4, 0], [4, 3], [0, 3]], "height": 2.8,
+    }
+    scene = read_json(get_adapter("scene_smith").materialize_output(
+        native, generation_input, tmp_path / "scenesmith_out"
+    ))
 
     obj = scene["objects"][0]
     assert scene["boundary"] == [[0.0, 0.0], [4.0, 0.0], [4.0, 3.0], [0.0, 3.0]]

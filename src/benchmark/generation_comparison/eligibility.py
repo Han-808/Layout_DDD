@@ -238,6 +238,11 @@ def _report(
             BUILTIN_CONTROLS.get(adapter_name, set()) if builtin is None else builtin
         ),
         "runner_declared_controls": sorted(configured_values),
+        "control_evidence": {
+            "pre_run_basis": "capability_declarations",
+            "real_upstream_smoke_test_verified": False,
+            "post_run_validation_required": protocol.mode != NATIVE,
+        },
         "reasons": reasons,
     }
 

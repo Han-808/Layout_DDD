@@ -1,0 +1,66 @@
+name: External harness compatibility
+
+on:
+  pull_request:
+  push:
+    branches: [main, codex/pipeline-refinement, codex/review-refinement]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: external-harness-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  compatibility:
+    name: Compatibility / Python ${{ matrix.python }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.11', '3.13']
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install benchmark and test dependencies only
+        run: python -m pip install -e '.[dev]'
+      - name: Record exact source and dependency versions
+        run: |
+          mkdir -p test-results
+          git rev-parse HEAD > test-results/source-commit.txt
+          python -m pip freeze > test-results/python-packages.txt
+      - name: Test converters, execution, comparison, and canonical evaluation
+        # Fake upstream subprocesses and tiny synthetic catalogs only: no
+        # upstream checkout, asset dataset, Blender, model, or API key is needed.
+        run: >-
+          python -m pytest -o addopts='' -q
+          tests/test_external_harness_adapters.py
+          tests/test_adapter_io_contracts.py
+          tests/test_external_converter_correctness.py
+          tests/test_external_harness_execution.py
+          tests/test_external_room_contracts.py
+          tests/test_generation_comparison_protocol.py
+          tests/test_controlled_generation_pilot.py
+          tests/test_catalog_placement_adapter.py
+          tests/test_scene_harness.py
+          tests/test_nl_scene_mvp.py
+          tests/test_evaluation_mode_interface.py
+          tests/test_generation_campaign_v2.py
+          --junitxml=test-results/external-harness.xml
+      - name: Preserve test evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: external-harness-python-${{ matrix.python }}-${{ github.sha }}
+          path: test-results/
+          if-no-files-found: warn
+          retention-days: 14

@@ -20,6 +20,8 @@ from benchmark.adapters.common.geometry import (
     category_from_identifier,
     finite_float,
     matrix_vector,
+    require_boundary_model,
+    require_room_geometry_match,
     rotation_matrix_to_euler_xyz_degrees,
     scene_state_matrix,
     shift_boundary_to_origin,
@@ -82,9 +84,10 @@ def convert_scene_state(
         source_boundary = "generation_input"
         scale_to_meters = 1.0
     else:
-        if len(floors) > 1 and room_id is None:
+        if len(floors) > 1:
             raise ArtifactValidationError(
-                "SceneState contains multiple floors; set adapter_config.room_id or provide a per-room export"
+                "SceneState selection contains multiple floors; select exactly one room "
+                "or provide a per-room export. The converter will not discard floors."
             )
         floor = floors[0]
         selected_room_id = str(floor.get("roomId") or "").strip() or room_id
@@ -96,6 +99,8 @@ def convert_scene_state(
         scale_to_meters = unit * finite_float(
             arch.get("scaleToMeters", 1.0), "SceneState.scene.arch.scaleToMeters"
         )
+        if unit <= 0.0 or scale_to_meters <= 0.0:
+            raise ArtifactValidationError("SceneState unit and scaleToMeters must be positive")
         points = floor.get("points")
         if not isinstance(points, Sequence) or isinstance(points, (str, bytes)) or len(points) < 3:
             raise ArtifactValidationError("SceneState floor.points must contain at least three points")
@@ -116,8 +121,12 @@ def convert_scene_state(
                 ) from exc
         source_boundary = "scene_state_arch"
 
-    boundary, origin_shift = shift_boundary_to_origin(boundary)
-    _, fallback_height, _ = canonical_room(generation_input)
+    require_boundary_model(
+        boundary,
+        supported=("axis_aligned_rectangle",),
+        path="SceneState selected floor",
+    )
+    benchmark_boundary, fallback_height, _ = canonical_room(generation_input)
     wall_heights = [
         finite_float(item.get("height"), "SceneState wall.height") * scale_to_meters
         for item in elements
@@ -127,6 +136,17 @@ def convert_scene_state(
         and (selected_room_id is None or str(item.get("roomId") or "") == selected_room_id)
     ]
     scene_height = max(wall_heights) if wall_heights else fallback_height
+    if scene_height <= 0.0 or any(height <= 0.0 for height in wall_heights):
+        raise ArtifactValidationError("SceneState wall height must be positive")
+    if any(abs(height - scene_height) > 1.0e-6 for height in wall_heights):
+        raise ArtifactValidationError(
+            "SceneState wall heights conflict; a single-height room cannot preserve them"
+        )
+    require_room_geometry_match(
+        boundary, scene_height, benchmark_boundary, fallback_height,
+        path="SceneState native room",
+    )
+    boundary, origin_shift = shift_boundary_to_origin(boundary)
 
     native_objects = scene.get("object")
     if not isinstance(native_objects, Sequence) or isinstance(native_objects, (str, bytes)):
@@ -243,6 +263,8 @@ def convert_scene_state(
         extra_metadata={
             "source_artifact": resolved_path.as_posix(),
             "source_boundary": source_boundary,
+            "source_height": "scene_state_arch" if wall_heights else "generation_input",
+            "room_geometry_match": "validated_against_benchmark",
             "room_id": selected_room_id,
         },
     )

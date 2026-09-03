@@ -17,6 +17,8 @@ from benchmark.adapters.common.geometry import (
     canonical_room,
     category_from_identifier,
     finite_float,
+    require_boundary_model,
+    require_room_geometry_match,
     shift_boundary_to_origin,
     shift_center,
     vector3,
@@ -53,7 +55,8 @@ def convert_holodeck(
     rooms = payload.get("rooms")
     if not isinstance(rooms, Sequence) or isinstance(rooms, (str, bytes)) or not rooms:
         raise ArtifactValidationError("Holodeck output.rooms must be a non-empty list")
-    rooms = [room for room in rooms if isinstance(room, Mapping)]
+    if any(not isinstance(room, Mapping) for room in rooms):
+        raise ArtifactValidationError("Holodeck output.rooms entries must be objects")
     room_id = str(config.get("room_id") or "").strip() or None
     if room_id is not None:
         rooms = [room for room in rooms if str(room.get("id") or "") == room_id]
@@ -78,8 +81,12 @@ def convert_holodeck(
                 finite_float(point.get("z"), f"Holodeck floorPolygon[{index}].z"),
             ]
         )
-    boundary, origin_shift = shift_boundary_to_origin(boundary)
-    _, fallback_height, _ = canonical_room(generation_input)
+    require_boundary_model(
+        boundary,
+        supported=("axis_aligned_rectangle",),
+        path="Holodeck room.floorPolygon",
+    )
+    benchmark_boundary, fallback_height, _ = canonical_room(generation_input)
     wall_heights = [
         finite_float(wall.get("height"), "Holodeck wall.height")
         for wall in payload.get("walls", [])
@@ -91,6 +98,17 @@ def convert_holodeck(
         payload.get("wall_height", max(wall_heights) if wall_heights else fallback_height),
         "Holodeck wall height",
     )
+    if scene_height <= 0.0 or any(height <= 0.0 for height in wall_heights):
+        raise ArtifactValidationError("Holodeck wall height must be positive")
+    if any(abs(height - scene_height) > 1.0e-6 for height in wall_heights):
+        raise ArtifactValidationError(
+            "Holodeck wall heights conflict; a single-height room cannot preserve them"
+        )
+    require_room_geometry_match(
+        boundary, scene_height, benchmark_boundary, fallback_height,
+        path="Holodeck native room",
+    )
+    boundary, origin_shift = shift_boundary_to_origin(boundary)
 
     native_objects = payload.get("objects")
     if not isinstance(native_objects, Sequence) or isinstance(native_objects, (str, bytes)):
@@ -201,6 +219,12 @@ def convert_holodeck(
             "source_artifact": resolved_path.as_posix(),
             "room_id": selected_room_id,
             "conversion_route": "raw_procthor",
+            "source_boundary": "room.floorPolygon",
+            "source_height": (
+                "wall_height" if "wall_height" in payload
+                else "walls" if wall_heights else "generation_input"
+            ),
+            "room_geometry_match": "validated_against_benchmark",
         },
     )
 

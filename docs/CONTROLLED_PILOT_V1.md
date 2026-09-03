@@ -49,6 +49,14 @@ the runner refuses to overwrite any previous result or failed method/case
 directory. A credential-free configuration template is provided at
 `configs/generation_comparison/controlled_pilot_methods.example.json`.
 
+This file is an execution-contract template, not a set of supplied upstream
+bridges. In particular, its `integration_entrypoint.py` commands require operator
+code that is not shipped here or by those upstream repositories. The example
+`comparison_support` flags are declarations to implement and verify, not evidence
+that an unmodified upstream method honors them. See the per-method gaps and
+real-upstream acceptance gate in
+[`COMPATIBILITY_STATUS.md`](../COMPATIBILITY_STATUS.md).
+
 ## Eligibility versus execution readiness
 
 The pilot independently records semantic eligibility and execution readiness.

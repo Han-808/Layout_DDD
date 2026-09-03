@@ -96,6 +96,7 @@ testpaths = [
   "tests/test_external_converter_correctness.py",
   "tests/test_external_harness_adapters.py",
   "tests/test_external_harness_execution.py",
+  "tests/test_external_room_contracts.py",
   "tests/test_evaluation_mode_interface.py",
   "tests/test_multi_room_evaluation.py",
   "tests/test_functional_discovery.py",

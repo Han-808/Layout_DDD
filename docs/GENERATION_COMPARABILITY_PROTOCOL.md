@@ -133,6 +133,14 @@ catalog membership, inventory, architecture, and physical scale are checked
 again after generation. Missing declarations fail closed with structured reason
 codes and the upstream command is not launched.
 
+The eligibility report explicitly records `control_evidence.pre_run_basis` as
+`capability_declarations` and `real_upstream_smoke_test_verified=false`.
+`ELIGIBLE` is permission to attempt the configured protocol, not proof of
+released-upstream controllability or publication readiness. Post-run validation
+proves the observed run's identities, not that every future run will honor the
+control flags. A publication baseline also needs the real-upstream gate in
+[`COMPATIBILITY_STATUS.md`](../COMPATIBILITY_STATUS.md).
+
 | Method | Native | SharedDB | FrozenAssets | Reason / limitation |
 | --- | --- | --- | --- | --- |
 | Current `catalog_placement` | YES | NOT_APPLICABLE | YES | It already receives exact selected assets and slots; controlled input fixes `uniform_scale=1.0` and validates native placement identity. |
@@ -176,6 +184,14 @@ architecture hashes, catalog identity, inventory and binding hashes, scale and
 retrieval policy, eligibility, upstream repo/commit, preserved native artifact
 and hash, native selections, canonical scene and hash, the unchanged evaluator
 route/report, and available generation resource metadata.
+
+The manifest retains the pre-run `control_evidence` separately from observed
+post-run validation. `runner.source_provenance` records the actual shim/callback
+file's pre/post execution hashes, discoverable Git commit, and tracked/modified
+state. Fingerprinting is entrypoint-only, not a transitive dependency lock or
+verification of the runner's capability attestation. Version and retain the
+actual bridge and its dependencies for publication; a clean upstream commit
+alone does not identify an untracked local wrapper.
 
 Wall time is always recorded. Model, token, generation-call, tool-call,
 retrieval-call, rendering-call, and iteration counts are recorded when reported
