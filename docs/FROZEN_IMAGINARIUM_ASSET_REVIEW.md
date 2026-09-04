@@ -780,3 +780,116 @@ shelf are additions after the four towel-rack instances are removed.
 6. Add immutable catalog records and source hashes, then re-run local-asset,
    frozen-binding, architecture, scale, support, and harness-eligibility
    preflight.
+
+## S107 — workshop, repair, and storage room
+
+Review status: `user_selected_pending_materialization`
+
+Recorded: `2026-09-05` (`Asia/Shanghai`)
+
+### Baseline scene
+
+- Model: `Claude Opus 5`
+- SceneBoard dataset key: `anthropic_opus5`
+- Displayed liveboard score: `92.83`
+- Source score: `94.96`
+- Coverage: `99.13`
+- Existing object count: `24`
+- Canonical scene:
+  `Support/datasets/api3_anthropic_generations_v1/claude-opus-5-aihub/S107/scene/canonical_scene.json`
+- Canonical scene SHA-256:
+  `9ee3bac55debd73ee3909141bdce9b358345bcb37df539adf9d7e03db0d0d960`
+- Blender scene:
+  `Support/datasets/api3_anthropic_generations_v1/claude-opus-5-aihub/S107/prepared/evaluation.blend`
+- Blender scene SHA-256:
+  `9207a39147deddd91838ceac9a6e0e4e00e4f9252cae2d25539e798ed38aadf0`
+
+### User removal decision
+
+Remove exactly three objects:
+
+1. `shop_vacuum`, bound to exact asset `25_SM_Vacuum_Cleaner_NN_51b`
+   (CSV row `666`).
+2. `workshop_stool_1`, bound to exact asset `7_SM_Chair_01`.
+3. `workshop_stool_2`, bound to the same exact asset `7_SM_Chair_01`.
+
+The user explicitly confirmed that both chair/stool instances are removed. No
+vacuum or chair/stool replacement is proposed. Preserve the source
+Blender/native scene unchanged; apply removals only when the approved
+FrozenAssets case is materialized.
+
+### Candidate shortlist
+
+All twenty exact CSV assets and local directories were verified. Candidates
+`1`, `2`, and `19` can serve as explicit replacements for existing misbound
+drill-press, bench-vise, and small-parts-organizer slots if selected. The other
+candidates add workshop tools, power, storage, and task lighting. Dimensions are
+shown directly. Only the rows repeated in the user-selected table below are
+approved for later materialization.
+
+| Candidate | CSV id | Exact asset ID | CSV bbox W×D×H (m) | CSV class/category | Suggested placement / role |
+| ---: | ---: | --- | --- | --- | --- |
+| 1 | 1702 | `a_SM_stand_drill` | `0.979 × 0.486 × 1.939` | `Industrial_bench_drill` / `press` | Floor; proper drill press offered as replacement for speaker-mesh `drill_press` |
+| 2 | 1223 | `a_SM_auto_repair_props_01_clamp` | `0.440 × 0.336 × 0.197` | `Discarded_industrial_component` / `vise` | On workbench; proper bench vise offered as replacement for tiny clamp `bench_vise` |
+| 3 | 48 | `0_drill_01_2k_packed` | `0.183 × 0.185 × 0.052` | `Handheld_drill_tool` / `drill` | On workbench/tool cabinet; cordless drill |
+| 4 | 86 | `0_metal_tool_chest_2k_packed` | `0.685 × 0.407 × 0.652` | `Toolbox` / `toolbox` | Floor or robust low surface; red multi-drawer tool chest |
+| 5 | 1225 | `a_SM_auto_repair_props_01_tool_box` | `0.450 × 0.195 × 0.263` | `Small_toolbox` / `toolbox` | On workbench or shelf; portable red/black toolbox |
+| 6 | 708 | `36_ToolSet_01` | `0.286 × 0.114 × 0.025` | `Hammer` / `hammer` | On workbench or tool surface; claw hammer |
+| 7 | 711 | `36_ToolSet_05` | `0.194 × 0.025 × 0.025` | `Hardware_tool` / `tool` | On workbench; blue-grip flathead screwdriver |
+| 8 | 712 | `36_ToolSet_09` | `0.191 × 0.060 × 0.016` | `Hardware_tool` / `pliers` | On workbench; yellow-grip pliers |
+| 9 | 83 | `0_measuring_tape_01_2k_packed` | `0.169 × 0.041 × 0.073` | `Tape_measure` / `tape` | On workbench; retractable tape measure |
+| 10 | 60 | `0_garden_gloves_01_2k_packed` | `0.299 × 0.227 × 0.076` | `Farm_tool` / `glove` | On workbench/shelf; protective work gloves |
+| 11 | 808 | `44_sk33_PowerStrip01` | `0.481 × 0.168 × 0.038` | `Power_strip` / `strip` | On wall/workbench surface; multi-outlet power strip |
+| 12 | 1132 | `a_Floodlight1` | `0.218 × 0.177 × 0.170` | `Floodlight` / `lamp` | On candidate `13` stand or secure work surface; guarded task floodlight |
+| 13 | 1133 | `a_Floodlight1Stand` | `0.313 × 0.183 × 0.318` | `Construction_light_stand` / `stand` | Floor/workbench; stand paired with candidate `12` |
+| 14 | 1204 | `a_SM_auto_repair_03_gallon_01` | `0.183 × 0.083 × 0.260` | `Toolbox` / `can` | On shelf/workbench; vintage red oil can |
+| 15 | 1241 | `a_SM_auto_repair_table_drawer` | `1.120 × 0.636 × 0.950` | `Metal_tool_cabinet_with_wheels` / `cabinet` | Floor; rolling green multi-drawer tool cabinet |
+| 16 | 1281 | `a_SM_cable_work_battery_rack` | `0.477 × 1.207 × 0.794` | `Two_tier_battery_rack` / `rack` | Floor; battery/tool storage rack |
+| 17 | 745 | `42_ShopShelving_06_2` | `0.500 × 0.532 × 0.800` | `Storage_locker` / `locker` | Floor; compact weathered metal shop locker |
+| 18 | 1677 | `a_SM_shelving_unit` | `1.684 × 0.549 × 1.900` | `Storage_rack` / `rack` | Floor; four-tier gray metal storage rack |
+| 19 | 269 | `0_vintage_wooden_drawer_01_2k_packed` | `0.858 × 0.457 × 0.545` | `Storage_locker` / `cabinet` | Floor/workbench support; six-drawer parts organizer replacing crate-mesh `small_parts_organizer` |
+| 20 | 1527 | `a_SM_lights_fluorescent_hanged` | `1.500 × 0.353 × 0.184` | `Ceiling_lamp` / `fixture` | Ceiling; linear fluorescent task light over a workbench |
+
+### User-selected additions
+
+The user selected candidate numbers `1, 5, 7, 8, 14`, each with count one.
+Candidate `1` replaces the misbound drill-press slot. The portable toolbox,
+screwdriver, pliers, and oil can are additions.
+
+| Original candidate | Count | CSV id | Exact asset ID | CSV bbox W×D×H (m) | Intended support | Provisional role |
+| ---: | ---: | ---: | --- | --- | --- | --- |
+| 1 | 1 | 1702 | `a_SM_stand_drill` | `0.979 × 0.486 × 1.939` | floor | Proper industrial drill press replacing `drill_press` |
+| 5 | 1 | 1225 | `a_SM_auto_repair_props_01_tool_box` | `0.450 × 0.195 × 0.263` | on object | Portable red/black toolbox on a workbench or shelf |
+| 7 | 1 | 711 | `36_ToolSet_05` | `0.194 × 0.025 × 0.025` | on object | Flathead screwdriver on a workbench/tool surface |
+| 8 | 1 | 712 | `36_ToolSet_09` | `0.191 × 0.060 × 0.016` | on object | Pliers on a workbench/tool surface |
+| 14 | 1 | 1204 | `a_SM_auto_repair_03_gallon_01` | `0.183 × 0.083 × 0.260` | on object | Vintage oil can on a shelf or workbench |
+
+### Candidate-selection constraints
+
+- No candidate recreates the removed shop vacuum or either chair/stool.
+- Selecting candidate `1`, `2`, or `19` authorizes replacement, not duplication,
+  of `drill_press`, `bench_vise`, or `small_parts_organizer`, respectively.
+- Candidates `3`, `5`--`12`, and `14` require explicit workbench, cabinet,
+  shelf, wall, or stand support; do not flatten them to the floor.
+- Candidate `12` should normally be paired with candidate `13` unless mounted
+  to another explicitly selected stable support.
+- Candidates `1`, `4`, `13`, and `15`--`19` require sufficient floor/workbench
+  clearance. Candidate `20` requires ceiling support.
+- All five selected asset directories exist. None is materialized into the
+  executable FrozenAssets case by this review-only update.
+
+### Materialization still required
+
+1. Remove `shop_vacuum`, `workshop_stool_1`, and `workshop_stool_2` without
+   creating vacuum or seating replacement slots.
+2. Replace the `drill_press` slot's speaker binding `a_SM_Speaker_01` with exact
+   asset `a_SM_stand_drill`; retain the slot identity.
+3. Add unique toolbox, screwdriver, pliers, and oil-can slots without changing
+   other retained S107 identities.
+4. Bind the four small additions to explicit workbench, shelf, or tool-cabinet
+   parents; do not flatten them to the floor.
+5. Validate the `0.979 x 0.486 m` drill-press footprint and its operating
+   clearance against workbenches and circulation.
+6. Add immutable catalog records and source hashes, then re-run local-asset,
+   frozen-binding, architecture, scale, support, and harness-eligibility
+   preflight.
