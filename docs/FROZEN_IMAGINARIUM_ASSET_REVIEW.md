@@ -552,3 +552,109 @@ smart speaker, and fruit/snack bowl are additions.
 5. Add immutable catalog records and source hashes, then re-run local-asset,
    frozen-binding, architecture, scale, support, and harness-eligibility
    preflight.
+
+## S105 — children's study, play, and art room
+
+Review status: `user_selected_pending_materialization`
+
+Recorded: `2026-09-05` (`Asia/Shanghai`)
+
+### Baseline scene
+
+- Model: `HY4-0823dev`
+- SceneBoard dataset key: `hy4_dev0823_arena`
+- Displayed liveboard score: `90.77`
+- Source score: `93.73`
+- Coverage: `100.0`
+- Existing object count: `22`
+- Canonical scene:
+  `Support/datasets/hy_dev0823_arena_single_room_eval_v1/S105/scene/canonical_scene.json`
+- Canonical scene SHA-256:
+  `f63c439f9bd9ab588f9db36d7ef39f66fb2d87ceab112a67a93428b9270a5d40`
+- Blender scene:
+  `Support/datasets/hy_dev0823_arena_single_room_eval_v1/S105/prepared/evaluation.blend`
+- Blender scene SHA-256:
+  `2d9f85a103a3519733676d334aa92a299171b634a8f6a5d15decdd243fb00e5f`
+
+### User removal decision
+
+Remove exactly one object: `play_rug_1`, bound to exact asset
+`22_SM_Rug_Stacked_01g` (CSV row `589`). Its `Folded_fabric` class,
+description, and `0.572 x 0.542 x 0.063 m` dimensions confirm it is folded
+fabric rather than a floor rug. Preserve the source Blender/native scene
+unchanged; apply the removal only when the approved FrozenAssets case is
+materialized.
+
+### Candidate shortlist
+
+All twenty exact CSV assets and local directories were verified. Candidate `1`
+is a real floor-carpet replacement. The remaining candidates add age-appropriate
+play, art, study, storage, and decorative detail. Dimensions are shown directly
+to support the user's selection. Only the rows repeated in the user-selected
+table below are approved for later materialization.
+
+| Candidate | CSV id | Exact asset ID | CSV bbox W×D×H (m) | CSV class/category | Suggested placement / role |
+| ---: | ---: | --- | --- | --- | --- |
+| 1 | 895 | `45_SM_Rug_07a` | `1.797 × 1.802 × 0.043` | `Carpet` / `rug` | Floor; round blue play carpet replacing the folded fabric |
+| 2 | 791 | `44_sk17_UnitBlocks01` | `0.243 × 0.212 × 0.174` | `Children_toy` / `block` | On play rug, low table, or storage surface; wooden geometric blocks |
+| 3 | 793 | `44_sk19_Xylophone01` | `0.288 × 0.078 × 0.013` | `Children_toy` / `xylophone` | On art/play table or rug; pastel wooden xylophone |
+| 4 | 862 | `44_sk83_ToyCar02` | `0.219 × 0.076 × 0.087` | `Toy_car` / `toy` | On rug, shelf, or low table; wooden toy car |
+| 5 | 859 | `44_sk80_UnitBlock03` | `0.211 × 0.116 × 0.113` | `Children_toy` / `tower` | On rug or play table; wooden stacking tower |
+| 6 | 856 | `44_sk78_RaceTrack01` | `1.194 × 1.086 × 0.040` | `Children_toy` / `track` | Floor; slot-car track requiring a dedicated play footprint |
+| 7 | 49 | `0_dutch_ship_medium_2k_packed` | `0.241 × 0.068 × 0.247` | `Toy_car` / `boat` | On shelf; wooden pirate-ship model |
+| 8 | 2006 | `d_1000009425588` | `0.577 × 0.577 × 0.600` | `Beach_ball` / `ball` | Floor or toy-storage zone; large blue/gray beach ball |
+| 9 | 2011 | `d_1000009529730` | `0.153 × 0.152 × 0.152` | `Soccer_ball` / `ball` | Floor or storage; compact gray/black soccer ball |
+| 10 | 1431 | `a_SM_desk_props_marker` | `0.175 × 0.025 × 0.024` | `Marker_pen` / `pen` | On art table; blue-grip marker |
+| 11 | 1617 | `a_SM_Pen_01c` | `0.025 × 0.149 × 0.027` | `Marker_pen` / `pen` | On art table; red-cap marker |
+| 12 | 1433 | `a_SM_desk_props_notebook` | `0.013 × 0.110 × 0.155` | `Notebook_stationery` / `notebook` | On study desk; spiral sketch notebook |
+| 13 | 1607 | `a_SM_papers_stickynote_05` | `0.050 × 0.010 × 0.050` | `Sticky_note` / `note` | On study desk or board; pink `HELLO` note |
+| 14 | 688 | `3_PaperBox` | `0.478 × 0.334 × 0.234` | `Small_storage_box` / `box` | On low shelf or floor; wooden art-paper/toy box |
+| 15 | 1899 | `b_44` | `0.880 × 0.661 × 0.432` | `Small_storage_box` / `ottoman` | Floor; beige upholstered storage ottoman |
+| 16 | 177 | `0_SM_Deco023_02` | `0.287 × 0.189 × 0.162` | `Small_storage_box` / `box` | On shelf or desk; small sage-green organizer box |
+| 17 | 304 | `11_SM_Books_03` | `0.140 × 0.035 × 0.210` | `Book` / `book` | On children's bookshelf; teal upright book |
+| 18 | 307 | `11_SM_Books_06` | `0.139 × 0.032 × 0.210` | `Book` / `book` | On children's bookshelf; dark-navy upright book |
+| 19 | 1 | `0_alarm_clock_01_2k_packed` | `0.132 × 0.067 × 0.174` | `Alarm_clock` / `clock` | On study desk or shelf; mint-green twin-bell clock |
+| 20 | 1765 | `a_SM_Wall_Picture_1` | `1.045 × 0.020 × 1.540` | `Wall_mounted_picture_frame` / `print` | Wall; geometric low-poly cat portrait |
+
+### User-selected additions
+
+The user selected candidate numbers `1, 3, 6, 15`, each with count one. The
+new floor carpet replaces the deleted false rug. The xylophone, race track, and
+storage ottoman are additions.
+
+| Original candidate | Count | CSV id | Exact asset ID | CSV bbox W×D×H (m) | Intended support | Provisional role |
+| ---: | ---: | ---: | --- | --- | --- | --- |
+| 1 | 1 | 895 | `45_SM_Rug_07a` | `1.797 × 1.802 × 0.043` | floor | Actual round blue play carpet replacing `play_rug_1` |
+| 3 | 1 | 793 | `44_sk19_Xylophone01` | `0.288 × 0.078 × 0.013` | on object or floor | Pastel wooden xylophone on the play rug/table |
+| 6 | 1 | 856 | `44_sk78_RaceTrack01` | `1.194 × 1.086 × 0.040` | floor | Dedicated slot-car track in the play zone |
+| 15 | 1 | 1899 | `b_44` | `0.880 × 0.661 × 0.432` | floor | Upholstered toy-storage ottoman |
+
+### Candidate-selection constraints
+
+- Candidate `1` is the only proposed floor-rug replacement and must not reuse
+  the removed `22_SM_Rug_Stacked_01g` binding.
+- Candidate `6` occupies approximately `1.30 m²`; select it only if a dedicated
+  collision-free play footprint remains.
+- Candidates `2`--`5`, `7`, and `9` may use the play rug/floor only where
+  physically plausible; shelf/table placements require explicit support.
+- Candidates `10`--`14` and `16`--`19` require explicit desk, table, shelf, or
+  storage support; do not flatten them to the floor.
+- Candidate `15` is floor furniture, and candidate `20` requires wall support.
+- All four selected asset directories exist. None is materialized into the
+  executable FrozenAssets case by this review-only update.
+
+### Materialization still required
+
+1. Remove `play_rug_1` and its false-rug `22_SM_Rug_Stacked_01g` binding;
+   recreate the play-rug slot bound exactly to `45_SM_Rug_07a` at fixed native
+   scale.
+2. Add unique xylophone, race-track, and storage-ottoman slots without changing
+   other retained S105 identities.
+3. Explicitly bind the xylophone to either the play carpet, a low play surface,
+   or an otherwise defensible floor position.
+4. Jointly validate the `1.797 x 1.802 m` carpet, `1.194 x 1.086 m` race track,
+   and `0.880 x 0.661 m` ottoman footprints. Reject materialization if all three
+   cannot preserve circulation and collision-free use.
+5. Add immutable catalog records and source hashes, then re-run local-asset,
+   frozen-binding, architecture, scale, support, and harness-eligibility
+   preflight.
