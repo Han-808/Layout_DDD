@@ -66,8 +66,8 @@ def load_arena() -> dict[str, Any]:
         raise ArenaError("base arena must not preselect Agent entrants")
     integrity = _mapping(value.get("integrity"), "integrity")
     if integrity != {
-        "current_lock": "arena.lock.v2.json",
-        "predecessor_lock": "arena.lock.json",
+        "current_lock": "arena.lock.v3.json",
+        "predecessor_lock": "arena.lock.v2.json",
     }:
         raise ArenaError("arena integrity-chain declaration drifted")
     return value

@@ -1,0 +1,38 @@
+{
+  "adapter": {
+    "adapter_id": "sieve-pi-common-harness-v1",
+    "adapter_version": "1",
+    "command_argv_source": "trusted/pi_harness.py",
+    "runtime_manifest": "../runtime_bundles/pi-0.85.0/runtime.manifest.json",
+    "task_delivery": {
+      "canonical_source": "workspace/TODO.md",
+      "method": "stdin_utf8_canonical_text"
+    }
+  },
+  "agent_id": "replace-with-agent-and-model-id",
+  "implementation": {
+    "name": "Pi Coding Agent",
+    "version": "0.85.0"
+  },
+  "isolation": {
+    "backend": "macos_seatbelt_sandbox_exec_v1",
+    "broad_internet_allowed": false,
+    "host_auth_files_mounted": false,
+    "host_environment_inherited": false,
+    "workspace_scope": "one_agent_one_scene_one_run"
+  },
+  "model_or_service": {
+    "api_protocol": "replace-with-openai-completions-or-openai-responses",
+    "compute_policy": "replace-with-off-minimal-low-medium-or-high",
+    "identity": "replace-with-exact-wire-model",
+    "identity_disclosure": "exact"
+  },
+  "remote_access": {
+    "fixed_model_or_service_identity_enforced": true,
+    "max_requests": "replace-with-positive-integer",
+    "mode": "scoped_loopback_gateway",
+    "upstream_credential_visible_to_agent": false
+  },
+  "schema_version": "sieve_general_agent_registration_v1",
+  "selection_status": "template_not_runnable"
+}

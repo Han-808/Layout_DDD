@@ -6,6 +6,7 @@ from __future__ import annotations
 import http.client
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import math
 import secrets
 import threading
 from typing import Any
@@ -32,6 +33,7 @@ class ScopedModelGateway:
         max_requests: int,
         upstream_auth_header: str = "Authorization",
         upstream_auth_prefix: str = "Bearer ",
+        upstream_timeout_seconds: float = 600.0,
         allow_insecure_loopback_upstream: bool = False,
     ) -> None:
         upstream = urlsplit(upstream_base_url.rstrip("/"))
@@ -50,6 +52,13 @@ class ScopedModelGateway:
             raise GatewayError("gateway endpoint is invalid")
         if isinstance(max_requests, bool) or not isinstance(max_requests, int) or max_requests < 1:
             raise GatewayError("max_requests must be positive")
+        if (
+            isinstance(upstream_timeout_seconds, bool)
+            or not isinstance(upstream_timeout_seconds, (int, float))
+            or not math.isfinite(float(upstream_timeout_seconds))
+            or not 0 < float(upstream_timeout_seconds) <= 7200
+        ):
+            raise GatewayError("upstream_timeout_seconds must be in (0, 7200]")
         self.upstream = upstream
         self.upstream_secret = upstream_secret
         self.fixed_model = fixed_model
@@ -57,6 +66,7 @@ class ScopedModelGateway:
         self.max_requests = max_requests
         self.upstream_auth_header = upstream_auth_header
         self.upstream_auth_prefix = upstream_auth_prefix
+        self.upstream_timeout_seconds = float(upstream_timeout_seconds)
         self.capability_token = secrets.token_hex(32)
         self._request_count = 0
         self._lock = threading.Lock()
@@ -167,7 +177,11 @@ class ScopedModelGateway:
             else http.client.HTTPConnection
         )
         port = self.upstream.port or (443 if self.upstream.scheme == "https" else 80)
-        connection = connection_cls(self.upstream.hostname, port, timeout=600)
+        connection = connection_cls(
+            self.upstream.hostname,
+            port,
+            timeout=self.upstream_timeout_seconds,
+        )
         base_path = self.upstream.path.rstrip("/")
         upstream_path = base_path + self.endpoint
         headers = {

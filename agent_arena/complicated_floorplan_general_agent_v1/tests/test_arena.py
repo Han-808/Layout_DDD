@@ -24,7 +24,7 @@ from arena import (  # noqa: E402
     verify_episode_inputs,
     verify_fixed_suite,
 )
-from model_gateway import ScopedModelGateway  # noqa: E402
+from model_gateway import GatewayError, ScopedModelGateway  # noqa: E402
 from verify_arena import verify_lock  # noqa: E402
 
 
@@ -131,8 +131,10 @@ class ArenaTests(unittest.TestCase):
                 fixed_model="fixed-model",
                 endpoint="/responses",
                 max_requests=1,
+                upstream_timeout_seconds=3000,
                 allow_insecure_loopback_upstream=True,
             ) as gateway:
+                self.assertEqual(gateway.upstream_timeout_seconds, 3000.0)
                 unauthorized_status, _ = _gateway_request(
                     gateway.port,
                     "0" * 64,
@@ -173,6 +175,18 @@ class ArenaTests(unittest.TestCase):
             upstream.shutdown()
             upstream.server_close()
             thread.join(timeout=5.0)
+
+    def test_gateway_rejects_invalid_upstream_timeout(self) -> None:
+        with self.assertRaisesRegex(GatewayError, "upstream_timeout_seconds"):
+            ScopedModelGateway(
+                upstream_base_url="http://127.0.0.1:1/v1",
+                upstream_secret="fixture-secret",
+                fixed_model="fixture-model",
+                endpoint="/chat/completions",
+                max_requests=1,
+                upstream_timeout_seconds=0,
+                allow_insecure_loopback_upstream=True,
+            )
 
 
 def _gateway_request(

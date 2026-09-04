@@ -36,15 +36,19 @@ not an accepted fallback.
 ## Folder map
 
 - `arena.json`: frozen scientific and isolation contract.
-- `arena.lock.v2.json`: current content hashes for every controlled arena file.
-- `arena.lock.json`: preserved predecessor lock from the earlier, overly
-  specific draft; v2 hashes it as part of the provenance chain.
+- `arena.lock.v3.json`: current content hashes for every controlled arena file.
+- `arena.lock.v2.json` and `arena.lock.json`: preserved predecessor locks; the
+  current lock extends rather than rewrites the provenance chain.
 - `TODO.md`: canonical Agent-facing task template.
 - `fixed_suite/`: approved layouts/programs plus public shared-DB identity.
 - `public/`: files copied into each Agent workspace.
 - `trusted/`: host-only materializer, verifier, gateway, and isolated executor.
 - `trusted/agent_registration.example.json`: participant-neutral registration
   template; the current entrant list is intentionally empty.
+- `trusted/pi_harness/`: frozen common Pi prompt, tool/resource policy, and Pi
+  registration template. Installing the harness does not select a model.
+- `trusted/pi_harness.py`: creates the per-episode, secret-free Pi model config
+  for the one scoped gateway and returns the exact command plus TODO stdin.
 - `episodes/`: generated episode folders; contents are intentionally ignored by
   git.
 
@@ -84,3 +88,12 @@ Every selected Agent adapter must pin the exact runtime version/hash, model or
 service identity when available, reasoning/compute policy, command, wall-clock
 budget, and scoped gateway configuration. No entrant or generation is selected
 or launched by this package.
+
+## Installed common Pi harness
+
+The local portable runtime is installed outside the sealed arena at
+`../runtime_bundles/pi-0.85.0`. Its local manifest records the Node/Pi identity
+and bundle fingerprint. Both Chat Completions and Responses routes are
+supported, but a concrete wire model, route, reasoning policy, timeout, request
+budget, and credential must still be registered and pass a tool-call preflight
+before any generation is authorized.

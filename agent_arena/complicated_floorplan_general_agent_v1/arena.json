@@ -29,8 +29,8 @@
     "workspace_scope": "one_agent_one_scene_one_run"
   },
   "integrity": {
-    "current_lock": "arena.lock.v2.json",
-    "predecessor_lock": "arena.lock.json"
+    "current_lock": "arena.lock.v3.json",
+    "predecessor_lock": "arena.lock.v2.json"
   },
   "participant_class": "general_purpose_tool_using_agent",
   "public_workspace_files": [
