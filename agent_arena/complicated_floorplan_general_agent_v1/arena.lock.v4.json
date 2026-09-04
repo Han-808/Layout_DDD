@@ -1,6 +1,6 @@
 {
   "arena_id": "sieve-complicated-floorplan-general-agents-v2",
-  "content_root_sha256": "2d95ec56d96eb715aad33947a195c5e3860580258019d45f32726fb19c05d425",
+  "content_root_sha256": "420187430cc5a79713d39d35d9f4a58b67d460a2a64a176401e7f4e32733aa10",
   "file_count": 96,
   "files": {
     ".gitignore": {
@@ -15,8 +15,8 @@
     },
     "TODO.md": {
       "executable": false,
-      "sha256": "4f5d25fa4e4ac3e9cf247a96053aa5dfe913a71b4c99b7e3242bd7aac32ee123",
-      "size_bytes": 7100
+      "sha256": "63e599decdb1131ed1385e5b324495f59dc730f303535a5ed5c15213df6a491a",
+      "size_bytes": 7367
     },
     "arena.json": {
       "executable": false,
@@ -380,8 +380,8 @@
     },
     "tests/test_arena.py": {
       "executable": false,
-      "sha256": "3dece1ee3f7467cf413489359d70c6a197344a4d06b935bf70550197badb62b8",
-      "size_bytes": 9531
+      "sha256": "f3832dc6350303ac60f64caf723d9d5b67e6b32ed68717818aa908230f19ee91",
+      "size_bytes": 11072
     },
     "tests/test_isolation.py": {
       "executable": false,
@@ -410,8 +410,8 @@
     },
     "trusted/arena.py": {
       "executable": false,
-      "sha256": "636314615a5fd1249a67200a0bad629e8c1f1679f5cd5b5169246ed2b2e7095c",
-      "size_bytes": 24485
+      "sha256": "f5272d1716b75ff1e098115a2dd028a7e82319fa42cf28092537a57a219b8dec",
+      "size_bytes": 25203
     },
     "trusted/create_episode.py": {
       "executable": true,

@@ -320,11 +320,17 @@ def create_episode(*, agent_id: str, scene_id: str, run_id: str) -> Episode:
         "target_total_instances": {"min": case.target_min, "max": case.target_max},
         "complexity_contract": {
             "schema_version": "sieve_floorplan_complexity_contract_v1",
-            "density_baseline": "original_multi_room_floorplan_planned_envelope_v1",
-            "density_multiplier": 1.4,
-            "objects_per_m2_target": {
-                "min": 0.6509909031838855,
-                "max": 0.8073424301494476,
+            "count_unit": "expanded_placed_instance",
+            "count_constraints_are_authoritative_integers": True,
+            "density_provenance": {
+                "baseline": "original_multi_room_floorplan_planned_envelope_v1",
+                "historical_multiplier": 1.4,
+                "objects_per_m2_used_to_precompute_ranges": {
+                    "min": 0.6509909031838855,
+                    "max": 0.8073424301494476,
+                },
+                "provenance_only": True,
+                "additional_multiplier_allowed": False,
             },
             "room_instance_range_policy": (
                 "area_proportional_largest_remainder_exact_total_v1"
@@ -448,6 +454,12 @@ def room_instance_ranges(
         if lower < 1 or upper < lower:
             raise ArenaError("derived per-room instance range is invalid")
         output.append({"room_id": str(room_id), "min": lower, "max": upper})
+    summed_minimum = sum(int(row["min"]) for row in output)
+    summed_maximum = sum(int(row["max"]) for row in output)
+    if summed_minimum > maximum or summed_maximum < minimum:
+        raise ArenaError("derived room ranges make the scene target infeasible")
+    if summed_minimum != minimum or summed_maximum != maximum:
+        raise ArenaError("derived room ranges do not reproduce the exact scene range")
     return output
 
 

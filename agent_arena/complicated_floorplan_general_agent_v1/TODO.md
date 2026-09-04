@@ -10,14 +10,20 @@ describe a solution in prose.
 - Layout: `{{LAYOUT_ID}}`
 - Rooms: `{{ROOM_COUNT}}`
 - Wall segments: `{{WALL_SEGMENT_COUNT}}`
-- Required total instances: `{{TARGET_MIN}}` to `{{TARGET_MAX}}`, inclusive
-- Density treatment: 40% above the frozen original-FloorPlan baseline
+- Required total expanded placed instances: `{{TARGET_MIN}}` to
+  `{{TARGET_MAX}}`, inclusive
+- Density provenance: these integer ranges were precomputed at 40% above the
+  frozen original-FloorPlan density baseline. This is provenance only; do not
+  apply an additional multiplier.
 - Shared asset database: `{{DATABASE_SNAPSHOT_ID}}`
 
-The benchmark has already converted the density treatment into the following
-hard per-room instance ranges:
+The scene-total range above and the per-room integer ranges below are the
+complete and authoritative count constraints:
 
 {{ROOM_INSTANCE_RANGE_TABLE}}
+
+All counts refer to expanded placed instances, not object-plan rows, slots,
+asset bindings, or placement containers.
 
 ## Authoritative contract files
 

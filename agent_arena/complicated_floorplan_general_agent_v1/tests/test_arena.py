@@ -66,8 +66,26 @@ class ArenaTests(unittest.TestCase):
             )
             self.assertEqual(task["layout_id"], "scene_012121")
             self.assertEqual(task["target_total_instances"], {"min": 85, "max": 106})
+            complexity = task["complexity_contract"]
+            self.assertEqual(complexity["count_unit"], "expanded_placed_instance")
+            self.assertTrue(
+                complexity["count_constraints_are_authoritative_integers"]
+            )
             self.assertEqual(
-                task["complexity_contract"]["room_instance_ranges"],
+                complexity["density_provenance"],
+                {
+                    "baseline": "original_multi_room_floorplan_planned_envelope_v1",
+                    "historical_multiplier": 1.4,
+                    "objects_per_m2_used_to_precompute_ranges": {
+                        "min": 0.6509909031838855,
+                        "max": 0.8073424301494476,
+                    },
+                    "provenance_only": True,
+                    "additional_multiplier_allowed": False,
+                },
+            )
+            self.assertEqual(
+                complexity["room_instance_ranges"],
                 [
                     {"room_id": "room_000", "min": 34, "max": 43},
                     {"room_id": "room_001", "min": 11, "max": 13},
@@ -75,6 +93,14 @@ class ArenaTests(unittest.TestCase):
                     {"room_id": "room_003", "min": 14, "max": 18},
                     {"room_id": "room_004", "min": 13, "max": 16},
                 ],
+            )
+            self.assertEqual(
+                sum(row["min"] for row in complexity["room_instance_ranges"]),
+                task["target_total_instances"]["min"],
+            )
+            self.assertEqual(
+                sum(row["max"] for row in complexity["room_instance_ranges"]),
+                task["target_total_instances"]["max"],
             )
             self.assertEqual(
                 task["geometry_contract"]["uniform_scale"],
@@ -85,6 +111,15 @@ class ArenaTests(unittest.TestCase):
             )
             self.assertIn(
                 "- `room_000`: 34 to 43 instances",
+                rendered_todo,
+            )
+            self.assertIn(
+                "This is provenance only; do not\n  apply an additional multiplier.",
+                rendered_todo,
+            )
+            self.assertIn(
+                "All counts refer to expanded placed instances, not object-plan "
+                "rows, slots,\nasset bindings, or placement containers.",
                 rendered_todo,
             )
             self.assertIn(
