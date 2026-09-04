@@ -73,10 +73,19 @@ def materialize_method_catalog(
         "catalog": catalog.identity,
         "linear_unit": "meter",
         "object_inventory_policy": protocol.inventory_policy,
+        "objects": [
+            {
+                key: item[key]
+                for key in ("slot_id", "category", "description", "asset_id")
+                if key in item
+            }
+            for item in protocol.objects
+        ],
         "object_inventory_sha256": protocol.inventory_sha256,
         "asset_binding_sha256": protocol.binding_sha256,
         "scale_policy": protocol.scale_policy,
         "retrieval_policy": protocol.as_dict()["retrieval_policy"],
+        "generation": protocol.as_dict()["generation"],
         "logical_to_native_slot": slot_map,
         "catalog_path": catalog_path.resolve().as_posix(),
         "method_catalog_path": payload_path.resolve().as_posix(),
@@ -105,6 +114,15 @@ def logical_to_native_slot_map(
     protocol: ComparisonProtocol,
     adapter_name: str,
 ) -> dict[str, str]:
+    if adapter_name == "layout_vlm" and any(
+        isinstance(item.get("metadata"), Mapping)
+        and item["metadata"].get("source_group_id")
+        for item in protocol.objects
+    ):
+        return {
+            str(item["slot_id"]): f"{_slug(str(item['slot_id']))}-0"
+            for item in protocol.objects
+        }
     if adapter_name != "layout_gpt":
         return {str(item["slot_id"]): str(item["slot_id"]) for item in protocol.objects}
     counts: Counter[str] = Counter()
@@ -258,6 +276,10 @@ def _method_payload(
                 slot_map[slot_id]: asset_id
                 for slot_id, asset_id in protocol.bindings.items()
             },
+            "native_selector_by_slot": {
+                slot_map[str(item["slot_id"])]: _direct_layout_selector(item)
+                for item in protocol.objects
+            },
         }
     if adapter_name == "layout_vlm":
         candidates = {
@@ -282,11 +304,17 @@ def _method_payload(
                 if item.get("asset_id")
             ],
         }
+    sceneweaver_assets = assets_by_id
+    if protocol.mode == FROZEN_ASSETS:
+        bound_ids = {str(asset_id) for asset_id in protocol.bindings.values()}
+        sceneweaver_assets = {
+            asset_id: assets_by_id[asset_id] for asset_id in sorted(bound_ids)
+        }
     return {
         **common,
         "asset_source": {
             asset_id: _scene_weaver_asset(asset)
-            for asset_id, asset in assets_by_id.items()
+            for asset_id, asset in sceneweaver_assets.items()
         },
         "frozen_asset_bindings": {
             slot_map[slot_id]: _scene_weaver_asset(catalog.get(asset_id))
@@ -342,14 +370,32 @@ def _direct_layout_assets(
                 "description": asset["description"],
                 "source_mesh_uri": mesh,
                 "materialized_mesh_path": materialized,
+                "mesh_sha256": (
+                    asset.get("content", {}).get("mesh_sha256")
+                    if isinstance(asset.get("content"), Mapping)
+                    else None
+                ),
                 "bbox_size_local": asset["bbox_size_local"],
                 "bbox_center_local": asset["bbox_center_local"],
                 "canonical_front": asset.get("canonical_front"),
+                "canonical_front_source": asset.get("canonical_front_source"),
                 "native_scale": asset["native_scale"],
                 "physical_dimensions": asset["physical_dimensions"],
             }
         )
     return result
+
+
+def _direct_layout_selector(slot: Mapping[str, Any]) -> str:
+    metadata = slot.get("metadata")
+    metadata = metadata if isinstance(metadata, Mapping) else {}
+    value = str(metadata.get("source_group_id") or slot["slot_id"])
+    selector = re.sub(r"[^A-Za-z0-9_]+", "_", value).strip("_")
+    if not selector or not re.fullmatch(r"[A-Za-z_]\w*", selector):
+        raise ArtifactValidationError(
+            f"DirectLayout slot {slot['slot_id']!r} has no safe native selector"
+        )
+    return selector
 
 
 def _layout_vlm_asset(asset: Mapping[str, Any]) -> dict[str, Any]:
@@ -422,12 +468,15 @@ def _respace_frozen_object(
 
 
 def _scene_weaver_asset(asset: Mapping[str, Any]) -> dict[str, Any]:
+    content = asset.get("content")
+    content = content if isinstance(content, Mapping) else {}
     return {
         "asset_key": asset["asset_id"],
         "source_db": asset["source_db"],
         "category": asset["category"],
         "description": asset["description"],
         "mesh_uri": asset.get("mesh_uri"),
+        "mesh_sha256": content.get("mesh_sha256"),
         "bbox_size": asset["bbox_size_local"],
         "bbox_center_local": asset["bbox_center_local"],
         "canonical_front": asset.get("canonical_front"),

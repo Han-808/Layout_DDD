@@ -18,6 +18,7 @@ from benchmark.adapters.common.geometry import (
     build_scene,
     canonical_room,
     category_from_identifier,
+    compose_front_basis_rotation,
     finite_float,
     reject_unsupported_architecture,
     shift_boundary_to_origin,
@@ -62,6 +63,8 @@ def convert_direct_layout(
     objects: list[dict[str, Any]] = []
     seen_ids: set[str] = set()
     default_source = str(config.get("asset_source_db") or "directlayout")
+    asset_bindings = config.get("asset_bindings")
+    asset_bindings = asset_bindings if isinstance(asset_bindings, Mapping) else {}
 
     for index, entry in enumerate(payload):
         if not isinstance(entry, Mapping):
@@ -122,9 +125,33 @@ def convert_direct_layout(
                 entry.get("orientation", entry.get("yaw")),
                 f"DirectLayout output[{index}].yaw",
             )
-        category = str(entry.get("category") or category_from_identifier(object_id))
-        description = str(entry.get("description") or entry.get("prompt") or category)
-        asset_key = str(entry.get("asset_id") or entry.get("jid") or object_id)
+        binding_value = asset_bindings.get(object_id)
+        binding = (
+            dict(binding_value)
+            if isinstance(binding_value, Mapping)
+            else {"asset_key": binding_value}
+            if binding_value is not None
+            else {}
+        )
+        category = str(
+            entry.get("category")
+            or binding.get("category")
+            or category_from_identifier(object_id)
+        )
+        description = str(
+            entry.get("description")
+            or entry.get("prompt")
+            or binding.get("description")
+            or category
+        )
+        asset_key_value = (
+            entry.get("asset_id")
+            or entry.get("jid")
+            or binding.get("asset_key")
+            or binding.get("asset_id")
+            or object_id
+        )
+        asset_key = str(asset_key_value) if asset_key_value is not None else None
         record = resolve_asset_record(
             provider,
             asset_key=asset_key,
@@ -133,13 +160,23 @@ def convert_direct_layout(
             description=description,
             size=size,
             hint=entry,
-            native_record=entry,
+            native_record={**binding, **entry},
             resolution_policy=str(
                 config.get("asset_resolution_policy") or "exact_only"
             ),
         )
         asset_local_size = record_asset_local_bbox_size(record)
         asset_local_center = record_bbox_center(record)
+        canonical_rotation = [0.0, 0.0, yaw]
+        front_basis_yaw = None
+        canonical_front = record.get("canonical_front")
+        if canonical_front is not None:
+            canonical_rotation, front_basis_yaw = compose_front_basis_rotation(
+                canonical_rotation,
+                canonical_front=canonical_front,
+                native_zero_front=[0.0, 1.0, 0.0],
+                path=f"DirectLayout output[{index}].front_basis",
+            )
         geometry_audit: dict[str, Any] = {
             "evaluated_size_source": f"native.{size_field}",
             "native_size": size,
@@ -151,6 +188,16 @@ def convert_direct_layout(
             geometry_audit["asset_local_bbox_source"] = "asset_metadata"
         if asset_local_center is not None:
             geometry_audit["asset_local_bbox_center"] = asset_local_center
+        if front_basis_yaw is not None:
+            geometry_audit.update(
+                {
+                    "native_zero_front": [0.0, 1.0, 0.0],
+                    "canonical_front_basis_yaw_degrees": front_basis_yaw,
+                    "orientation_basis_transform": (
+                        "canonical_asset_front_to_directlayout_positive_y"
+                    ),
+                }
+            )
         fields = asset_fields(
             object_id=object_id,
             target_size=size,
@@ -167,7 +214,15 @@ def convert_direct_layout(
             {
                 "native_object_id": object_id,
                 "native_asset_id": asset_key,
+                "native_asset_binding_source": (
+                    "native_object"
+                    if entry.get("asset_id") or entry.get("jid")
+                    else "preserved_asset_bindings_sidecar"
+                    if binding
+                    else "native_object_id"
+                ),
                 "native_rotation_degrees": yaw,
+                "native_zero_front": [0.0, 1.0, 0.0],
             }
         )
         objects.append(
@@ -176,7 +231,7 @@ def convert_direct_layout(
                 **{key: value for key, value in fields.items() if key != "metadata"},
                 "size": size,
                 "center": shift_center(position, origin_shift),
-                "rotation": [0.0, 0.0, yaw],
+                "rotation": canonical_rotation,
                 "metadata": metadata,
             }
         )
@@ -194,7 +249,8 @@ def convert_direct_layout(
             "source_unit": "meter",
             "source_rotation_encoding": "yaw_z",
             "source_rotation_unit": "degree",
-            "source_orientation_reference": "native_bbox_axes",
+            "source_orientation_reference": "positive_y_at_zero_degrees",
+            "asset_front_basis_transform": "matrix_composition_when_available",
             "position_semantics": "bbox_center",
             "origin_shift": origin_shift,
         },

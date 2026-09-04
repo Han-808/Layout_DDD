@@ -333,6 +333,49 @@ def rotation_matrix_to_euler_xyz_degrees(matrix: list[list[float]]) -> list[floa
     return [math.degrees(roll), math.degrees(pitch), math.degrees(yaw)]
 
 
+def compose_front_basis_rotation(
+    source_rotation_xyz_degrees: Sequence[float],
+    *,
+    canonical_front: Sequence[float],
+    native_zero_front: Sequence[float],
+    path: str,
+) -> tuple[list[float], float]:
+    """Compose a native pose with the local-frame transform between fronts.
+
+    ``source_rotation`` acts in the harness's local asset frame. The returned
+    rotation acts on the catalog's canonical local frame, preserving the world
+    facing direction selected by the harness.
+    """
+
+    source = vector3(source_rotation_xyz_degrees, f"{path}.source_rotation")
+    canonical = vector3(canonical_front, f"{path}.canonical_front")
+    native = vector3(native_zero_front, f"{path}.native_zero_front")
+    if abs(canonical[2]) > 1.0e-6 or abs(native[2]) > 1.0e-6:
+        raise ArtifactValidationError(
+            f"{path} supports only horizontal canonical/native front vectors"
+        )
+    canonical_norm = math.hypot(canonical[0], canonical[1])
+    native_norm = math.hypot(native[0], native[1])
+    if canonical_norm <= 1.0e-12 or native_norm <= 1.0e-12:
+        raise ArtifactValidationError(f"{path} front vectors must be non-zero")
+    basis_yaw = math.degrees(
+        math.atan2(native[1], native[0])
+        - math.atan2(canonical[1], canonical[0])
+    )
+    source_matrix = euler_xyz_to_matrix(
+        source,
+        f"{path}.source_rotation",
+        unit="degree",
+    )
+    basis_matrix = euler_xyz_to_matrix(
+        [0.0, 0.0, basis_yaw],
+        f"{path}.front_basis",
+        unit="degree",
+    )
+    composed = matrix_multiply(source_matrix, basis_matrix)
+    return rotation_matrix_to_euler_xyz_degrees(composed), basis_yaw
+
+
 def scene_state_matrix(value: Any, path: str) -> tuple[list[list[float]], list[float], list[float]]:
     """Decode a SceneState column-major 4x4 transform.
 
@@ -408,6 +451,7 @@ __all__ = [
     "canonical_room",
     "category_from_identifier",
     "euler_xyz_to_matrix",
+    "compose_front_basis_rotation",
     "finite_float",
     "matrix_multiply",
     "matrix_transpose",

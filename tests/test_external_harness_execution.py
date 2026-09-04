@@ -55,6 +55,10 @@ def test_external_subprocess_generation_preserves_and_evaluates_native_output(
     repo = _fake_upstream_repo(tmp_path / f"repo_{adapter_name}")
     generation_input = _generation_input()
     config = _adapter_config(adapter_name, repo)
+    private_endpoint = "https://private-model-route.example/v1"
+    config["execution"]["environment"]["LAYOUT_DDD_API_BASE_URL"] = (
+        private_endpoint
+    )
     result = run_generate(
         generation_input=generation_input,
         adapter_name=adapter_name,
@@ -132,6 +136,10 @@ def test_external_subprocess_generation_preserves_and_evaluates_native_output(
         preserved.resolve()
     )
     runner_config = read_json(run_metadata["runner_config_path"])
+    assert private_endpoint not in json.dumps(runner_config)
+    assert runner_config["execution"]["environment"][
+        "LAYOUT_DDD_API_BASE_URL"
+    ].startswith("<redacted-locator:sha256=")
     assert runner_config["execution"]["environment"]["UPSTREAM_API_TOKEN"] == (
         "<redacted>"
     )
@@ -545,6 +553,67 @@ def test_module_execution_does_not_claim_discovered_source_identity(tmp_path: Pa
     assert provenance["status"] == "NOT_DISCOVERED"
     assert "source_sha256" not in provenance
     assert provenance["control_verification"] == "NOT_VERIFIED"
+
+
+def test_pinned_clean_upstream_stays_clean_when_entrypoint_imports_local_module(
+    tmp_path: Path,
+) -> None:
+    repo = _fake_upstream_repo(tmp_path / "pinned_upstream")
+    helper = repo / "fake_helper.py"
+    helper.write_text("VALUE = 1\n", encoding="utf-8")
+    script = repo / "fake_upstream.py"
+    source = script.read_text(encoding="utf-8")
+    script.write_text(
+        source.replace(
+            "from __future__ import annotations\n",
+            "from __future__ import annotations\nimport fake_helper\n",
+            1,
+        ),
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "add", "fake_helper.py", "fake_upstream.py"], cwd=repo, check=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=Harness Test",
+            "-c",
+            "user.email=harness@example.invalid",
+            "commit",
+            "-qm",
+            "add imported module",
+        ],
+        cwd=repo,
+        check=True,
+    )
+    commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    config = _adapter_config("direct_layout", repo)
+    config["execution"].update(
+        {
+            "expected_upstream_commit": commit,
+            "expected_entrypoint_sha256": hashlib.sha256(
+                script.read_bytes()
+            ).hexdigest(),
+        }
+    )
+    result = run_generate(
+        generation_input=_generation_input(),
+        adapter_name="direct_layout",
+        out_dir=tmp_path / "pinned_run",
+        adapter_config=config,
+        run_generation=True,
+    )
+    metadata = read_json(result["adapter_metadata"])["generation_run"]
+    assert metadata["upstream_repo_clean_before_execution"] is True
+    assert metadata["upstream_repo_clean_after_execution"] is True
+    assert metadata["pinned_upstream_identity_enforced"] is True
+    assert not (repo / "__pycache__").exists()
 
 
 def test_unreadable_source_audit_does_not_hide_the_upstream_result(

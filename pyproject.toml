@@ -105,6 +105,7 @@ testpaths = [
   "tests/test_generation_campaign_v2.py",
   "tests/test_generation_comparison_protocol.py",
   "tests/test_controlled_generation_pilot.py",
+  "tests/test_frozen_imaginarium_scene10.py",
   "tests/test_generation_legacy_forwarding_d1.py",
   "tests/test_multi_room_generation.py",
   "tests/test_non_rectangular_generation_contracts.py",

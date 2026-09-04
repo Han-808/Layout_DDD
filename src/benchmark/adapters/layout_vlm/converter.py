@@ -20,6 +20,7 @@ from benchmark.adapters.common.geometry import (
     build_scene,
     canonical_room,
     category_from_identifier,
+    compose_front_basis_rotation,
     finite_float,
     reject_unsupported_architecture,
     require_boundary_model,
@@ -143,7 +144,9 @@ def convert_layout_vlm(
                 config.get("asset_resolution_policy") or "exact_only"
             ),
         )
-        native_asset_local_size = record_asset_local_bbox_size(native_asset)
+        native_asset_local_size, native_bbox_axis_transform = (
+            _native_asset_local_bbox_size(native_asset)
+        )
         asset_local_size = (
             native_asset_local_size
             or record_asset_local_bbox_size(record)
@@ -164,7 +167,20 @@ def convert_layout_vlm(
             for axis in range(3)
         ]
         center = vector3(placement.get("position"), f"LayoutVLM layout.{instance_id}.position")
-        rotation = _rotation(placement.get("rotation"), f"LayoutVLM layout.{instance_id}.rotation")
+        source_rotation = _rotation(
+            placement.get("rotation"),
+            f"LayoutVLM layout.{instance_id}.rotation",
+        )
+        rotation = list(source_rotation)
+        front_basis_yaw = None
+        canonical_front = record.get("canonical_front")
+        if canonical_front is not None:
+            rotation, front_basis_yaw = compose_front_basis_rotation(
+                source_rotation,
+                canonical_front=canonical_front,
+                native_zero_front=[1.0, 0.0, 0.0],
+                path=f"LayoutVLM layout.{instance_id}.front_basis",
+            )
         asset_local_center = record_bbox_center(record)
         geometry_audit: dict[str, Any] = {
             "evaluated_size_source": (
@@ -187,10 +203,23 @@ def convert_layout_vlm(
                 else "implicit_identity"
             ),
         }
+        if native_bbox_axis_transform is not None:
+            geometry_audit["native_bbox_axis_transform"] = native_bbox_axis_transform
+            geometry_audit["asset_local_bbox_axes"] = "canonical_mesh_xyz"
         if native_scale_value is not None:
             geometry_audit["native_scale"] = applied_scale
         if asset_local_center is not None:
             geometry_audit["asset_local_bbox_center"] = asset_local_center
+        if front_basis_yaw is not None:
+            geometry_audit.update(
+                {
+                    "native_zero_front": [1.0, 0.0, 0.0],
+                    "canonical_front_basis_yaw_degrees": front_basis_yaw,
+                    "orientation_basis_transform": (
+                        "canonical_asset_front_to_layoutvlm_positive_x"
+                    ),
+                }
+            )
         fields = asset_fields(
             object_id=instance_id,
             target_size=size,
@@ -213,6 +242,8 @@ def convert_layout_vlm(
                 "native_instance_id": instance_id,
                 "native_asset_id": asset_key,
                 "native_placement_index": index,
+                "native_rotation_degrees": source_rotation,
+                "native_zero_front": [1.0, 0.0, 0.0],
             }
         )
         if native_asset.get("frontView") is not None:
@@ -242,6 +273,8 @@ def convert_layout_vlm(
             "source_rotation_encoding": "euler_xyz_or_yaw",
             "rotation_unit": "degree",
             "rotation_action": "active",
+            "source_zero_rotation_front": "positive_x",
+            "asset_front_basis_transform": "matrix_composition_when_available",
             "position_semantics": "asset_instance_center",
             "origin_shift": origin_shift,
         },
@@ -271,6 +304,37 @@ def _scene_config(
     if not isinstance(loaded, Mapping):
         raise ArtifactValidationError("LayoutVLM scene_config_path must contain a JSON object")
     return dict(loaded)
+
+
+def _native_asset_local_bbox_size(
+    native_asset: Mapping[str, Any],
+) -> tuple[list[float] | None, str | None]:
+    """Decode the released LayoutVLM preprocessing bbox contract.
+
+    The official entrypoint swaps source X/Y before the solver. Frozen inputs
+    preserve the original canonical-mesh bbox alongside that solver bbox so
+    canonical output can retain the mesh-local dimensions and express the
+    solver frame as a rotation-basis transform instead of relabeling axes.
+    """
+
+    metadata = native_asset.get("assetMetadata")
+    metadata = metadata if isinstance(metadata, Mapping) else {}
+    axis_transform = metadata.get("axisTransform")
+    canonical = metadata.get("canonicalBoundingBoxBeforeLayoutVLMSwap")
+    if axis_transform is not None or canonical is not None:
+        if axis_transform != "swap_xy_for_layoutvlm_processed_positive_x_frame":
+            raise ArtifactValidationError(
+                "LayoutVLM assetMetadata declares an unsupported bbox axis transform"
+            )
+        return (
+            vector3(
+                canonical,
+                "LayoutVLM assetMetadata.canonicalBoundingBoxBeforeLayoutVLMSwap",
+                positive=True,
+            ),
+            str(axis_transform),
+        )
+    return record_asset_local_bbox_size(native_asset), None
 
 
 def _rotation(value: Any, path: str) -> list[float]:

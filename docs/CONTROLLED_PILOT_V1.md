@@ -102,3 +102,13 @@ the native loop.
 Without the required upstream checkouts/endpoints/evidence services,
 preparation remains reproducible but no method-quality score is claimed.
 Offline artifacts are labeled `offline_artifact`, never `real_generation`.
+
+## S100--S109 Frozen Imaginarium track
+
+The larger harness-comparison track is documented separately in
+[`FROZEN_IMAGINARIUM_SCENE10.md`](FROZEN_IMAGINARIUM_SCENE10.md). It reuses the
+existing public S100--S109 briefs/object plans, expands 235 exact slots, supports
+the Catalog Placement Stage-C baseline, and ships thin controlled bridges for
+LayoutGPT, DirectLayout, LayoutVLM, and conditional SceneWeaver integration.
+Its candidate asset snapshot is deliberately blocked from generation until
+human approval.

@@ -23,8 +23,8 @@ and SceneWeaver `7ae54b2`.
 
 | Adapter | Native boundary | Native pose | Asset identity | Geometry source | Supported scope | Remaining caveats |
 | --- | --- | --- | --- | --- | --- | --- |
-| `direct_layout` | Benchmark input room; native output room geometry is rejected | Z-up bbox center and degree yaw | Native `asset_id`/`jid`, or persisted `new_object_id` binding | Native placed OBB after DirectLayout rescaling | One axis-aligned rectangular room | Mesh URI is reference-only; source does not persist a separate scale transform or unambiguous canonical front |
-| `layout_gpt` | Benchmark input room | Released `left/top/depth` bbox center, unit normalization, degree yaw | Persisted generation-time `asset_ids` binding; exact lookup only | Released numerical placed bbox | One axis-aligned rectangular room and explicitly selected output record | Native asset binding and dataset/unit assumptions must be supplied; per-case upstream bridge is not shipped |
+| `direct_layout` | Benchmark input room; native output room geometry is rejected | Z-up bbox center and degree yaw | Native `asset_id`/`jid`, or persisted `new_object_id` binding | Native placed OBB after DirectLayout rescaling | One axis-aligned rectangular room | Mesh URI is reference-only; an exact catalog front is basis-composed with DirectLayout's +Y zero direction, otherwise front remains unavailable |
+| `layout_gpt` | Benchmark input room | Released `left/top/depth` bbox center, unit normalization, degree yaw | Persisted generation-time `asset_ids` binding; exact lookup only | Released numerical placed bbox | One axis-aligned rectangular room and explicitly selected output record | Native asset binding and dataset/unit assumptions must be supplied; a FrozenAssets-only controlled bridge is shipped, while the general released batch/dataset route remains operator-specific |
 | `layout_vlm` | `scene_config.boundary`, required to match the benchmark room | Z-up bbox center and degree XYZ Euler/yaw | `scene_config.assets[*].uid`/`asset_id` | Asset-local bbox multiplied by explicit placement scale | One axis-aligned rectangular room | Polygon and architecture output are rejected; processed-asset +X front convention is recorded |
 | `respace` | Y-up `bounds_bottom`/`bounds_top`, required to be planar, aligned, and benchmark-matching | Y-up bottom-center; released default is unitless XYZW quaternion; Euler/yaw require explicit encoding and unit | `sampled_asset_jid` first, then legacy `sampled_jid`/`jid` | SSR placed OBB; sampled asset bbox and native scale are separate audit fields | One axis-aligned rectangular room in the canonical evaluator path | Upstream rectilinear polygons are rejected because `canonical_scene_v1` remains rectangular; they are never flattened |
 | `scene_weaver` | Native `roomsize`, required to match the benchmark room | World bbox bottom-center and Blender XYZ radians | Native `asset_id`/`jid`, or explicit `asset_bindings` | Native placed bbox dimensions | One axis-aligned rectangular room and one explicitly selected iteration | Directory conversion requires `selected_iteration`/`layout_path`; `latest` is explicit non-strict convenience only; nonempty structure is rejected |
@@ -121,11 +121,11 @@ is retained without a configured Mode B execution profile.
 
 | Adapter | Evaluation compatibility | Executable integration | Real upstream smoke tested | Loop-state support | Asset protocol | Controlled-comparison readiness |
 | --- | --- | --- | --- | --- | --- | --- |
-| `layout_gpt` | YES | IMPLEMENTED_NOT_REAL_SMOKE_TESTED | NO | NOT_IMPLEMENTED | Native LayoutGPT layout plus persisted generation-time `asset_ids` binding | SHARED_DB/FROZEN_ASSETS CONDITIONAL on runner-declared controls and post-run gates |
-| `direct_layout` | YES | IMPLEMENTED_NOT_REAL_SMOKE_TESTED | NO | NOT_IMPLEMENTED | Native asset-library IDs / `new_object_id` and DirectLayout asset-layout workflow | SHARED_DB/FROZEN_ASSETS CONDITIONAL on runner-declared controls and post-run gates |
+| `layout_gpt` | YES | IMPLEMENTED_NOT_REAL_SMOKE_TESTED | NO | NOT_IMPLEMENTED | Native LayoutGPT layout plus persisted generation-time `asset_ids` binding | Scene10 FROZEN_ASSETS bridge implemented and mock-tested; general SHARED_DB remains CONDITIONAL |
+| `direct_layout` | YES | IMPLEMENTED_NOT_REAL_SMOKE_TESTED | NO | NOT_IMPLEMENTED | Native asset-library IDs / `new_object_id` and DirectLayout asset-layout workflow | Scene10 FROZEN_ASSETS bridge implemented and mock-tested; general SHARED_DB remains CONDITIONAL |
 | `layout_vlm` | YES | IMPLEMENTED_NOT_REAL_SMOKE_TESTED | NO | NOT_IMPLEMENTED | Native scene config, Objaverse asset table, and optimized layout | FROZEN_ASSETS implemented and mock-tested; SHARED_DB selection wrapper CONDITIONAL |
 | `respace` | YES | IMPLEMENTED_NOT_REAL_SMOKE_TESTED | NO | NOT_IMPLEMENTED | Native ReSpace sampling; selected `sampled_asset_jid` remains in SSR | SHARED_DB/FROZEN_ASSETS CONDITIONAL on native cache/sampling controls |
-| `scene_weaver` | YES | IMPLEMENTED_NOT_REAL_SMOKE_TESTED | NO | YES | Native/procedural assets plus persisted generation-time `asset_bindings` | SHARED_DB CONDITIONAL; FROZEN_ASSETS requires inventory/asset locks across all iterations |
+| `scene_weaver` | YES | IMPLEMENTED_NOT_REAL_SMOKE_TESTED | NO | YES | Native/procedural assets plus persisted generation-time `asset_bindings` | SHARED_DB CONDITIONAL; Scene10 FROZEN_ASSETS launcher is implemented but remains ineligible until a versioned upstream-side lock plugin exists |
 | `holodeck` | YES | COMPATIBILITY_ONLY | NO | NOT_IMPLEMENTED | Existing ProcTHOR/Objathor or SceneState conversion | CONDITIONAL |
 | `scene_smith` | YES | COMPATIBILITY_ONLY | NO | NOT_IMPLEMENTED | Existing generated/native asset state conversion | CONDITIONAL |
 
@@ -137,15 +137,17 @@ mocked five-method route are documented in
 This does not claim a real-upstream controlled smoke test.
 
 The executable-integration column above describes benchmark orchestration.
-The actual release-to-request transport gaps are separate:
+The actual release-to-request transport gaps are separate. The controlled
+S100--S109 bridges below are narrow FrozenAssets routes, not general replacements
+for the released systems:
 
 | Method | Released entrypoint/interface | Per-case bridge shipped here | Clean-checkout blocker |
 | --- | --- | --- | --- |
-| LayoutGPT | `run_layoutgpt_3d.py` dataset/batch workflow | NOT_IMPLEMENTED | Operator bridge must provide the benchmark case to the released workflow and persist true generation-time asset bindings |
-| DirectLayout | `demo.py` numerical-layout batch CLI | Direct CLI configuration only | Upstream environment/assets/API configuration and a real smoke run; the FrozenAssets pilot still needs a verified control bridge |
-| LayoutVLM | `main.py` scene-config CLI | Direct CLI configuration only | Processed assets, model/API environment, and a real smoke run |
+| LayoutGPT | `run_layoutgpt_3d.py` dataset/batch workflow | `scripts/external_harness_bridges/layout_gpt_frozen.py` (controlled CSS + required frozen ICL messages) | A released-derived ICL file plus expected hash, pinned clean upstream, shared endpoint fingerprint, and a real smoke run; non-Frozen modes still need the released dataset route |
+| DirectLayout | `demo.py` numerical-layout batch CLI | `scripts/external_harness_bridges/direct_layout_frozen.py` | Pinned clean upstream, shared endpoint fingerprint, verified selected Imaginarium GLBs, and a real smoke run |
+| LayoutVLM | `main.py` scene-config CLI | `scripts/external_harness_bridges/layout_vlm_frozen.py` | Pinned clean upstream, shared endpoint fingerprint, verified selected Imaginarium GLBs, and a real smoke run |
 | ReSpace | Released Python SSR generation/sampling API | NOT_IMPLEMENTED | Operator bridge, model/checkpoint/cache, and native sampled asset decisions |
-| SceneWeaver | `Pipeline/main.py` native loop | NOT_IMPLEMENTED | Operator bridge, Blender/Infinigen/assets, complete trajectory capture, and exact native bindings |
+| SceneWeaver | `Pipeline/main.py` native loop | `scripts/external_harness_bridges/scene_weaver_frozen.py` (fail-closed launcher/validator) | A hash-pinned upstream-side frozen initializer plugin with per-iteration observed mesh evidence, Blender/Infinigen/assets, pinned clean upstream/shared endpoint, and a real smoke run; the released initializer alone cannot lock this protocol |
 
 No method in this table has met the real-upstream publication gate in this
 repository. A fake subprocess or hand-authored native fixture is not that gate.
@@ -196,8 +198,12 @@ entrypoint path, SHA-256, discoverable Git commit, whether the source file is
 tracked/modified, and its hash again after execution. Relative script paths are
 resolved against the configured upstream `cwd`, not the benchmark checkout.
 This distinguishes an uncommitted `integration_entrypoint.py` from the released
-upstream commit. Only the entrypoint file is fingerprinted, not its transitive
-dependencies; this is identity evidence, never control-verification evidence.
+upstream commit. For the shipped bridges, a narrow bundle hash also covers the
+entrypoint and sibling `_common.py`; other transitive dependencies remain out of
+scope. This is identity evidence, never control-verification evidence. The
+Scene10 publication config additionally pins the expected upstream commit,
+entrypoint hash, and bundle hash and requires a clean upstream checkout before
+and after execution.
 Undiscoverable entrypoints (for example `python -m ...`) remain `NOT_DISCOVERED`;
 offline artifacts are `NOT_EXECUTED`. Source content/secrets are not copied into
 this provenance record.
@@ -273,8 +279,10 @@ layout-ddd-evaluate \
   --out run/direct_layout/evaluation_report.json
 ```
 
-These examples exercise/configure the implemented benchmark execution contract;
-they are not complete per-case upstream bridges or records of real smoke tests.
+The generic examples exercise/configure the benchmark execution contract. The
+focused Frozen Imaginarium commands and their narrower support claims are in
+[`docs/FROZEN_IMAGINARIUM_SCENE10.md`](docs/FROZEN_IMAGINARIUM_SCENE10.md).
+None is a record of a real smoke test.
 
 Before claiming a paper baseline is executable, preserve evidence for:
 

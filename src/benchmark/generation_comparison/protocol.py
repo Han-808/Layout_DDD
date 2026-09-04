@@ -13,6 +13,7 @@ from benchmark.generation_comparison.identity import (
     canonical_json_sha256,
     normalize_rectangular_architecture,
 )
+from benchmark.generation_comparison.model_policy import normalize_model_policy
 from benchmark.scene_io.validate import ArtifactValidationError
 from benchmark.utils.io import read_json
 
@@ -248,6 +249,9 @@ def validate_comparison_protocol(value: Mapping[str, Any]) -> dict[str, Any]:
         raise ArtifactValidationError("comparison evaluator policy must be an object")
     generation_policy = dict(generation)
     generation_policy.setdefault("budget_policy", "method_native_recorded")
+    model_policy = normalize_model_policy(generation_policy.get("model_policy"))
+    if model_policy is not None:
+        generation_policy["model_policy"] = model_policy
     evaluator_policy = dict(evaluator)
     evaluator_policy.setdefault("policy", "same_canonical_run_evaluate")
     if evaluator_policy.get("policy") != "same_canonical_run_evaluate":

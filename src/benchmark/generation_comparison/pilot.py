@@ -8,8 +8,10 @@ import hashlib
 import json
 import math
 import os
+import shutil
 import statistics
 import subprocess
+from copy import deepcopy
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -18,14 +20,28 @@ from benchmark.generation_comparison.catalog import (
     CanonicalAssetCatalog,
     load_asset_catalog,
 )
+from benchmark.adapters.common.execution import (
+    bridge_bundle_identity,
+    redact_private_locators,
+)
 from benchmark.generation_comparison.eligibility import check_method_eligibility
 from benchmark.generation_comparison.execution import run_controlled_generation
 from benchmark.generation_comparison.identity import canonical_json_sha256
+from benchmark.generation_comparison.imaginarium_bundle import (
+    bundle_mesh_path,
+    validate_imaginarium_glb_bundle,
+)
+from benchmark.generation_comparison.model_policy import (
+    api_base_sha256,
+    configured_model_policy_report,
+)
 from benchmark.generation_comparison.protocol import ComparisonProtocol
 from benchmark.nl_scene.generation_input import (
     build_direct_natural_language_generation_input,
+    build_generation_input,
+    build_scene_request,
 )
-from benchmark.scene_io.validate import ArtifactValidationError
+from benchmark.scene_io.validate import ArtifactValidationError, validate_object_plan
 from benchmark.utils.io import read_json, write_json
 
 
@@ -33,6 +49,8 @@ PILOT_SCHEMA_VERSION = "controlled_generation_pilot_v1"
 PILOT_MANIFEST_SCHEMA_VERSION = "controlled_generation_pilot_manifest_v1"
 ASSET_PREFLIGHT_SCHEMA_VERSION = "controlled_asset_preflight_v1"
 RESULT_SCHEMA_VERSION = "controlled_generation_pilot_result_v1"
+ASSET_SELECTION_PENDING = "candidate_pending_human_approval"
+ASSET_SELECTION_APPROVED = "human_approved"
 FAILURE_CLASSES = {
     "generation_failure",
     "timeout",
@@ -96,6 +114,7 @@ def prepare_controlled_pilot(
     out_dir: str | Path,
     method_configs: Mapping[str, Any] | str | Path | None = None,
     repo_root: str | Path | None = None,
+    asset_bundle_root: str | Path | None = None,
 ) -> dict[str, Any]:
     """Freeze catalog/cases and persist pre-run eligibility without generation."""
 
@@ -109,7 +128,13 @@ def prepare_controlled_pilot(
     output_root.mkdir(parents=True, exist_ok=True)
     source_root = Path(asset_root).expanduser().resolve()
     catalog, asset_preflight = _preflight_imaginarium_catalog(
-        pilot["catalog"], source_root
+        pilot["catalog"],
+        source_root,
+        asset_bundle_root=(
+            Path(asset_bundle_root).expanduser().resolve()
+            if asset_bundle_root is not None
+            else None
+        ),
     )
     asset_preflight_path = write_json(
         output_root / "asset_preflight.json", asset_preflight
@@ -138,17 +163,7 @@ def prepare_controlled_pilot(
             catalog=catalog,
             evaluator_policy=evaluator_policy,
         )
-        generation_input = build_direct_natural_language_generation_input(
-            request_id=case_id,
-            instruction=str(case["instruction"]),
-            scene_type=str(case["scene_type"]),
-            room=dict(case["room"]),
-            metadata={
-                "pilot_id": pilot["pilot_id"],
-                "case_id": case_id,
-                "seed": case.get("seed"),
-            },
-        )
+        generation_input = _generation_input_for_case(pilot=pilot, case=case)
         object_plan = _evaluation_object_plan(case)
         complexity = _case_complexity(case)
         protocol_path = write_json(case_dir / "protocol.json", protocol.as_dict())
@@ -165,6 +180,16 @@ def prepare_controlled_pilot(
             "room": case["room"],
             "instruction": case["instruction"],
             "objects": case["objects"],
+            **(
+                {"object_plan": case["object_plan"]}
+                if isinstance(case.get("object_plan"), Mapping)
+                else {}
+            ),
+            **(
+                {"source_provenance": case["source_provenance"]}
+                if isinstance(case.get("source_provenance"), Mapping)
+                else {}
+            ),
         }
         case_manifest = {
             "schema_version": "controlled_generation_case_manifest_v1",
@@ -183,6 +208,8 @@ def prepare_controlled_pilot(
             "generation_input": generation_path.resolve().as_posix(),
             "generation_input_sha256": canonical_json_sha256(generation_input),
             "evaluation_object_plan": object_plan_path.resolve().as_posix(),
+            "public_object_plan_sha256": canonical_json_sha256(object_plan),
+            "source_provenance": deepcopy(case.get("source_provenance") or {}),
             "complexity": complexity,
         }
         case_manifest_path = write_json(case_dir / "case_manifest.json", case_manifest)
@@ -213,6 +240,7 @@ def prepare_controlled_pilot(
         "protocol_id": pilot["protocol_id"],
         "protocol_version": pilot["protocol_version"],
         "mode": pilot["mode"],
+        "asset_selection_status": pilot.get("asset_selection_status"),
         "catalog": catalog.identity,
         "evaluator_config_sha256": evaluator_config_hash,
         "case_protocol_sha256": case_protocols,
@@ -223,6 +251,7 @@ def prepare_controlled_pilot(
         "pilot_id": pilot["pilot_id"],
         "label": pilot.get("label") or "pilot / integration validation",
         "status": "prepared",
+        "asset_selection_status": pilot.get("asset_selection_status"),
         "branch_commit": _git_commit(
             Path(repo_root).resolve()
             if repo_root is not None
@@ -263,6 +292,17 @@ def run_prepared_pilot(
         "completed",
     }:
         raise ArtifactValidationError("prepared pilot manifest is invalid")
+    asset_selection_status = manifest.get("asset_selection_status")
+    if (
+        asset_selection_status is not None
+        and asset_selection_status != ASSET_SELECTION_APPROVED
+    ):
+        raise ArtifactValidationError(
+            "frozen asset selection is not approved for generation: "
+            f"{asset_selection_status!r}; review the candidate bindings, set "
+            f"asset_selection_status={ASSET_SELECTION_APPROVED!r}, and prepare "
+            "a fresh immutable pilot directory"
+        )
     if (root / "results.jsonl").exists() or (root / "results.csv").exists():
         raise FileExistsError(
             "pilot result tables already exist; failed/completed runs are never overwritten"
@@ -279,20 +319,38 @@ def run_prepared_pilot(
     first_case = cases[0]
     for method in manifest["methods"]:
         offline = outputs.get(method, {}).get(first_case["case_id"])
+        protocol = ComparisonProtocol.from_mapping(read_json(first_case["protocol"]))
+        active_model_policy = protocol.as_dict()["generation"].get("model_policy")
+        active_model_policy = (
+            active_model_policy if isinstance(active_model_policy, Mapping) else {}
+        )
         readiness = _execution_readiness(
             method,
             configs.get(method),
             offline_artifact=offline,
             allow_offline_artifacts=allow_offline_artifacts,
+            catalog=catalog,
+            required_api_base_sha256=active_model_policy.get(
+                "required_api_base_sha256"
+            ),
         )
-        protocol = ComparisonProtocol.from_mapping(read_json(first_case["protocol"]))
+        config = _adapter_config(configs.get(method))
         semantic = check_method_eligibility(
             adapter_name=method,
             protocol=protocol,
             catalog=catalog,
-            adapter_config=_adapter_config(configs.get(method)),
+            adapter_config=config,
         )
-        if not semantic["eligible"] or not readiness["ready"]:
+        model_control = configured_model_policy_report(
+            adapter_name=method,
+            policy=protocol.as_dict()["generation"].get("model_policy"),
+            adapter_config=config,
+        )
+        if (
+            not semantic["eligible"]
+            or not model_control["valid"]
+            or not readiness["ready"]
+        ):
             continue
         row = _run_case(
             root=root,
@@ -539,7 +597,7 @@ def _failure_row(
         "tool_calls": None,
         "failure_class": failure_class,
         "failure_source": failure_source,
-        "failure_reason": str(error),
+        "failure_reason": redact_private_locators(str(error)),
         "run_manifest": (
             comparison_manifest.resolve().as_posix()
             if comparison_manifest.is_file()
@@ -553,23 +611,45 @@ def _failure_row(
 def _preflight_imaginarium_catalog(
     catalog_spec: Mapping[str, Any],
     asset_root: Path,
+    *,
+    asset_bundle_root: Path | None = None,
 ) -> tuple[CanonicalAssetCatalog, dict[str, Any]]:
     csv_path = asset_root / "imaginarium_asset_info.csv"
     if not csv_path.is_file():
         raise FileNotFoundError(f"Imaginarium catalog CSV is missing: {csv_path}")
     with csv_path.open("r", encoding="utf-8-sig", newline="") as handle:
         csv_rows = {str(row.get("name_en")): row for row in csv.DictReader(handle)}
+    bundle_validation = None
+    if asset_bundle_root is not None:
+        bundle_validation = validate_imaginarium_glb_bundle(
+            plan=asset_bundle_root / "bundle_plan.json",
+            report=asset_bundle_root / "bundle_report.json",
+            expected_asset_root=asset_root,
+            expected_bundle_root=asset_bundle_root,
+        )
+        if not bundle_validation["valid"]:
+            raise ArtifactValidationError(
+                "Imaginarium GLB bundle failed its content/geometry validation"
+            )
     records = []
     preflight_rows = []
     for expected in catalog_spec["assets"]:
         asset_id = str(expected["asset_id"])
         row = csv_rows.get(asset_id)
         asset_dir = asset_root / asset_id
-        mesh_path = asset_dir / f"{asset_id}.fbx"
+        source_mesh_path = asset_dir / f"{asset_id}.fbx"
+        mesh_path = source_mesh_path
+        if asset_bundle_root is not None:
+            try:
+                mesh_path = bundle_mesh_path(asset_bundle_root, asset_id)
+            except FileNotFoundError:
+                mesh_path = asset_bundle_root / asset_id / f"{asset_id}.glb"
         metadata_path = asset_dir / f"{asset_id}_metadata.json"
         errors = []
         if row is None:
             errors.append("catalog_row_missing")
+        if not source_mesh_path.is_file() or source_mesh_path.stat().st_size <= 0:
+            errors.append("source_mesh_missing_or_empty")
         if not mesh_path.is_file() or mesh_path.stat().st_size <= 0:
             errors.append("mesh_missing_or_empty")
         if not metadata_path.is_file():
@@ -625,6 +705,19 @@ def _preflight_imaginarium_catalog(
                 "source_metadata_sha256": (
                     _file_sha256(metadata_path) if metadata_path.is_file() else None
                 ),
+                "source_fbx_sha256": (
+                    _file_sha256(source_mesh_path)
+                    if source_mesh_path.is_file()
+                    else None
+                ),
+                "mesh_materialization": (
+                    "verified_external_glb_bundle"
+                    if asset_bundle_root is not None
+                    else "native_imaginarium_fbx"
+                ),
+                "canonical_front_source": expected.get(
+                    "canonical_front_source"
+                ),
             },
         }
         if front is not None:
@@ -638,6 +731,7 @@ def _preflight_imaginarium_catalog(
                 "category_expected": expected["category"],
                 "category_catalog": category,
                 "mesh_path": mesh_path.resolve().as_posix(),
+                "source_fbx_path": source_mesh_path.resolve().as_posix(),
                 "mesh_exists": mesh_path.is_file(),
                 "mesh_sha256": mesh_hash,
                 "bbox_size_local": bbox_size,
@@ -645,6 +739,9 @@ def _preflight_imaginarium_catalog(
                 "native_scale": [1.0, 1.0, 1.0],
                 "canonical_front_status": (
                     "validated" if front is not None else "unavailable_not_invented"
+                ),
+                "canonical_front_source": expected.get(
+                    "canonical_front_source"
                 ),
             }
         )
@@ -668,6 +765,13 @@ def _preflight_imaginarium_catalog(
         "asset_root": asset_root.resolve().as_posix(),
         "source_catalog_csv": csv_path.resolve().as_posix(),
         "source_catalog_csv_sha256": _file_sha256(csv_path),
+        "asset_bundle_root": (
+            asset_bundle_root.resolve().as_posix()
+            if asset_bundle_root is not None
+            else None
+        ),
+        "mesh_format": "glb" if asset_bundle_root is not None else "fbx",
+        "asset_bundle_validation": bundle_validation,
         "catalog": catalog.identity,
         "asset_count": len(preflight_rows),
         "passed": len(preflight_rows) - len(failed),
@@ -704,6 +808,7 @@ def _case_protocol(
             "retrieval_policy": "disabled_exact_bindings",
             "generation": {
                 **dict(pilot.get("generation") or {}),
+                "asset_selection_status": pilot.get("asset_selection_status"),
                 "seed": case.get("seed"),
                 "seed_enforcement": "not_guaranteed_unless_runner_reports",
             },
@@ -712,7 +817,47 @@ def _case_protocol(
     )
 
 
+def _generation_input_for_case(
+    *, pilot: Mapping[str, Any], case: Mapping[str, Any]
+) -> dict[str, Any]:
+    metadata = {
+        "pilot_id": pilot["pilot_id"],
+        "case_id": case["case_id"],
+        "seed": case.get("seed"),
+        "source_provenance": deepcopy(case.get("source_provenance") or {}),
+    }
+    if not isinstance(case.get("object_plan"), Mapping):
+        return build_direct_natural_language_generation_input(
+            request_id=str(case["case_id"]),
+            instruction=str(case["instruction"]),
+            scene_type=str(case["scene_type"]),
+            room=dict(case["room"]),
+            metadata=metadata,
+        )
+    plan = deepcopy(dict(case["object_plan"]))
+    plan["request_id"] = str(case["case_id"])
+    plan["scene_type"] = str(case["scene_type"])
+    plan["scene_description"] = str(case["instruction"])
+    validate_object_plan(plan)
+    request = build_scene_request(
+        request_id=str(case["case_id"]),
+        instruction=str(case["instruction"]),
+        scene_type=str(case["scene_type"]),
+        room=dict(case["room"]),
+        structure=True,
+        metadata=metadata,
+    )
+    return build_generation_input(scene_request=request, object_plan=plan)
+
+
 def _evaluation_object_plan(case: Mapping[str, Any]) -> dict[str, Any]:
+    if isinstance(case.get("object_plan"), Mapping):
+        plan = deepcopy(dict(case["object_plan"]))
+        plan["request_id"] = str(case["case_id"])
+        plan["scene_type"] = str(case["scene_type"])
+        plan["scene_description"] = str(case["instruction"])
+        validate_object_plan(plan)
+        return plan
     return {
         "request_id": case["case_id"],
         "scene_type": case["scene_type"],
@@ -757,20 +902,33 @@ def _compatibility_report(
     method_configs: Mapping[str, Any],
 ) -> dict[str, Any]:
     rows = []
+    model_policy = protocol.as_dict()["generation"].get("model_policy")
     for method in methods:
+        config = _adapter_config(method_configs.get(method))
         semantic = check_method_eligibility(
             adapter_name=method,
             protocol=protocol,
             catalog=catalog,
-            adapter_config=_adapter_config(method_configs.get(method)),
+            adapter_config=config,
+        )
+        model_control = configured_model_policy_report(
+            adapter_name=method,
+            policy=model_policy,
+            adapter_config=config,
         )
         readiness = _execution_readiness(
             method,
             method_configs.get(method),
             offline_artifact=None,
             allow_offline_artifacts=False,
+            catalog=catalog,
+            required_api_base_sha256=(
+                model_policy.get("required_api_base_sha256")
+                if isinstance(model_policy, Mapping)
+                else None
+            ),
         )
-        if not semantic["eligible"]:
+        if not semantic["eligible"] or not model_control["valid"]:
             status = "INELIGIBLE"
         elif not readiness["ready"]:
             status = "SEMANTICALLY_ELIGIBLE_INFRASTRUCTURE_UNAVAILABLE"
@@ -781,6 +939,7 @@ def _compatibility_report(
                 "method": method,
                 "status": status,
                 "semantic_eligibility": semantic,
+                "model_policy": model_control,
                 "execution_readiness": readiness,
                 "config_summary": _public_config_summary(method_configs.get(method)),
             }
@@ -798,6 +957,8 @@ def _execution_readiness(
     *,
     offline_artifact: str | Path | None,
     allow_offline_artifacts: bool,
+    catalog: CanonicalAssetCatalog | None = None,
+    required_api_base_sha256: str | None = None,
 ) -> dict[str, Any]:
     if offline_artifact is not None:
         path = Path(offline_artifact).expanduser().resolve()
@@ -830,8 +991,141 @@ def _execution_readiness(
             repo = execution.get("repo_path")
             if not repo or not Path(str(repo)).expanduser().is_dir():
                 reasons.append("upstream_repo_missing")
+            else:
+                expected_commit = str(
+                    execution.get("expected_upstream_commit") or ""
+                ).strip()
+                if method in {
+                    "layout_gpt",
+                    "direct_layout",
+                    "layout_vlm",
+                    "scene_weaver",
+                } and (
+                    len(expected_commit) != 40
+                    or any(
+                        character not in "0123456789abcdef"
+                        for character in expected_commit.lower()
+                    )
+                ):
+                    reasons.append("expected_upstream_commit_missing_or_invalid")
+                elif expected_commit and _git_commit(
+                    Path(str(repo)).expanduser().resolve()
+                ) != expected_commit:
+                    reasons.append("upstream_commit_mismatch")
+                if expected_commit and _git_clean(
+                    Path(str(repo)).expanduser().resolve()
+                ) is not True:
+                    reasons.append("upstream_worktree_not_clean")
             if not execution.get("command"):
                 reasons.append("execution_command_missing")
+            python_value = str(execution.get("python_executable") or "").strip()
+            if not python_value:
+                reasons.append("python_executable_missing")
+            elif "/" in python_value or python_value.startswith("."):
+                python_path = Path(python_value).expanduser()
+                if not python_path.is_file() or not os.access(python_path, os.X_OK):
+                    reasons.append("python_executable_unavailable")
+            elif shutil.which(python_value) is None:
+                reasons.append("python_executable_unavailable")
+            variables = execution.get("template_variables")
+            variables = variables if isinstance(variables, Mapping) else {}
+            for name in ("bridge_script", "layoutgpt_icl_examples", "frozen_plugin"):
+                if name not in variables:
+                    continue
+                path = Path(str(variables[name])).expanduser()
+                if not path.is_file():
+                    reasons.append(f"{name}_unavailable")
+            expected_entrypoint = str(
+                execution.get("expected_entrypoint_sha256") or ""
+            ).strip()
+            bridge_value = variables.get("bridge_script")
+            if method in {
+                "layout_gpt",
+                "direct_layout",
+                "layout_vlm",
+                "scene_weaver",
+            } and not expected_entrypoint:
+                reasons.append("expected_entrypoint_sha256_missing")
+            elif expected_entrypoint:
+                if len(expected_entrypoint) != 64 or any(
+                    character not in "0123456789abcdef"
+                    for character in expected_entrypoint
+                ):
+                    reasons.append("expected_entrypoint_sha256_invalid")
+                elif not bridge_value or not Path(str(bridge_value)).expanduser().is_file():
+                    reasons.append("expected_entrypoint_unavailable")
+                elif _file_sha256(
+                    Path(str(bridge_value)).expanduser().resolve()
+                ) != expected_entrypoint:
+                    reasons.append("entrypoint_sha256_mismatch")
+            expected_bundle = str(
+                execution.get("expected_bridge_bundle_sha256") or ""
+            ).strip()
+            if method in {
+                "layout_gpt",
+                "direct_layout",
+                "layout_vlm",
+                "scene_weaver",
+            } and not expected_bundle:
+                reasons.append("expected_bridge_bundle_sha256_missing")
+            elif expected_bundle:
+                if len(expected_bundle) != 64 or any(
+                    character not in "0123456789abcdef"
+                    for character in expected_bundle
+                ):
+                    reasons.append("expected_bridge_bundle_sha256_invalid")
+                elif not bridge_value or not Path(str(bridge_value)).expanduser().is_file():
+                    reasons.append("expected_bridge_bundle_unavailable")
+                elif bridge_bundle_identity(
+                    Path(str(bridge_value)).expanduser().resolve()
+                )["bridge_bundle_sha256"] != expected_bundle:
+                    reasons.append("bridge_bundle_sha256_mismatch")
+            if method == "layout_gpt":
+                digest = str(variables.get("layoutgpt_icl_sha256") or "")
+                if len(digest) != 64 or any(
+                    character not in "0123456789abcdef" for character in digest
+                ):
+                    reasons.append("layoutgpt_icl_sha256_invalid")
+            if method == "scene_weaver":
+                digest = str(variables.get("frozen_plugin_sha256") or "")
+                if len(digest) != 64 or any(
+                    character not in "0123456789abcdef" for character in digest
+                ):
+                    reasons.append("sceneweaver_plugin_sha256_invalid")
+            environment = execution.get("environment")
+            environment = environment if isinstance(environment, Mapping) else {}
+            endpoint_name = (
+                "LAYOUT_DDD_API_ENDPOINT"
+                if method == "layout_gpt"
+                else "LAYOUT_DDD_API_BASE_URL"
+            )
+            endpoint = str(
+                environment.get(endpoint_name) or os.environ.get(endpoint_name) or ""
+            ).strip()
+            if not endpoint or "YOUR-AUTHORIZED-ENDPOINT" in endpoint:
+                reasons.append("model_endpoint_unavailable")
+            elif required_api_base_sha256 is not None:
+                try:
+                    observed_endpoint_sha256 = api_base_sha256(
+                        endpoint,
+                        completion_endpoint=method == "layout_gpt",
+                    )
+                except ArtifactValidationError:
+                    reasons.append("model_endpoint_invalid")
+                else:
+                    if observed_endpoint_sha256 != required_api_base_sha256:
+                        reasons.append("model_endpoint_fingerprint_mismatch")
+            if not os.environ.get("LAYOUT_DDD_API_KEY"):
+                reasons.append("model_api_key_environment_unset")
+            if method in {"direct_layout", "layout_vlm", "scene_weaver"} and catalog:
+                non_glb = [
+                    asset["asset_id"]
+                    for asset in catalog.assets
+                    if Path(str(asset.get("mesh_uri") or "")).suffix.lower()
+                    != ".glb"
+                ]
+                if non_glb:
+                    reasons.append("verified_glb_bundle_unavailable")
     return {"ready": not reasons, "mode": "real_generation", "reasons": reasons}
 
 
@@ -845,8 +1139,14 @@ def _public_config_summary(value: Any) -> dict[str, Any]:
     config = _adapter_config(value)
     execution = config.get("execution")
     execution = execution if isinstance(execution, Mapping) else {}
+    endpoint = str(config.get("endpoint") or "").strip()
     return {
-        "endpoint": config.get("endpoint"),
+        "endpoint_configured": bool(endpoint),
+        "endpoint_sha256": (
+            hashlib.sha256(endpoint.encode("utf-8")).hexdigest()
+            if endpoint
+            else None
+        ),
         "model": config.get("model") or config.get("model_id"),
         "api_key_env": config.get("api_key_env"),
         "literal_secret_present": config.get("api_key") is not None,
@@ -1143,6 +1443,15 @@ def _validate_pilot_spec(value: Mapping[str, Any]) -> None:
         )
     if value.get("mode") != "frozen_assets":
         raise ArtifactValidationError("first controlled pilot must use frozen_assets")
+    asset_selection_status = value.get("asset_selection_status")
+    if asset_selection_status is not None and asset_selection_status not in {
+        ASSET_SELECTION_PENDING,
+        ASSET_SELECTION_APPROVED,
+    }:
+        raise ArtifactValidationError(
+            "pilot asset_selection_status must be "
+            f"{ASSET_SELECTION_PENDING!r} or {ASSET_SELECTION_APPROVED!r}"
+        )
     for field in ("pilot_id", "protocol_id"):
         if not isinstance(value.get(field), str) or not value[field].strip():
             raise ArtifactValidationError(f"pilot {field} is required")
@@ -1164,6 +1473,10 @@ def _validate_pilot_spec(value: Mapping[str, Any]) -> None:
     methods = value.get("methods")
     if not isinstance(methods, list) or not methods:
         raise ArtifactValidationError("pilot methods must be a non-empty list")
+    if len([str(method) for method in methods]) != len(
+        set(str(method) for method in methods)
+    ):
+        raise ArtifactValidationError("pilot methods must not contain duplicates")
     catalog_assets = value["catalog"].get("assets")
     if not isinstance(catalog_assets, list) or not catalog_assets:
         raise ArtifactValidationError("pilot catalog assets must be a non-empty list")
@@ -1171,6 +1484,37 @@ def _validate_pilot_spec(value: Mapping[str, Any]) -> None:
     for case in cases:
         if not isinstance(case, Mapping) or not isinstance(case.get("objects"), list):
             raise ArtifactValidationError("every pilot case requires objects")
+        object_plan = case.get("object_plan")
+        if object_plan is not None:
+            if not isinstance(object_plan, Mapping):
+                raise ArtifactValidationError("pilot case object_plan must be an object")
+            validate_object_plan(dict(object_plan))
+            frozen_slots = {str(slot.get("slot_id") or "") for slot in case["objects"]}
+            plan_slots = {
+                str(item.get("id") or "")
+                for item in object_plan.get("objects", [])
+                if isinstance(item, Mapping)
+            }
+            if frozen_slots != plan_slots:
+                raise ArtifactValidationError(
+                    f"case {case['case_id']} object_plan IDs must exactly match frozen "
+                    f"slots; missing={sorted(frozen_slots - plan_slots)}, "
+                    f"unexpected={sorted(plan_slots - frozen_slots)}"
+                )
+            non_unit_counts = {
+                str(item.get("id")): item.get("count")
+                for item in object_plan.get("objects", [])
+                if isinstance(item, Mapping) and int(item.get("count", 1)) != 1
+            }
+            if non_unit_counts:
+                raise ArtifactValidationError(
+                    f"case {case['case_id']} object_plan must expand every instance "
+                    f"into a unique slot; counts={non_unit_counts}"
+                )
+        if case.get("source_provenance") is not None and not isinstance(
+            case.get("source_provenance"), Mapping
+        ):
+            raise ArtifactValidationError("pilot case source_provenance must be an object")
         for slot in case["objects"]:
             asset_id = str(slot.get("asset_id") or "")
             asset = catalog_by_id.get(asset_id)
@@ -1232,18 +1576,64 @@ def _git_commit(root: Path) -> str | None:
     return value if completed.returncode == 0 and len(value) == 40 else None
 
 
+def bridge_execution_hashes(entrypoint: str | Path) -> dict[str, Any]:
+    """Return the exact source pins expected by publication runner configs.
+
+    The bundle digest is intentionally not a plain file SHA-256: it commits to
+    the bridge entrypoint and its sibling ``_common.py`` when present.  Keeping
+    the calculation here gives operators one canonical command for replacing
+    the fail-closed placeholders in the example configuration.
+    """
+
+    path = Path(entrypoint).expanduser().resolve()
+    if not path.is_file():
+        raise ArtifactValidationError(f"bridge entrypoint is missing: {path}")
+    bundle = bridge_bundle_identity(path)
+    return {
+        "entrypoint": path.as_posix(),
+        **bundle,
+        "expected_entrypoint_sha256": _file_sha256(path),
+        "expected_bridge_bundle_sha256": bundle["bridge_bundle_sha256"],
+    }
+
+
+def _git_clean(root: Path) -> bool | None:
+    completed = subprocess.run(
+        [
+            "git",
+            "-C",
+            root.as_posix(),
+            "status",
+            "--porcelain=v1",
+            "--untracked-files=all",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        return None
+    return not completed.stdout.strip()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
     prepare = subparsers.add_parser("prepare")
     prepare.add_argument("--spec", required=True)
     prepare.add_argument("--asset-root", required=True)
+    prepare.add_argument("--asset-bundle-root")
     prepare.add_argument("--out-dir", required=True)
     prepare.add_argument("--method-configs")
     run = subparsers.add_parser("run")
     run.add_argument("--prepared-dir", required=True)
     run.add_argument("--method-configs", required=True)
     run.add_argument("--dry-run-only", action="store_true")
+    source_hash = subparsers.add_parser(
+        "hash-bridge",
+        help="print the entrypoint and canonical bridge-bundle source pins",
+    )
+    source_hash.add_argument("--entrypoint", required=True)
     args = parser.parse_args()
     if args.command == "prepare":
         result = prepare_controlled_pilot(
@@ -1251,13 +1641,16 @@ def main() -> None:
             asset_root=args.asset_root,
             out_dir=args.out_dir,
             method_configs=args.method_configs,
+            asset_bundle_root=args.asset_bundle_root,
         )
-    else:
+    elif args.command == "run":
         result = run_prepared_pilot(
             prepared_dir=args.prepared_dir,
             method_configs=args.method_configs,
             dry_run_only=args.dry_run_only,
         )
+    else:
+        result = bridge_execution_hashes(args.entrypoint)
     print(json.dumps(result, ensure_ascii=False, sort_keys=True))
 
 
@@ -1266,11 +1659,14 @@ if __name__ == "__main__":
 
 
 __all__ = [
+    "ASSET_SELECTION_APPROVED",
+    "ASSET_SELECTION_PENDING",
     "ASSET_PREFLIGHT_SCHEMA_VERSION",
     "FAILURE_CLASSES",
     "PILOT_MANIFEST_SCHEMA_VERSION",
     "PILOT_SCHEMA_VERSION",
     "RESULT_SCHEMA_VERSION",
+    "bridge_execution_hashes",
     "prepare_controlled_pilot",
     "run_prepared_pilot",
 ]

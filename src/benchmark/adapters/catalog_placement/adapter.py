@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Mapping
 from pathlib import Path
+from typing import Any
 
 from benchmark.adapters.base import AdapterCapabilities, GenerationAdapter
 from benchmark.adapters.output_routing import OUTPUT_CONVERTER
@@ -122,9 +124,10 @@ class CatalogPlacementAdapter(GenerationAdapter):
         raw_response_path.parent.mkdir(parents=True, exist_ok=True)
         raw_response_path.write_text(response_text, encoding="utf-8")
         raw_response_sha256 = hashlib.sha256(raw_response_path.read_bytes()).hexdigest()
+        request_metadata = _private_route_metadata(client.last_request_metadata)
         request_metadata_path = write_json(
             Path(out_dir) / "model_request_metadata.json",
-            client.last_request_metadata,
+            request_metadata,
         )
         schema_repair = {
             "attempted": False,
@@ -140,7 +143,7 @@ class CatalogPlacementAdapter(GenerationAdapter):
         except ArtifactValidationError as error:
             self.last_run_metadata = {
                 "provider": "openai_compatible",
-                "endpoint": endpoint,
+                "endpoint_sha256": _text_sha256(endpoint),
                 "model": model_id,
                 "output_schema": self.output_schema,
                 "raw_response_path": raw_response_path.as_posix(),
@@ -159,7 +162,7 @@ class CatalogPlacementAdapter(GenerationAdapter):
         native_artifact_sha256 = hashlib.sha256(output_path.read_bytes()).hexdigest()
         self.last_run_metadata = {
             "provider": "openai_compatible",
-            "endpoint": endpoint,
+            "endpoint_sha256": _text_sha256(endpoint),
             "model": model_id,
             "output_schema": self.output_schema,
             "raw_response_path": raw_response_path.as_posix(),
@@ -207,3 +210,16 @@ class CatalogPlacementAdapter(GenerationAdapter):
             "canonical_output_path": scene_path.as_posix(),
         }
         return scene_path
+
+
+def _text_sha256(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _private_route_metadata(value: Mapping[str, Any]) -> dict[str, Any]:
+    result = dict(value)
+    for key in ("endpoint", "url"):
+        locator = result.pop(key, None)
+        if locator is not None:
+            result[f"{key}_sha256"] = _text_sha256(str(locator))
+    return result

@@ -50,7 +50,10 @@ def inspect_native_asset_selections(
     elif adapter_name == "catalog_placement":
         objects = _catalog_placement_objects(payload)
     elif adapter_name == "direct_layout":
-        objects = _direct_layout_objects(payload)
+        objects = _direct_layout_objects(
+            payload,
+            _auxiliary_mapping(execution_metadata, "asset_bindings"),
+        )
     elif adapter_name == "layout_vlm":
         native_input_path = execution_metadata.get("native_input_path")
         native_input = read_json(native_input_path) if native_input_path else {}
@@ -210,7 +213,9 @@ def _select_layout_gpt_record(
     )
 
 
-def _direct_layout_objects(payload: Any) -> list[dict[str, Any]]:
+def _direct_layout_objects(
+    payload: Any, bindings: Mapping[str, Any]
+) -> list[dict[str, Any]]:
     if isinstance(payload, Mapping):
         payload = payload.get("objects") or payload.get("layout") or payload.get("placements")
     if not isinstance(payload, Sequence) or isinstance(payload, (str, bytes)):
@@ -227,12 +232,22 @@ def _direct_layout_objects(payload: Any) -> list[dict[str, Any]]:
             or raw.get("id")
             or f"object_{index}"
         )
+        binding = bindings.get(native_id)
+        binding = binding if isinstance(binding, Mapping) else {}
+        binding_asset = _asset_id(binding) or _asset_id(bindings.get(native_id))
+        native_asset = _text(raw.get("asset_id"), raw.get("jid"))
         result.append(
             {
                 "native_object_id": native_id,
-                "asset_id": str(raw.get("asset_id") or raw.get("jid") or native_id),
-                "category": raw.get("category"),
-                "selection_source": "native_object",
+                "asset_id": native_asset or binding_asset or native_id,
+                "category": raw.get("category") or binding.get("category"),
+                "selection_source": (
+                    "native_object"
+                    if native_asset
+                    else "preserved_asset_bindings_sidecar"
+                    if binding_asset
+                    else "native_object_id"
+                ),
             }
         )
     return result

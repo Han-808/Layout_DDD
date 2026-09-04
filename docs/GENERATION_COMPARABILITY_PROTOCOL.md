@@ -80,11 +80,13 @@ read-only-by-contract snapshot, and its bytes are checked again after generation
 Controlled execution also verifies a declared mesh hash against local bytes when
 that mesh path is present.
 
-The first concrete backend is `load_3d_future_subset_catalog()`. It normalizes an
-explicitly selected 3D-FUTURE subset and optionally hashes local mesh bytes. It
-does not search, rank, or retrieve records. This is a pilot backend, not a
-3D-FUTURE dependency in the comparison architecture. The synthetic checked-in
-catalog is for CI and configuration examples only.
+The original concrete backend is `load_3d_future_subset_catalog()`. It
+normalizes an explicitly selected 3D-FUTURE subset and optionally hashes local
+mesh bytes. The S100--S109 controlled track adds a preflighted Imaginarium
+snapshot and a selected-only FBX-to-GLB materialization. Neither backend
+searches, ranks, or retrieves records during conversion. They are pilot
+backends, not database dependencies in the comparison architecture. See
+[`FROZEN_IMAGINARIUM_SCENE10.md`](FROZEN_IMAGINARIUM_SCENE10.md).
 
 ## Generation-side materializers
 
@@ -167,6 +169,8 @@ The comparison validator reports violations; it never repairs them. It checks:
 - selected-ID membership in SharedDB;
 - exact `slot_id -> asset_id` equality in FrozenAssets;
 - fixed physical dimensions under `fixed_native_scale`;
+- optional strict local-mesh byte snapshots immediately before and after
+  execution (`generation.require_local_asset_bytes=true`);
 - exact catalog source/mesh/front and the separately retained local bbox,
   local-center, native-scale, and physical-dimension provenance;
 - unexpected insertion/removal and SceneWeaver iteration drift;
@@ -188,9 +192,10 @@ route/report, and available generation resource metadata.
 The manifest retains the pre-run `control_evidence` separately from observed
 post-run validation. `runner.source_provenance` records the actual shim/callback
 file's pre/post execution hashes, discoverable Git commit, and tracked/modified
-state. Fingerprinting is entrypoint-only, not a transitive dependency lock or
-verification of the runner's capability attestation. Version and retain the
-actual bridge and its dependencies for publication; a clean upstream commit
+state. When a sibling `_common.py` exists, it also records a canonical bundle
+hash over both files. This narrow bundle is not a general transitive dependency
+lock or verification of the runner's capability attestation. Version and retain
+the actual bridge and its dependencies for publication; a clean upstream commit
 alone does not identify an untracked local wrapper.
 
 Wall time is always recorded. Model, token, generation-call, tool-call,
@@ -199,6 +204,13 @@ by the upstream runner. `method_native_recorded` deliberately does not claim
 that structurally different workflows received identical token/tool budgets;
 quality and cost remain separate outcomes.
 
+When `generation.model_policy` is present, focused runs can require the same
+configured provider/model, one operator-attested deployment ID, one normalized
+API-base SHA-256, and API-response-observed model identity. The endpoint string
+and credentials are not persisted. This prevents method-specific endpoint
+configuration from silently passing merely because all responses use the same
+model alias.
+
 ## SceneWeaver trajectories
 
 The complete native SceneWeaver directory remains the source of truth. Every
@@ -206,7 +218,13 @@ The complete native SceneWeaver directory remains the source of truth. Every
 SceneWeaver converter, evaluated with the same `run_evaluate()`, and checked
 against the same comparison protocol. A FrozenAssets trajectory is valid only
 when every iteration retains the same slots, exact asset IDs, and fixed physical
-dimensions.
+dimensions. The focused Imaginarium bridge additionally requires each iteration
+to report the actually loaded mesh path and content hash; capability booleans or
+a benchmark-authored binding sidecar alone do not prove asset identity. Its
+upstream-side plugin must also prove the exact public object-plan hash, native
+room width/depth/height/unit, catalog-bbox bottom-center rebase, full-precision
+local bbox and Euler pose before released two-decimal serialization, and the
+canonical-front basis used by every iteration.
 
 The benchmark report is post-hoc. Neither scores nor evaluator error details are
 placed in the method input or fed into SceneWeaver's native reflection loop.

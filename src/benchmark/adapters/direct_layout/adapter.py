@@ -1,3 +1,5 @@
+from collections.abc import Mapping
+
 from benchmark.adapters.common.adapter import (
     SINGLE_ROOM_HARNESS_CAPABILITIES,
     HarnessConverterAdapter,
@@ -7,6 +9,8 @@ from benchmark.adapters.common.native_input import (
     public_room_dimensions,
 )
 from benchmark.adapters.direct_layout.converter import convert_direct_layout
+from benchmark.scene_io.validate import ArtifactValidationError
+from benchmark.utils.io import read_json
 
 
 class DirectLayoutAdapter(HarnessConverterAdapter):
@@ -28,6 +32,36 @@ class DirectLayoutAdapter(HarnessConverterAdapter):
             [public_instruction(method_input)],
             [[width, depth, height]],
         ]
+
+    def enrich_conversion_config(self, config: dict) -> dict:
+        cfg = super().enrich_conversion_config(config)
+        if isinstance(cfg.get("asset_bindings"), Mapping):
+            return cfg
+        path_value = cfg.get("asset_bindings_path")
+        run_metadata = getattr(self, "last_run_metadata", None)
+        auxiliary = (
+            run_metadata.get("preserved_auxiliary_artifacts")
+            if isinstance(run_metadata, dict)
+            else None
+        )
+        if not path_value and isinstance(auxiliary, Mapping):
+            item = auxiliary.get("asset_bindings")
+            if isinstance(item, Mapping):
+                path_value = item.get("path")
+        if not path_value:
+            return cfg
+        loaded = read_json(path_value)
+        if isinstance(loaded, Mapping) and isinstance(
+            loaded.get("asset_bindings"), Mapping
+        ):
+            loaded = loaded["asset_bindings"]
+        if not isinstance(loaded, Mapping):
+            raise ArtifactValidationError(
+                "DirectLayout asset_bindings_path must contain a binding mapping"
+            )
+        cfg["asset_bindings"] = dict(loaded)
+        cfg["asset_bindings_path"] = str(path_value)
+        return cfg
 
 
 __all__ = ["DirectLayoutAdapter"]

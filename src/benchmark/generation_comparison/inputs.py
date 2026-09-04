@@ -15,7 +15,11 @@ from benchmark.generation_comparison.protocol import (
 )
 from benchmark.io_contracts import I2_NATURAL_LANGUAGE_STRUCTURE
 from benchmark.nl_scene.converter import FINE_GRAINED
-from benchmark.scene_io.validate import validate_generation_input
+from benchmark.scene_io.validate import (
+    ArtifactValidationError,
+    validate_generation_input,
+    validate_object_plan,
+)
 
 
 def build_controlled_generation_input(
@@ -45,6 +49,7 @@ def build_controlled_generation_input(
         contract["input_type"] = I2_NATURAL_LANGUAGE_STRUCTURE
         if protocol.mode == FROZEN_ASSETS:
             assert catalog is not None
+            _apply_frozen_dimensions(plan, protocol=protocol, catalog=catalog)
             controlled["asset_selection"] = _asset_selection(
                 controlled,
                 protocol,
@@ -76,6 +81,32 @@ def build_controlled_generation_input(
     )
     validate_generation_input(controlled)
     return controlled
+
+
+def _apply_frozen_dimensions(
+    plan: dict[str, Any],
+    *,
+    protocol: ComparisonProtocol,
+    catalog: CanonicalAssetCatalog,
+) -> None:
+    """Replace planning estimates with the exact selected physical dimensions."""
+
+    bindings = protocol.bindings
+    for item in plan.get("objects", []):
+        if not isinstance(item, dict):
+            continue
+        slot_id = str(item.get("id") or "")
+        asset_id = bindings.get(slot_id)
+        if asset_id is None:
+            raise ArtifactValidationError(
+                f"frozen object plan slot {slot_id!r} has no exact asset binding"
+            )
+        asset = catalog.get(asset_id)
+        item["estimated_size"] = list(asset["physical_dimensions"])
+        metadata = item.get("metadata")
+        metadata = dict(metadata) if isinstance(metadata, Mapping) else {}
+        metadata["comparison_scale_policy"] = "fixed_native_scale"
+        item["metadata"] = metadata
 
 
 def _public_control(
@@ -129,6 +160,37 @@ def _object_plan(
     generation_input: Mapping[str, Any],
     protocol: ComparisonProtocol,
 ) -> dict[str, Any]:
+    supplied = generation_input.get("object_plan")
+    if isinstance(supplied, Mapping):
+        plan = deepcopy(dict(supplied))
+        expected_slots = {str(item["slot_id"]) for item in protocol.objects}
+        actual_slots = {
+            str(item.get("id") or "")
+            for item in plan.get("objects", [])
+            if isinstance(item, Mapping)
+        }
+        if actual_slots != expected_slots:
+            raise ArtifactValidationError(
+                "public object_plan IDs must exactly match the frozen comparison "
+                f"slots; missing={sorted(expected_slots - actual_slots)}, "
+                f"unexpected={sorted(actual_slots - expected_slots)}"
+            )
+        for index, item in enumerate(plan.get("objects", [])):
+            if not isinstance(item, dict):
+                continue
+            count = item.get("count", 1)
+            if isinstance(count, bool) or int(count) != 1:
+                raise ArtifactValidationError(
+                    "controlled FrozenAssets object plans require one expanded "
+                    f"instance per slot; object_plan.objects[{index}].count={count!r}"
+                )
+            item["count"] = 1
+            metadata = item.get("metadata")
+            metadata = dict(metadata) if isinstance(metadata, Mapping) else {}
+            metadata["comparison_slot_id"] = str(item["id"])
+            item["metadata"] = metadata
+        validate_object_plan(plan)
+        return plan
     request = generation_input["scene_request"]
     return {
         "request_id": str(generation_input["request_id"]),
@@ -159,9 +221,15 @@ def _asset_selection(
     protocol: ComparisonProtocol,
     catalog: CanonicalAssetCatalog,
 ) -> dict[str, Any]:
+    public_objects = {
+        str(item.get("id")): item
+        for item in (generation_input.get("object_plan") or {}).get("objects", [])
+        if isinstance(item, Mapping) and item.get("id") is not None
+    }
     rows = []
     for slot in protocol.objects:
         asset = catalog.get(str(slot["asset_id"]))
+        public_spec = public_objects.get(str(slot["slot_id"])) or slot
         selected = {
             "jid": asset["asset_id"],
             "category": asset["category"],
@@ -201,8 +269,8 @@ def _asset_selection(
             {
                 "object_id": slot["slot_id"],
                 "object_spec": {
-                    "category": slot["category"],
-                    "description": slot["description"],
+                    "category": public_spec["category"],
+                    "description": public_spec["description"],
                     "count": 1,
                 },
                 "retrieval_query": None,

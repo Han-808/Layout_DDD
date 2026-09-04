@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import math
 import time
 from collections.abc import Mapping
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
-from benchmark.adapters.common.execution import artifact_sha256
+from benchmark.adapters.common.execution import artifact_sha256, redact_private_locators
 from benchmark.api.evaluation import run_evaluate
 from benchmark.api.generation import run_generate
 from benchmark.api.scene_weaver_iterations import evaluate_scene_weaver_iterations
@@ -27,6 +29,11 @@ from benchmark.generation_comparison.inputs import build_controlled_generation_i
 from benchmark.generation_comparison.materializers import (
     architecture_from_native_input,
     materialize_method_catalog,
+)
+from benchmark.generation_comparison.model_policy import (
+    configured_model_policy_report,
+    reported_model_policy_report,
+    runner_report,
 )
 from benchmark.generation_comparison.native_identity import (
     inspect_native_asset_selections,
@@ -88,6 +95,9 @@ def run_controlled_generation(
     protocol_file_hash_before = _file_sha256(protocol_path)
 
     config = _copy_adapter_config(adapter_config)
+    require_local_asset_bytes = bool(
+        contract.as_dict()["generation"].get("require_local_asset_bytes", False)
+    )
     materialization: dict[str, Any] | None = None
     if catalog is not None:
         materialization = materialize_method_catalog(
@@ -96,12 +106,106 @@ def run_controlled_generation(
             protocol=contract,
             out_dir=comparison_dir / "method_input" / adapter_name,
         )
+        asset_bytes_before = _asset_byte_snapshot(
+            catalog,
+            asset_ids=(
+                set(contract.bindings.values())
+                if contract.mode == FROZEN_ASSETS
+                else set(catalog.asset_ids)
+            ),
+        )
+        asset_bytes_before_path = write_json(
+            comparison_dir / "asset_bytes_before.json", asset_bytes_before
+        )
+        materialization = dict(materialization)
+        materialization["asset_bytes_before_path"] = (
+            asset_bytes_before_path.resolve().as_posix()
+        )
+        materialization["require_local_asset_bytes"] = require_local_asset_bytes
     eligibility = check_method_eligibility(
         adapter_name=adapter_name,
         protocol=contract,
         catalog=catalog,
         adapter_config=config,
     )
+    selection_status = contract.as_dict()["generation"].get(
+        "asset_selection_status"
+    )
+    if selection_status is not None and selection_status != "human_approved":
+        eligibility = _append_ineligibility(
+            eligibility,
+            code="frozen_asset_selection_not_approved",
+            message=(
+                "candidate frozen asset bindings are preflight-only until "
+                "human approval is frozen into the protocol"
+            ),
+            asset_selection_status=selection_status,
+        )
+    harness_inputs = contract.as_dict()["generation"].get("harness_inputs")
+    harness_inputs = harness_inputs if isinstance(harness_inputs, Mapping) else {}
+    if adapter_name == "layout_gpt" and isinstance(
+        harness_inputs.get("layout_gpt"), Mapping
+    ):
+        layoutgpt_input = harness_inputs["layout_gpt"]
+        if layoutgpt_input.get("status") != "human_approved":
+            eligibility = _append_ineligibility(
+                eligibility,
+                code="layoutgpt_icl_not_approved",
+                message="LayoutGPT ICL snapshot is not frozen and human-reviewed",
+                icl_status=layoutgpt_input.get("status"),
+                icl_sha256=layoutgpt_input.get("icl_sha256"),
+            )
+    if contract.as_dict()["generation"].get(
+        "require_pinned_execution_identity"
+    ) is True and adapter_name in {"layout_gpt", "direct_layout", "layout_vlm", "scene_weaver"}:
+        execution_policy = config.get("execution")
+        execution_policy = (
+            execution_policy if isinstance(execution_policy, Mapping) else {}
+        )
+        required_execution_fields = {
+            "expected_upstream_commit": 40,
+            "expected_entrypoint_sha256": 64,
+            "expected_bridge_bundle_sha256": 64,
+        }
+        invalid_fields = []
+        for field, length in required_execution_fields.items():
+            value = str(execution_policy.get(field) or "").strip().lower()
+            if len(value) != length or any(
+                character not in "0123456789abcdef" for character in value
+            ):
+                invalid_fields.append(field)
+        if invalid_fields:
+            eligibility = _append_ineligibility(
+                eligibility,
+                code="pinned_execution_identity_missing",
+                message="publication track requires pinned upstream and bridge sources",
+                invalid_fields=invalid_fields,
+            )
+    if (
+        catalog is not None
+        and require_local_asset_bytes
+        and not asset_bytes_before["valid"]
+    ):
+        eligibility = _append_ineligibility(
+            eligibility,
+            code="asset_bytes_unavailable_or_changed",
+            message="frozen local mesh bytes do not match the catalog snapshot",
+            asset_byte_errors=asset_bytes_before["errors"],
+        )
+    model_policy = contract.as_dict()["generation"].get("model_policy")
+    configured_model_control = configured_model_policy_report(
+        adapter_name=adapter_name,
+        policy=model_policy,
+        adapter_config=config,
+    )
+    eligibility["model_policy"] = configured_model_control
+    if not configured_model_control["valid"]:
+        eligibility = _append_ineligibility(
+            eligibility,
+            code="model_policy_mismatch",
+            message="adapter configuration does not satisfy same-backing-model policy",
+            model_policy=configured_model_control,
+        )
     input_architecture = architecture_sha256(
         architecture_from_generation_input(source_input)
     )
@@ -173,7 +277,39 @@ def run_controlled_generation(
             raise ComparisonRunError(
                 "controlled comparison requires a generated canonical scene"
             )
+        if catalog is not None and materialization is not None:
+            asset_bytes_after = _asset_byte_snapshot(
+                catalog,
+                asset_ids=(
+                    set(contract.bindings.values())
+                    if contract.mode == FROZEN_ASSETS
+                    else set(catalog.asset_ids)
+                ),
+            )
+            asset_bytes_after_path = write_json(
+                comparison_dir / "asset_bytes_after_generation.json",
+                asset_bytes_after,
+            )
+            materialization["asset_bytes_after_generation_path"] = (
+                asset_bytes_after_path.resolve().as_posix()
+            )
     except BaseException as exc:
+        if catalog is not None and materialization is not None:
+            failed_asset_bytes_after = _asset_byte_snapshot(
+                catalog,
+                asset_ids=(
+                    set(contract.bindings.values())
+                    if contract.mode == FROZEN_ASSETS
+                    else set(catalog.asset_ids)
+                ),
+            )
+            failed_asset_bytes_after_path = write_json(
+                comparison_dir / "asset_bytes_after_generation.json",
+                failed_asset_bytes_after,
+            )
+            materialization["asset_bytes_after_generation_path"] = (
+                failed_asset_bytes_after_path.resolve().as_posix()
+            )
         manifest = _base_manifest(
             adapter_name=adapter_name,
             contract=contract,
@@ -188,7 +324,10 @@ def run_controlled_generation(
                 "status": "GENERATION_FAILED",
                 "valid_comparison_run": False,
                 "controlled_generation_input": controlled_input_path.resolve().as_posix(),
-                "error": {"type": type(exc).__name__, "message": str(exc)},
+                "error": {
+                    "type": type(exc).__name__,
+                    "message": redact_private_locators(str(exc)),
+                },
             }
         )
         write_json(comparison_dir / "run_manifest.json", manifest)
@@ -201,6 +340,19 @@ def run_controlled_generation(
     execution_metadata = dict(execution_metadata)
     execution_metadata.setdefault(
         "runtime_seconds", time.monotonic() - generation_started
+    )
+    reported_model_control = reported_model_policy_report(
+        adapter_name=adapter_name,
+        policy=model_policy,
+        execution_metadata=execution_metadata,
+    )
+    bridge_report = runner_report(execution_metadata)
+    model_control_path = write_json(
+        comparison_dir / "model_policy.json",
+        {
+            "configured": configured_model_control,
+            "reported": reported_model_control,
+        },
     )
     native_artifact = result.get("raw_native_artifact") or result.get("native_output")
     if not native_artifact:
@@ -240,6 +392,31 @@ def run_controlled_generation(
         eligibility=eligibility,
         selected_iteration=selected_iteration,
     )
+    validation["model_policy"] = {
+        "path": model_control_path.resolve().as_posix(),
+        "configured": configured_model_control,
+        "reported": reported_model_control,
+    }
+    if not reported_model_control["valid"]:
+        validation["violations"].append(
+            {
+                "code": "model_policy_mismatch",
+                "message": "runner did not prove the required backing-model identity",
+                "details": reported_model_control,
+            }
+        )
+    protocol_observation = bridge_report.get("protocol_observation")
+    if (
+        isinstance(protocol_observation, Mapping)
+        and protocol_observation.get("valid") is False
+    ):
+        validation["violations"].append(
+            {
+                "code": "runner_protocol_observation_failed",
+                "message": "external bridge reported a native protocol violation",
+                "details": dict(protocol_observation),
+            }
+        )
     _append_input_immutability_violations(
         validation,
         protocol_path=protocol_path,
@@ -293,11 +470,25 @@ def run_controlled_generation(
 
     trajectory: dict[str, Any] | None = None
     if adapter_name == "scene_weaver" and evaluate_sceneweaver_trajectory:
+        trajectory_adapter_config = dict(config)
+        preserved_auxiliary = execution_metadata.get(
+            "preserved_auxiliary_artifacts"
+        )
+        preserved_auxiliary = (
+            preserved_auxiliary
+            if isinstance(preserved_auxiliary, Mapping)
+            else {}
+        )
+        preserved_bindings = preserved_auxiliary.get("asset_bindings")
+        if isinstance(preserved_bindings, Mapping) and preserved_bindings.get("path"):
+            trajectory_adapter_config["asset_bindings_path"] = str(
+                preserved_bindings["path"]
+            )
         trajectory = _evaluate_sceneweaver_comparison_trajectory(
             native_artifact=Path(native_artifact),
             controlled_input=controlled_input,
             out_dir=comparison_dir / "sceneweaver_trajectory",
-            adapter_config=config,
+            adapter_config=trajectory_adapter_config,
             evaluation_kwargs=evaluation_options,
             protocol=contract,
             catalog=catalog,
@@ -357,47 +548,78 @@ def _configure_adapter(
 ) -> dict[str, Any]:
     configured = dict(config)
     configured["asset_resolution_policy"] = "exact_only"
-    if materialization is None:
-        return configured
-    configured["asset_manifest_path"] = materialization[
-        "converter_asset_manifest_path"
-    ]
-    configured["comparison_control_path"] = materialization[
-        "comparison_control_path"
-    ]
+    if materialization is not None:
+        configured["asset_manifest_path"] = materialization[
+            "converter_asset_manifest_path"
+        ]
+        configured["comparison_control_path"] = materialization[
+            "comparison_control_path"
+        ]
     execution = configured.get("execution")
     if isinstance(execution, Mapping):
         execution_copy = dict(execution)
         variables = dict(execution_copy.get("template_variables") or {})
-        variables.update(
-            {
-                "comparison_input": materialization["comparison_control_path"],
-                "comparison_catalog": materialization["method_catalog_path"],
-            }
-        )
-        if materialization.get("method_asset_root"):
-            variables["comparison_asset_root"] = materialization[
-                "method_asset_root"
-            ]
         environment = dict(execution_copy.get("environment") or {})
-        environment.update(
-            {
-                "LAYOUT_DDD_COMPARISON_INPUT": materialization[
-                    "comparison_control_path"
-                ],
-                "LAYOUT_DDD_COMPARISON_CATALOG": materialization[
-                    "method_catalog_path"
-                ],
-            }
-        )
-        if materialization.get("method_asset_root"):
-            environment["LAYOUT_DDD_COMPARISON_ASSET_ROOT"] = materialization[
-                "method_asset_root"
-            ]
+        if materialization is not None:
+            variables.update(
+                {
+                    "comparison_input": materialization[
+                        "comparison_control_path"
+                    ],
+                    "comparison_catalog": materialization["method_catalog_path"],
+                }
+            )
+            if materialization.get("method_asset_root"):
+                variables["comparison_asset_root"] = materialization[
+                    "method_asset_root"
+                ]
+            environment.update(
+                {
+                    "LAYOUT_DDD_COMPARISON_INPUT": materialization[
+                        "comparison_control_path"
+                    ],
+                    "LAYOUT_DDD_COMPARISON_CATALOG": materialization[
+                        "method_catalog_path"
+                    ],
+                }
+            )
+            if materialization.get("method_asset_root"):
+                environment["LAYOUT_DDD_COMPARISON_ASSET_ROOT"] = materialization[
+                    "method_asset_root"
+                ]
+        model_policy = contract.as_dict()["generation"].get("model_policy")
+        if (
+            isinstance(model_policy, Mapping)
+            and adapter_name in model_policy.get("comparison_group", [])
+        ):
+            identity = model_policy["required_identity"]
+            variables["model_provider"] = str(identity["provider"])
+            variables["model_id"] = str(identity["model_id"])
+            environment["LAYOUT_DDD_MODEL_PROVIDER"] = str(identity["provider"])
+            environment["LAYOUT_DDD_MODEL_ID"] = str(identity["model_id"])
+            deployment_id = model_policy.get("required_deployment_id")
+            if deployment_id is not None:
+                variables["model_deployment_id"] = str(deployment_id)
+                environment["LAYOUT_DDD_MODEL_DEPLOYMENT_ID"] = str(deployment_id)
+            endpoint_sha256 = model_policy.get("required_api_base_sha256")
+            if endpoint_sha256 is not None:
+                variables["required_api_base_sha256"] = str(endpoint_sha256)
+                environment["LAYOUT_DDD_REQUIRED_API_BASE_SHA256"] = str(
+                    endpoint_sha256
+                )
+            auxiliary = dict(execution_copy.get("auxiliary_artifacts") or {})
+            auxiliary.setdefault(
+                "runner_report", "{upstream_output_dir}/runner_report.json"
+            )
+            execution_copy["auxiliary_artifacts"] = auxiliary
         execution_copy["template_variables"] = variables
         execution_copy["environment"] = environment
         configured["execution"] = execution_copy
-    if adapter_name == "layout_vlm" and contract.mode == FROZEN_ASSETS:
+    if (
+        materialization is not None
+        and adapter_name == "layout_vlm"
+        and contract.mode == FROZEN_ASSETS
+    ):
         payload = read_json(materialization["method_catalog_path"])
         scene_config = _configured_layout_vlm_scene(configured)
         scene_config["assets"] = payload["frozen_assets"]
@@ -405,6 +627,51 @@ def _configure_adapter(
         configured.pop("scene_config_path", None)
         configured.pop("scene_config", None)
         configured["layout_vlm_scene_config"] = scene_config
+    comparison_support = configured.get("comparison_support")
+    comparison_support = (
+        comparison_support if isinstance(comparison_support, Mapping) else {}
+    )
+    if (
+        materialization is not None
+        and adapter_name == "scene_weaver"
+        and contract.mode == FROZEN_ASSETS
+        and comparison_support.get("sceneweaver_released_export_contract") is True
+    ):
+        configured_rotation_unit = str(
+            configured.get("rotation_unit") or "radian"
+        ).strip().lower()
+        if configured_rotation_unit not in {"radian", "radians"}:
+            raise ComparisonRunError(
+                "released SceneWeaver FrozenAssets output uses radians; "
+                "rotation_unit cannot be overridden"
+            )
+        configured["rotation_unit"] = "radian"
+        configured["sceneweaver_native_size_semantics"] = (
+            "released_world_aabb_rounded_2dp"
+        )
+        configured["sceneweaver_world_aabb_tolerance"] = 1.0e-6
+        geometry_tolerance = contract.as_dict()["generation"].get(
+            "asset_geometry_tolerance_m"
+        )
+        if (
+            not isinstance(geometry_tolerance, (int, float))
+            or isinstance(geometry_tolerance, bool)
+            or not math.isfinite(float(geometry_tolerance))
+            or float(geometry_tolerance) <= 0.0
+        ):
+            raise ComparisonRunError(
+                "released SceneWeaver FrozenAssets conversion requires a positive "
+                "generation.asset_geometry_tolerance_m"
+            )
+        configured["sceneweaver_asset_geometry_tolerance_m"] = float(
+            geometry_tolerance
+        )
+        configured["sceneweaver_orientation_basis"] = (
+            "bake_catalog_front_to_sceneweaver_positive_x"
+        )
+        configured["sceneweaver_anchor_basis"] = (
+            "rebase_catalog_bbox_bottom_center_to_sceneweaver_origin"
+        )
     return configured
 
 
@@ -577,6 +844,7 @@ def _completed_manifest(
                 "commit": execution_metadata.get("upstream_commit"),
             },
             "generation_resources": _resource_metadata(execution_metadata, contract),
+            "model_policy": deepcopy(validation.get("model_policy")),
             "evaluator": _evaluator_metadata(
                 evaluation_report_path, evaluation_report, contract
             ),
@@ -615,6 +883,7 @@ def _base_manifest(
         "asset_binding_sha256": payload["asset_binding_sha256"],
         "scale_policy": payload["scale_policy"],
         "retrieval_policy": payload["retrieval_policy"],
+        "model_policy": deepcopy(payload["generation"].get("model_policy")),
         "eligibility": eligibility_path.resolve().as_posix(),
         "eligibility_status": eligibility["status"],
         "control_evidence": deepcopy(eligibility.get("control_evidence")),
@@ -630,6 +899,13 @@ def _resource_metadata(
     callback = callback if isinstance(callback, Mapping) else {}
     declared = callback.get("resource_usage")
     declared = dict(declared) if isinstance(declared, Mapping) else {}
+    external_report = runner_report(execution)
+    external_usage = external_report.get("resource_usage")
+    external_usage = (
+        dict(external_usage) if isinstance(external_usage, Mapping) else {}
+    )
+    if external_usage:
+        declared = {**external_usage, **declared}
     request_metadata: dict[str, Any] = {}
     request_metadata_path = execution.get("request_metadata_path")
     if request_metadata_path:
@@ -654,6 +930,7 @@ def _resource_metadata(
         "retrieval_calls": declared.get("retrieval_calls"),
         "rendering_calls": declared.get("rendering_calls"),
         "reported_by_upstream": declared,
+        "runner_report": external_report or None,
     }
 
 
@@ -771,6 +1048,44 @@ def _append_input_immutability_violations(
                         "details": {"path": path.resolve().as_posix()},
                     }
                 )
+        if materialization.get("require_local_asset_bytes") is True:
+            before_path = materialization.get("asset_bytes_before_path")
+            after_path = materialization.get("asset_bytes_after_generation_path")
+            before = read_json(before_path) if before_path else {}
+            after = read_json(after_path) if after_path else {}
+            if not isinstance(after, Mapping) or after.get("valid") is not True:
+                validation["violations"].append(
+                    {
+                        "code": "asset_bytes_changed",
+                        "message": (
+                            "local frozen asset bytes were unavailable or changed "
+                            "during generation"
+                        ),
+                        "details": {
+                            "after": (
+                                dict(after) if isinstance(after, Mapping) else None
+                            )
+                        },
+                    }
+                )
+            elif (
+                not isinstance(before, Mapping)
+                or before.get("assets") != after.get("assets")
+            ):
+                validation["violations"].append(
+                    {
+                        "code": "asset_bytes_changed",
+                        "message": (
+                            "local frozen asset byte snapshot changed during generation"
+                        ),
+                        "details": {
+                            "before": (
+                                dict(before) if isinstance(before, Mapping) else None
+                            ),
+                            "after": dict(after),
+                        },
+                    }
+                )
     validation["valid_comparison_run"] = not validation["violations"]
 
 
@@ -792,7 +1107,7 @@ def _append_ineligibility(
 
 def _copy_adapter_config(value: Mapping[str, Any] | None) -> dict[str, Any]:
     config = dict(value or {})
-    for key in ("execution", "comparison_support"):
+    for key in ("execution", "comparison_support", "model_identity"):
         if isinstance(config.get(key), Mapping):
             config[key] = dict(config[key])
     return config
@@ -819,6 +1134,75 @@ def _active_architecture_features(
 
 def _file_sha256(path: Path) -> str:
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def _asset_byte_snapshot(
+    catalog: CanonicalAssetCatalog,
+    *,
+    asset_ids: set[str],
+) -> dict[str, Any]:
+    """Re-hash local controlled meshes immediately around external execution."""
+
+    rows: dict[str, Any] = {}
+    errors: list[dict[str, Any]] = []
+    for asset_id in sorted(asset_ids):
+        asset = catalog.get(asset_id)
+        mesh_uri = asset.get("mesh_uri")
+        content = asset.get("content")
+        content = content if isinstance(content, Mapping) else {}
+        expected = str(content.get("mesh_sha256") or "").strip() or None
+        if not mesh_uri:
+            rows[asset_id] = {"status": "no_mesh_uri", "sha256": None}
+            errors.append({"asset_id": asset_id, "code": "mesh_uri_missing"})
+            continue
+        parsed = urlparse(str(mesh_uri))
+        if parsed.scheme and parsed.scheme != "file":
+            rows[asset_id] = {
+                "status": "non_local_uri",
+                "mesh_uri": str(mesh_uri),
+                "sha256": expected,
+            }
+            errors.append(
+                {"asset_id": asset_id, "code": "non_local_mesh_unverifiable"}
+            )
+            continue
+        path = Path(
+            parsed.path if parsed.scheme == "file" else str(mesh_uri)
+        ).expanduser().resolve()
+        if not path.is_file():
+            rows[asset_id] = {
+                "status": "missing",
+                "path": path.as_posix(),
+                "sha256": None,
+            }
+            errors.append({"asset_id": asset_id, "code": "mesh_missing"})
+            continue
+        actual = _file_sha256(path)
+        rows[asset_id] = {
+            "status": "verified" if expected == actual else "unverified",
+            "path": path.as_posix(),
+            "sha256": actual,
+            "bytes": path.stat().st_size,
+        }
+        if expected is None:
+            errors.append(
+                {"asset_id": asset_id, "code": "catalog_mesh_hash_missing"}
+            )
+        elif actual != expected:
+            errors.append(
+                {
+                    "asset_id": asset_id,
+                    "code": "mesh_hash_mismatch",
+                    "expected": expected,
+                    "actual": actual,
+                }
+            )
+    return {
+        "schema_version": "generation_comparison_asset_byte_snapshot_v1",
+        "valid": not errors,
+        "assets": rows,
+        "errors": errors,
+    }
 
 
 def main() -> None:

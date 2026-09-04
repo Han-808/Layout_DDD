@@ -28,10 +28,12 @@ EXECUTION_RESULT_SCHEMA_VERSION = "external_harness_execution_v1"
 NATIVE_ARTIFACT_MANIFEST_SCHEMA_VERSION = "native_artifact_manifest_v1"
 ENV_TOKEN = re.compile(r"^\{env:([A-Za-z_][A-Za-z0-9_]*)\}$")
 SAFE_NAME = re.compile(r"^[A-Za-z0-9_.-]+$")
+URL_TOKEN = re.compile(r"https?://[^\s\"']+", re.IGNORECASE)
 SECRET_KEY = re.compile(
     r"(?:api[_-]?key|password|secret|token|credential)",
     re.IGNORECASE,
 )
+PRIVATE_LOCATOR_KEY = re.compile(r"(?:endpoint|base[_-]?url|^url$)", re.IGNORECASE)
 SAFE_TOKEN_COUNT_KEYS = {
     "tokens",
     "prompt_tokens",
@@ -117,6 +119,8 @@ def execute_external_harness(
     cwd: Path | None = None
     repo_path: Path | None = None
     upstream_commit: str | None = None
+    upstream_repo_clean_before: bool | None = None
+    upstream_repo_clean_after: bool | None = None
     runner_provenance: dict[str, Any] = {"status": "NOT_DISCOVERED"}
     callback_metadata: dict[str, Any] = {}
     source_artifact: Path | None = None
@@ -125,6 +129,7 @@ def execute_external_harness(
     try:
         repo_path = _resolve_repo_path(execution_config, required=command_configured)
         upstream_commit = _discover_git_commit(repo_path)
+        upstream_repo_clean_before = _git_repo_clean(repo_path)
         if runner is not None:
             if not callable(runner):
                 raise ExternalExecutionError("config.runner must be callable")
@@ -135,6 +140,12 @@ def execute_external_harness(
             runner_provenance = _runner_source_provenance(
                 Path(source_file) if source_file else None,
                 entrypoint=_callable_name(runner),
+            )
+            _verify_expected_execution_identity(
+                execution_config,
+                upstream_commit=upstream_commit,
+                upstream_repo_clean=upstream_repo_clean_before,
+                runner_provenance=runner_provenance,
             )
             captured_stdout = io.StringIO()
             captured_stderr = io.StringIO()
@@ -178,6 +189,12 @@ def execute_external_harness(
             runner_provenance = _runner_source_provenance(
                 entrypoint,
                 entrypoint=entrypoint.as_posix() if entrypoint else None,
+            )
+            _verify_expected_execution_identity(
+                execution_config,
+                upstream_commit=upstream_commit,
+                upstream_repo_clean=upstream_repo_clean_before,
+                runner_provenance=runner_provenance,
             )
             timeout_seconds = _timeout_seconds(execution_config)
             try:
@@ -226,6 +243,18 @@ def execute_external_harness(
     stdout_path.write_text(stdout, encoding="utf-8")
     stderr_path.write_text(stderr, encoding="utf-8")
     _finish_runner_source_provenance(runner_provenance)
+    upstream_repo_clean_after = _git_repo_clean(repo_path)
+    if error is None:
+        try:
+            _verify_expected_execution_identity(
+                execution_config,
+                upstream_commit=upstream_commit,
+                upstream_repo_clean=upstream_repo_clean_after,
+                runner_provenance=runner_provenance,
+                require_unchanged=True,
+            )
+        except BaseException as exc:
+            error = exc
     runtime_seconds = time.monotonic() - started_monotonic
     base_result: dict[str, Any] = {
         "schema_version": EXECUTION_RESULT_SCHEMA_VERSION,
@@ -248,6 +277,11 @@ def execute_external_harness(
         "timed_out": timed_out,
         "upstream_repo": repo_path.as_posix() if repo_path is not None else None,
         "upstream_commit": upstream_commit,
+        "upstream_repo_clean_before_execution": upstream_repo_clean_before,
+        "upstream_repo_clean_after_execution": upstream_repo_clean_after,
+        "pinned_upstream_identity_enforced": bool(
+            execution_config.get("expected_upstream_commit")
+        ),
         "runner_provenance": runner_provenance,
         "upstream_output_dir": upstream_output_dir.resolve().as_posix(),
         "source_native_artifact_path": (
@@ -261,7 +295,7 @@ def execute_external_harness(
         base_result["status"] = "failed"
         base_result["error"] = {
             "type": type(error).__name__,
-            "message": str(error),
+            "message": redact_private_locators(str(error)),
         }
         write_json(result_path, base_result)
         if isinstance(error, ExternalExecutionError):
@@ -294,7 +328,7 @@ def execute_external_harness(
         base_result["status"] = "failed"
         base_result["error"] = {
             "type": type(exc).__name__,
-            "message": str(exc),
+            "message": redact_private_locators(str(exc)),
         }
         write_json(result_path, base_result)
         if isinstance(exc, ExternalExecutionError):
@@ -634,6 +668,11 @@ def _subprocess_request(
         execution_config=execution_config,
     )
     environment = _environment(execution_config, variables=variables)
+    if execution_config.get("expected_upstream_commit") is not None:
+        # Pinned checkouts are read-only execution inputs. Avoid normal Python
+        # imports creating untracked __pycache__ entries that would obscure the
+        # pre/post clean-worktree evidence.
+        environment.setdefault("PYTHONDONTWRITEBYTECODE", "1")
     command, audit_command = _expand_command(
         execution_config.get("command"),
         variables=variables,
@@ -827,6 +866,7 @@ def _runner_source_provenance(
             "source_git_commit": _discover_git_commit(source.parent),
             "source_git_tracked": None,
             "source_git_modified": None,
+            **bridge_bundle_identity(source),
         }
     )
     if result["source_git_commit"] is not None:
@@ -861,6 +901,59 @@ def _runner_source_provenance(
     return result
 
 
+def _verify_expected_execution_identity(
+    execution_config: Mapping[str, Any],
+    *,
+    upstream_commit: str | None,
+    upstream_repo_clean: bool | None,
+    runner_provenance: Mapping[str, Any],
+    require_unchanged: bool = False,
+) -> None:
+    expected_commit = execution_config.get("expected_upstream_commit")
+    if expected_commit is not None and str(expected_commit) != str(upstream_commit):
+        raise ExternalExecutionError(
+            "configured upstream checkout does not match expected_upstream_commit"
+        )
+    if expected_commit is not None and upstream_repo_clean is not True:
+        raise ExternalExecutionError(
+            "configured pinned upstream checkout is not a clean Git worktree"
+        )
+    expected_source = execution_config.get("expected_entrypoint_sha256")
+    if expected_source is not None:
+        expected_source = str(expected_source).strip().lower()
+        if not re.fullmatch(r"[0-9a-f]{64}", expected_source):
+            raise ExternalExecutionError(
+                "execution.expected_entrypoint_sha256 must be lowercase SHA-256"
+            )
+        if runner_provenance.get("source_sha256") != expected_source:
+            raise ExternalExecutionError(
+                "configured runner entrypoint differs from expected_entrypoint_sha256"
+            )
+        if require_unchanged and runner_provenance.get(
+            "source_unchanged_during_execution"
+        ) is not True:
+            raise ExternalExecutionError(
+                "configured runner entrypoint changed during external execution"
+            )
+    expected_bundle = execution_config.get("expected_bridge_bundle_sha256")
+    if expected_bundle is not None:
+        expected_bundle = str(expected_bundle).strip().lower()
+        if not re.fullmatch(r"[0-9a-f]{64}", expected_bundle):
+            raise ExternalExecutionError(
+                "execution.expected_bridge_bundle_sha256 must be lowercase SHA-256"
+            )
+        if runner_provenance.get("bridge_bundle_sha256") != expected_bundle:
+            raise ExternalExecutionError(
+                "configured bridge bundle differs from expected_bridge_bundle_sha256"
+            )
+        if require_unchanged and runner_provenance.get(
+            "bridge_bundle_unchanged_during_execution"
+        ) is not True:
+            raise ExternalExecutionError(
+                "configured bridge bundle changed during external execution"
+            )
+
+
 def _finish_runner_source_provenance(provenance: dict[str, Any]) -> None:
     value = provenance.get("source_path")
     if value is None:
@@ -879,6 +972,41 @@ def _finish_runner_source_provenance(provenance: dict[str, Any]) -> None:
     provenance["source_unchanged_during_execution"] = (
         digest == provenance["source_sha256"]
     )
+    current_bundle = bridge_bundle_identity(path)
+    provenance["bridge_bundle_sha256_after_execution"] = current_bundle.get(
+        "bridge_bundle_sha256"
+    )
+    provenance["bridge_bundle_unchanged_during_execution"] = (
+        current_bundle.get("bridge_bundle_sha256")
+        == provenance.get("bridge_bundle_sha256")
+    )
+
+
+def bridge_bundle_identity(entrypoint: str | Path) -> dict[str, Any]:
+    """Hash the bridge entrypoint and its sibling shared helper, if present."""
+
+    source = Path(entrypoint).expanduser().resolve()
+    if not source.is_file():
+        raise FileNotFoundError(f"bridge entrypoint is missing: {source}")
+    paths = [source]
+    common = source.with_name("_common.py")
+    if common.is_file() and common not in paths:
+        paths.append(common)
+    entries = [
+        {"name": path.name, "sha256": _file_sha256(path)}
+        for path in sorted(paths, key=lambda item: item.name)
+    ]
+    payload = json.dumps(
+        entries,
+        allow_nan=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return {
+        "bridge_bundle_scope": "entrypoint_plus_sibling_common_if_present",
+        "bridge_bundle_files": entries,
+        "bridge_bundle_sha256": hashlib.sha256(payload).hexdigest(),
+    }
 
 
 def _resolve_repo_path(
@@ -914,6 +1042,31 @@ def _discover_git_commit(repo_path: Path | None) -> str | None:
         return None
     value = completed.stdout.strip()
     return value if re.fullmatch(r"[0-9a-fA-F]{40}", value) else None
+
+
+def _git_repo_clean(repo_path: Path | None) -> bool | None:
+    if repo_path is None:
+        return None
+    try:
+        completed = subprocess.run(
+            [
+                "git",
+                "-C",
+                repo_path.as_posix(),
+                "status",
+                "--porcelain=v1",
+                "--untracked-files=all",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if completed.returncode != 0:
+        return None
+    return not completed.stdout.strip()
 
 
 def _resolve_expected_artifact(
@@ -1105,6 +1258,13 @@ def _sanitize(value: Any, *, key: str = "") -> Any:
         return value
     if SECRET_KEY.search(key):
         return "<redacted>"
+    if (
+        PRIVATE_LOCATOR_KEY.search(key)
+        and not key.casefold().endswith("_sha256")
+        and isinstance(value, (str, Path))
+    ):
+        digest = hashlib.sha256(str(value).encode("utf-8")).hexdigest()
+        return f"<redacted-locator:sha256={digest}>"
     if isinstance(value, Mapping):
         return {
             str(item_key): _sanitize(item_value, key=str(item_key))
@@ -1116,7 +1276,9 @@ def _sanitize(value: Any, *, key: str = "") -> Any:
         return value.as_posix()
     if callable(value):
         return _callable_name(value)
-    if value is None or isinstance(value, (str, int, float, bool)):
+    if isinstance(value, str):
+        return redact_private_locators(value)
+    if value is None or isinstance(value, (int, float, bool)):
         return value
     return repr(value)
 
@@ -1126,7 +1288,19 @@ def _redact_command(command: list[str]) -> list[str]:
     for index, token in enumerate(result[:-1]):
         if SECRET_KEY.search(token):
             result[index + 1] = "<redacted>"
+    for index, token in enumerate(result):
+        if token.startswith(("http://", "https://")):
+            digest = hashlib.sha256(token.encode("utf-8")).hexdigest()
+            result[index] = f"<redacted-locator:sha256={digest}>"
     return result
+
+
+def redact_private_locators(value: str) -> str:
+    def replacement(match: re.Match[str]) -> str:
+        digest = hashlib.sha256(match.group(0).encode("utf-8")).hexdigest()
+        return f"<redacted-locator:sha256={digest}>"
+
+    return URL_TOKEN.sub(replacement, str(value))
 
 
 def _sanitize_execution_config(value: Mapping[str, Any]) -> dict[str, Any]:
@@ -1155,9 +1329,11 @@ __all__ = [
     "EXECUTION_RESULT_SCHEMA_VERSION",
     "ExternalExecutionError",
     "artifact_sha256",
+    "bridge_bundle_identity",
     "execute_external_harness",
     "preserve_native_artifact",
     "preserve_supplied_native_artifact",
+    "redact_private_locators",
     "update_execution_result",
     "verify_preserved_native_artifact",
 ]

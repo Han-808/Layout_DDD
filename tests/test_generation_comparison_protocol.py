@@ -979,7 +979,6 @@ def _generation_input() -> dict[str, Any]:
 
 
 def _native_output(adapter_name: str, out_dir: Path, config: dict) -> Path:
-    del config
     asset_id = "chair.asset.001"
     if adapter_name == "layout_gpt":
         return write_json(
@@ -1081,7 +1080,12 @@ def _native_output(adapter_name: str, out_dir: Path, config: dict) -> Path:
                         "description": "wood dining chair",
                         "location": [1.5 + iteration * 0.5, 2.0, 0.0],
                         "rotation": [0.0, 0.0, 0.0],
-                        "size": [0.8, 0.7, 1.0],
+                        "size": (
+                            [0.7, 0.8, 1.0]
+                            if config.get("sceneweaver_native_size_semantics")
+                            == "released_world_aabb_rounded_2dp"
+                            else [0.8, 0.7, 1.0]
+                        ),
                         "parent": [],
                     }
                 },

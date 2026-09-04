@@ -1,4 +1,7 @@
+import hashlib
+import json
 from collections.abc import Mapping
+from copy import deepcopy
 from pathlib import Path
 import re
 
@@ -54,6 +57,27 @@ class SceneWeaverAdapter(HarnessConverterAdapter):
             raise ArtifactValidationError(
                 "sceneweaver_count must be a positive integer"
             )
+        structure = visible.get("structure")
+        structure = structure if isinstance(structure, Mapping) else {}
+        object_plan = structure.get("object_plan")
+        public_plan = (
+            _without_asset_locators(object_plan)
+            if isinstance(object_plan, Mapping)
+            else None
+        )
+        public_plan_sha256 = (
+            hashlib.sha256(
+                json.dumps(
+                    public_plan,
+                    allow_nan=False,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                    sort_keys=True,
+                ).encode("utf-8")
+            ).hexdigest()
+            if public_plan is not None
+            else None
+        )
         return {
             "schema_version": self.native_input_schema,
             "prompt": public_instruction(method_input),
@@ -65,7 +89,11 @@ class SceneWeaverAdapter(HarnessConverterAdapter):
                 "height": room.get("height"),
                 "unit": room.get("unit", "meter"),
             },
-            "asset_selection": public_asset_selection(method_input),
+            "asset_selection": _without_asset_locators(
+                public_asset_selection(method_input)
+            ),
+            "public_object_plan": public_plan,
+            "public_object_plan_sha256": public_plan_sha256,
             "feedback_source": "native_sceneweaver_only",
         }
 
@@ -141,6 +169,30 @@ class SceneWeaverAdapter(HarnessConverterAdapter):
         cfg["asset_bindings"] = dict(loaded)
         cfg["asset_bindings_path"] = str(path_value)
         return cfg
+
+
+def _without_asset_locators(value):
+    """Keep public IDs/metadata while withholding host-local cache paths."""
+
+    private_keys = {
+        "asset_root",
+        "cache_path",
+        "file_path",
+        "mesh_path",
+        "mesh_uri",
+        "metadata_path",
+        "metadata_uri",
+        "path",
+    }
+    if isinstance(value, Mapping):
+        return {
+            str(key): _without_asset_locators(item)
+            for key, item in value.items()
+            if str(key) not in private_keys
+        }
+    if isinstance(value, list):
+        return [_without_asset_locators(item) for item in value]
+    return deepcopy(value)
 
 
 __all__ = ["SceneWeaverAdapter"]

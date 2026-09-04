@@ -8,10 +8,37 @@ import pytest
 
 from benchmark.generation_comparison.pilot import (
     _trajectory_summary,
+    bridge_execution_hashes,
     prepare_controlled_pilot,
     run_prepared_pilot,
 )
 from benchmark.utils.io import read_json, write_json
+
+
+def test_bridge_execution_hashes_are_operator_reproducible(tmp_path: Path) -> None:
+    entrypoint = tmp_path / "bridge.py"
+    common = tmp_path / "_common.py"
+    entrypoint.write_text("print('bridge')\n", encoding="utf-8")
+    common.write_text("VALUE = 1\n", encoding="utf-8")
+
+    first = bridge_execution_hashes(entrypoint)
+    second = bridge_execution_hashes(entrypoint)
+
+    assert first == second
+    assert len(first["expected_entrypoint_sha256"]) == 64
+    assert len(first["expected_bridge_bundle_sha256"]) == 64
+    assert [item["name"] for item in first["bridge_bundle_files"]] == [
+        "_common.py",
+        "bridge.py",
+    ]
+    common.write_text("VALUE = 2\n", encoding="utf-8")
+    changed = bridge_execution_hashes(entrypoint)
+    assert changed["expected_entrypoint_sha256"] == first[
+        "expected_entrypoint_sha256"
+    ]
+    assert changed["expected_bridge_bundle_sha256"] != first[
+        "expected_bridge_bundle_sha256"
+    ]
 
 
 def test_prepare_pilot_preflights_assets_cases_hashes_and_readiness(
@@ -149,6 +176,31 @@ def test_offline_dry_run_generates_tables_without_claiming_real_execution(
     assert summary["methods"]["catalog_placement"]["valid_runs"] == 1
     assert summary["methods"]["catalog_placement"]["scored_runs"] == 0
     assert summary["statistical_significance_tested"] is False
+
+
+def test_pending_human_asset_selection_can_prepare_but_cannot_run(
+    tmp_path: Path,
+) -> None:
+    spec = _pilot_spec(methods=["catalog_placement"])
+    spec["asset_selection_status"] = "candidate_pending_human_approval"
+    prepared = prepare_controlled_pilot(
+        spec=spec,
+        asset_root=_asset_root(tmp_path / "assets"),
+        out_dir=tmp_path / "pilot",
+    )
+
+    assert prepared["asset_selection_status"] == (
+        "candidate_pending_human_approval"
+    )
+    with pytest.raises(
+        ValueError, match="frozen asset selection is not approved for generation"
+    ):
+        run_prepared_pilot(
+            prepared_dir=tmp_path / "pilot",
+            method_configs={},
+            dry_run_only=True,
+        )
+    assert not (tmp_path / "pilot" / "results.jsonl").exists()
 
 
 def test_prepare_and_run_refuse_to_overwrite_existing_artifacts(
