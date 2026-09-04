@@ -230,6 +230,12 @@ def test_approved_agent_suite_and_shared_db_contract_are_frozen() -> None:
 
     assert suite.public_dict()["track_type"] == "agent_only"
     assert suite.public_dict()["asset_access_mode"] == "shared_database"
+    assert prepared.public_dict()["participant_class"] == (
+        "general_purpose_coding_agent"
+    )
+    assert prepared.public_dict()["comparison_unit"] == (
+        "general_purpose_coding_agent_system"
+    )
     assert suite.public_dict()["scene_count"] == 10
     assert suite.public_dict()["room_count"] == 42
     assert suite.public_dict()["wall_segment_count"] == 314

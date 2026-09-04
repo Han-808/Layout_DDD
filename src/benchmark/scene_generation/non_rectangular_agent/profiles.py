@@ -13,6 +13,7 @@ from .tool_server import AgentToolPolicy
 
 
 TRACK_PROFILE_SCHEMA_VERSION = "non_rectangular_agent_track_profile_v1"
+PARTICIPANT_CLASS = "general_purpose_coding_agent"
 _PORTABLE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 _ENV_NAME = re.compile(r"^[A-Z_][A-Z0-9_]*$")
 _FORBIDDEN_ENVIRONMENT = frozenset(
@@ -70,6 +71,7 @@ class AgentTrackProfile:
     path: Path
     fullrun_id: str
     track_id: str
+    participant_class: str
     suite_root: Path
     retrieval_catalog: Path
     shared_database_contract: Path
@@ -83,6 +85,7 @@ class AgentTrackProfile:
             "schema_version": TRACK_PROFILE_SCHEMA_VERSION,
             "fullrun_id": self.fullrun_id,
             "track_id": self.track_id,
+            "participant_class": self.participant_class,
             "suite_root": self.suite_root.as_posix(),
             "retrieval_catalog": self.retrieval_catalog.as_posix(),
             "shared_database_contract": self.shared_database_contract.as_posix(),
@@ -105,6 +108,7 @@ def load_agent_track_profile(
             "schema_version",
             "fullrun_id",
             "track_id",
+            "participant_class",
             "suite_root",
             "retrieval_catalog",
             "shared_database_contract",
@@ -121,6 +125,13 @@ def load_agent_track_profile(
     track_id = _portable(value["track_id"], label="track_id")
     if track_id != "complicated_floorplan_agent_track_v1":
         raise AgentProfileError("profile selects the wrong Agent track")
+    participant_class = _text(
+        value["participant_class"], label="participant_class"
+    )
+    if participant_class != PARTICIPANT_CLASS:
+        raise AgentProfileError(
+            "this track accepts only general-purpose coding Agents"
+        )
     max_top_k = _positive_int(value["max_top_k"], label="max_top_k")
     tool_raw = value["tool_policy"]
     if not isinstance(tool_raw, dict):
@@ -161,6 +172,7 @@ def load_agent_track_profile(
         path=profile_path,
         fullrun_id=fullrun_id,
         track_id=track_id,
+        participant_class=participant_class,
         suite_root=_repo_file(root, value["suite_root"], label="suite_root", directory=True),
         retrieval_catalog=_repo_file(
             root, value["retrieval_catalog"], label="retrieval_catalog"
@@ -349,6 +361,7 @@ __all__ = [
     "AgentBackendProfile",
     "AgentProfileError",
     "AgentTrackProfile",
+    "PARTICIPANT_CLASS",
     "TRACK_PROFILE_SCHEMA_VERSION",
     "load_agent_track_profile",
 ]
