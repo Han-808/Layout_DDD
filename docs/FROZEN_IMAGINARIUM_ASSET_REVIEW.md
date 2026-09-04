@@ -332,3 +332,117 @@ instances are additions to the retained baseline inventory.
 6. Add immutable catalog records and source hashes, then re-run local-asset,
    frozen-binding, architecture, scale, support, and harness-eligibility
    preflight.
+
+## S103 — bedroom, dressing, and workspace
+
+Review status: `user_selected_pending_materialization`
+
+Recorded: `2026-09-05` (`Asia/Shanghai`)
+
+### Baseline scene
+
+- Model: `Claude Opus 5`
+- SceneBoard dataset key: `anthropic_opus5`
+- Displayed liveboard score: `88.75`
+- Source score: `91.34`
+- Coverage: `97.34`
+- Existing object count: `21`
+- Canonical scene:
+  `Support/datasets/api3_anthropic_generations_v1/claude-opus-5-aihub/S103/scene/canonical_scene.json`
+- Canonical scene SHA-256:
+  `b4b0a44f93d59fbffa670032cc2c7945d8d41cbeb8f67f4826db06e0f7930155`
+- Blender scene:
+  `Support/datasets/api3_anthropic_generations_v1/claude-opus-5-aihub/S103/prepared/evaluation.blend`
+- Blender scene SHA-256:
+  `d4cb07402755112cc7f29f027ed75b22062edeee7982043c49f007d2654f172c`
+
+### User removal decision
+
+Remove exactly two objects:
+
+1. `computer_monitor`, bound to retired, orientation-incompatible exact asset
+   `5_SM_PC_B_Monitor` (CSV row `964`).
+2. `area_rug`, bound to exact asset `22_SM_Rug_Stacked_01g` (CSV row `589`).
+   The catalog class is `Folded_fabric`; its description and dimensions
+   (`0.572 x 0.542 x 0.063 m`) confirm that it is a folded fabric stack, not a
+   floor rug.
+
+Preserve the source Blender/native scene unchanged. Apply both removals only
+when the approved FrozenAssets case is materialized.
+
+### Candidate shortlist
+
+All twenty exact CSV assets and local directories were verified. Candidates
+`1` and `2` are the faithful replacements for the removed monitor and false
+rug. The remaining candidates add workstation, bedside, dressing, textile, and
+decorative detail. Only the rows repeated in the user-selected table below are
+approved for later materialization.
+
+| Candidate | CSV id | Exact asset ID | CSV bbox W×D×H (m) | CSV class/category | Suggested placement / role |
+| ---: | ---: | --- | --- | --- | --- |
+| 1 | 742 | `41_ComputerSet_03` | `0.480 × 0.198 × 0.445` | `Computer_monitor` / `monitor` | On desk; reviewed replacement for the retired monitor |
+| 2 | 891 | `45_Capet05` | `2.400 × 1.700 × 0.010` | `Carpet` / `rug` | Floor; actual muted gray/teal geometric area rug replacing the folded fabric |
+| 3 | 197 | `0_SM_Keyboard` | `0.326 × 0.137 × 0.010` | `Keyboard` / `keyboard` | On desk; in front of the replacement monitor |
+| 4 | 207 | `0_SM_Laptop` | `0.383 × 0.282 × 0.257` | `Laptop_computer` / `laptop` | On desk; secondary mobile work device |
+| 5 | 434 | `17_SM_Clock` | `0.120 × 0.120 × 0.116` | `Alarm_clock` / `clock` | On a nightstand; modern gray alarm clock |
+| 6 | 122 | `0_SM_003_Deco001` | `0.118 × 0.067 × 0.125` | `Jewelry_box` / `shelf` | On vanity; tiered jewelry organizer |
+| 7 | 161 | `0_SM_Deco_Sec004` | `0.023 × 0.023 × 0.086` | `Nail_polish` / `nail` | On vanity; small nail-polish bottle |
+| 8 | 440 | `17_SM_Decor_5` | `0.119 × 0.119 × 0.157` | `Skincare_product` / `bottle` | On vanity; frosted skincare bottle |
+| 9 | 842 | `44_sk64_HairDryer01` | `0.339 × 0.147 × 0.066` | `Hair_dryer` / `hairdryer` | On vanity; black hair dryer with pink accents |
+| 10 | 486 | `19_SM_Cloth_3` | `0.609 × 0.160 × 0.839` | `Hanging_cloth` / `hanger` | Hanging at wardrobe/dressing zone; rust-brown shirt on hanger |
+| 11 | 1409 | `a_SM_Curtain_Open_01` | `1.891 × 0.227 × 2.413` | `Curtain` / `curtain` | Window/wall; tied-back dark-gray curtain panels if architecture has a matching window |
+| 12 | 241 | `0_SM_Stool_Fir001` | `0.789 × 0.334 × 0.495` | `Low_stool` / `bench` | Floor; teal upholstered dressing or foot-of-bed bench |
+| 13 | 1984 | `d_1000003759813` | `0.633 × 0.210 × 0.338` | `Pillow` / `pillow` | On bed or armchair; teal lumbar pillow |
+| 14 | 590 | `22_SM_Rug_Stacked_01h` | `0.508 × 0.491 × 0.077` | `Folded_fabric` / `blanket` | On armchair, bench, or dresser; deliberately used as folded blanket, not rug |
+| 15 | 480 | `19_SM_Book_7` | `0.025 × 0.235 × 0.312` | `Book` / `desk` | On bookshelf or desk; freelancer guide book |
+| 16 | 1433 | `a_SM_desk_props_notebook` | `0.013 × 0.110 × 0.155` | `Notebook_stationery` / `notebook` | On desk; spiral notebook with sketches |
+| 17 | 157 | `0_SM_Coffee_cup_2` | `0.081 × 0.107 × 0.098` | `Water_cup` / `mug` | On desk; dark-gray coffee mug |
+| 18 | 549 | `21_SM_Picture_Frames_01b` | `0.614 × 0.027 × 0.448` | `Wall_mounted_picture_frame` / `frame` | Wall; black-and-white coastal photograph |
+| 19 | 1622 | `a_SM_Plant_01a` | `0.960 × 0.739 × 1.380` | `Large_potted_plant` / `vase` | Floor; tall Monstera in an unoccupied corner |
+| 20 | 1413 | `a_SM_Decor_3` | `0.065 × 0.065 × 0.058` | `Desktop_ornament` / `vase` | On nightstand or vanity; small white candle holder |
+
+### User-selected additions
+
+The user selected candidate numbers `1, 3, 5, 13`, each with count one. The
+new monitor replaces the deleted retired monitor. The keyboard, alarm clock,
+and lumbar pillow are additions. Candidate `2` was not selected, so the deleted
+false rug has no replacement in the frozen inventory.
+
+| Original candidate | Count | CSV id | Exact asset ID | CSV bbox W×D×H (m) | Intended support | Provisional role |
+| ---: | ---: | ---: | --- | --- | --- | --- |
+| 1 | 1 | 742 | `41_ComputerSet_03` | `0.480 × 0.198 × 0.445` | on object | Reviewed monitor on the desk, replacing `computer_monitor` |
+| 3 | 1 | 197 | `0_SM_Keyboard` | `0.326 × 0.137 × 0.010` | on object | Keyboard in front of the replacement monitor |
+| 5 | 1 | 434 | `17_SM_Clock` | `0.120 × 0.120 × 0.116` | on object | Modern alarm clock on one nightstand |
+| 13 | 1 | 1984 | `d_1000003759813` | `0.633 × 0.210 × 0.338` | on object | Teal lumbar pillow on the bed or reading armchair |
+
+### Candidate-selection constraints
+
+- Candidate `1` is the only proposed replacement for the deleted monitor and
+  must not retain the old `5_SM_PC_B_Monitor` binding.
+- Candidate `2` is the only proposed replacement for the false rug; unlike the
+  removed object, it is an actual near-planar floor carpet.
+- Candidates `3`--`9` and `13`--`17`, `20` require explicit supporting objects;
+  do not flatten them to floor placement.
+- Candidate `10` requires a defensible hanging/wardrobe support convention.
+- Candidate `11` is eligible only if a matching native window/wall opening is
+  present; it must not invent architecture.
+- Candidate `18` requires wall support. Candidate `19` requires sufficient
+  floor clearance.
+- All four selected asset directories exist. None is materialized into the
+  executable FrozenAssets case by this review-only update.
+
+### Materialization still required
+
+1. Remove `computer_monitor` and its retired `5_SM_PC_B_Monitor` binding;
+   recreate the workstation monitor slot bound exactly to
+   `41_ComputerSet_03`.
+2. Remove `area_rug` and its false-rug `22_SM_Rug_Stacked_01g` binding without
+   creating a replacement rug slot.
+3. Add unique keyboard, alarm-clock, and lumbar-pillow slots without changing
+   other retained S103 identities.
+4. Bind the monitor and keyboard to the desk, the clock to one selected
+   nightstand, and the pillow to either the bed or armchair; preserve these
+   support relationships explicitly.
+5. Add immutable catalog records and source hashes, then re-run local-asset,
+   frozen-binding, architecture, scale, support, and harness-eligibility
+   preflight.
