@@ -5,11 +5,11 @@
     "room_table_json": "review/rooms.json",
     "scaled_layout_manifest": {
       "path": "scaled_layouts/manifest_v1.json",
-      "sha256": "4ef82a3af709c8a0c52f75d6ffbfd421bf99ef5eb0b805f4746efcaccc34af27"
+      "sha256": "e6ab078764125adb62956504768ca34d7c54095d13f0cfbe18884f67b5bd4c9c"
     },
     "scaled_program_manifest": {
       "path": "scaled_programs/manifest_v1.json",
-      "sha256": "cff0a93d6ef166ecbd087f232e66a70dbf87614757fffb9ad66ce229ffcc952d"
+      "sha256": "d26bf6b0d3da8b369a5b73bc281ab647a9157172604b5df7244983db0413472b"
     }
   },
   "evaluator_scope": {
@@ -38,19 +38,27 @@
     "minimum_scaled_short_span_m": 2.5875000000000004,
     "per_room_manual_edits": false
   },
-  "manifest_sha256": "8d030d28432aab5ec4a13c0fc1782fe11651014da739a18298e79cf7fd0fec22",
+  "manifest_sha256": "d81f8dadbd431cf4f256dec956ca09d92e095b70c9750ae3474efd853cb75362",
   "object_count": {
     "aggregate_target_total_instances": {
-      "max": 891,
-      "min": 719
+      "max": 1133,
+      "min": 914
     },
-    "density_multiplier": 1.1,
+    "density_baseline": {
+      "id": "original_multi_room_floorplan_planned_envelope_v1",
+      "objects_per_m2": {
+        "max": 0.5766731643924626,
+        "min": 0.464993502274204
+      }
+    },
+    "density_multiplier": 1.4,
     "objects_per_m2_target": {
-      "max": 0.6343404808317089,
-      "min": 0.5114928525016245
-    }
+      "max": 0.8073424301494476,
+      "min": 0.6509909031838855
+    },
+    "per_room_range_policy": "area_proportional_largest_remainder_exact_total_v1"
   },
-  "proposal_id": "complicated_floorplan_spatiallm_proposed10_scale125_density110_v1",
+  "proposal_id": "complicated_floorplan_spatiallm_selected10_scale125_density140_v2",
   "schema_version": "complicated_floorplan_proposal_manifest_v1",
   "selection": {
     "layout_count": 10,

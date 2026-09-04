@@ -44,7 +44,7 @@
       "arguments": [
         "WORKSPACE_RELATIVE_JSON_PATH"
       ],
-      "effect": "Validate the draft without exposing evaluator results or hidden labels."
+      "effect": "Validate the draft against the declared public schema, identity, total/per-room counts, asset/binding/placement cardinality, and unit-scale contract without exposing evaluator results or hidden labels."
     }
   },
   "protocol": "non_rectangular_agent_tool_protocol_v1",
@@ -63,8 +63,17 @@
   "security": {
     "asset_resource_paths_exposed": false,
     "external_asset_sources_allowed": false,
+    "final_submission_hash_sealed_host_side": true,
     "raw_database_files_mounted": false,
-    "scores_or_hidden_labels_exposed": false
+    "scores_or_hidden_labels_exposed": false,
+    "tool_audit_journal_visible_or_writable_by_agent": false
+  },
+  "transcript_policy": {
+    "event_schema": "non_rectangular_agent_tool_event_v2",
+    "hash_chained": true,
+    "result_payloads": "complete_public_tool_results_only",
+    "storage": "trusted_host_side",
+    "credentials_headers_endpoints_and_hidden_reasoning_recorded": false
   },
   "transport": "authenticated_unix_domain_socket_json_line_v1"
 }

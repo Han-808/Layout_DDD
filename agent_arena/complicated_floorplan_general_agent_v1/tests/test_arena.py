@@ -37,7 +37,7 @@ class ArenaTests(unittest.TestCase):
         self.assertEqual(fixed["room_count"], 42)
         self.assertEqual(fixed["wall_segment_count"], 314)
         self.assertEqual(
-            fixed["aggregate_target_total_instances"], {"min": 719, "max": 891}
+            fixed["aggregate_target_total_instances"], {"min": 914, "max": 1133}
         )
         self.assertEqual(
             fixed["database_snapshot_id"],
@@ -65,7 +65,25 @@ class ArenaTests(unittest.TestCase):
                 (episode.workspace / "task.json").read_text(encoding="utf-8")
             )
             self.assertEqual(task["layout_id"], "scene_012121")
-            self.assertEqual(task["target_total_instances"], {"min": 67, "max": 83})
+            self.assertEqual(task["target_total_instances"], {"min": 85, "max": 106})
+            self.assertEqual(
+                task["complexity_contract"]["room_instance_ranges"],
+                [
+                    {"room_id": "room_000", "min": 34, "max": 43},
+                    {"room_id": "room_001", "min": 11, "max": 13},
+                    {"room_id": "room_002", "min": 13, "max": 16},
+                    {"room_id": "room_003", "min": 14, "max": 18},
+                    {"room_id": "room_004", "min": 13, "max": 16},
+                ],
+            )
+            self.assertEqual(
+                task["geometry_contract"]["uniform_scale"],
+                {"policy": "exact", "value": 1.0},
+            )
+            self.assertIn(
+                "- `room_000`: 34 to 43 instances",
+                (episode.workspace / "TODO.md").read_text(encoding="utf-8"),
+            )
             combined = "\n".join(
                 path.read_text(encoding="utf-8", errors="replace")
                 for path in episode.workspace.iterdir()

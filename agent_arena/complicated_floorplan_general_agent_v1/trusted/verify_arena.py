@@ -12,9 +12,9 @@ from typing import Any
 
 
 ARENA_ROOT = Path(__file__).resolve().parents[1]
-LOCK_PATH = ARENA_ROOT / "arena.lock.v3.json"
-PREDECESSOR_LOCK = ARENA_ROOT / "arena.lock.v2.json"
-EXCLUDED_NAMES = frozenset({"arena.lock.v3.json", ".DS_Store"})
+LOCK_PATH = ARENA_ROOT / "arena.lock.v4.json"
+PREDECESSOR_LOCK = ARENA_ROOT / "arena.lock.v3.json"
+EXCLUDED_NAMES = frozenset({"arena.lock.v4.json", ".DS_Store"})
 
 
 class ArenaLockError(RuntimeError):
@@ -39,7 +39,7 @@ def controlled_files() -> list[Path]:
 
 def build_lock() -> dict[str, Any]:
     if not PREDECESSOR_LOCK.is_file() or PREDECESSOR_LOCK.is_symlink():
-        raise ArenaLockError("predecessor arena.lock.v2.json is missing or linked")
+        raise ArenaLockError("predecessor arena.lock.v3.json is missing or linked")
     entries: dict[str, dict[str, Any]] = {}
     for path in controlled_files():
         relative = path.relative_to(ARENA_ROOT).as_posix()
@@ -55,10 +55,10 @@ def build_lock() -> dict[str, Any]:
         entries, sort_keys=True, ensure_ascii=False, separators=(",", ":")
     ).encode("utf-8")
     return {
-        "schema_version": "sieve_agent_arena_lock_v3",
-        "arena_id": "sieve-complicated-floorplan-general-agents-v1",
+        "schema_version": "sieve_agent_arena_lock_v4",
+        "arena_id": "sieve-complicated-floorplan-general-agents-v2",
         "predecessor_lock": {
-            "path": "arena.lock.v2.json",
+            "path": "arena.lock.v3.json",
             "sha256": hashlib.sha256(PREDECESSOR_LOCK.read_bytes()).hexdigest(),
         },
         "file_count": len(entries),
@@ -69,7 +69,7 @@ def build_lock() -> dict[str, Any]:
 
 def write_lock() -> dict[str, Any]:
     if LOCK_PATH.exists() or LOCK_PATH.is_symlink():
-        raise ArenaLockError("arena.lock.v3.json already exists")
+        raise ArenaLockError("arena.lock.v4.json already exists")
     value = build_lock()
     encoded = json.dumps(value, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
     descriptor = os.open(LOCK_PATH, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o444)
@@ -83,11 +83,11 @@ def write_lock() -> dict[str, Any]:
 
 def verify_lock() -> dict[str, Any]:
     if not LOCK_PATH.is_file() or LOCK_PATH.is_symlink():
-        raise ArenaLockError("arena.lock.v3.json is missing or linked")
+        raise ArenaLockError("arena.lock.v4.json is missing or linked")
     expected = json.loads(LOCK_PATH.read_text(encoding="utf-8"))
     observed = build_lock()
     if expected != observed:
-        raise ArenaLockError("arena content differs from arena.lock.v3.json")
+        raise ArenaLockError("arena content differs from arena.lock.v4.json")
     return observed
 
 

@@ -40,6 +40,7 @@ from benchmark.scene_generation.non_rectangular_agent.tool_server import (
     AgentToolPolicy,
     AgentToolServer,
     AgentToolSession,
+    validate_task_submission_constraints,
 )
 
 
@@ -286,6 +287,51 @@ def test_agent_submission_uses_authoritative_shared_db_assets() -> None:
         )
 
 
+def test_task_constraints_enforce_per_room_ranges_and_unit_scale() -> None:
+    validated = validate_agent_submission(
+        _submission(),
+        room_layout=_fixture("simple_multi_room.json"),
+        room_program=_fixture("simple_multi_room_program.json"),
+        asset_catalog=FakeCatalog(),
+    )
+    task = {
+        "target_total_instances": {"min": 4, "max": 4},
+        "complexity_contract": {
+            "room_instance_ranges": [
+                {"room_id": "room_000", "min": 2, "max": 2},
+                {"room_id": "room_001", "min": 2, "max": 2},
+            ]
+        },
+        "geometry_contract": {
+            "uniform_scale": {"policy": "exact", "value": 1.0}
+        },
+    }
+    report = validate_task_submission_constraints(validated, task_payload=task)
+    assert report["valid"] is True
+    assert report["room_instance_ranges"][0]["actual"] == 2
+
+    invalid_count = deepcopy(task)
+    invalid_count["complexity_contract"]["room_instance_ranges"][0] = {
+        "room_id": "room_000",
+        "min": 1,
+        "max": 1,
+    }
+    invalid_count["target_total_instances"] = {"min": 3, "max": 3}
+    with pytest.raises(AgentToolError, match="outside"):
+        validate_task_submission_constraints(validated, task_payload=invalid_count)
+
+    scaled = _submission()
+    scaled["global_placement"]["rooms"][0]["instances"][0]["uniform_scale"] = 0.9
+    scaled_validated = validate_agent_submission(
+        scaled,
+        room_layout=_fixture("simple_multi_room.json"),
+        room_program=_fixture("simple_multi_room_program.json"),
+        asset_catalog=FakeCatalog(),
+    )
+    with pytest.raises(AgentToolError, match="uniform_scale"):
+        validate_task_submission_constraints(scaled_validated, task_payload=task)
+
+
 def test_local_tool_server_seals_only_valid_submission(tmp_path: Path) -> None:
     (tmp_path / "submission.json").write_text(
         json.dumps(_submission()), encoding="utf-8"
@@ -297,6 +343,7 @@ def test_local_tool_server_seals_only_valid_submission(tmp_path: Path) -> None:
         asset_catalog=FakeCatalog(),
         task_payload={"layout_id": "fixture_simple_multi_room"},
         policy=AgentToolPolicy(max_total_calls=8, max_top_k=4),
+        seal_record_path=tmp_path / "trusted_submission_seal.json",
     )
     with AgentToolServer(session) as server:
         task = call_tool(
@@ -316,7 +363,25 @@ def test_local_tool_server_seals_only_valid_submission(tmp_path: Path) -> None:
     assert result["ok"] is True
     assert (tmp_path / "final_submission.json").is_file()
     assert (tmp_path / "finalization.json").is_file()
-    assert len((tmp_path / "tool_events.jsonl").read_text().splitlines()) == 2
+    trusted_seal = json.loads(
+        (tmp_path / "trusted_submission_seal.json").read_text()
+    )
+    assert trusted_seal["schema_version"] == "sieve_trusted_submission_seal_v1"
+    assert (
+        trusted_seal["finalization"]["submission_sha256"]
+        == json.loads((tmp_path / "finalization.json").read_text())["submission_sha256"]
+    )
+    events = [
+        json.loads(line)
+        for line in (tmp_path / "tool_events.jsonl").read_text().splitlines()
+    ]
+    assert len(events) == 2
+    assert events[0]["schema_version"] == "non_rectangular_agent_tool_event_v2"
+    assert events[0]["previous_event_sha256"] is None
+    assert events[1]["previous_event_sha256"] == events[0]["event_sha256"]
+    assert events[1]["result"]["valid"] is True
+    assert len(events[1]["result_sha256"]) == 64
+    assert len(json.loads((tmp_path / "finalization.json").read_text())["submission_sha256"]) == 64
 
 
 def test_tool_budget_is_cumulative_across_resume(tmp_path: Path) -> None:

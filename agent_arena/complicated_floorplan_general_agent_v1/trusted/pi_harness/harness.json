@@ -1,5 +1,5 @@
 {
-  "harness_id": "sieve-pi-common-harness-v1",
+  "harness_id": "sieve-pi-common-harness-v2",
   "implementation": {
     "name": "Pi Coding Agent",
     "npm_package": "@earendil-works/pi-coding-agent",
@@ -20,6 +20,24 @@
     ],
     "upstream_credentials_visible_to_agent": false
   },
+  "fairness_and_audit": {
+    "maximum_model_turns": "required_per_registration_and_gateway_enforced",
+    "wall_clock_limit": "required_per_registration_and_outer_executor_enforced",
+    "maximum_concurrent_tool_calls": 1,
+    "sampling_policy": "record_exact_requested_setting_or_explicit_provider_default",
+    "reasoning_policy": "record_exact_requested_setting_and_observable_usage_only",
+    "hidden_reasoning_content_recorded": false,
+    "starting_workspace_hash_required": true,
+    "final_submission_hash_required": true,
+    "final_submission_hash_sealed_host_side": true,
+    "tool_transcript": {
+      "event_schema": "non_rectangular_agent_tool_event_v2",
+      "hash_chained": true,
+      "records_complete_public_results": true,
+      "storage": "trusted_host_side",
+      "agent_visible_or_writable": false
+    }
+  },
   "resources": {
     "context_files": false,
     "extensions": false,
@@ -33,7 +51,7 @@
     "node_relative_path": "bin/node",
     "runtime_manifest": "../runtime_bundles/pi-0.85.0/runtime.manifest.json"
   },
-  "schema_version": "sieve_pi_common_harness_v1",
+  "schema_version": "sieve_pi_common_harness_v2",
   "system_prompt_path": "trusted/pi_harness/SYSTEM.md",
   "task_delivery": {
     "canonical_source": "workspace/TODO.md",

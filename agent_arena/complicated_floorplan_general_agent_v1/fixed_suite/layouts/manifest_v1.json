@@ -1,6 +1,6 @@
 {
-  "cohort_id": "complicated_floorplan_spatiallm_proposed10_scale125_density110_v1",
-  "manifest_sha256": "e402d7b8017c887701d7682e48478b3b338cd1dd45090b4e1fcaa0b2a9456496",
+  "cohort_id": "complicated_floorplan_spatiallm_selected10_scale125_v2",
+  "manifest_sha256": "36097376a62265d02a3129093f1b40d3cbb48c9abf8b9ad2f7c7bf0f280bf930",
   "scenes": [
     {
       "adjacency_connected": true,

@@ -31,7 +31,7 @@
   ],
   "schema_version": "non_rectangular_room_program_v1",
   "target_total_instances": {
-    "max": 83,
-    "min": 67
+    "max": 106,
+    "min": 85
   }
 }

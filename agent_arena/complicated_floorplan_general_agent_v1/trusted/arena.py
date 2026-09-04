@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from decimal import Decimal, ROUND_FLOOR
 import hashlib
 import json
 import os
@@ -41,6 +42,7 @@ class FixedCase:
     room_program: Path
     floorplan_sha256: str
     room_program_sha256: str
+    room_instance_ranges: tuple[Mapping[str, int | str], ...]
 
 
 @dataclass(frozen=True)
@@ -66,8 +68,8 @@ def load_arena() -> dict[str, Any]:
         raise ArenaError("base arena must not preselect Agent entrants")
     integrity = _mapping(value.get("integrity"), "integrity")
     if integrity != {
-        "current_lock": "arena.lock.v3.json",
-        "predecessor_lock": "arena.lock.v2.json",
+        "current_lock": "arena.lock.v4.json",
+        "predecessor_lock": "arena.lock.v3.json",
     }:
         raise ArenaError("arena integrity-chain declaration drifted")
     return value
@@ -92,8 +94,34 @@ def verify_fixed_suite() -> dict[str, Any]:
     if access.get("mode") != "shared_database":
         raise ArenaError("fixed suite does not select the shared database")
 
+    expected_density = {
+        "baseline": "original_multi_room_floorplan_planned_envelope_v1",
+        "multiplier": 1.4,
+        "objects_per_m2_target": {
+            "min": 0.6509909031838855,
+            "max": 0.8073424301494476,
+        },
+        "per_room_range_policy": (
+            "area_proportional_largest_remainder_exact_total_v1"
+        ),
+    }
+    if suite.get("density_treatment") != expected_density:
+        raise ArenaError("fixed suite density treatment drifted")
+    proposal_count = _mapping(proposal.get("object_count"), "object_count")
+    for field in ("density_multiplier", "objects_per_m2_target"):
+        if proposal_count.get(field) != {
+            "density_multiplier": 1.4,
+            "objects_per_m2_target": expected_density["objects_per_m2_target"],
+        }[field]:
+            raise ArenaError(f"proposal object-count {field} drifted")
+
     layout_manifest = read_json(ARENA_ROOT / str(suite["layout_manifest_path"]))
     program_manifest = read_json(ARENA_ROOT / str(suite["program_manifest_path"]))
+    program_policy = _mapping(program_manifest.get("policy"), "program policy")
+    if program_policy.get("density_multiplier") != 1.4 or program_policy.get(
+        "objects_per_m2_target"
+    ) != expected_density["objects_per_m2_target"]:
+        raise ArenaError("program density policy drifted")
     if _text_list(
         _mapping(layout_manifest.get("selection"), "layout selection").get(
             "scene_order"
@@ -121,6 +149,12 @@ def verify_fixed_suite() -> dict[str, Any]:
         if sha256_file(room_program) != expected_program_hash:
             raise ArenaError(f"room-program hash drifted: {scene_id}")
         target = _mapping(program.get("target_total_instances"), "target range")
+        layout_payload = read_json(floorplan)
+        ranges = room_instance_ranges(
+            layout_payload,
+            minimum=_positive_int(target.get("min"), "target min"),
+            maximum=_positive_int(target.get("max"), "target max"),
+        )
         cases.append(
             FixedCase(
                 scene_id=scene_id,
@@ -134,6 +168,7 @@ def verify_fixed_suite() -> dict[str, Any]:
                 room_program=room_program,
                 floorplan_sha256=expected_layout_hash,
                 room_program_sha256=expected_program_hash,
+                room_instance_ranges=tuple(ranges),
             )
         )
     if sum(case.room_count for case in cases) != int(suite.get("room_count", -1)):
@@ -151,6 +186,8 @@ def verify_fixed_suite() -> dict[str, Any]:
         "max": sum(case.target_max for case in cases),
     } != aggregate:
         raise ArenaError("fixed suite aggregate target range drifted")
+    if aggregate != {"min": 914, "max": 1133}:
+        raise ArenaError("approved density-1.40 aggregate target drifted")
 
     database = read_json(ARENA_ROOT / "fixed_suite/shared_database_contract.json")
     public_database = _mapping(arena.get("database"), "arena.database")
@@ -193,6 +230,11 @@ def fixed_case(scene_id: str) -> FixedCase:
     target = _mapping(program["target_total_instances"], "target range")
     floorplan = ARENA_ROOT / "fixed_suite/layouts" / scene_id / "room_layout.json"
     room_program = ARENA_ROOT / "fixed_suite/programs" / scene_id / "room_program.json"
+    ranges = room_instance_ranges(
+        read_json(floorplan),
+        minimum=_positive_int(target.get("min"), "target min"),
+        maximum=_positive_int(target.get("max"), "target max"),
+    )
     return FixedCase(
         scene_id=scene_id,
         room_count=_positive_int(layout["room_count"], "room_count"),
@@ -205,6 +247,7 @@ def fixed_case(scene_id: str) -> FixedCase:
         room_program=room_program,
         floorplan_sha256=str(layout["room_layout_sha256"]),
         room_program_sha256=str(program["room_program_sha256"]),
+        room_instance_ranges=tuple(ranges),
     )
 
 
@@ -231,11 +274,16 @@ def create_episode(*, agent_id: str, scene_id: str, run_id: str) -> Episode:
     replacements = {
         "{{ARENA_ID}}": str(arena["arena_id"]),
         "{{SCENE_ID}}": case.scene_id,
+        "{{LAYOUT_ID}}": case.scene_id,
         "{{ROOM_COUNT}}": str(case.room_count),
         "{{WALL_SEGMENT_COUNT}}": str(case.wall_segment_count),
         "{{TARGET_MIN}}": str(case.target_min),
         "{{TARGET_MAX}}": str(case.target_max),
         "{{DATABASE_SNAPSHOT_ID}}": str(database["snapshot_id"]),
+        "{{ROOM_INSTANCE_RANGE_TABLE}}": "\n".join(
+            f"- `{row['room_id']}`: {row['min']} to {row['max']} instances"
+            for row in case.room_instance_ranges
+        ),
     }
     todo = (ARENA_ROOT / "TODO.md").read_text(encoding="utf-8")
     for before, after in replacements.items():
@@ -262,7 +310,7 @@ def create_episode(*, agent_id: str, scene_id: str, run_id: str) -> Episode:
         mode=0o555,
     )
     task = {
-        "schema_version": "sieve_isolated_agent_task_v1",
+        "schema_version": "sieve_isolated_agent_task_v2",
         "arena_id": arena["arena_id"],
         "track_id": arena["track_id"],
         "participant_class": arena["participant_class"],
@@ -270,6 +318,54 @@ def create_episode(*, agent_id: str, scene_id: str, run_id: str) -> Episode:
         "room_count": case.room_count,
         "wall_segment_count": case.wall_segment_count,
         "target_total_instances": {"min": case.target_min, "max": case.target_max},
+        "complexity_contract": {
+            "schema_version": "sieve_floorplan_complexity_contract_v1",
+            "density_baseline": "original_multi_room_floorplan_planned_envelope_v1",
+            "density_multiplier": 1.4,
+            "objects_per_m2_target": {
+                "min": 0.6509909031838855,
+                "max": 0.8073424301494476,
+            },
+            "room_instance_range_policy": (
+                "area_proportional_largest_remainder_exact_total_v1"
+            ),
+            "room_instance_ranges": [dict(row) for row in case.room_instance_ranges],
+            "composition_guidance": {
+                "specific_asset_or_category_list_prescribed": False,
+                "functional_composition_first": True,
+                "remaining_capacity_role": (
+                    "plausible_secondary_elements_and_visual_layers"
+                ),
+            },
+            "prompt_fidelity_scored": False,
+        },
+        "geometry_contract": {
+            "coordinate_frame": (
+                "shared_scene_global_x_width_y_depth_z_up_meters"
+            ),
+            "pose_anchor": "catalog_canonical_bbox_center",
+            "rotation_unit": "degree",
+            "uniform_scale": {"policy": "exact", "value": 1.0},
+            "room_containment_tolerance_m": float(
+                read_json(case.floorplan).get("geometry_tolerance_m", 1e-6)
+            ),
+        },
+        "public_validation_policy": {
+            "version": "sieve_agent_public_validation_v2",
+            "declared_checks": [
+                "submission_schema",
+                "layout_identity",
+                "room_program_mapping",
+                "total_instance_range",
+                "per_room_instance_ranges",
+                "asset_snapshot_membership",
+                "binding_and_placement_cardinality",
+                "uniform_scale_exactly_one",
+            ],
+            "official_score_exposed": False,
+            "hidden_semantic_feedback_exposed": False,
+            "recommended_edits_exposed": False,
+        },
         "authoritative_inputs": {
             "floorplan": "floorplan.json",
             "floorplan_sha256": case.floorplan_sha256,
@@ -323,6 +419,70 @@ def create_episode(*, agent_id: str, scene_id: str, run_id: str) -> Episode:
     }
     write_json_exclusive(host / "episode_manifest.json", manifest, mode=0o444)
     return Episode(root=episode_root, workspace=workspace, host=host, case=case)
+
+
+def room_instance_ranges(
+    room_layout: Mapping[str, Any],
+    *,
+    minimum: int,
+    maximum: int,
+) -> list[dict[str, int | str]]:
+    """Apportion a fixed scene range across rooms using exact polygon areas."""
+
+    if minimum > maximum:
+        raise ArenaError("target minimum must not exceed maximum")
+    rooms = room_layout.get("rooms")
+    order = room_layout.get("room_order")
+    if not isinstance(rooms, list) or not isinstance(order, list):
+        raise ArenaError("room layout lacks rooms or room_order")
+    by_id = {str(room.get("room_id") or ""): room for room in rooms}
+    if list(by_id) != [str(item) for item in order]:
+        raise ArenaError("room layout order is not canonical")
+    areas = [_polygon_area(by_id[str(room_id)].get("floor_polygon_xy")) for room_id in order]
+    minimums = _largest_remainder(minimum, areas)
+    maximums = _largest_remainder(maximum, areas)
+    output: list[dict[str, int | str]] = []
+    for index, room_id in enumerate(order):
+        lower = minimums[index]
+        upper = maximums[index]
+        if lower < 1 or upper < lower:
+            raise ArenaError("derived per-room instance range is invalid")
+        output.append({"room_id": str(room_id), "min": lower, "max": upper})
+    return output
+
+
+def _polygon_area(value: Any) -> Decimal:
+    if not isinstance(value, list) or len(value) < 3:
+        raise ArenaError("room polygon must contain at least three vertices")
+    points: list[tuple[Decimal, Decimal]] = []
+    for vertex in value:
+        if not isinstance(vertex, list) or len(vertex) != 2:
+            raise ArenaError("room polygon vertex must be a 2-vector")
+        points.append((Decimal(str(vertex[0])), Decimal(str(vertex[1]))))
+    twice = Decimal(0)
+    for index, (x1, y1) in enumerate(points):
+        x2, y2 = points[(index + 1) % len(points)]
+        twice += x1 * y2 - x2 * y1
+    area = abs(twice) / Decimal(2)
+    if area <= 0:
+        raise ArenaError("room polygon area must be positive")
+    return area
+
+
+def _largest_remainder(total: int, weights: list[Decimal]) -> list[int]:
+    if total < len(weights):
+        raise ArenaError("scene target cannot furnish every room")
+    weight_sum = sum(weights, Decimal(0))
+    quotas = [Decimal(total) * weight / weight_sum for weight in weights]
+    allocated = [int(item.to_integral_value(rounding=ROUND_FLOOR)) for item in quotas]
+    remainder = total - sum(allocated)
+    order = sorted(
+        range(len(weights)),
+        key=lambda index: (-(quotas[index] - Decimal(allocated[index])), index),
+    )
+    for index in order[:remainder]:
+        allocated[index] += 1
+    return allocated
 
 
 def verify_episode_inputs(episode: Episode) -> dict[str, Any]:
@@ -438,6 +598,7 @@ __all__ = [
     "load_arena",
     "portable_id",
     "read_json",
+    "room_instance_ranges",
     "sha256_file",
     "verify_episode_inputs",
     "verify_fixed_suite",

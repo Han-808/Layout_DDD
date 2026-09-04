@@ -27,14 +27,23 @@
   },
   "model_or_service": {
     "compute_policy": "replace-with-disclosed-policy-or-null",
+    "context_window": "replace-with-positive-integer",
     "identity": "replace-with-exact-identity-or-disclosed-opaque-service-release",
-    "identity_disclosure": "exact_or_explicitly_opaque"
+    "identity_disclosure": "exact_or_explicitly_opaque",
+    "maximum_output_tokens": "replace-with-positive-integer",
+    "response_reported_identity": "record-after-run-if-available",
+    "temperature": "replace-with-exact-number-or-provider-default"
   },
   "remote_access": {
     "fixed_model_or_service_identity_enforced": true,
     "max_requests": "replace-with-positive-integer",
+    "maximum_model_turns": "same-positive-integer-as-max-requests",
     "mode": "scoped_loopback_gateway_or_equivalent_host_broker",
     "upstream_credential_visible_to_agent": false
+  },
+  "run_limits": {
+    "maximum_concurrent_tool_calls": 1,
+    "wall_clock_seconds": "replace-with-positive-integer"
   },
   "schema_version": "sieve_general_agent_registration_v1",
   "selection_status": "template_not_runnable"

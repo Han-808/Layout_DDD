@@ -17,7 +17,15 @@ model workflow.
   the Agent runtime/version, underlying model/version, and registered launch
   policy. A model running through two different Agent runtimes is two systems.
 - Task suite: the approved ten customized SpatialLM FloorPlans (42 rooms, 314
-  wall segments), with benchmark-owned architecture and room programs.
+  wall segments), with benchmark-owned architecture and room programs. The
+  FloorPlan geometry is unchanged from the approved 1.25x-linear-scale suite.
+- Complexity treatment: the benchmark computes a 1.40x object-density target
+  from the original multi-room FloorPlan planned-density envelope before an
+  episode starts. This yields 914-1133 instances across the ten scenes.
+- Count control: every episode receives benchmark-computed hard per-room
+  instance ranges whose minima and maxima sum exactly to its scene-level range.
+  The public validator enforces both levels; the prompt does not ask the Agent
+  to estimate density.
 - Asset access: all Agents query the same content-addressed Imaginarium shared
   database. Assets are not preselected per scene.
 - Output: one Agent-selected object plan, exact shared-DB bindings, and one
@@ -33,7 +41,7 @@ policy. Every run fails closed if those identities drift.
 ## Agent tools
 
 Each episode receives an isolated writable workspace and a bounded local tool
-service. The workspace command `./layout-ddd-agent-tool` supports:
+service. The workspace command `./sieve-agent-tool` supports:
 
 - `get-task`
 - `search-assets`
@@ -44,7 +52,11 @@ service. The workspace command `./layout-ddd-agent-tool` supports:
 Search is deterministic and returns up to the common `top_k` bound. The Agent
 may choose among returned assets and revise its draft repeatedly. The tool
 service never returns benchmark scores, VLM Judge decisions, or hidden defect
-labels.
+labels. The benchmark prescribes neither specific asset IDs nor an object
+category list: Agents must first establish each room's functional composition,
+then use the remaining count capacity for plausible secondary elements and
+visual layers rather than arbitrary clutter. Those semantic objectives remain
+quality criteria rather than a claimed prompt-fidelity score.
 
 ## Backend boundary
 

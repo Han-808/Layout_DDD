@@ -1,16 +1,16 @@
 {
   "layout_id": "scene_012246",
   "output": {
-    "room_program_sha256": "3e029c1121cda22e31f302542381761da2443b6391dee4c84f1c04e600b374bd"
+    "room_program_sha256": "88f8b8412e61836817d818e0b21b1e5958985e04ee58c25f1d46600108f4bfc3"
   },
   "policy": {
     "area_multiplier": 1.5625,
-    "density_multiplier": 1.1,
+    "density_multiplier": 1.4,
     "integer_rounding_policy": "floor_x_plus_0.5_v1",
     "linear_scale_xy": 1.25,
     "objects_per_m2_target": {
-      "max": 0.6343404808317089,
-      "min": 0.5114928525016245
+      "max": 0.8073424301494476,
+      "min": 0.6509909031838855
     },
     "source_room_id_to_type_mapping_emitted": false,
     "source_room_type_multiset_preserved": true

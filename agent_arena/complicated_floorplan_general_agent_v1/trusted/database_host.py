@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from contextlib import AbstractContextManager
+import hashlib
 from pathlib import Path
 import sys
 from typing import Any
@@ -35,6 +36,7 @@ from benchmark.scene_generation.non_rectangular_agent.tool_server import (  # no
     AgentToolPolicy,
     AgentToolServer,
     AgentToolSession,
+    validate_task_submission_constraints,
 )
 from benchmark.scene_generation.non_rectangular_multi_room.architecture import (  # noqa: E402
     build_polygon_architecture,
@@ -81,6 +83,8 @@ class EpisodeDatabase(AbstractContextManager["EpisodeDatabase"]):
             asset_catalog=self.database,
             task_payload=task,
             policy=self.policy,
+            audit_path=episode.host / "tool_events.jsonl",
+            seal_record_path=episode.host / "submission_seal.json",
         )
         self.server = AgentToolServer(self.session)
 
@@ -110,6 +114,22 @@ def collect_and_normalize(episode: Episode, database: Any) -> dict[str, Any]:
         raise ArenaError("Agent did not produce a real sealed final_submission.json")
     if not finalization.is_file() or finalization.is_symlink():
         raise ArenaError("Agent did not produce a real finalization.json")
+    trusted_seal_path = episode.host / "submission_seal.json"
+    if not trusted_seal_path.is_file() or trusted_seal_path.is_symlink():
+        raise ArenaError("trusted submission seal is missing or linked")
+    trusted_seal = read_json(trusted_seal_path)
+    if trusted_seal.get("schema_version") != "sieve_trusted_submission_seal_v1":
+        raise ArenaError("trusted submission seal schema differs")
+    sealed_finalization = trusted_seal.get("finalization")
+    if not isinstance(sealed_finalization, dict):
+        raise ArenaError("trusted submission seal payload is malformed")
+    workspace_finalization = read_json(finalization)
+    workspace_finalization.pop("tool_counts", None)
+    if workspace_finalization != sealed_finalization:
+        raise ArenaError("workspace finalization differs from trusted seal")
+    submission_sha256 = hashlib.sha256(final_submission.read_bytes()).hexdigest()
+    if sealed_finalization.get("submission_sha256") != submission_sha256:
+        raise ArenaError("final submission differs from trusted seal")
     floorplan = read_json(episode.workspace / "floorplan.json")
     room_program = read_json(episode.workspace / "room_program.json")
     submission = read_json(final_submission)
@@ -118,6 +138,10 @@ def collect_and_normalize(episode: Episode, database: Any) -> dict[str, Any]:
         room_layout=floorplan,
         room_program=room_program,
         asset_catalog=database,
+    )
+    task_constraints = validate_task_submission_constraints(
+        validated,
+        task_payload=read_json(episode.workspace / "task.json"),
     )
     scene, preflight = materialize_agent_scene(
         room_layout=floorplan,
@@ -135,6 +159,7 @@ def collect_and_normalize(episode: Episode, database: Any) -> dict[str, Any]:
         "compiled_architecture.json": architecture,
         "evaluation_preflight.json": preflight,
         "submission_validation.json": validated.public_dict(),
+        "task_constraint_validation.json": task_constraints,
     }
     for name, value in outputs.items():
         _write_host_json(episode.host / name, value)
@@ -145,6 +170,7 @@ def collect_and_normalize(episode: Episode, database: Any) -> dict[str, Any]:
         "database_snapshot_id": database.snapshot_id,
         "planned_instance_count": validated.public_dict()["planned_instance_count"],
         "room_count": validated.public_dict()["room_count"],
+        "submission_sha256": submission_sha256,
         "official_evaluation_connected": False,
         "normalized_artifacts": sorted(outputs),
     }

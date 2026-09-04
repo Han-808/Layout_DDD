@@ -36,8 +36,8 @@ not an accepted fallback.
 ## Folder map
 
 - `arena.json`: frozen scientific and isolation contract.
-- `arena.lock.v3.json`: current content hashes for every controlled arena file.
-- `arena.lock.v2.json` and `arena.lock.json`: preserved predecessor locks; the
+- `arena.lock.v4.json`: current content hashes for every controlled arena file.
+- `arena.lock.v3.json`, `arena.lock.v2.json`, and `arena.lock.json`: preserved predecessor locks; the
   current lock extends rather than rewrites the provenance chain.
 - `TODO.md`: canonical Agent-facing task template.
 - `fixed_suite/`: approved layouts/programs plus public shared-DB identity.
@@ -48,7 +48,9 @@ not an accepted fallback.
 - `trusted/pi_harness/`: frozen common Pi prompt, tool/resource policy, and Pi
   registration template. Installing the harness does not select a model.
 - `trusted/pi_harness.py`: creates the per-episode, secret-free Pi model config
-  for the one scoped gateway and returns the exact command plus TODO stdin.
+  for the one scoped gateway and returns the exact command, TODO stdin, prompt
+  hashes, runtime hashes, model settings, budgets, database identity, validator
+  policy, and starting-workspace hash.
 - `episodes/`: generated episode folders; contents are intentionally ignored by
   git.
 
@@ -88,6 +90,31 @@ Every selected Agent adapter must pin the exact runtime version/hash, model or
 service identity when available, reasoning/compute policy, command, wall-clock
 budget, and scoped gateway configuration. No entrant or generation is selected
 or launched by this package.
+
+## Fixed complexity treatment
+
+The approved v2 arena keeps the ten FloorPlans and 42 rooms unchanged and sets
+object density to 1.40 times the original multi-room FloorPlan benchmark's
+planned density envelope. The resulting frozen suite range is 914-1133
+instances. Each episode's `task.json` and rendered `TODO.md` contain hard
+per-room ranges derived by area-proportional largest-remainder apportionment;
+their lower and upper bounds reproduce the scene-level bounds exactly.
+
+No specific asset or object category is prescribed. The prompt asks the Agent
+to establish functional room compositions first and use remaining capacity for
+plausible secondary elements and visual layers. Semantic role proportions are
+not represented as a prompt-fidelity score.
+
+The public validator enforces total/per-room counts and exact unit scale in
+addition to the existing schema, identity, asset, binding, placement, and
+room-program contracts. The database service writes a hash-chained transcript
+of complete public tool calls and results to trusted host-side storage, outside
+the Agent's visible and writable workspace.
+
+Successful finalization also writes a trusted host-side seal containing the
+validated submission hash. Before normalization, the collector revalidates the
+submission and requires its bytes and workspace finalization record to match
+that seal. A post-finalization workspace edit therefore fails closed.
 
 ## Installed common Pi harness
 

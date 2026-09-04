@@ -44,6 +44,8 @@ class PiEpisodeConfig:
     thinking: str
     context_window: int
     max_tokens: int
+    max_model_requests: int
+    wall_clock_seconds: int
 
 
 def verify_runtime(runtime_root: str | Path) -> dict[str, Any]:
@@ -95,11 +97,22 @@ def verify_runtime(runtime_root: str | Path) -> dict[str, Any]:
         "cli": str(cli),
         "pi_version": PI_VERSION,
         "content_root_sha256": observed["content_root_sha256"],
+        "runtime_manifest_sha256": hashlib.sha256(
+            manifest_path.read_bytes()
+        ).hexdigest(),
+        **selected_hashes,
     }
 
 
 def prepare_episode(config: PiEpisodeConfig) -> dict[str, Any]:
     runtime = verify_runtime(config.runtime_root)
+    harness = json.loads(HARNESS_CONTRACT.read_text(encoding="utf-8"))
+    if (
+        not isinstance(harness, dict)
+        or harness.get("schema_version") != "sieve_pi_common_harness_v2"
+        or harness.get("harness_id") != "sieve-pi-common-harness-v2"
+    ):
+        raise PiHarnessError("Pi harness contract identity differs")
     workspace = config.workspace.expanduser().resolve(strict=True)
     if not workspace.is_dir() or workspace.is_symlink():
         raise PiHarnessError("episode workspace must be a real directory")
@@ -109,6 +122,14 @@ def prepare_episode(config: PiEpisodeConfig) -> dict[str, Any]:
     wire_model = _model_id(config.wire_model)
     context_window = _positive_int(config.context_window, "context window")
     max_tokens = _positive_int(config.max_tokens, "max tokens")
+    max_model_requests = _positive_int(
+        config.max_model_requests,
+        "maximum model requests",
+    )
+    wall_clock_seconds = _positive_int(
+        config.wall_clock_seconds,
+        "wall-clock seconds",
+    )
     if max_tokens > context_window:
         raise PiHarnessError("max tokens cannot exceed the context window")
     base_url = _gateway_base_url(config.gateway_base_url)
@@ -145,6 +166,8 @@ def prepare_episode(config: PiEpisodeConfig) -> dict[str, Any]:
     }
     _write_json_exclusive(models_path, models, mode=0o400)
 
+    system_prompt = SYSTEM_PROMPT.read_text(encoding="utf-8")
+    task_prompt = todo.read_text(encoding="utf-8")
     command = [
         str(runtime["node"]),
         str(runtime["cli"]),
@@ -168,19 +191,102 @@ def prepare_episode(config: PiEpisodeConfig) -> dict[str, Any]:
         "--tools",
         "read,write,edit,bash",
         "--system-prompt",
-        SYSTEM_PROMPT.read_text(encoding="utf-8"),
+        system_prompt,
     ]
+    task = json.loads((workspace / "task.json").read_text(encoding="utf-8"))
+    if not isinstance(task, dict):
+        raise PiHarnessError("episode task must be a JSON object")
+    tool_policy = task.get("tool_policy")
+    if not isinstance(tool_policy, dict):
+        raise PiHarnessError("episode task lacks the frozen tool policy")
+    launch_record = {
+        "schema_version": "sieve_pi_episode_launch_record_v1",
+        "harness_id": "sieve-pi-common-harness-v2",
+        "harness_contract_sha256": hashlib.sha256(
+            HARNESS_CONTRACT.read_bytes()
+        ).hexdigest(),
+        "runtime": {
+            "package": "@earendil-works/pi-coding-agent",
+            "version": PI_VERSION,
+            "content_root_sha256": runtime["content_root_sha256"],
+            "runtime_manifest_sha256": runtime["runtime_manifest_sha256"],
+            "node_sha256": runtime["node_sha256"],
+            "pi_cli_sha256": runtime["pi_cli_sha256"],
+            "pi_package_manifest_sha256": runtime[
+                "pi_package_manifest_sha256"
+            ],
+        },
+        "prompts": {
+            "system_prompt_sha256": hashlib.sha256(
+                system_prompt.encode("utf-8")
+            ).hexdigest(),
+            "task_prompt_sha256": hashlib.sha256(
+                task_prompt.encode("utf-8")
+            ).hexdigest(),
+        },
+        "model": {
+            "provider": PROVIDER_ID,
+            "wire_model": wire_model,
+            "api_protocol": api,
+            "reasoning_configuration": thinking,
+            "temperature": "provider_default_not_overridden",
+            "context_window": context_window,
+            "maximum_output_tokens": max_tokens,
+        },
+        "limits": {
+            "maximum_model_turns": max_model_requests,
+            "maximum_model_requests": max_model_requests,
+            "wall_clock_seconds": wall_clock_seconds,
+            "maximum_concurrent_tool_calls": 1,
+            "tool_policy": tool_policy,
+        },
+        "tooling": {
+            "sieve_agent_tool_sha256": hashlib.sha256(
+                (workspace / "sieve-agent-tool").read_bytes()
+            ).hexdigest(),
+            "public_tool_policy": tool_policy,
+        },
+        "database_snapshot": task.get("asset_database"),
+        "starting_workspace_sha256": _workspace_input_root(workspace),
+        "validator_policy": task.get("public_validation_policy"),
+        "tool_transcript": {
+            "event_schema": "non_rectangular_agent_tool_event_v2",
+            "hash_chained": True,
+            "host_side": True,
+            "records_complete_public_tool_results": True,
+            "records_credentials_headers_endpoints_or_hidden_reasoning": False,
+        },
+    }
     return {
         "schema_version": "sieve_pi_episode_launch_material_v1",
         "command": command,
-        "stdin_text": todo.read_text(encoding="utf-8"),
+        "stdin_text": task_prompt,
         "models_path": str(models_path),
         "provider_id": PROVIDER_ID,
         "wire_model": wire_model,
         "api": api,
         "thinking": thinking,
         "runtime": runtime,
+        "launch_record": launch_record,
     }
+
+
+def _workspace_input_root(workspace: Path) -> str:
+    entries: dict[str, str] = {}
+    for name in (
+        "TODO.md",
+        "database-interface.json",
+        "floorplan.json",
+        "room_program.json",
+        "sieve-agent-tool",
+        "submission.schema.json",
+        "task.json",
+    ):
+        path = _real_file(workspace / name, f"workspace input {name}")
+        entries[name] = hashlib.sha256(path.read_bytes()).hexdigest()
+    return hashlib.sha256(
+        json.dumps(entries, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
 
 
 def _gateway_base_url(value: str) -> str:

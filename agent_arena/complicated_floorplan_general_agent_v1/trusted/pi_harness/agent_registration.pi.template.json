@@ -1,7 +1,7 @@
 {
   "adapter": {
-    "adapter_id": "sieve-pi-common-harness-v1",
-    "adapter_version": "1",
+    "adapter_id": "sieve-pi-common-harness-v2",
+    "adapter_version": "2",
     "command_argv_source": "trusted/pi_harness.py",
     "runtime_manifest": "../runtime_bundles/pi-0.85.0/runtime.manifest.json",
     "task_delivery": {
@@ -25,13 +25,22 @@
     "api_protocol": "replace-with-openai-completions-or-openai-responses",
     "compute_policy": "replace-with-off-minimal-low-medium-or-high",
     "identity": "replace-with-exact-wire-model",
-    "identity_disclosure": "exact"
+    "identity_disclosure": "exact",
+    "context_window": "replace-with-positive-integer",
+    "maximum_output_tokens": "replace-with-positive-integer",
+    "temperature": "replace-with-exact-number-or-provider-default",
+    "response_reported_identity": "record-after-run-if-available"
   },
   "remote_access": {
     "fixed_model_or_service_identity_enforced": true,
     "max_requests": "replace-with-positive-integer",
+    "maximum_model_turns": "same-positive-integer-as-max-requests",
     "mode": "scoped_loopback_gateway",
     "upstream_credential_visible_to_agent": false
+  },
+  "run_limits": {
+    "maximum_concurrent_tool_calls": 1,
+    "wall_clock_seconds": "replace-with-positive-integer"
   },
   "schema_version": "sieve_general_agent_registration_v1",
   "selection_status": "template_not_runnable"
