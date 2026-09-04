@@ -96,3 +96,114 @@ Before these selections enter the executable FrozenAssets case:
    flattened to floor placement.
 7. Keep the global asset set pending until the user explicitly approves the
    completed S100--S109 inventory.
+
+## S101 — combined kitchen, dining, and utility room
+
+Review status: `user_selected_pending_materialization`
+
+Recorded: `2026-09-05` (`Asia/Shanghai`)
+
+### Baseline scene
+
+- Model: `Claude Opus 5`
+- SceneBoard dataset key: `anthropic_opus5`
+- Displayed liveboard score: `85.32`
+- Source score: `90.40`
+- Coverage: `98.37`
+- Existing object count: `25`
+- Canonical scene:
+  `Support/datasets/api3_anthropic_generations_v1/claude-opus-5-aihub/S101/scene/canonical_scene.json`
+- Canonical scene SHA-256:
+  `d8ff20328e481d79840a3f4bb859bf480fa3199c5975a79c765206c9cbd48a60`
+- Blender scene:
+  `Support/datasets/api3_anthropic_generations_v1/claude-opus-5-aihub/S101/prepared/evaluation.blend`
+- Blender scene SHA-256:
+  `559cb5759c3ceebbd1bf48db3a5ddb0b4a180f8b03d69f7010ec4a719d0fd015`
+
+### User removal decision
+
+Remove exactly one object: user-visible Blender object `Asset_range_cooker`,
+recorded canonically as object `range_cooker`. Its current exact Imaginarium
+asset is `0_SM_Deco021_02` (CSV row `176`), a `0.415 x 0.301 x 0.247 m`
+stainless-steel **countertop oven**. This confirms that the current asset is not
+a faithful freestanding range cooker. Preserve the source Blender/native scene
+unchanged; apply the removal only when the approved FrozenAssets case is
+materialized.
+
+### Candidate shortlist
+
+The following twenty exact CSV assets were checked against the local catalog.
+Every listed asset directory exists. Candidate `1` is the functional-priority
+replacement for the removed mislabeled range cooker. The remaining candidates
+add kitchen storage, a utility work surface, appliances, supplies, and restrained
+decor. These rows are the reviewed shortlist. Only the rows repeated in the
+user-selected table below are approved for later materialization.
+
+| Candidate | CSV id | Exact asset ID | CSV bbox W×D×H (m) | CSV class/category | Suggested placement / role |
+| ---: | ---: | --- | --- | --- | --- |
+| 1 | 50 | `0_electric_stove_2k_packed` | `0.503 × 0.648 × 0.859` | `Kitchen_stove` / `stove` | Floor; proper four-burner freestanding cooker replacing the removed false range |
+| 2 | 2029 | `e_kitchen_08` | `1.200 × 0.316 × 0.764` | `Kitchen_cabinet` / `cabinet` | Wall; dark-gray four-door upper cabinet above a clear counter run |
+| 3 | 206 | `0_SM_Kitchen_top_shelf_50cm` | `0.600 × 0.320 × 0.750` | `Display_stand` / `shelf` | Wall; compact three-tier open kitchen shelf |
+| 4 | 47 | `0_drawer_cabinet_2k_packed` | `1.141 × 0.488 × 1.881` | `Storage_rack` / `rack` | Floor; light-wood/black rack with shelves and lower drawer storage |
+| 5 | 703 | `34_RollingShelf_01` | `1.142 × 0.642 × 1.700` | `Storage_rack` / `cart` | Floor; four-tier rolling utility cart with boxes |
+| 6 | 279 | `0_wooden_display_shelves_01_2k_packed` | `1.078 × 0.372 × 1.556` | `Display_cabinet` / `cabinet` | Floor; light-wood cubby storage for pantry or utility organization |
+| 7 | 2043 | `e_workbench_02` | `1.086 × 0.481 × 0.609` | `Workbench` / `workbench` | Floor; narrow utility folding/work table with lower shelf |
+| 8 | 173 | `0_SM_Deco019` | `0.170 × 0.405 × 0.300` | `Coffee_machine` / `machine` | On counter; sage-green coffee machine |
+| 9 | 170 | `0_SM_Deco017_02` | `0.231 × 0.140 × 0.162` | `Kettle` / `kettle` | On counter; white electric kettle with wood accents |
+| 10 | 830 | `44_sk53_Toaster01` | `0.356 × 0.185 × 0.233` | `Toaster` / `toaster` | On counter; white two-slice toaster |
+| 11 | 801 | `44_sk27_KitchenTool01` | `0.464 × 0.063 × 0.351` | `Kitchen_utensil` / `rack` | Wall; utensil rail with wood-handled stainless tools |
+| 12 | 757 | `43_FruitBasket` | `0.241 × 0.229 × 0.130` | `Fruit_basket` / `bowl` | On dining table or island; white fruit bowl with assorted fruit |
+| 13 | 453 | `17_SM_Plates` | `0.237 × 0.237 × 0.032` | `Plate` / `plate` | On shelf or counter; nested matte-black plates |
+| 14 | 1504 | `a_SM_kitchen_Canisters01_C` | `0.053 × 0.053 × 0.080` | `Seasoning_bottle_or_jar` / `canister` | On shelf or counter; sage-green tea canister |
+| 15 | 1508 | `a_SM_Kitchen_Decor_11_Black` | `0.077 × 0.077 × 0.211` | `Seasoning_bottle_or_jar` / `mill` | On counter or dining table; matte-black pepper mill |
+| 16 | 739 | `4_SM_WashingPowder1_08` | `0.272 × 0.173 × 0.413` | `Cleaning_bottle` / `bottle` | On utility shelf; large laundry detergent bottle |
+| 17 | 1438 | `a_SM_dishwasher_product` | `0.117 × 0.058 × 0.324` | `Cleaning_bottle` / `bottle` | On utility shelf or beside sink; cleaning spray |
+| 18 | 1832 | `a_TrashCan3` | `0.258 × 0.258 × 0.502` | `Outdoor_trash_can` / `trashcan` | Floor; compact gray cylindrical utility/kitchen waste bin |
+| 19 | 1513 | `a_SM_Kitchen_Decor_19` | `0.229 × 0.177 × 0.224` | `Small_potted_plant` / `pot` | On sideboard, shelf, or island; compact green plant in white pot |
+| 20 | 1766 | `a_SM_Wall_Picture_2` | `0.950 × 0.020 × 1.400` | `Wall_mounted_picture_frame` / `art` | Wall; dark-blue geometric art for the dining zone |
+
+### User-selected additions
+
+The user selected candidate numbers `1, 2, 3, 4, 9, 12, 13, 18`. Each row is
+one requested addition. The new stove replaces the removed false range cooker;
+the other seven rows are additions to the retained baseline inventory.
+
+| Original candidate | CSV id | Exact asset ID | CSV bbox W×D×H (m) | CSV class/category | Intended support | Provisional role |
+| ---: | ---: | --- | --- | --- | --- | --- |
+| 1 | 50 | `0_electric_stove_2k_packed` | `0.503 × 0.648 × 0.859` | `Kitchen_stove` / `stove` | floor | Exact functional replacement for `range_cooker` |
+| 2 | 2029 | `e_kitchen_08` | `1.200 × 0.316 × 0.764` | `Kitchen_cabinet` / `cabinet` | wall | Four-door upper storage above a clear kitchen counter run |
+| 3 | 206 | `0_SM_Kitchen_top_shelf_50cm` | `0.600 × 0.320 × 0.750` | `Display_stand` / `shelf` | wall | Open kitchen display/storage shelf |
+| 4 | 47 | `0_drawer_cabinet_2k_packed` | `1.141 × 0.488 × 1.881` | `Storage_rack` / `rack` | floor | Secondary kitchen/utility storage with a distinct drawer role |
+| 9 | 170 | `0_SM_Deco017_02` | `0.231 × 0.140 × 0.162` | `Kettle` / `kettle` | on object | Small appliance on a kitchen counter |
+| 12 | 757 | `43_FruitBasket` | `0.241 × 0.229 × 0.130` | `Fruit_basket` / `bowl` | on object | Dining-table or island food centerpiece |
+| 13 | 453 | `17_SM_Plates` | `0.237 × 0.237 × 0.032` | `Plate` / `plate` | on object | Tableware on the open shelf or kitchen counter |
+| 18 | 1832 | `a_TrashCan3` | `0.258 × 0.258 × 0.502` | `Outdoor_trash_can` / `trashcan` | floor | Compact waste bin in the kitchen/utility zone |
+
+### Candidate-selection constraints
+
+- Candidate `1` is the only proposed functional replacement for the deleted
+  range cooker; do not retain its old `0_SM_Deco021_02` binding.
+- Candidates `2`--`6` are relatively large. Final selection must respect the
+  available wall/floor footprint and should not duplicate the existing pantry,
+  sideboard, and utility shelf without a distinct role.
+- Candidates `8`--`17` require an explicit supporting counter, table, shelf, or
+  sink-adjacent surface when materialized; do not flatten them to floor objects.
+- Candidate `20` is wall-mounted and must retain that support semantics.
+- All eight selected asset directories exist. None is materialized into the
+  executable FrozenAssets case by this review-only update.
+
+### Materialization still required
+
+1. Remove the canonical `range_cooker` slot and its old
+   `0_SM_Deco021_02` binding; add a replacement slot bound exactly to
+   `0_electric_stove_2k_packed`.
+2. Add seven additional unique object slots for candidates `2, 3, 4, 9, 12,
+   13, 18` without changing other retained S101 slots.
+3. Confirm the exact wall locations for candidates `2` and `3` and preserve
+   their wall-support semantics.
+4. Confirm the supporting counter/table/shelf parents for candidates `9`, `12`,
+   and `13`; do not flatten them to floor placement.
+5. Confirm that candidate `4` has a non-duplicative storage role and a collision-
+   free footprint relative to the existing pantry, sideboard, and utility shelf.
+6. Add immutable catalog records and source hashes, then re-run room-height,
+   local-asset, frozen-binding, architecture, and harness-eligibility preflight.
