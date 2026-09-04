@@ -38,48 +38,53 @@ mapping to manufacture one.
 ## Frozen case source
 
 `configs/generation_comparison/frozen_imaginarium_scene10_v1.json` is generated
-deterministically from the existing public S100--S109 Stage-A object plans and
-their Imaginarium Top-1 selections. It reuses only:
+deterministically from the human-reviewed curation manifest
+`configs/generation_comparison/frozen_imaginarium_scene10_curation_v1.json`.
+Each room names one hash-pinned, high-scoring SceneBoard canonical scene as its
+inventory/asset baseline, followed by exact remove, rebind, add, count, zone,
+and support decisions. It reuses only:
 
 - the public natural-language task and rectangular room dimensions;
-- the public object inventory, non-coordinate relations, and zones;
+- public task-slot category, role, and description fields;
 - exact selected Imaginarium asset IDs.
 
 It does not reuse generated positions, absolute coordinate hints, evaluator
-reports, scores, or evaluator-private data. Grouped counts are expanded into
-stable one-based instance slots so every harness receives exactly the same 235
-objects. The current candidate snapshot contains 125 unique assets.
+reports, scores, or evaluator-private data. The visual-review `.blend` files
+are provenance only and are never consumed as inventory, geometry, or pose
+inputs. Every harness receives exactly the same 269 object slots. The current
+materialized snapshot contains 168 unique assets.
 
 Stage-A `estimated_size` values remain in the source spec for selection audit,
 but the generator-visible FrozenAssets plan replaces them with each selected
 asset's exact physical dimensions. A harness therefore never receives two
 conflicting scale targets.
 
-The checked-in snapshot has
+The ten per-room selections are
+`materialized_pending_final_approval`, while the checked-in snapshot retains
 `asset_selection_status=candidate_pending_human_approval`. Preparation and
-asset preflight are allowed in that state, but both the pilot command and the
-central controlled runner fail closed. After asset
-review, change the status to `human_approved` and prepare a new immutable output
-directory. This prevents an exploratory Top-1 candidate set from being run or
-reported as the final FrozenAssets experiment by accident.
+asset preflight are allowed, but both the pilot command and the central
+controlled runner fail closed. After reviewing the complete generated
+inventory/support summary, the user may explicitly set the global status to
+`human_approved` and prepare a new immutable output directory. This separates
+materialization from authorization to launch an experiment.
 
 `audit_frozen_imaginarium_scene10_assets.py` is review support only: it never
 replaces an asset. Its HIGH-priority flags include assets whose bbox is taller
 than the case room, as well as footprint and combined semantic/scale outliers;
 the review tables retain each room's dimensions so those decisions are auditable.
 
-| Case | Scene | Room metres | Slots |
-| --- | --- | ---: | ---: |
-| S100 | open-plan living/dining/reading | 9.2 x 7.2 x 3.1 | 22 |
-| S101 | kitchen/dining/utility | 10.0 x 5.6 x 3.0 | 25 |
-| S102 | shared office/library/meeting | 8.8 x 6.6 x 3.0 | 24 |
-| S103 | bedroom/dressing/workspace | 8.2 x 6.4 x 3.0 | 21 |
-| S104 | media/music/game/recreation | 10.4 x 7.6 x 3.2 | 27 |
-| S105 | children's study/play/art | 9.0 x 6.8 x 3.0 | 21 |
-| S106 | bathroom/laundry/utility | 8.4 x 5.8 x 3.0 | 23 |
-| S107 | workshop/repair/storage | 9.2 x 6.6 x 3.1 | 24 |
-| S108 | cafe reading/coworking lounge | 8.6 x 6.4 x 3.0 | 21 |
-| S109 | fitness/yoga/recovery/hobby | 10.2 x 7.4 x 3.2 | 27 |
+| Case | Baseline | Scene | Room metres | Curated slots |
+| --- | --- | --- | ---: | ---: |
+| S100 | GPT-5.6-Sol | open-plan living/dining/reading | 9.2 x 7.2 x 3.1 | 31 |
+| S101 | Claude Opus 5 | kitchen/dining/utility | 10.0 x 5.6 x 3.0 | 32 |
+| S102 | HY4-SFT0812 | shared office/library/meeting | 8.8 x 6.6 x 3.0 | 29 |
+| S103 | Claude Opus 5 | bedroom/dressing/workspace | 8.2 x 6.4 x 3.0 | 23 |
+| S104 | HY4-SFT0812 | media/music/game/recreation | 10.4 x 7.6 x 3.2 | 30 |
+| S105 | HY4-0823dev | children's study/play/art | 9.0 x 6.8 x 3.0 | 25 |
+| S106 | Claude Opus 5 | bathroom/laundry/utility | 8.4 x 5.8 x 3.0 | 26 |
+| S107 | Claude Opus 5 | workshop/repair/storage | 9.2 x 6.6 x 3.1 | 25 |
+| S108 | GLM-5.3 | cafe reading/coworking lounge | 8.6 x 6.4 x 3.0 | 23 |
+| S109 | HY4-0823dev | fitness/yoga/recovery/hobby | 10.2 x 7.4 x 3.2 | 25 |
 
 The architecture is still the common-denominator contract: one axis-aligned
 rectangular room. The semantic briefs are more demanding, but they do not add
@@ -250,17 +255,23 @@ converter exact-only behavior.
 
 ## Prepare and run
 
-Regenerate the candidate spec from existing public artifacts:
+Regenerate the materialized curation from the checked-in candidate prompts,
+hash-pinned SceneBoard canonical scenes, and exact curation manifest:
 
 ```bash
 PYTHONPATH=src python scripts/build_frozen_imaginarium_scene10_spec.py \
-  --source-root /ABSOLUTE/PATH/TO/scene10_stage_a_root \
-  --briefs /ABSOLUTE/PATH/TO/briefs.json \
+  --base-spec configs/generation_comparison/frozen_imaginarium_scene10_v1.json \
+  --curation configs/generation_comparison/frozen_imaginarium_scene10_curation_v1.json \
+  --repo-root /ABSOLUTE/PATH/TO/Layout_DDD \
   --asset-root /ABSOLUTE/PATH/TO/imaginarium_assets \
-  --model-api-base-url https://ONE-SHARED-ENDPOINT/v1 \
-  --model-deployment-id ONE-SHARED-DEPLOYMENT-ID \
   --output configs/generation_comparison/frozen_imaginarium_scene10_v1.json
 ```
+
+For a reproducibility check, write to a temporary path and byte-compare or
+canonical-JSON-compare it with the checked-in spec. The builder verifies the
+catalog CSV hash, all source canonical-scene hashes, every exact asset's FBX
+and metadata bytes, every removal/rebinding identity, room geometry, and all
+explicit object-support parents. It does not read source pose fields.
 
 Prepare immutable inputs and verify source/converted assets without launching a
 model:
@@ -290,7 +301,7 @@ and native method/case directories are never overwritten.
 ## What has and has not been executed
 
 The integration boundary is covered with synthetic fixtures and existing
-converter/evaluator regressions. Local Imaginarium source metadata and all 125
-candidate asset files were preflighted. No real LayoutGPT, DirectLayout,
+converter/evaluator regressions. Local Imaginarium source metadata and all 168
+materialized asset files were preflighted. No real LayoutGPT, DirectLayout,
 LayoutVLM, or SceneWeaver model run was executed as part of this implementation,
 and no quality score is claimed.

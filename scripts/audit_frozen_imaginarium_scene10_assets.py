@@ -60,6 +60,7 @@ def _rows(spec: dict[str, Any], asset_root: Path) -> list[dict[str, Any]]:
         ys = [float(point[1]) for point in room["boundary"]]
         room_size = [max(xs) - min(xs), max(ys) - min(ys), float(room["height"])]
         public = {item["id"]: item for item in case["object_plan"]["objects"]}
+        public_ids = set(public)
         catalog = {item["asset_id"]: item for item in spec["catalog"]["assets"]}
         for frozen in case["objects"]:
             slot_id = str(frozen["slot_id"])
@@ -97,6 +98,18 @@ def _rows(spec: dict[str, Any], asset_root: Path) -> list[dict[str, Any]]:
             if len(uses[asset_id]) > 1:
                 flags.append("asset_reused_across_requested_categories")
             support = str(public_item.get("metadata", {}).get("support") or "floor")
+            support_kind = str(
+                public_item.get("metadata", {}).get("support_kind") or (
+                    "object" if support in public_ids else support
+                )
+            )
+            support_parent = public_item.get("metadata", {}).get(
+                "support_parent_id"
+            )
+            if support_kind == "object" and (
+                not support_parent or str(support_parent) not in public_ids
+            ):
+                flags.append("invalid_support_parent")
             result.append(
                 {
                     "case_id": case["case_id"],
@@ -116,6 +129,8 @@ def _rows(spec: dict[str, Any], asset_root: Path) -> list[dict[str, Any]]:
                     "canonical_front": asset.get("canonical_front"),
                     "directed": directed,
                     "support": support,
+                    "support_kind": support_kind,
+                    "support_parent_id": support_parent,
                     "global_asset_use_count": counts[asset_id],
                     "requested_categories_for_asset": sorted(uses[asset_id]),
                     "review_flags": flags,
@@ -210,7 +225,9 @@ def _summary(
         }
     return {
         "schema_version": "frozen_imaginarium_asset_review_v1",
-        "selection_status": "candidate_pending_human_approval",
+        "selection_status": spec.get(
+            "asset_selection_status", "candidate_pending_human_approval"
+        ),
         "pilot_id": spec["pilot_id"],
         "cases": len(spec["cases"]),
         "slots": len(rows),
@@ -232,7 +249,8 @@ def _markdown(summary: dict[str, Any], groups: list[dict[str, Any]]) -> str:
     lines = [
         "# Frozen Imaginarium Scene10 asset review",
         "",
-        "Status: **candidate pending human approval**. No automatic replacement is made.",
+        f"Selection status: **{summary['selection_status']}**. "
+        "No automatic replacement is made.",
         "",
         f"- Cases: {summary['cases']}",
         f"- Expanded slots: {summary['slots']}",
@@ -283,7 +301,7 @@ def _markdown(summary: dict[str, Any], groups: list[dict[str, Any]]) -> str:
         [
             "",
             "All object groups, including MEDIUM/LOW prompts, are in `group_review.csv`. "
-            "The full 235-slot table is in `asset_review.csv`; exact structured data is "
+            f"The full {summary['slots']}-slot table is in `asset_review.csv`; exact structured data is "
             "in `asset_review.json`.",
             "",
         ]

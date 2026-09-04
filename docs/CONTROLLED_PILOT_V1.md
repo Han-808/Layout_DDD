@@ -19,6 +19,8 @@ preparation requires `--asset-root`; no absolute asset paths or meshes are
 committed. Preparation checks exact CSV category/description, nonempty FBX
 existence, positive transformed local bbox, finite bbox center, native scale
 `[1, 1, 1]`, nonzero canonical front when supplied, and mesh/metadata SHA-256.
+When a spec pins the source CSV/FBX/metadata hashes, preparation also compares
+the live bytes to those pins and fails before generation on any drift.
 
 Unavailable canonical fronts are recorded as `unavailable_not_invented`; the
 pilot does not synthesize them.
@@ -107,8 +109,10 @@ Offline artifacts are labeled `offline_artifact`, never `real_generation`.
 
 The larger harness-comparison track is documented separately in
 [`FROZEN_IMAGINARIUM_SCENE10.md`](FROZEN_IMAGINARIUM_SCENE10.md). It reuses the
-existing public S100--S109 briefs/object plans, expands 235 exact slots, supports
-the Catalog Placement Stage-C baseline, and ships thin controlled bridges for
-LayoutGPT, DirectLayout, LayoutVLM, and conditional SceneWeaver integration.
-Its candidate asset snapshot is deliberately blocked from generation until
-human approval.
+existing public S100--S109 briefs together with ten hash-pinned, human-selected
+SceneBoard baseline inventories. Exact removals, replacements, additions, and
+support parents are materialized as 269 slots over 168 immutable Imaginarium
+assets. It supports the Catalog Placement Stage-C baseline and ships thin
+controlled bridges for LayoutGPT, DirectLayout, LayoutVLM, and conditional
+SceneWeaver integration. The materialized snapshot remains blocked from real
+generation until the user gives final approval to the complete contract.

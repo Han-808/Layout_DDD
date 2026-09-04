@@ -1,12 +1,25 @@
 # Frozen Imaginarium SceneBoard asset review
 
-Status: `in_progress`
+Status: `materialized_pending_final_approval`
 
 This is the human-decision ledger for the SceneBoard single-room asset review.
-It is deliberately separate from the executable FrozenAssets specification
-until every room has been reviewed and the missing slot, support, zone, count,
-and relation semantics have been confirmed. Nothing in this file changes
-`asset_selection_status`, approves the complete catalog, or launches a harness.
+All S100--S109 selections are now encoded in
+`configs/generation_comparison/frozen_imaginarium_scene10_curation_v1.json`
+and materialized into the executable FrozenAssets specification. The global
+`asset_selection_status` intentionally remains
+`candidate_pending_human_approval`: materialization does not approve or launch
+a harness. The per-room "Materialization still required" lists below are kept
+as the original audit checklist; the checked-in curation/spec and regression
+tests are now the authoritative resolution of those items.
+
+The curated spec uses the hash-pinned canonical scenes only for public task-slot
+semantics and exact asset identity. It never copies baseline position, rotation,
+scale, evaluator annotations, or scores into generator-visible inputs. The
+`.blend` files are visual-review provenance only and are not materialization
+inputs. After interactive review, the local S102--S109 `.blend` bytes no longer
+matched the earlier recorded hashes, so they are explicitly excluded as
+inventory/geometry authorities; the canonical-scene hashes remained the strict
+source gate.
 
 ## Frozen sources
 
@@ -33,7 +46,7 @@ and relation semantics have been confirmed. Nothing in this file changes
 
 ## S100 — open-plan living, dining, and reading room
 
-Review status: `user_selected_pending_materialization`
+Review status: `materialized_pending_final_approval`
 
 Recorded: `2026-09-05` (`Asia/Shanghai`)
 
@@ -99,7 +112,7 @@ Before these selections enter the executable FrozenAssets case:
 
 ## S101 — combined kitchen, dining, and utility room
 
-Review status: `user_selected_pending_materialization`
+Review status: `materialized_pending_final_approval`
 
 Recorded: `2026-09-05` (`Asia/Shanghai`)
 
@@ -210,7 +223,7 @@ the other seven rows are additions to the retained baseline inventory.
 
 ## S102 — shared office, library, and meeting room
 
-Review status: `user_selected_pending_materialization`
+Review status: `materialized_pending_final_approval`
 
 Recorded: `2026-09-05` (`Asia/Shanghai`)
 
@@ -335,7 +348,7 @@ instances are additions to the retained baseline inventory.
 
 ## S103 — bedroom, dressing, and workspace
 
-Review status: `user_selected_pending_materialization`
+Review status: `materialized_pending_final_approval`
 
 Recorded: `2026-09-05` (`Asia/Shanghai`)
 
@@ -449,7 +462,7 @@ false rug has no replacement in the frozen inventory.
 
 ## S104 — media, music, and game recreation room
 
-Review status: `user_selected_pending_materialization`
+Review status: `materialized_pending_final_approval`
 
 Recorded: `2026-09-05` (`Asia/Shanghai`)
 
@@ -555,7 +568,7 @@ smart speaker, and fruit/snack bowl are additions.
 
 ## S105 — children's study, play, and art room
 
-Review status: `user_selected_pending_materialization`
+Review status: `materialized_pending_final_approval`
 
 Recorded: `2026-09-05` (`Asia/Shanghai`)
 
@@ -661,7 +674,7 @@ storage ottoman are additions.
 
 ## S106 — bathroom, laundry, linen, and utility room
 
-Review status: `user_selected_pending_materialization`
+Review status: `materialized_pending_final_approval`
 
 Recorded: `2026-09-05` (`Asia/Shanghai`)
 
@@ -783,7 +796,7 @@ shelf are additions after the four towel-rack instances are removed.
 
 ## S107 — workshop, repair, and storage room
 
-Review status: `user_selected_pending_materialization`
+Review status: `materialized_pending_final_approval`
 
 Recorded: `2026-09-05` (`Asia/Shanghai`)
 
@@ -896,7 +909,7 @@ screwdriver, pliers, and oil can are additions.
 
 ## S108 — cafe-style reading and coworking lounge
 
-Review status: `user_selected_pending_materialization`
+Review status: `materialized_pending_final_approval`
 
 Recorded: `2026-09-05` (`Asia/Shanghai`)
 
@@ -1015,7 +1028,7 @@ drawer-front side table are additions. The deleted bookshelf has no replacement.
 
 ## S109 — home fitness, recovery, and hobby room
 
-Review status: `user_selected_pending_materialization`
+Review status: `materialized_pending_final_approval`
 
 Recorded: `2026-09-05` (`Asia/Shanghai`)
 

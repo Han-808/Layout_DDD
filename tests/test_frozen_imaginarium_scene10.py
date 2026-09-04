@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import csv
+import hashlib
 import importlib.util
 import json
 import sys
@@ -36,6 +38,7 @@ from benchmark.generation_comparison.execution import (
     run_controlled_generation,
 )
 from benchmark.generation_comparison.inputs import build_controlled_generation_input
+from benchmark.generation_comparison.identity import canonical_json_sha256
 from benchmark.generation_comparison.materializers import materialize_method_catalog
 from benchmark.generation_comparison.model_policy import (
     api_base_sha256,
@@ -53,7 +56,7 @@ ROOT = Path(__file__).resolve().parents[1]
 BRIDGES = ROOT / "scripts" / "external_harness_bridges"
 
 
-def test_checked_in_scene10_candidate_is_exact_and_excludes_respace() -> None:
+def test_checked_in_scene10_curation_is_materialized_and_excludes_respace() -> None:
     value = read_json(
         ROOT
         / "configs"
@@ -70,23 +73,32 @@ def test_checked_in_scene10_candidate_is_exact_and_excludes_respace() -> None:
     assert value["asset_selection_status"] == (
         "candidate_pending_human_approval"
     )
+    assert value["asset_curation"]["status"] == (
+        "materialized_pending_final_approval"
+    )
+    assert value["catalog"]["catalog_version"] == (
+        "scene10-human-curated-bindings-v2"
+    )
+    assert value["catalog"]["source_catalog_csv_sha256"] == (
+        "506ef357d2c1d36b145eb8f61743b6ac4d7b4864a9d7842ffab39268052fba85"
+    )
     assert [case["case_id"] for case in value["cases"]] == [
         f"S{number}" for number in range(100, 110)
     ]
     assert [len(case["objects"]) for case in value["cases"]] == [
-        22,
-        25,
-        24,
-        21,
-        27,
-        21,
+        31,
+        32,
+        29,
         23,
-        24,
-        21,
-        27,
+        30,
+        25,
+        26,
+        25,
+        23,
+        25,
     ]
-    assert sum(len(case["objects"]) for case in value["cases"]) == 235
-    assert len(value["catalog"]["assets"]) == 125
+    assert sum(len(case["objects"]) for case in value["cases"]) == 269
+    assert len(value["catalog"]["assets"]) == 168
     assets_with_front = [
         asset
         for asset in value["catalog"]["assets"]
@@ -157,6 +169,324 @@ def test_checked_in_scene10_candidate_is_exact_and_excludes_respace() -> None:
             if relation.get("subject_id") is not None
             and relation.get("object_id") is not None
         )
+
+
+def test_scene10_curated_edits_and_support_parents_are_exact() -> None:
+    spec = read_json(
+        ROOT
+        / "configs"
+        / "generation_comparison"
+        / "frozen_imaginarium_scene10_v1.json"
+    )
+    curation = read_json(
+        ROOT
+        / "configs"
+        / "generation_comparison"
+        / "frozen_imaginarium_scene10_curation_v1.json"
+    )
+    assert spec["asset_curation"]["curation_sha256"] == canonical_json_sha256(
+        curation
+    )
+    assert [case["source_provenance"]["source_model_label"] for case in spec["cases"]] == [
+        "GPT-5.6-Sol",
+        "Claude Opus 5",
+        "HY4-SFT0812",
+        "Claude Opus 5",
+        "HY4-SFT0812",
+        "HY4-0823dev",
+        "Claude Opus 5",
+        "Claude Opus 5",
+        "GLM-5.3",
+        "HY4-0823dev",
+    ]
+    cases = {case["case_id"]: case for case in spec["cases"]}
+    removed = {
+        "S100": set(),
+        "S101": set(),
+        "S102": set(),
+        "S103": {"area_rug"},
+        "S104": set(),
+        "S105": set(),
+        "S106": {
+            "towel_ladder_rack_1",
+            "folded_towel_stack_1",
+            "folded_towel_stack_2",
+            "folded_towel_stack_3",
+        },
+        "S107": {"shop_vacuum", "workshop_stool_1", "workshop_stool_2"},
+        "S108": {"bookshelf_1"},
+        "S109": {
+            "yoga_mat_1",
+            "yoga_mat_2",
+            "yoga_mat_3",
+            "kettlebell_set_1",
+            "kettlebell_set_2",
+        },
+    }
+    replacements = {
+        "S101": {"range_cooker": "0_electric_stove_2k_packed"},
+        "S102": {
+            "monitor_a": "41_ComputerSet_03",
+            "monitor_b": "41_ComputerSet_03",
+        },
+        "S103": {"computer_monitor": "41_ComputerSet_03"},
+        "S104": {"area_rug": "45_Capet05"},
+        "S105": {"play_rug_1": "45_SM_Rug_07a"},
+        "S106": {"washing_machine_1": "28_Washer_01"},
+        "S107": {"drill_press": "a_SM_stand_drill"},
+        "S108": {"area_rug_1": "45_Capet05"},
+    }
+    expected_addition_counts = {
+        "S100": 9,
+        "S101": 7,
+        "S102": 7,
+        "S103": 3,
+        "S104": 3,
+        "S105": 3,
+        "S106": 5,
+        "S107": 4,
+        "S108": 3,
+        "S109": 4,
+    }
+    for case_id, case in cases.items():
+        bindings = {item["slot_id"]: item["asset_id"] for item in case["objects"]}
+        assert not (removed[case_id] & set(bindings))
+        assert case["source_provenance"]["removed_slots"] == sorted(
+            removed[case_id]
+        )
+        for slot_id, asset_id in replacements.get(case_id, {}).items():
+            assert bindings[slot_id] == asset_id
+        additions = case["source_provenance"]["added_slots"]
+        assert len(additions) == expected_addition_counts[case_id]
+        assert all(
+            next(item for item in case["objects"] if item["slot_id"] == slot_id)[
+                "metadata"
+            ]["curation_action"]
+            == "added"
+            for slot_id in additions
+        )
+        plan_ids = {item["id"] for item in case["object_plan"]["objects"]}
+        plan_by_id = {item["id"]: item for item in case["object_plan"]["objects"]}
+        for relation in case["object_plan"]["relations"]:
+            assert relation["type"] == "supported_by"
+            assert relation["subject_id"] in plan_ids
+            assert relation["object_id"] in plan_ids
+            metadata = plan_by_id[relation["subject_id"]]["metadata"]
+            assert metadata["support_kind"] == "object"
+            assert metadata["support_parent_id"] == relation["object_id"]
+        assert all(
+            item["placement_intent"]["absolute_relations"] == []
+            for item in case["object_plan"]["objects"]
+        )
+    assert {item["slot_id"] for item in cases["S109"]["objects"]} >= {
+        "yoga_block_1",
+        "yoga_block_2",
+    }
+    assert all(
+        len(asset["source_fbx_sha256"]) == 64
+        and len(asset["source_metadata_sha256"]) == 64
+        for asset in spec["catalog"]["assets"]
+    )
+
+
+def test_legacy_candidate_builder_still_returns_all_cases(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    builder_path = ROOT / "scripts" / "build_frozen_imaginarium_scene10_spec.py"
+    module_spec = importlib.util.spec_from_file_location(
+        "scene10_candidate_builder", builder_path
+    )
+    assert module_spec is not None and module_spec.loader is not None
+    builder = importlib.util.module_from_spec(module_spec)
+    module_spec.loader.exec_module(builder)
+
+    briefs = [
+        {
+            "brief_id": f"brief_{index:02d}",
+            "instruction": f"Arrange fixture room {index}.",
+            "room_dimensions_m": [4.0, 5.0, 3.0],
+            "room_type": "fixture_room",
+        }
+        for index in range(10)
+    ]
+
+    def fake_read_json(path: Path) -> dict[str, object]:
+        if path.name == "briefs.json":
+            return {"briefs": briefs}
+        index = int(path.parent.name[1:]) - 100
+        if path.name == "generation_input.json":
+            return {
+                "scene_request": {
+                    "instruction": briefs[index]["instruction"],
+                    "scene_type": "fixture_room",
+                    "room": {
+                        "dimensions": {"width": 4.0, "depth": 5.0, "height": 3.0}
+                    },
+                    "metadata": {"source_brief_id": f"brief_{index:02d}"},
+                }
+            }
+        if path.name == "object_plan.json":
+            return {"objects": [], "relations": [], "zones": []}
+        if path.name == "asset_selection.json":
+            return {"objects": []}
+        raise AssertionError(f"unexpected fixture path: {path}")
+
+    monkeypatch.setattr(builder, "_read_json", fake_read_json)
+    monkeypatch.setattr(builder, "_catalog_rows", lambda path: {})
+    monkeypatch.setattr(builder, "_sha256", lambda path: "f" * 64)
+    result = builder.build_spec(
+        source_root=tmp_path / "source",
+        briefs_path=tmp_path / "briefs.json",
+        asset_root=tmp_path / "assets",
+        model_provider="fixture",
+        model_id="fixture-model",
+        model_deployment_id="fixture-deployment",
+        model_api_base_url="https://fixture.example/v1",
+        layoutgpt_icl_sha256="a" * 64,
+        layoutgpt_icl_status="candidate_pending_human_approval",
+        layoutgpt_icl_provenance="fixture",
+    )
+
+    assert [case["case_id"] for case in result["cases"]] == [
+        f"S{number}" for number in range(100, 110)
+    ]
+    assert result["catalog"]["assets"] == []
+    assert result["asset_selection_status"] == "candidate_pending_human_approval"
+
+
+def test_reviewed_spec_builder_is_deterministic_and_drops_source_pose(
+    tmp_path: Path,
+) -> None:
+    builder_path = ROOT / "scripts" / "build_frozen_imaginarium_scene10_spec.py"
+    module_spec = importlib.util.spec_from_file_location(
+        "scene10_reviewed_builder", builder_path
+    )
+    assert module_spec is not None and module_spec.loader is not None
+    builder = importlib.util.module_from_spec(module_spec)
+    module_spec.loader.exec_module(builder)
+
+    asset_root = tmp_path / "assets"
+    asset_dir = asset_root / "chair_asset"
+    asset_dir.mkdir(parents=True)
+    fbx = asset_dir / "chair_asset.fbx"
+    fbx.write_bytes(b"fixture fbx")
+    metadata = asset_dir / "chair_asset_metadata.json"
+    metadata.write_text("{}\n", encoding="utf-8")
+    csv_path = asset_root / "imaginarium_asset_info.csv"
+    with csv_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=["name_en", "category", "short_desc"],
+        )
+        writer.writeheader()
+        writer.writerow(
+            {
+                "name_en": "chair_asset",
+                "category": "chair",
+                "short_desc": "fixture chair",
+            }
+        )
+
+    cases = []
+    edits = {}
+    for case_id in (f"S{number}" for number in range(100, 110)):
+        source = tmp_path / "sources" / f"{case_id}.json"
+        source.parent.mkdir(exist_ok=True)
+        source.write_text(
+            json.dumps(
+                {
+                    "boundary": [[0, 0], [4, 0], [4, 4], [0, 4]],
+                    "scene_height": 3.0,
+                    "objects": [
+                        {
+                            "id": "chair_1",
+                            "jid": "chair_asset",
+                            "asset_ref": {
+                                "source_db": "imaginarium",
+                                "asset_key": "chair_asset",
+                            },
+                            "center": [3.0, 2.0, 0.5],
+                            "rotation": [0.0, 0.0, 90.0],
+                            "size": [0.8, 0.7, 1.0],
+                            "metadata": {
+                                "task_slot": {
+                                    "intended_category": "reading chair",
+                                    "intended_role": "reading seat",
+                                    "description": "A chair for reading.",
+                                }
+                            },
+                        }
+                    ],
+                },
+                sort_keys=True,
+            ),
+            encoding="utf-8",
+        )
+        blend = tmp_path / "sources" / f"{case_id}.blend"
+        blend.write_bytes(case_id.encode("utf-8"))
+        cases.append(
+            {
+                "case_id": case_id,
+                "scene_type": "reading_room",
+                "seed": int(case_id[1:]),
+                "room": {
+                    "boundary": [[0, 0], [4, 0], [4, 4], [0, 4]],
+                    "height": 3.0,
+                    "unit": "meter",
+                },
+                "instruction": "Arrange a reading room.",
+                "objects": [],
+                "object_plan": {
+                    "prompt_granularity": "fine_grained",
+                    "zones": [],
+                    "global_constraints": [],
+                },
+            }
+        )
+        edits[case_id] = {
+            "source_model": "fixture",
+            "source_dataset_key": "fixture",
+            "displayed_liveboard_score": 1.0,
+            "source_scene": source.relative_to(tmp_path).as_posix(),
+            "source_scene_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+            "source_blend": blend.relative_to(tmp_path).as_posix(),
+            "source_blend_sha256": hashlib.sha256(blend.read_bytes()).hexdigest(),
+            "expected_source_object_count": 1,
+            "remove_slots": [],
+            "replace_bindings": {},
+            "additions": [],
+        }
+    base = {"cases": cases, "catalog": {}, "generation": {}}
+    curation = {
+        "schema_version": "frozen_imaginarium_scene10_curation_v1",
+        "curation_id": "fixture",
+        "status": "materialized_pending_final_approval",
+        "selection_policy": "fixture",
+        "source_catalog": {
+            "csv_sha256": hashlib.sha256(csv_path.read_bytes()).hexdigest()
+        },
+        "cases": edits,
+    }
+    first = builder.materialize_reviewed_spec(
+        base_spec=base,
+        curation=curation,
+        repo_root=tmp_path,
+        asset_root=asset_root,
+    )
+    second = builder.materialize_reviewed_spec(
+        base_spec=base,
+        curation=curation,
+        repo_root=tmp_path,
+        asset_root=asset_root,
+    )
+    assert first == second
+    assert sum(len(case["objects"]) for case in first["cases"]) == 10
+    serialized_plans = json.dumps(
+        [case["object_plan"] for case in first["cases"]], sort_keys=True
+    )
+    assert '"center"' not in serialized_plans
+    assert '"rotation"' not in serialized_plans
+    assert '"size"' not in serialized_plans
 
 
 def test_same_model_policy_checks_config_and_preserved_runner_report(

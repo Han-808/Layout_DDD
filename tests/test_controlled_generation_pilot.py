@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 from pathlib import Path
 import sys
@@ -271,6 +272,52 @@ def test_asset_category_mismatch_fails_before_generation(tmp_path: Path) -> None
     assert not (tmp_path / "invalid" / "pilot_manifest.json").exists()
 
 
+def test_preflight_enforces_frozen_catalog_and_source_asset_hashes(
+    tmp_path: Path,
+) -> None:
+    asset_root = _asset_root(tmp_path / "assets")
+    csv_path = asset_root / "imaginarium_asset_info.csv"
+    fbx_path = asset_root / "chair_asset" / "chair_asset.fbx"
+    metadata_path = asset_root / "chair_asset" / "chair_asset_metadata.json"
+    spec = _pilot_spec()
+    spec["catalog"]["source_catalog_csv_sha256"] = hashlib.sha256(
+        csv_path.read_bytes()
+    ).hexdigest()
+    spec["catalog"]["assets"][0].update(
+        {
+            "source_fbx_sha256": hashlib.sha256(fbx_path.read_bytes()).hexdigest(),
+            "source_metadata_sha256": hashlib.sha256(
+                metadata_path.read_bytes()
+            ).hexdigest(),
+        }
+    )
+    prepare_controlled_pilot(
+        spec=spec,
+        asset_root=asset_root,
+        out_dir=tmp_path / "valid",
+    )
+
+    csv_mismatch = _pilot_spec()
+    csv_mismatch["catalog"]["source_catalog_csv_sha256"] = "0" * 64
+    with pytest.raises(ValueError, match="catalog CSV differs"):
+        prepare_controlled_pilot(
+            spec=csv_mismatch,
+            asset_root=asset_root,
+            out_dir=tmp_path / "csv_mismatch",
+        )
+
+    asset_mismatch = _pilot_spec()
+    asset_mismatch["catalog"]["assets"][0]["source_fbx_sha256"] = "0" * 64
+    with pytest.raises(ValueError, match="asset preflight failed"):
+        prepare_controlled_pilot(
+            spec=asset_mismatch,
+            asset_root=asset_root,
+            out_dir=tmp_path / "asset_mismatch",
+        )
+    report = read_json(tmp_path / "asset_mismatch" / "asset_preflight.json")
+    assert "source_fbx_hash_mismatch" in report["assets"][0]["errors"]
+
+
 def test_offline_dry_run_generates_tables_without_claiming_real_execution(
     tmp_path: Path,
 ) -> None:
@@ -362,6 +409,25 @@ def test_pending_human_asset_selection_can_prepare_but_cannot_run(
             dry_run_only=True,
         )
     assert not (tmp_path / "pilot" / "results.jsonl").exists()
+
+
+def test_case_audit_provenance_is_not_generator_visible(tmp_path: Path) -> None:
+    spec = _pilot_spec(methods=["catalog_placement"])
+    spec["cases"][0]["source_provenance"] = {
+        "source_model_label": "baseline-model",
+        "displayed_liveboard_score": 99.9,
+        "source_blend": "/private/audit/path.blend",
+        "reference_annotation": {"hidden": True},
+    }
+    prepared = prepare_controlled_pilot(
+        spec=spec,
+        asset_root=_asset_root(tmp_path / "assets"),
+        out_dir=tmp_path / "pilot",
+    )
+    generation_input = read_json(prepared["cases"][0]["generation_input"])
+    assert "source_provenance" not in generation_input["scene_request"]["metadata"]
+    manifest = read_json(prepared["cases"][0]["case_manifest"])
+    assert manifest["source_provenance"] == spec["cases"][0]["source_provenance"]
 
 
 def test_prepare_and_run_refuse_to_overwrite_existing_artifacts(

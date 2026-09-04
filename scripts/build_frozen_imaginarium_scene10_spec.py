@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
-"""Freeze the existing S100--S109 public plans and Imaginarium bindings.
+"""Freeze the S100--S109 public plans and reviewed Imaginarium bindings.
 
 The source model is used only to choose a reproducible public object inventory
 and asset binding.  Generated poses and evaluator artifacts are never copied.
 Every grouped count is expanded into stable one-instance slots so all harnesses
 receive the same exact inventory.
+
+The initial candidate can be built from Stage A plans.  Once human curation is
+complete, ``--base-spec`` plus ``--curation`` rebuilds the executable spec from
+the hash-pinned SceneBoard baseline inventories and the explicit edit ledger.
 """
 
 from __future__ import annotations
@@ -28,6 +32,7 @@ CASE_IDS = tuple(f"S{number}" for number in range(100, 110))
 SOURCE_DIRS = tuple(f"t{number}" for number in range(100, 110))
 HARNESS_METHODS = ("layout_gpt", "direct_layout", "layout_vlm", "scene_weaver")
 IMAGINARIUM_BUNDLE_GEOMETRY_TOLERANCE_M = 1.0e-4
+CURATION_SCHEMA_VERSION = "frozen_imaginarium_scene10_curation_v1"
 
 
 def build_spec(
@@ -191,6 +196,536 @@ def build_spec(
         "methods": ["catalog_placement", *HARNESS_METHODS],
         "cases": cases,
     }
+
+
+def materialize_reviewed_spec(
+    *,
+    base_spec: Mapping[str, Any],
+    curation: Mapping[str, Any],
+    repo_root: Path,
+    asset_root: Path,
+) -> dict[str, Any]:
+    """Apply the approved SceneBoard edit ledger without copying source poses."""
+
+    if curation.get("schema_version") != CURATION_SCHEMA_VERSION:
+        raise ValueError(
+            f"curation schema_version must be {CURATION_SCHEMA_VERSION!r}"
+        )
+    if curation.get("status") != "materialized_pending_final_approval":
+        raise ValueError(
+            "reviewed curation must have "
+            "status='materialized_pending_final_approval'"
+        )
+    case_edits = _mapping(curation.get("cases"), "curation.cases")
+    if set(case_edits) != set(CASE_IDS):
+        raise ValueError(
+            "curation cases must be exactly S100--S109: "
+            f"missing={sorted(set(CASE_IDS) - set(case_edits))}, "
+            f"unexpected={sorted(set(case_edits) - set(CASE_IDS))}"
+        )
+    source_catalog = _mapping(
+        curation.get("source_catalog"), "curation.source_catalog"
+    )
+    csv_path = asset_root / "imaginarium_asset_info.csv"
+    expected_csv_hash = str(source_catalog.get("csv_sha256") or "")
+    if _sha256(csv_path) != expected_csv_hash:
+        raise ValueError("Imaginarium CSV differs from the approved curation hash")
+    catalog_rows = _catalog_rows(csv_path)
+    catalog_assets: dict[str, dict[str, Any]] = {}
+    base_cases = {
+        str(item.get("case_id")): item
+        for item in base_spec.get("cases", [])
+        if isinstance(item, Mapping)
+    }
+    if set(base_cases) != set(CASE_IDS):
+        raise ValueError("base spec must contain exactly S100--S109")
+
+    curation_sha256 = _canonical_sha256(curation)
+    cases = []
+    for case_id in CASE_IDS:
+        base_case = _mapping(base_cases[case_id], f"base_spec.cases[{case_id}]")
+        edit = _mapping(case_edits[case_id], f"curation.cases[{case_id}]")
+        scene_path = _repo_path(repo_root, edit.get("source_scene"), case_id)
+        _repo_path(repo_root, edit.get("source_blend"), case_id)
+        _require_hash(scene_path, edit.get("source_scene_sha256"), case_id)
+        scene = _mapping(_read_json(scene_path), str(scene_path))
+        source_objects = scene.get("objects")
+        if not isinstance(source_objects, Sequence) or isinstance(
+            source_objects, (str, bytes)
+        ):
+            raise ValueError(f"{case_id} source scene objects must be an array")
+        expected_count = _positive_int(
+            edit.get("expected_source_object_count"),
+            f"curation.cases[{case_id}].expected_source_object_count",
+        )
+        if len(source_objects) != expected_count:
+            raise ValueError(
+                f"{case_id} source object count changed: "
+                f"{len(source_objects)} != {expected_count}"
+            )
+        _verify_reviewed_architecture(base_case, scene, case_id)
+        source_by_id: dict[str, Mapping[str, Any]] = {}
+        for raw in source_objects:
+            obj = _mapping(raw, f"{case_id}.source.objects")
+            slot_id = str(obj.get("id") or "").strip()
+            if not slot_id or slot_id in source_by_id:
+                raise ValueError(f"{case_id} source scene has invalid object IDs")
+            source_by_id[slot_id] = obj
+
+        removals = _string_set(edit.get("remove_slots"), f"{case_id}.remove_slots")
+        missing_removals = removals - set(source_by_id)
+        if missing_removals:
+            raise ValueError(
+                f"{case_id} removal slots are absent from the pinned source: "
+                f"{sorted(missing_removals)}"
+            )
+        replacements = _mapping(
+            edit.get("replace_bindings") or {}, f"{case_id}.replace_bindings"
+        )
+        invalid_replacements = set(replacements) - (set(source_by_id) - removals)
+        if invalid_replacements:
+            raise ValueError(
+                f"{case_id} replacement slots are absent or removed: "
+                f"{sorted(invalid_replacements)}"
+            )
+
+        frozen_objects = []
+        public_objects = []
+        for slot_id, obj in source_by_id.items():
+            if slot_id in removals:
+                continue
+            source_asset_id = _scene_asset_id(obj, case_id, slot_id)
+            replacement = replacements.get(slot_id)
+            replacement = (
+                _mapping(replacement, f"{case_id}.replace_bindings[{slot_id}]")
+                if replacement is not None
+                else None
+            )
+            asset_id = (
+                str(replacement.get("asset_id") or "").strip()
+                if replacement is not None
+                else source_asset_id
+            )
+            if not asset_id:
+                raise ValueError(f"{case_id}.{slot_id} replacement asset is empty")
+            asset = _reviewed_catalog_asset(
+                asset_id=asset_id,
+                catalog_rows=catalog_rows,
+                asset_root=asset_root,
+                canonical_front=_source_canonical_front(obj),
+            )
+            _merge_catalog_asset(catalog_assets, asset)
+            public = _reviewed_source_object(
+                obj=obj,
+                slot_id=slot_id,
+                asset=asset,
+                action="binding_replaced" if replacement is not None else "retained",
+                source_asset_id=source_asset_id,
+            )
+            frozen_objects.append(
+                _frozen_slot(
+                    slot_id=slot_id,
+                    asset=asset,
+                    requested_category=public["category"],
+                    requested_description=public["description"],
+                    action=public["metadata"]["curation_action"],
+                    source_asset_id=source_asset_id,
+                )
+            )
+            public_objects.append(public)
+
+        additions = edit.get("additions") or []
+        if not isinstance(additions, Sequence) or isinstance(additions, (str, bytes)):
+            raise ValueError(f"{case_id}.additions must be an array")
+        existing_ids = {item["slot_id"] for item in frozen_objects}
+        relations = []
+        for raw_addition in additions:
+            addition = _mapping(raw_addition, f"{case_id}.additions")
+            slot_id = str(addition.get("slot_id") or "").strip()
+            if not slot_id or slot_id in existing_ids:
+                raise ValueError(f"{case_id} addition slot is empty or duplicated: {slot_id!r}")
+            existing_ids.add(slot_id)
+            asset = _reviewed_catalog_asset(
+                asset_id=str(addition.get("asset_id") or "").strip(),
+                catalog_rows=catalog_rows,
+                asset_root=asset_root,
+                canonical_front=_explicit_canonical_front(addition),
+            )
+            _merge_catalog_asset(catalog_assets, asset)
+            public = _reviewed_added_object(addition=addition, asset=asset)
+            public_objects.append(public)
+            frozen_objects.append(
+                _frozen_slot(
+                    slot_id=slot_id,
+                    asset=asset,
+                    requested_category=public["category"],
+                    requested_description=public["description"],
+                    action="added",
+                    source_asset_id=None,
+                )
+            )
+            support = _mapping(addition.get("support"), f"{case_id}.{slot_id}.support")
+            if support.get("kind") == "object":
+                relations.append(
+                    {
+                        "family": "oor",
+                        "type": "supported_by",
+                        "subject_id": slot_id,
+                        "object_id": str(support["parent_slot_id"]),
+                        "source": "human_approved_curation",
+                    }
+                )
+
+        final_ids = {item["slot_id"] for item in frozen_objects}
+        for relation in relations:
+            if relation["object_id"] not in final_ids:
+                raise ValueError(
+                    f"{case_id} support parent is absent after curation: "
+                    f"{relation['object_id']!r}"
+                )
+        base_plan = base_case.get("object_plan")
+        base_plan = base_plan if isinstance(base_plan, Mapping) else {}
+        object_plan = {
+            "schema_version": "hy34_object_plan_v2",
+            "request_id": f"{case_id.lower()}_frozen_imaginarium_curated_v1",
+            "scene_type": str(base_case["scene_type"]),
+            "scene_description": str(base_case["instruction"]),
+            "prompt_granularity": str(
+                base_plan.get("prompt_granularity") or "fine_grained"
+            ),
+            "zones": deepcopy(list(base_plan.get("zones") or [])),
+            "objects": public_objects,
+            "global_constraints": _non_pose_global_constraints(
+                list(base_plan.get("global_constraints") or [])
+            ),
+            "relations": relations,
+            "metadata": {
+                "curation_id": str(curation["curation_id"]),
+                "curation_sha256": curation_sha256,
+                "source_pose_hints_removed": True,
+                "support_relations_from_human_curation_only": True,
+            },
+        }
+        cases.append(
+            {
+                "case_id": case_id,
+                "scene_type": str(base_case["scene_type"]),
+                "seed": base_case.get("seed"),
+                "room": deepcopy(base_case["room"]),
+                "instruction": str(base_case["instruction"]),
+                "objects": frozen_objects,
+                "object_plan": object_plan,
+                "source_provenance": {
+                    "policy": "human_curated_sceneboard_inventory_and_exact_assets_v1",
+                    "pose_reused": False,
+                    "evaluation_data_reused": False,
+                    "task_slot_semantics_reused": True,
+                    "source_model_label": str(edit["source_model"]),
+                    "source_dataset_key": str(edit["source_dataset_key"]),
+                    "displayed_liveboard_score": float(
+                        edit["displayed_liveboard_score"]
+                    ),
+                    "source_canonical_scene": str(edit["source_scene"]),
+                    "source_canonical_scene_sha256": str(
+                        edit["source_scene_sha256"]
+                    ),
+                    "source_blend": str(edit["source_blend"]),
+                    "source_blend_sha256": str(edit["source_blend_sha256"]),
+                    "source_blend_role": (
+                        "visual_review_provenance_not_materialization_input"
+                    ),
+                    "source_object_count": expected_count,
+                    "removed_slots": sorted(removals),
+                    "replaced_slots": sorted(replacements),
+                    "added_slots": [
+                        str(item["slot_id"])
+                        for item in additions
+                        if isinstance(item, Mapping)
+                    ],
+                    "curation_id": str(curation["curation_id"]),
+                    "curation_sha256": curation_sha256,
+                },
+            }
+        )
+
+    result = deepcopy(dict(base_spec))
+    result.update(
+        {
+            "label": "human-curated Frozen Imaginarium S100-S109 harness comparison",
+            "asset_selection_status": "candidate_pending_human_approval",
+            "asset_curation": {
+                "schema_version": CURATION_SCHEMA_VERSION,
+                "curation_id": str(curation["curation_id"]),
+                "status": "materialized_pending_final_approval",
+                "curation_sha256": curation_sha256,
+                "selection_policy": str(curation["selection_policy"]),
+                "source_catalog_csv_sha256": expected_csv_hash,
+                "sceneboard": deepcopy(curation.get("sceneboard") or {}),
+            },
+            "catalog": {
+                "catalog_id": "imaginarium_scene10_frozen_v1",
+                "catalog_version": "scene10-human-curated-bindings-v2",
+                "source_db": "imaginarium",
+                "source_catalog_csv_sha256": expected_csv_hash,
+                "assets": [catalog_assets[key] for key in sorted(catalog_assets)],
+            },
+            "cases": cases,
+        }
+    )
+    return result
+
+
+def _repo_path(repo_root: Path, value: Any, case_id: str) -> Path:
+    text = str(value or "").strip()
+    if not text or Path(text).is_absolute():
+        raise ValueError(f"{case_id} source paths must be non-empty repo-relative paths")
+    root = repo_root.resolve()
+    path = (root / text).resolve()
+    try:
+        path.relative_to(root)
+    except ValueError as exc:
+        raise ValueError(f"{case_id} source path escapes the repository") from exc
+    if not path.is_file():
+        raise FileNotFoundError(f"{case_id} source artifact is missing: {path}")
+    return path
+
+
+def _require_hash(path: Path, expected: Any, case_id: str) -> None:
+    observed = _sha256(path)
+    if observed != str(expected or ""):
+        raise ValueError(
+            f"{case_id} source artifact hash changed: {path} "
+            f"{observed} != {expected}"
+        )
+
+
+def _verify_reviewed_architecture(
+    base_case: Mapping[str, Any], scene: Mapping[str, Any], case_id: str
+) -> None:
+    room = _mapping(base_case.get("room"), f"base_spec.{case_id}.room")
+    if scene.get("boundary") != room.get("boundary"):
+        raise ValueError(f"{case_id} SceneBoard boundary differs from benchmark room")
+    if float(scene.get("scene_height")) != float(room.get("height")):
+        raise ValueError(f"{case_id} SceneBoard height differs from benchmark room")
+
+
+def _scene_asset_id(obj: Mapping[str, Any], case_id: str, slot_id: str) -> str:
+    asset_ref = obj.get("asset_ref")
+    asset_ref = asset_ref if isinstance(asset_ref, Mapping) else {}
+    jid = str(obj.get("jid") or "").strip()
+    asset_key = str(asset_ref.get("asset_key") or "").strip()
+    if jid and asset_key and jid != asset_key:
+        raise ValueError(f"{case_id}.{slot_id} jid and asset_ref disagree")
+    asset_id = asset_key or jid
+    if not asset_id or str(asset_ref.get("source_db") or "") != "imaginarium":
+        raise ValueError(f"{case_id}.{slot_id} is not exactly bound to Imaginarium")
+    return asset_id
+
+
+def _source_canonical_front(obj: Mapping[str, Any]) -> tuple[list[float], str] | None:
+    metadata = obj.get("metadata")
+    metadata = metadata if isinstance(metadata, Mapping) else {}
+    asset_metadata = metadata.get("asset_metadata")
+    asset_metadata = asset_metadata if isinstance(asset_metadata, Mapping) else {}
+    if (
+        asset_metadata.get("catalog_facing_contract_version")
+        == "imaginarium_catalog_facing_v1"
+        and asset_metadata.get("default_directed_functional_side") == "local_neg_y"
+    ):
+        return [0.0, -1.0, 0.0], "imaginarium_catalog_facing_v1"
+    return None
+
+
+def _explicit_canonical_front(
+    value: Mapping[str, Any],
+) -> tuple[list[float], str] | None:
+    raw = value.get("canonical_front")
+    if raw is None:
+        return None
+    if not isinstance(raw, Sequence) or isinstance(raw, (str, bytes)) or len(raw) != 3:
+        raise ValueError("explicit canonical_front must be a 3-vector")
+    vector = [float(component) for component in raw]
+    source = str(value.get("canonical_front_source") or "").strip()
+    if not source:
+        raise ValueError("explicit canonical_front requires canonical_front_source")
+    return vector, source
+
+
+def _reviewed_catalog_asset(
+    *,
+    asset_id: str,
+    catalog_rows: Mapping[str, Mapping[str, str]],
+    asset_root: Path,
+    canonical_front: tuple[list[float], str] | None,
+) -> dict[str, Any]:
+    row = catalog_rows.get(asset_id)
+    if row is None:
+        raise ValueError(f"asset {asset_id!r} is absent from Imaginarium CSV")
+    asset_dir = asset_root / asset_id
+    fbx = asset_dir / f"{asset_id}.fbx"
+    metadata = asset_dir / f"{asset_id}_metadata.json"
+    if not fbx.is_file() or not metadata.is_file():
+        raise FileNotFoundError(f"asset {asset_id!r} lacks FBX or metadata bytes")
+    result: dict[str, Any] = {
+        "asset_id": asset_id,
+        "category": str(row.get("category") or "").strip(),
+        "description": str(row.get("short_desc") or "").strip(),
+        "source_fbx_sha256": _sha256(fbx),
+        "source_metadata_sha256": _sha256(metadata),
+    }
+    if not result["category"] or not result["description"]:
+        raise ValueError(f"asset {asset_id!r} lacks category/description")
+    if canonical_front is not None:
+        result["canonical_front"] = canonical_front[0]
+        result["canonical_front_source"] = canonical_front[1]
+    return result
+
+
+def _merge_catalog_asset(
+    catalog_assets: dict[str, dict[str, Any]], asset: Mapping[str, Any]
+) -> None:
+    asset_id = str(asset["asset_id"])
+    existing = catalog_assets.get(asset_id)
+    if existing is None:
+        catalog_assets[asset_id] = dict(asset)
+        return
+    common_keys = set(existing) & set(asset)
+    if any(existing[key] != asset[key] for key in common_keys):
+        raise ValueError(f"asset {asset_id!r} has conflicting reviewed records")
+    if "canonical_front" in asset:
+        existing["canonical_front"] = deepcopy(asset["canonical_front"])
+        existing["canonical_front_source"] = asset["canonical_front_source"]
+
+
+def _reviewed_source_object(
+    *,
+    obj: Mapping[str, Any],
+    slot_id: str,
+    asset: Mapping[str, Any],
+    action: str,
+    source_asset_id: str,
+) -> dict[str, Any]:
+    metadata = obj.get("metadata")
+    metadata = metadata if isinstance(metadata, Mapping) else {}
+    task = metadata.get("task_slot")
+    task = task if isinstance(task, Mapping) else {}
+    category = str(task.get("intended_category") or obj.get("category") or "").strip()
+    description = str(task.get("description") or obj.get("description") or "").strip()
+    if not category or not description:
+        raise ValueError(f"source slot {slot_id!r} lacks public task semantics")
+    public_metadata = {
+        "comparison_slot_id": slot_id,
+        "source_group_id": slot_id,
+        "source_instance_index": 1,
+        "source_instance_count": 1,
+        "requested_category": category,
+        "requested_description": description,
+        "curation_action": action,
+        "source_asset_id": source_asset_id,
+    }
+    result = {
+        "id": slot_id,
+        "category": category,
+        "description": description,
+        "count": 1,
+        "metadata": public_metadata,
+        "placement_intent": {
+            "absolute_relations": [],
+            "relative_relations": [],
+        },
+    }
+    role = str(task.get("intended_role") or "").strip()
+    if role:
+        result["role"] = role
+        result["metadata"]["intended_role"] = role
+    return result
+
+
+def _reviewed_added_object(
+    *, addition: Mapping[str, Any], asset: Mapping[str, Any]
+) -> dict[str, Any]:
+    slot_id = str(addition["slot_id"])
+    category = str(addition.get("category") or "").strip()
+    description = str(addition.get("description") or "").strip()
+    role = str(addition.get("role") or "").strip()
+    if not category or not description or not role:
+        raise ValueError(f"addition {slot_id!r} requires category/description/role")
+    support = _mapping(addition.get("support"), f"addition[{slot_id}].support")
+    kind = str(support.get("kind") or "")
+    if kind not in {"floor", "wall", "object"}:
+        raise ValueError(f"addition {slot_id!r} has unsupported support kind")
+    parent = str(support.get("parent_slot_id") or "").strip()
+    if kind == "object" and not parent:
+        raise ValueError(f"addition {slot_id!r} requires a support parent")
+    if kind != "object" and parent:
+        raise ValueError(f"addition {slot_id!r} has an invalid support parent")
+    relative = []
+    if kind == "object":
+        relative.append(f"Place on and support by {parent}.")
+    elif kind == "wall":
+        relative.append("Mount on a suitable room wall without changing architecture.")
+    metadata = {
+        "comparison_slot_id": slot_id,
+        "source_group_id": slot_id,
+        "source_instance_index": 1,
+        "source_instance_count": 1,
+        "requested_category": category,
+        "requested_description": description,
+        "intended_role": role,
+        "zone": str(addition.get("zone") or ""),
+        "support_kind": kind,
+        "support": parent if parent else kind,
+        "curation_action": "added",
+    }
+    if parent:
+        metadata["support_parent_id"] = parent
+    return {
+        "id": slot_id,
+        "category": category,
+        "description": description,
+        "count": 1,
+        "role": role,
+        "metadata": metadata,
+        "placement_intent": {
+            "absolute_relations": [],
+            "relative_relations": relative,
+        },
+    }
+
+
+def _frozen_slot(
+    *,
+    slot_id: str,
+    asset: Mapping[str, Any],
+    requested_category: str,
+    requested_description: str,
+    action: str,
+    source_asset_id: str | None,
+) -> dict[str, Any]:
+    return {
+        "slot_id": slot_id,
+        "category": str(asset["category"]),
+        "description": str(asset["description"]),
+        "asset_id": str(asset["asset_id"]),
+        "metadata": {
+            "source_group_id": slot_id,
+            "source_instance_index": 1,
+            "source_instance_count": 1,
+            "requested_category": requested_category,
+            "requested_description": requested_description,
+            "curation_action": action,
+            "source_asset_id": source_asset_id,
+        },
+    }
+
+
+def _string_set(value: Any, path: str) -> set[str]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+        raise ValueError(f"{path} must be an array")
+    result = {str(item).strip() for item in value}
+    if "" in result or len(result) != len(value):
+        raise ValueError(f"{path} values must be non-empty and unique")
+    return result
 
 
 def _expand_case(
@@ -562,8 +1097,24 @@ def _loopback_host(hostname: str) -> bool:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--source-root", required=True, type=Path)
-    parser.add_argument("--briefs", required=True, type=Path)
+    parser.add_argument("--source-root", type=Path)
+    parser.add_argument("--briefs", type=Path)
+    parser.add_argument(
+        "--base-spec",
+        type=Path,
+        help="Existing candidate spec used for prompts/rooms in reviewed mode",
+    )
+    parser.add_argument(
+        "--curation",
+        type=Path,
+        help="Hash-pinned per-case SceneBoard curation manifest",
+    )
+    parser.add_argument(
+        "--repo-root",
+        type=Path,
+        default=Path.cwd(),
+        help="Repository root used to resolve curation source paths",
+    )
     parser.add_argument("--asset-root", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--model-provider", default="openai_compatible")
@@ -593,18 +1144,31 @@ def main() -> None:
         default="pending_released_example_selection",
     )
     args = parser.parse_args()
-    result = build_spec(
-        source_root=args.source_root.expanduser().resolve(),
-        briefs_path=args.briefs.expanduser().resolve(),
-        asset_root=args.asset_root.expanduser().resolve(),
-        model_provider=str(args.model_provider),
-        model_id=str(args.model_id),
-        model_deployment_id=str(args.model_deployment_id),
-        model_api_base_url=str(args.model_api_base_url),
-        layoutgpt_icl_sha256=str(args.layoutgpt_icl_sha256),
-        layoutgpt_icl_status=str(args.layoutgpt_icl_status),
-        layoutgpt_icl_provenance=str(args.layoutgpt_icl_provenance),
-    )
+    reviewed_mode = args.base_spec is not None or args.curation is not None
+    if reviewed_mode:
+        if args.base_spec is None or args.curation is None:
+            parser.error("reviewed mode requires both --base-spec and --curation")
+        result = materialize_reviewed_spec(
+            base_spec=_mapping(_read_json(args.base_spec), str(args.base_spec)),
+            curation=_mapping(_read_json(args.curation), str(args.curation)),
+            repo_root=args.repo_root.expanduser().resolve(),
+            asset_root=args.asset_root.expanduser().resolve(),
+        )
+    else:
+        if args.source_root is None or args.briefs is None:
+            parser.error("candidate mode requires --source-root and --briefs")
+        result = build_spec(
+            source_root=args.source_root.expanduser().resolve(),
+            briefs_path=args.briefs.expanduser().resolve(),
+            asset_root=args.asset_root.expanduser().resolve(),
+            model_provider=str(args.model_provider),
+            model_id=str(args.model_id),
+            model_deployment_id=str(args.model_deployment_id),
+            model_api_base_url=str(args.model_api_base_url),
+            layoutgpt_icl_sha256=str(args.layoutgpt_icl_sha256),
+            layoutgpt_icl_status=str(args.layoutgpt_icl_status),
+            layoutgpt_icl_provenance=str(args.layoutgpt_icl_provenance),
+        )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with args.output.open("w", encoding="utf-8") as handle:
         json.dump(result, handle, indent=2, ensure_ascii=False)

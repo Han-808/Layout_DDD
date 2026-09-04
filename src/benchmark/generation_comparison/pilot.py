@@ -635,6 +635,15 @@ def _preflight_imaginarium_catalog(
     csv_path = asset_root / "imaginarium_asset_info.csv"
     if not csv_path.is_file():
         raise FileNotFoundError(f"Imaginarium catalog CSV is missing: {csv_path}")
+    csv_sha256 = _file_sha256(csv_path)
+    expected_csv_sha256 = catalog_spec.get("source_catalog_csv_sha256")
+    if (
+        expected_csv_sha256 is not None
+        and str(expected_csv_sha256) != csv_sha256
+    ):
+        raise ArtifactValidationError(
+            "Imaginarium catalog CSV differs from the frozen source hash"
+        )
     with csv_path.open("r", encoding="utf-8-sig", newline="") as handle:
         csv_rows = {str(row.get("name_en")): row for row in csv.DictReader(handle)}
     bundle_validation = None
@@ -697,6 +706,22 @@ def _preflight_imaginarium_catalog(
                     raise ValueError("zero canonical front")
             except ValueError as exc:
                 errors.append(f"canonical_front_invalid:{exc}")
+        source_fbx_hash = (
+            _file_sha256(source_mesh_path) if source_mesh_path.is_file() else None
+        )
+        source_metadata_hash = (
+            _file_sha256(metadata_path) if metadata_path.is_file() else None
+        )
+        if (
+            expected.get("source_fbx_sha256") is not None
+            and expected.get("source_fbx_sha256") != source_fbx_hash
+        ):
+            errors.append("source_fbx_hash_mismatch")
+        if (
+            expected.get("source_metadata_sha256") is not None
+            and expected.get("source_metadata_sha256") != source_metadata_hash
+        ):
+            errors.append("source_metadata_hash_mismatch")
         mesh_hash = _file_sha256(mesh_path) if mesh_path.is_file() else None
         record = {
             "asset_id": asset_id,
@@ -721,12 +746,10 @@ def _preflight_imaginarium_catalog(
                     row.get("scaling_strategy") if row is not None else None
                 ),
                 "source_metadata_sha256": (
-                    _file_sha256(metadata_path) if metadata_path.is_file() else None
+                    source_metadata_hash
                 ),
                 "source_fbx_sha256": (
-                    _file_sha256(source_mesh_path)
-                    if source_mesh_path.is_file()
-                    else None
+                    source_fbx_hash
                 ),
                 "mesh_materialization": (
                     "verified_external_glb_bundle"
@@ -782,7 +805,8 @@ def _preflight_imaginarium_catalog(
         "status": "passed" if not failed else "failed",
         "asset_root": asset_root.resolve().as_posix(),
         "source_catalog_csv": csv_path.resolve().as_posix(),
-        "source_catalog_csv_sha256": _file_sha256(csv_path),
+        "source_catalog_csv_sha256": csv_sha256,
+        "expected_source_catalog_csv_sha256": expected_csv_sha256,
         "asset_bundle_root": (
             asset_bundle_root.resolve().as_posix()
             if asset_bundle_root is not None
@@ -842,7 +866,6 @@ def _generation_input_for_case(
         "pilot_id": pilot["pilot_id"],
         "case_id": case["case_id"],
         "seed": case.get("seed"),
-        "source_provenance": deepcopy(case.get("source_provenance") or {}),
     }
     if not isinstance(case.get("object_plan"), Mapping):
         return build_direct_natural_language_generation_input(

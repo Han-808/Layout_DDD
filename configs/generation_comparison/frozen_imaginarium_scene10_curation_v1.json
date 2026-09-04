@@ -1,0 +1,622 @@
+{
+  "schema_version": "frozen_imaginarium_scene10_curation_v1",
+  "curation_id": "scene10_liveboard_human_curation_2026_09_05",
+  "status": "materialized_pending_final_approval",
+  "recorded_date": "2026-09-05",
+  "selection_policy": "human_selected_from_scored_sceneboard_single_room_baselines",
+  "source_catalog": {
+    "source_db": "imaginarium",
+    "csv_path": "Support/Assets/imaginarium_assets/imaginarium_asset_info.csv",
+    "csv_sha256": "506ef357d2c1d36b145eb8f61743b6ac4d7b4864a9d7842ffab39268052fba85"
+  },
+  "sceneboard": {
+    "url": "http://29.98.161.115:8081/scene_liveboard.html",
+    "snapshot_generated_at": "2026-09-01T07:32:39+00:00",
+    "snapshot_sha256": "b1a392062e4ba9863227b1d68aa8467244049f14336f07f36e78088099b49ef8"
+  },
+  "cases": {
+    "S100": {
+      "source_model": "GPT-5.6-Sol",
+      "source_dataset_key": "gpt56sol",
+      "displayed_liveboard_score": 93.25,
+      "source_scene": "Support/datasets/api1_gpt56sol_generations_v1/gpt-5.6-sol/S100/scene/canonical_scene.json",
+      "source_scene_sha256": "00e2f644ea1317b2b1491078f439cfbbd273b2eba7d5755db721685618b58a26",
+      "source_blend": "Support/datasets/api1_gpt56sol_generations_v1/gpt-5.6-sol/S100/prepared/evaluation.blend",
+      "source_blend_sha256": "5e705250f51b479561b622ae6d8f510a7f3b6594cbb499c3edd0412e729b5ca0",
+      "expected_source_object_count": 22,
+      "remove_slots": [],
+      "replace_bindings": {},
+      "additions": [
+        {
+          "slot_id": "tall_reading_bookcase_1",
+          "asset_id": "a_SM_BookShelf_01a",
+          "category": "bookcase",
+          "description": "A tall five-shelf bookcase for accessible reading-zone storage.",
+          "role": "primary true bookcase",
+          "zone": "reading_zone",
+          "support": {"kind": "floor"}
+        },
+        {
+          "slot_id": "display_bookcase_1",
+          "asset_id": "5_SM_Shelf_A_B",
+          "category": "bookcase",
+          "description": "A tall display bookcase with open shelves and lower closed storage.",
+          "role": "secondary book and display storage",
+          "zone": "reading_zone",
+          "support": {"kind": "floor"}
+        },
+        {
+          "slot_id": "reading_plant_1",
+          "asset_id": "17_SM_Plant_2",
+          "category": "potted plant",
+          "description": "A tall fiddle-leaf fig that softens the reading and living-zone boundary.",
+          "role": "large greenery accent",
+          "zone": "reading_zone",
+          "support": {"kind": "floor"}
+        },
+        {
+          "slot_id": "reading_table_lamp_1",
+          "asset_id": "a_SM_TableLamp_01a",
+          "category": "table lamp",
+          "description": "A compact table lamp for focused reading light.",
+          "role": "reading task light",
+          "zone": "reading_zone",
+          "support": {"kind": "object", "parent_slot_id": "reading_side_table"}
+        },
+        {
+          "slot_id": "coffee_table_magazines_1",
+          "asset_id": "17_SM_Magazine_2",
+          "category": "magazine stack",
+          "description": "A small stack of interior-design magazines on the living coffee table.",
+          "role": "living-area reading detail",
+          "zone": "living_zone",
+          "support": {"kind": "object", "parent_slot_id": "coffee_table"}
+        },
+        {
+          "slot_id": "reading_open_book_1",
+          "asset_id": "17_SM_Opened_Book",
+          "category": "open book",
+          "description": "An open book left ready for use beside the reading chair.",
+          "role": "active reading detail",
+          "zone": "reading_zone",
+          "support": {"kind": "object", "parent_slot_id": "reading_side_table"}
+        },
+        {
+          "slot_id": "reading_globe_1",
+          "asset_id": "a_SM_Globe",
+          "category": "globe",
+          "description": "A small vintage globe displayed with the reading collection.",
+          "role": "reading-zone display accent",
+          "zone": "reading_zone",
+          "support": {"kind": "object", "parent_slot_id": "tall_reading_bookcase_1"}
+        },
+        {
+          "slot_id": "media_console_bird_sculpture_1",
+          "asset_id": "a_SM_Decor_9",
+          "category": "decorative sculpture",
+          "description": "A restrained black bird sculpture on the media console.",
+          "role": "media-console accent",
+          "zone": "living_zone",
+          "support": {"kind": "object", "parent_slot_id": "media_console"}
+        },
+        {
+          "slot_id": "dining_table_vase_1",
+          "asset_id": "0_SM_Deco_thr008",
+          "category": "flower vase",
+          "description": "A compact calla-lily vase used as the dining-table centerpiece.",
+          "role": "dining centerpiece",
+          "zone": "dining_zone",
+          "support": {"kind": "object", "parent_slot_id": "dining_table"}
+        }
+      ]
+    },
+    "S101": {
+      "source_model": "Claude Opus 5",
+      "source_dataset_key": "anthropic_opus5",
+      "displayed_liveboard_score": 85.32,
+      "source_scene": "Support/datasets/api3_anthropic_generations_v1/claude-opus-5-aihub/S101/scene/canonical_scene.json",
+      "source_scene_sha256": "d8ff20328e481d79840a3f4bb859bf480fa3199c5975a79c765206c9cbd48a60",
+      "source_blend": "Support/datasets/api3_anthropic_generations_v1/claude-opus-5-aihub/S101/prepared/evaluation.blend",
+      "source_blend_sha256": "559cb5759c3ceebbd1bf48db3a5ddb0b4a180f8b03d69f7010ec4a719d0fd015",
+      "expected_source_object_count": 25,
+      "remove_slots": [],
+      "replace_bindings": {
+        "range_cooker": {
+          "asset_id": "0_electric_stove_2k_packed",
+          "reason": "replace countertop-oven mesh with a true freestanding stove"
+        }
+      },
+      "additions": [
+        {
+          "slot_id": "upper_kitchen_cabinet_1",
+          "asset_id": "e_kitchen_08",
+          "category": "upper kitchen cabinet",
+          "description": "A four-door wall-mounted cabinet above a clear kitchen counter run.",
+          "role": "upper kitchen storage",
+          "zone": "kitchen_zone",
+          "support": {"kind": "wall"}
+        },
+        {
+          "slot_id": "open_kitchen_shelf_1",
+          "asset_id": "0_SM_Kitchen_top_shelf_50cm",
+          "category": "kitchen shelf",
+          "description": "A compact wall-mounted open shelf for everyday kitchen storage.",
+          "role": "open kitchen display and storage",
+          "zone": "kitchen_zone",
+          "support": {"kind": "wall"}
+        },
+        {
+          "slot_id": "utility_storage_rack_1",
+          "asset_id": "0_drawer_cabinet_2k_packed",
+          "category": "storage rack",
+          "description": "A tall shelf-and-drawer unit for distinct kitchen or utility storage.",
+          "role": "secondary utility storage",
+          "zone": "utility_zone",
+          "support": {"kind": "floor"}
+        },
+        {
+          "slot_id": "countertop_kettle_1",
+          "asset_id": "0_SM_Deco017_02",
+          "category": "kettle",
+          "description": "A compact electric kettle on the primary kitchen worktop.",
+          "role": "hot-drink appliance",
+          "zone": "kitchen_zone",
+          "support": {"kind": "object", "parent_slot_id": "kitchen_counter_run_1"}
+        },
+        {
+          "slot_id": "dining_fruit_basket_1",
+          "asset_id": "43_FruitBasket",
+          "category": "fruit basket",
+          "description": "A fruit basket used as an edible centerpiece on the dining table.",
+          "role": "dining centerpiece",
+          "zone": "dining_zone",
+          "support": {"kind": "object", "parent_slot_id": "dining_table"}
+        },
+        {
+          "slot_id": "countertop_plate_stack_1",
+          "asset_id": "17_SM_Plates",
+          "category": "plate stack",
+          "description": "A nested plate stack placed on the secondary kitchen worktop.",
+          "role": "accessible tableware",
+          "zone": "kitchen_zone",
+          "support": {"kind": "object", "parent_slot_id": "kitchen_counter_run_2"}
+        },
+        {
+          "slot_id": "kitchen_waste_bin_1",
+          "asset_id": "a_TrashCan3",
+          "category": "waste bin",
+          "description": "A compact waste bin serving the kitchen and utility area.",
+          "role": "kitchen waste collection",
+          "zone": "utility_zone",
+          "support": {"kind": "floor"}
+        }
+      ]
+    },
+    "S102": {
+      "source_model": "HY4-SFT0812",
+      "source_dataset_key": "hy4_sft0812",
+      "displayed_liveboard_score": 99.10,
+      "source_scene": "Support/datasets/hy_server_generations_v1/hy4-sft0812/S102/scene/canonical_scene.json",
+      "source_scene_sha256": "e965dddfd5e639c7daa70af44242eca2c12004c431f39181a22c102d27908635",
+      "source_blend": "Support/datasets/hy_server_generations_v1/hy4-sft0812/S102/prepared/evaluation.blend",
+      "source_blend_sha256": "181c43fe50f8f74d813e876140ce9ba92c8599940f6fe8a748c980ee6525e312",
+      "expected_source_object_count": 22,
+      "remove_slots": [],
+      "replace_bindings": {
+        "monitor_a": {"asset_id": "41_ComputerSet_03", "reason": "retired monitor replacement"},
+        "monitor_b": {"asset_id": "41_ComputerSet_03", "reason": "retired monitor replacement"}
+      },
+      "additions": [
+        {
+          "slot_id": "keyboard_a",
+          "asset_id": "0_SM_Keyboard",
+          "category": "keyboard",
+          "description": "A keyboard positioned at workstation A in front of its monitor.",
+          "role": "workstation A input device",
+          "zone": "workstation_zone",
+          "support": {"kind": "object", "parent_slot_id": "desk_a"}
+        },
+        {
+          "slot_id": "keyboard_b",
+          "asset_id": "0_SM_Keyboard",
+          "category": "keyboard",
+          "description": "A keyboard positioned at workstation B in front of its monitor.",
+          "role": "workstation B input device",
+          "zone": "workstation_zone",
+          "support": {"kind": "object", "parent_slot_id": "desk_b"}
+        },
+        {
+          "slot_id": "upright_library_book_1",
+          "asset_id": "11_SM_Books_06",
+          "category": "book",
+          "description": "An upright reference book stored on the first library bookcase.",
+          "role": "library shelf detail",
+          "zone": "library_zone",
+          "support": {"kind": "object", "parent_slot_id": "bookcase_pair_1"}
+        },
+        {
+          "slot_id": "desk_book_1",
+          "asset_id": "0_SM_002_Book001",
+          "category": "book",
+          "description": "A flat finance book kept on workstation A for active use.",
+          "role": "workstation reference material",
+          "zone": "workstation_zone",
+          "support": {"kind": "object", "parent_slot_id": "desk_a"}
+        },
+        {
+          "slot_id": "coffee_mug_a",
+          "asset_id": "0_SM_Coffee_cup_2",
+          "category": "coffee mug",
+          "description": "A coffee mug at workstation A.",
+          "role": "workstation A personal item",
+          "zone": "workstation_zone",
+          "support": {"kind": "object", "parent_slot_id": "desk_a"}
+        },
+        {
+          "slot_id": "coffee_mug_b",
+          "asset_id": "0_SM_Coffee_cup_2",
+          "category": "coffee mug",
+          "description": "A coffee mug at workstation B.",
+          "role": "workstation B personal item",
+          "zone": "workstation_zone",
+          "support": {"kind": "object", "parent_slot_id": "desk_b"}
+        },
+        {
+          "slot_id": "printer_storage_station_1",
+          "asset_id": "b_18",
+          "category": "low storage cabinet",
+          "description": "A low shared cabinet that serves as the office print and storage station.",
+          "role": "shared printer and document storage",
+          "zone": "workstation_zone",
+          "support": {"kind": "floor"}
+        }
+      ]
+    },
+    "S103": {
+      "source_model": "Claude Opus 5",
+      "source_dataset_key": "anthropic_opus5",
+      "displayed_liveboard_score": 88.75,
+      "source_scene": "Support/datasets/api3_anthropic_generations_v1/claude-opus-5-aihub/S103/scene/canonical_scene.json",
+      "source_scene_sha256": "b4b0a44f93d59fbffa670032cc2c7945d8d41cbeb8f67f4826db06e0f7930155",
+      "source_blend": "Support/datasets/api3_anthropic_generations_v1/claude-opus-5-aihub/S103/prepared/evaluation.blend",
+      "source_blend_sha256": "d4cb07402755112cc7f29f027ed75b22062edeee7982043c49f007d2654f172c",
+      "expected_source_object_count": 21,
+      "remove_slots": ["area_rug"],
+      "replace_bindings": {
+        "computer_monitor": {"asset_id": "41_ComputerSet_03", "reason": "retired monitor replacement"}
+      },
+      "additions": [
+        {
+          "slot_id": "computer_keyboard_1",
+          "asset_id": "0_SM_Keyboard",
+          "category": "keyboard",
+          "description": "A keyboard in front of the replacement monitor on the writing desk.",
+          "role": "workspace input device",
+          "zone": "workspace_zone",
+          "support": {"kind": "object", "parent_slot_id": "desk"}
+        },
+        {
+          "slot_id": "bedside_alarm_clock_1",
+          "asset_id": "17_SM_Clock",
+          "category": "alarm clock",
+          "description": "A compact modern alarm clock on the left nightstand.",
+          "role": "bedside timepiece",
+          "zone": "sleeping_zone",
+          "support": {"kind": "object", "parent_slot_id": "nightstand_left"}
+        },
+        {
+          "slot_id": "bed_lumbar_pillow_1",
+          "asset_id": "d_1000003759813",
+          "category": "lumbar pillow",
+          "description": "A teal lumbar pillow used on the queen bed.",
+          "role": "bed comfort accent",
+          "zone": "sleeping_zone",
+          "support": {"kind": "object", "parent_slot_id": "queen_bed"}
+        }
+      ]
+    },
+    "S104": {
+      "source_model": "HY4-SFT0812",
+      "source_dataset_key": "hy4_sft0812",
+      "displayed_liveboard_score": 89.13,
+      "source_scene": "Support/datasets/hy_server_generations_v1/hy4-sft0812/S104/scene/canonical_scene.json",
+      "source_scene_sha256": "7b690fd0b9047c353db1430c64af82946221e1f36142d22cc776f352ae8cc744",
+      "source_blend": "Support/datasets/hy_server_generations_v1/hy4-sft0812/S104/prepared/evaluation.blend",
+      "source_blend_sha256": "ec3af01aba4dc54150c1c474768d8f47f88265e99642e26d7a77642b6d416096",
+      "expected_source_object_count": 27,
+      "remove_slots": [],
+      "replace_bindings": {
+        "area_rug": {"asset_id": "45_Capet05", "reason": "replace folded-fabric proxy with a geometric floor carpet"}
+      },
+      "additions": [
+        {
+          "slot_id": "game_controller_1",
+          "asset_id": "0_gamepad_2k_packed",
+          "category": "game controller",
+          "description": "A game controller placed on the lounge coffee table.",
+          "role": "active media control",
+          "zone": "media_zone",
+          "support": {"kind": "object", "parent_slot_id": "coffee_table"}
+        },
+        {
+          "slot_id": "media_smart_speaker_1",
+          "asset_id": "a_SM_SmartTV_B",
+          "category": "smart speaker",
+          "description": "A compact smart speaker placed on the media console.",
+          "role": "compact media audio device",
+          "zone": "media_zone",
+          "support": {"kind": "object", "parent_slot_id": "media_console"}
+        },
+        {
+          "slot_id": "game_table_snack_bowl_1",
+          "asset_id": "20_SM_Bowl_with_Oranges",
+          "category": "snack bowl",
+          "description": "A fruit and snack bowl on the board-game table.",
+          "role": "game-table refreshment",
+          "zone": "game_zone",
+          "support": {"kind": "object", "parent_slot_id": "board_game_table"}
+        }
+      ]
+    },
+    "S105": {
+      "source_model": "HY4-0823dev",
+      "source_dataset_key": "hy4_dev0823_arena",
+      "displayed_liveboard_score": 90.77,
+      "source_scene": "Support/datasets/hy_dev0823_arena_single_room_eval_v1/S105/scene/canonical_scene.json",
+      "source_scene_sha256": "f63c439f9bd9ab588f9db36d7ef39f66fb2d87ceab112a67a93428b9270a5d40",
+      "source_blend": "Support/datasets/hy_dev0823_arena_single_room_eval_v1/S105/prepared/evaluation.blend",
+      "source_blend_sha256": "2d9f85a103a3519733676d334aa92a299171b634a8f6a5d15decdd243fb00e5f",
+      "expected_source_object_count": 22,
+      "remove_slots": [],
+      "replace_bindings": {
+        "play_rug_1": {"asset_id": "45_SM_Rug_07a", "reason": "replace folded-fabric proxy with a round floor carpet"}
+      },
+      "additions": [
+        {
+          "slot_id": "play_xylophone_1",
+          "asset_id": "44_sk19_Xylophone01",
+          "category": "toy xylophone",
+          "description": "A small pastel xylophone used on the play-zone floor.",
+          "role": "musical play object",
+          "zone": "play_zone",
+          "support": {"kind": "floor"}
+        },
+        {
+          "slot_id": "play_race_track_1",
+          "asset_id": "44_sk78_RaceTrack01",
+          "category": "toy race track",
+          "description": "A dedicated slot-car track occupying a clear play-zone footprint.",
+          "role": "large floor play activity",
+          "zone": "play_zone",
+          "support": {"kind": "floor"}
+        },
+        {
+          "slot_id": "toy_storage_ottoman_1",
+          "asset_id": "b_44",
+          "category": "storage ottoman",
+          "description": "An upholstered storage ottoman for toys and flexible seating.",
+          "role": "toy storage and occasional seat",
+          "zone": "play_zone",
+          "support": {"kind": "floor"}
+        }
+      ]
+    },
+    "S106": {
+      "source_model": "Claude Opus 5",
+      "source_dataset_key": "anthropic_opus5",
+      "displayed_liveboard_score": 87.85,
+      "source_scene": "Support/datasets/api3_anthropic_generations_v1/claude-opus-5-aihub/S106/scene/canonical_scene.json",
+      "source_scene_sha256": "70907938318c42f001cbe94a833f3105f4fadb269ff4f9c7c87c547f2b1eb79e",
+      "source_blend": "Support/datasets/api3_anthropic_generations_v1/claude-opus-5-aihub/S106/prepared/evaluation.blend",
+      "source_blend_sha256": "23a243901b6a69a6f17006895ff3aea698d4f9df44e09d6634323342e94022f0",
+      "expected_source_object_count": 25,
+      "remove_slots": [
+        "towel_ladder_rack_1",
+        "folded_towel_stack_1",
+        "folded_towel_stack_2",
+        "folded_towel_stack_3"
+      ],
+      "replace_bindings": {
+        "washing_machine_1": {"asset_id": "28_Washer_01", "reason": "replace dryer mesh with a true washer"}
+      },
+      "additions": [
+        {
+          "slot_id": "folded_towel_1",
+          "asset_id": "44_sk56_FoldedTowel01",
+          "category": "folded towel",
+          "description": "A rack-free folded towel stored on the first linen shelf.",
+          "role": "accessible clean linen",
+          "zone": "linen_zone",
+          "support": {"kind": "object", "parent_slot_id": "linen_shelving_unit_1"}
+        },
+        {
+          "slot_id": "toilet_paper_holder_1",
+          "asset_id": "17_SM_Bathroom_decor_4",
+          "category": "toilet-paper holder",
+          "description": "A wall-mounted toilet-paper holder beside the toilet.",
+          "role": "toilet-side wall accessory",
+          "zone": "bathroom_zone",
+          "support": {"kind": "wall"}
+        },
+        {
+          "slot_id": "shampoo_bottle_1",
+          "asset_id": "a_SM_RestRoom_Shampoo",
+          "category": "shampoo bottle",
+          "description": "A pump shampoo bottle on the bathroom vanity ledge.",
+          "role": "bathing supply",
+          "zone": "bathroom_zone",
+          "support": {"kind": "object", "parent_slot_id": "vanity_with_sink_1"}
+        },
+        {
+          "slot_id": "toilet_brush_1",
+          "asset_id": "a_SM_toilet_cleaner",
+          "category": "toilet brush",
+          "description": "A toilet brush in its holder beside the toilet.",
+          "role": "toilet cleaning tool",
+          "zone": "bathroom_zone",
+          "support": {"kind": "floor"}
+        },
+        {
+          "slot_id": "rolling_utility_shelf_1",
+          "asset_id": "34_RollingShelf_01",
+          "category": "rolling utility shelf",
+          "description": "A four-tier rolling shelf for laundry and household supplies.",
+          "role": "mobile utility storage",
+          "zone": "laundry_zone",
+          "support": {"kind": "floor"}
+        }
+      ]
+    },
+    "S107": {
+      "source_model": "Claude Opus 5",
+      "source_dataset_key": "anthropic_opus5",
+      "displayed_liveboard_score": 92.83,
+      "source_scene": "Support/datasets/api3_anthropic_generations_v1/claude-opus-5-aihub/S107/scene/canonical_scene.json",
+      "source_scene_sha256": "9ee3bac55debd73ee3909141bdce9b358345bcb37df539adf9d7e03db0d0d960",
+      "source_blend": "Support/datasets/api3_anthropic_generations_v1/claude-opus-5-aihub/S107/prepared/evaluation.blend",
+      "source_blend_sha256": "9207a39147deddd91838ceac9a6e0e4e00e4f9252cae2d25539e798ed38aadf0",
+      "expected_source_object_count": 24,
+      "remove_slots": ["shop_vacuum", "workshop_stool_1", "workshop_stool_2"],
+      "replace_bindings": {
+        "drill_press": {"asset_id": "a_SM_stand_drill", "reason": "replace speaker mesh with a true drill press"}
+      },
+      "additions": [
+        {
+          "slot_id": "portable_toolbox_1",
+          "asset_id": "a_SM_auto_repair_props_01_tool_box",
+          "category": "toolbox",
+          "description": "A portable toolbox kept on the primary repair workbench.",
+          "role": "portable hand-tool storage",
+          "zone": "repair_zone",
+          "support": {"kind": "object", "parent_slot_id": "workbench_main"}
+        },
+        {
+          "slot_id": "flathead_screwdriver_1",
+          "asset_id": "36_ToolSet_05",
+          "category": "screwdriver",
+          "description": "A flathead screwdriver laid on the primary workbench.",
+          "role": "active repair hand tool",
+          "zone": "repair_zone",
+          "support": {"kind": "object", "parent_slot_id": "workbench_main"}
+        },
+        {
+          "slot_id": "pliers_1",
+          "asset_id": "36_ToolSet_09",
+          "category": "pliers",
+          "description": "A pair of pliers laid on the secondary workbench.",
+          "role": "active repair hand tool",
+          "zone": "repair_zone",
+          "support": {"kind": "object", "parent_slot_id": "workbench_secondary"}
+        },
+        {
+          "slot_id": "oil_can_1",
+          "asset_id": "a_SM_auto_repair_03_gallon_01",
+          "category": "oil can",
+          "description": "A vintage oil can stored on the rolling tool chest.",
+          "role": "machine-maintenance supply",
+          "zone": "repair_zone",
+          "support": {"kind": "object", "parent_slot_id": "rolling_tool_chest"}
+        }
+      ]
+    },
+    "S108": {
+      "source_model": "GLM-5.3",
+      "source_dataset_key": "glm53",
+      "displayed_liveboard_score": 97.20,
+      "source_scene": "Support/datasets/api2_glm53_max_scene10_r6/S108/scene/canonical_scene.json",
+      "source_scene_sha256": "6e0add8c41f672c350dd40e195590502febf0173609ab211dcd5a34aab6f099d",
+      "source_blend": "Support/datasets/api2_glm53_max_scene10_r6/S108/prepared/evaluation.blend",
+      "source_blend_sha256": "96ff9bcb649bb9eb93942bccc6ac4257d4028b6837ebb57c015c1019fd647710",
+      "expected_source_object_count": 21,
+      "remove_slots": ["bookshelf_1"],
+      "replace_bindings": {
+        "area_rug_1": {"asset_id": "45_Capet05", "reason": "replace folded-fabric proxy with a geometric floor carpet"}
+      },
+      "additions": [
+        {
+          "slot_id": "coworking_monitor_1",
+          "asset_id": "41_ComputerSet_03",
+          "category": "computer monitor",
+          "description": "A flat-panel monitor on the communal coworking table.",
+          "role": "shared coworking display",
+          "zone": "coworking_zone",
+          "support": {"kind": "object", "parent_slot_id": "coworking_table_1"}
+        },
+        {
+          "slot_id": "low_storage_cabinet_1",
+          "asset_id": "b_18",
+          "category": "low storage cabinet",
+          "description": "A low single-level storage run serving the coworking lounge.",
+          "role": "shared low storage",
+          "zone": "coworking_zone",
+          "support": {"kind": "floor"}
+        },
+        {
+          "slot_id": "drawer_side_table_1",
+          "asset_id": "b_35",
+          "category": "drawer side table",
+          "description": "A compact marble-top side table with accessible drawer storage.",
+          "role": "directional lounge side storage",
+          "zone": "reading_zone",
+          "support": {"kind": "floor"}
+        }
+      ]
+    },
+    "S109": {
+      "source_model": "HY4-0823dev",
+      "source_dataset_key": "hy4_dev0823_arena",
+      "displayed_liveboard_score": 95.95,
+      "source_scene": "Support/datasets/hy_dev0823_arena_single_room_eval_v1/S109/scene/canonical_scene.json",
+      "source_scene_sha256": "4ff97b8d8e341679c4de1288249ae2efe4c3270596b5a75e2d67a80fa230bc71",
+      "source_blend": "Support/datasets/hy_dev0823_arena_single_room_eval_v1/S109/prepared/evaluation.blend",
+      "source_blend_sha256": "64d13b4ac6978ac4101854c88b452775df5a592108079b28807c8030721fee7d",
+      "expected_source_object_count": 26,
+      "remove_slots": [
+        "yoga_mat_1",
+        "yoga_mat_2",
+        "yoga_mat_3",
+        "kettlebell_set_1",
+        "kettlebell_set_2"
+      ],
+      "replace_bindings": {},
+      "additions": [
+        {
+          "slot_id": "sports_duffel_1",
+          "asset_id": "a_Bag1",
+          "category": "sports duffel",
+          "description": "A sports duffel kept on the floor in the fitness storage zone.",
+          "role": "portable fitness storage",
+          "zone": "fitness_zone",
+          "support": {"kind": "floor"}
+        },
+        {
+          "slot_id": "hobby_bicycle_1",
+          "asset_id": "44_sk39_Bike01",
+          "category": "bicycle",
+          "description": "A hobby bicycle stored on the floor without treating it as exercise equipment.",
+          "role": "hobby bicycle storage",
+          "zone": "hobby_zone",
+          "support": {"kind": "floor"}
+        },
+        {
+          "slot_id": "hobby_notebook_1",
+          "asset_id": "a_SM_desk_props_notebook",
+          "category": "notebook",
+          "description": "A project notebook kept on the hobby workbench.",
+          "role": "hobby planning material",
+          "zone": "hobby_zone",
+          "support": {"kind": "object", "parent_slot_id": "hobby_workbench_1"}
+        },
+        {
+          "slot_id": "media_console_plant_1",
+          "asset_id": "20_SM_Kitchen_Decor_10",
+          "category": "potted plant",
+          "description": "A compact potted plant displayed on the media console.",
+          "role": "media-console decorative accent",
+          "zone": "recovery_zone",
+          "support": {"kind": "object", "parent_slot_id": "media_console_1"}
+        }
+      ]
+    }
+  }
+}
