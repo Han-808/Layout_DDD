@@ -44,7 +44,9 @@ def build_lock() -> dict[str, Any]:
         entries[relative] = {
             "sha256": hashlib.sha256(payload).hexdigest(),
             "size_bytes": len(payload),
-            "mode": oct(path.stat().st_mode & 0o777),
+            # Git preserves only the executable bit, not exact 0444/0555 vs
+            # 0644/0755 permissions. Lock the portable semantic bit.
+            "executable": bool(path.stat().st_mode & 0o111),
         }
     canonical = json.dumps(
         entries, sort_keys=True, ensure_ascii=False, separators=(",", ":")
