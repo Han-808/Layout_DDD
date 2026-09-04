@@ -1,0 +1,111 @@
+#!/usr/bin/ruby
+# frozen_string_literal: true
+
+# Standalone, dependency-free client for the per-episode shared-DB capability.
+
+require "json"
+require "socket"
+require "timeout"
+
+PROTOCOL = "non_rectangular_agent_tool_protocol_v1"
+MAX_BYTES = 4 * 1024 * 1024
+
+
+def fail_usage(message)
+  warn(message)
+  exit(2)
+end
+
+
+def parse_search(arguments)
+  query = nil
+  size = nil
+  top_k = 8
+  until arguments.empty?
+    flag = arguments.shift
+    case flag
+    when "--query"
+      query = arguments.shift
+    when "--size"
+      fail_usage("--size needs WIDTH DEPTH HEIGHT") if arguments.length < 3
+      size = arguments.shift(3).map { |item| Float(item) }
+    when "--top-k"
+      top_k = Integer(arguments.shift)
+    else
+      fail_usage("unknown search-assets argument: #{flag}")
+    end
+  end
+  fail_usage("search-assets requires --query") if query.nil? || query.empty?
+  {
+    "query" => query,
+    "size_constraint" => size,
+    "top_k" => top_k
+  }
+end
+
+
+def request(method, params)
+  socket_path = ENV.fetch("LAYOUT_DDD_AGENT_TOOL_SOCKET", "")
+  token = ENV.fetch("LAYOUT_DDD_AGENT_TOOL_TOKEN", "")
+  raise "Agent tool connection is unavailable" if socket_path.empty? || token.empty?
+
+  payload = {
+    "protocol" => PROTOCOL,
+    "token" => token,
+    "method" => method,
+    "params" => params
+  }
+  encoded = JSON.generate(payload) + "\n"
+  raise "Agent tool request is oversized" if encoded.bytesize > MAX_BYTES
+
+  raw = nil
+  Timeout.timeout(120) do
+    UNIXSocket.open(socket_path) do |connection|
+      connection.write(encoded)
+      connection.flush
+      raw = connection.gets("\n", MAX_BYTES + 1)
+    end
+  end
+  raise "Agent tool response is missing or oversized" if raw.nil? || raw.bytesize > MAX_BYTES
+
+  value = JSON.parse(raw)
+  raise "Agent tool response must be an object" unless value.is_a?(Hash)
+  value
+end
+
+
+command = ARGV.shift
+fail_usage("command required") if command.nil?
+
+case command
+when "get-task"
+  fail_usage("get-task takes no arguments") unless ARGV.empty?
+  method = "get_task"
+  params = {}
+when "search-assets"
+  method = "search_assets"
+  params = parse_search(ARGV)
+when "inspect-asset"
+  fail_usage("inspect-asset needs exactly one ASSET_ID") unless ARGV.length == 1
+  method = "inspect_asset"
+  params = { "asset_id" => ARGV.fetch(0) }
+when "validate-submission", "finalize-submission"
+  fail_usage("#{command} needs exactly one relative JSON path") unless ARGV.length == 1
+  method = command == "validate-submission" ? "validate_submission" : "finalize_submission"
+  params = { "submission_path" => ARGV.fetch(0) }
+else
+  fail_usage("unsupported command: #{command}")
+end
+
+begin
+  response = request(method, params)
+rescue StandardError => error
+  response = {
+    "ok" => false,
+    "error_type" => error.class.name,
+    "message" => error.message.to_s[0, 1000]
+  }
+end
+
+puts(JSON.generate(response.sort.to_h))
+exit(response["ok"] == true ? 0 : 2)

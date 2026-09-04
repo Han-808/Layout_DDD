@@ -1,0 +1,40 @@
+(version 1)
+(deny default)
+(import "system.sb")
+
+(allow process-fork)
+(allow process-info* signal (target self))
+(allow dynamic-code-generation)
+
+(allow process-exec* file-map-executable
+  (subpath "/bin")
+  (subpath "/sbin")
+  (subpath "/usr/bin")
+  (subpath "/usr/sbin")
+  (subpath "/Library/Developer/CommandLineTools")
+  (subpath (param "RUNTIME_ROOT"))
+  (subpath (param "WORKSPACE")))
+
+(allow file-read* file-test-existence
+  (subpath "/bin")
+  (subpath "/sbin")
+  (subpath "/usr/bin")
+  (subpath "/usr/sbin")
+  (subpath "/private/etc")
+  (subpath "/Library/Developer/CommandLineTools")
+  (subpath (param "RUNTIME_ROOT"))
+  (subpath (param "WORKSPACE")))
+
+(allow file-read-metadata file-test-existence
+  (path-ancestors (param "WORKSPACE"))
+  (path-ancestors (param "RUNTIME_ROOT"))
+  (path-ancestors (param "TOOL_SOCKET")))
+
+(allow file-write* file-ioctl
+  (subpath (param "WORKSPACE")))
+
+;; Exactly two host capabilities: the per-episode database Unix socket and one
+;; loopback TCP model gateway. DNS and arbitrary internet remain unavailable.
+(allow network-outbound
+  (literal (param "TOOL_SOCKET"))
+  (remote tcp (param "MODEL_GATEWAY")))

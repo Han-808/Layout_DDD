@@ -1,0 +1,32 @@
+{
+  "layout_id": "scene_011634",
+  "program_order": [
+    "child_room_01",
+    "home_office_01",
+    "living_room_01",
+    "primary_bedroom_01"
+  ],
+  "programs": [
+    {
+      "program_id": "child_room_01",
+      "room_type": "child room"
+    },
+    {
+      "program_id": "home_office_01",
+      "room_type": "home office"
+    },
+    {
+      "program_id": "living_room_01",
+      "room_type": "living room"
+    },
+    {
+      "program_id": "primary_bedroom_01",
+      "room_type": "primary bedroom"
+    }
+  ],
+  "schema_version": "non_rectangular_room_program_v1",
+  "target_total_instances": {
+    "max": 79,
+    "min": 64
+  }
+}

@@ -1,0 +1,70 @@
+{
+  "authentication": {
+    "credential": false,
+    "description": "The token is an ephemeral capability scoped to one episode and one tool socket.",
+    "socket_environment": "LAYOUT_DDD_AGENT_TOOL_SOCKET",
+    "token_environment": "LAYOUT_DDD_AGENT_TOOL_TOKEN"
+  },
+  "command": "./sieve-agent-tool",
+  "methods": {
+    "finalize-submission": {
+      "arguments": [
+        "WORKSPACE_RELATIVE_JSON_PATH"
+      ],
+      "effect": "Validate and immutably seal the final submission; repeated sealing must be identical.",
+      "writes": [
+        "final_submission.json",
+        "finalization.json"
+      ]
+    },
+    "get-task": {
+      "arguments": [],
+      "effect": "Return the public task, database identity, budgets, and evaluation scope."
+    },
+    "inspect-asset": {
+      "arguments": [
+        "ASSET_ID"
+      ],
+      "effect": "Resolve one returned asset ID to authoritative public metadata and bbox values."
+    },
+    "search-assets": {
+      "arguments": [
+        "--query",
+        "TEXT",
+        "--size",
+        "WIDTH",
+        "DEPTH",
+        "HEIGHT",
+        "--top-k",
+        "K"
+      ],
+      "effect": "Deterministically return at most the common Top-K bound from the frozen shared database."
+    },
+    "validate-submission": {
+      "arguments": [
+        "WORKSPACE_RELATIVE_JSON_PATH"
+      ],
+      "effect": "Validate the draft without exposing evaluator results or hidden labels."
+    }
+  },
+  "protocol": "non_rectangular_agent_tool_protocol_v1",
+  "response_envelope": {
+    "failure": {
+      "error_type": "public error class",
+      "message": "bounded public message",
+      "ok": false
+    },
+    "success": {
+      "ok": true,
+      "result": "method-specific JSON value"
+    }
+  },
+  "schema_version": "sieve_agent_database_interface_v1",
+  "security": {
+    "asset_resource_paths_exposed": false,
+    "external_asset_sources_allowed": false,
+    "raw_database_files_mounted": false,
+    "scores_or_hidden_labels_exposed": false
+  },
+  "transport": "authenticated_unix_domain_socket_json_line_v1"
+}

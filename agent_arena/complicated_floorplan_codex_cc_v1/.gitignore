@@ -1,0 +1,4 @@
+episodes/**
+!episodes/.gitkeep
+**/__pycache__/
+*.pyc

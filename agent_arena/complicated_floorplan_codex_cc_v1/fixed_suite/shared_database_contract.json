@@ -1,0 +1,25 @@
+{
+  "asset_namespace": "imaginarium-jid-v1",
+  "dataset_id": "imaginarium-assets-v1",
+  "encoder_id": "qwen3-embedding-0.6b-97b0c614-v2",
+  "encoder_revision": "97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3",
+  "expected_asset_count": 2043,
+  "expected_dimension": 1024,
+  "external_asset_sources_allowed": false,
+  "index_id": "imaginarium-qwen3-embedding-0.6b-index-v2",
+  "max_top_k": 12,
+  "mode": "shared_database",
+  "per_scene_assets_prefrozen": false,
+  "resource_content_sha256": {
+    "embedding_matrix": "688aaea0a9f23dff5e63e4f5d66b090403cdcebc1386b9ec966726e16d66b494",
+    "encoder_snapshot": "a586da9f71c1318da658377718bb0d959973f4eda40b9635070e5af2b0161cff",
+    "golden_suite": "a9f5bda10f3f60525b708d0364421611d7ee873c065926bde2c08ef844dc900d",
+    "metadata_index": "bd3736bb430d295c516ac9272deb6c1a58ae42a3250dccc75d8d6dfc158ad809",
+    "retrieval_catalog": "2f7f8e73aa65bbe30cafe74246512d732c47bc74b4823d6acb3136c4f99ded49"
+  },
+  "retrieval_profile_id": "imaginarium-qwen3-embedding-0.6b-stable-top1-v2",
+  "schema_version": "non_rectangular_agent_shared_asset_db_v1",
+  "selection_policy": "agent_selects_from_deterministic_bounded_topk_v1",
+  "snapshot_id": "imaginarium-shared-agent-db-v1-8ea5e21ef6c710f7",
+  "snapshot_sha256": "8ea5e21ef6c710f7117b873f32556cf88e7e45180346555114ad27cc3e98a7d3"
+}
