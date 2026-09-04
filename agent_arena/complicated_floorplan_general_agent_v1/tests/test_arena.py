@@ -80,9 +80,26 @@ class ArenaTests(unittest.TestCase):
                 task["geometry_contract"]["uniform_scale"],
                 {"policy": "exact", "value": 1.0},
             )
+            rendered_todo = (episode.workspace / "TODO.md").read_text(
+                encoding="utf-8"
+            )
             self.assertIn(
                 "- `room_000`: 34 to 43 instances",
-                (episode.workspace / "TODO.md").read_text(encoding="utf-8"),
+                rendered_todo,
+            )
+            self.assertIn(
+                "Multiple expanded instances for a slot whose `count` is greater "
+                "than one are\n  required and are not duplicate placements.",
+                rendered_todo,
+            )
+            self.assertIn(
+                "Relation endpoints in the object plan are slot-level, not "
+                "instance-level.",
+                rendered_todo,
+            )
+            self.assertIn(
+                "no hidden or\n  implicit one-to-one instance pairing is assumed",
+                rendered_todo,
             )
             combined = "\n".join(
                 path.read_text(encoding="utf-8", errors="replace")

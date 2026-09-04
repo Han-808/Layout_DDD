@@ -82,12 +82,19 @@ No particular object category or asset is prescribed.
 - Furnish every required room and meet both the per-room instance ranges in
   `task.json` and the inclusive total-instance range.
 
-- Every planned slot must have exactly one object-plan entry and exactly one
-  ordered `{room_id, slot_id, asset_id}` binding. Its placement must contain
-  exactly `count` instances referencing that slot.
+- Every planned `slot_id` must identify exactly one object-plan entry and appear
+  exactly once in the ordered `{room_id, slot_id, asset_id}` binding list.
 
-- Do not create duplicate bindings, duplicate placements, unbound slots, or
-  unplanned objects.
+- The global placement must contain exactly the slot's declared `count` of
+  expanded instances. Every expanded instance must have a scene-global unique
+  `instance_id`, reference its source `slot_id`, and use the asset bound to that
+  slot.
+
+- Multiple expanded instances for a slot whose `count` is greater than one are
+  required and are not duplicate placements.
+
+- Duplicate slot bindings, duplicate `instance_id` values, unbound slots,
+  unplanned instances, and count mismatches are forbidden.
 
 - Use only exact asset IDs from the active database snapshot.
 
@@ -103,8 +110,17 @@ No particular object category or asset is prescribed.
 - Preserve room circulation and do not obstruct doors, openings, or required
   passage regions.
 
-- Support and attachment relations must reference existing slots or exact local
-  wall IDs and must be geometrically consistent with their placements.
+- Relation endpoints in the object plan are slot-level, not instance-level.
+  `support` must be `"floor"`, an existing same-room `slot_id`, or an exact local
+  `wall_id`; do not put an `instance_id` in `support`. A `facing_target` that
+  names an object likewise names a same-room `slot_id`.
+
+- A slot-level relation applies to every expanded source instance. When its
+  target slot expands to multiple instances, every source instance must realize
+  the relation geometrically with at least one target instance; no hidden or
+  implicit one-to-one instance pairing is assumed. Wall attachment targets the
+  exact named local wall. All support and attachment intent must be
+  geometrically consistent with the final expanded placements.
 
 ## Scene-quality objectives
 
