@@ -1,10 +1,10 @@
 # Complicated FloorPlan Agent track
 
 This is an additive Agent-only generation track for **general-purpose coding
-Agents**, such as Codex- and Claude Code-class systems. The contestants are not
-specialized scene-generation pipelines such as LayoutGPT, LayoutVLM, or
-SceneWeaver. It does not replace or modify the frozen Stage A → Top-1
-retrieval → Stage C model workflow.
+Agents**, such as Codex- and Claude Code-class systems. It is distinct from the
+separate pipeline-compatible track for complete scene-generation harnesses,
+such as Holodeck-class systems. It does not replace or modify the frozen Stage
+A → Top-1 retrieval → Stage C model workflow.
 
 ## Fixed experiment contract
 
