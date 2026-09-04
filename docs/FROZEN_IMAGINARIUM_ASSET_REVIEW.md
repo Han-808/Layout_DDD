@@ -893,3 +893,122 @@ screwdriver, pliers, and oil can are additions.
 6. Add immutable catalog records and source hashes, then re-run local-asset,
    frozen-binding, architecture, scale, support, and harness-eligibility
    preflight.
+
+## S108 — cafe-style reading and coworking lounge
+
+Review status: `user_selected_pending_materialization`
+
+Recorded: `2026-09-05` (`Asia/Shanghai`)
+
+### Baseline scene
+
+- Model: `GLM-5.3`
+- SceneBoard dataset key: `glm53`
+- Displayed liveboard score: `97.20`
+- Source score: `98.43`
+- Coverage: `100.0`
+- Existing object count: `21`
+- Canonical scene:
+  `Support/datasets/api2_glm53_max_scene10_r6/S108/scene/canonical_scene.json`
+- Canonical scene SHA-256:
+  `6e0add8c41f672c350dd40e195590502febf0173609ab211dcd5a34aab6f099d`
+- Blender scene:
+  `Support/datasets/api2_glm53_max_scene10_r6/S108/prepared/evaluation.blend`
+- Blender scene SHA-256:
+  `96ff9bcb649bb9eb93942bccc6ac4257d4028b6837ebb57c015c1019fd647710`
+
+### User removal decision
+
+Remove exactly two objects:
+
+1. `bookshelf_1`, bound to exact asset
+   `0_steel_frame_shelves_02_2k_packed`.
+2. `area_rug_1`, bound to exact asset `22_SM_Rug_Stacked_01g` (CSV row
+   `589`). Its `Folded_fabric` class and `0.572 x 0.542 x 0.063 m` dimensions
+   confirm it is folded fabric rather than a floor rug.
+
+No bookshelf replacement is assumed. Preserve the source Blender/native scene
+unchanged; apply removals only when the approved FrozenAssets case is
+materialized.
+
+### Direction-aware candidate shortlist
+
+All twenty exact CSV assets and local directories were verified. Candidate `1`
+is the actual floor-rug replacement. Candidates `2`--`14` have a defensible
+semantic use direction: seating faces a table/user, screens face viewers, and
+adjustable lamps aim at a task surface. Candidates `15`--`17` are a small set
+of low, single-level/front-access storage pieces; candidates `18`--`20` are
+tables. The exact canonical-front vector is not inferred from category alone and
+must be verified from asset mesh/metadata during materialization. Only the rows
+repeated in the user-selected table below are approved for later materialization.
+
+| Candidate | Exact asset ID | CSV bbox W×D×H (m) | Type | Direction concept / suggested role |
+| ---: | --- | --- | --- | --- |
+| 1 | `45_Capet05` | `2.400 × 1.700 × 0.010` | true carpet | No front; actual muted gray/teal lounge rug replacing folded fabric |
+| 2 | `b_104` | `1.077 × 0.892 × 0.804` | lounge chair | Clear seat front; face coffee table or another lounge seat |
+| 3 | `b_11` | `0.713 × 0.943 × 0.814` | recliner chair | Clear seat front; face reading table or lounge center |
+| 4 | `0_SM_Modern_Armchair` | `1.367 × 1.045 × 0.857` | sofa chair | Clear seat front; beige/olive reading chair facing a table |
+| 5 | `b_68` | `0.827 × 0.808 × 1.039` | swivel chair | Clear seat front; teal coworking/lounge chair |
+| 6 | `b_53` | `0.573 × 0.574 × 0.846` | backrest chair | Clear seat front; compact cafe chair facing a table |
+| 7 | `0_SM_Modern_Office_chair` | `0.621 × 0.644 × 1.022` | office chair | Clear seat front; face coworking surface |
+| 8 | `b_66` | `1.872 × 0.993 × 0.835` | two-seat sofa | Clear seating front; face coffee table/lounge group |
+| 9 | `b_108` | `2.843 × 0.952 × 0.791` | three-seat sofa | Clear seating front; larger taupe lounge anchor |
+| 10 | `41_ComputerSet_03` | `0.480 × 0.198 × 0.445` | monitor | Explicit display front; face coworking user |
+| 11 | `0_SM_Laptop` | `0.383 × 0.282 × 0.257` | laptop | Explicit user/display side; place on coworking table |
+| 12 | `5_SM_DeskLamp_B` | `0.141 × 0.269 × 0.512` | articulated desk lamp | Directional task-light aim; place on reading/work table |
+| 13 | `a_SM_Floor_Lamp` | `0.315 × 1.115 × 1.687` | adjustable floor lamp | Directional dome/arm aim toward reading chair |
+| 14 | `a_SM_TVFlat_01b` | `0.920 × 0.089 × 0.510` | wall display | Explicit screen front; wall-facing/viewer relation |
+| 15 | `b_18` | `1.800 × 0.401 × 0.501` | low cabinet | Front-access/open-shelf side; light-wood single-level storage run |
+| 16 | `d_1000003614203` | `1.840 × 0.400 × 0.653` | low cabinet | Front-access drawers/open shelf; dark-walnut single-level run |
+| 17 | `b_35` | `0.493 × 0.425 × 0.497` | side table/cabinet | Drawer front is directional; compact marble-top unit |
+| 18 | `c_SM_Table_4` | `0.559 × 0.559 × 0.616` | round side table | Radial/no front; compact cafe side table |
+| 19 | `a_SM_CoffeeTable_01b` | `0.820 × 0.800 × 0.405` | coffee table | No functional front; two-tier lounge table |
+| 20 | `b_47` | `1.800 × 0.900 × 0.720` | long table | Strong longitudinal axis; shared coworking table |
+
+### User-selected additions
+
+The user selected candidate numbers `1, 10, 15, 17`, each with count one. The
+new carpet replaces the deleted false rug. The monitor, low cabinet, and
+drawer-front side table are additions. The deleted bookshelf has no replacement.
+
+| Original candidate | Count | Exact asset ID | CSV bbox W×D×H (m) | Intended support | Provisional role / direction |
+| ---: | ---: | --- | --- | --- | --- |
+| 1 | 1 | `45_Capet05` | `2.400 × 1.700 × 0.010` | floor | Actual muted geometric lounge rug replacing `area_rug_1`; no front |
+| 10 | 1 | `41_ComputerSet_03` | `0.480 × 0.198 × 0.445` | on object | Coworking monitor with verified display side required at materialization |
+| 15 | 1 | `b_18` | `1.800 × 0.401 × 0.501` | floor | Low, light-wood single-level storage run; front-access side |
+| 17 | 1 | `b_35` | `0.493 × 0.425 × 0.497` | floor | Compact marble-top side table/cabinet; drawer-front side |
+
+### Candidate-selection constraints
+
+- Candidate `1` is the only proposed rug replacement and must not reuse the
+  removed `22_SM_Rug_Stacked_01g` binding.
+- No candidate silently recreates the deleted bookshelf.
+- For candidates `2`--`14`, this ledger records semantic directionality only.
+  Materialization must preserve a verified upstream canonical front when
+  available; otherwise it must leave `canonical_front` absent rather than
+  inventing a vector.
+- Candidate `10`, `11`, and `12` require explicit table support. Candidate `14`
+  requires wall support.
+- Candidates `15` and `16` are the intentionally small cabinet subset; avoid
+  selecting both unless they have distinct roles and wall footprints.
+- Candidates `2`--`9` and `13`--`20` require collision-free floor/table
+  footprints and preserved circulation.
+- All four selected asset directories exist. None is materialized into the
+  executable FrozenAssets case by this review-only update.
+
+### Materialization still required
+
+1. Remove `bookshelf_1` without creating a replacement bookshelf slot.
+2. Remove `area_rug_1` and its false-rug `22_SM_Rug_Stacked_01g` binding;
+   recreate the rug slot bound exactly to `45_Capet05` at fixed native scale.
+3. Add unique monitor, low-cabinet, and drawer-side-table slots without changing
+   other retained S108 identities.
+4. Bind the monitor to the coworking table and verify its mesh-derived
+   canonical-front/display side before recording a facing relation. Leave
+   `canonical_front` absent if it cannot be verified.
+5. Preserve the front-access orientation of both storage pieces and validate
+   their `1.800 x 0.401 m` and `0.493 x 0.425 m` footprints against walls,
+   seating, and circulation.
+6. Add immutable catalog records and source hashes, then re-run local-asset,
+   frozen-binding, architecture, scale, support, facing, and harness-eligibility
+   preflight.
