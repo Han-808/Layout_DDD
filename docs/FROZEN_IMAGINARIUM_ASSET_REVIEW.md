@@ -207,3 +207,128 @@ the other seven rows are additions to the retained baseline inventory.
    free footprint relative to the existing pantry, sideboard, and utility shelf.
 6. Add immutable catalog records and source hashes, then re-run room-height,
    local-asset, frozen-binding, architecture, and harness-eligibility preflight.
+
+## S102 — shared office, library, and meeting room
+
+Review status: `user_selected_pending_materialization`
+
+Recorded: `2026-09-05` (`Asia/Shanghai`)
+
+### Baseline scene
+
+- Model: `HY4-SFT0812`
+- SceneBoard dataset key: `hy4_sft0812`
+- Displayed liveboard score: `99.10`
+- Source score: `99.44`
+- Coverage: `100.0`
+- Existing object count: `22`
+- Canonical scene:
+  `Support/datasets/hy_server_generations_v1/hy4-sft0812/S102/scene/canonical_scene.json`
+- Canonical scene SHA-256:
+  `e965dddfd5e639c7daa70af44242eca2c12004c431f39181a22c102d27908635`
+- Blender scene:
+  `Support/datasets/hy_server_generations_v1/hy4-sft0812/S102/prepared/evaluation.blend`
+- Blender scene SHA-256:
+  `181c43fe50f8f74d813e876140ce9ba92c8599940f6fe8a748c980ee6525e312`
+
+### User removal decision
+
+Remove exactly two objects: user-visible Blender objects `Asset_monitor_a` and
+`Asset_monitor_b`, recorded canonically as `monitor_a` and `monitor_b`. Both are
+bound to exact Imaginarium asset `5_SM_PC_B_Monitor` (CSV row `964`). Preserve
+the source Blender/native scene unchanged; apply removals only when the approved
+FrozenAssets case is materialized.
+
+### Local retirement-policy audit
+
+The user's expectation that this asset is locally blocked is supported but not
+fully enforced:
+
+- `Support/scripts/migrate_multi_room_monitor_asset.py` explicitly labels
+  `5_SM_PC_B_Monitor` as retired and orientation-incompatible.
+- That migration defines `41_ComputerSet_03` as the reviewed fixed replacement,
+  with canonical facing `local_neg_y`.
+- The catalog CSV row for `5_SM_PC_B_Monitor` still has an empty `state` field.
+- The current `frozen_imaginarium_scene10_v1.json` catalog and S102 case still
+  reference `5_SM_PC_B_Monitor`.
+
+Therefore the asset is retired by a specific local migration policy, but it is
+not globally fail-closed in the catalog/retrieval boundary. This review records
+the discrepancy without broadening scope into a block-policy refactor.
+
+### Candidate shortlist
+
+All twenty exact CSV assets and their local directories were verified. Candidate
+`1` is the reviewed replacement monitor and is proposed with count two, one per
+desk. The remaining candidates add workstation, library, meeting, storage, and
+decorative detail. Only the rows repeated in the user-selected table below are
+approved for later materialization.
+
+| Candidate | CSV id | Exact asset ID | CSV bbox W×D×H (m) | CSV class/category | Suggested count / placement / role |
+| ---: | ---: | --- | --- | --- | --- |
+| 1 | 742 | `41_ComputerSet_03` | `0.480 × 0.198 × 0.445` | `Computer_monitor` / `monitor` | 2; one on each desk; reviewed replacement for both retired monitors |
+| 2 | 197 | `0_SM_Keyboard` | `0.326 × 0.137 × 0.010` | `Keyboard` / `keyboard` | 2; one in front of each replacement monitor |
+| 3 | 207 | `0_SM_Laptop` | `0.383 × 0.282 × 0.257` | `Laptop_computer` / `laptop` | 1; secondary mobile workstation or meeting-table device |
+| 4 | 304 | `11_SM_Books_03` | `0.140 × 0.035 × 0.210` | `Book` / `book` | 1; upright teal book on a bookcase shelf |
+| 5 | 306 | `11_SM_Books_05` | `0.140 × 0.036 × 0.210` | `Book` / `book` | 1; upright parchment-covered reference book |
+| 6 | 307 | `11_SM_Books_06` | `0.139 × 0.032 × 0.210` | `Book` / `book` | 1; upright dark-navy book on a bookcase shelf |
+| 7 | 118 | `0_SM_002_Book001` | `0.196 × 0.298 × 0.026` | `Book` / `bookcase` | 1; flat finance book on desk, meeting table, or shelf |
+| 8 | 119 | `0_SM_002_Book002` | `0.210 × 0.301 × 0.025` | `Book` / `bookcase` | 1; flat architecture book in the library/meeting zone |
+| 9 | 448 | `17_SM_Magazine_2` | `0.250 × 0.324 × 0.039` | `magazine` / `stack` | 1; magazine stack on the reading side table |
+| 10 | 450 | `17_SM_Opened_Book` | `0.388 × 0.239 × 0.052` | `Book` / `magazine` | 1; open book on the reading side table or desk |
+| 11 | 1466 | `a_SM_Globe` | `0.265 × 0.279 × 0.412` | `Globe` / `globe` | 1; library shelf or cabinet display object |
+| 12 | 157 | `0_SM_Coffee_cup_2` | `0.081 × 0.107 × 0.098` | `Water_cup` / `mug` | 2; one mug per workstation or meeting participants' area |
+| 13 | 1715 | `a_SM_Tablet` | `0.463 × 0.293 × 0.014` | `Tablet_computer` / `tablet` | 1; flat collaboration device on meeting table |
+| 14 | 1418 | `a_SM_Decor_9` | `0.196 × 0.058 × 0.188` | `Desktop_ornament` / `statue` | 1; restrained black sculpture on cabinet or shelf |
+| 15 | 1766 | `a_SM_Wall_Picture_2` | `0.950 × 0.020 × 1.400` | `Wall_mounted_picture_frame` / `art` | 1; geometric wall art in reading or meeting zone |
+| 16 | 1622 | `a_SM_Plant_01a` | `0.960 × 0.739 × 1.380` | `Large_potted_plant` / `vase` | 1; floor plant at an unoccupied room corner |
+| 17 | 1623 | `a_SM_Plant_02a` | `0.924 × 0.576 × 0.549` | `Small_potted_plant` / `planter` | 1; floor or sufficiently large low cabinet; rectangular fern planter |
+| 18 | 1832 | `a_TrashCan3` | `0.258 × 0.258 × 0.502` | `Outdoor_trash_can` / `trashcan` | 1; compact waste bin near the printer or desks |
+| 19 | 279 | `0_wooden_display_shelves_01_2k_packed` | `1.078 × 0.372 × 1.556` | `Display_cabinet` / `cabinet` | 1; library storage with cubbies, distinct from the two tall bookcases |
+| 20 | 1871 | `b_18` | `1.800 × 0.401 × 0.501` | `TV_cabinet` / `cabinet` | 1; low shared print/storage station if sufficient wall space remains |
+
+### User-selected additions
+
+The user selected candidates `1, 2, 6, 7, 12, 20` with explicit multiplicities.
+This represents nine instances across six exact assets. The two replacement
+monitors replace the two removed instances one-for-one; the remaining seven
+instances are additions to the retained baseline inventory.
+
+| Original candidate | Count | CSV id | Exact asset ID | CSV bbox W×D×H (m) | Intended support | Provisional role |
+| ---: | ---: | ---: | --- | --- | --- | --- |
+| 1 | 2 | 742 | `41_ComputerSet_03` | `0.480 × 0.198 × 0.445` | on object | One reviewed flat-panel monitor on each desk, replacing `monitor_a` and `monitor_b` |
+| 2 | 2 | 197 | `0_SM_Keyboard` | `0.326 × 0.137 × 0.010` | on object | One keyboard in front of each replacement monitor |
+| 6 | 1 | 307 | `11_SM_Books_06` | `0.139 × 0.032 × 0.210` | on object | Upright dark-navy book on a bookcase shelf |
+| 7 | 1 | 118 | `0_SM_002_Book001` | `0.196 × 0.298 × 0.026` | on object | Flat finance book on a desk, meeting table, or shelf |
+| 12 | 2 | 157 | `0_SM_Coffee_cup_2` | `0.081 × 0.107 × 0.098` | on object | One coffee mug at each workstation |
+| 20 | 1 | 1871 | `b_18` | `1.800 × 0.401 × 0.501` | floor | Low shared printer/storage station against a suitable wall |
+
+### Candidate-selection constraints
+
+- Candidate `1`, if selected, means two instances of the same exact reviewed
+  asset, replacing `monitor_a` and `monitor_b` one-for-one.
+- Candidate `2`, if selected, likewise means two instances, one per desk.
+- Candidates `4`--`14` require explicit desk, table, cabinet, side-table, or
+  bookcase support; do not flatten them to the floor.
+- Candidate `15` requires wall support.
+- Candidates `16`, `17`, `19`, and `20` have material footprints; select only if
+  they retain circulation and distinct functional roles.
+- All six selected asset directories exist. None is materialized into the
+  executable FrozenAssets case by this review-only update.
+
+### Materialization still required
+
+1. Remove `monitor_a` and `monitor_b` and their retired
+   `5_SM_PC_B_Monitor` bindings; recreate two monitor slots bound exactly to
+   `41_ComputerSet_03` while retaining the workstation identities.
+2. Add two keyboard slots and two mug slots, paired one-to-one with the two
+   desks/workstations.
+3. Add one upright-book slot, one flat-book slot, and one low print-station
+   cabinet slot with unique identities.
+4. Confirm exact support parents for all eight tabletop/shelf instances; do not
+   flatten them to the floor.
+5. Confirm the `b_18` cabinet has a collision-free wall footprint and place the
+   existing office printer on it if that support relationship is selected.
+6. Add immutable catalog records and source hashes, then re-run local-asset,
+   frozen-binding, architecture, scale, support, and harness-eligibility
+   preflight.
