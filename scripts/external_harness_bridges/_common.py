@@ -212,15 +212,15 @@ def openai_chat_completion(
             response_payload = json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         raw = exc.read(65537).decode("utf-8", errors="replace")
-        detail = _redacted_error_detail(
+        detail = redact_error_detail(
             raw,
-            secret=api_key,
+            secrets=(api_key,),
             truncated=len(raw.encode("utf-8")) > 65536,
         )
         raise RuntimeError(f"model endpoint returned HTTP {exc.code}: {detail}") from exc
     except urllib.error.URLError as exc:
-        reason = _redacted_error_detail(
-            str(exc.reason), secret=api_key, truncated=False
+        reason = redact_error_detail(
+            str(exc.reason), secrets=(api_key,), truncated=False
         )
         raise RuntimeError(
             f"could not reach configured model endpoint: {reason}"
@@ -398,15 +398,16 @@ class _RejectRedirectHandler(urllib.request.HTTPRedirectHandler):
         )
 
 
-def _redacted_error_detail(
+def redact_error_detail(
     value: str,
     *,
-    secret: str | None,
+    secrets: Sequence[str] = (),
     truncated: bool,
 ) -> str:
     safe = str(value)
-    if secret:
-        safe = safe.replace(secret, "<redacted>")
+    for secret in secrets:
+        if secret:
+            safe = safe.replace(str(secret), "<redacted>")
     safe = re.sub(r"(?i)\bbearer\s+[^\s,;\"']+", "Bearer <redacted>", safe)
     safe = re.sub(
         r'(?i)(["\']?(?:api[_-]?key|authorization|access[_-]?token|secret)["\']?\s*[:=]\s*)'
@@ -414,7 +415,23 @@ def _redacted_error_detail(
         r"\1<redacted>",
         safe,
     )
+    safe = re.sub(r"https?://[^\s\"']+", "<redacted-url>", safe, flags=re.IGNORECASE)
     result = safe[:4096]
     if truncated or len(safe) > 4096:
         result += "...<truncated>"
     return result
+
+
+def _redacted_error_detail(
+    value: str,
+    *,
+    secret: str | None,
+    truncated: bool,
+) -> str:
+    """Backward-compatible private wrapper used by older bridge tests."""
+
+    return redact_error_detail(
+        value,
+        secrets=(secret,) if secret else (),
+        truncated=truncated,
+    )

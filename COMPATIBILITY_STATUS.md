@@ -145,7 +145,7 @@ for the released systems:
 | --- | --- | --- | --- |
 | LayoutGPT | `run_layoutgpt_3d.py` dataset/batch workflow | `scripts/external_harness_bridges/layout_gpt_frozen.py` (controlled CSS + required frozen ICL messages) | A released-derived ICL file plus expected hash, pinned clean upstream, shared endpoint fingerprint, and a real smoke run; non-Frozen modes still need the released dataset route |
 | DirectLayout | `demo.py` numerical-layout batch CLI | `scripts/external_harness_bridges/direct_layout_frozen.py` | Pinned clean upstream, shared endpoint fingerprint, verified selected Imaginarium GLBs, and a real smoke run |
-| LayoutVLM | `main.py` scene-config CLI | `scripts/external_harness_bridges/layout_vlm_frozen.py` | Pinned clean upstream, shared endpoint fingerprint, verified selected Imaginarium GLBs, and a real smoke run |
+| LayoutVLM | `main.py` scene-config CLI | `scripts/external_harness_bridges/layout_vlm_frozen.py` (prepared scene-config preservation, released frame conversion, and fail-closed model-code DSL guard) | Pinned clean upstream, shared endpoint fingerprint, verified selected Imaginarium GLBs, and a real smoke run |
 | ReSpace | Released Python SSR generation/sampling API | NOT_IMPLEMENTED | Operator bridge, model/checkpoint/cache, and native sampled asset decisions |
 | SceneWeaver | `Pipeline/main.py` native loop | `scripts/external_harness_bridges/scene_weaver_frozen.py` (fail-closed launcher/validator) | A hash-pinned upstream-side frozen initializer plugin with per-iteration observed mesh evidence, Blender/Infinigen/assets, pinned clean upstream/shared endpoint, and a real smoke run; the released initializer alone cannot lock this protocol |
 
@@ -190,7 +190,9 @@ return code, timestamps/runtime, timeout state, upstream checkout and discoverab
 Git commit, source and preserved native paths, SHA-256, auxiliary artifacts, and
 the resulting canonical scene. The native artifact hash is checked once after
 copying and again after conversion. A converter never receives the mutable
-upstream output path.
+upstream output path. On POSIX, each external command runs in its own process
+group so a timeout also terminates spawned Blender/worker descendants instead of
+leaving them alive after the run is marked failed.
 
 `execution_result.json.runner_provenance` also fingerprints the actual Python
 script or inspectable callback source **before** execution. It records the

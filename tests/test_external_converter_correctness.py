@@ -513,10 +513,8 @@ def test_layout_vlm_separates_local_bbox_scale_and_evaluated_dimensions(
     assert audit["scale_source"] == "native.scale"
     assert audit["evaluated_obb_size"] == [2.0, 1.0, 1.5]
     assert audit["mesh_used_for_evaluation"] is False
-    assert obj["metadata"]["canonical_front"] == [1.0, 0.0, 0.0]
-    assert obj["metadata"]["canonical_front_source"] == (
-        "layoutvlm_processed_asset_contract"
-    )
+    assert "canonical_front" not in obj["metadata"]
+    assert "canonical_front_source" not in obj["metadata"]
     assert obj["metadata"]["native_front_view"] == 2
 
 

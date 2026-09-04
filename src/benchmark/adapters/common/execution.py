@@ -10,6 +10,7 @@ import io
 import json
 import os
 import re
+import signal
 import shlex
 import shutil
 import subprocess
@@ -198,14 +199,11 @@ def execute_external_harness(
             )
             timeout_seconds = _timeout_seconds(execution_config)
             try:
-                completed = subprocess.run(
+                completed = _run_external_process(
                     command,
                     cwd=cwd,
-                    env=environment,
-                    capture_output=True,
-                    text=True,
-                    timeout=timeout_seconds,
-                    check=False,
+                    environment=environment,
+                    timeout_seconds=timeout_seconds,
                 )
             except subprocess.TimeoutExpired as exc:
                 timed_out = True
@@ -972,7 +970,13 @@ def _finish_runner_source_provenance(provenance: dict[str, Any]) -> None:
     provenance["source_unchanged_during_execution"] = (
         digest == provenance["source_sha256"]
     )
-    current_bundle = bridge_bundle_identity(path)
+    try:
+        current_bundle = bridge_bundle_identity(path)
+    except OSError as exc:
+        provenance["bridge_bundle_sha256_after_execution"] = None
+        provenance["bridge_bundle_unchanged_during_execution"] = None
+        provenance["bridge_bundle_verification_error"] = type(exc).__name__
+        return
     provenance["bridge_bundle_sha256_after_execution"] = current_bundle.get(
         "bridge_bundle_sha256"
     )
@@ -1223,6 +1227,55 @@ def _timeout_seconds(execution_config: Mapping[str, Any]) -> float:
     if timeout <= 0.0:
         raise ExternalExecutionError("execution.timeout_seconds must be positive")
     return timeout
+
+
+def _run_external_process(
+    command: Sequence[str],
+    *,
+    cwd: Path,
+    environment: Mapping[str, str],
+    timeout_seconds: float,
+) -> subprocess.CompletedProcess[str]:
+    """Run one harness command and kill its process tree on timeout.
+
+    The real bridges can launch Blender or other worker processes. Killing only
+    the immediate bridge would leave those workers running after the benchmark
+    has already recorded a timeout. On POSIX, a fresh session gives the command
+    its own process group, which is terminated as a unit.
+    """
+
+    process = subprocess.Popen(
+        list(command),
+        cwd=cwd,
+        env=dict(environment),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=os.name == "posix",
+    )
+    try:
+        stdout, stderr = process.communicate(timeout=timeout_seconds)
+    except subprocess.TimeoutExpired as exc:
+        if os.name == "posix":
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        else:
+            process.kill()
+        stdout, stderr = process.communicate()
+        raise subprocess.TimeoutExpired(
+            list(command),
+            timeout_seconds,
+            output=stdout,
+            stderr=stderr,
+        ) from exc
+    return subprocess.CompletedProcess(
+        args=list(command),
+        returncode=int(process.returncode),
+        stdout=stdout,
+        stderr=stderr,
+    )
 
 
 def _file_sha256(path: Path) -> str:

@@ -11,6 +11,7 @@ import pytest
 
 from benchmark.adapters.direct_layout.converter import convert_direct_layout
 from benchmark.adapters.layout_vlm.converter import convert_layout_vlm
+from benchmark.adapters.layout_vlm.adapter import LayoutVLMAdapter
 from benchmark.adapters.scene_weaver.converter import (
     convert_scene_weaver,
     discover_layout_iterations,
@@ -31,6 +32,7 @@ from benchmark.generation_comparison.imaginarium_bundle import (
 )
 from benchmark.generation_comparison.execution import (
     ComparisonRunError,
+    _append_layout_vlm_solver_input_identity_violations,
     run_controlled_generation,
 )
 from benchmark.generation_comparison.inputs import build_controlled_generation_input
@@ -43,6 +45,7 @@ from benchmark.generation_comparison.model_policy import (
 )
 from benchmark.generation_comparison.protocol import ComparisonProtocol
 from benchmark.nl_scene.generation_input import build_generation_input, build_scene_request
+from benchmark.scene_io.validate import ArtifactValidationError
 from benchmark.utils.io import read_json, write_json
 
 
@@ -129,6 +132,13 @@ def test_checked_in_scene10_candidate_is_exact_and_excludes_respace() -> None:
         assert execution["expected_bridge_bundle_sha256"] == (
             bridge_bundle_identity(bridge)["bridge_bundle_sha256"]
         )
+    layout_vlm_execution = example["methods"]["layout_vlm"]["adapter_config"][
+        "execution"
+    ]
+    assert layout_vlm_execution["auxiliary_artifacts"]["scene_config"] == (
+        "{upstream_output_dir}/prepared_scene_config.json"
+    )
+    assert "--prepared-scene-config-output" in layout_vlm_execution["command"]
     for case in value["cases"]:
         frozen_ids = [item["slot_id"] for item in case["objects"]]
         plan_ids = [item["id"] for item in case["object_plan"]["objects"]]
@@ -236,7 +246,7 @@ def test_same_model_policy_checks_config_and_preserved_runner_report(
     assert observed["valid"] is True
 
 
-def test_agent_endpoint_forms_resolve_to_one_frozen_base_fingerprint(
+def test_harness_endpoint_forms_resolve_to_one_frozen_base_fingerprint(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     common = _bridge("_common")
@@ -762,6 +772,350 @@ def test_layoutvlm_processed_bbox_and_front_are_restored_to_canonical_mesh_frame
     assert scene["objects"][0]["metadata"]["geometry_audit"][
         "native_bbox_axis_transform"
     ] == "swap_xy_for_layoutvlm_processed_positive_x_frame"
+
+
+def test_layoutvlm_released_asset_basis_is_geometric_without_inventing_front(
+    tmp_path: Path,
+) -> None:
+    native = write_json(
+        tmp_path / "layout.json",
+        {
+            "frontless_asset-0": {
+                "position": [2.0, 2.0, 0.5],
+                "rotation": [0.0, 0.0, 0.0],
+                "scale": [1.0, 1.0, 1.0],
+            }
+        },
+    )
+    scene = convert_layout_vlm(
+        native,
+        _direct_generation_input(),
+        {
+            "layout_vlm_asset_frame_contract": (
+                "swap_xy_for_layoutvlm_processed_positive_x_frame"
+            ),
+            "scene_config": {
+                "boundary": {
+                    "floor_vertices": [
+                        [0, 0, 0],
+                        [4, 0, 0],
+                        [4, 4, 0],
+                        [0, 4, 0],
+                    ],
+                    "wall_height": 3.0,
+                },
+                "assets": {
+                    "frontless_asset-0": {
+                        "uid": "frontless.asset",
+                        "category": "table",
+                        "assetMetadata": {
+                            "boundingBox": {"x": 2.0, "y": 1.0, "z": 1.0}
+                        },
+                    }
+                },
+            },
+        },
+        None,
+    )
+    obj = scene["objects"][0]
+    assert obj["size"] == pytest.approx([2.0, 1.0, 1.0])
+    assert obj["rotation"][2] == pytest.approx(90.0)
+    assert "canonical_front" not in obj["metadata"]
+    assert obj["metadata"]["geometry_audit"][
+        "orientation_basis_source"
+    ] == "released_layoutvlm_preprocess_and_renderer_contract"
+
+    with pytest.raises(ArtifactValidationError, match="unsupported.*asset-frame"):
+        convert_layout_vlm(
+            native,
+            _direct_generation_input(),
+            {
+                "layout_vlm_asset_frame_contract": "guess_from_bbox_magnitude",
+                "scene_config": {
+                    "assets": {
+                        "frontless_asset-0": {
+                            "uid": "frontless.asset",
+                            "assetMetadata": {
+                                "boundingBox": {
+                                    "x": 2.0,
+                                    "y": 1.0,
+                                    "z": 1.0,
+                                }
+                            },
+                        }
+                    }
+                },
+            },
+            None,
+        )
+
+
+def test_controlled_layoutvlm_uses_released_asset_basis_with_prebridge_catalog(
+    tmp_path: Path,
+) -> None:
+    catalog = _catalog()
+    protocol = _protocol(catalog)
+
+    def runner(*, out_dir: Path, **_kwargs: object) -> dict[str, object]:
+        native = write_json(
+            out_dir / "layout.json",
+            {
+                "reading_chair_1": {
+                    "position": [2.0, 2.0, 0.5],
+                    "rotation": [0.0, 0.0, 0.0],
+                    "scale": [1.0, 1.0, 1.0],
+                }
+            },
+        )
+        return {"native_artifact_path": native}
+
+    result = run_controlled_generation(
+        generation_input=_direct_generation_input(),
+        adapter_name="layout_vlm",
+        protocol=protocol,
+        asset_catalog=catalog,
+        out_dir=tmp_path / "run",
+        adapter_config={
+            "runner": runner,
+            "comparison_support": {
+                "fixed_object_inventory": True,
+                "exact_asset_ids": True,
+                "fixed_native_scale": True,
+            },
+        },
+    )
+    scene = read_json(result["canonical_scene"])
+    obj = scene["objects"][0]
+    assert obj["rotation"][2] == pytest.approx(90.0)
+    assert obj["size"] == pytest.approx([0.8, 0.7, 1.0])
+    assert "canonical_front" not in obj["metadata"]
+
+
+def test_layoutvlm_converter_sidecar_is_bound_to_reported_solver_input(
+    tmp_path: Path,
+) -> None:
+    scene_config = write_json(tmp_path / "prepared_scene_config.json", {"assets": {}})
+    report = write_json(
+        tmp_path / "runner_report.json",
+        {
+            "protocol_observation": {
+                "prepared_scene_config_sha256": file_sha256(scene_config)
+            }
+        },
+    )
+    adapter = LayoutVLMAdapter()
+    adapter.last_run_metadata = {
+        "preserved_auxiliary_artifacts": {
+            "scene_config": {
+                "path": scene_config.as_posix(),
+                "sha256": file_sha256(scene_config),
+            },
+            "runner_report": {
+                "path": report.as_posix(),
+                "sha256": file_sha256(report),
+            },
+        }
+    }
+    configured = adapter.enrich_conversion_config({})
+    assert configured["scene_config_path"] == scene_config.as_posix()
+
+    adapter.last_run_metadata["preserved_auxiliary_artifacts"]["scene_config"][
+        "sha256"
+    ] = "0" * 64
+    with pytest.raises(ArtifactValidationError, match="differs from the solver input"):
+        adapter.enrich_conversion_config({})
+
+
+def test_controlled_layoutvlm_subprocess_requires_exact_solver_input_hash() -> None:
+    validation = {"violations": []}
+    execution_metadata = {
+        "runner_kind": "subprocess",
+        "preserved_auxiliary_artifacts": {
+            "scene_config": {"sha256": "a" * 64}
+        },
+    }
+    _append_layout_vlm_solver_input_identity_violations(
+        validation,
+        adapter_name="layout_vlm",
+        execution_metadata=execution_metadata,
+        protocol_observation={"prepared_scene_config_sha256": "b" * 64},
+    )
+    assert validation["violations"][0]["code"] == (
+        "layoutvlm_solver_input_identity_mismatch"
+    )
+
+    validation = {"violations": []}
+    _append_layout_vlm_solver_input_identity_violations(
+        validation,
+        adapter_name="layout_vlm",
+        execution_metadata=execution_metadata,
+        protocol_observation={"prepared_scene_config_sha256": "a" * 64},
+    )
+    assert validation["violations"] == []
+
+
+def test_layoutvlm_constraint_program_guard_accepts_only_the_released_pose_dsl() -> None:
+    bridge = _bridge("layout_vlm_frozen")
+    prepared = {
+        "boundary": {
+            "floor_vertices": [[0, 0, 0], [4, 0, 0], [4, 4, 0], [0, 4, 0]]
+        },
+        "assets": {
+            "chair-0": {
+                "asset_var_name": "chair",
+                "instance_idx": 0,
+            },
+            "table-0": {
+                "asset_var_name": "table",
+                "instance_idx": 0,
+            },
+        },
+    }
+    audit = bridge._validate_constraint_program(
+        "\n".join(
+            (
+                "chair[0].position = [1.0, 2.0, 0.5]",
+                    "chair.placements[0].rotation = [0, 0, radians(90)]",
+                    (
+                        "solver.distance_constraint("
+                        "chair[0], table[0], None, 1.0, weight=10)"
+                    ),
+            )
+        ),
+        group_assets={"chair-0"},
+        prepared=prepared,
+    )
+    assert audit["pose_assignment_count"] == 2
+    assert audit["constraint_count"] == 1
+    assert len(audit["source_sha256"]) == 64
+
+
+@pytest.mark.parametrize(
+    ("program", "message"),
+    [
+        ("import os", "outside the frozen DSL"),
+        (
+            "\n".join(
+                (
+                    "chair[0].position = [__import__('os'), 0, 0]",
+                    "chair[0].rotation = [0, 0, 0]",
+                    "solver.against_wall(chair[0], walls[0])",
+                )
+            ),
+            "finite numeric literals",
+        ),
+        (
+            "\n".join(
+                (
+                    "chair[0].position = [1, 2, 0.5]",
+                    "solver.against_wall(chair[0], walls[0])",
+                )
+            ),
+            "explicit position and rotation",
+        ),
+        (
+            "\n".join(
+                (
+                    "chair[0].position = [1, 2, 0.5]",
+                    "chair[0].rotation = [0, 0, 0]",
+                    "solver.align_x(chair[0], table[0])",
+                )
+            ),
+            "advertised solver constraint",
+        ),
+        (
+            "\n".join(
+                (
+                    "chair[0].position = [1, 2, 0.5]",
+                    "chair[0].rotation = [0, 0, 0]",
+                    "solver.distance_constraint(chair[0], walls[0], 0, 1)",
+                )
+            ),
+            "target must be a known asset",
+        ),
+    ],
+)
+def test_layoutvlm_constraint_program_guard_rejects_untrusted_python(
+    program: str,
+    message: str,
+) -> None:
+    bridge = _bridge("layout_vlm_frozen")
+    prepared = {
+        "boundary": {
+            "floor_vertices": [[0, 0, 0], [4, 0, 0], [4, 4, 0], [0, 4, 0]]
+        },
+        "assets": {
+            "chair-0": {"asset_var_name": "chair", "instance_idx": 0},
+            "table-0": {"asset_var_name": "table", "instance_idx": 0},
+        },
+    }
+    with pytest.raises(ValueError, match=message):
+        bridge._validate_constraint_program(
+            program,
+            group_assets={"chair-0"},
+            prepared=prepared,
+        )
+
+
+def test_layoutvlm_constraint_guard_wraps_the_final_upstream_exec_boundary(
+    tmp_path: Path,
+) -> None:
+    bridge = _bridge("layout_vlm_frozen")
+    prepared = {
+        "boundary": {
+            "floor_vertices": [[0, 0, 0], [4, 0, 0], [4, 4, 0], [0, 4, 0]]
+        },
+        "assets": {
+            "chair-0": {"asset_var_name": "chair", "instance_idx": 0}
+        },
+    }
+
+    class FakeSandbox:
+        def __init__(self) -> None:
+            self.executed = 0
+
+        def sanity_check(self, _group: object, _program: str) -> str:
+            self.executed += 1
+            return "executed"
+
+    class FakeSolver:
+        def __init__(self) -> None:
+            self.sandbox = FakeSandbox()
+            self.program = "\n".join(
+                (
+                    "chair[0].position = [1, 2, 0.5]",
+                    "chair[0].rotation = [0, 0, 0]",
+                    "solver.against_wall(chair[0], walls[0])",
+                )
+            )
+
+        def _solve_single_group(
+            self,
+            _task: object,
+            _criteria: object,
+            _placed: object,
+            group: object,
+            _save_dir: object,
+        ) -> str:
+            return self.sandbox.sanity_check(group, self.program)
+
+    solver = FakeSolver()
+    tracking = bridge._install_constraint_program_guard(
+        solver,
+        prepared,
+        report_path=tmp_path / "guard.json",
+    )
+    assert solver._solve_single_group(None, None, None, {"chair-0"}, None) == (
+        "executed"
+    )
+    assert solver.sandbox.executed == 1
+    assert tracking["accepted_program_count"] == 1
+
+    solver.program = "import os"
+    with pytest.raises(RuntimeError, match="rejected by the frozen DSL"):
+        solver._solve_single_group(None, None, None, {"chair-0"}, None)
+    assert solver.sandbox.executed == 1
+    assert tracking["rejected_program_count"] == 1
 
 
 def test_sceneweaver_released_world_aabb_restores_local_bbox_and_front_basis(
@@ -1479,7 +1833,10 @@ def test_bridge_input_builders_preserve_frozen_ids_and_geometry(
 
     class FailingOptimization(FakeOptimization):
         def optimize(self, **_kwargs: object) -> None:
-            raise RuntimeError("optimizer exploded")
+            raise RuntimeError(
+                "optimizer exploded token=secret-value "
+                "https://private-model.example/v1"
+            )
 
     failing_pipeline = FakePipeline()
     failing_pipeline.optimization_service = FailingOptimization(
@@ -1492,11 +1849,17 @@ def test_bridge_input_builders_preserve_frozen_ids_and_geometry(
         expected=[],
         tolerance=1.0e-6,
         audit_dir=tmp_path / "direct_failure_audit",
+        error_secrets=("secret-value",),
     )
     with pytest.raises(RuntimeError, match="no base-layout fallback"):
         failing_pipeline._run_optimization_with_retry("ignored", object())
     assert failing_tracking["optimization_attempts"] == 2
     assert failing_tracking["optimization_completed"] is False
+    failure_message = failing_tracking["optimization_attempt_results"][0][
+        "error_message"
+    ]
+    assert "secret-value" not in failure_message
+    assert "private-model.example" not in failure_message
     selected_state = direct._select_completed_layout_state(
         {
             "completed_attempt": 2,

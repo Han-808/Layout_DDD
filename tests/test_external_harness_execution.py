@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
+import time
 from typing import Any
 
 import pytest
@@ -235,6 +237,33 @@ def test_external_process_failures_persist_execution_evidence(
     assert "fake stdout" in Path(result["stdout_path"]).read_text(encoding="utf-8")
     assert "fake stderr" in Path(result["stderr_path"]).read_text(encoding="utf-8")
     assert not (tmp_path / f"failure_{mode}" / "generated_scene.json").exists()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX process-group contract")
+def test_timeout_terminates_upstream_descendant_processes(tmp_path: Path) -> None:
+    repo = _fake_upstream_repo(tmp_path / "timeout_tree_repo")
+    config = _adapter_config("direct_layout", repo, mode="timeout_tree")
+    config["execution"]["timeout_seconds"] = 0.05
+    run_root = tmp_path / "timeout_tree_run"
+
+    with pytest.raises(ExternalExecutionError, match="timed out"):
+        run_generate(
+            generation_input=_generation_input(),
+            adapter_name="direct_layout",
+            out_dir=run_root,
+            adapter_config=config,
+            run_generation=True,
+        )
+
+    # The descendant writes only after 0.5 s. If it escaped the timed-out
+    # bridge's process group, this sentinel will appear.
+    time.sleep(0.7)
+    assert not (
+        run_root
+        / "generator"
+        / "upstream_output"
+        / "descendant_survived.txt"
+    ).exists()
 
 
 def test_missing_repo_and_executable_fail_clearly(tmp_path: Path) -> None:
@@ -635,6 +664,29 @@ def test_unreadable_source_audit_does_not_hide_the_upstream_result(
     assert provenance["source_verification_error"] == "PermissionError"
 
 
+def test_deleted_source_audit_is_recorded_without_masking_upstream_result(
+    tmp_path: Path,
+) -> None:
+    from benchmark.adapters.common import execution
+
+    source = tmp_path / "runner.py"
+    source.write_text("# test fixture\n", encoding="utf-8")
+    provenance = {
+        "source_path": str(source),
+        "source_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+        "bridge_bundle_sha256": "before",
+    }
+    source.unlink()
+
+    execution._finish_runner_source_provenance(provenance)
+
+    assert provenance["source_sha256_after_execution"] is None
+    assert provenance["source_unchanged_during_execution"] is False
+    assert provenance["bridge_bundle_sha256_after_execution"] is None
+    assert provenance["bridge_bundle_unchanged_during_execution"] is None
+    assert provenance["bridge_bundle_verification_error"] == "FileNotFoundError"
+
+
 @pytest.mark.parametrize("adapter_name", ["layout_gpt", "scene_weaver"])
 def test_generation_sidecar_asset_bindings_are_preserved_and_consumed(
     adapter_name: str,
@@ -930,6 +982,7 @@ _FAKE_UPSTREAM_SCRIPT = r'''from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import subprocess
 import sys
 import time
 
@@ -945,6 +998,21 @@ print(f"fake stderr: {adapter}", file=sys.stderr, flush=True)
 if mode == "nonzero":
     raise SystemExit(7)
 if mode == "timeout":
+    time.sleep(2)
+    raise SystemExit(0)
+if mode == "timeout_tree":
+    output = Path(output_dir)
+    output.mkdir(parents=True, exist_ok=True)
+    sentinel = output / "descendant_survived.txt"
+    subprocess.Popen([
+        sys.executable,
+        "-c",
+        (
+            "import pathlib,sys,time; time.sleep(0.5); "
+            "pathlib.Path(sys.argv[1]).write_text('survived', encoding='utf-8')"
+        ),
+        str(sentinel),
+    ])
     time.sleep(2)
     raise SystemExit(0)
 output = Path(output_dir)

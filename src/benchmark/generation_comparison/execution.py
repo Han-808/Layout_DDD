@@ -417,6 +417,12 @@ def run_controlled_generation(
                 "details": dict(protocol_observation),
             }
         )
+    _append_layout_vlm_solver_input_identity_violations(
+        validation,
+        adapter_name=adapter_name,
+        execution_metadata=execution_metadata,
+        protocol_observation=protocol_observation,
+    )
     _append_input_immutability_violations(
         validation,
         protocol_path=protocol_path,
@@ -627,6 +633,9 @@ def _configure_adapter(
         configured.pop("scene_config_path", None)
         configured.pop("scene_config", None)
         configured["layout_vlm_scene_config"] = scene_config
+        configured["layout_vlm_asset_frame_contract"] = (
+            "swap_xy_for_layoutvlm_processed_positive_x_frame"
+        )
     comparison_support = configured.get("comparison_support")
     comparison_support = (
         comparison_support if isinstance(comparison_support, Mapping) else {}
@@ -1087,6 +1096,52 @@ def _append_input_immutability_violations(
                     }
                 )
     validation["valid_comparison_run"] = not validation["violations"]
+
+
+def _append_layout_vlm_solver_input_identity_violations(
+    validation: dict[str, Any],
+    *,
+    adapter_name: str,
+    execution_metadata: Mapping[str, Any],
+    protocol_observation: Any,
+) -> None:
+    if (
+        adapter_name != "layout_vlm"
+        or execution_metadata.get("runner_kind") != "subprocess"
+    ):
+        return
+    auxiliary = execution_metadata.get("preserved_auxiliary_artifacts")
+    auxiliary = auxiliary if isinstance(auxiliary, Mapping) else {}
+    scene_config_item = auxiliary.get("scene_config")
+    scene_config_item = (
+        scene_config_item if isinstance(scene_config_item, Mapping) else {}
+    )
+    expected_scene_config_hash = (
+        protocol_observation.get("prepared_scene_config_sha256")
+        if isinstance(protocol_observation, Mapping)
+        else None
+    )
+    if not expected_scene_config_hash:
+        validation["violations"].append(
+            {
+                "code": "layoutvlm_solver_input_identity_missing",
+                "message": "LayoutVLM runner did not attest the prepared scene config",
+                "details": {},
+            }
+        )
+    elif scene_config_item.get("sha256") != expected_scene_config_hash:
+        validation["violations"].append(
+            {
+                "code": "layoutvlm_solver_input_identity_mismatch",
+                "message": (
+                    "preserved LayoutVLM scene config is not the exact solver input"
+                ),
+                "details": {
+                    "reported_sha256": expected_scene_config_hash,
+                    "preserved_sha256": scene_config_item.get("sha256"),
+                },
+            }
+        )
 
 
 def _append_ineligibility(

@@ -6,6 +6,7 @@ from benchmark.adapters.common.adapter import (
     SINGLE_ROOM_HARNESS_CAPABILITIES,
     HarnessConverterAdapter,
 )
+from benchmark.adapters.common.execution import artifact_sha256
 from benchmark.adapters.common.native_input import (
     public_asset_selection,
     public_instruction,
@@ -60,6 +61,10 @@ class LayoutVLMAdapter(HarnessConverterAdapter):
 
     def enrich_conversion_config(self, config: dict) -> dict:
         cfg = super().enrich_conversion_config(config)
+        _verify_reported_prepared_scene_config(
+            cfg,
+            getattr(self, "last_run_metadata", None),
+        )
         if cfg.get("scene_config") is not None or cfg.get("scene_config_path"):
             return cfg
         metadata = getattr(self, "last_preparation_metadata", None)
@@ -144,6 +149,63 @@ def _assets_from_public_selection(selection: dict | None) -> dict:
             entry["path"] = str(asset_ref["mesh_uri"])
         assets[object_id] = entry
     return assets
+
+
+def _verify_reported_prepared_scene_config(
+    config: Mapping[str, object],
+    run_metadata: object,
+) -> None:
+    """Bind the converter sidecar to the exact scene config used upstream."""
+
+    if not isinstance(run_metadata, Mapping):
+        return
+    auxiliary = run_metadata.get("preserved_auxiliary_artifacts")
+    if not isinstance(auxiliary, Mapping):
+        return
+    report_item = auxiliary.get("runner_report")
+    report_item = report_item if isinstance(report_item, Mapping) else {}
+    report_path = report_item.get("path")
+    if not report_path:
+        return
+    report_digest, _ = artifact_sha256(Path(str(report_path)))
+    if report_digest != report_item.get("sha256"):
+        raise ArtifactValidationError(
+            "LayoutVLM preserved runner report changed before conversion"
+        )
+    report = read_json(Path(str(report_path)))
+    report = report if isinstance(report, Mapping) else {}
+    observation = report.get("protocol_observation")
+    observation = observation if isinstance(observation, Mapping) else {}
+    expected = observation.get("prepared_scene_config_sha256")
+    if expected is None:
+        return
+    scene_item = auxiliary.get("scene_config")
+    if not isinstance(scene_item, Mapping) or not scene_item.get("path"):
+        raise ArtifactValidationError(
+            "LayoutVLM runner reported a prepared scene config but the exact "
+            "sidecar was not preserved"
+        )
+    if scene_item.get("sha256") != expected:
+        raise ArtifactValidationError(
+            "LayoutVLM preserved scene config differs from the solver input"
+        )
+    scene_digest, _ = artifact_sha256(Path(str(scene_item["path"])))
+    if scene_digest != expected:
+        raise ArtifactValidationError(
+            "LayoutVLM prepared scene config changed before conversion"
+        )
+    if config.get("scene_config") is not None:
+        raise ArtifactValidationError(
+            "LayoutVLM inline scene_config would override the preserved solver input"
+        )
+    configured_path = config.get("scene_config_path")
+    if not configured_path or (
+        Path(str(configured_path)).expanduser().resolve()
+        != Path(str(scene_item["path"])).expanduser().resolve()
+    ):
+        raise ArtifactValidationError(
+            "LayoutVLM converter is not configured with the preserved solver input"
+        )
 
 
 __all__ = ["LayoutVLMAdapter"]

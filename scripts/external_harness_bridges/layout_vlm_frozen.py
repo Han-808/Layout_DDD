@@ -4,7 +4,10 @@
 from __future__ import annotations
 
 import argparse
+import ast
+import hashlib
 import json
+import math
 import os
 import re
 import sys
@@ -13,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from _common import (
+    file_sha256,
     observed_model_identity,
     public_object_plan,
     read_mapping,
@@ -26,6 +30,17 @@ from _common import (
     write_json,
     write_runner_report,
 )
+
+
+CONSTRAINT_PROGRAM_POLICY_VERSION = "layoutvlm_constraint_dsl_v1"
+_CONSTRAINT_METHODS = {
+    "against_wall",
+    "align_with",
+    "distance_constraint",
+    "on_top_of",
+    "point_towards",
+}
+_RESERVED_DSL_NAMES = {"AssetInstance", "radians", "solver", "walls"}
 
 
 class _CountingChat:
@@ -76,6 +91,7 @@ def main() -> None:
     parser.add_argument("--work-dir", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--runner-report", required=True, type=Path)
+    parser.add_argument("--prepared-scene-config-output", required=True, type=Path)
     parser.add_argument("--max-attempts", type=int, default=3)
     args = parser.parse_args()
 
@@ -93,7 +109,11 @@ def main() -> None:
     plan = public_object_plan(method_input)
     prepared = _prepare_task(request, plan, catalog, args.comparison_catalog)
     args.work_dir.mkdir(parents=True, exist_ok=True)
-    prepared_path = write_json(args.work_dir / "prepared_scene_config.json", prepared)
+    prepared_path = write_json(
+        args.prepared_scene_config_output,
+        prepared,
+    )
+    prepared_scene_config_sha256 = file_sha256(prepared_path)
 
     api_key = os.environ.get("LAYOUT_DDD_API_KEY", "").strip()
     api_base = os.environ.get("LAYOUT_DDD_API_BASE_URL", "").strip()
@@ -106,6 +126,8 @@ def main() -> None:
         api_base,
         completion_endpoint=False,
     )
+    # The pinned upstream constructor still creates three clients from the
+    # process environment. They are replaced below before any invocation.
     os.environ["OPENAI_API_KEY"] = api_key
     os.environ["OPENAI_API_BASE"] = api_base
     os.environ["OPENAI_BASE_URL"] = api_base
@@ -117,7 +139,12 @@ def main() -> None:
         from src.layoutvlm.layoutvlm import LayoutVLM
 
         chat = _CountingChat(
-            ChatOpenAI(model_name=identity["model_id"], max_tokens=2048),
+            ChatOpenAI(
+                model_name=identity["model_id"],
+                max_tokens=2048,
+                openai_api_key=api_key,
+                openai_api_base=api_base,
+            ),
             identity,
         )
         solver = LayoutVLM(
@@ -132,9 +159,28 @@ def main() -> None:
         solver.llm_slow = chat
         solver.llm_slow_mini = chat
         solver.llm_slow_grouping = chat
+        constraint_guard = _install_constraint_program_guard(
+            solver,
+            prepared,
+            report_path=args.work_dir / "constraint_program_guard.json",
+        )
+        # Untrusted model-authored constraint code is executed by the released
+        # solver. The AST guard below restricts it to the advertised pose DSL;
+        # remove model credentials from its process environment as defense in
+        # depth before reaching either upstream exec boundary.
+        for environment_name in (
+            "LAYOUT_DDD_API_KEY",
+            "LAYOUT_DDD_API_BASE_URL",
+            "OPENAI_API_KEY",
+            "OPENAI_API_BASE",
+            "OPENAI_BASE_URL",
+        ):
+            os.environ.pop(environment_name, None)
         layout = solver.solve(prepared, MAX_ATTEMPTS=int(args.max_attempts))
     finally:
         os.chdir(old_cwd)
+    if file_sha256(prepared_path) != prepared_scene_config_sha256:
+        raise RuntimeError("LayoutVLM prepared scene config changed during generation")
     if not isinstance(layout, dict):
         raise RuntimeError("LayoutVLM solver did not return its native layout mapping")
     solver_observation = _observe_solver_state(
@@ -173,12 +219,17 @@ def main() -> None:
             "native_zero_rotation_front": [1.0, 0.0, 0.0],
             "solver_state": solver_observation,
             "exact_asset_size_literal_shim": precision_tracking,
+            "constraint_program_guard": constraint_guard,
+            "prepared_scene_config_sha256": prepared_scene_config_sha256,
         },
         observed_model_identities=observed_identities,
         model_identity_evidence="observed_response",
         model_deployment_id=deployment_id,
         model_endpoint_sha256=endpoint_sha256,
-        extra={"prepared_scene_config": prepared_path.resolve().as_posix()},
+        extra={
+            "prepared_scene_config": prepared_path.resolve().as_posix(),
+            "prepared_scene_config_sha256": prepared_scene_config_sha256,
+        },
     )
 
 
@@ -208,6 +259,14 @@ def _prepare_task(
                 f"LayoutVLM controlled native ID must end in '-0': {native_id!r}"
             )
         asset_var_name = native_id[:-2]
+        if (
+            not re.fullmatch(r"[A-Za-z_]\w*", asset_var_name)
+            or asset_var_name.startswith("__")
+            or asset_var_name in _RESERVED_DSL_NAMES
+        ):
+            raise RuntimeError(
+                f"LayoutVLM controlled native ID has unsafe variable name: {native_id!r}"
+            )
         path_value = item.get("path")
         if not path_value:
             raise FileNotFoundError(f"LayoutVLM asset {item.get('uid')!r} has no mesh")
@@ -315,6 +374,447 @@ def _layout_criteria(
         + "\nPUBLIC CONTROLLED OBJECT-PLAN CONSTRAINTS:\n"
         + json.dumps(public_constraints, ensure_ascii=False, separators=(",", ":"))
     )
+
+
+def _install_constraint_program_guard(
+    solver: Any,
+    prepared: Mapping[str, Any],
+    *,
+    report_path: Path,
+) -> dict[str, Any]:
+    """Validate final model-authored code immediately before upstream exec."""
+
+    original_solve_single_group = solver._solve_single_group
+    tracking: dict[str, Any] = {
+        "schema_version": "layoutvlm_constraint_program_guard_report_v1",
+        "policy_version": CONSTRAINT_PROGRAM_POLICY_VERSION,
+        "accepted_program_count": 0,
+        "rejected_program_count": 0,
+        "programs": [],
+    }
+    write_json(report_path, tracking)
+
+    def guarded_solve_single_group(*args: Any, **kwargs: Any) -> Any:
+        group_assets = kwargs.get("group_assets")
+        if group_assets is None and len(args) > 3:
+            group_assets = args[3]
+        if group_assets is None:
+            raise RuntimeError(
+                "LayoutVLM guard could not resolve the current asset group"
+            )
+        sandbox = solver.sandbox
+        original_sanity_check = sandbox.sanity_check
+
+        def guarded_sanity_check(*sanity_args: Any, **sanity_kwargs: Any) -> Any:
+            sanity_group = sanity_kwargs.get("group_assets")
+            if sanity_group is None and sanity_args:
+                sanity_group = sanity_args[0]
+            program = sanity_kwargs.get("entire_program")
+            if program is None and len(sanity_args) > 1:
+                program = sanity_args[1]
+            try:
+                audit = _validate_constraint_program(
+                    program,
+                    group_assets=sanity_group,
+                    prepared=prepared,
+                )
+            except (TypeError, ValueError, SyntaxError) as exc:
+                tracking["rejected_program_count"] += 1
+                tracking["programs"].append(
+                    {
+                        "status": "rejected",
+                        "source_sha256": _program_sha256(program),
+                        "reason": str(exc),
+                    }
+                )
+                write_json(report_path, tracking)
+                raise RuntimeError(
+                    "LayoutVLM model constraint program was rejected by the "
+                    f"frozen DSL policy: {exc}"
+                ) from None
+            tracking["accepted_program_count"] += 1
+            tracking["programs"].append({"status": "accepted", **audit})
+            write_json(report_path, tracking)
+            return original_sanity_check(*sanity_args, **sanity_kwargs)
+
+        sandbox.sanity_check = guarded_sanity_check
+        try:
+            return original_solve_single_group(*args, **kwargs)
+        finally:
+            sandbox.sanity_check = original_sanity_check
+
+    solver._solve_single_group = guarded_solve_single_group
+    return tracking
+
+
+def _validate_constraint_program(
+    program: Any,
+    *,
+    group_assets: Any,
+    prepared: Mapping[str, Any],
+) -> dict[str, Any]:
+    if not isinstance(program, str) or not program.strip():
+        raise ValueError("constraint program must be non-empty text")
+    encoded = program.encode("utf-8")
+    if len(encoded) > 1024 * 1024:
+        raise ValueError("constraint program exceeds the 1 MiB policy limit")
+    try:
+        tree = ast.parse(program, mode="exec")
+    except SyntaxError as exc:
+        raise SyntaxError("constraint program is not valid Python") from exc
+    if len(tree.body) > 5000:
+        raise ValueError("constraint program exceeds the statement policy limit")
+
+    assets = prepared.get("assets")
+    if not isinstance(assets, Mapping):
+        raise ValueError("prepared LayoutVLM task lacks an asset table")
+    all_refs = _known_asset_refs(assets, list(assets))
+    current_ids = _string_set(group_assets, "current asset group")
+    current_refs = _known_asset_refs(assets, current_ids)
+    wall_count = _wall_count(prepared)
+    assignments: set[tuple[tuple[str, int], str]] = set()
+    constrained: set[tuple[str, int]] = set()
+    constraint_count = 0
+
+    for statement in tree.body:
+        if isinstance(statement, ast.Assign):
+            if len(statement.targets) != 1:
+                raise ValueError("pose assignment must have exactly one target")
+            asset_ref, field = _pose_target(statement.targets[0])
+            if asset_ref not in current_refs:
+                raise ValueError("pose assignment target is not in the current group")
+            key = (asset_ref, field)
+            if key in assignments:
+                raise ValueError("duplicate pose-field assignment is forbidden")
+            _validate_vector_literal(
+                statement.value,
+                allow_radians=field == "rotation",
+            )
+            assignments.add(key)
+            continue
+        if isinstance(statement, ast.Expr) and isinstance(statement.value, ast.Call):
+            first_ref = _validate_constraint_call(
+                statement.value,
+                current_refs=current_refs,
+                all_refs=all_refs,
+                wall_count=wall_count,
+            )
+            constrained.add(first_ref)
+            constraint_count += 1
+            continue
+        raise ValueError(
+            f"statement type {type(statement).__name__} is outside the frozen DSL"
+        )
+
+    missing_fields = [
+        f"{name}[{index}].{field}"
+        for name, index in sorted(current_refs)
+        for field in ("position", "rotation")
+        if ((name, index), field) not in assignments
+    ]
+    if missing_fields:
+        raise ValueError(
+            "every current asset requires explicit position and rotation; "
+            f"missing={missing_fields}"
+        )
+    unconstrained = sorted(current_refs - constrained)
+    if unconstrained:
+        raise ValueError(
+            "every current asset requires at least one advertised constraint; "
+            f"missing={unconstrained}"
+        )
+    return {
+        "source_sha256": hashlib.sha256(encoded).hexdigest(),
+        "current_asset_refs": [
+            f"{name}[{index}]" for name, index in sorted(current_refs)
+        ],
+        "pose_assignment_count": len(assignments),
+        "constraint_count": constraint_count,
+    }
+
+
+def _known_asset_refs(
+    assets: Mapping[str, Any],
+    native_ids: Any,
+) -> set[tuple[str, int]]:
+    refs: set[tuple[str, int]] = set()
+    for native_id in _string_set(native_ids, "asset IDs"):
+        item = assets.get(native_id)
+        if not isinstance(item, Mapping):
+            raise ValueError(f"unknown LayoutVLM asset ID {native_id!r}")
+        variable = str(item.get("asset_var_name") or "")
+        if (
+            not re.fullmatch(r"[A-Za-z_]\w*", variable)
+            or variable.startswith("__")
+            or variable in _RESERVED_DSL_NAMES
+        ):
+            raise ValueError(f"asset {native_id!r} has an invalid Python variable")
+        index = item.get("instance_idx")
+        if not isinstance(index, int) or isinstance(index, bool) or index < 0:
+            raise ValueError(f"asset {native_id!r} has an invalid instance index")
+        ref = (variable, index)
+        if ref in refs:
+            raise ValueError(f"duplicate LayoutVLM asset reference {ref!r}")
+        refs.add(ref)
+    return refs
+
+
+def _string_set(value: Any, label: str) -> set[str]:
+    if isinstance(value, (str, bytes)) or not isinstance(value, (set, list, tuple, dict)):
+        raise ValueError(f"{label} must be a finite collection")
+    items = value.keys() if isinstance(value, dict) else value
+    result = {str(item) for item in items}
+    if len(result) != len(value):
+        raise ValueError(f"{label} contains duplicate identifiers")
+    return result
+
+
+def _pose_target(value: ast.expr) -> tuple[tuple[str, int], str]:
+    if not isinstance(value, ast.Attribute) or value.attr not in {
+        "position",
+        "rotation",
+    }:
+        raise ValueError("assignment target must be an asset position or rotation")
+    return _asset_ref(value.value), value.attr
+
+
+def _asset_ref(value: ast.expr) -> tuple[str, int]:
+    if not isinstance(value, ast.Subscript):
+        raise ValueError("asset reference must use a literal placement index")
+    owner = value.value
+    if isinstance(owner, ast.Attribute):
+        if owner.attr != "placements" or not isinstance(owner.value, ast.Name):
+            raise ValueError("unsupported asset attribute chain")
+        name = owner.value.id
+    elif isinstance(owner, ast.Name):
+        name = owner.id
+    else:
+        raise ValueError("unsupported asset reference")
+    index = _integer_index(value.slice)
+    return name, index
+
+
+def _integer_index(value: ast.expr) -> int:
+    if (
+        not isinstance(value, ast.Constant)
+        or not isinstance(value.value, int)
+        or isinstance(value.value, bool)
+        or value.value < 0
+    ):
+        raise ValueError("placement index must be a non-negative integer literal")
+    return int(value.value)
+
+
+def _validate_vector_literal(value: ast.expr, *, allow_radians: bool) -> None:
+    if not isinstance(value, (ast.List, ast.Tuple)) or len(value.elts) != 3:
+        raise ValueError("pose value must be a three-element list or tuple")
+    for element in value.elts:
+        if allow_radians and _is_radians_literal(element):
+            continue
+        _numeric_literal(element)
+
+
+def _is_radians_literal(value: ast.expr) -> bool:
+    if not (
+        isinstance(value, ast.Call)
+        and isinstance(value.func, ast.Name)
+        and value.func.id == "radians"
+        and len(value.args) == 1
+        and not value.keywords
+    ):
+        return False
+    _numeric_literal(value.args[0])
+    return True
+
+
+def _numeric_literal(value: ast.expr) -> float:
+    sign = 1.0
+    literal = value
+    if isinstance(value, ast.UnaryOp) and isinstance(value.op, (ast.UAdd, ast.USub)):
+        sign = -1.0 if isinstance(value.op, ast.USub) else 1.0
+        literal = value.operand
+    if (
+        not isinstance(literal, ast.Constant)
+        or isinstance(literal.value, bool)
+        or not isinstance(literal.value, (int, float))
+    ):
+        raise ValueError("constraint parameters must be finite numeric literals")
+    try:
+        number = sign * float(literal.value)
+    except (OverflowError, ValueError) as exc:
+        raise ValueError("constraint numeric literal is not finite") from exc
+    if not math.isfinite(number):
+        raise ValueError("constraint numeric literal is not finite")
+    return number
+
+
+def _validate_constraint_call(
+    call: ast.Call,
+    *,
+    current_refs: set[tuple[str, int]],
+    all_refs: set[tuple[str, int]],
+    wall_count: int,
+) -> tuple[str, int]:
+    if not (
+        isinstance(call.func, ast.Attribute)
+        and isinstance(call.func.value, ast.Name)
+        and call.func.value.id == "solver"
+        and call.func.attr in _CONSTRAINT_METHODS
+    ):
+        raise ValueError("only advertised solver constraint calls are allowed")
+    if len(call.args) < 2:
+        raise ValueError("solver constraint requires two object arguments")
+    if any(isinstance(argument, ast.Starred) for argument in call.args):
+        raise ValueError("starred constraint arguments are forbidden")
+    if any(keyword.arg is None for keyword in call.keywords):
+        raise ValueError("expanded constraint keyword arguments are forbidden")
+    first = _asset_ref(call.args[0])
+    if first not in current_refs:
+        raise ValueError("constraint first argument must be a current-group asset")
+    method = call.func.attr
+    second = call.args[1]
+    if method == "against_wall":
+        _require_constraint_shape(call, positional=2, keywords=set())
+        _validate_wall_ref(second, wall_count)
+    elif method == "on_top_of":
+        _require_constraint_shape(call, positional=2, keywords=set())
+        _validate_known_asset_ref(second, all_refs, label="on_top_of")
+    elif method in {"align_with", "point_towards"}:
+        _validate_angle_constraint_shape(call)
+        _validate_known_asset_or_fixed_point(
+            second,
+            all_refs,
+            allow_fixed_point=method == "point_towards",
+            label=method,
+        )
+    else:
+        _validate_distance_constraint_shape(call)
+        _validate_known_asset_or_fixed_point(
+            second,
+            all_refs,
+            allow_fixed_point=True,
+            label="distance_constraint",
+        )
+    return first
+
+
+def _require_constraint_shape(
+    call: ast.Call,
+    *,
+    positional: int,
+    keywords: set[str],
+) -> None:
+    if len(call.args) != positional:
+        raise ValueError("solver constraint has unsupported positional arity")
+    actual_keywords = {str(keyword.arg) for keyword in call.keywords}
+    if actual_keywords != keywords or len(actual_keywords) != len(call.keywords):
+        raise ValueError("solver constraint has unsupported keyword arguments")
+
+
+def _validate_angle_constraint_shape(call: ast.Call) -> None:
+    if len(call.args) not in {2, 3}:
+        raise ValueError("solver orientation constraint has unsupported arity")
+    keywords = {str(keyword.arg) for keyword in call.keywords}
+    if not keywords.issubset({"angle"}) or len(keywords) != len(call.keywords):
+        raise ValueError("solver orientation constraint accepts only angle")
+    if len(call.args) == 3 and "angle" in keywords:
+        raise ValueError("solver orientation angle cannot be supplied twice")
+    if len(call.args) == 3:
+        _numeric_literal(call.args[2])
+    for keyword in call.keywords:
+        _numeric_literal(keyword.value)
+
+
+def _validate_distance_constraint_shape(call: ast.Call) -> None:
+    if not 2 <= len(call.args) <= 5:
+        raise ValueError("distance_constraint has unsupported positional arity")
+    parameter_names = ("min_distance", "max_distance", "weight")
+    supplied_positionally = set(parameter_names[: len(call.args) - 2])
+    supplied_by_keyword: set[str] = set()
+    for offset, argument in enumerate(call.args[2:]):
+        name = parameter_names[offset]
+        if name in {"min_distance", "max_distance"} and _is_none_literal(argument):
+            continue
+        _numeric_literal(argument)
+    for keyword in call.keywords:
+        name = str(keyword.arg)
+        if name not in parameter_names:
+            raise ValueError("distance_constraint has unsupported keyword arguments")
+        if name in supplied_by_keyword or name in supplied_positionally:
+            raise ValueError(f"distance_constraint supplied {name} more than once")
+        supplied_by_keyword.add(name)
+        if name in {"min_distance", "max_distance"} and _is_none_literal(
+            keyword.value
+        ):
+            continue
+        _numeric_literal(keyword.value)
+
+
+def _validate_known_asset_ref(
+    value: ast.expr,
+    all_refs: set[tuple[str, int]],
+    *,
+    label: str,
+) -> None:
+    if _asset_ref(value) not in all_refs:
+        raise ValueError(f"{label} target must be a known asset")
+
+
+def _validate_known_asset_or_fixed_point(
+    value: ast.expr,
+    all_refs: set[tuple[str, int]],
+    *,
+    allow_fixed_point: bool,
+    label: str,
+) -> None:
+    if allow_fixed_point and _is_fixed_asset_instance(value):
+        return
+    _validate_known_asset_ref(value, all_refs, label=label)
+
+
+def _validate_wall_ref(value: ast.expr, wall_count: int) -> None:
+    if not (
+        isinstance(value, ast.Subscript)
+        and isinstance(value.value, ast.Name)
+        and value.value.id == "walls"
+    ):
+        raise ValueError("constraint target must be a known asset or wall")
+    index = _integer_index(value.slice)
+    if index >= wall_count:
+        raise ValueError("wall index is outside the native room boundary")
+
+
+def _is_fixed_asset_instance(value: ast.expr) -> bool:
+    if not (
+        isinstance(value, ast.Call)
+        and isinstance(value.func, ast.Name)
+        and value.func.id == "AssetInstance"
+        and not value.args
+        and len(value.keywords) == 1
+        and value.keywords[0].arg == "position"
+    ):
+        return False
+    _validate_vector_literal(value.keywords[0].value, allow_radians=False)
+    return True
+
+
+def _is_none_literal(value: ast.expr) -> bool:
+    return isinstance(value, ast.Constant) and value.value is None
+
+
+def _wall_count(prepared: Mapping[str, Any]) -> int:
+    boundary = prepared.get("boundary")
+    boundary = boundary if isinstance(boundary, Mapping) else {}
+    vertices = boundary.get("floor_vertices")
+    if not isinstance(vertices, list) or len(vertices) < 3:
+        raise ValueError("prepared LayoutVLM task lacks a valid wall boundary")
+    return len(vertices)
+
+
+def _program_sha256(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
 def _observe_solver_state(

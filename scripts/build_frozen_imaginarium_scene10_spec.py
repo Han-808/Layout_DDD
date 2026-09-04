@@ -26,7 +26,7 @@ from urllib.parse import urlsplit, urlunsplit
 SCHEMA_VERSION = "controlled_generation_pilot_v1"
 CASE_IDS = tuple(f"S{number}" for number in range(100, 110))
 SOURCE_DIRS = tuple(f"t{number}" for number in range(100, 110))
-AGENT_METHODS = ("layout_gpt", "direct_layout", "layout_vlm", "scene_weaver")
+HARNESS_METHODS = ("layout_gpt", "direct_layout", "layout_vlm", "scene_weaver")
 IMAGINARIUM_BUNDLE_GEOMETRY_TOLERANCE_M = 1.0e-4
 
 
@@ -177,7 +177,7 @@ def build_spec(
             },
             "model_policy": {
                 "policy": "same_backing_model",
-                "comparison_group": list(AGENT_METHODS),
+                "comparison_group": list(HARNESS_METHODS),
                 "excluded_baselines": ["catalog_placement"],
                 "required_identity": {
                     "provider": model_provider,
@@ -188,7 +188,7 @@ def build_spec(
                 "workflow_budget_policy": "method_native_recorded",
             },
         },
-        "methods": ["catalog_placement", *AGENT_METHODS],
+        "methods": ["catalog_placement", *HARNESS_METHODS],
         "cases": cases,
     }
 

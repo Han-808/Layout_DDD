@@ -10,7 +10,7 @@ same S100--S109 rectangular rooms
   + same public object plans and relations
   + same expanded object slots
   + same exact Imaginarium assets and physical dimensions
-  + same backing model for the four agent harnesses
+  + same backing model for the four scene-generation harnesses
   -> method-native pose generation
   -> preserved native artifact
   -> existing strict converter
@@ -137,7 +137,7 @@ PYTHONPATH=src python scripts/prepare_imaginarium_glb_bundle.py \
 | Catalog Placement | Existing exact asset selection is supplied directly to the existing Stage-C placement prompt; native `catalog_placement_v1` is then converted/evaluated normally. | Integration present; separate baseline model policy. |
 | LayoutGPT | Public plan plus a frozen released-style ICL message set and fixed row order/dimensions -> CSS-style numerical layout -> existing LayoutGPT converter. Exact IDs are preserved in the runner sidecar because the released CSS rows do not encode mesh IDs. | Controlled ICL bridge implemented; a frozen ICL file is required; not real-smoke-tested here. |
 | DirectLayout | Released two-list request plus per-slot exact GLB library -> released DirectLayout pipeline -> native numerical JSON -> existing converter. A path-only shim gives initial/refined artifacts one stable room token while preserving the full semantic prompt in every model call. Every native state is snapshotted and checked before rendering; terminal optimizer failure is no longer swallowed, and states from failed retries cannot become the selected result. | Thin released-pipeline bridge implemented; not real-smoke-tested here. |
-| LayoutVLM | Released scene config with exact frozen asset table -> released one-shot solver/optimizer -> native layout JSON -> existing converter. The bridge reproduces the released X/Y processed-bbox frame, replaces only the released two-decimal size literal with the exact frozen value, and rejects randomized/unplaced fallback or model-mutated size. | Thin released-solver bridge implemented; not real-smoke-tested here. |
+| LayoutVLM | Released scene config with exact frozen asset table -> released one-shot solver/optimizer -> native layout JSON -> existing converter. The bridge reproduces the released X/Y processed-bbox and fixed mesh-frame transform, preserves the prepared scene config, replaces only the released two-decimal size literal with the exact frozen value, and rejects randomized/unplaced fallback or model-mutated size. Model-authored Python is restricted to the released pose/constraint DSL before the upstream executor sees it. | Thin released-solver bridge implemented; not real-smoke-tested here. |
 | SceneWeaver | Exact initialized GLBs -> native reflect/modify loop -> every `layout_N.json` -> existing converter/evaluator per iteration. The plugin must report the exact public-plan hash and native room dimensions, then for each iteration report observed asset ID, mesh path/hash, full-precision canonical local bbox, catalog-bbox bottom-center rebase, and canonical-front-to-native-+X basis. A boolean attestation or benchmark-derived binding alone is insufficient. The converter audits the released rounded world AABB but reconstructs the canonical local OBB rather than rotating that AABB twice. | Conditional: the released initializer/exporter cannot enforce this contract. A versioned upstream-side frozen plugin is required to lock initialization/tools and emit the additional geometry/basis evidence without feeding benchmark scores into reflection. |
 
 Frozen identity does not imply identical mesh observability inside each method.
@@ -183,6 +183,21 @@ configured endpoint strings may differ only by LayoutGPT's required
 `/chat/completions` suffix and must match the protocol's normalized base hash.
 API keys remain inherited secrets and are never stored in the checked config or
 runner report.
+
+LayoutVLM's released solver executes the model-authored constraint program as
+Python. The controlled bridge validates the final post-rewrite program at the
+last boundary before that execution. It admits only explicit finite
+position/rotation assignments for every current-group instance and the five
+constraint calls advertised by the pinned prompt; imports, arbitrary calls,
+control flow, definitions, comprehensions, attribute introspection, and missing
+pose/constraint coverage fail closed. The accepted source hash and policy
+version are preserved without copying program text into the runner report (the
+native upstream work directory already preserves the raw response). The bridge
+also supplies credentials directly to the preconstructed model client and
+removes them from the process environment before the constraint program runs.
+The exact prepared scene-config bytes are separately preserved, and their
+SHA-256 must match the solver-input hash reported by the bridge before that
+sidecar is accepted by the converter.
 
 LayoutGPT additionally requires a frozen JSON list of alternating
 user/assistant ICL messages. It should be derived and versioned from the released

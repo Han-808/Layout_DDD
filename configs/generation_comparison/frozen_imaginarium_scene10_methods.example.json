@@ -30,7 +30,7 @@
           "repo_path": "/ABSOLUTE/PATH/TO/LayoutGPT",
           "expected_upstream_commit": "fc31954962553e5b65bf267a904a6930d50b1f5e",
           "expected_entrypoint_sha256": "0794f1a868cdf44d69903c54687636f08bcafb8a56dc3d8a8f79a7fd2b711c6e",
-          "expected_bridge_bundle_sha256": "5203fee4c2d6bde119e3f29462976dc0b1727e071042699cda70c64ad0fc430a",
+          "expected_bridge_bundle_sha256": "1ed312be6c00d0a4d266abbd35cb95050e15ffd057e20c8d7f184a09c40fc449",
           "python_executable": "/ABSOLUTE/PATH/TO/layoutgpt/python",
           "template_variables": {
             "bridge_script": "/ABSOLUTE/PATH/TO/Layout_DDD/scripts/external_harness_bridges/layout_gpt_frozen.py",
@@ -94,8 +94,8 @@
         "execution": {
           "repo_path": "/ABSOLUTE/PATH/TO/DirectLayout",
           "expected_upstream_commit": "4430535304124dbc8d48f6bb0ea5891e92267986",
-          "expected_entrypoint_sha256": "01b0dfaee71a601471f049c8421f623f3f9a959da0c43f155e9ef7c936577a2b",
-          "expected_bridge_bundle_sha256": "a7aefdd92a05253d69c2be7578f633be649bf76e97c8d06ff44d5206add3ff8d",
+          "expected_entrypoint_sha256": "0f984699824a5849651e639610fd554f5f58e54640f3de8d48ecf6beb96288f1",
+          "expected_bridge_bundle_sha256": "8ad3007fdd4bcd80c4bf894b9a755e240d600d7a04d7e68d1d99db064f7d6db6",
           "python_executable": "/ABSOLUTE/PATH/TO/directlayout/python",
           "template_variables": {
             "bridge_script": "/ABSOLUTE/PATH/TO/Layout_DDD/scripts/external_harness_bridges/direct_layout_frozen.py"
@@ -145,8 +145,8 @@
         "execution": {
           "repo_path": "/ABSOLUTE/PATH/TO/LayoutVLM",
           "expected_upstream_commit": "85d06b4cd2478551188a0b4a47cd658c85c41315",
-          "expected_entrypoint_sha256": "555f78cb80dff3b7d7e6c8fd32fc79e7268345203120797893e12c3dc9007d4f",
-          "expected_bridge_bundle_sha256": "8614432c95a659b64fae0b723988957a99f1de3659ce46b698f3c5ace7fd1916",
+          "expected_entrypoint_sha256": "201cbb4933ad9171138a0ed018b0daea4570bc86d7f0a77241af837f5b230db0",
+          "expected_bridge_bundle_sha256": "cf27f61c1c9fdf0dd6489b468c8b2349f26f91341cb7d87478b1f357ce42c121",
           "python_executable": "/ABSOLUTE/PATH/TO/layoutvlm/python",
           "template_variables": {
             "bridge_script": "/ABSOLUTE/PATH/TO/Layout_DDD/scripts/external_harness_bridges/layout_vlm_frozen.py"
@@ -169,6 +169,8 @@
             "{comparison_catalog}",
             "--work-dir",
             "{upstream_output_dir}/layoutvlm_work",
+            "--prepared-scene-config-output",
+            "{upstream_output_dir}/prepared_scene_config.json",
             "--output",
             "{upstream_output_dir}/layout.json",
             "--runner-report",
@@ -176,6 +178,7 @@
           ],
           "native_artifact": "{upstream_output_dir}/layout.json",
           "auxiliary_artifacts": {
+            "scene_config": "{upstream_output_dir}/prepared_scene_config.json",
             "upstream_artifacts": "{upstream_output_dir}/layoutvlm_work",
             "runner_report": "{upstream_output_dir}/runner_report.json"
           },
@@ -203,7 +206,7 @@
           "repo_path": "/ABSOLUTE/PATH/TO/SceneWeaver",
           "expected_upstream_commit": "7ae54b2ec3fc66147704faa7daf7b017ba8b1bd9",
           "expected_entrypoint_sha256": "5431e9e8cb2f244b46f3d0419f6a446cabb3bebf71dfada0d974a27845ce2a0b",
-          "expected_bridge_bundle_sha256": "b909b7668de4a6a5c0260a4010d7ef1b3e91496aaf1ad03ff2b7d74e742856b7",
+          "expected_bridge_bundle_sha256": "e9d0e7172268d45e03094d360729de9a14013249c4a154732fd6a77587cb40ef",
           "python_executable": "/ABSOLUTE/PATH/TO/sceneweaver/python",
           "template_variables": {
             "bridge_script": "/ABSOLUTE/PATH/TO/Layout_DDD/scripts/external_harness_bridges/scene_weaver_frozen.py",

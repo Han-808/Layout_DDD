@@ -21,16 +21,24 @@ from benchmark.adapters.common.geometry import (
     canonical_room,
     category_from_identifier,
     compose_front_basis_rotation,
+    euler_xyz_to_matrix,
     finite_float,
+    matrix_multiply,
     reject_unsupported_architecture,
     require_boundary_model,
     require_room_geometry_match,
+    rotation_matrix_to_euler_xyz_degrees,
     shift_boundary_to_origin,
     shift_center,
     vector3,
 )
 from benchmark.scene_io.validate import ArtifactValidationError
 from benchmark.utils.io import read_json
+
+
+RELEASED_PROCESSED_ASSET_FRAME = (
+    "swap_xy_for_layoutvlm_processed_positive_x_frame"
+)
 
 
 def convert_layout_vlm(
@@ -147,6 +155,11 @@ def convert_layout_vlm(
         native_asset_local_size, native_bbox_axis_transform = (
             _native_asset_local_bbox_size(native_asset)
         )
+        asset_frame_contract = _asset_frame_contract(
+            config,
+            native_bbox_axis_transform=native_bbox_axis_transform,
+            path=f"LayoutVLM layout.{instance_id}.asset_frame",
+        )
         asset_local_size = (
             native_asset_local_size
             or record_asset_local_bbox_size(record)
@@ -173,8 +186,16 @@ def convert_layout_vlm(
         )
         rotation = list(source_rotation)
         front_basis_yaw = None
+        fixed_asset_basis_yaw = None
         canonical_front = record.get("canonical_front")
-        if canonical_front is not None:
+        if asset_frame_contract == RELEASED_PROCESSED_ASSET_FRAME:
+            fixed_asset_basis_yaw = 90.0
+            rotation = _compose_fixed_asset_basis_rotation(
+                source_rotation,
+                basis_yaw_degrees=fixed_asset_basis_yaw,
+                path=f"LayoutVLM layout.{instance_id}.released_asset_basis",
+            )
+        elif canonical_front is not None:
             rotation, front_basis_yaw = compose_front_basis_rotation(
                 source_rotation,
                 canonical_front=canonical_front,
@@ -210,7 +231,20 @@ def convert_layout_vlm(
             geometry_audit["native_scale"] = applied_scale
         if asset_local_center is not None:
             geometry_audit["asset_local_bbox_center"] = asset_local_center
-        if front_basis_yaw is not None:
+        if fixed_asset_basis_yaw is not None:
+            geometry_audit.update(
+                {
+                    "native_zero_front": [1.0, 0.0, 0.0],
+                    "canonical_mesh_basis_yaw_degrees": fixed_asset_basis_yaw,
+                    "orientation_basis_transform": (
+                        "canonical_mesh_local_to_layoutvlm_processed_asset_frame"
+                    ),
+                    "orientation_basis_source": (
+                        "released_layoutvlm_preprocess_and_renderer_contract"
+                    ),
+                }
+            )
+        elif front_basis_yaw is not None:
             geometry_audit.update(
                 {
                     "native_zero_front": [1.0, 0.0, 0.0],
@@ -232,11 +266,6 @@ def convert_layout_vlm(
             geometry_audit=geometry_audit,
         )
         metadata = dict(fields["metadata"])
-        metadata.setdefault("canonical_front", [1.0, 0.0, 0.0])
-        metadata.setdefault(
-            "canonical_front_source",
-            "layoutvlm_processed_asset_contract",
-        )
         metadata.update(
             {
                 "native_instance_id": instance_id,
@@ -246,6 +275,8 @@ def convert_layout_vlm(
                 "native_zero_front": [1.0, 0.0, 0.0],
             }
         )
+        if asset_frame_contract is not None:
+            metadata["native_asset_frame_contract"] = asset_frame_contract
         if native_asset.get("frontView") is not None:
             metadata["native_front_view"] = native_asset["frontView"]
         objects.append(
@@ -274,7 +305,9 @@ def convert_layout_vlm(
             "rotation_unit": "degree",
             "rotation_action": "active",
             "source_zero_rotation_front": "positive_x",
-            "asset_front_basis_transform": "matrix_composition_when_available",
+            "asset_front_basis_transform": (
+                "released_fixed_matrix_or_declared_front_matrix_composition"
+            ),
             "position_semantics": "asset_instance_center",
             "origin_shift": origin_shift,
         },
@@ -322,7 +355,7 @@ def _native_asset_local_bbox_size(
     axis_transform = metadata.get("axisTransform")
     canonical = metadata.get("canonicalBoundingBoxBeforeLayoutVLMSwap")
     if axis_transform is not None or canonical is not None:
-        if axis_transform != "swap_xy_for_layoutvlm_processed_positive_x_frame":
+        if axis_transform != RELEASED_PROCESSED_ASSET_FRAME:
             raise ArtifactValidationError(
                 "LayoutVLM assetMetadata declares an unsupported bbox axis transform"
             )
@@ -335,6 +368,64 @@ def _native_asset_local_bbox_size(
             str(axis_transform),
         )
     return record_asset_local_bbox_size(native_asset), None
+
+
+def _asset_frame_contract(
+    config: Mapping[str, Any],
+    *,
+    native_bbox_axis_transform: str | None,
+    path: str,
+) -> str | None:
+    configured = config.get("layout_vlm_asset_frame_contract")
+    if configured is None:
+        resolved = native_bbox_axis_transform
+    elif not isinstance(configured, str) or not configured.strip():
+        raise ArtifactValidationError(
+            f"{path} layout_vlm_asset_frame_contract must be a non-empty string"
+        )
+    else:
+        resolved = configured.strip()
+    if (
+        native_bbox_axis_transform is not None
+        and resolved != native_bbox_axis_transform
+    ):
+        raise ArtifactValidationError(
+            f"{path} configured and native asset-frame contracts conflict"
+        )
+    if resolved is not None and resolved != RELEASED_PROCESSED_ASSET_FRAME:
+        raise ArtifactValidationError(
+            f"{path} declares unsupported LayoutVLM asset-frame contract {resolved!r}"
+        )
+    return resolved
+
+
+def _compose_fixed_asset_basis_rotation(
+    source_rotation_xyz_degrees: Sequence[float],
+    *,
+    basis_yaw_degrees: float,
+    path: str,
+) -> list[float]:
+    """Compose released LayoutVLM's fixed local mesh-frame transform.
+
+    The solver/native pose acts after the renderer's deterministic local-frame
+    transform, so the active canonical rotation is ``R_native @ B``.
+    This transform is geometric and remains required when semantic front
+    metadata is unavailable.
+    """
+
+    source_matrix = euler_xyz_to_matrix(
+        source_rotation_xyz_degrees,
+        f"{path}.source_rotation",
+        unit="degree",
+    )
+    basis_matrix = euler_xyz_to_matrix(
+        [0.0, 0.0, basis_yaw_degrees],
+        f"{path}.fixed_basis",
+        unit="degree",
+    )
+    return rotation_matrix_to_euler_xyz_degrees(
+        matrix_multiply(source_matrix, basis_matrix)
+    )
 
 
 def _rotation(value: Any, path: str) -> list[float]:

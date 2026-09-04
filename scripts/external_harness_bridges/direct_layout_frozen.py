@@ -17,6 +17,7 @@ from _common import (
     observed_model_identity,
     public_object_plan,
     read_mapping,
+    redact_error_detail,
     required_model_identity,
     required_model_deployment_id,
     require_observed_model_match,
@@ -144,6 +145,7 @@ def main() -> None:
             expected=expected,
             tolerance=args.size_tolerance,
             audit_dir=args.work_dir / "validated_layout_states",
+            error_secrets=(api_key,),
         )
         pipeline.run()
     finally:
@@ -216,6 +218,7 @@ def _install_stable_room_bridge(
     expected: list[dict[str, Any]],
     tolerance: float,
     audit_dir: Path,
+    error_secrets: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     """Decouple upstream artifact filenames from its semantic prompt string.
 
@@ -305,7 +308,6 @@ def _install_stable_room_bridge(
         return result
 
     def run_optimization(_prompt: str, generation_result: Any) -> Any:
-        last_error: Exception | None = None
         max_retries = int(pipeline.settings.runtime.max_retries)
         for attempt in range(1, max_retries + 1):
             tracking["optimization_attempts"] += 1
@@ -333,19 +335,22 @@ def _install_stable_room_bridge(
             except FrozenContractViolation:
                 raise
             except Exception as exc:
-                last_error = exc
                 tracking["optimization_attempt_results"].append(
                     {
                         "attempt": attempt,
                         "status": "failed",
                         "error_type": type(exc).__name__,
-                        "error_message": str(exc),
+                        "error_message": redact_error_detail(
+                            str(exc),
+                            secrets=error_secrets,
+                            truncated=False,
+                        ),
                     }
                 )
         raise RuntimeError(
             "DirectLayout optimization failed after "
             f"{max_retries} attempts; no base-layout fallback is permitted"
-        ) from last_error
+        ) from None
 
     service._request_reasoning_feedback = reasoning
     service._request_vlm_feedback = vlm

@@ -3,10 +3,12 @@ from __future__ import annotations
 import csv
 import json
 from pathlib import Path
+import sys
 
 import pytest
 
 from benchmark.generation_comparison.pilot import (
+    _execution_readiness,
     _trajectory_summary,
     bridge_execution_hashes,
     prepare_controlled_pilot,
@@ -39,6 +41,165 @@ def test_bridge_execution_hashes_are_operator_reproducible(tmp_path: Path) -> No
     assert changed["expected_bridge_bundle_sha256"] != first[
         "expected_bridge_bundle_sha256"
     ]
+
+
+@pytest.mark.parametrize(
+    ("method", "artifact_variable", "digest_variable", "expected_reason"),
+    [
+        (
+            "layout_gpt",
+            "layoutgpt_icl_examples",
+            "layoutgpt_icl_sha256",
+            "layoutgpt_icl_sha256_mismatch",
+        ),
+        (
+            "scene_weaver",
+            "frozen_plugin",
+            "frozen_plugin_sha256",
+            "sceneweaver_plugin_sha256_mismatch",
+        ),
+    ],
+)
+def test_readiness_hashes_actual_harness_support_file_bytes(
+    method: str,
+    artifact_variable: str,
+    digest_variable: str,
+    expected_reason: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bridge = tmp_path / f"{method}_frozen.py"
+    bridge.write_text("# bridge\n", encoding="utf-8")
+    support_file = tmp_path / "support.json"
+    support_file.write_text("{}\n", encoding="utf-8")
+    source_pins = bridge_execution_hashes(bridge)
+    monkeypatch.setenv("LAYOUT_DDD_API_KEY", "test-secret")
+    report = _execution_readiness(
+        method,
+        {
+            "adapter_config": {
+                "execution": {
+                    "repo_path": str(tmp_path / "missing-upstream"),
+                    "expected_upstream_commit": "0" * 40,
+                    "expected_entrypoint_sha256": source_pins[
+                        "expected_entrypoint_sha256"
+                    ],
+                    "expected_bridge_bundle_sha256": source_pins[
+                        "expected_bridge_bundle_sha256"
+                    ],
+                    "python_executable": sys.executable,
+                    "command": [sys.executable, str(bridge)],
+                    "template_variables": {
+                        "bridge_script": str(bridge),
+                        artifact_variable: str(support_file),
+                        digest_variable: "0" * 64,
+                    },
+                    "environment": {
+                        (
+                            "LAYOUT_DDD_API_ENDPOINT"
+                            if method == "layout_gpt"
+                            else "LAYOUT_DDD_API_BASE_URL"
+                        ): (
+                            "http://127.0.0.1:9999/v1/chat/completions"
+                            if method == "layout_gpt"
+                            else "http://127.0.0.1:9999/v1"
+                        )
+                    },
+                }
+            }
+        },
+        offline_artifact=None,
+        allow_offline_artifacts=False,
+        required_layoutgpt_icl_sha256=("1" * 64 if method == "layout_gpt" else None),
+    )
+    assert expected_reason in report["reasons"]
+    if method == "layout_gpt":
+        assert "layoutgpt_icl_protocol_sha256_mismatch" in report["reasons"]
+
+
+def test_readiness_requires_the_pinned_bridge_to_be_the_configured_command(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bridge = tmp_path / "layout_gpt_frozen.py"
+    bridge.write_text("# pinned bridge\n", encoding="utf-8")
+    unrelated = tmp_path / "unrelated.py"
+    unrelated.write_text("# unrelated runner\n", encoding="utf-8")
+    icl = tmp_path / "icl.json"
+    icl.write_text("[]\n", encoding="utf-8")
+    source_pins = bridge_execution_hashes(bridge)
+    monkeypatch.setenv("LAYOUT_DDD_API_KEY", "test-secret")
+    report = _execution_readiness(
+        "layout_gpt",
+        {
+            "adapter_config": {
+                "execution": {
+                    "repo_path": str(tmp_path / "missing-upstream"),
+                    "expected_upstream_commit": "0" * 40,
+                    **source_pins,
+                    "python_executable": sys.executable,
+                    "command": [sys.executable, str(unrelated)],
+                    "template_variables": {
+                        "bridge_script": str(bridge),
+                        "layoutgpt_icl_examples": str(icl),
+                        "layoutgpt_icl_sha256": "0" * 64,
+                    },
+                    "environment": {
+                        "LAYOUT_DDD_API_ENDPOINT": (
+                            "http://127.0.0.1:9999/v1/chat/completions"
+                        )
+                    },
+                }
+            }
+        },
+        offline_artifact=None,
+        allow_offline_artifacts=False,
+    )
+    assert "bridge_script_not_in_command" in report["reasons"]
+
+
+def test_layoutvlm_readiness_binds_preserved_scene_config_to_bridge_output(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bridge = tmp_path / "layout_vlm_frozen.py"
+    bridge.write_text("# bridge\n", encoding="utf-8")
+    source_pins = bridge_execution_hashes(bridge)
+    monkeypatch.setenv("LAYOUT_DDD_API_KEY", "test-secret")
+    report = _execution_readiness(
+        "layout_vlm",
+        {
+            "adapter_config": {
+                "execution": {
+                    "repo_path": str(tmp_path / "missing-upstream"),
+                    "expected_upstream_commit": "0" * 40,
+                    "expected_entrypoint_sha256": source_pins[
+                        "expected_entrypoint_sha256"
+                    ],
+                    "expected_bridge_bundle_sha256": source_pins[
+                        "expected_bridge_bundle_sha256"
+                    ],
+                    "python_executable": sys.executable,
+                    "command": [
+                        sys.executable,
+                        str(bridge),
+                        "--prepared-scene-config-output",
+                        "{upstream_output_dir}/actual.json",
+                    ],
+                    "template_variables": {"bridge_script": str(bridge)},
+                    "auxiliary_artifacts": {
+                        "scene_config": "{upstream_output_dir}/different.json"
+                    },
+                    "environment": {
+                        "LAYOUT_DDD_API_BASE_URL": "http://127.0.0.1:9999/v1"
+                    },
+                }
+            }
+        },
+        offline_artifact=None,
+        allow_offline_artifacts=False,
+    )
+    assert "layoutvlm_prepared_scene_config_path_mismatch" in report["reasons"]
 
 
 def test_prepare_pilot_preflights_assets_cases_hashes_and_readiness(

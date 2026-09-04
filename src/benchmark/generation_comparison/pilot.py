@@ -8,6 +8,7 @@ import hashlib
 import json
 import math
 import os
+import shlex
 import shutil
 import statistics
 import subprocess
@@ -324,6 +325,20 @@ def run_prepared_pilot(
         active_model_policy = (
             active_model_policy if isinstance(active_model_policy, Mapping) else {}
         )
+        active_harness_inputs = protocol.as_dict()["generation"].get(
+            "harness_inputs"
+        )
+        active_harness_inputs = (
+            active_harness_inputs
+            if isinstance(active_harness_inputs, Mapping)
+            else {}
+        )
+        active_layout_gpt_inputs = active_harness_inputs.get("layout_gpt")
+        active_layout_gpt_inputs = (
+            active_layout_gpt_inputs
+            if isinstance(active_layout_gpt_inputs, Mapping)
+            else {}
+        )
         readiness = _execution_readiness(
             method,
             configs.get(method),
@@ -332,6 +347,9 @@ def run_prepared_pilot(
             catalog=catalog,
             required_api_base_sha256=active_model_policy.get(
                 "required_api_base_sha256"
+            ),
+            required_layoutgpt_icl_sha256=active_layout_gpt_inputs.get(
+                "icl_sha256"
             ),
         )
         config = _adapter_config(configs.get(method))
@@ -902,7 +920,14 @@ def _compatibility_report(
     method_configs: Mapping[str, Any],
 ) -> dict[str, Any]:
     rows = []
-    model_policy = protocol.as_dict()["generation"].get("model_policy")
+    generation_policy = protocol.as_dict()["generation"]
+    model_policy = generation_policy.get("model_policy")
+    harness_inputs = generation_policy.get("harness_inputs")
+    harness_inputs = harness_inputs if isinstance(harness_inputs, Mapping) else {}
+    layout_gpt_inputs = harness_inputs.get("layout_gpt")
+    layout_gpt_inputs = (
+        layout_gpt_inputs if isinstance(layout_gpt_inputs, Mapping) else {}
+    )
     for method in methods:
         config = _adapter_config(method_configs.get(method))
         semantic = check_method_eligibility(
@@ -925,6 +950,11 @@ def _compatibility_report(
             required_api_base_sha256=(
                 model_policy.get("required_api_base_sha256")
                 if isinstance(model_policy, Mapping)
+                else None
+            ),
+            required_layoutgpt_icl_sha256=(
+                str(layout_gpt_inputs["icl_sha256"])
+                if layout_gpt_inputs.get("icl_sha256") is not None
                 else None
             ),
         )
@@ -959,6 +989,7 @@ def _execution_readiness(
     allow_offline_artifacts: bool,
     catalog: CanonicalAssetCatalog | None = None,
     required_api_base_sha256: str | None = None,
+    required_layoutgpt_icl_sha256: str | None = None,
 ) -> dict[str, Any]:
     if offline_artifact is not None:
         path = Path(offline_artifact).expanduser().resolve()
@@ -1039,6 +1070,12 @@ def _execution_readiness(
                 execution.get("expected_entrypoint_sha256") or ""
             ).strip()
             bridge_value = variables.get("bridge_script")
+            command_tokens = _readiness_command_tokens(execution.get("command"))
+            if bridge_value and not any(
+                token in {"{bridge_script}", str(bridge_value)}
+                for token in command_tokens
+            ):
+                reasons.append("bridge_script_not_in_command")
             if method in {
                 "layout_gpt",
                 "direct_layout",
@@ -1086,12 +1123,53 @@ def _execution_readiness(
                     character not in "0123456789abcdef" for character in digest
                 ):
                     reasons.append("layoutgpt_icl_sha256_invalid")
+                else:
+                    icl_value = variables.get("layoutgpt_icl_examples")
+                    icl_path = (
+                        Path(str(icl_value)).expanduser()
+                        if icl_value is not None
+                        else None
+                    )
+                    if icl_path is not None and icl_path.is_file() and (
+                        _file_sha256(icl_path.resolve()) != digest
+                    ):
+                        reasons.append("layoutgpt_icl_sha256_mismatch")
+                    if (
+                        required_layoutgpt_icl_sha256 is not None
+                        and digest != required_layoutgpt_icl_sha256
+                    ):
+                        reasons.append("layoutgpt_icl_protocol_sha256_mismatch")
+            if method == "layout_vlm":
+                auxiliary = execution.get("auxiliary_artifacts")
+                auxiliary = auxiliary if isinstance(auxiliary, Mapping) else {}
+                scene_config_artifact = auxiliary.get("scene_config")
+                prepared_target = _command_option_value(
+                    command_tokens,
+                    "--prepared-scene-config-output",
+                )
+                if not scene_config_artifact:
+                    reasons.append("layoutvlm_prepared_scene_config_not_preserved")
+                if prepared_target is None:
+                    reasons.append("layoutvlm_prepared_scene_config_output_missing")
+                elif str(scene_config_artifact) != prepared_target:
+                    reasons.append("layoutvlm_prepared_scene_config_path_mismatch")
             if method == "scene_weaver":
                 digest = str(variables.get("frozen_plugin_sha256") or "")
                 if len(digest) != 64 or any(
                     character not in "0123456789abcdef" for character in digest
                 ):
                     reasons.append("sceneweaver_plugin_sha256_invalid")
+                else:
+                    plugin_value = variables.get("frozen_plugin")
+                    plugin_path = (
+                        Path(str(plugin_value)).expanduser()
+                        if plugin_value is not None
+                        else None
+                    )
+                    if plugin_path is not None and plugin_path.is_file() and (
+                        _file_sha256(plugin_path.resolve()) != digest
+                    ):
+                        reasons.append("sceneweaver_plugin_sha256_mismatch")
             environment = execution.get("environment")
             environment = environment if isinstance(environment, Mapping) else {}
             endpoint_name = (
@@ -1127,6 +1205,28 @@ def _execution_readiness(
                 if non_glb:
                     reasons.append("verified_glb_bundle_unavailable")
     return {"ready": not reasons, "mode": "real_generation", "reasons": reasons}
+
+
+def _readiness_command_tokens(value: Any) -> list[str]:
+    if isinstance(value, str):
+        try:
+            return shlex.split(value)
+        except ValueError:
+            return []
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        return [str(token) for token in value]
+    return []
+
+
+def _command_option_value(tokens: Sequence[str], option: str) -> str | None:
+    prefix = f"{option}="
+    for index, token in enumerate(tokens):
+        if token.startswith(prefix):
+            value = token[len(prefix):]
+            return value or None
+        if token == option:
+            return tokens[index + 1] if index + 1 < len(tokens) else None
+    return None
 
 
 def _adapter_config(value: Any) -> dict[str, Any]:
