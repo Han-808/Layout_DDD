@@ -446,3 +446,109 @@ false rug has no replacement in the frozen inventory.
 5. Add immutable catalog records and source hashes, then re-run local-asset,
    frozen-binding, architecture, scale, support, and harness-eligibility
    preflight.
+
+## S104 — media, music, and game recreation room
+
+Review status: `user_selected_pending_materialization`
+
+Recorded: `2026-09-05` (`Asia/Shanghai`)
+
+### Baseline scene
+
+- Model: `HY4-SFT0812`
+- SceneBoard dataset key: `hy4_sft0812`
+- Displayed liveboard score: `89.13`
+- Source score: `92.45`
+- Coverage: `100.0`
+- Existing object count: `27`
+- Canonical scene:
+  `Support/datasets/hy_server_generations_v1/hy4-sft0812/S104/scene/canonical_scene.json`
+- Canonical scene SHA-256:
+  `7b690fd0b9047c353db1430c64af82946221e1f36142d22cc776f352ae8cc744`
+- Blender scene:
+  `Support/datasets/hy_server_generations_v1/hy4-sft0812/S104/prepared/evaluation.blend`
+- Blender scene SHA-256:
+  `ec3af01aba4dc54150c1c474768d8f47f88265e99642e26d7a77642b6d416096`
+
+### User removal decision
+
+Remove exactly one object: `area_rug`, bound to exact asset
+`22_SM_Rug_Stacked_01g` (CSV row `589`). Its `Folded_fabric` class,
+description, and `0.572 x 0.542 x 0.063 m` dimensions confirm it is folded
+fabric rather than a floor rug. Preserve the source Blender/native scene
+unchanged; apply the removal only when the approved FrozenAssets case is
+materialized.
+
+### Candidate shortlist
+
+All twenty exact CSV assets and local directories were verified. Candidate `1`
+is the faithful floor-rug replacement. The remaining candidates add game,
+music, media-control, reading, comfort, lighting, and decorative detail. Only
+the rows repeated in the user-selected table below are approved for later
+materialization.
+
+| Candidate | CSV id | Exact asset ID | CSV bbox W×D×H (m) | CSV class/category | Suggested placement / role |
+| ---: | ---: | --- | --- | --- | --- |
+| 1 | 891 | `45_Capet05` | `2.400 × 1.700 × 0.010` | `Carpet` / `rug` | Floor; actual muted gray/teal geometric rug replacing the folded fabric |
+| 2 | 59 | `0_gamepad_2k_packed` | `0.404 × 0.435 × 0.019` | `Game_console` / `controller` | On coffee or side table; wired vintage controller |
+| 3 | 2034 | `e_ps5_03_set` | `0.160 × 0.171 × 0.139` | `Game_controller` / `controller` | On media console; dual controllers on charging dock |
+| 4 | 441 | `17_SM_Headphones` | `0.207 × 0.245 × 0.094` | `Gaming_headset` / `headphones` | On media console, side table, or music station |
+| 5 | 521 | `20_SM_Remote` | `0.066 × 0.265 × 0.025` | `TV_remote_control` / `remote` | On coffee or side table; TV remote control |
+| 6 | 29 | `0_chess_set_2k_packed` | `0.553 × 0.553 × 0.112` | `Chessboard` / `board` | On board-game table; complete chess set |
+| 7 | 478 | `19_SM_Book_5` | `0.033 × 0.248 × 0.290` | `Book` / `book` | On bookcase; music-themed hardcover book |
+| 8 | 438 | `17_SM_Decor_10` | `0.128 × 0.255 × 0.180` | `Book` / `bookcase` | On bookcase; metal bookend with books/magazines |
+| 9 | 448 | `17_SM_Magazine_2` | `0.250 × 0.324 × 0.039` | `magazine` / `stack` | On coffee table; magazine stack |
+| 10 | 1569 | `a_SM_Opened_Book` | `0.052 × 0.388 × 0.239` | `Book` / `book` | On coffee/side table; open art book |
+| 11 | 263 | `0_ukulele_01_2k_packed` | `0.527 × 0.178 × 0.051` | `Guitar_bass` / `ukulele` | On a suitable instrument stand or wall mount; small second instrument |
+| 12 | 1646 | `a_SM_radio_scanner_mic` | `0.105 × 0.161 × 0.249` | `Desktop_microphone` / `microphone` | On media/music surface; desktop microphone |
+| 13 | 1698 | `a_SM_Speaker_01` | `0.289 × 0.361 × 1.128` | `Speaker` / `speaker` | Floor; tall walnut speaker, preferably selected as a stereo pair |
+| 14 | 1686 | `a_SM_SmartTV_B` | `0.101 × 0.101 × 0.037` | `Small_desktop_electronic_device` / `speaker` | On media console; compact smart speaker |
+| 15 | 509 | `20_SM_Bowl_with_Oranges` | `0.254 × 0.253 × 0.146` | `Snack` / `bowl` | On board-game or coffee table; snack/fruit bowl |
+| 16 | 157 | `0_SM_Coffee_cup_2` | `0.081 × 0.107 × 0.098` | `Water_cup` / `mug` | On side table; dark-gray coffee mug |
+| 17 | 1984 | `d_1000003759813` | `0.633 × 0.210 × 0.338` | `Pillow` / `pillow` | On sofa or armchair; teal lumbar pillow |
+| 18 | 1766 | `a_SM_Wall_Picture_2` | `0.950 × 0.020 × 1.400` | `Wall_mounted_picture_frame` / `art` | Wall; dark-blue geometric art |
+| 19 | 1622 | `a_SM_Plant_01a` | `0.960 × 0.739 × 1.380` | `Large_potted_plant` / `vase` | Floor; tall Monstera in an unoccupied corner |
+| 20 | 411 | `16_SM_Ceiling_Lamp` | `1.101 × 0.060 × 1.218` | `Wall_mounted_lamp_holder` / `lamp` | Ceiling; slim black linear pendant over the board-game table |
+
+### User-selected additions
+
+The user selected candidate numbers `1, 2, 14, 15`, each with count one. The
+new floor carpet replaces the deleted false rug. The game controller, compact
+smart speaker, and fruit/snack bowl are additions.
+
+| Original candidate | Count | CSV id | Exact asset ID | CSV bbox W×D×H (m) | Intended support | Provisional role |
+| ---: | ---: | ---: | --- | --- | --- | --- |
+| 1 | 1 | 891 | `45_Capet05` | `2.400 × 1.700 × 0.010` | floor | Actual geometric area rug replacing `area_rug` |
+| 2 | 1 | 59 | `0_gamepad_2k_packed` | `0.404 × 0.435 × 0.019` | on object | Game controller on the coffee table or media console |
+| 14 | 1 | 1686 | `a_SM_SmartTV_B` | `0.101 × 0.101 × 0.037` | on object | Compact smart speaker on the media console |
+| 15 | 1 | 509 | `20_SM_Bowl_with_Oranges` | `0.254 × 0.253 × 0.146` | on object | Fruit/snack bowl on the board-game or coffee table |
+
+### Candidate-selection constraints
+
+- Candidate `1` is the only proposed floor-rug replacement and must not reuse
+  the removed `22_SM_Rug_Stacked_01g` binding.
+- Candidates `2`--`10`, `12`, and `14`--`17` require explicit supporting
+  tables, shelves, consoles, seating, or cabinets; do not flatten them to the
+  floor.
+- Candidate `11` requires an instrument stand or wall-mount convention rather
+  than unsupported placement.
+- Candidate `13` is proposed as a stereo pair if selected with count two; a
+  single instance is also valid only if the user explicitly chooses count one.
+- Candidate `18` requires wall support, and candidate `20` requires ceiling
+  support. Candidate `19` requires sufficient floor clearance.
+- All four selected asset directories exist. None is materialized into the
+  executable FrozenAssets case by this review-only update.
+
+### Materialization still required
+
+1. Remove `area_rug` and its false-rug `22_SM_Rug_Stacked_01g` binding; recreate
+   the rug slot bound exactly to `45_Capet05` at fixed native scale.
+2. Add unique game-controller, compact-smart-speaker, and fruit-bowl slots
+   without changing other retained S104 identities.
+3. Bind the game controller and smart speaker to a media surface and the bowl
+   to either the board-game or coffee table; preserve support explicitly.
+4. Confirm the `2.400 x 1.700 m` carpet footprint retains circulation and does
+   not intersect game/music furniture.
+5. Add immutable catalog records and source hashes, then re-run local-asset,
+   frozen-binding, architecture, scale, support, and harness-eligibility
+   preflight.
