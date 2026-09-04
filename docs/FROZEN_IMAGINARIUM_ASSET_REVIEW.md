@@ -658,3 +658,125 @@ storage ottoman are additions.
 5. Add immutable catalog records and source hashes, then re-run local-asset,
    frozen-binding, architecture, scale, support, and harness-eligibility
    preflight.
+
+## S106 — bathroom, laundry, linen, and utility room
+
+Review status: `user_selected_pending_materialization`
+
+Recorded: `2026-09-05` (`Asia/Shanghai`)
+
+### Baseline scene
+
+- Model: `Claude Opus 5`
+- SceneBoard dataset key: `anthropic_opus5`
+- Displayed liveboard score: `87.85`
+- Source score: `90.34`
+- Coverage: `100.0`
+- Existing object count: `25`
+- Canonical scene:
+  `Support/datasets/api3_anthropic_generations_v1/claude-opus-5-aihub/S106/scene/canonical_scene.json`
+- Canonical scene SHA-256:
+  `70907938318c42f001cbe94a833f3105f4fadb269ff4f9c7c87c547f2b1eb79e`
+- Blender scene:
+  `Support/datasets/api3_anthropic_generations_v1/claude-opus-5-aihub/S106/prepared/evaluation.blend`
+- Blender scene SHA-256:
+  `23a243901b6a69a6f17006895ff3aea698d4f9df44e09d6634323342e94022f0`
+
+### User removal decision
+
+Remove all four canonical instances bound to exact asset
+`17_SM_Bathroom_decor_1` (CSV row `422`):
+
+1. `towel_ladder_rack_1`
+2. `folded_towel_stack_1`
+3. `folded_towel_stack_2`
+4. `folded_towel_stack_3`
+
+Although only one object ID contains `towel_ladder_rack`, all four use the same
+`0.648 x 0.154 x 0.553 m` gray towel-on-wall-rack mesh. The instruction that
+all towel-ladder-rack objects are unnecessary is therefore applied to the full
+exact-asset group, not only to the name-matching instance. No towel-ladder-rack
+replacement is proposed. Preserve the source Blender/native scene unchanged;
+apply removals only when the approved FrozenAssets case is materialized.
+
+### Candidate shortlist
+
+All twenty exact CSV assets and local directories were verified. Candidate `1`
+is a rack-free folded towel. Candidates `14`, `15`, and `19` expose additional
+misbound baseline objects as explicit, optional replacements rather than silent
+repairs. Dimensions are shown directly. Only the rows repeated in the
+user-selected table below are approved for later materialization.
+
+| Candidate | CSV id | Exact asset ID | CSV bbox W×D×H (m) | CSV class/category | Suggested placement / role |
+| ---: | ---: | --- | --- | --- | --- |
+| 1 | 833 | `44_sk56_FoldedTowel01` | `0.340 × 0.276 × 0.034` | `Stacked_towel` / `towel` | On linen shelf or counter; rack-free folded towel |
+| 2 | 425 | `17_SM_Bathroom_decor_4` | `0.162 × 0.124 × 0.229` | `Toilet_paper` / `holder` | Wall beside toilet; paper roll on compact holder |
+| 3 | 1673 | `a_SM_RestRoom_Shampoo` | `0.049 × 0.049 × 0.214` | `Shampoo_bottle` / `bottle` | On shower/bath surface; blue-white pump shampoo |
+| 4 | 423 | `17_SM_Bathroom_decor_10` | `0.087 × 0.087 × 0.058` | `Skincare_product` / `jar` | On vanity or shelf; hair-mask jar |
+| 5 | 440 | `17_SM_Decor_5` | `0.119 × 0.119 × 0.157` | `Skincare_product` / `bottle` | On vanity; frosted skincare bottle |
+| 6 | 1671 | `a_SM_rest_area_tissue` | `0.200 × 0.100 × 0.125` | `Desktop_tissue_box` / `box` | On vanity or utility counter; tissue box |
+| 7 | 1720 | `a_SM_toilet_cleaner` | `0.180 × 0.180 × 0.576` | `Toilet_brush` / `brush` | Floor beside toilet; brush in holder |
+| 8 | 739 | `4_SM_WashingPowder1_08` | `0.272 × 0.173 × 0.413` | `Cleaning_bottle` / `bottle` | On utility shelf; large laundry detergent bottle |
+| 9 | 91 | `0_multi_cleaner_bottle_2k_packed` | `0.088 × 0.090 × 0.229` | `Cleaning_bottle` / `bottle` | On utility shelf; compact multipurpose cleaner |
+| 10 | 1438 | `a_SM_dishwasher_product` | `0.117 × 0.058 × 0.324` | `Cleaning_bottle` / `bottle` | Beside utility sink or on shelf; cleaning spray |
+| 11 | 726 | `4_SM_LinenTrolley01` | `0.579 × 1.073 × 0.846` | `Hand_truck` / `basket` | Floor; rolling wire linen basket |
+| 12 | 703 | `34_RollingShelf_01` | `1.142 × 0.642 × 1.700` | `Storage_rack` / `cart` | Floor; four-tier rolling utility shelf with boxes |
+| 13 | 663 | `25_SM_Vacuum_Cleaner_51a` | `0.257 × 0.271 × 1.313` | `Household_vacuum_cleaner` / `vacuum` | Floor; upright household vacuum |
+| 14 | 673 | `28_Washer_01` | `0.826 × 0.735 × 1.098` | `Washing_machine` / `washer` | Floor; proper washer offered only as replacement for misbound `washing_machine_1` |
+| 15 | 1832 | `a_TrashCan3` | `0.258 × 0.258 × 0.502` | `Outdoor_trash_can` / `trashcan` | Floor; compact bin offered only as replacement for dumpster-like `waste_bin_1` |
+| 16 | 212 | `0_SM_Mirror001` | `0.720 × 0.030 × 0.720` | `Mirror` / `mirror` | Wall above vanity/sink; round wood-framed mirror |
+| 17 | 1420 | `a_SM_Decor_Candle_Off` | `0.058 × 0.058 × 0.028` | `Desktop_ornament` / `candle` | On vanity or bath ledge; small unlit concrete candle |
+| 18 | 514 | `20_SM_Kitchen_Decor_10` | `0.229 × 0.177 × 0.224` | `Small_potted_plant` / `pot` | On vanity or shelf; compact succulent in white pot |
+| 19 | 153 | `0_SM_Carpet_thr001` | `1.331 × 1.325 × 0.010` | `Carpet` / `rug` | Floor; actual carpet offered only as replacement for bathtub-mesh `bath_mat_1` |
+| 20 | 184 | `0_SM_Drawer` | `0.421 × 0.558 × 0.573` | `Storage_locker` / `cabinet` | Floor; compact three-drawer linen/utility cabinet |
+
+### User-selected additions
+
+The user selected candidate numbers `1, 2, 3, 7, 12, 14`, each with count one.
+Candidate `14` is an exact replacement for the misbound washing-machine slot;
+the rack-free towel, toilet-paper holder, shampoo, toilet brush, and rolling
+shelf are additions after the four towel-rack instances are removed.
+
+| Original candidate | Count | CSV id | Exact asset ID | CSV bbox W×D×H (m) | Intended support | Provisional role |
+| ---: | ---: | ---: | --- | --- | --- | --- |
+| 1 | 1 | 833 | `44_sk56_FoldedTowel01` | `0.340 × 0.276 × 0.034` | on object | Rack-free folded towel on a linen shelf or counter |
+| 2 | 1 | 425 | `17_SM_Bathroom_decor_4` | `0.162 × 0.124 × 0.229` | wall | Toilet-paper holder beside the toilet |
+| 3 | 1 | 1673 | `a_SM_RestRoom_Shampoo` | `0.049 × 0.049 × 0.214` | on object | Pump shampoo on a bath/shower ledge or shelf |
+| 7 | 1 | 1720 | `a_SM_toilet_cleaner` | `0.180 × 0.180 × 0.576` | floor | Toilet brush in holder beside the toilet |
+| 12 | 1 | 703 | `34_RollingShelf_01` | `1.142 × 0.642 × 1.700` | floor | Four-tier rolling utility shelf with boxes |
+| 14 | 1 | 673 | `28_Washer_01` | `0.826 × 0.735 × 1.098` | floor | Proper washer replacing `washing_machine_1` |
+
+### Candidate-selection constraints
+
+- No candidate recreates the removed towel ladder rack. Candidate `1` is a
+  separate, rack-free folded-towel object.
+- Candidates `2` and `16` require wall support. Candidates `3`--`6`, `8`--`10`,
+  `17`, and `18` require explicit shelf/counter/bath support.
+- Candidates `11`--`15`, `19`, and `20` require sufficient floor clearance.
+- Selecting candidate `14` authorizes replacing, not duplicating,
+  `washing_machine_1`, whose current asset is the same dryer used by
+  `tumble_dryer_1`.
+- Selecting candidate `15` authorizes replacing, not duplicating, `waste_bin_1`.
+- Selecting candidate `19` authorizes replacing, not duplicating, `bath_mat_1`,
+  whose current asset is a second bathtub mesh.
+- All six selected asset directories exist. None is materialized into the
+  executable FrozenAssets case by this review-only update.
+
+### Materialization still required
+
+1. Remove `towel_ladder_rack_1` and `folded_towel_stack_1/2/3`, eliminating all
+   four `17_SM_Bathroom_decor_1` instances.
+2. Add one rack-free folded-towel slot, one wall-supported toilet-paper slot,
+   one shampoo slot, one toilet-brush slot, and one rolling-shelf slot with
+   unique identities.
+3. Replace the `washing_machine_1` slot's dryer binding `27_Dryer_01` with exact
+   asset `28_Washer_01`; retain the slot identity and keep `tumble_dryer_1`
+   unchanged.
+4. Bind the folded towel and shampoo to explicit shelf/ledge parents and the
+   toilet-paper holder to the wall. Keep the toilet brush and rolling shelf on
+   the floor.
+5. Validate the `1.142 x 0.642 m` rolling-shelf and `0.826 x 0.735 m` washer
+   footprints against utility circulation and door/appliance clearances.
+6. Add immutable catalog records and source hashes, then re-run local-asset,
+   frozen-binding, architecture, scale, support, and harness-eligibility
+   preflight.
