@@ -20,6 +20,8 @@ dependencies = [
 [project.scripts]
 layout-ddd-generate = "benchmark.api.generation:main"
 layout-ddd-generate-nonrect = "benchmark.scene_generation.non_rectangular_multi_room.cli:main"
+layout-ddd-generate-nonrect-agent = "benchmark.scene_generation.non_rectangular_agent.cli:main"
+layout-ddd-agent-tool = "benchmark.scene_generation.non_rectangular_agent.tool_client:main"
 layout-ddd-evaluate = "benchmark.api.evaluation:main"
 layout-ddd-evaluate-sceneweaver-iterations = "benchmark.api.scene_weaver_iterations:main"
 layout-ddd-compare-generation = "benchmark.generation_comparison.execution:main"
@@ -56,6 +58,7 @@ include-package-data = false
   "schemas/*.json",
   "schemas/multi_room/*.json",
   "schemas/non_rectangular/*.json",
+  "schemas/non_rectangular_agent/*.json",
   "configs/evaluation/*.yaml",
   "configs/evaluation/*.json",
   "configs/grouping/*.yaml",
@@ -67,6 +70,7 @@ include-package-data = false
 ]
 "benchmark.scene_generation.multi_room" = ["prompts/*.txt"]
 "benchmark.scene_generation.non_rectangular_multi_room" = ["prompts/*.txt"]
+"benchmark.scene_generation.non_rectangular_agent" = ["prompts/*.txt"]
 
 [tool.pytest.ini_options]
 testpaths = [
@@ -111,6 +115,7 @@ testpaths = [
   "tests/test_non_rectangular_generation_architecture.py",
   "tests/test_non_rectangular_generation_campaign.py",
   "tests/test_non_rectangular_generation_runtime.py",
+  "tests/test_non_rectangular_agent_track.py",
   "tests/test_non_rectangular_spatiallm_conversion.py",
   "tests/test_non_rectangular_spatiallm_cohort.py",
   "tests/test_non_rectangular_spatiallm_programs.py",

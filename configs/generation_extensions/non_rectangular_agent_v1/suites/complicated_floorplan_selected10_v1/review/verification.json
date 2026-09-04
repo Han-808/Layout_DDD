@@ -1,0 +1,24 @@
+{
+  "aggregate_target_total_instances": {
+    "max": 891,
+    "min": 719
+  },
+  "asset_access_mode": "shared_database",
+  "cross_room_connections_scored": false,
+  "generation_authorized": true,
+  "generation_started": false,
+  "layout_count": 10,
+  "layout_manifest_sha256": "4ef82a3af709c8a0c52f75d6ffbfd421bf99ef5eb0b805f4746efcaccc34af27",
+  "minimum_room_area_m2": 15.724381032751758,
+  "minimum_room_short_span_m": 2.5875000000000004,
+  "ok": true,
+  "program_manifest_sha256": "cff0a93d6ef166ecbd087f232e66a70dbf87614757fffb9ad66ce229ffcc952d",
+  "proposal_manifest_sha256": "46d89467f954c2517c140608111f8ec35896247d5b0360120b25d59ed4556af7",
+  "room_count": 42,
+  "room_program_label_binding": "unbound_multiset_only",
+  "schema_version": "complicated_floorplan_proposal_verification_v1",
+  "total_floor_area_m2": 1405.2989407225741,
+  "track_id": "complicated_floorplan_agent_track_v1",
+  "track_type": "agent_only",
+  "wall_segment_count": 314
+}
