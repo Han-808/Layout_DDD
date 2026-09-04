@@ -1012,3 +1012,123 @@ drawer-front side table are additions. The deleted bookshelf has no replacement.
 6. Add immutable catalog records and source hashes, then re-run local-asset,
    frozen-binding, architecture, scale, support, facing, and harness-eligibility
    preflight.
+
+## S109 — home fitness, recovery, and hobby room
+
+Review status: `user_selected_pending_materialization`
+
+Recorded: `2026-09-05` (`Asia/Shanghai`)
+
+### Baseline scene
+
+- Model: `HY4-0823dev`
+- SceneBoard dataset key: `hy4_dev0823_arena`
+- Displayed liveboard score: `95.95`
+- Source score: `97.66`
+- Coverage: `100.0`
+- Existing object count: `26`
+- Canonical scene:
+  `Support/datasets/hy_dev0823_arena_single_room_eval_v1/S109/scene/canonical_scene.json`
+- Canonical scene SHA-256:
+  `4ff97b8d8e341679c4de1288249ae2efe4c3270596b5a75e2d67a80fa230bc71`
+- Blender scene:
+  `Support/datasets/hy_dev0823_arena_single_room_eval_v1/S109/prepared/evaluation.blend`
+- Blender scene SHA-256:
+  `64d13b4ac6978ac4101854c88b452775df5a592108079b28807c8030721fee7d`
+
+### User removal decision
+
+Remove exactly five objects, confirmed after resolving the initial count
+ambiguity:
+
+1. `yoga_mat_1`
+2. `yoga_mat_2`
+3. `yoga_mat_3`
+4. `kettlebell_set_1`
+5. `kettlebell_set_2`
+
+The three yoga mats are all bound to `0_SM_Shoe4_L`, a brown leather shoe. The
+two kettlebell instances are both bound to `a_SM_rest_area_kettle`, a metal
+kettle. The user clarified that `yoga_block_1` and `yoga_block_2` remain in the
+baseline. No yoga-mat or kettlebell replacement is proposed. Preserve the
+source Blender/native scene unchanged; apply removals only when the approved
+FrozenAssets case is materialized.
+
+### Candidate shortlist
+
+The Imaginarium snapshot does not contain defensible native treadmill,
+dumbbell, weight-bench, or foam-roller assets that match the current semantic
+slots. This shortlist therefore avoids inventing those categories and focuses
+on exact sports, recovery, storage, media, and hobby assets that are present.
+All twenty CSV records and local directories were verified. Dimensions are
+shown directly. Only the rows repeated in the user-selected table below are
+approved for later materialization.
+
+| Candidate | Exact asset ID | CSV bbox W×D×H (m) | Type | Suggested placement / role |
+| ---: | --- | --- | --- | --- |
+| 1 | `0_dartboard_2k_packed` | `0.451 × 0.040 × 0.451` | dartboard | Wall; hobby/target-practice feature with clear front |
+| 2 | `d_1000009536233` | `0.290 × 0.290 × 0.289` | basketball | Floor or dedicated sports-storage surface |
+| 3 | `d_1000009536202` | `0.205 × 0.205 × 0.203` | volleyball | Floor or dedicated sports-storage surface |
+| 4 | `d_1000009529730` | `0.153 × 0.152 × 0.152` | soccer ball | Floor or dedicated sports-storage surface |
+| 5 | `0_american_football_2k_packed` | `0.453 × 0.256 × 0.256` | rugby/football | On cabinet/shelf or in sports-storage zone |
+| 6 | `a_Bag1` | `0.805 × 0.289 × 0.339` | sports duffel | Floor or low shelf near fitness/storage zone |
+| 7 | `0_tire_pump_2k_packed` | `0.255 × 0.101 × 0.580` | floor pump | Floor beside hobby bicycle/storage |
+| 8 | `44_sk39_Bike01` | `0.540 × 1.691 × 0.956` | bicycle | Floor/wall storage; hobby bicycle, not a stationary exercise machine |
+| 9 | `44_sk56_FoldedTowel01` | `0.340 × 0.276 × 0.034` | folded towel | On recovery shelf/cabinet or massage table |
+| 10 | `a_SM_SmartTV_B` | `0.101 × 0.101 × 0.037` | smart speaker | On media console; compact audio device |
+| 11 | `17_SM_Headphones` | `0.207 × 0.245 × 0.094` | headphones | On media console or hobby workbench |
+| 12 | `0_ukulele_01_2k_packed` | `0.527 × 0.178 × 0.051` | ukulele | On explicit stand/wall support; hobby instrument |
+| 13 | `a_SM_desk_props_notebook` | `0.013 × 0.110 × 0.155` | notebook | On hobby workbench; project/sketch notebook |
+| 14 | `0_drill_01_2k_packed` | `0.183 × 0.185 × 0.052` | cordless drill | On hobby workbench/tool surface |
+| 15 | `a_SM_auto_repair_props_01_tool_box` | `0.450 × 0.195 × 0.263` | toolbox | On hobby workbench or shelf |
+| 16 | `0_SM_Drawer` | `0.421 × 0.558 × 0.573` | compact cabinet | Floor; three-drawer hobby/recovery storage |
+| 17 | `0_vintage_wooden_drawer_01_2k_packed` | `0.858 × 0.457 × 0.545` | parts cabinet | Floor; six-drawer hobby organizer |
+| 18 | `a_SM_Ottoman` | `0.579 × 0.577 × 0.400` | ottoman | Floor; recovery footrest/seating near lounge chair |
+| 19 | `d_1000003759813` | `0.633 × 0.210 × 0.338` | lumbar pillow | On recovery lounge chair or massage table |
+| 20 | `20_SM_Kitchen_Decor_10` | `0.229 × 0.177 × 0.224` | potted plant | On media console/cabinet; compact decorative plant |
+
+### User-selected additions
+
+The user selected candidate numbers `6, 8, 13, 20`, each with count one. All
+four are additions. The five deleted yoga-mat/kettlebell instances have no
+replacement.
+
+| Original candidate | Count | Exact asset ID | CSV bbox W×D×H (m) | Intended support | Provisional role |
+| ---: | ---: | --- | --- | --- | --- |
+| 6 | 1 | `a_Bag1` | `0.805 × 0.289 × 0.339` | floor or on object | Sports duffel in the fitness/storage zone |
+| 8 | 1 | `44_sk39_Bike01` | `0.540 × 1.691 × 0.956` | floor or wall | Hobby bicycle with storage/display role; not an exercise-bike replacement |
+| 13 | 1 | `a_SM_desk_props_notebook` | `0.013 × 0.110 × 0.155` | on object | Project/sketch notebook on the hobby workbench |
+| 20 | 1 | `20_SM_Kitchen_Decor_10` | `0.229 × 0.177 × 0.224` | on object | Compact plant on the media console or storage cabinet |
+
+### Candidate-selection constraints
+
+- No candidate recreates the removed yoga mats or kettlebells.
+- `yoga_block_1/2` remain because the user explicitly limited the final removal
+  set to yoga mats plus kettlebells.
+- Candidate `1` requires wall support and a safe clear zone in front.
+- Candidates `2`--`8`, `16`--`18` require collision-free floor/storage
+  footprints. Candidate `8` is a hobby bicycle, not an exercise-bike replacement.
+- Candidates `9`--`15`, `19`, and `20` require explicit table, cabinet, shelf,
+  chair, massage-table, stand, or wall support as appropriate.
+- Candidate `12` requires a real instrument stand/wall support rather than
+  unsupported placement.
+- All four selected asset directories exist. None is materialized into the
+  executable FrozenAssets case by this review-only update.
+
+### Materialization still required
+
+1. Remove `yoga_mat_1/2/3` and their shoe binding `0_SM_Shoe4_L` without
+   creating replacement yoga-mat slots.
+2. Remove `kettlebell_set_1/2` and their kettle binding
+   `a_SM_rest_area_kettle` without creating replacement kettlebell slots.
+3. Retain `yoga_block_1/2` unchanged, as explicitly confirmed by the user.
+4. Add unique sports-bag, hobby-bicycle, notebook, and potted-plant slots
+   without changing other retained S109 identities.
+5. Bind the notebook to the hobby workbench and the plant to an explicit
+   console/cabinet. Record whether the bicycle uses a floor stand or wall
+   support; do not imply that it is stationary exercise equipment.
+6. Validate the bicycle's `0.540 x 1.691 m` footprint against equipment use and
+   circulation.
+7. Add immutable catalog records and source hashes, then re-run local-asset,
+   frozen-binding, architecture, scale, support, and harness-eligibility
+   preflight.
