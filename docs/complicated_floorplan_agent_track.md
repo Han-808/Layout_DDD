@@ -1,17 +1,19 @@
 # Complicated FloorPlan Agent track
 
-This is an additive Agent-only generation track for **general-purpose coding
-Agents**, such as Codex- and Claude Code-class systems. It is distinct from the
-separate pipeline-compatible track for complete scene-generation harnesses,
-such as Holodeck-class systems. It does not replace or modify the frozen Stage
-A → Top-1 retrieval → Stage C model workflow.
+This is an additive Agent-only generation track for **general-purpose
+tool-using Agents**. The entrant list, Agent implementation family, and model
+are deliberately not fixed by this contract; compatible entrants may be
+registered later. It is distinct from the separate pipeline-compatible track
+for complete scene-generation systems.
+It does not replace or modify the frozen Stage A → Top-1 retrieval → Stage C
+model workflow.
 
 ## Fixed experiment contract
 
-- Participant class: a general-purpose coding Agent that can inspect a task
+- Participant class: a general-purpose tool-using Agent that can inspect a task
   workspace, iteratively invoke the benchmark-owned tools, revise artifacts,
   and seal a final submission.
-- Unit of comparison: the complete general-purpose Agent system, including
+- Unit of comparison: the complete registered Agent system, including
   the Agent runtime/version, underlying model/version, and registered launch
   policy. A model running through two different Agent runtimes is two systems.
 - Task suite: the approved ten customized SpatialLM FloorPlans (42 rooms, 314
@@ -46,23 +48,30 @@ labels.
 
 ## Backend boundary
 
-An Agent backend is a thin adapter around a general-purpose coding-agent CLI
-(for example, Codex or Claude Code) that consumes the task prompt on stdin. It
-must pin and record the exact Agent implementation/version and model/version,
-enforce task-workspace-only isolation, and use exit code 75 only for an
-unambiguous retryable infrastructure failure. HTTP 429/500/502/503/504 handling
-belongs in that thin backend wrapper. The cohort runner waits 30 seconds and
-retries only that declared exit. A timeout is ambiguous and is not blindly
-retried.
+An Agent backend is a thin adapter around a later-selected Agent runtime. The
+canonical task files and hashes are fixed, while the adapter registers how the
+unchanged task is delivered (for example as a workspace file, stdin, or an argv
+path). It must record the Agent implementation/version, model or service
+identity at the strongest available disclosure level, and launch policy; and
+use exit code 75 only for an unambiguous retryable infrastructure failure. HTTP
+429/500/502/503/504 handling belongs in that thin backend wrapper. The cohort
+runner waits 30 seconds and retries only that declared exit. A timeout is
+ambiguous and is not blindly retried.
 
 The adapter must not give the Agent repository access, arbitrary internet
 access, a second asset source, benchmark scores, evaluator outputs, or hidden
-labels. Both Codex- and Claude Code-class entrants receive the same task files,
-shared database snapshot, tool surface, tool-call budget, and wall-clock
-budget; only the Agent system differs.
+labels. Every registered entrant receives the same task files, shared database
+snapshot, tool surface, tool-call budget, and wall-clock budget; only the Agent
+system differs.
 
 The backend must call `finalize-submission submission.json`; a zero process
 exit without a sealed submission is a failed case.
+
+The repository-level cohort command is an adapter-development prototype: its
+plain subprocess path relies on the adapter's isolation attestation. Official
+runs must be launched from the standalone arena through its trusted Seatbelt
+executor. These paths are not treated as equivalent, and no Agent entrant is
+selected merely by installing this package.
 
 ## Commands
 

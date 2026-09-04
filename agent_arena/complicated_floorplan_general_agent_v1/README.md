@@ -1,8 +1,8 @@
 # SIEVE Complicated FloorPlan Agent Arena
 
 This folder is the self-contained experiment package for the general-purpose
-coding-agent track (Codex / Claude Code class). It is not the
-pipeline-compatible Holodeck-class track.
+tool-using Agent track. It does not preselect an Agent implementation or model.
+It is not the pipeline-compatible scene-generation-system track.
 
 ## Trust boundary
 
@@ -36,11 +36,15 @@ not an accepted fallback.
 ## Folder map
 
 - `arena.json`: frozen scientific and isolation contract.
-- `arena.lock.json`: content hashes for every controlled arena file.
+- `arena.lock.v2.json`: current content hashes for every controlled arena file.
+- `arena.lock.json`: preserved predecessor lock from the earlier, overly
+  specific draft; v2 hashes it as part of the provenance chain.
 - `TODO.md`: canonical Agent-facing task template.
 - `fixed_suite/`: approved layouts/programs plus public shared-DB identity.
 - `public/`: files copied into each Agent workspace.
 - `trusted/`: host-only materializer, verifier, gateway, and isolated executor.
+- `trusted/agent_registration.example.json`: participant-neutral registration
+  template; the current entrant list is intentionally empty.
 - `episodes/`: generated episode folders; contents are intentionally ignored by
   git.
 
@@ -55,7 +59,7 @@ Create one episode without launching an Agent:
 
 ```bash
 /usr/bin/python3 trusted/create_episode.py \
-  --agent-id codex-example \
+  --agent-id agent-example \
   --scene-id scene_012121 \
   --run-id dryrun-001
 ```
@@ -65,7 +69,6 @@ Run the isolation smoke test (no model/API request):
 ```bash
 /usr/bin/python3 trusted/smoke_isolation.py
 /usr/bin/python3 trusted/smoke_gateway_isolation.py
-/usr/bin/python3 trusted/smoke_codex_runtime.py
 ```
 
 Query the real frozen database through the isolated public interface (still no
@@ -77,6 +80,7 @@ model/API request):
   --resource-bindings /Users/han_mohan/Desktop/Layout_DDD/.runtime/retrieval_bindings.local.json
 ```
 
-Real Codex/Claude Code launch adapters must pin the exact CLI version, exact
-model identifier, reasoning policy, command, wall-clock budget, and scoped
-gateway configuration. No such generation is launched by this package.
+Every selected Agent adapter must pin the exact runtime version/hash, model or
+service identity when available, reasoning/compute policy, command, wall-clock
+budget, and scoped gateway configuration. No entrant or generation is selected
+or launched by this package.

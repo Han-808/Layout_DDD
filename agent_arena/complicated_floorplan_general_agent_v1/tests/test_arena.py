@@ -6,7 +6,6 @@ import json
 from pathlib import Path
 import shutil
 import sys
-import tempfile
 import threading
 import unittest
 import uuid
@@ -14,8 +13,7 @@ import uuid
 
 ARENA_ROOT = Path(__file__).resolve().parents[1]
 TRUSTED = ARENA_ROOT / "trusted"
-ADAPTERS = TRUSTED / "adapters"
-for path in (TRUSTED, ADAPTERS):
+for path in (TRUSTED,):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
 
@@ -26,7 +24,6 @@ from arena import (  # noqa: E402
     verify_episode_inputs,
     verify_fixed_suite,
 )
-from codex import build_codex_command  # noqa: E402
 from model_gateway import ScopedModelGateway  # noqa: E402
 from verify_arena import verify_lock  # noqa: E402
 
@@ -75,7 +72,7 @@ class ArenaTests(unittest.TestCase):
                 if path.is_file()
             )
             self.assertNotIn("TOKENHUB_API_KEY", combined)
-            self.assertNotIn("/Users/han_mohan/.codex", combined)
+            self.assertNotIn("/Users/han_mohan", combined)
             self.assertNotIn("evaluation_preflight.json", combined)
         finally:
             scene_root = episode.root.parent
@@ -83,32 +80,6 @@ class ArenaTests(unittest.TestCase):
             shutil.rmtree(episode.root)
             scene_root.rmdir()
             agent_root.rmdir()
-
-    def test_codex_adapter_is_ephemeral_and_scoped(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            executable = root / "codex"
-            executable.write_bytes(b"fixture")
-            executable.chmod(0o755)
-            workspace = root / "workspace"
-            workspace.mkdir()
-            command = build_codex_command(
-                executable=executable,
-                workspace=workspace,
-                model_id="fixture-codex-model",
-                reasoning_effort="high",
-                gateway_base_url="http://127.0.0.1:45678",
-            )
-        joined = "\n".join(command)
-        self.assertIn("--ephemeral", command)
-        self.assertIn("--ignore-user-config", command)
-        self.assertIn("--ignore-rules", command)
-        self.assertIn('approval_policy="never"', command)
-        self.assertIn('web_search="disabled"', command)
-        self.assertIn("http://127.0.0.1:45678", joined)
-        self.assertIn("ARENA_MODEL_GATEWAY_TOKEN", joined)
-        self.assertNotIn("OPENAI_API_KEY", joined)
-        self.assertNotIn("auth.json", joined)
 
     def test_authoritative_input_tampering_is_rejected(self) -> None:
         token = uuid.uuid4().hex[:12]

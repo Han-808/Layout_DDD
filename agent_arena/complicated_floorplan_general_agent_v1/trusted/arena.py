@@ -55,10 +55,21 @@ def load_arena() -> dict[str, Any]:
     value = read_json(ARENA_ROOT / "arena.json")
     if value.get("schema_version") != "sieve_general_agent_arena_v1":
         raise ArenaError("unsupported arena schema")
-    if value.get("participant_class") != "general_purpose_coding_agent":
+    if value.get("participant_class") != "general_purpose_tool_using_agent":
         raise ArenaError("arena participant class drifted")
     if value.get("track_id") != "complicated_floorplan_agent_track_v1":
         raise ArenaError("arena track identity drifted")
+    selection = _mapping(value.get("entrant_selection"), "entrant_selection")
+    if selection.get("status") != "deferred" or selection.get(
+        "registered_entrants"
+    ) != []:
+        raise ArenaError("base arena must not preselect Agent entrants")
+    integrity = _mapping(value.get("integrity"), "integrity")
+    if integrity != {
+        "current_lock": "arena.lock.v2.json",
+        "predecessor_lock": "arena.lock.json",
+    }:
+        raise ArenaError("arena integrity-chain declaration drifted")
     return value
 
 

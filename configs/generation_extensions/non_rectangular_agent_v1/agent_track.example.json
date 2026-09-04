@@ -2,7 +2,7 @@
   "schema_version": "non_rectangular_agent_track_profile_v1",
   "fullrun_id": "complicated-floorplan-agent-shared-db-v1",
   "track_id": "complicated_floorplan_agent_track_v1",
-  "participant_class": "general_purpose_coding_agent",
+  "participant_class": "general_purpose_tool_using_agent",
   "suite_root": "configs/generation_extensions/non_rectangular_agent_v1/suites/complicated_floorplan_selected10_v1",
   "retrieval_catalog": "configs/retrieval/profiles_v2.json",
   "shared_database_contract": "configs/generation_extensions/non_rectangular_agent_v1/shared_databases/imaginarium_shared_v1.json",
@@ -16,9 +16,9 @@
   },
   "agents": [
     {
-      "agent_id": "replace-with-coding-agent-id",
-      "display_name": "Replace with Codex / Claude Code-class Agent name",
-      "implementation": "replace-with-general-purpose-agent-runtime",
+      "agent_id": "replace-with-agent-id",
+      "display_name": "Replace with registered Agent system name",
+      "implementation": "replace-with-agent-runtime",
       "implementation_version": "replace-with-version",
       "model_id": "replace-with-exact-model-id",
       "command": [
@@ -33,9 +33,7 @@
       "retryable_exit_codes": [
         75
       ],
-      "pass_environment": [
-        "HOME"
-      ]
+      "pass_environment": []
     }
   ]
 }

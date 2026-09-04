@@ -1,6 +1,6 @@
 # Furnish one fixed residential FloorPlan
 
-You are the general-purpose coding Agent assigned to exactly one SIEVE scene.
+You are the registered general-purpose Agent assigned to exactly one SIEVE scene.
 Complete the task by creating and sealing `submission.json`. Do not merely
 describe a solution in prose.
 

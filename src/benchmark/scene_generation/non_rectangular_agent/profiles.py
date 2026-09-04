@@ -13,7 +13,7 @@ from .tool_server import AgentToolPolicy
 
 
 TRACK_PROFILE_SCHEMA_VERSION = "non_rectangular_agent_track_profile_v1"
-PARTICIPANT_CLASS = "general_purpose_coding_agent"
+PARTICIPANT_CLASS = "general_purpose_tool_using_agent"
 _PORTABLE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 _ENV_NAME = re.compile(r"^[A-Z_][A-Z0-9_]*$")
 _FORBIDDEN_ENVIRONMENT = frozenset(
@@ -130,7 +130,7 @@ def load_agent_track_profile(
     )
     if participant_class != PARTICIPANT_CLASS:
         raise AgentProfileError(
-            "this track accepts only general-purpose coding Agents"
+            "this track accepts only registered general-purpose tool-using Agents"
         )
     max_top_k = _positive_int(value["max_top_k"], label="max_top_k")
     tool_raw = value["tool_policy"]

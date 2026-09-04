@@ -1,0 +1,41 @@
+{
+  "adapter": {
+    "adapter_id": "replace-with-adapter-id",
+    "adapter_version": "replace-with-adapter-version",
+    "command_argv": [
+      "/ABSOLUTE/PINNED/AGENT/EXECUTABLE",
+      "REPLACE_WITH_NONINTERACTIVE_FLAGS"
+    ],
+    "executable_sha256": "replace-with-64-lowercase-hex",
+    "task_delivery": {
+      "canonical_source": "workspace/TODO.md",
+      "method": "replace-with-registered-workspace-file-stdin-or-argv-path"
+    },
+    "runtime_root": "/ABSOLUTE/NARROW/RUNTIME/BUNDLE"
+  },
+  "agent_id": "replace-with-agent-id",
+  "implementation": {
+    "name": "replace-with-agent-runtime-name",
+    "version": "replace-with-exact-version"
+  },
+  "isolation": {
+    "backend": "macos_seatbelt_sandbox_exec_v1",
+    "broad_internet_allowed": false,
+    "host_auth_files_mounted": false,
+    "host_environment_inherited": false,
+    "workspace_scope": "one_agent_one_scene_one_run"
+  },
+  "model_or_service": {
+    "compute_policy": "replace-with-disclosed-policy-or-null",
+    "identity": "replace-with-exact-identity-or-disclosed-opaque-service-release",
+    "identity_disclosure": "exact_or_explicitly_opaque"
+  },
+  "remote_access": {
+    "fixed_model_or_service_identity_enforced": true,
+    "max_requests": "replace-with-positive-integer",
+    "mode": "scoped_loopback_gateway_or_equivalent_host_broker",
+    "upstream_credential_visible_to_agent": false
+  },
+  "schema_version": "sieve_general_agent_registration_v1",
+  "selection_status": "template_not_runnable"
+}

@@ -47,7 +47,7 @@ class PreparedAgentFullrun:
             "fullrun_id": self.profile.fullrun_id,
             "track_id": self.profile.track_id,
             "participant_class": self.profile.participant_class,
-            "comparison_unit": "general_purpose_coding_agent_system",
+            "comparison_unit": "general_purpose_tool_using_agent_system",
             "profile_sha256": self.profile_sha256,
             "agent_order": [agent.agent_id for agent in self.profile.agents],
             "agent_count": len(self.profile.agents),

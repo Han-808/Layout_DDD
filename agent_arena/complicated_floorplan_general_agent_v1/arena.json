@@ -1,5 +1,5 @@
 {
-  "arena_id": "sieve-complicated-floorplan-coding-agents-v1",
+  "arena_id": "sieve-complicated-floorplan-general-agents-v1",
   "database": {
     "contract_path": "fixed_suite/shared_database_contract.json",
     "expected_asset_count": 2043,
@@ -13,6 +13,10 @@
     "cross_room_connections_scored": false,
     "unit": "single_room_projection"
   },
+  "entrant_selection": {
+    "registered_entrants": [],
+    "status": "deferred"
+  },
   "isolation": {
     "agent_can_see_host_credentials": false,
     "agent_can_see_host_home": false,
@@ -24,7 +28,11 @@
     "network_default": "deny",
     "workspace_scope": "one_agent_one_scene_one_run"
   },
-  "participant_class": "general_purpose_coding_agent",
+  "integrity": {
+    "current_lock": "arena.lock.v2.json",
+    "predecessor_lock": "arena.lock.json"
+  },
+  "participant_class": "general_purpose_tool_using_agent",
   "public_workspace_files": [
     "TODO.md",
     "database-interface.json",
