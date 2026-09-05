@@ -91,7 +91,7 @@ nonrectangular geometry, multiple rooms, generated openings, or topology.
 ## Asset geometry and GLB bundle
 
 The local Imaginarium source is FBX plus source metadata. DirectLayout,
-LayoutVLM, and the proposed SceneWeaver frozen initializer require exact GLBs.
+LayoutVLM, and the SceneWeaver frozen initializer require exact GLBs.
 Only the selected snapshot is converted; the full asset database is not copied.
 
 `prepare_imaginarium_glb_bundle.py` creates a content-addressed plan and invokes
@@ -150,7 +150,7 @@ PYTHONPATH=src python scripts/prepare_imaginarium_glb_bundle.py \
 | LayoutGPT | Public plan plus a frozen released-style ICL message set and fixed row order/dimensions -> CSS-style numerical layout -> existing LayoutGPT converter. Exact IDs are preserved in the runner sidecar because the released CSS rows do not encode mesh IDs. | Controlled ICL bridge implemented; a frozen ICL file is required; not real-smoke-tested here. |
 | DirectLayout | Released two-list request plus per-slot exact GLB library -> released DirectLayout pipeline -> native numerical JSON -> existing converter. A path-only shim gives initial/refined artifacts one stable room token while preserving the full semantic prompt in every model call. Every native state is snapshotted and checked before rendering; terminal optimizer failure is no longer swallowed, and states from failed retries cannot become the selected result. | Thin released-pipeline bridge implemented; not real-smoke-tested here. |
 | LayoutVLM | Released scene config with exact frozen asset table -> released one-shot solver/optimizer -> native layout JSON -> existing converter. The bridge reproduces the released X/Y processed-bbox and fixed mesh-frame transform, preserves the prepared scene config, replaces only the released two-decimal size literal with the exact frozen value, and rejects randomized/unplaced fallback or model-mutated size. Model-authored Python is restricted to the released pose/constraint DSL before the upstream executor sees it. | Thin released-solver bridge implemented; not real-smoke-tested here. |
-| SceneWeaver | Exact initialized GLBs -> native reflect/modify loop -> every `layout_N.json` -> existing converter/evaluator per iteration. The plugin must report the exact public-plan hash and native room dimensions, then for each iteration report observed asset ID, mesh path/hash, full-precision canonical local bbox, native Euler, exported bottom-center position, `obj.dimensions`, catalog-bbox bottom-center rebase, and canonical-front-to-native-+X basis. A boolean attestation or benchmark-derived binding alone is insufficient. The converter audits rounded local-axis object dimensions, not a world AABB, against these observations. | Conditional: the released initializer/exporter cannot enforce this contract alone. A versioned upstream-side frozen plugin is required to lock initialization/tools and emit the additional geometry/basis evidence without feeding benchmark scores into reflection. |
+| SceneWeaver | Exact initialized GLBs -> native reflect/modify loop -> every `layout_N.json` -> existing converter/evaluator per iteration. The plugin reports the exact public-plan hash and native room dimensions, then per-iteration observed asset ID, mesh path/hash, full-precision canonical local bbox, native Euler, exported bottom-center position, `obj.dimensions`, origin rebase, and front basis. The existing converter audits native rounded fields against those observations. | `scene_weaver_frozen_plugin.py` now implements the native driver/worker route, validated with mocked execution and real-input static preflight. **Not real-upstream-loop smoke tested**; Linux/native environment and production model qualification remain required. |
 
 Frozen identity does not imply identical mesh observability inside each method.
 LayoutGPT is a numerical bbox planner and receives exact IDs, descriptions, and
@@ -181,9 +181,78 @@ operations before they mutate frozen geometry/inventory; native pose processing,
 physics measurements and reflection are retained. The deletion/re-optimize cycle
 stops if no legal deletion exists, leaving collisions visible, not scoring them
 as fixed. This must be reported as **SceneWeaver–FrozenAssets (restricted mutation
-set)**. Component tests do not certify the complete initializer/launcher/loop;
-the harness remains conditional until those integrations and host qualification
-are finished. Upstream files, frozen assets and benchmark scoring stay unchanged.
+set)**. The plugin connects these controls to native initialization and child
+workers; failed, unaccepted initial placement candidates may be rolled back so
+the native second attempt can run. An accepted scene object cannot be deleted.
+Mocked integration does not certify the real initializer/optimizer/renderer/loop;
+the harness remains conditional until host and real-loop qualification finish.
+Upstream files, frozen assets and benchmark scoring stay unchanged.
+
+### SceneWeaver frozen plugin execution
+
+The existing bridge's `--plugin-entrypoint` now points to
+`scripts/external_harness_bridges/scene_weaver_frozen_plugin.py`. The example
+method configuration includes its SHA-256. That pinned file also checks the
+hashes of its four transitive helpers **before importing them**. All workers
+verify the pinned, clean upstream checkout. Do not reuse an old prepared run
+after changing either plugin or configuration identity.
+
+The driver calls the released `SceneDesigner.run()`; it does not implement a
+replacement reflection loop. The released three-stage GPT initializer receives
+the exact public plan, slot counts, dimensions and fixed factory mapping. Its
+native output must match those inputs; wrong mappings, counts, dimensions or
+room size are rejected, not rewritten. The worker uses the released native
+`generate_indoors.main()` and pose optimizer. Native additional-object stages
+are disabled through configuration. A pinned import-time room-height binding
+prevents modules from retaining a different randomly sampled height; a headless
+UI-only overlay avoids requiring a Blender viewport. Neither changes room shape.
+
+`LAYOUT_DDD_SCENEWEAVER_PYTHON` selects the native worker interpreter; it defaults
+to the plugin interpreter. Before any model call, the driver starts a no-model
+worker import/overlay preflight. Missing native dependencies stop execution
+there. The worker receives no API-key/token/secret environment variables. It
+stays in the outer runner's process group so its existing timeout/cancellation
+cleanup covers the complete native process tree.
+
+For a **static, no-upstream-import/no-API** check of already materialized public
+inputs (all variables below are explicit operator paths):
+
+```bash
+python scripts/external_harness_bridges/scene_weaver_frozen_plugin.py --preflight-only --repo-path "$SCENEWEAVER_REPO" --request "$PUBLIC_REQUEST" --method-input "$PUBLIC_METHOD_INPUT" --comparison-input "$COMPARISON_CONTROL" --comparison-catalog "$METHOD_CATALOG" --output-root "$NEW_OUTPUT" --plugin-report "$NEW_PREFLIGHT_REPORT"
+```
+
+This reports `STATIC_PREFLIGHT_ONLY`, never production readiness. It does not
+load Blender, optimize, render, or call a model. Actual execution uses the
+existing controlled-pilot/bridge command after separate API authorization;
+`controlled-pilot run --dry-run-only` is still a **real generation** command.
+
+Artifacts beneath the new output root:
+
+- `generation_asset_selection.json`: exact IDs saved before generation.
+- `frozen_worker_input.json`: immutable worker bindings; not model-visible.
+- `model_calls/call_*/`: effective request and original SDK response saved before
+  native consumption, observed model identity, token usage and redacted failure.
+  Native SDK/reasoning retry budgets remain native; no fallback model/endpoint.
+- `worker_attempts/attempt_*/`: argv, cwd, native args, stdout/stderr, return code,
+  runtime, source overlay audit and mutation journal.
+- `sceneweaver_native/`: working native layouts, renders, state/blend/pickle
+  files, native reflection records and full-precision observations.
+- `native_archive/`: append-only snapshots with original relative names and
+  content-addressed, hash-verified bytes. Backtracking cannot erase earlier
+  versions. Blob names avoid duplicate `layout_N.json` discovery. To evaluate
+  an archived attempt, restore its manifest's original names into a **new**
+  directory, verify hashes, then use the existing offline converter/iteration API.
+- `plugin_report.json`: produced only after successful native termination and
+  validation of all selected working iterations through the existing bridge.
+  A failed last action cannot promote an earlier layout into a successful run.
+
+The plugin does not import or call the benchmark evaluator. Existing post-hoc
+trajectory evaluation remains responsible for canonical scenes and reports.
+Actual SDK call count and tokens are recorded; rendering-call totals remain
+unknown where retries prevent a reliable count (not silently equated with the
+number of selected states). The operator must still qualify the configured
+model's real image/tool response behavior. Interface reference:
+[OpenAI Chat Completions Python API](https://developers.openai.com/api/reference/python/resources/chat/subresources/completions/methods/create).
 
 Released SceneWeaver serializes the solver placeholder's `obj.dimensions` into
 `layout.size` to two decimals. These are scaled **local-axis object dimensions**,

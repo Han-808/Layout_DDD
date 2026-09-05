@@ -210,8 +210,8 @@
           "python_executable": "/ABSOLUTE/PATH/TO/sceneweaver/python",
           "template_variables": {
             "bridge_script": "/ABSOLUTE/PATH/TO/Layout_DDD/scripts/external_harness_bridges/scene_weaver_frozen.py",
-            "frozen_plugin": "/ABSOLUTE/PATH/TO/VERSIONED/sceneweaver_frozen_plugin.py",
-            "frozen_plugin_sha256": "REPLACE_WITH_64_LOWERCASE_HEX_SHA256"
+            "frozen_plugin": "/ABSOLUTE/PATH/TO/Layout_DDD/scripts/external_harness_bridges/scene_weaver_frozen_plugin.py",
+            "frozen_plugin_sha256": "7ca59a152d7001a0bf4627c7a565497bf5110278701f56d8246cd844b92e0da9"
           },
           "environment": {
             "LAYOUT_DDD_API_BASE_URL": "https://YOUR-AUTHORIZED-ENDPOINT/v1"

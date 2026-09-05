@@ -55,8 +55,8 @@ policies and converters are not redesigned.
 - [x] F6: every planned unit has a terminal status; blocked/partial/cancelled
       are distinct from complete; zero attempts cannot exit successfully.
 - [x] Current focused compatibility/execution and new regression tests run.
-      Latest SceneWeaver exporter/input/mutation-focused: 71 passed.
-      Extended: 577 passed, one baseline-existing failure;
+      Latest SceneWeaver plugin/exporter/input/mutation-focused: 104 passed.
+      Final extended regression: 610 passed, one baseline-existing failure;
       this is not an all-green full-suite certification (see evidence below).
 - [x] Fresh wheel installation: 11 entrypoints imported/`--help` passed, 12
       selected schemas/prompts/render workers checked, new ICL module imported,
@@ -74,8 +74,11 @@ policies and converters are not redesigned.
       unavailable locally. SceneWeaver's Linux runtime/plugin are not qualified.
 - [x] Released-derived LayoutGPT ICL snapshot with source/selection/leakage audit;
       eight training-only examples, byte-identical independent message rebuild.
-- [ ] Actual SceneWeaver frozen initializer/export plugin preserving native loop,
-      or evidence-backed ineligibility (never substitute a fake implementation).
+- [x] SceneWeaver frozen plugin implementation: native SceneDesigner entry,
+      fixed initializer mapping, child-worker wiring and iteration observation.
+      Mocked driver/worker integration reaches the existing strict converter.
+- [ ] Qualify that plugin in the actual native environment and loop. Static
+      source checks and mocked execution are not full-loop certification.
 - [ ] Method-native geometry invariants and real asymmetric/near-symmetric pose
       round-trips. DirectLayout/LayoutVLM native mesh assembly: 24/24 captures
       now match conversion, including asymmetric/offset/near-square meshes.
@@ -108,7 +111,7 @@ bpy objects. No benchmark score was fed to a generator.
 | LayoutGPT | `fc31954962553e5b65bf267a904a6930d50b1f5e` | Eight public `rect_train` demonstrations prepared using the release's metric formatter; source hashes and disjoint train/test/val selection checked | Configure audited ICL identity in a new prepared protocol; production response identity and native-parser smoke |
 | DirectLayout | `4430535304124dbc8d48f6bb0ea5891e92267986` | Native pipeline imports; 12 actual mesh assemblies match the corrected clockwise-yaw converter, in CPython 3.11.15 / bpy 4.3.0 / NumPy 1.26.4 | Real rendering/refinement and model/API smoke |
 | LayoutVLM | `85d06b4cd2478551188a0b4a47cd658c85c41315` | Native solver imports; 12 actual mesh assemblies confirm the existing +90-degree basis; CPU fallback probe gives positive loss but both corner gradients are null | Build/verify native differentiable Rotated_IoU on compatible CUDA host; no silent CPU-fallback ablation |
-| SceneWeaver | `7ae54b2ec3fc66147704faa7daf7b017ba8b1bd9` | Exporter 16/16 states match conversion; exact GLB input factory verified separately; user-approved, source-pinned mutation guards match 14 targets and preserve three approved GLBs in an instrumented bpy function-path diagnostic | Full frozen initialization/export plugin, child-worker wiring and Linux runtime remain unqualified; component evidence is not full-loop smoke |
+| SceneWeaver | `7ae54b2ec3fc66147704faa7daf7b017ba8b1bd9` | Frozen plugin now wires the native driver and worker; mocked two-state execution reaches the existing converter; all S100–S109 public-input static preflights pass (269 slots), with 16 pinned mutation targets. Earlier real-bpy exporter/input diagnostics remain separate evidence | Linux runtime, real initialization/optimizer/render/reflection loop and production model route remain unqualified; implemented integration is not real-loop smoke |
 | Catalog Placement | This benchmark checkout | Existing fixed-selection Stage-C baseline and offline same-evaluator tests retained | Production Stage-C/API and full evaluation smoke, separately reported |
 
 All four upstream checkouts were clean after these inspections/imports. Source
@@ -572,3 +575,78 @@ The sole failure remains the independently baseline-reproduced camera test above
 no legitimate strict test or evaluator code was weakened. This checkpoint adds
 only external source-checkout helper/tests/docs, so the previously verified core
 wheel remains unchanged. No experimental artifacts are committed to Git.
+
+## SceneWeaver driver/worker checkpoint (2026-09-05)
+
+Implementation now includes `scene_weaver_frozen_plugin.py` (entry SHA-256
+`7ca59a152d7001a0bf4627c7a565497bf5110278701f56d8246cd844b92e0da9`),
+connected by the existing bridge/example config. It invokes released
+`SceneDesigner.run()` and child `generate_indoors.main()`, not a replacement
+generator. The initializer keeps native model calls and placement/relationship
+logic while requiring exact supplied slot/factory bindings. Sixteen pinned
+internal mutation targets guard the approved no-resize/no-delete policy;
+initial unaccepted candidate rollback remains legal. Extra-object finalization
+stages are disabled through native configuration. Native files are not edited.
+
+The complete code route now includes public-input preparation, exact GLB factory
+registration, source pins, no-model worker import/overlay preflight, configured
+same-model SDK routing, native loop invocation, worker logs and return codes,
+append-only native snapshots, observed per-iteration geometry, and validation
+through the existing strict bridge/converter. The SDK interface follows the
+official Chat Completions tool/image message contract; original native call and
+retry budgets are retained. No credential file from the upstream checkout is
+opened. A failed final action cannot relabel an older layout as a successful run.
+
+Two implementation details were verified against pinned source: native layout
+and rotation tools both send backend action `update`; native modules capture
+`WALL_HEIGHT` during import, so public height is bound before that capture. The
+observer additionally checks the actual native room contour instead of trusting
+only the exported room-size header. Native inventory/scale failures are rejected,
+not repaired by conversion. No `src/benchmark` or evaluator change is in this
+checkpoint.
+
+**Evidence boundary:** mocked native driver/Blender tests execute the real plugin
+orchestration, preserve two native JSON states, pass the existing bridge, then
+independently invoke the existing strict converter for iterations 0 and 1 with
+an exact provider whose retrieval method raises. These are not real upstream
+reasoning/optimizer/render/loop tests. Actual public-input static checks use
+approved GLB paths/hashes and the unchanged frozen catalog, but import neither
+Blender nor native modules and make zero model calls. They do not establish
+production generation eligibility. The Linux runtime, full native mesh/anchor
+round-trip (including ultra-thin assets), real model route and same-evaluator E2E
+smoke still require qualification. The unrelated evaluator applicability gate
+also remains unresolved; no score/ownership/weight override was introduced.
+
+Exact final test commands, from the isolated worktree (Python 3.13.14):
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src /Users/han_mohan/Desktop/Layout_DDD/.venv/bin/python -m pytest -q -o addopts='' tests/test_sceneweaver_frozen_plugin.py tests/test_sceneweaver_frozen_mutations.py tests/test_sceneweaver_frozen_assets.py tests/test_sceneweaver_native_export.py --tb=short --basetemp=/private/tmp/pipeline-sceneweaver-plugin.hfjeP4/pytest_checkpoint_focused --junitxml=/private/tmp/pipeline-sceneweaver-plugin.hfjeP4/checkpoint_focused.xml
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src /Users/han_mohan/Desktop/Layout_DDD/.venv/bin/python -m pytest -q -o addopts='' tests/test_external_harness_adapters.py tests/test_adapter_io_contracts.py tests/test_generation_comparison_protocol.py tests/test_controlled_generation_pilot.py tests/test_frozen_imaginarium_scene10.py tests/test_external_harness_execution.py tests/test_pipeline_evaluation_runtime.py tests/test_layoutgpt_frozen_icl.py tests/test_frozen_public_brief.py tests/test_native_mesh_frame_roundtrip.py tests/test_sceneweaver_native_export.py tests/test_sceneweaver_frozen_assets.py tests/test_sceneweaver_frozen_mutations.py tests/test_sceneweaver_frozen_plugin.py tests/test_scene_harness.py tests/test_catalog_placement_adapter.py tests/test_external_converter_correctness.py tests/test_external_room_contracts.py tests/test_canonical_metric_scoring.py tests/test_canonical_l3_camera_integration.py tests/test_evaluation_mode_interface.py tests/test_submission_api.py --tb=short --basetemp=/private/tmp/pipeline-sceneweaver-plugin.hfjeP4/pytest_checkpoint_extended --junitxml=/private/tmp/pipeline-sceneweaver-plugin.hfjeP4/checkpoint_extended.xml
+```
+
+Results: **104 passed / 0 failed** (0.54s); **610 passed / 1 failed** (11.04s).
+The sole extended failure is the previously independently baseline-reproduced
+`test_canonical_l3_group_judge_repair_reaches_vlm_and_renders` (expected one VLM
+request, observed zero). No tests were weakened or skipped to hide it. Earlier
+diagnostic/test attempts remain under `/private/tmp/pipeline-sceneweaver-plugin.hfjeP4/`.
+The core wheel contents remain unchanged; plugin scripts execute from the pinned
+source checkout rather than introducing an alternate installed evaluator.
+
+All ten approved public inputs were prepared again in a **new diagnostic**
+directory using public-brief-v2 spec SHA
+`2d0328d8ef016c430e8655cda183898b578a6faf3fbde72a5072a678f52c9e2b`
+and the unchanged verified 168-asset GLB bundle. Static plugin checks returned
+exit 0 for S100–S109, respectively 31/32/29/23/30/25/26/25/23/25 slots (269 total).
+The reports record the actual plugin/input file hashes. Exact commands:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src /Users/han_mohan/Desktop/Layout_DDD/.venv/bin/python -c 'from benchmark.generation_comparison.pilot import main; main()' prepare --spec /Users/han_mohan/Desktop/Layout_DDD/Support/pipeline_compatibility_runs/api_ready_v1/public_brief_v2/spec.json --asset-root /Users/han_mohan/Desktop/Layout_DDD/Support/Assets/imaginarium_assets --asset-bundle-root /Users/han_mohan/Desktop/Layout_DDD/Support/pipeline_compatibility_runs/api_ready_v1/glb_bundle_attempt3 --method-configs configs/generation_comparison/frozen_imaginarium_scene10_methods.example.json --out-dir /private/tmp/pipeline-sceneweaver-plugin.hfjeP4/all_cases_prepared
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src /Users/han_mohan/Desktop/Layout_DDD/.venv/bin/python /private/tmp/pipeline-sceneweaver-plugin.hfjeP4/preflight_public_cases.py --checkout /private/tmp/layout-ddd-pipeline-compatibility-runs --data /Users/han_mohan/Desktop/Layout_DDD/Support/pipeline_compatibility_runs/api_ready_v1 --prepared-root /private/tmp/pipeline-sceneweaver-plugin.hfjeP4/all_cases_prepared --out /private/tmp/pipeline-sceneweaver-plugin.hfjeP4/all_cases_static
+```
+
+The preparation intentionally retains placeholder production paths/API settings
+and is **not** a production-ready or scored experiment. No native generation,
+real rendering, optimizer, model call or evaluator call ran in these checks.
+Fresh preparation with fully qualified runtime identities remains mandatory
+before any separately authorized real run. Diagnostic JSON/JUnit/source script
+evidence is stored outside Git under the owned ignored data prefix.

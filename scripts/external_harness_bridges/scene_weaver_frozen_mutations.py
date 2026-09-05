@@ -56,6 +56,8 @@ class FrozenMutationGuard:
         self._bindings = {slot: validate_binding(slot, value, tolerance=tolerance)
                           for slot, value in bindings.items()}
         self.tolerance = tolerance
+        self._pending_initialization = set()
+        self._native_mapping = None
         self.journal = Path(journal)
         # A separate journal for every native worker/attempt; never truncate one.
         with self.journal.open("x", encoding="utf-8"):
@@ -138,6 +140,12 @@ class FrozenMutationGuard:
     def skip_deletion(self, state, name, reason):
         if name not in state.objs:
             self.reject("deletion_target_missing")
+        if name in self._pending_initialization:
+            # Native failed-placement rollback is not removal from an accepted
+            # scene. Permit its cleanup so the original second attempt can run.
+            self._pending_initialization.remove(name)
+            self.emit("initialization_attempt_rollback", slot_id=name)
+            return False
         objstate = state.objs[name]
         if name in self._bindings:
             slot, _, _ = self._object(objstate.obj)
@@ -157,6 +165,36 @@ class FrozenMutationGuard:
         self.emit("native_move_controls", disabled=sorted(set(schedules) & blocked),
                   retained=list(result), retained_weights_unchanged=True)
         return result
+
+    def configure_initialization(self, mapping):
+        if set(mapping) != set(self._bindings) or any(not isinstance(v, str) for v in mapping.values()):
+            self.reject("invalid_fixed_factory_mapping")
+        self._native_mapping = dict(mapping)
+
+    def fixed_retrieval(self, solver, category_cnt, name_mapping):
+        if (self._native_mapping is None or name_mapping != self._native_mapping
+                or set(category_cnt) != set(self._bindings)
+                or any(str(v) != "1" for v in category_cnt.values())):
+            self.reject("native_initializer_changed_fixed_inventory_or_factory")
+        solver.LoadObjavCnts = {}
+        solver.LoadObjavFiles = {}
+        self.emit("fixed_input_binding", asset_selection="provided_exact_ids", retrieval_calls=0)
+
+    def begin_initialization_slot(self, factory, state):
+        slot = getattr(factory, "frozen_slot_id", None)
+        if slot not in self._bindings or slot in state.objs:
+            self.reject("invalid_or_duplicate_initialization_slot")
+        self._pending_initialization.add(slot)
+        return slot
+
+    def finish_initialization_attempt(self, slot, success):
+        if success:
+            self._pending_initialization.discard(slot)
+
+    def assert_complete_initialization(self, state):
+        current = {name for name, value in state.objs.items() if getattr(value, "generator", None) is not None}
+        if self._pending_initialization or current != set(self._bindings):
+            self.reject("incomplete_frozen_initialization")
 
 
 def _statements(code):
@@ -227,6 +265,23 @@ def _patch_function(path, original):
         node.body[loops[0]:loops[0]] = _statements("GUARD.validate_layout(self.state, layouts)")
     elif path == "Solver.delete_object":
         node.body[:0] = _statements("if GUARD.skip_deletion(self.state, name, 'native_cleanup'):\n    return")
+    elif path == "Solver.retrieve_objav_assets":
+        node.body = _statements("return GUARD.fixed_retrieval(self, category_cnt, name_mapping)")
+    elif path == "Solver.init_graph_gpt":
+        names = [item for item in ast.walk(node) if _assigns(item, "target_name") and isinstance(item.value, ast.JoinedStr)]
+        if len(names) != 1:
+            raise RuntimeError("native initialization identity assignment changed")
+        names[0].value = ast.parse(f"{GUARD_GLOBAL}.begin_initialization_slot(gen_class, self.state)", mode="eval").body
+        hits = 0
+        for block in list(ast.walk(node)):
+            body = getattr(block, "body", None)
+            if isinstance(body, list):
+                for i in range(len(body)-1, -1, -1):
+                    if _assigns(body[i], "success") and isinstance(body[i].value, ast.Call) and ast.unparse(body[i].value.func) == "move.apply_init":
+                        body[i+1:i+1] = _statements("GUARD.finish_initialization_attempt(target_name, success)")
+                        hits += 1
+        if hits != 1:
+            raise RuntimeError("native initialization attempt call changed")
     elif path == "Solver._configure_move_weights":
         returns = [item for item in node.body if isinstance(item, ast.Return)]
         if len(returns) != 1 or ast.unparse(returns[0].value) != "schedules":
@@ -280,7 +335,8 @@ def _code_identity(code):
 PATCH_TARGETS = {
     "infinigen/core/constraints/example_solver/solve.py": (
         "Solver.update_graph", "Solver.update_graph_size", "Solver.remove_object",
-        "Solver.delete_object", "Solver._configure_move_weights"),
+        "Solver.delete_object", "Solver._configure_move_weights", "Solver.retrieve_objav_assets",
+        "Solver.init_graph_gpt"),
     "infinigen/core/constraints/example_solver/populate.py": (
         "populate_state_placeholders_mid", "update_asset_location"),
     "infinigen/core/constraints/example_solver/moves/addition.py": (

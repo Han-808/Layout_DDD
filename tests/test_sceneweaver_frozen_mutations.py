@@ -96,6 +96,40 @@ def test_population_only_moves_pose_not_scale(fixture):
     assert copy.scale == [1, 1, 1]
 
 
+def test_initializer_uses_only_supplied_exact_factory_mapping(controls, fixture):
+    f = fixture
+    f.guard.configure_initialization({"rug": "fixed.RugFactory"})
+    solver = SimpleNamespace()
+    f.guard.fixed_retrieval(solver, {"rug": "1"}, {"rug": "fixed.RugFactory"})
+    assert solver.LoadObjavCnts == solver.LoadObjavFiles == {}
+    with pytest.raises(controls.FrozenMutationError):
+        f.guard.fixed_retrieval(solver, {"rug": "1"}, {"rug": None})
+
+
+def test_initial_failed_candidate_rollback_is_not_committed_object_deletion(controls, fixture):
+    f = fixture
+    candidate = f.state.objs.pop("rug")
+    factory = SimpleNamespace(frozen_slot_id="rug")
+    assert f.guard.begin_initialization_slot(factory, f.state) == "rug"
+    f.state.objs["rug"] = candidate
+    f.guard.finish_initialization_attempt("rug", False)
+    assert f.guard.skip_deletion(f.state, "rug", "failed_initial_attempt") is False
+    f.state.objs.pop("rug")  # Native rollback removes its unaccepted candidate.
+    f.guard.begin_initialization_slot(factory, f.state)
+    f.state.objs["rug"] = candidate
+    f.guard.finish_initialization_attempt("rug", True)
+    f.guard.assert_complete_initialization(f.state)
+    assert f.guard.skip_deletion(f.state, "rug", "later_physics_cleanup") is True
+    with pytest.raises(controls.FrozenMutationError):
+        f.guard.begin_initialization_slot(factory, f.state)
+
+
+def test_incomplete_initialization_cannot_be_exported(controls, fixture):
+    fixture.state.objs.pop("rug")
+    with pytest.raises(controls.FrozenMutationError, match="incomplete_frozen_initialization"):
+        fixture.guard.assert_complete_initialization(fixture.state)
+
+
 def test_population_cannot_exchange_slots(controls, fixture, tmp_path):
     guard = controls.FrozenMutationGuard({"rug": fixture.binding, "other": fixture.binding},
                                           tmp_path / "two_slots.jsonl")

@@ -8,6 +8,7 @@ Blender and the released AssetFactory base are imported/supplied only at runtime
 from __future__ import annotations
 
 from copy import deepcopy
+from array import array
 import hashlib
 import json
 import math
@@ -69,6 +70,12 @@ def _bounds(points):
     low = [min(p[i] for p in points) for i in range(3)]
     high = [max(p[i] for p in points) for i in range(3)]
     return [high[i] - low[i] for i in range(3)], [(high[i] + low[i]) / 2 for i in range(3)]
+
+
+def local_vertex_digest(obj):
+    """Within-worker geometry observation, separate from the source-file hash."""
+    values = array("f", (float(v) for vertex in obj.data.vertices for v in vertex.co))
+    return hashlib.sha256(values.tobytes()).hexdigest()
 
 
 def load_exact_glb(slot_id: str, binding: dict, *, tolerance: float = 1e-4):
@@ -138,6 +145,8 @@ def load_exact_glb(slot_id: str, binding: dict, *, tolerance: float = 1e-4):
         obj["frozen_slot_id"] = slot_id
         obj["frozen_asset_id"] = asset["asset_key"]
         obj["frozen_mesh_sha256"] = asset["mesh_sha256"]
+        obj["frozen_geometry_role"] = "asset"
+        obj["frozen_vertex_sha256"] = local_vertex_digest(obj)
         audit = {
             "slot_id": slot_id, "asset_id": asset["asset_key"],
             "mesh_path": asset["mesh_uri"], "mesh_sha256": asset["mesh_sha256"],
@@ -148,6 +157,7 @@ def load_exact_glb(slot_id: str, binding: dict, *, tolerance: float = 1e-4):
             "source_to_native_matrix": [list(row) for row in transform],
             "mesh_counts": {"vertices": before_vertices, "edges": before_edges, "faces": before_faces},
             "source_file_unchanged": True, "retrieval_calls": 0,
+            "native_local_vertex_sha256": obj["frozen_vertex_sha256"],
         }
         return obj, audit
     except BaseException:
@@ -194,12 +204,14 @@ def make_frozen_factory(base_factory, slot_id: str, binding: dict, *, tolerance:
         bpy.context.collection.objects.link(placeholder)
         for key in ("frozen_slot_id", "frozen_asset_id", "frozen_mesh_sha256"):
             placeholder[key] = obj[key]
+        placeholder["frozen_geometry_role"] = "placeholder"
         bpy.data.objects.remove(obj, do_unlink=True)
         return placeholder
 
     factory = type(class_name, (base_factory,), {
         "__module__": __name__, "create_asset": create_asset,
         "create_placeholder": create_placeholder, "frozen_binding_sha256": identity,
+        "frozen_slot_id": slot_id, "frozen_asset_id": asset["asset_key"],
     })
     globals()[class_name] = factory
     return factory
