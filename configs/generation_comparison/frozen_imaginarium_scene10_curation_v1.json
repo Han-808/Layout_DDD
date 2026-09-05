@@ -1,7 +1,7 @@
 {
   "schema_version": "frozen_imaginarium_scene10_curation_v1",
   "curation_id": "scene10_liveboard_human_curation_2026_09_05",
-  "status": "materialized_pending_final_approval",
+  "status": "human_approved",
   "recorded_date": "2026-09-05",
   "selection_policy": "human_selected_from_scored_sceneboard_single_room_baselines",
   "source_catalog": {

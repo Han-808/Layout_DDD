@@ -70,12 +70,8 @@ def test_checked_in_scene10_curation_is_materialized_and_excludes_respace() -> N
         "layout_vlm",
         "scene_weaver",
     ]
-    assert value["asset_selection_status"] == (
-        "candidate_pending_human_approval"
-    )
-    assert value["asset_curation"]["status"] == (
-        "materialized_pending_final_approval"
-    )
+    assert value["asset_selection_status"] == "human_approved"
+    assert value["asset_curation"]["status"] == "human_approved"
     assert value["catalog"]["catalog_version"] == (
         "scene10-human-curated-bindings-v2"
     )
@@ -460,7 +456,7 @@ def test_reviewed_spec_builder_is_deterministic_and_drops_source_pose(
     curation = {
         "schema_version": "frozen_imaginarium_scene10_curation_v1",
         "curation_id": "fixture",
-        "status": "materialized_pending_final_approval",
+        "status": "human_approved",
         "selection_policy": "fixture",
         "source_catalog": {
             "csv_sha256": hashlib.sha256(csv_path.read_bytes()).hexdigest()

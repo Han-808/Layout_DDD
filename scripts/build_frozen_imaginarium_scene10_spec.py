@@ -211,10 +211,14 @@ def materialize_reviewed_spec(
         raise ValueError(
             f"curation schema_version must be {CURATION_SCHEMA_VERSION!r}"
         )
-    if curation.get("status") != "materialized_pending_final_approval":
+    curation_status = str(curation.get("status") or "")
+    if curation_status not in {
+        "materialized_pending_final_approval",
+        "human_approved",
+    }:
         raise ValueError(
-            "reviewed curation must have "
-            "status='materialized_pending_final_approval'"
+            "reviewed curation status must be "
+            "'materialized_pending_final_approval' or 'human_approved'"
         )
     case_edits = _mapping(curation.get("cases"), "curation.cases")
     if set(case_edits) != set(CASE_IDS):
@@ -452,11 +456,15 @@ def materialize_reviewed_spec(
     result.update(
         {
             "label": "human-curated Frozen Imaginarium S100-S109 harness comparison",
-            "asset_selection_status": "candidate_pending_human_approval",
+            "asset_selection_status": (
+                "human_approved"
+                if curation_status == "human_approved"
+                else "candidate_pending_human_approval"
+            ),
             "asset_curation": {
                 "schema_version": CURATION_SCHEMA_VERSION,
                 "curation_id": str(curation["curation_id"]),
-                "status": "materialized_pending_final_approval",
+                "status": curation_status,
                 "curation_sha256": curation_sha256,
                 "selection_policy": str(curation["selection_policy"]),
                 "source_catalog_csv_sha256": expected_csv_hash,

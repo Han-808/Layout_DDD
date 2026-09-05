@@ -114,5 +114,6 @@ SceneBoard baseline inventories. Exact removals, replacements, additions, and
 support parents are materialized as 269 slots over 168 immutable Imaginarium
 assets. It supports the Catalog Placement Stage-C baseline and ships thin
 controlled bridges for LayoutGPT, DirectLayout, LayoutVLM, and conditional
-SceneWeaver integration. The materialized snapshot remains blocked from real
-generation until the user gives final approval to the complete contract.
+SceneWeaver integration. The user approved the complete 269-slot asset contract
+on 2026-09-05. Real generation still requires each method's independent runner,
+execution-identity, credentials, and method-specific input prerequisites.

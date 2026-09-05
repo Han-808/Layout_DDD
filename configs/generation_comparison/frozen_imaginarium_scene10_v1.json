@@ -2,7 +2,7 @@
   "schema_version": "controlled_generation_pilot_v1",
   "pilot_id": "frozen_imaginarium_scene10_harness_v1",
   "label": "human-curated Frozen Imaginarium S100-S109 harness comparison",
-  "asset_selection_status": "candidate_pending_human_approval",
+  "asset_selection_status": "human_approved",
   "protocol_id": "generation_comparison_v1",
   "protocol_version": 1,
   "mode": "frozen_assets",
@@ -3301,7 +3301,7 @@
         ],
         "metadata": {
           "curation_id": "scene10_liveboard_human_curation_2026_09_05",
-          "curation_sha256": "a1f90dcd840438db6995fbec77802a0996fd4dd20253e763f6af080aa4cc842f",
+          "curation_sha256": "100cc254b905c605a2dfff532c5743efce624574a26439e460649901d8df94b3",
           "source_pose_hints_removed": true,
           "support_relations_from_human_curation_only": true
         }
@@ -3334,7 +3334,7 @@
           "dining_table_vase_1"
         ],
         "curation_id": "scene10_liveboard_human_curation_2026_09_05",
-        "curation_sha256": "a1f90dcd840438db6995fbec77802a0996fd4dd20253e763f6af080aa4cc842f"
+        "curation_sha256": "100cc254b905c605a2dfff532c5743efce624574a26439e460649901d8df94b3"
       }
     },
     {
@@ -4639,7 +4639,7 @@
         ],
         "metadata": {
           "curation_id": "scene10_liveboard_human_curation_2026_09_05",
-          "curation_sha256": "a1f90dcd840438db6995fbec77802a0996fd4dd20253e763f6af080aa4cc842f",
+          "curation_sha256": "100cc254b905c605a2dfff532c5743efce624574a26439e460649901d8df94b3",
           "source_pose_hints_removed": true,
           "support_relations_from_human_curation_only": true
         }
@@ -4672,7 +4672,7 @@
           "kitchen_waste_bin_1"
         ],
         "curation_id": "scene10_liveboard_human_curation_2026_09_05",
-        "curation_sha256": "a1f90dcd840438db6995fbec77802a0996fd4dd20253e763f6af080aa4cc842f"
+        "curation_sha256": "100cc254b905c605a2dfff532c5743efce624574a26439e460649901d8df94b3"
       }
     },
     {
@@ -5889,7 +5889,7 @@
         ],
         "metadata": {
           "curation_id": "scene10_liveboard_human_curation_2026_09_05",
-          "curation_sha256": "a1f90dcd840438db6995fbec77802a0996fd4dd20253e763f6af080aa4cc842f",
+          "curation_sha256": "100cc254b905c605a2dfff532c5743efce624574a26439e460649901d8df94b3",
           "source_pose_hints_removed": true,
           "support_relations_from_human_curation_only": true
         }
@@ -5923,7 +5923,7 @@
           "printer_storage_station_1"
         ],
         "curation_id": "scene10_liveboard_human_curation_2026_09_05",
-        "curation_sha256": "a1f90dcd840438db6995fbec77802a0996fd4dd20253e763f6af080aa4cc842f"
+        "curation_sha256": "100cc254b905c605a2dfff532c5743efce624574a26439e460649901d8df94b3"
       }
     },
     {
@@ -6886,7 +6886,7 @@
         ],
         "metadata": {
           "curation_id": "scene10_liveboard_human_curation_2026_09_05",
-          "curation_sha256": "a1f90dcd840438db6995fbec77802a0996fd4dd20253e763f6af080aa4cc842f",
+          "curation_sha256": "100cc254b905c605a2dfff532c5743efce624574a26439e460649901d8df94b3",
           "source_pose_hints_removed": true,
           "support_relations_from_human_curation_only": true
         }
@@ -6917,7 +6917,7 @@
           "bed_lumbar_pillow_1"
         ],
         "curation_id": "scene10_liveboard_human_curation_2026_09_05",
-        "curation_sha256": "a1f90dcd840438db6995fbec77802a0996fd4dd20253e763f6af080aa4cc842f"
+        "curation_sha256": "100cc254b905c605a2dfff532c5743efce624574a26439e460649901d8df94b3"
       }
     },
     {
@@ -8142,7 +8142,7 @@
         ],
         "metadata": {
           "curation_id": "scene10_liveboard_human_curation_2026_09_05",
-          "curation_sha256": "a1f90dcd840438db6995fbec77802a0996fd4dd20253e763f6af080aa4cc842f",
+          "curation_sha256": "100cc254b905c605a2dfff532c5743efce624574a26439e460649901d8df94b3",
           "source_pose_hints_removed": true,
           "support_relations_from_human_curation_only": true
         }
@@ -8171,7 +8171,7 @@
           "game_table_snack_bowl_1"
         ],
         "curation_id": "scene10_liveboard_human_curation_2026_09_05",
-        "curation_sha256": "a1f90dcd840438db6995fbec77802a0996fd4dd20253e763f6af080aa4cc842f"
+        "curation_sha256": "100cc254b905c605a2dfff532c5743efce624574a26439e460649901d8df94b3"
       }
     },
     {
@@ -9178,7 +9178,7 @@
         "relations": [],
         "metadata": {
           "curation_id": "scene10_liveboard_human_curation_2026_09_05",
-          "curation_sha256": "a1f90dcd840438db6995fbec77802a0996fd4dd20253e763f6af080aa4cc842f",
+          "curation_sha256": "100cc254b905c605a2dfff532c5743efce624574a26439e460649901d8df94b3",
           "source_pose_hints_removed": true,
           "support_relations_from_human_curation_only": true
         }
@@ -9207,7 +9207,7 @@
           "toy_storage_ottoman_1"
         ],
         "curation_id": "scene10_liveboard_human_curation_2026_09_05",
-        "curation_sha256": "a1f90dcd840438db6995fbec77802a0996fd4dd20253e763f6af080aa4cc842f"
+        "curation_sha256": "100cc254b905c605a2dfff532c5743efce624574a26439e460649901d8df94b3"
       }
     },
     {
@@ -10278,7 +10278,7 @@
         ],
         "metadata": {
           "curation_id": "scene10_liveboard_human_curation_2026_09_05",
-          "curation_sha256": "a1f90dcd840438db6995fbec77802a0996fd4dd20253e763f6af080aa4cc842f",
+          "curation_sha256": "100cc254b905c605a2dfff532c5743efce624574a26439e460649901d8df94b3",
           "source_pose_hints_removed": true,
           "support_relations_from_human_curation_only": true
         }
@@ -10314,7 +10314,7 @@
           "rolling_utility_shelf_1"
         ],
         "curation_id": "scene10_liveboard_human_curation_2026_09_05",
-        "curation_sha256": "a1f90dcd840438db6995fbec77802a0996fd4dd20253e763f6af080aa4cc842f"
+        "curation_sha256": "100cc254b905c605a2dfff532c5743efce624574a26439e460649901d8df94b3"
       }
     },
     {
@@ -11365,7 +11365,7 @@
         ],
         "metadata": {
           "curation_id": "scene10_liveboard_human_curation_2026_09_05",
-          "curation_sha256": "a1f90dcd840438db6995fbec77802a0996fd4dd20253e763f6af080aa4cc842f",
+          "curation_sha256": "100cc254b905c605a2dfff532c5743efce624574a26439e460649901d8df94b3",
           "source_pose_hints_removed": true,
           "support_relations_from_human_curation_only": true
         }
@@ -11399,7 +11399,7 @@
           "oil_can_1"
         ],
         "curation_id": "scene10_liveboard_human_curation_2026_09_05",
-        "curation_sha256": "a1f90dcd840438db6995fbec77802a0996fd4dd20253e763f6af080aa4cc842f"
+        "curation_sha256": "100cc254b905c605a2dfff532c5743efce624574a26439e460649901d8df94b3"
       }
     },
     {
@@ -12342,7 +12342,7 @@
         ],
         "metadata": {
           "curation_id": "scene10_liveboard_human_curation_2026_09_05",
-          "curation_sha256": "a1f90dcd840438db6995fbec77802a0996fd4dd20253e763f6af080aa4cc842f",
+          "curation_sha256": "100cc254b905c605a2dfff532c5743efce624574a26439e460649901d8df94b3",
           "source_pose_hints_removed": true,
           "support_relations_from_human_curation_only": true
         }
@@ -12373,7 +12373,7 @@
           "drawer_side_table_1"
         ],
         "curation_id": "scene10_liveboard_human_curation_2026_09_05",
-        "curation_sha256": "a1f90dcd840438db6995fbec77802a0996fd4dd20253e763f6af080aa4cc842f"
+        "curation_sha256": "100cc254b905c605a2dfff532c5743efce624574a26439e460649901d8df94b3"
       }
     },
     {
@@ -13408,7 +13408,7 @@
         ],
         "metadata": {
           "curation_id": "scene10_liveboard_human_curation_2026_09_05",
-          "curation_sha256": "a1f90dcd840438db6995fbec77802a0996fd4dd20253e763f6af080aa4cc842f",
+          "curation_sha256": "100cc254b905c605a2dfff532c5743efce624574a26439e460649901d8df94b3",
           "source_pose_hints_removed": true,
           "support_relations_from_human_curation_only": true
         }
@@ -13442,15 +13442,15 @@
           "media_console_plant_1"
         ],
         "curation_id": "scene10_liveboard_human_curation_2026_09_05",
-        "curation_sha256": "a1f90dcd840438db6995fbec77802a0996fd4dd20253e763f6af080aa4cc842f"
+        "curation_sha256": "100cc254b905c605a2dfff532c5743efce624574a26439e460649901d8df94b3"
       }
     }
   ],
   "asset_curation": {
     "schema_version": "frozen_imaginarium_scene10_curation_v1",
     "curation_id": "scene10_liveboard_human_curation_2026_09_05",
-    "status": "materialized_pending_final_approval",
-    "curation_sha256": "a1f90dcd840438db6995fbec77802a0996fd4dd20253e763f6af080aa4cc842f",
+    "status": "human_approved",
+    "curation_sha256": "100cc254b905c605a2dfff532c5743efce624574a26439e460649901d8df94b3",
     "selection_policy": "human_selected_from_scored_sceneboard_single_room_baselines",
     "source_catalog_csv_sha256": "506ef357d2c1d36b145eb8f61743b6ac4d7b4864a9d7842ffab39268052fba85",
     "sceneboard": {

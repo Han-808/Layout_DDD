@@ -59,14 +59,12 @@ but the generator-visible FrozenAssets plan replaces them with each selected
 asset's exact physical dimensions. A harness therefore never receives two
 conflicting scale targets.
 
-The ten per-room selections are
-`materialized_pending_final_approval`, while the checked-in snapshot retains
-`asset_selection_status=candidate_pending_human_approval`. Preparation and
-asset preflight are allowed, but both the pilot command and the central
-controlled runner fail closed. After reviewing the complete generated
-inventory/support summary, the user may explicitly set the global status to
-`human_approved` and prepare a new immutable output directory. This separates
-materialization from authorization to launch an experiment.
+The user gave explicit final approval to all ten per-room selections on
+2026-09-05. The checked-in snapshot therefore records
+`asset_selection_status=human_approved`; preparation and controlled execution
+may pass the asset-selection gate. Approval does not launch an experiment and
+does not override separate prerequisites such as runner configuration,
+execution identity, credentials, or the LayoutGPT ICL snapshot.
 
 `audit_frozen_imaginarium_scene10_assets.py` is review support only: it never
 replaces an asset. Its HIGH-priority flags include assets whose bbox is taller
