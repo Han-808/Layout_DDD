@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import http.client
+from dataclasses import replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 from pathlib import Path
@@ -25,6 +26,7 @@ from arena import (  # noqa: E402
     verify_fixed_suite,
 )
 from model_gateway import GatewayError, ScopedModelGateway  # noqa: E402
+from api_profiles import ProfileRegistry, RouteRuntimeBinding  # noqa: E402
 from verify_arena import verify_lock  # noqa: E402
 
 
@@ -173,6 +175,9 @@ class ArenaTests(unittest.TestCase):
 
     def test_scoped_gateway_hides_secret_and_enforces_model_budget(self) -> None:
         observed: dict[str, object] = {}
+        registry = ProfileRegistry.load()
+        model = registry.model("api2-gpt-5-6-sol-agent-v1")
+        route = registry.route(model.route_profile_id)
 
         class UpstreamHandler(BaseHTTPRequestHandler):
             def do_POST(self) -> None:  # noqa: N802
@@ -180,9 +185,17 @@ class ArenaTests(unittest.TestCase):
                 observed["path"] = self.path
                 observed["authorization"] = self.headers.get("Authorization")
                 observed["body"] = json.loads(self.rfile.read(length))
-                body = json.dumps({"ok": True}).encode("utf-8")
+                event = {
+                    "model": "api_azure_openai_gpt-5.6-sol",
+                    "choices": [{"delta": {"content": "ok"}}],
+                }
+                body = (
+                    "data: "
+                    + json.dumps(event, separators=(",", ":"))
+                    + "\n\ndata: [DONE]\n\n"
+                ).encode("utf-8")
                 self.send_response(200)
-                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Type", "text/event-stream")
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
                 self.wfile.write(body)
@@ -196,48 +209,59 @@ class ArenaTests(unittest.TestCase):
         try:
             upstream_url = f"http://127.0.0.1:{upstream.server_address[1]}/v1"
             with ScopedModelGateway(
-                upstream_base_url=upstream_url,
-                upstream_secret="trusted-upstream-secret",
-                fixed_model="fixed-model",
-                endpoint="/responses",
+                route=route,
+                model=model,
+                runtime_binding=RouteRuntimeBinding(
+                    route_profile_id=route.route_profile_id,
+                    binding_profile_id="fixture-api2-sol-binding-v1",
+                    upstream_base_url=upstream_url,
+                    allow_insecure_upstream=True,
+                ),
+                runtime_credential="trusted-upstream-secret",
                 max_requests=1,
-                upstream_timeout_seconds=3000,
-                allow_insecure_loopback_upstream=True,
             ) as gateway:
-                self.assertEqual(gateway.upstream_timeout_seconds, 3000.0)
                 unauthorized_status, _ = _gateway_request(
                     gateway.port,
                     "0" * 64,
-                    "/responses",
-                    {"model": "fixed-model"},
+                    route.client_path,
+                    {"model": model.client_wire_model, "stream": True},
                 )
                 self.assertEqual(unauthorized_status, 401)
                 status, body = _gateway_request(
                     gateway.port,
                     gateway.capability_token,
-                    "/responses",
-                    {"model": "fixed-model", "input": "test"},
+                    route.client_path,
+                    {
+                        "model": model.client_wire_model,
+                        "messages": [{"role": "user", "content": "test"}],
+                        "stream": True,
+                        "reasoning_effort": "low",
+                        "max_tokens": 1,
+                    },
                 )
                 self.assertEqual(status, 200)
-                self.assertEqual(json.loads(body), {"ok": True})
-                self.assertEqual(observed["path"], "/v1/responses")
+                self.assertIn("data:", body)
+                self.assertEqual(observed["path"], "/v1/chat/completions")
                 self.assertEqual(
                     observed["authorization"], "Bearer trusted-upstream-secret"
                 )
+                self.assertEqual(observed["body"]["model"], model.upstream_wire_model)
+                self.assertEqual(observed["body"]["reasoning_effort"], "high")
+                self.assertEqual(observed["body"]["max_tokens"], 1)
                 self.assertNotIn("trusted-upstream-secret", body)
 
                 wrong_status, _ = _gateway_request(
                     gateway.port,
                     gateway.capability_token,
-                    "/responses",
+                    route.client_path,
                     {"model": "different-model"},
                 )
                 self.assertEqual(wrong_status, 400)
                 exhausted_status, _ = _gateway_request(
                     gateway.port,
                     gateway.capability_token,
-                    "/responses",
-                    {"model": "fixed-model"},
+                    route.client_path,
+                    {"model": model.client_wire_model, "stream": True},
                 )
                 self.assertEqual(exhausted_status, 429)
                 self.assertEqual(gateway.request_count, 1)
@@ -247,15 +271,22 @@ class ArenaTests(unittest.TestCase):
             thread.join(timeout=5.0)
 
     def test_gateway_rejects_invalid_upstream_timeout(self) -> None:
-        with self.assertRaisesRegex(GatewayError, "upstream_timeout_seconds"):
+        registry = ProfileRegistry.load()
+        original = registry.model("api2-gpt-5-6-sol-agent-v1")
+        model = replace(original, request_timeout_seconds=0)
+        route = registry.route(model.route_profile_id)
+        with self.assertRaisesRegex(GatewayError, "request timeout"):
             ScopedModelGateway(
-                upstream_base_url="http://127.0.0.1:1/v1",
-                upstream_secret="fixture-secret",
-                fixed_model="fixture-model",
-                endpoint="/chat/completions",
+                route=route,
+                model=model,
+                runtime_binding=RouteRuntimeBinding(
+                    route_profile_id=route.route_profile_id,
+                    binding_profile_id="fixture-api2-sol-binding-v1",
+                    upstream_base_url="http://127.0.0.1:1/v1",
+                    allow_insecure_upstream=True,
+                ),
+                runtime_credential="fixture-secret",
                 max_requests=1,
-                upstream_timeout_seconds=0,
-                allow_insecure_loopback_upstream=True,
             )
 
 

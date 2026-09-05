@@ -1,0 +1,657 @@
+{
+  "arena_id": "sieve-complicated-floorplan-general-agents-v2",
+  "content_root_sha256": "34070829065b59c7b141841d65b1e27f489a6baab99fe243c1ab3a77bf322354",
+  "file_count": 129,
+  "files": {
+    ".gitignore": {
+      "executable": false,
+      "sha256": "5d306ee549b66f4d2cc821eed1b88d6f3a141b03c45753579a4c6f47f857f113",
+      "size_bytes": 98
+    },
+    "README.md": {
+      "executable": false,
+      "sha256": "e4c88ec1cd3aa5dc47032fbe850670decdc59b21212eb5daef73a066b79827ab",
+      "size_bytes": 7380
+    },
+    "TODO.md": {
+      "executable": false,
+      "sha256": "63e599decdb1131ed1385e5b324495f59dc730f303535a5ed5c15213df6a491a",
+      "size_bytes": 7367
+    },
+    "arena.json": {
+      "executable": false,
+      "sha256": "045d9f9d4cd21634ca801c4de5952c12392b6617d82baf73ea5007ecb57bf421",
+      "size_bytes": 2634
+    },
+    "arena.lock.json": {
+      "executable": false,
+      "sha256": "899d927f537ed0a13bab09578e9db0782442d309cc09ad876400baac161e4b86",
+      "size_bytes": 17955
+    },
+    "arena.lock.v2.json": {
+      "executable": false,
+      "sha256": "83ab4aba7c439db714ce8d537a48771905f967901a96d6d9d99155d8fe490658",
+      "size_bytes": 17919
+    },
+    "arena.lock.v3.json": {
+      "executable": false,
+      "sha256": "4d34948ef056d5ad066d9da8520a98b40ff8b24f04da694f60b22b1ba61dc2c4",
+      "size_bytes": 19017
+    },
+    "arena.lock.v4.json": {
+      "executable": false,
+      "sha256": "bb5829bfad56c9cddc8f8b7f7a6e65f30a2da7df95aaa7e50828ac268ab13464",
+      "size_bytes": 19191
+    },
+    "episodes/.gitkeep": {
+      "executable": false,
+      "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
+      "size_bytes": 1
+    },
+    "fixed_suite/layouts/manifest_v1.json": {
+      "executable": false,
+      "sha256": "e6ab078764125adb62956504768ca34d7c54095d13f0cfbe18884f67b5bd4c9c",
+      "size_bytes": 9411
+    },
+    "fixed_suite/layouts/scene_011634/geometry_validation.json": {
+      "executable": false,
+      "sha256": "eb600086b58aa12a90cea0d164a42eff05e8c5f6139c68f3120179b0914d5fda",
+      "size_bytes": 1921
+    },
+    "fixed_suite/layouts/scene_011634/room_layout.json": {
+      "executable": false,
+      "sha256": "ab133f84e35b536641eb97e34d6230714c76942351b4ff694d2e417f928eabe6",
+      "size_bytes": 21031
+    },
+    "fixed_suite/layouts/scene_011634/source_provenance.json": {
+      "executable": false,
+      "sha256": "c05c8a5432700455825e595b355af7c1757c2bce210a27671bad6fa9398c35d6",
+      "size_bytes": 872
+    },
+    "fixed_suite/layouts/scene_011687/geometry_validation.json": {
+      "executable": false,
+      "sha256": "e77365bbb831790b1b54bba8af6587d9949716f24ba2c86ee0a79b44268c6611",
+      "size_bytes": 2019
+    },
+    "fixed_suite/layouts/scene_011687/room_layout.json": {
+      "executable": false,
+      "sha256": "e7ea28e9d94984270fbe87da4c7a50bd70177ec1d0dc6e497078859fcb672616",
+      "size_bytes": 17565
+    },
+    "fixed_suite/layouts/scene_011687/source_provenance.json": {
+      "executable": false,
+      "sha256": "7d525603c77cbd13d4ea03f29449f34143ebab08258dad9e36f534123fd304ce",
+      "size_bytes": 855
+    },
+    "fixed_suite/layouts/scene_011760/geometry_validation.json": {
+      "executable": false,
+      "sha256": "c5cc1cb34cbd21c84cd7b0483440c912e60d28c4e74c315c47528fd0a43abf95",
+      "size_bytes": 1767
+    },
+    "fixed_suite/layouts/scene_011760/room_layout.json": {
+      "executable": false,
+      "sha256": "ca38ebdaf0791c0a090ded0830d4cfc124171a1202dd3a7f760b4e2dff5e4c17",
+      "size_bytes": 7608
+    },
+    "fixed_suite/layouts/scene_011760/source_provenance.json": {
+      "executable": false,
+      "sha256": "5b97d568829b1e56c70ee25d424966161d7a468be701b94b6686c9f10e5f1c16",
+      "size_bytes": 870
+    },
+    "fixed_suite/layouts/scene_011809/geometry_validation.json": {
+      "executable": false,
+      "sha256": "6d082f7bcdcca29a680c87e9dbc796eb487bb7f1feac03037b924740b2a12a51",
+      "size_bytes": 1757
+    },
+    "fixed_suite/layouts/scene_011809/room_layout.json": {
+      "executable": false,
+      "sha256": "eca1a9685bd3fc5aaf88c3e119ba30556bef0ef1a0325d3835757d155922c989",
+      "size_bytes": 12118
+    },
+    "fixed_suite/layouts/scene_011809/source_provenance.json": {
+      "executable": false,
+      "sha256": "379647aa9a2a0e8f0e390cc2e5dfd760ffed1a59ea1e002c3d64c57534620017",
+      "size_bytes": 855
+    },
+    "fixed_suite/layouts/scene_011838/geometry_validation.json": {
+      "executable": false,
+      "sha256": "f9c4cbadddfcf80881abeaadbed87bbf53a24ee98e8f2c45a21c8ba5237f13a6",
+      "size_bytes": 1910
+    },
+    "fixed_suite/layouts/scene_011838/room_layout.json": {
+      "executable": false,
+      "sha256": "f1df9656484d8bd8c83d3abcdaa0d9312ecca98217b75eed40e45920e068f8d3",
+      "size_bytes": 12509
+    },
+    "fixed_suite/layouts/scene_011838/source_provenance.json": {
+      "executable": false,
+      "sha256": "7faebd17f6cff3575cc7e76d2e94825aa6909578432df9116befbf0342cc1307",
+      "size_bytes": 864
+    },
+    "fixed_suite/layouts/scene_011888/geometry_validation.json": {
+      "executable": false,
+      "sha256": "f50cb2d8c2bbc9d25408945bcf82e74de2737ee522f2bd6c9b7a2acae6f935e4",
+      "size_bytes": 1740
+    },
+    "fixed_suite/layouts/scene_011888/room_layout.json": {
+      "executable": false,
+      "sha256": "0b1d0df7129f02acc990bf5c3c8e17cfabab6fc6a0cb639e3269030729e34cf5",
+      "size_bytes": 10339
+    },
+    "fixed_suite/layouts/scene_011888/source_provenance.json": {
+      "executable": false,
+      "sha256": "7f37e1638c557f513b5e85e4fa0d85b608a110abb2cc0279ffc1aca26c2e4f56",
+      "size_bytes": 856
+    },
+    "fixed_suite/layouts/scene_011923/geometry_validation.json": {
+      "executable": false,
+      "sha256": "39b6e7adeb93f587b00e43d2b8e1cf0e56469fca0001827206b28da645c8b000",
+      "size_bytes": 2189
+    },
+    "fixed_suite/layouts/scene_011923/room_layout.json": {
+      "executable": false,
+      "sha256": "ac1a3f1115b7d7ba452ad0b8acb6a76ab5c8294298c2ca2dd49796c13880bde0",
+      "size_bytes": 14719
+    },
+    "fixed_suite/layouts/scene_011923/source_provenance.json": {
+      "executable": false,
+      "sha256": "4f94ba90772961c8db000fd62d1b61776545516a1af9c706c43c8e875569151d",
+      "size_bytes": 867
+    },
+    "fixed_suite/layouts/scene_012121/geometry_validation.json": {
+      "executable": false,
+      "sha256": "88e9e51ef73743916196e90965df31ff4f4bdcf2d796a78d24be7fc3f7de4198",
+      "size_bytes": 2288
+    },
+    "fixed_suite/layouts/scene_012121/room_layout.json": {
+      "executable": false,
+      "sha256": "8bec0dbb4a00f6c17ae99a2a90c6fe877b1a99adff3770c7f5b11af6d488b3b9",
+      "size_bytes": 25985
+    },
+    "fixed_suite/layouts/scene_012121/source_provenance.json": {
+      "executable": false,
+      "sha256": "dc26688f7b6478887b5c20fa348e331402875576edf235777d47edfd9d6327d7",
+      "size_bytes": 854
+    },
+    "fixed_suite/layouts/scene_012173/geometry_validation.json": {
+      "executable": false,
+      "sha256": "2af4cec052f9d1cf3c97ec9a55ed3a0c1698e56e676723a2787a108403725b27",
+      "size_bytes": 2167
+    },
+    "fixed_suite/layouts/scene_012173/room_layout.json": {
+      "executable": false,
+      "sha256": "02d9545da655695a2b9c3382db1e2573cf76178ea7a8e6180c2a2a81186692c9",
+      "size_bytes": 19756
+    },
+    "fixed_suite/layouts/scene_012173/source_provenance.json": {
+      "executable": false,
+      "sha256": "53e8a28de2704cf638bcd1c2e671bd11c926f60409951222d5682d7bc6e5bb64",
+      "size_bytes": 873
+    },
+    "fixed_suite/layouts/scene_012246/geometry_validation.json": {
+      "executable": false,
+      "sha256": "23042cbc636b310a0f6a8266f3bd537a4976346be2025aeb7d9e2b32eb215b13",
+      "size_bytes": 2054
+    },
+    "fixed_suite/layouts/scene_012246/room_layout.json": {
+      "executable": false,
+      "sha256": "7aa648d47cb113e2a2fc504a193bf9df8e5bd7ec308c6484544e80b54ad2451f",
+      "size_bytes": 12585
+    },
+    "fixed_suite/layouts/scene_012246/source_provenance.json": {
+      "executable": false,
+      "sha256": "99dfcc072a7b6fb9678702eabe6139c9679c4325d928a7dc15a19e7dad04d5ba",
+      "size_bytes": 870
+    },
+    "fixed_suite/programs/manifest_v1.json": {
+      "executable": false,
+      "sha256": "d26bf6b0d3da8b369a5b73bc281ab647a9157172604b5df7244983db0413472b",
+      "size_bytes": 14453
+    },
+    "fixed_suite/programs/scene_011634/program_validation.json": {
+      "executable": false,
+      "sha256": "7990c11745dce08e51fa2cb45261e04321e0d7b832b29ec566880a03a5b37ed8",
+      "size_bytes": 401
+    },
+    "fixed_suite/programs/scene_011634/room_program.json": {
+      "executable": false,
+      "sha256": "2b4d20d18e34f783221b145a21e10b6bd26661ace318e4551d2d8dcf7f1aaf3c",
+      "size_bytes": 632
+    },
+    "fixed_suite/programs/scene_011634/source_provenance.json": {
+      "executable": false,
+      "sha256": "fef9ad0a030e0035e7f33d165f114ae7ffdcab4818364d192d8671947819430a",
+      "size_bytes": 770
+    },
+    "fixed_suite/programs/scene_011687/program_validation.json": {
+      "executable": false,
+      "sha256": "8c466326fd6ea333ad5c4a0385c936ad42b518e003d35905829945c3c8b2e9cd",
+      "size_bytes": 401
+    },
+    "fixed_suite/programs/scene_011687/room_program.json": {
+      "executable": false,
+      "sha256": "91da239ece6b4323875e3cc965185248c80044a17bfdd3e180756057a090a5df",
+      "size_bytes": 735
+    },
+    "fixed_suite/programs/scene_011687/source_provenance.json": {
+      "executable": false,
+      "sha256": "1e7ff40da93dd3b25fb08274f6d854114ead5478a022100d0c0a4cdd724ef52b",
+      "size_bytes": 770
+    },
+    "fixed_suite/programs/scene_011760/program_validation.json": {
+      "executable": false,
+      "sha256": "558452a93a151d599207e454280f4d690234006f4a3606b1fd57f41f645868ff",
+      "size_bytes": 402
+    },
+    "fixed_suite/programs/scene_011760/room_program.json": {
+      "executable": false,
+      "sha256": "3c4283fd8dd3b818ea6c6155191138f6f949138845ec206fc34f9f6891ebd4ee",
+      "size_bytes": 505
+    },
+    "fixed_suite/programs/scene_011760/source_provenance.json": {
+      "executable": false,
+      "sha256": "779c80446ffaebbae80c9e9c8a95469f0343235014578418473fb333e98d0d1b",
+      "size_bytes": 770
+    },
+    "fixed_suite/programs/scene_011809/program_validation.json": {
+      "executable": false,
+      "sha256": "f09112aa07ddfe5961b48cb3c078a9ed75a5c4f947b12e58fd9c42c8b673a6cc",
+      "size_bytes": 401
+    },
+    "fixed_suite/programs/scene_011809/room_program.json": {
+      "executable": false,
+      "sha256": "f993d453388cac103f3aebb0a97eb2d2d72b958427dc2deeae481517ee9d6b26",
+      "size_bytes": 546
+    },
+    "fixed_suite/programs/scene_011809/source_provenance.json": {
+      "executable": false,
+      "sha256": "0dedcc1055c3a77a560d48ac7923fe24f14d6fdb1a036e989bd32dace072f54f",
+      "size_bytes": 770
+    },
+    "fixed_suite/programs/scene_011838/program_validation.json": {
+      "executable": false,
+      "sha256": "41aa70269a973981a63efe3f5e8924226f1fe7989fedddfb542d927d4edbb358",
+      "size_bytes": 402
+    },
+    "fixed_suite/programs/scene_011838/room_program.json": {
+      "executable": false,
+      "sha256": "9c4cdbb53af7a10e835f68d3237ca004fd09288f0b02d50a3dedacb9a86124f9",
+      "size_bytes": 612
+    },
+    "fixed_suite/programs/scene_011838/source_provenance.json": {
+      "executable": false,
+      "sha256": "4b73595a9da02e594ae6ad21b7e0c82c20e39be0fce217f354cfa41bc3869ac1",
+      "size_bytes": 770
+    },
+    "fixed_suite/programs/scene_011888/program_validation.json": {
+      "executable": false,
+      "sha256": "e885bda56ef781dce0a2a2ad56e10cc5e9b050a21e641b10f353964b86ff8ae7",
+      "size_bytes": 396
+    },
+    "fixed_suite/programs/scene_011888/room_program.json": {
+      "executable": false,
+      "sha256": "e535a3163834f7e4398e79b6bf47fff8eaaab05225d89c01a4f252a79fab5d9b",
+      "size_bytes": 516
+    },
+    "fixed_suite/programs/scene_011888/source_provenance.json": {
+      "executable": false,
+      "sha256": "6bd1e849b4dc85384d37ce66319a00ed68ea968b2dd41c008f651ee34b7feebb",
+      "size_bytes": 770
+    },
+    "fixed_suite/programs/scene_011923/program_validation.json": {
+      "executable": false,
+      "sha256": "b4fb7eaa63e0dba1cb1bc36d4fefc794a57cc9876ae11abbbc5d433bca68e936",
+      "size_bytes": 402
+    },
+    "fixed_suite/programs/scene_011923/room_program.json": {
+      "executable": false,
+      "sha256": "77fff0f82c055d9d203df3c6388960fa127b641ae0f13ae40a940874e5901b22",
+      "size_bytes": 808
+    },
+    "fixed_suite/programs/scene_011923/source_provenance.json": {
+      "executable": false,
+      "sha256": "09714d6f08ede7af583fe4820033dca0ba7017d97068682650fe037ea655137e",
+      "size_bytes": 770
+    },
+    "fixed_suite/programs/scene_012121/program_validation.json": {
+      "executable": false,
+      "sha256": "cb393d0a46daa7dfb8d8b533665e1f78bfa6d3bb3b21e0198a7ec7c1b4b0deac",
+      "size_bytes": 402
+    },
+    "fixed_suite/programs/scene_012121/room_program.json": {
+      "executable": false,
+      "sha256": "a5da11cf27105af81c388b534295cde52c1a2dab8989808c90a3c4762a51a672",
+      "size_bytes": 735
+    },
+    "fixed_suite/programs/scene_012121/source_provenance.json": {
+      "executable": false,
+      "sha256": "e49529a7c4e8f82fe2a3f5b2d099133fb33e7c1f2fee2b5a75e6890db3c2014b",
+      "size_bytes": 770
+    },
+    "fixed_suite/programs/scene_012173/program_validation.json": {
+      "executable": false,
+      "sha256": "eb60c3f895aae86fb7848cd9316712d32ff8650ba56430983abcbeac91ff04f2",
+      "size_bytes": 401
+    },
+    "fixed_suite/programs/scene_012173/room_program.json": {
+      "executable": false,
+      "sha256": "fcfa47791724ac98fbcc5a6573d5afd118b6c80b8b7fbb0acd2fc1aed09e643b",
+      "size_bytes": 769
+    },
+    "fixed_suite/programs/scene_012173/source_provenance.json": {
+      "executable": false,
+      "sha256": "c4557effb748fb03fd2154e869bdb0e7220e768983726784a6112dd7aa30de50",
+      "size_bytes": 770
+    },
+    "fixed_suite/programs/scene_012246/program_validation.json": {
+      "executable": false,
+      "sha256": "aee84686a5a0546bf3a18f2aced785b43dc6fabdac9a3887b9213edabb5d16b2",
+      "size_bytes": 401
+    },
+    "fixed_suite/programs/scene_012246/room_program.json": {
+      "executable": false,
+      "sha256": "88f8b8412e61836817d818e0b21b1e5958985e04ee58c25f1d46600108f4bfc3",
+      "size_bytes": 687
+    },
+    "fixed_suite/programs/scene_012246/source_provenance.json": {
+      "executable": false,
+      "sha256": "96890e9792b7d22ebad388cd6a993334948090a30a8ac360cb5a07df34bbb01d",
+      "size_bytes": 770
+    },
+    "fixed_suite/proposal_manifest.json": {
+      "executable": false,
+      "sha256": "9f0242e9319a1e64db4dc2b3f6def23edf388a7f8fcee9b9a18e6bd4b050ab3c",
+      "size_bytes": 3017
+    },
+    "fixed_suite/shared_database_contract.json": {
+      "executable": false,
+      "sha256": "45da3804d98c5755b58e0f50ae4958d51d6bdbfe989a26fea2c5ebec88f96599",
+      "size_bytes": 1318
+    },
+    "public/database-interface.json": {
+      "executable": false,
+      "sha256": "61342654ae482dc1a743ecd14344b33f6886b0cace8b732652dc6edd50551e85",
+      "size_bytes": 2579
+    },
+    "public/sieve-agent-tool": {
+      "executable": true,
+      "sha256": "e318571e7dfe252e9f3759a891153a64047854e330e469d252bd2fba90107b8e",
+      "size_bytes": 2894
+    },
+    "public/submission.schema.json": {
+      "executable": false,
+      "sha256": "4a82a810c4b660edcf3d9908dc4a11adb600a52c3a4c2d80642461584f6a4e9c",
+      "size_bytes": 1475
+    },
+    "tests/test_api_profiles.py": {
+      "executable": false,
+      "sha256": "d0ac76fafda288c37606c19cc90142c687855bffa9a6efeafb3d2810c162837d",
+      "size_bytes": 10344
+    },
+    "tests/test_arena.py": {
+      "executable": false,
+      "sha256": "593b125cb806ff8fff522608c9db2d44b509d3f23dc4724ec0976d1f1bac17c9",
+      "size_bytes": 12577
+    },
+    "tests/test_experiment_resume_planning.py": {
+      "executable": false,
+      "sha256": "389f8477418a23d4525094807aeba862f8bf9d3f12109ac6671d4b9917dd125d",
+      "size_bytes": 34023
+    },
+    "tests/test_family_lock.py": {
+      "executable": false,
+      "sha256": "4c4841b1f99f1349c61c4c89bdeaadc65d66b594508b52a353bfc5dd5363873f",
+      "size_bytes": 4553
+    },
+    "tests/test_isolated_exec_resources.py": {
+      "executable": false,
+      "sha256": "8454bbcbdba342e494275f9626de1e4fb9b7f1e73b978a0bb74ae27fed6d5bd4",
+      "size_bytes": 7761
+    },
+    "tests/test_isolation.py": {
+      "executable": false,
+      "sha256": "4c04b587a9d7ff665d6cd1aecf74cb42f680aaf9ea1d3c6706f694b24888da4b",
+      "size_bytes": 1924
+    },
+    "tests/test_log_sanitizer.py": {
+      "executable": false,
+      "sha256": "929896938445dd18c2bfff153af1bd8dcbefff5a1a8a69604e96050b6ae1069d",
+      "size_bytes": 2789
+    },
+    "tests/test_managed_transport.py": {
+      "executable": false,
+      "sha256": "7913dd07d73eed6eecd93f06d4ddaaac241bf7c829be60bc71ebbd9d9e1ca75b",
+      "size_bytes": 39371
+    },
+    "tests/test_model_gateway_and_preflight.py": {
+      "executable": false,
+      "sha256": "36de433b776844c2aad54a9068f796e5ccae8853d5bc85c5280e07ceba2ea22e",
+      "size_bytes": 52553
+    },
+    "tests/test_model_gateway_lifecycle.py": {
+      "executable": false,
+      "sha256": "d3cd545982997596ca5f7b571bce91dd0a2d911d79bf941f9fb5f5b538d3377d",
+      "size_bytes": 10615
+    },
+    "tests/test_pi_bash_containment.py": {
+      "executable": false,
+      "sha256": "3912b04f711d0308480c6636ea862762183dbe4319d6d7417ce32bbf04ee321c",
+      "size_bytes": 10355
+    },
+    "tests/test_pi_harness.py": {
+      "executable": false,
+      "sha256": "5b6ec911a42d96e39735875be7fa8abb388a6bf69e964bf27a4278686aa2e560",
+      "size_bytes": 10773
+    },
+    "tests/test_pi_route_compatibility.py": {
+      "executable": false,
+      "sha256": "ac34df736c1e5b91e0d5bbbea453cccb724f7b43d9fc79e24b04bcb6bf298f6b",
+      "size_bytes": 24335
+    },
+    "tests/test_pi_tool_transcript.py": {
+      "executable": false,
+      "sha256": "0a7d1477a77b44fdf6fa24e75db8aee4d4454ae27eed74f39d2c1d1dcb471a6a",
+      "size_bytes": 5726
+    },
+    "tests/test_tokenhub_identity_relay.py": {
+      "executable": false,
+      "sha256": "ed0bb59e11804a9bd478033b33900e0f9359902a13c1f00c9d17f9780ee01fff",
+      "size_bytes": 9936
+    },
+    "trusted/API_COMPATIBILITY.md": {
+      "executable": false,
+      "sha256": "51c34da60a3a43f370bd8f03e401c0ab10d0201f1114ffb401ca034419d33647",
+      "size_bytes": 14585
+    },
+    "trusted/TODO.md": {
+      "executable": false,
+      "sha256": "d3696912138e7630369778a62e88150f6e13baba7e8df6e75b962ced7a6be2b8",
+      "size_bytes": 1574
+    },
+    "trusted/adapters/README.md": {
+      "executable": false,
+      "sha256": "2dcdd5058001eca937b96ce022efdae2923b08283c6b9d0dde9f2d8ee4706e1d",
+      "size_bytes": 2486
+    },
+    "trusted/adapters/tokenhub_litellm_v1.json": {
+      "executable": false,
+      "sha256": "8d22b0b3ecdd388b7101542fbc3e863d2182a1cd56fb11a141a3803c2c924b36",
+      "size_bytes": 2643
+    },
+    "trusted/agent_registration.example.json": {
+      "executable": false,
+      "sha256": "93686c97fd33c1ab8e36289263e649107ea72ecd0b2c8f0d16c3b6416544e901",
+      "size_bytes": 1925
+    },
+    "trusted/api_profiles.py": {
+      "executable": false,
+      "sha256": "6f1acdfbfa2a33478dd3dd605d6aee0847436179b24b3db99b7bb109374059ba",
+      "size_bytes": 47431
+    },
+    "trusted/arena.py": {
+      "executable": false,
+      "sha256": "06d3d2b4e1866ab7ef5129ae74e7de601f7992dc5bb1d8659de4dadb7718eabf",
+      "size_bytes": 31508
+    },
+    "trusted/create_episode.py": {
+      "executable": true,
+      "sha256": "3d7df5778ee53152e912d4c50fafcbbf53d73e7fc8393fcda63034984d7892f5",
+      "size_bytes": 999
+    },
+    "trusted/database_host.py": {
+      "executable": false,
+      "sha256": "abffa367702dddaab762485d2dccda5f9a65e0d7324bb5c322ea123b9a389029",
+      "size_bytes": 15035
+    },
+    "trusted/experiments/api2-all-models.example.json": {
+      "executable": false,
+      "sha256": "c9422231b7e197af134bb34dd98c17dca89e7fdddc96726d56023d518260bcca",
+      "size_bytes": 887
+    },
+    "trusted/experiments/api3-all-models.example.json": {
+      "executable": false,
+      "sha256": "f0054db7ff453904c1712eecbf4b0741b0c8fd86f64003374ed72d6128829f98",
+      "size_bytes": 871
+    },
+    "trusted/experiments/tokenhub-hy4.example.json": {
+      "executable": false,
+      "sha256": "001066e5eaa6a4c41009a891ff2ec983a9a209981a13c7133af7ca949e0484a1",
+      "size_bytes": 805
+    },
+    "trusted/family_lock.py": {
+      "executable": false,
+      "sha256": "c7829e8446f5ca93819802cb8d5b1f31c25e6f07ab2006f55ff20a84c3de7f0c",
+      "size_bytes": 6207
+    },
+    "trusted/isolated_exec.py": {
+      "executable": true,
+      "sha256": "f9ed461e4d5f85845c5e2885d27e3d5e2715bb0500db32edf8ba58a98527aaab",
+      "size_bytes": 58873
+    },
+    "trusted/managed_transport.py": {
+      "executable": false,
+      "sha256": "a734939f9527818292136ad9c01931cca9035007371bb44d6cd011e7ccded51c",
+      "size_bytes": 63730
+    },
+    "trusted/model_gateway.py": {
+      "executable": true,
+      "sha256": "0631f14fb0a7f13e3d743663dbdf54134206d9c48ce02cf7275e34d18bf225d9",
+      "size_bytes": 108986
+    },
+    "trusted/pi_harness.py": {
+      "executable": false,
+      "sha256": "cfea7f184f20e5639b58c4899a0e0f1c3bf88b5a12d234f578f1ef28a0f7e55e",
+      "size_bytes": 44235
+    },
+    "trusted/pi_harness/SYSTEM.md": {
+      "executable": false,
+      "sha256": "96f028cbb608d0baaa64c3cc5d8d3690a2102274c976fb3374d2e51750a17a50",
+      "size_bytes": 1763
+    },
+    "trusted/pi_harness/agent_registration.pi.template.json": {
+      "executable": false,
+      "sha256": "7ebf176aca2dc3d62e900a704389f5ca098d4682184c606700ff6aab026c75a1",
+      "size_bytes": 1746
+    },
+    "trusted/pi_harness/harness.json": {
+      "executable": false,
+      "sha256": "dabae309b3377cb5b9b5dbab4a8aa5b6ec2e52e3185492999c34b25314b159c6",
+      "size_bytes": 4265
+    },
+    "trusted/pi_harness/sequential_tools_extension.ts": {
+      "executable": false,
+      "sha256": "b8e5fca8dff7ec680949e5f131621980e910f2d7af06b2fb875f38e93f62dbb7",
+      "size_bytes": 10475
+    },
+    "trusted/pi_tool_transcript.py": {
+      "executable": false,
+      "sha256": "6b0a4148238b563ce3a0804f845f387551bba2259edc5c369b82460fb4eeefa2",
+      "size_bytes": 15920
+    },
+    "trusted/policies/offline.sb": {
+      "executable": false,
+      "sha256": "83eedbe23434d73a1d897326fd4dec819d3ebf9a8e5b3375acd60587002e4493",
+      "size_bytes": 1754
+    },
+    "trusted/policies/scoped_gateway.sb": {
+      "executable": false,
+      "sha256": "fee93924d7cdb7c3082e610c8b15a0cc26287ffdfbfb29ff41367d538c361c7f",
+      "size_bytes": 1278
+    },
+    "trusted/preflight_agent_route.py": {
+      "executable": false,
+      "sha256": "e2d872cf40b639a18ceb113af8ce108c181d0ab4cb420411de46e90508f1a15b",
+      "size_bytes": 21452
+    },
+    "trusted/preflight_pi_route.py": {
+      "executable": false,
+      "sha256": "a018de9d4f70e1587769eb39786a961b54cd06cb4b8601f3317e7138e762a813",
+      "size_bytes": 23061
+    },
+    "trusted/profiles/api_families.json": {
+      "executable": false,
+      "sha256": "d1dff171a5b9c70d011ff25bb44e7be2eb1307b62d9089e81689a96f837f4d2d",
+      "size_bytes": 1148
+    },
+    "trusted/profiles/model_profiles.json": {
+      "executable": false,
+      "sha256": "a7e9eedee71d13edb8ade13ffc7fa727e4a218811fe1a0046ee0004661560b06",
+      "size_bytes": 15553
+    },
+    "trusted/profiles/route_profiles.json": {
+      "executable": false,
+      "sha256": "744717e8824ea05ecac3233b9708987de23daac5c7231b538e995e36ca50bce4",
+      "size_bytes": 2672
+    },
+    "trusted/profiles/runtime_bindings.example.json": {
+      "executable": false,
+      "sha256": "d861c103065aa8bcd0740adfc4c107a2c79590c652a2640be04814eb884802f6",
+      "size_bytes": 1452
+    },
+    "trusted/run_pi_episode.py": {
+      "executable": false,
+      "sha256": "78c677bc1b3a29943b41e745b6314dc4c540c9819e91bbf33112fdf7ed22eee5",
+      "size_bytes": 35522
+    },
+    "trusted/run_pi_experiment.py": {
+      "executable": false,
+      "sha256": "e5c8bfd746b89e8152f7d182d5a194ac94f95ad33bd97648f8e3d277185487f9",
+      "size_bytes": 37554
+    },
+    "trusted/smoke_gateway_isolation.py": {
+      "executable": true,
+      "sha256": "18a556e8991c86c552d39325bb4e1a33ffb72ca28c3d76a7f6cf11427ed20554",
+      "size_bytes": 4913
+    },
+    "trusted/smoke_isolation.py": {
+      "executable": true,
+      "sha256": "edfb5bd9e7152b08d7ba7fb96fb8c268da6cab85658d82953f8047ecd2e83f25",
+      "size_bytes": 6194
+    },
+    "trusted/smoke_real_database.py": {
+      "executable": true,
+      "sha256": "1af97e1578f0c883826c454f27b895fe8726b7e9ace05ed71902f417589dc548",
+      "size_bytes": 3400
+    },
+    "trusted/tokenhub_identity_relay.py": {
+      "executable": false,
+      "sha256": "d99d6d21d9adc2d2a06617c329440092657df68080165a3e0d8c94c9c84deab8",
+      "size_bytes": 26756
+    },
+    "trusted/tokenhub_release_gate.py": {
+      "executable": false,
+      "sha256": "d3c51e0b0e495ff0fe35e98dc97b0984f92bb855c9b58c07a1d67ebb6a50a6f2",
+      "size_bytes": 73910
+    },
+    "trusted/verify_arena.py": {
+      "executable": true,
+      "sha256": "a68a7b891789c4cd96fe74cfdda801b1002f8dd174483d86666273cde2e800c5",
+      "size_bytes": 4252
+    }
+  },
+  "predecessor_lock": {
+    "path": "arena.lock.v4.json",
+    "sha256": "bb5829bfad56c9cddc8f8b7f7a6e65f30a2da7df95aaa7e50828ac268ab13464"
+  },
+  "schema_version": "sieve_agent_arena_lock_v5"
+}

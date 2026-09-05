@@ -13,7 +13,8 @@
   (subpath "/usr/sbin")
   (subpath "/Library/Developer/CommandLineTools")
   (subpath (param "RUNTIME_ROOT"))
-  (subpath (param "WORKSPACE")))
+  (subpath (param "WORKSPACE"))
+  (literal (param "HARNESS_EXTENSION")))
 
 (allow file-read* file-test-existence
   (subpath "/bin")
@@ -23,12 +24,14 @@
   (subpath "/private/etc")
   (subpath "/Library/Developer/CommandLineTools")
   (subpath (param "RUNTIME_ROOT"))
-  (subpath (param "WORKSPACE")))
+  (subpath (param "WORKSPACE"))
+  (literal (param "HARNESS_EXTENSION")))
 
 (allow file-read-metadata file-test-existence
   (path-ancestors (param "WORKSPACE"))
   (path-ancestors (param "RUNTIME_ROOT"))
-  (path-ancestors (param "TOOL_SOCKET")))
+  (path-ancestors (param "TOOL_SOCKET"))
+  (path-ancestors (param "HARNESS_EXTENSION")))
 
 (allow file-write* file-ioctl
   (subpath (param "WORKSPACE")))

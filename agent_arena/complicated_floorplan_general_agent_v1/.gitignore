@@ -2,3 +2,4 @@ episodes/**
 !episodes/.gitkeep
 **/__pycache__/
 *.pyc
+trusted/profiles/runtime_bindings.local.json

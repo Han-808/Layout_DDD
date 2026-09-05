@@ -1,0 +1,441 @@
+{
+  "models": [
+    {
+      "api3_strategy_type": null,
+      "api_family_id": "api2",
+      "auth_query_parameters": {},
+      "client_wire_model": "api_azure_openai_gpt-5.6-sol",
+      "display_label": "gpt-5.6-sol",
+      "model_profile_id": "api2-gpt-5-6-sol-agent-v1",
+      "pi": {
+        "api_protocol": "openai-completions",
+        "compatibility": {
+          "maxTokensField": "max_tokens",
+          "requiresAssistantAfterToolResult": false,
+          "requiresReasoningContentOnAssistantMessages": false,
+          "requiresThinkingAsText": false,
+          "requiresToolResultName": false,
+          "sendSessionAffinityHeaders": false,
+          "sessionAffinityFormat": "openai-nosession",
+          "supportsDeveloperRole": false,
+          "supportsFinishReason": true,
+          "supportsLongCacheRetention": false,
+          "supportsOpenAIGrammarTools": false,
+          "supportsReasoningEffort": false,
+          "supportsStore": false,
+          "supportsStrictMode": false,
+          "supportsUsageInStreaming": true,
+          "thinkingFormat": "openai"
+        },
+        "context_window": 131072,
+        "maximum_output_tokens": 65536,
+        "thinking_level": "high"
+      },
+      "reasoning": {
+        "effort": "high",
+        "preserve_across_tool_turns": true,
+        "style": "top_level_reasoning",
+        "thinking_type": null
+      },
+      "request_timeout_seconds": 3000,
+      "response_identity": {
+        "accepted_models": [],
+        "required": false
+      },
+      "retry": {
+        "max_infrastructure_retries": 5,
+        "retry_ambiguous_timeouts": false,
+        "retry_delay_seconds": 30,
+        "retry_transport_failures": true,
+        "retryable_http_statuses": [408, 409, 425, 429, 500, 502, 503, 504]
+      },
+      "route_profile_id": "api2-standard-chat-agent-v1",
+      "temperature": null,
+      "upstream_wire_model": "api_azure_openai_gpt-5.6-sol",
+      "user_agent_suffix": "sieve-pi-api2-gpt56sol-v1"
+    },
+    {
+      "api3_strategy_type": null,
+      "api_family_id": "api2",
+      "auth_query_parameters": {
+        "model": "kimi-k3",
+        "provider": "moonshot",
+        "timeout": "600"
+      },
+      "client_wire_model": "kimi-k3",
+      "display_label": "kimi-k3",
+      "model_profile_id": "api2-kimi-k3-agent-v1",
+      "pi": {
+        "api_protocol": "openai-completions",
+        "compatibility": {
+          "maxTokensField": "max_tokens",
+          "requiresAssistantAfterToolResult": false,
+          "requiresReasoningContentOnAssistantMessages": true,
+          "requiresThinkingAsText": false,
+          "requiresToolResultName": false,
+          "sendSessionAffinityHeaders": false,
+          "sessionAffinityFormat": "openai-nosession",
+          "supportsDeveloperRole": false,
+          "supportsFinishReason": true,
+          "supportsLongCacheRetention": false,
+          "supportsOpenAIGrammarTools": false,
+          "supportsReasoningEffort": false,
+          "supportsStore": false,
+          "supportsStrictMode": false,
+          "supportsUsageInStreaming": true,
+          "thinkingFormat": "openai"
+        },
+        "context_window": 131072,
+        "maximum_output_tokens": 65536,
+        "thinking_level": "high"
+      },
+      "reasoning": {
+        "effort": "max",
+        "preserve_across_tool_turns": true,
+        "style": "top_level_reasoning",
+        "thinking_type": null
+      },
+      "request_timeout_seconds": 660,
+      "response_identity": {
+        "accepted_models": [],
+        "required": false
+      },
+      "retry": {
+        "max_infrastructure_retries": 5,
+        "retry_ambiguous_timeouts": false,
+        "retry_delay_seconds": 30,
+        "retry_transport_failures": true,
+        "retryable_http_statuses": [408, 409, 425, 429, 500, 502, 503, 504]
+      },
+      "route_profile_id": "api2-chat-reasoning-agent-v1",
+      "temperature": null,
+      "upstream_wire_model": "kimi-k3",
+      "user_agent_suffix": "sieve-pi-api2-kimi-k3-v1"
+    },
+    {
+      "api3_strategy_type": null,
+      "api_family_id": "api2",
+      "auth_query_parameters": {
+        "model": "glm-5.3",
+        "provider": "zhipu",
+        "timeout": "600"
+      },
+      "client_wire_model": "glm-5.3",
+      "display_label": "glm-5.3",
+      "model_profile_id": "api2-glm-5-3-agent-v1",
+      "pi": {
+        "api_protocol": "openai-responses",
+        "compatibility": {
+          "sessionAffinityFormat": "openai-nosession",
+          "supportsAdditionalTools": false,
+          "supportsDeveloperRole": false,
+          "supportsLongCacheRetention": false,
+          "supportsMaxOutputTokens": true,
+          "supportsOpenAIGrammarTools": false,
+          "supportsStrictMode": false,
+          "supportsToolSearch": false
+        },
+        "context_window": 131072,
+        "maximum_output_tokens": 65536,
+        "thinking_level": "high"
+      },
+      "reasoning": {
+        "effort": "max",
+        "preserve_across_tool_turns": true,
+        "style": "responses_reasoning",
+        "thinking_type": null
+      },
+      "request_timeout_seconds": 1200,
+      "response_identity": {
+        "accepted_models": [],
+        "required": false
+      },
+      "retry": {
+        "max_infrastructure_retries": 5,
+        "retry_ambiguous_timeouts": false,
+        "retry_delay_seconds": 30,
+        "retry_transport_failures": true,
+        "retryable_http_statuses": [408, 409, 425, 429, 500, 502, 503, 504]
+      },
+      "route_profile_id": "api2-responses-reasoning-agent-v1",
+      "temperature": null,
+      "upstream_wire_model": "glm-5.3",
+      "user_agent_suffix": "sieve-pi-api2-glm53-v1"
+    },
+    {
+      "api3_strategy_type": null,
+      "api_family_id": "api2",
+      "auth_query_parameters": {
+        "model": "hy4-preview",
+        "provider": "taiji",
+        "timeout": "600"
+      },
+      "client_wire_model": "hy4-preview",
+      "display_label": "hy4-preview (API2)",
+      "model_profile_id": "api2-hy4-preview-agent-v1",
+      "pi": {
+        "api_protocol": "openai-completions",
+        "compatibility": {
+          "maxTokensField": "max_tokens",
+          "requiresAssistantAfterToolResult": false,
+          "requiresReasoningContentOnAssistantMessages": true,
+          "requiresThinkingAsText": false,
+          "requiresToolResultName": false,
+          "sendSessionAffinityHeaders": false,
+          "sessionAffinityFormat": "openai-nosession",
+          "supportsDeveloperRole": false,
+          "supportsFinishReason": true,
+          "supportsLongCacheRetention": false,
+          "supportsOpenAIGrammarTools": false,
+          "supportsReasoningEffort": false,
+          "supportsStore": false,
+          "supportsStrictMode": false,
+          "supportsUsageInStreaming": true,
+          "thinkingFormat": "openai"
+        },
+        "context_window": 131072,
+        "maximum_output_tokens": 65536,
+        "thinking_level": "high"
+      },
+      "reasoning": {
+        "effort": "high",
+        "preserve_across_tool_turns": true,
+        "style": "top_level_reasoning",
+        "thinking_type": null
+      },
+      "request_timeout_seconds": 610,
+      "response_identity": {
+        "accepted_models": ["hy4-preview"],
+        "required": true
+      },
+      "retry": {
+        "max_infrastructure_retries": 5,
+        "retry_ambiguous_timeouts": false,
+        "retry_delay_seconds": 30,
+        "retry_transport_failures": true,
+        "retryable_http_statuses": [408, 409, 425, 429, 500, 502, 503, 504]
+      },
+      "route_profile_id": "api2-chat-reasoning-agent-v1",
+      "temperature": null,
+      "upstream_wire_model": "hy4-preview",
+      "user_agent_suffix": "sieve-pi-api2-hy4-preview-v1"
+    },
+    {
+      "api3_strategy_type": "ConsistentHash",
+      "api_family_id": "api3",
+      "auth_query_parameters": {},
+      "client_wire_model": "claude-opus-5-aihub",
+      "display_label": "claude-opus-5-aihub",
+      "model_profile_id": "api3-claude-opus-5-agent-v1",
+      "pi": {
+        "api_protocol": "openai-completions",
+        "compatibility": {
+          "maxTokensField": "max_tokens",
+          "requiresAssistantAfterToolResult": false,
+          "requiresReasoningContentOnAssistantMessages": false,
+          "requiresThinkingAsText": false,
+          "requiresToolResultName": false,
+          "sendSessionAffinityHeaders": false,
+          "sessionAffinityFormat": "openai-nosession",
+          "supportsDeveloperRole": false,
+          "supportsFinishReason": true,
+          "supportsLongCacheRetention": false,
+          "supportsOpenAIGrammarTools": false,
+          "supportsReasoningEffort": false,
+          "supportsStore": false,
+          "supportsStrictMode": false,
+          "supportsUsageInStreaming": true,
+          "thinkingFormat": "openai"
+        },
+        "context_window": 131072,
+        "maximum_output_tokens": 65536,
+        "thinking_level": "off"
+      },
+      "reasoning": {
+        "effort": null,
+        "preserve_across_tool_turns": false,
+        "style": "none",
+        "thinking_type": null
+      },
+      "request_timeout_seconds": 1800,
+      "response_identity": {
+        "accepted_models": ["claude-opus-5"],
+        "required": true
+      },
+      "retry": {
+        "max_infrastructure_retries": 5,
+        "retry_ambiguous_timeouts": false,
+        "retry_delay_seconds": 30,
+        "retry_transport_failures": true,
+        "retryable_http_statuses": [408, 409, 425, 429, 500, 502, 503, 504]
+      },
+      "route_profile_id": "api3-chat-legacy-agent-v1",
+      "temperature": null,
+      "upstream_wire_model": "claude-opus-5-aihub",
+      "user_agent_suffix": null
+    },
+    {
+      "api3_strategy_type": "ConsistentHash",
+      "api_family_id": "api3",
+      "auth_query_parameters": {},
+      "client_wire_model": "claude-sonnet-5-aihub",
+      "display_label": "claude-sonnet-5-aihub",
+      "model_profile_id": "api3-claude-sonnet-5-agent-v1",
+      "pi": {
+        "api_protocol": "openai-completions",
+        "compatibility": {
+          "maxTokensField": "max_tokens",
+          "requiresAssistantAfterToolResult": false,
+          "requiresReasoningContentOnAssistantMessages": false,
+          "requiresThinkingAsText": false,
+          "requiresToolResultName": false,
+          "sendSessionAffinityHeaders": false,
+          "sessionAffinityFormat": "openai-nosession",
+          "supportsDeveloperRole": false,
+          "supportsFinishReason": true,
+          "supportsLongCacheRetention": false,
+          "supportsOpenAIGrammarTools": false,
+          "supportsReasoningEffort": false,
+          "supportsStore": false,
+          "supportsStrictMode": false,
+          "supportsUsageInStreaming": true,
+          "thinkingFormat": "openai"
+        },
+        "context_window": 131072,
+        "maximum_output_tokens": 65536,
+        "thinking_level": "off"
+      },
+      "reasoning": {
+        "effort": null,
+        "preserve_across_tool_turns": false,
+        "style": "none",
+        "thinking_type": null
+      },
+      "request_timeout_seconds": 1800,
+      "response_identity": {
+        "accepted_models": ["claude-sonnet-5"],
+        "required": true
+      },
+      "retry": {
+        "max_infrastructure_retries": 5,
+        "retry_ambiguous_timeouts": false,
+        "retry_delay_seconds": 30,
+        "retry_transport_failures": true,
+        "retryable_http_statuses": [408, 409, 425, 429, 500, 502, 503, 504]
+      },
+      "route_profile_id": "api3-chat-legacy-agent-v1",
+      "temperature": null,
+      "upstream_wire_model": "claude-sonnet-5-aihub",
+      "user_agent_suffix": null
+    },
+    {
+      "api3_strategy_type": "ConsistentHash",
+      "api_family_id": "api3",
+      "auth_query_parameters": {},
+      "client_wire_model": "claude-fable-5-aihub",
+      "display_label": "claude-fable-5-aihub",
+      "model_profile_id": "api3-claude-fable-5-agent-v1",
+      "pi": {
+        "api_protocol": "openai-completions",
+        "compatibility": {
+          "maxTokensField": "max_tokens",
+          "requiresAssistantAfterToolResult": false,
+          "requiresReasoningContentOnAssistantMessages": false,
+          "requiresThinkingAsText": false,
+          "requiresToolResultName": false,
+          "sendSessionAffinityHeaders": false,
+          "sessionAffinityFormat": "openai-nosession",
+          "supportsDeveloperRole": false,
+          "supportsFinishReason": true,
+          "supportsLongCacheRetention": false,
+          "supportsOpenAIGrammarTools": false,
+          "supportsReasoningEffort": false,
+          "supportsStore": false,
+          "supportsStrictMode": false,
+          "supportsUsageInStreaming": true,
+          "thinkingFormat": "openai"
+        },
+        "context_window": 131072,
+        "maximum_output_tokens": 65536,
+        "thinking_level": "off"
+      },
+      "reasoning": {
+        "effort": null,
+        "preserve_across_tool_turns": false,
+        "style": "none",
+        "thinking_type": null
+      },
+      "request_timeout_seconds": 1800,
+      "response_identity": {
+        "accepted_models": ["claude-fable-5"],
+        "required": true
+      },
+      "retry": {
+        "max_infrastructure_retries": 5,
+        "retry_ambiguous_timeouts": false,
+        "retry_delay_seconds": 30,
+        "retry_transport_failures": true,
+        "retryable_http_statuses": [408, 409, 425, 429, 500, 502, 503, 504]
+      },
+      "route_profile_id": "api3-chat-legacy-agent-v1",
+      "temperature": null,
+      "upstream_wire_model": "claude-fable-5-aihub",
+      "user_agent_suffix": null
+    },
+    {
+      "api3_strategy_type": null,
+      "api_family_id": "tokenhub",
+      "auth_query_parameters": {},
+      "client_wire_model": "hy4-preview",
+      "display_label": "hy4-preview (TokenHub)",
+      "model_profile_id": "tokenhub-hy4-preview-agent-v1",
+      "pi": {
+        "api_protocol": "openai-completions",
+        "compatibility": {
+          "maxTokensField": "max_tokens",
+          "requiresAssistantAfterToolResult": false,
+          "requiresReasoningContentOnAssistantMessages": true,
+          "requiresThinkingAsText": false,
+          "requiresToolResultName": false,
+          "sendSessionAffinityHeaders": false,
+          "sessionAffinityFormat": "openai-nosession",
+          "supportsDeveloperRole": false,
+          "supportsFinishReason": true,
+          "supportsLongCacheRetention": false,
+          "supportsOpenAIGrammarTools": false,
+          "supportsReasoningEffort": false,
+          "supportsStore": false,
+          "supportsStrictMode": false,
+          "supportsUsageInStreaming": true,
+          "thinkingFormat": "openai"
+        },
+        "context_window": 131072,
+        "maximum_output_tokens": 65536,
+        "thinking_level": "high"
+      },
+      "reasoning": {
+        "effort": "high",
+        "preserve_across_tool_turns": true,
+        "style": "top_level_reasoning",
+        "thinking_type": null
+      },
+      "request_timeout_seconds": 1800,
+      "response_identity": {
+        "accepted_models": ["hy4-preview"],
+        "required": true
+      },
+      "retry": {
+        "max_infrastructure_retries": 5,
+        "retry_ambiguous_timeouts": false,
+        "retry_delay_seconds": 30,
+        "retry_transport_failures": true,
+        "retryable_http_statuses": [408, 409, 425, 429, 500, 502, 503, 504]
+      },
+      "route_profile_id": "tokenhub-chat-reasoning-agent-v1",
+      "temperature": null,
+      "upstream_wire_model": "hy4-preview",
+      "user_agent_suffix": "sieve-pi-tokenhub-hy4-preview-v1"
+    }
+  ],
+  "schema_version": "sieve_agent_model_profiles_v1"
+}

@@ -1,7 +1,7 @@
 {
   "adapter": {
-    "adapter_id": "sieve-pi-common-harness-v2",
-    "adapter_version": "2",
+    "adapter_id": "sieve-pi-common-harness-v4",
+    "adapter_version": "3",
     "command_argv_source": "trusted/pi_harness.py",
     "runtime_manifest": "../runtime_bundles/pi-0.85.0/runtime.manifest.json",
     "task_delivery": {

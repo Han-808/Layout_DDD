@@ -27,3 +27,20 @@ An adapter is not authorized for a benchmark run until it passes all of:
 4. scoped gateway request/model budget test;
 5. one no-evaluator preflight episode;
 6. public workspace file-set equality check against the other entrants.
+
+The common Pi host adapter, API-family profiles, credential-free runtime gate,
+and real streaming tool-call preflight are specified in
+`../API_COMPATIBILITY.md`. A profile or example experiment is registration, not
+authorization to contact a provider; a live route requires an explicit
+operator action and a gitignored runtime binding.
+
+For TokenHub, authorization also requires the credential-free real-Pi →
+real-LiteLLM → host identity relay → fake-Anthropic signed-thinking replay
+gate. The host relay, not LiteLLM's rewritten OpenAI stream, proves the raw
+Anthropic response model before releasing success. The gate additionally
+proves that unsafe post-send/stream failures cannot be converted into a retry
+by LiteLLM: the private ambiguity sideband makes the request terminal, poisons
+the relay, drains the raw connection, recycles the owned proxy, reverifies the
+pinned runtime, and only then permits the next logical unit. A first-turn codec
+check or post-LiteLLM model alias alone is insufficient for a multi-turn
+tool-using Agent.

@@ -69,7 +69,7 @@
     "tool_audit_journal_visible_or_writable_by_agent": false
   },
   "transcript_policy": {
-    "event_schema": "non_rectangular_agent_tool_event_v2",
+    "event_schema": "non_rectangular_agent_tool_event_v3",
     "hash_chained": true,
     "result_payloads": "complete_public_tool_results_only",
     "storage": "trusted_host_side",

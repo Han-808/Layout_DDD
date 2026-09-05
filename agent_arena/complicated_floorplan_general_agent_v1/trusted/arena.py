@@ -14,6 +14,7 @@ from typing import Any, Mapping
 
 ARENA_ROOT = Path(__file__).resolve().parents[1]
 PORTABLE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
+SHA256 = re.compile(r"^[0-9a-f]{64}$")
 WORKSPACE_FILES = frozenset(
     {
         "TODO.md",
@@ -68,8 +69,8 @@ def load_arena() -> dict[str, Any]:
         raise ArenaError("base arena must not preselect Agent entrants")
     integrity = _mapping(value.get("integrity"), "integrity")
     if integrity != {
-        "current_lock": "arena.lock.v4.json",
-        "predecessor_lock": "arena.lock.v3.json",
+        "current_lock": "arena.lock.v5.json",
+        "predecessor_lock": "arena.lock.v4.json",
     }:
         raise ArenaError("arena integrity-chain declaration drifted")
     return value
@@ -251,6 +252,14 @@ def fixed_case(scene_id: str) -> FixedCase:
     )
 
 
+def canonical_task(case: FixedCase) -> dict[str, Any]:
+    """Build one task exclusively from the frozen arena and fixed case."""
+
+    arena = load_arena()
+    database = _mapping(arena["database"], "arena.database")
+    return _build_task(arena, case, database)
+
+
 def create_episode(*, agent_id: str, scene_id: str, run_id: str) -> Episode:
     from verify_arena import verify_lock
 
@@ -271,25 +280,7 @@ def create_episode(*, agent_id: str, scene_id: str, run_id: str) -> Episode:
 
     arena = load_arena()
     database = _mapping(arena["database"], "arena.database")
-    replacements = {
-        "{{ARENA_ID}}": str(arena["arena_id"]),
-        "{{SCENE_ID}}": case.scene_id,
-        "{{LAYOUT_ID}}": case.scene_id,
-        "{{ROOM_COUNT}}": str(case.room_count),
-        "{{WALL_SEGMENT_COUNT}}": str(case.wall_segment_count),
-        "{{TARGET_MIN}}": str(case.target_min),
-        "{{TARGET_MAX}}": str(case.target_max),
-        "{{DATABASE_SNAPSHOT_ID}}": str(database["snapshot_id"]),
-        "{{ROOM_INSTANCE_RANGE_TABLE}}": "\n".join(
-            f"- `{row['room_id']}`: {row['min']} to {row['max']} instances"
-            for row in case.room_instance_ranges
-        ),
-    }
-    todo = (ARENA_ROOT / "TODO.md").read_text(encoding="utf-8")
-    for before, after in replacements.items():
-        todo = todo.replace(before, after)
-    if "{{" in todo or "}}" in todo:
-        raise ArenaError("TODO template contains unresolved fields")
+    todo = _render_todo(arena, case, database)
 
     write_text_exclusive(workspace / "TODO.md", todo, mode=0o444)
     copy_exclusive(case.floorplan, workspace / "floorplan.json", mode=0o444)
@@ -309,7 +300,72 @@ def create_episode(*, agent_id: str, scene_id: str, run_id: str) -> Episode:
         workspace / "sieve-agent-tool",
         mode=0o555,
     )
-    task = {
+    task = canonical_task(case)
+    write_json_exclusive(workspace / "task.json", task, mode=0o444)
+
+    observed = {
+        path.name: {
+            "sha256": sha256_file(path),
+            "size_bytes": path.stat().st_size,
+            "mode": oct(path.stat().st_mode & 0o777),
+        }
+        for path in sorted(workspace.iterdir(), key=lambda item: item.name)
+        if path.is_file()
+    }
+    if set(observed) != WORKSPACE_FILES:
+        raise ArenaError("materialized public workspace file set drifted")
+    manifest = {
+        "schema_version": "sieve_isolated_agent_episode_manifest_v1",
+        "arena_id": arena["arena_id"],
+        "agent_id": agent_id,
+        "scene_id": scene_id,
+        "run_id": run_id,
+        "workspace_relative_path": "workspace",
+        "workspace_files": observed,
+        "host_home_mounted": False,
+        "repository_mounted": False,
+        "other_episodes_mounted": False,
+        "network_default": "deny",
+        "model_gateway_required": True,
+        "database_snapshot_id": database["snapshot_id"],
+    }
+    write_json_exclusive(host / "episode_manifest.json", manifest, mode=0o444)
+    return Episode(root=episode_root, workspace=workspace, host=host, case=case)
+
+
+def _render_todo(
+    arena: Mapping[str, Any],
+    case: FixedCase,
+    database: Mapping[str, Any],
+) -> str:
+    replacements = {
+        "{{ARENA_ID}}": str(arena["arena_id"]),
+        "{{SCENE_ID}}": case.scene_id,
+        "{{LAYOUT_ID}}": case.scene_id,
+        "{{ROOM_COUNT}}": str(case.room_count),
+        "{{WALL_SEGMENT_COUNT}}": str(case.wall_segment_count),
+        "{{TARGET_MIN}}": str(case.target_min),
+        "{{TARGET_MAX}}": str(case.target_max),
+        "{{DATABASE_SNAPSHOT_ID}}": str(database["snapshot_id"]),
+        "{{ROOM_INSTANCE_RANGE_TABLE}}": "\n".join(
+            f"- `{row['room_id']}`: {row['min']} to {row['max']} instances"
+            for row in case.room_instance_ranges
+        ),
+    }
+    todo = (ARENA_ROOT / "TODO.md").read_text(encoding="utf-8")
+    for before, after in replacements.items():
+        todo = todo.replace(before, after)
+    if "{{" in todo or "}}" in todo:
+        raise ArenaError("TODO template contains unresolved fields")
+    return todo
+
+
+def _build_task(
+    arena: Mapping[str, Any],
+    case: FixedCase,
+    database: Mapping[str, Any],
+) -> dict[str, Any]:
+    return {
         "schema_version": "sieve_isolated_agent_task_v2",
         "arena_id": arena["arena_id"],
         "track_id": arena["track_id"],
@@ -395,36 +451,6 @@ def create_episode(*, agent_id: str, scene_id: str, run_id: str) -> Episode:
             "model_gateway_scoped": True,
         },
     }
-    write_json_exclusive(workspace / "task.json", task, mode=0o444)
-
-    observed = {
-        path.name: {
-            "sha256": sha256_file(path),
-            "size_bytes": path.stat().st_size,
-            "mode": oct(path.stat().st_mode & 0o777),
-        }
-        for path in sorted(workspace.iterdir(), key=lambda item: item.name)
-        if path.is_file()
-    }
-    if set(observed) != WORKSPACE_FILES:
-        raise ArenaError("materialized public workspace file set drifted")
-    manifest = {
-        "schema_version": "sieve_isolated_agent_episode_manifest_v1",
-        "arena_id": arena["arena_id"],
-        "agent_id": agent_id,
-        "scene_id": scene_id,
-        "run_id": run_id,
-        "workspace_relative_path": "workspace",
-        "workspace_files": observed,
-        "host_home_mounted": False,
-        "repository_mounted": False,
-        "other_episodes_mounted": False,
-        "network_default": "deny",
-        "model_gateway_required": True,
-        "database_snapshot_id": database["snapshot_id"],
-    }
-    write_json_exclusive(host / "episode_manifest.json", manifest, mode=0o444)
-    return Episode(root=episode_root, workspace=workspace, host=host, case=case)
 
 
 def room_instance_ranges(
@@ -498,16 +524,137 @@ def _largest_remainder(total: int, weights: list[Decimal]) -> list[int]:
 
 
 def verify_episode_inputs(episode: Episode) -> dict[str, Any]:
-    manifest = read_json(episode.host / "episode_manifest.json")
-    expected = _mapping(manifest.get("workspace_files"), "workspace_files")
-    for name, metadata in expected.items():
-        if name not in WORKSPACE_FILES:
-            raise ArenaError(f"unexpected controlled workspace file: {name}")
-        path = episode.workspace / name
-        item = _mapping(metadata, f"workspace_files.{name}")
-        if sha256_file(path) != item.get("sha256"):
+    """Rebuild and verify every authoritative episode input.
+
+    The manifest is host-owned evidence, but resume acceptance must not trust a
+    self-consistent subset supplied by that manifest.  This verifier binds the
+    exact file set, identities, bytes, sizes and modes back to the current
+    frozen arena and approved fixed case.
+    """
+
+    root = episode.root.expanduser().absolute()
+    workspace = episode.workspace.expanduser().absolute()
+    host = episode.host.expanduser().absolute()
+    if workspace != root / "workspace" or host != root / "host":
+        raise ArenaError("episode workspace or host path is not canonical")
+    for path, label in ((root, "root"), (workspace, "workspace"), (host, "host")):
+        if not path.is_dir() or path.is_symlink():
+            raise ArenaError(f"episode {label} must be a real directory")
+    try:
+        relative_parts = root.relative_to(ARENA_ROOT / "episodes").parts
+    except ValueError as exc:
+        raise ArenaError("episode is outside the arena episode root") from exc
+    if len(relative_parts) != 3:
+        raise ArenaError("episode path identity is malformed")
+    agent_id, scene_id, run_id = relative_parts
+    portable_id(agent_id, "agent_id")
+    portable_id(scene_id, "scene_id")
+    portable_id(run_id, "run_id")
+    if episode.case.scene_id != scene_id:
+        raise ArenaError("episode case identity differs from its path")
+
+    manifest_path = host / "episode_manifest.json"
+    _require_mode(manifest_path, 0o444, "episode manifest")
+    manifest = read_json(manifest_path)
+    exact_manifest_keys = {
+        "schema_version",
+        "arena_id",
+        "agent_id",
+        "scene_id",
+        "run_id",
+        "workspace_relative_path",
+        "workspace_files",
+        "host_home_mounted",
+        "repository_mounted",
+        "other_episodes_mounted",
+        "network_default",
+        "model_gateway_required",
+        "database_snapshot_id",
+    }
+    if set(manifest) != exact_manifest_keys:
+        raise ArenaError("episode manifest field set drifted")
+
+    arena = load_arena()
+    database = _mapping(arena["database"], "arena.database")
+    expected_manifest_fields = {
+        "schema_version": "sieve_isolated_agent_episode_manifest_v1",
+        "arena_id": arena["arena_id"],
+        "agent_id": agent_id,
+        "scene_id": scene_id,
+        "run_id": run_id,
+        "workspace_relative_path": "workspace",
+        "host_home_mounted": False,
+        "repository_mounted": False,
+        "other_episodes_mounted": False,
+        "network_default": "deny",
+        "model_gateway_required": True,
+        "database_snapshot_id": database["snapshot_id"],
+    }
+    for field, expected_value in expected_manifest_fields.items():
+        if manifest.get(field) != expected_value:
+            raise ArenaError(f"episode manifest identity drifted: {field}")
+
+    records = _mapping(manifest.get("workspace_files"), "workspace_files")
+    if set(records) != WORKSPACE_FILES:
+        raise ArenaError("episode manifest authoritative file set drifted")
+    task = canonical_task(episode.case)
+    expected_bytes = {
+        "TODO.md": _render_todo(arena, episode.case, database).encode("utf-8"),
+        "database-interface.json": (
+            ARENA_ROOT / "public/database-interface.json"
+        ).read_bytes(),
+        "floorplan.json": episode.case.floorplan.read_bytes(),
+        "room_program.json": episode.case.room_program.read_bytes(),
+        "sieve-agent-tool": (ARENA_ROOT / "public/sieve-agent-tool").read_bytes(),
+        "submission.schema.json": (
+            ARENA_ROOT / "public/submission.schema.json"
+        ).read_bytes(),
+        "task.json": _json_bytes(task),
+    }
+    expected_modes = {
+        name: (0o555 if name == "sieve-agent-tool" else 0o444)
+        for name in WORKSPACE_FILES
+    }
+    for name in sorted(WORKSPACE_FILES):
+        item = _mapping(records[name], f"workspace_files.{name}")
+        if set(item) != {"sha256", "size_bytes", "mode"}:
+            raise ArenaError(f"workspace manifest metadata drifted: {name}")
+        expected_digest = hashlib.sha256(expected_bytes[name]).hexdigest()
+        size = item.get("size_bytes")
+        mode_text = item.get("mode")
+        if (
+            not isinstance(item.get("sha256"), str)
+            or SHA256.fullmatch(str(item["sha256"])) is None
+            or isinstance(size, bool)
+            or not isinstance(size, int)
+            or size < 0
+            or not isinstance(mode_text, str)
+        ):
+            raise ArenaError(f"workspace manifest metadata is invalid: {name}")
+        if item != {
+            "sha256": expected_digest,
+            "size_bytes": len(expected_bytes[name]),
+            "mode": oct(expected_modes[name]),
+        }:
+            raise ArenaError(f"workspace manifest metadata differs: {name}")
+        path = workspace / name
+        _require_mode(
+            path,
+            expected_modes[name],
+            f"Agent changed authoritative workspace file {name}; workspace input",
+        )
+        observed = path.read_bytes()
+        if observed != expected_bytes[name]:
             raise ArenaError(f"Agent changed an authoritative workspace file: {name}")
-    return {"valid": True, "verified_files": len(expected)}
+        if sha256_file(path) != expected_digest:
+            raise ArenaError(f"authoritative workspace hash differs: {name}")
+    return {
+        "schema_version": "sieve_episode_input_verification_v2",
+        "valid": True,
+        "verified_files": len(records),
+        "scene_id": scene_id,
+        "database_snapshot_id": database["snapshot_id"],
+    }
 
 
 def portable_id(value: str, label: str) -> str:
@@ -520,8 +667,11 @@ def read_json(path: Path) -> dict[str, Any]:
     if not path.is_file() or path.is_symlink():
         raise ArenaError(f"required JSON is missing or linked: {path}")
     try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        value = json.loads(
+            path.read_text(encoding="utf-8"),
+            parse_constant=_reject_json_constant,
+        )
+    except (OSError, UnicodeError, ValueError) as exc:
         raise ArenaError(f"cannot read JSON {path.name}: {type(exc).__name__}") from exc
     if not isinstance(value, dict):
         raise ArenaError(f"JSON root must be an object: {path.name}")
@@ -539,10 +689,7 @@ def sha256_file(path: Path) -> str:
 
 
 def write_json_exclusive(path: Path, value: Mapping[str, Any], *, mode: int) -> None:
-    encoded = json.dumps(
-        dict(value), indent=2, sort_keys=True, ensure_ascii=False, allow_nan=False
-    ) + "\n"
-    write_bytes_exclusive(path, encoded.encode("utf-8"), mode=mode)
+    write_bytes_exclusive(path, _json_bytes(value), mode=mode)
 
 
 def write_text_exclusive(path: Path, value: str, *, mode: int) -> None:
@@ -564,6 +711,33 @@ def copy_exclusive(source: Path, target: Path, *, mode: int) -> None:
     if not source.is_file() or source.is_symlink():
         raise ArenaError(f"copy source is missing or linked: {source}")
     write_bytes_exclusive(target, source.read_bytes(), mode=mode)
+
+
+def _json_bytes(value: Mapping[str, Any]) -> bytes:
+    return (
+        json.dumps(
+            dict(value),
+            indent=2,
+            sort_keys=True,
+            ensure_ascii=False,
+            allow_nan=False,
+        )
+        + "\n"
+    ).encode("utf-8")
+
+
+def _require_mode(path: Path, expected: int, label: str) -> None:
+    if not path.is_file() or path.is_symlink():
+        raise ArenaError(f"{label} must be a real file")
+    observed = path.stat().st_mode & 0o777
+    if observed != expected:
+        raise ArenaError(
+            f"{label} mode differs: expected {oct(expected)}, got {oct(observed)}"
+        )
+
+
+def _reject_json_constant(value: str) -> Any:
+    raise ValueError(f"non-finite JSON constant is forbidden: {value}")
 
 
 def _rows_by_scene(value: Any, label: str) -> dict[str, dict[str, Any]]:
@@ -605,6 +779,7 @@ __all__ = [
     "Episode",
     "FixedCase",
     "WORKSPACE_FILES",
+    "canonical_task",
     "create_episode",
     "fixed_case",
     "load_arena",

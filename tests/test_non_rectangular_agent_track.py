@@ -5,6 +5,8 @@ import hashlib
 import json
 from pathlib import Path
 import sys
+import threading
+import time
 from typing import Any
 
 import pytest
@@ -40,7 +42,10 @@ from benchmark.scene_generation.non_rectangular_agent.tool_server import (
     AgentToolPolicy,
     AgentToolServer,
     AgentToolSession,
+    AgentToolShutdownError,
+    TOOL_EVENT_SCHEMA_VERSION,
     validate_task_submission_constraints,
+    verify_tool_event_journal,
 )
 
 
@@ -344,6 +349,7 @@ def test_local_tool_server_seals_only_valid_submission(tmp_path: Path) -> None:
         task_payload={"layout_id": "fixture_simple_multi_room"},
         policy=AgentToolPolicy(max_total_calls=8, max_top_k=4),
         seal_record_path=tmp_path / "trusted_submission_seal.json",
+        sealed_submission_path=tmp_path / "host_sealed_submission.json",
     )
     with AgentToolServer(session) as server:
         task = call_tool(
@@ -358,15 +364,24 @@ def test_local_tool_server_seals_only_valid_submission(tmp_path: Path) -> None:
             socket_path=str(server.socket_path),
             token=server.token,
         )
+        repeated = call_tool(
+            "finalize_submission",
+            {"submission_path": "submission.json"},
+            socket_path=str(server.socket_path),
+            token=server.token,
+        )
 
     assert task["ok"] is True
     assert result["ok"] is True
+    assert repeated["ok"] is False
+    assert "already finalized" in repeated["message"]
     assert (tmp_path / "final_submission.json").is_file()
     assert (tmp_path / "finalization.json").is_file()
     trusted_seal = json.loads(
         (tmp_path / "trusted_submission_seal.json").read_text()
     )
-    assert trusted_seal["schema_version"] == "sieve_trusted_submission_seal_v1"
+    assert trusted_seal["schema_version"] == "sieve_trusted_submission_seal_v2"
+    assert (tmp_path / "host_sealed_submission.json").stat().st_mode & 0o777 == 0o400
     assert (
         trusted_seal["finalization"]["submission_sha256"]
         == json.loads((tmp_path / "finalization.json").read_text())["submission_sha256"]
@@ -375,13 +390,55 @@ def test_local_tool_server_seals_only_valid_submission(tmp_path: Path) -> None:
         json.loads(line)
         for line in (tmp_path / "tool_events.jsonl").read_text().splitlines()
     ]
-    assert len(events) == 2
-    assert events[0]["schema_version"] == "non_rectangular_agent_tool_event_v2"
+    assert len(events) == 3
+    assert events[0]["schema_version"] == TOOL_EVENT_SCHEMA_VERSION
+    assert TOOL_EVENT_SCHEMA_VERSION == "non_rectangular_agent_tool_event_v3"
     assert events[0]["previous_event_sha256"] is None
     assert events[1]["previous_event_sha256"] == events[0]["event_sha256"]
+    assert events[2]["previous_event_sha256"] == events[1]["event_sha256"]
     assert events[1]["result"]["valid"] is True
     assert len(events[1]["result_sha256"]) == 64
     assert len(json.loads((tmp_path / "finalization.json").read_text())["submission_sha256"]) == 64
+    verification = verify_tool_event_journal(
+        tmp_path / "tool_events.jsonl",
+        policy=session.policy,
+        require_finalized=True,
+        expected_mode=0o444,
+    )
+    assert verification["successful_finalizations"] == 1
+
+
+def test_local_tool_server_start_failure_revokes_and_unlinks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    session = AgentToolSession(
+        workspace=tmp_path,
+        room_layout=_fixture("simple_multi_room.json"),
+        room_program=_fixture("simple_multi_room_program.json"),
+        asset_catalog=FakeCatalog(),
+        task_payload={"layout_id": "fixture_simple_multi_room"},
+        policy=AgentToolPolicy(max_total_calls=8, max_top_k=4),
+    )
+    server = AgentToolServer(session)
+    socket_root = server.socket_path.parent
+    assert server.token
+
+    def fail_start() -> None:
+        raise RuntimeError("synthetic thread start failure")
+
+    monkeypatch.setattr(server._thread, "start", fail_start)
+    started = time.monotonic()
+    with pytest.raises(AgentToolShutdownError, match="thread failed to start"):
+        server.start()
+    assert time.monotonic() - started < 2.0
+    assert not server.socket_path.exists()
+    assert not socket_root.exists()
+    with pytest.raises(AgentToolShutdownError, match="capability has been scrubbed"):
+        _ = server.token
+    with pytest.raises(AgentToolShutdownError, match="already closed"):
+        server.start()
+    assert session.events_path.is_file()
+    assert session.events_path.stat().st_mode & 0o777 == 0o444
 
 
 def test_tool_budget_is_cumulative_across_resume(tmp_path: Path) -> None:

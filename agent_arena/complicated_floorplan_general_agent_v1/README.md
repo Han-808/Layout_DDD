@@ -36,8 +36,9 @@ not an accepted fallback.
 ## Folder map
 
 - `arena.json`: frozen scientific and isolation contract.
-- `arena.lock.v4.json`: current content hashes for every controlled arena file.
-- `arena.lock.v3.json`, `arena.lock.v2.json`, and `arena.lock.json`: preserved predecessor locks; the
+- `arena.lock.v5.json`: current content hashes for every controlled arena file.
+- `arena.lock.v4.json`, `arena.lock.v3.json`, `arena.lock.v2.json`, and
+  `arena.lock.json`: preserved predecessor locks; the
   current lock extends rather than rewrites the provenance chain.
 - `TODO.md`: canonical Agent-facing task template.
 - `fixed_suite/`: approved layouts/programs plus public shared-DB identity.
@@ -51,6 +52,18 @@ not an accepted fallback.
   for the one scoped gateway and returns the exact command, TODO stdin, prompt
   hashes, runtime hashes, model settings, budgets, database identity, validator
   policy, and starting-workspace hash.
+- `trusted/API_COMPATIBILITY.md`: no-key release gates and the exact one-API,
+  many-model credential, transport, retry, reasoning, resume, and isolation
+  contract for API2, API3, and TokenHub.
+- `trusted/api_profiles.py`, `trusted/profiles/`, and `trusted/experiments/`:
+  controlled family/route/model profiles, secret-free runtime-binding
+  templates, and example serial experiment matrices.
+- `trusted/managed_transport.py` and `trusted/tokenhub_identity_relay.py`:
+  verify and own the pinned private TokenHub LiteLLM lifecycle, keep the real
+  provider credential out of LiteLLM, prove raw provider model identity, and
+  drain/recycle ambiguous transport state; direct API2/API3 routes bypass them.
+- `trusted/run_pi_experiment.py`: dry-run, credential-free runtime gate, real
+  Pi tool-call preflight, safe resume, and official experiment supervisor.
 - `episodes/`: generated episode folders; contents are intentionally ignored by
   git.
 
@@ -58,7 +71,9 @@ not an accepted fallback.
 
 ```bash
 /usr/bin/python3 trusted/verify_arena.py
-/usr/bin/python3 -m unittest discover -s tests -v
+PYTHONDONTWRITEBYTECODE=1 \
+PYTHONPATH=/absolute/path/to/repository/src \
+/absolute/path/to/repository/.venv/bin/python -m pytest -q tests
 ```
 
 Create one episode without launching an Agent:
@@ -89,7 +104,21 @@ model/API request):
 Every selected Agent adapter must pin the exact runtime version/hash, model or
 service identity when available, reasoning/compute policy, command, wall-clock
 budget, and scoped gateway configuration. No entrant or generation is selected
-or launched by this package.
+or launched merely by installing this package. The included Pi profiles and
+experiment JSON files are controlled examples; a real route is used only after
+an operator supplies a gitignored runtime binding and explicitly chooses
+`--preflight-only` or `--execute`.
+
+API2, API3, and TokenHub setup and release checks are documented in
+`trusted/API_COMPATIBILITY.md`. In particular, one experiment is restricted to
+one API family but may run several registered models sequentially using the one
+credential acquired by its host supervisor.
+
+The local macOS boundary is strong for registered cooperative Agents but is not
+a VM-grade containment claim against an intentionally hostile rapid daemonizer.
+Use a disposable VM or equivalent per-episode host for adversarial entrants;
+the scientific prompt, database, scoped gateway, and sealed-artifact contracts
+remain unchanged.
 
 ## Fixed complexity treatment
 

@@ -44,7 +44,10 @@ def _start(server: socketserver.BaseServer) -> threading.Thread:
 
 def main() -> int:
     episodes = ARENA_ROOT / "episodes"
-    temporary_root = Path(tempfile.mkdtemp(prefix="gateway-smoke-", dir=episodes))
+    smoke_id = secrets.token_hex(8)
+    agent_root = episodes / f"gateway-smoke-{smoke_id}"
+    temporary_root = agent_root / "fixture-scene" / "fixture-run"
+    temporary_root.mkdir(parents=True, mode=0o700)
     socket_root = Path(tempfile.mkdtemp(prefix="sieve-gateway-tool-"))
     tool_server = UnixServer(str(socket_root / "tool.sock"), UnixHandler)
     allowed_server = TCPServer(("127.0.0.1", 0), TCPHandler)
@@ -129,7 +132,7 @@ def main() -> int:
             server.server_close()
         for thread in threads:
             thread.join(timeout=5.0)
-        shutil.rmtree(temporary_root, ignore_errors=True)
+        shutil.rmtree(agent_root, ignore_errors=True)
         shutil.rmtree(socket_root, ignore_errors=True)
 
 

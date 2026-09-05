@@ -43,7 +43,10 @@ class ToolServer(socketserver.ThreadingUnixStreamServer):
 
 def main() -> int:
     episodes = ARENA_ROOT / "episodes"
-    temporary_root = Path(tempfile.mkdtemp(prefix="isolation-smoke-", dir=episodes))
+    smoke_id = secrets.token_hex(8)
+    agent_root = episodes / f"isolation-smoke-{smoke_id}"
+    temporary_root = agent_root / "fixture-scene" / "fixture-run"
+    temporary_root.mkdir(parents=True, mode=0o700)
     socket_root = Path(tempfile.mkdtemp(prefix="sieve-smoke-tool-"))
     try:
         workspace = temporary_root / "workspace"
@@ -147,7 +150,7 @@ def main() -> int:
         )
         return 0
     finally:
-        shutil.rmtree(temporary_root, ignore_errors=True)
+        shutil.rmtree(agent_root, ignore_errors=True)
         shutil.rmtree(socket_root, ignore_errors=True)
 
 

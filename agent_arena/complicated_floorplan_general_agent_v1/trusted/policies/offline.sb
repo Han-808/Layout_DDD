@@ -17,7 +17,8 @@
   (subpath "/usr/sbin")
   (subpath "/Library/Developer/CommandLineTools")
   (subpath (param "RUNTIME_ROOT"))
-  (subpath (param "WORKSPACE")))
+  (subpath (param "WORKSPACE"))
+  (literal (param "HARNESS_EXTENSION")))
 
 ;; No user/repository path is readable unless it is the one episode workspace
 ;; or the explicitly pinned Agent runtime.
@@ -29,14 +30,16 @@
   (subpath "/private/etc")
   (subpath "/Library/Developer/CommandLineTools")
   (subpath (param "RUNTIME_ROOT"))
-  (subpath (param "WORKSPACE")))
+  (subpath (param "WORKSPACE"))
+  (literal (param "HARNESS_EXTENSION")))
 
 ;; Path traversal needs metadata on the exact ancestor chain, not access to
 ;; sibling directory contents or file data.
 (allow file-read-metadata file-test-existence
   (path-ancestors (param "WORKSPACE"))
   (path-ancestors (param "RUNTIME_ROOT"))
-  (path-ancestors (param "TOOL_SOCKET")))
+  (path-ancestors (param "TOOL_SOCKET"))
+  (path-ancestors (param "HARNESS_EXTENSION")))
 
 ;; All filesystem mutation is confined to the episode workspace.
 (allow file-write* file-ioctl

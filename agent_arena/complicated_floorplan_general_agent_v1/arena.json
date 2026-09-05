@@ -18,8 +18,8 @@
     "unit": "single_room_projection"
   },
   "integrity": {
-    "current_lock": "arena.lock.v4.json",
-    "predecessor_lock": "arena.lock.v3.json"
+    "current_lock": "arena.lock.v5.json",
+    "predecessor_lock": "arena.lock.v4.json"
   },
   "isolation": {
     "agent_can_see_host_credentials": false,

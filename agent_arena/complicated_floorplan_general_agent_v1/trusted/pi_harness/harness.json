@@ -1,5 +1,5 @@
 {
-  "harness_id": "sieve-pi-common-harness-v2",
+  "harness_id": "sieve-pi-common-harness-v4",
   "implementation": {
     "name": "Pi Coding Agent",
     "npm_package": "@earendil-works/pi-coding-agent",
@@ -13,12 +13,47 @@
   "model_access": {
     "credential_source": "ARENA_MODEL_GATEWAY_TOKEN",
     "fixed_identity_enforced_by_host_gateway": true,
+    "one_api_family_per_experiment": true,
+    "one_model_profile_per_episode_gateway": true,
     "provider_id": "sieve-gateway",
+    "provider_reasoning_field_owner": "trusted_gateway_v2",
+    "provider_reasoning_separate_from_pi_thinking_level": true,
     "supported_protocols": [
       "openai-completions",
       "openai-responses"
     ],
     "upstream_credentials_visible_to_agent": false
+  },
+  "preflight": {
+    "exact_model_identity_required_when_profile_declares_it": true,
+    "reasoning_replay_required_when_profile_declares_it": true,
+    "streaming_tool_call_roundtrip_required": true,
+    "text_only_health_probe_is_sufficient": false
+  },
+  "retry": {
+    "ambiguous_post_send_or_stream_failure_terminal": true,
+    "ambiguous_transport_poisoned_until_owned_connections_drained": true,
+    "ambiguous_timeout_retry": false,
+    "explicit_http_and_pre_connect_failures_only": true,
+    "maximum_attempts_per_logical_request": 6,
+    "managed_transport_runtime_reverified_before_restart": true,
+    "pi_agent_auto_retry_enabled": false,
+    "pi_provider_sdk_max_retries": 0,
+    "retryable_http_statuses": [
+      408,
+      409,
+      425,
+      429,
+      500,
+      502,
+      503,
+      504
+    ],
+    "shared_api_family_cooldown": true,
+    "shared_api_family_cooldown_seconds": 30,
+    "tokenhub_raw_provider_identity_verified_before_success_forwarding": true,
+    "trusted_gateway_is_only_retry_owner": true,
+    "whole_episode_retry_allowed": false
   },
   "fairness_and_audit": {
     "maximum_model_turns": "required_per_registration_and_gateway_enforced",
@@ -31,16 +66,17 @@
     "final_submission_hash_required": true,
     "final_submission_hash_sealed_host_side": true,
     "tool_transcript": {
-      "event_schema": "non_rectangular_agent_tool_event_v2",
-      "hash_chained": true,
-      "records_complete_public_results": true,
-      "storage": "trusted_host_side",
+      "database_event_schema": "non_rectangular_agent_tool_event_v3",
+      "database_events_hash_chained_by_host": true,
+      "pi_event_projection_schema": "sieve_pi_tool_transcript_v1",
+      "pi_event_projection_hash_chained_by_host": true,
+      "records_complete_public_results_when_process_stream_is_complete": true,
       "agent_visible_or_writable": false
     }
   },
   "resources": {
     "context_files": false,
-    "extensions": false,
+    "extensions": "one_exact_hash-pinned_benchmark_extension_only",
     "prompt_templates": false,
     "skills": false,
     "themes": false
@@ -49,9 +85,11 @@
     "cli_relative_path": "node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js",
     "local_bundle_relative_to_arena": "../runtime_bundles/pi-0.85.0",
     "node_relative_path": "bin/node",
-    "runtime_manifest": "../runtime_bundles/pi-0.85.0/runtime.manifest.json"
+    "runtime_manifest": "../runtime_bundles/pi-0.85.0/runtime.manifest.json",
+    "runtime_manifest_sha256": "1adcb01a1f558a1ab2a5728e6d0d70941571bfce0dd12e9939d0a88b2c06699f",
+    "content_root_sha256": "018b0b92bcff8bf89370d5457c89a9c00ed286b54544a7ff9741658e5128dc0f"
   },
-  "schema_version": "sieve_pi_common_harness_v2",
+  "schema_version": "sieve_pi_common_harness_v4",
   "system_prompt_path": "trusted/pi_harness/SYSTEM.md",
   "task_delivery": {
     "canonical_source": "workspace/TODO.md",
@@ -66,6 +104,9 @@
       "bash"
     ],
     "effective_filesystem_scope": "episode_workspace_only",
-    "effective_network_scope": "one_scoped_loopback_model_gateway_plus_database_unix_socket"
+    "effective_network_scope": "one_scoped_loopback_model_gateway_plus_database_unix_socket",
+    "execution_mode": "sequential",
+    "harness_extension": "trusted/pi_harness/sequential_tools_extension.ts",
+    "model_gateway_capability_in_bash_subprocesses": false
   }
 }

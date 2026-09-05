@@ -1,0 +1,40 @@
+{
+  "api_families": [
+    {
+      "api_family_id": "api2",
+      "credential_kind": "api2_app_id_app_key_v1",
+      "display_label": "API2",
+      "maximum_concurrent_episodes": 1,
+      "prompt_once_per_experiment": true,
+      "route_profile_ids": [
+        "api2-standard-chat-agent-v1",
+        "api2-chat-reasoning-agent-v1",
+        "api2-responses-reasoning-agent-v1"
+      ],
+      "shared_cooldown_seconds": 30
+    },
+    {
+      "api_family_id": "api3",
+      "credential_kind": "bearer_token_v1",
+      "display_label": "API3",
+      "maximum_concurrent_episodes": 1,
+      "prompt_once_per_experiment": true,
+      "route_profile_ids": [
+        "api3-chat-legacy-agent-v1"
+      ],
+      "shared_cooldown_seconds": 30
+    },
+    {
+      "api_family_id": "tokenhub",
+      "credential_kind": "bearer_token_v1",
+      "display_label": "TokenHub (stable API4/API5 identity)",
+      "maximum_concurrent_episodes": 1,
+      "prompt_once_per_experiment": true,
+      "route_profile_ids": [
+        "tokenhub-chat-reasoning-agent-v1"
+      ],
+      "shared_cooldown_seconds": 30
+    }
+  ],
+  "schema_version": "sieve_agent_api_families_v1"
+}
