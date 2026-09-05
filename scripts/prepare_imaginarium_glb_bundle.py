@@ -55,6 +55,7 @@ def main() -> None:
             [
                 args.blender_executable.expanduser().resolve().as_posix(),
                 "--background",
+                "--factory-startup",
                 "--python",
                 worker.expanduser().resolve().as_posix(),
                 "--",

@@ -29,6 +29,8 @@ def build_imaginarium_glb_bundle_plan(
 
     source_root = Path(asset_root).expanduser().resolve()
     target_root = Path(bundle_root).expanduser().resolve()
+    if target_root.exists() and any(target_root.iterdir()):
+        raise FileExistsError(f"bundle output already exists; use a fresh attempt directory: {target_root}")
     assets = catalog_spec.get("assets")
     if not isinstance(assets, Sequence) or isinstance(assets, (str, bytes)):
         raise ArtifactValidationError("catalog spec assets must be a list")
@@ -90,6 +92,8 @@ def build_imaginarium_glb_bundle_plan(
             "origin_transform": "none",
             "verification": "fbx_import_vs_glb_reimport_vs_metadata_bbox",
             "geometry_tolerance_m": GEOMETRY_TOLERANCE_M,
+            "xy_order_tolerance_m": GEOMETRY_TOLERANCE_M,
+            "export_loose_geometry": True,
         },
         "asset_count": len(rows),
         "assets": rows,
@@ -241,6 +245,7 @@ def validate_imaginarium_glb_bundle(
             "roundtrip_xy_order_vs_metadata": _same_xy_order(
                 actual.get("roundtrip_bbox_size"),
                 planned.get("expected_bbox_size"),
+                tolerance,
             ),
         }
         if not all(geometry_checks.values()):
@@ -308,7 +313,7 @@ def _close3(left: Any, right: Any, tolerance: float) -> bool:
     )
 
 
-def _same_xy_order(left: Any, right: Any) -> bool:
+def _same_xy_order(left: Any, right: Any, tolerance: float = GEOMETRY_TOLERANCE_M) -> bool:
     try:
         first = _vector3(left, "reported_bbox")
         second = _vector3(right, "expected_bbox")
@@ -316,7 +321,11 @@ def _same_xy_order(left: Any, right: Any) -> bool:
         return False
     left_delta = first[0] - first[1]
     right_delta = second[0] - second[1]
-    return left_delta == 0.0 or right_delta == 0.0 or left_delta * right_delta > 0.0
+    # Near-square boxes have no numerically resolvable XY ordering. The same
+    # frozen per-axis tolerance still applies in _close3; do not mistake
+    # sub-tolerance floating-point sign changes for a 90-degree rotation.
+    return (abs(left_delta) <= tolerance or abs(right_delta) <= tolerance
+            or left_delta * right_delta > 0.0)
 
 
 __all__ = [

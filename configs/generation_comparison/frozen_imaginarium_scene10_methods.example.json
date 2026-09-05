@@ -145,8 +145,8 @@
         "execution": {
           "repo_path": "/ABSOLUTE/PATH/TO/LayoutVLM",
           "expected_upstream_commit": "85d06b4cd2478551188a0b4a47cd658c85c41315",
-          "expected_entrypoint_sha256": "201cbb4933ad9171138a0ed018b0daea4570bc86d7f0a77241af837f5b230db0",
-          "expected_bridge_bundle_sha256": "cf27f61c1c9fdf0dd6489b468c8b2349f26f91341cb7d87478b1f357ce42c121",
+          "expected_entrypoint_sha256": "39d514f79f2e67a222a3bde99ef6dff5db1ad586fc59998cd24847da4c8c68d6",
+          "expected_bridge_bundle_sha256": "b9875d8cc0ca1f376a1410d0ea6c563579c750c40b2cf7bf872c8e015644a359",
           "python_executable": "/ABSOLUTE/PATH/TO/layoutvlm/python",
           "template_variables": {
             "bridge_script": "/ABSOLUTE/PATH/TO/Layout_DDD/scripts/external_harness_bridges/layout_vlm_frozen.py"

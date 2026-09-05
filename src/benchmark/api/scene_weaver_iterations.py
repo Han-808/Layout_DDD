@@ -11,6 +11,9 @@ from benchmark.adapters import get_adapter
 from benchmark.adapters.common.execution import artifact_sha256
 from benchmark.adapters.scene_weaver.converter import discover_layout_iterations
 from benchmark.api.evaluation import run_evaluate
+from benchmark.generation_comparison.evaluation_runtime import (
+    CanonicalEvaluationRuntime, runtime_evaluation_options,
+)
 from benchmark.scene_io.validate import ArtifactValidationError, validate_generation_input
 from benchmark.utils.io import read_json, write_json
 
@@ -25,6 +28,7 @@ def evaluate_scene_weaver_iterations(
     out_dir: str | Path,
     adapter_config: Mapping[str, Any] | None = None,
     evaluation_kwargs: Mapping[str, Any] | None = None,
+    evaluation_runtime: CanonicalEvaluationRuntime | None = None,
 ) -> dict[str, Any]:
     """Convert and evaluate every native layout with the canonical evaluator."""
 
@@ -76,7 +80,8 @@ def evaluate_scene_weaver_iterations(
         report = run_evaluate(
             scene=scene,
             out=report_path,
-            **evaluation_options,
+            **runtime_evaluation_options(evaluation_options, evaluation_runtime,
+                                         scene=scene, out_dir=iteration_dir / "evaluation_runtime"),
         )
         workflows.add(str(report.get("workflow") or ""))
         score_value = report.get("benchmark_score")

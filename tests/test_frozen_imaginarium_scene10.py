@@ -28,6 +28,7 @@ from benchmark.adapters.common.execution import (
 )
 from benchmark.generation_comparison.catalog import CanonicalAssetCatalog
 from benchmark.generation_comparison.imaginarium_bundle import (
+    _same_xy_order,
     build_imaginarium_glb_bundle_plan,
     file_sha256,
     validate_imaginarium_glb_bundle,
@@ -1945,6 +1946,10 @@ def test_imaginarium_glb_bundle_plan_and_validation_are_content_addressed(
         "asset_count": 1,
         "errors": [],
     }
+    with pytest.raises(FileExistsError, match="fresh attempt"):
+        build_imaginarium_glb_bundle_plan(
+            catalog_spec={"assets": []}, asset_root=tmp_path / "assets", bundle_root=tmp_path / "bundle",
+        )
     metadata_path = source / "chair.asset_metadata.json"
     metadata_bytes = metadata_path.read_bytes()
     metadata_path.write_text("{}\n", encoding="utf-8")
@@ -1976,6 +1981,56 @@ def test_imaginarium_glb_bundle_plan_and_validation_are_content_addressed(
         item["code"] in {"target_root_mismatch", "report_plan_mismatch"}
         for item in root_validation["errors"]
     )
+
+
+@pytest.mark.parametrize("left,right,expected", [
+    ([0.6151453, 0.6151454, 1.15], [0.6151455, 0.6151453, 1.15], True),
+    ([0.8, 0.7, 1.0], [0.8, 0.7, 1.0], True),
+    ([0.7, 0.8, 1.0], [0.8, 0.7, 1.0], False),
+    ([float("nan"), 0.8, 1.0], [0.8, 0.7, 1.0], False),
+])
+def test_bundle_xy_order_respects_frozen_geometry_tolerance(left, right, expected):
+    assert _same_xy_order(left, right) is expected
+
+
+def test_bundle_worker_preserves_loose_geometry_and_rejects_overwrite(tmp_path, monkeypatch):
+    source = tmp_path / "fixture.fbx"
+    source.write_bytes(b"native fixture including loose geometry")
+    metadata = write_json(tmp_path / "metadata.json", {})
+    target = tmp_path / "output.glb"
+    calls = []
+    def export(**kwargs):
+        calls.append(kwargs)
+        Path(kwargs["filepath"]).write_bytes(b"exported fixture")
+    bpy = SimpleNamespace(
+        app=SimpleNamespace(version_string="fixture-no-real-blender"),
+        ops=SimpleNamespace(import_scene=SimpleNamespace(fbx=lambda **k: None, gltf=lambda **k: None),
+                            export_scene=SimpleNamespace(gltf=export)),
+    )
+    monkeypatch.setitem(sys.modules, "bpy", bpy)
+    monkeypatch.setitem(sys.modules, "mathutils", SimpleNamespace(Vector=lambda value: value))
+    path = ROOT / "scripts/blender/convert_imaginarium_frozen_bundle.py"
+    spec = importlib.util.spec_from_file_location("fixture_bundle_worker", path)
+    worker = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(worker)
+    plan = write_json(tmp_path / "plan.json", {
+        "conversion_policy": {"geometry_tolerance_m": 1e-4},
+        "assets": [{"asset_id": "fixture", "source_fbx": str(source),
+                    "source_metadata": str(metadata), "target_glb": str(target),
+                    "source_fbx_sha256": file_sha256(source), "source_metadata_sha256": file_sha256(metadata),
+                    "expected_bbox_size": [0.8, 0.7, 1.0], "expected_bbox_center": [0, 0, 0]}],
+    })
+    args = SimpleNamespace(plan=plan, report=tmp_path / "report.json", tolerance=1e-4)
+    monkeypatch.setattr(worker, "_args", lambda: args)
+    monkeypatch.setattr(worker, "_clear", lambda: None)
+    monkeypatch.setattr(worker, "_bounds", lambda: ([0.8, 0.7, 1.0], [0, 0, 0]))
+    worker.main()
+    assert calls[0]["use_mesh_vertices"] and calls[0]["use_mesh_edges"]
+    assert source.read_bytes() == b"native fixture including loose geometry"
+    assert read_json(args.report)["assets"][0]["geometry_verified"]
+    with pytest.raises(FileExistsError, match="fresh attempt"):
+        worker.main()
+    assert len(calls) == 1
 
 
 def test_bridge_input_builders_preserve_frozen_ids_and_geometry(
@@ -2612,6 +2667,26 @@ def _catalog() -> CanonicalAssetCatalog:
             ],
         }
     )
+
+
+@pytest.mark.parametrize("available", [False, None])
+def test_layoutvlm_missing_differentiable_overlap_backend_fails_before_calls(available):
+    from types import SimpleNamespace
+    bridge = _bridge("layout_vlm_frozen")
+    with pytest.raises(RuntimeError, match="detached CPU fallback is not certified"):
+        bridge._require_differentiable_overlap_backend(
+            SimpleNamespace(ORIENTED_IOU_AVAILABLE=available)
+        )
+
+
+def test_layoutvlm_differentiable_backend_is_recorded():
+    from types import SimpleNamespace
+    bridge = _bridge("layout_vlm_frozen")
+    report = bridge._require_differentiable_overlap_backend(
+        SimpleNamespace(ORIENTED_IOU_AVAILABLE=True)
+    )
+    assert report["oriented_iou_available"] is True
+    assert report["detached_cpu_fallback_allowed"] is False
 
 
 def _protocol(catalog: CanonicalAssetCatalog) -> ComparisonProtocol:

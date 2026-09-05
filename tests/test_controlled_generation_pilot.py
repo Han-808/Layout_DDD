@@ -10,12 +10,32 @@ import pytest
 
 from benchmark.generation_comparison.pilot import (
     _execution_readiness,
+    _upstream_execution_evidence,
     _trajectory_summary,
     bridge_execution_hashes,
     prepare_controlled_pilot,
     run_prepared_pilot,
 )
 from benchmark.utils.io import read_json, write_json
+
+
+@pytest.mark.parametrize(
+    ("record", "started"),
+    [
+        (None, False),
+        ({"runner_kind": "subprocess", "return_code": None}, False),
+        ({"runner_kind": "subprocess", "return_code": 0}, True),
+        ({"runner_kind": "subprocess", "return_code": 3}, True),
+        ({"runner_kind": "subprocess", "return_code": -9, "cancelled": True}, True),
+        ({"runner_kind": "subprocess", "timed_out": True}, True),
+        ({"runner_kind": "callback", "return_code": 0}, False),
+        ({"runner_kind": "configured_native_artifact", "return_code": 0}, False),
+    ],
+)
+def test_upstream_launch_claim_requires_process_evidence(tmp_path, record, started):
+    if record is not None:
+        write_json(tmp_path / "generator/execution/execution_result.json", record)
+    assert _upstream_execution_evidence(tmp_path)["upstream_process_started"] is started
 
 
 def test_bridge_execution_hashes_are_operator_reproducible(tmp_path: Path) -> None:
@@ -355,7 +375,10 @@ def test_offline_dry_run_generates_tables_without_claiming_real_execution(
         allow_offline_artifacts=True,
     )
 
-    assert result["status"] == "completed"
+    # Conversion success without complete evaluator coverage is not a completed
+    # experiment (Pro F6); retain the artifact and the unscored result.
+    assert result["status"] == "failed"
+    assert result["experiment_complete"] is False
     assert result["attempted_runs"] == 1
     assert result["valid_runs"] == 1
     assert result["real_upstream_execution_performed"] is False
@@ -571,6 +594,113 @@ def test_sceneweaver_trajectory_summary_uses_only_evaluator_reports(
         "trajectory_hard_failure_fixes": 2,
         "trajectory_hard_failure_regressions": 1,
     }
+
+
+@pytest.mark.parametrize("artifact", [
+    "generation_input", "evaluation_object_plan", "protocol", "evaluator_config",
+    "catalog", "case_manifest",
+])
+def test_prepared_artifact_drift_rejects_before_any_generation(
+    artifact: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prepared = prepare_controlled_pilot(
+        spec=_pilot_spec(methods=["catalog_placement"]),
+        asset_root=_asset_root(tmp_path / "assets"), out_dir=tmp_path / "pilot",
+    )
+    # Corrupt a later case as well: the gate must check the entire planned
+    # cohort before spending a call on the first case.
+    row = prepared if artifact in {"evaluator_config", "catalog"} else prepared["cases"][-1]
+    path = Path(row[artifact])
+    content = read_json(path)
+    content["unexpected_drift"] = True
+    write_json(path, content)
+    calls = []
+    monkeypatch.setattr(
+        "benchmark.generation_comparison.pilot.run_controlled_generation",
+        lambda **kwargs: calls.append(kwargs),
+    )
+    with pytest.raises(ValueError, match="prepared artifact hash mismatch"):
+        run_prepared_pilot(prepared_dir=tmp_path / "pilot")
+    assert calls == []
+    assert read_json(prepared["manifest_path"])["status"] == "prepared"
+
+
+def test_blocked_units_are_all_reported_and_cli_exits_nonzero(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture,
+) -> None:
+    from benchmark.generation_comparison.pilot import main
+
+    prepare_controlled_pilot(
+        spec=_pilot_spec(), asset_root=_asset_root(tmp_path / "assets"),
+        out_dir=tmp_path / "pilot",
+    )
+    config = write_json(tmp_path / "methods.json", {})
+    monkeypatch.setattr(sys, "argv", [
+        "pilot", "run", "--prepared-dir", str(tmp_path / "pilot"),
+        "--method-configs", str(config),
+    ])
+    with pytest.raises(SystemExit) as exc:
+        main()
+    assert exc.value.code == 2
+    result = json.loads(capsys.readouterr().out)
+    assert result["status"] == "blocked"
+    assert result["attempted_runs"] == 0
+    assert result["planned_runs"] == 15
+    assert not result["real_upstream_execution_performed"]
+    rows = [json.loads(line) for line in (tmp_path / "pilot/results.jsonl").read_text().splitlines()]
+    assert len(rows) == 15
+    assert all(row["run_status"] == "blocked" and row["readiness"] for row in rows)
+
+
+def test_cancellation_is_propagated_and_does_not_start_next_unit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prepared = prepare_controlled_pilot(
+        spec=_pilot_spec(methods=["catalog_placement"]),
+        asset_root=_asset_root(tmp_path / "assets"), out_dir=tmp_path / "pilot",
+    )
+    native = write_json(tmp_path / "native.json", {})
+    calls = []
+
+    def cancel(**kwargs):
+        calls.append(kwargs)
+        raise KeyboardInterrupt("operator stop")
+
+    monkeypatch.setattr("benchmark.generation_comparison.pilot.run_controlled_generation", cancel)
+    with pytest.raises(KeyboardInterrupt, match="operator stop"):
+        run_prepared_pilot(
+            prepared_dir=tmp_path / "pilot", allow_offline_artifacts=True,
+            method_outputs={"catalog_placement": {row["case_id"]: native for row in prepared["cases"]}},
+        )
+    assert len(calls) == 1
+    result = read_json(prepared["manifest_path"])
+    assert result["status"] == "cancelled"
+    assert result["attempted_runs"] == 1
+    assert result["unattempted_runs"] == 4
+    rows = [json.loads(line) for line in (tmp_path / "pilot/results.jsonl").read_text().splitlines()]
+    assert [row["run_status"] for row in rows] == ["cancelled"] + ["skipped"] * 4
+
+
+def test_prelaunch_output_conflict_preserves_old_files_and_finishes_plan(tmp_path):
+    prepared = prepare_controlled_pilot(
+        spec=_pilot_spec(methods=["catalog_placement"]),
+        asset_root=_asset_root(tmp_path / "assets"), out_dir=tmp_path / "pilot",
+    )
+    native = write_json(tmp_path / "native.json", {})
+    old = write_json(tmp_path / "pilot/cases/case_001/catalog_placement/comparison/run_manifest.json",
+                     {"old_run": "must not be attributed or overwritten"})
+    before = old.read_bytes()
+    with pytest.raises(FileExistsError, match="will not be overwritten"):
+        run_prepared_pilot(
+            prepared_dir=tmp_path / "pilot", allow_offline_artifacts=True,
+            method_outputs={"catalog_placement": {row["case_id"]: native for row in prepared["cases"]}},
+        )
+    assert old.read_bytes() == before
+    result = read_json(prepared["manifest_path"])
+    assert result["status"] == "blocked" and result["planned_runs"] == 5
+    rows = [json.loads(line) for line in (tmp_path / "pilot/results.jsonl").read_text().splitlines()]
+    assert [row["run_status"] for row in rows] == ["blocked"] + ["skipped"] * 4
+    assert all(not row["attempted"] and row["run_manifest"] is None for row in rows)
 
 
 def _asset_root(root: Path) -> Path:

@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import signal
 from pathlib import Path
 import subprocess
 import sys
@@ -264,6 +265,62 @@ def test_timeout_terminates_upstream_descendant_processes(tmp_path: Path) -> Non
         / "upstream_output"
         / "descendant_survived.txt"
     ).exists()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX operator cancellation")
+def test_sigint_reaps_upstream_tree_and_preserves_cancelled_logs(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    worker = repo / "worker.py"
+    worker.write_text(
+        "import json,os,subprocess,sys,time\n"
+        "from pathlib import Path\n"
+        "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'])\n"
+        "print('upstream stdout', flush=True)\n"
+        "print('upstream stderr', file=sys.stderr, flush=True)\n"
+        "Path(sys.argv[1]).write_text(json.dumps([os.getpid(), child.pid]))\n"
+        "time.sleep(30)\n", encoding="utf-8",
+    )
+    marker = tmp_path / "pids.json"
+    method_input = write_json(tmp_path / "input.json", {})
+    run_root = tmp_path / "run"
+    settings = write_json(tmp_path / "config.json", {
+        "execution": {"repo_path": str(repo), "python_executable": sys.executable,
+                      "command": [sys.executable, str(worker), str(marker)],
+                      "timeout_seconds": 60, "native_artifact": "layout.json"},
+    })
+    driver = subprocess.Popen([
+        sys.executable, "-c",
+        "from pathlib import Path; import json,sys; "
+        "from benchmark.adapters.common.execution import execute_external_harness; "
+        "execute_external_harness(adapter_name='direct_layout', "
+        "method_input_path=Path(sys.argv[1]), native_input_path=Path(sys.argv[1]), "
+        "out_dir=Path(sys.argv[2]), config=json.loads(Path(sys.argv[3]).read_text()))",
+        str(method_input), str(run_root), str(settings),
+    ], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        deadline = time.monotonic() + 10
+        while not marker.exists() and driver.poll() is None and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert marker.exists(), "upstream worker failed to reach the cancellation checkpoint"
+        pids = read_json(marker)
+        driver.send_signal(signal.SIGINT)
+        driver.communicate(timeout=8)
+        assert driver.returncode != 0
+        result = read_json(run_root / "execution/execution_result.json")
+        assert result["status"] == "cancelled"
+        assert result["cancelled"] is True and result["timed_out"] is False
+        assert "upstream stdout" in Path(result["stdout_path"]).read_text()
+        assert "upstream stderr" in Path(result["stderr_path"]).read_text()
+        assert result["return_code"] is not None
+        for pid in pids:
+            state = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)],
+                                   capture_output=True, text=True, check=False).stdout.strip()
+            assert not state or state.startswith("Z"), f"worker still alive: {pid} {state}"
+    finally:
+        if driver.poll() is None:
+            driver.kill()
+            driver.communicate(timeout=5)
 
 
 def test_missing_repo_and_executable_fail_clearly(tmp_path: Path) -> None:

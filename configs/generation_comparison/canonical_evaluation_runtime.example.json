@@ -1,0 +1,42 @@
+{
+  "schema_version": "canonical_blender_evaluation_runtime_v1",
+  "renderer": {
+    "blender_bin": "/ABSOLUTE/PATH/TO/blender",
+    "timeout_seconds": 900,
+    "width": 768,
+    "height": 768,
+    "render_engine": "CYCLES",
+    "cycles_device": "CPU",
+    "cycles_samples": 16,
+    "cycles_denoising": false,
+    "preview_render_engine": "CYCLES",
+    "preview_width": 256,
+    "preview_height": 256,
+    "preview_cycles_samples": 1,
+    "require_asset_mesh": true
+  },
+  "judge": {
+    "endpoint": "https://YOUR-AUTHORIZED-ENDPOINT/v1/chat/completions",
+    "model": "YOUR-FROZEN-EVALUATOR-MODEL",
+    "api_key_env": "LAYOUT_DDD_EVALUATOR_API_KEY",
+    "require_api_key": true,
+    "temperature": 0.0,
+    "max_tokens": 8192,
+    "timeout_seconds": 300,
+    "response_format_json": true,
+    "max_retries": 1,
+    "retry_backoff_seconds": 1.0
+  },
+  "camera_selector": {
+    "endpoint": "https://YOUR-AUTHORIZED-ENDPOINT/v1/chat/completions",
+    "model": "YOUR-FROZEN-EVALUATOR-MODEL",
+    "api_key_env": "LAYOUT_DDD_EVALUATOR_API_KEY",
+    "require_api_key": true,
+    "temperature": 0.0,
+    "max_tokens": 8192,
+    "timeout_seconds": 300,
+    "response_format_json": true,
+    "max_retries": 1,
+    "retry_backoff_seconds": 1.0
+  }
+}

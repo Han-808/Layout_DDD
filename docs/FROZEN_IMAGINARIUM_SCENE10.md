@@ -103,6 +103,15 @@ rescale, recenter, or repair geometry. It verifies:
 - re-imported GLB bbox size/center against the FBX import;
 - final GLB content hashes.
 
+The exporter explicitly retains native loose mesh vertices and edges, which
+Blender's default glTF export otherwise drops. Near-square XY ordering is tested
+at the same `1e-4` metre tolerance as individual axes; an ordering sign change
+below that tolerance is not evidence of an axis swap. This is not a front-
+direction inference: canonical-front metadata still comes only from the source.
+The worker records its own hash, Blender version and export flags. Existing
+plans/GLBs/reports are never overwritten; each conversion attempt needs a fresh
+directory (including a plan-only attempt followed by a build).
+
 The plan is bound to the current source and bundle roots, and its geometry
 tolerance is fixed at `1e-4` metres. Validation recomputes bbox comparisons from
 the reported measurements instead of trusting a worker boolean. Every run also
@@ -202,6 +211,15 @@ The exact prepared scene-config bytes are separately preserved, and their
 SHA-256 must match the solver-input hash reported by the bridge before that
 sidecar is accepted by the converter.
 
+The controlled LayoutVLM bridge also requires the release's differentiable
+`Rotated_IoU` backend before constructing model clients. Its CPU fallback
+detaches corner coordinates to NumPy/Shapely and creates new leaf loss tensors;
+a positive overlap loss consequently need not provide gradients to object pose.
+Do not label that fallback as the same optimization treatment. The current
+macOS preparation environment imports the release but lacks the CUDA extension;
+full LayoutVLM execution remains blocked until a compatible backend is verified.
+This gate does not replace or modify the upstream optimizer.
+
 LayoutGPT additionally requires a frozen JSON list of alternating
 user/assistant ICL messages. It should be derived and versioned from the released
 LayoutGPT training examples used for the experiment. The bridge refuses an
@@ -210,6 +228,34 @@ prompt would no longer represent the intended harness. It copies the exact ICL
 bytes into the native run artifacts, records the SHA-256, and fails if the source
 changes during generation. The expected ICL hash is required in runner
 configuration, and roles must be complete alternating `user`/`assistant` pairs.
+
+An offline, reproducible recipe is now provided at
+`configs/generation_comparison/layoutgpt_icl_recipe_v1.json`. It pins eight
+public training examples (the first four in each frozen `rect_train` list,
+bedroom then livingroom), the two dataset statistics files, upstream split
+hashes, and the released formatter hash. The official source is the
+[LayoutGPT preprocessing download](https://github.com/UCSB-AI/LayoutGPT#preparation-for-3d-indoor-scene-synthesis).
+The source subset can be extracted from `data_output.zip` without models.
+
+```bash
+PYTHONPATH=src python scripts/prepare_layoutgpt_frozen_icl.py \
+  --recipe configs/generation_comparison/layoutgpt_icl_recipe_v1.json \
+  --repo-path /ABSOLUTE/PATH/TO/LayoutGPT \
+  --training-root /ABSOLUTE/PATH/TO/data_output \
+  --out-dir /ABSOLUTE/NEW/PATH/TO/layoutgpt_icl
+```
+
+The builder invokes only the pinned `load_room_boxes` function, with metre units
+and normalization disabled. Its condition/layout text, two-decimal formatting,
+and native angle fields are preserved; it does not import the whole upstream
+CLI, run a tokenizer/model, use target scenes, or use released LLM predictions
+as ground-truth examples. The manifest explicitly labels this **adapted frozen
+ICL**, not native per-target k-similar retrieval. Training CSS does not supply
+canonical asset fronts; the target Imaginarium frames remain those explicitly
+given by the controlled bridge, not inferred from these demonstrations.
+Raw training records and generated message snapshots belong outside Git. Set
+the new prepared protocol's ICL identity to the audited snapshot hash; never
+change an old prepared run to accept a different snapshot.
 
 All four scene-generation harness bridges receive `LAYOUT_DDD_MODEL_PROVIDER`,
 `LAYOUT_DDD_MODEL_ID`, deployment ID, and API-base fingerprint from the

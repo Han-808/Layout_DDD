@@ -27,6 +27,10 @@ from benchmark.adapters.common.execution import (
 )
 from benchmark.generation_comparison.eligibility import check_method_eligibility
 from benchmark.generation_comparison.execution import run_controlled_generation
+from benchmark.generation_comparison.evaluation_runtime import (
+    CanonicalEvaluationRuntime,
+    evaluator_policy_readiness,
+)
 from benchmark.generation_comparison.identity import canonical_json_sha256
 from benchmark.generation_comparison.imaginarium_bundle import (
     bundle_mesh_path,
@@ -37,6 +41,10 @@ from benchmark.generation_comparison.model_policy import (
     configured_model_policy_report,
 )
 from benchmark.generation_comparison.protocol import ComparisonProtocol
+from benchmark.generation_comparison.prepared import (
+    freeze_prepared_artifacts,
+    verify_prepared_artifacts,
+)
 from benchmark.nl_scene.generation_input import (
     build_direct_natural_language_generation_input,
     build_generation_input,
@@ -65,7 +73,10 @@ FAILURE_CLASSES = {
 RESULT_COLUMNS = (
     "case_id",
     "method",
+    "run_status",
+    "attempted",
     "execution_mode",
+    "upstream_process_started",
     "protocol_id",
     "protocol_hash",
     "architecture_hash",
@@ -116,6 +127,7 @@ def prepare_controlled_pilot(
     method_configs: Mapping[str, Any] | str | Path | None = None,
     repo_root: str | Path | None = None,
     asset_bundle_root: str | Path | None = None,
+    evaluation_runtime_config: Mapping[str, Any] | str | Path | None = None,
 ) -> dict[str, Any]:
     """Freeze catalog/cases and persist pre-run eligibility without generation."""
 
@@ -148,6 +160,28 @@ def prepare_controlled_pilot(
     catalog_path = write_json(output_root / "catalog_manifest.json", catalog.as_dict())
 
     evaluator_policy = dict(pilot["evaluator"])
+    if evaluation_runtime_config is not None:
+        evaluator_policy["runtime"] = _load_mapping(evaluation_runtime_config, "evaluator runtime config")
+        # Validate without contacting any service, and reject literal credentials
+        # before the private runtime configuration is written to disk.
+        CanonicalEvaluationRuntime(evaluator_policy["runtime"], require_credentials=False)
+        # Resolve existing defaults at prepare time, not differently in each run.
+        from benchmark.evaluator.profile import resolve_evaluation_profile
+        static = dict(evaluator_policy.get("static_kwargs") or {})
+        static["evaluation_profile"] = resolve_evaluation_profile(static.get("evaluation_profile"))
+        frozen_ownership = {
+            "mode": "benchmark_provided", "identity_owner": "benchmark",
+            "category_selection_owner": "benchmark", "scale_owner": "benchmark",
+            "appearance_owner": "benchmark", "arrangement_owner": "generator",
+        }
+        if "asset_policy" in static and static["asset_policy"] != frozen_ownership:
+            raise ArtifactValidationError("evaluator asset ownership contradicts fixed-assets input")
+        # Factual ownership activates the existing applicability rules. We do
+        # not enable/disable metrics or change weights to conceal missing runtime.
+        static["asset_policy"] = frozen_ownership
+        evaluator_policy["static_kwargs"] = static
+        evaluator_policy["rendering_policy"] = "trusted_blender_mesh_runtime_v1"
+        evaluator_policy["evidence_policy"] = "canonical_judge_grouping_camera_runtime_v1"
     evaluator_config_hash = canonical_json_sha256(evaluator_policy)
     evaluator_policy["config_sha256"] = evaluator_config_hash
     evaluator_path = write_json(
@@ -270,9 +304,61 @@ def prepare_controlled_pilot(
         "cases": case_rows,
         "real_upstream_execution_performed": False,
     }
+    freeze_prepared_artifacts(output_root, manifest)
     manifest_path = write_json(output_root / "pilot_manifest.json", manifest)
     _write_readme(output_root, manifest, compatibility, summary=None)
     return {**manifest, "manifest_path": manifest_path.resolve().as_posix()}
+
+
+def _evaluation_readiness(
+    policy: Mapping[str, Any],
+) -> tuple[CanonicalEvaluationRuntime | None, dict[str, Any]]:
+    runtime = None
+    report = {"ready": False, "reasons": ["evaluator_runtime_missing"],
+              "service_contacted": False}
+    if policy.get("runtime") is not None:
+        try:
+            runtime = CanonicalEvaluationRuntime(policy["runtime"])
+            report = runtime.readiness
+        except Exception as exc:
+            report["reasons"] = [redact_private_locators(str(exc))]
+    score_policy = evaluator_policy_readiness(policy)
+    return runtime, {**report, "ready": report["ready"] and score_policy["ready"],
+                     "reasons": list(report.get("reasons", [])) + score_policy["reasons"],
+                     "score_policy": score_policy}
+
+
+def preflight_prepared_pilot(
+    *, prepared_dir: str | Path,
+    method_configs: Mapping[str, Any] | str | Path | None = None,
+) -> dict[str, Any]:
+    """Read-only, no-model/no-render preflight; does NOT call the run command."""
+    root = Path(prepared_dir).expanduser().resolve()
+    manifest = read_json(root / "pilot_manifest.json")
+    verified = verify_prepared_artifacts(root, manifest)
+    configs = _method_configs(method_configs)
+    _, runtime = _evaluation_readiness(verified["evaluator_policy"])
+    cases = []
+    for case in manifest["cases"]:
+        compatibility = _compatibility_report(
+            methods=manifest["methods"],
+            protocol=verified["cases"][case["case_id"]]["protocol"],
+            catalog=verified["catalog"], method_configs=configs,
+        )
+        cases.append({"case_id": case["case_id"], **compatibility})
+    methods_ready = all(row["status"] == "ELIGIBLE_READY"
+                        for case in cases for row in case["methods"])
+    approved = manifest.get("asset_selection_status") == ASSET_SELECTION_APPROVED
+    return {
+        "schema_version": "controlled_generation_no_call_preflight_v1",
+        "ready_for_generation": bool(approved and methods_ready and runtime["ready"]),
+        "asset_selection_approved": approved,
+        "prepared_artifacts": verified["report"],
+        "method_configs_sha256": canonical_json_sha256(configs),
+        "evaluation_runtime": runtime, "cases": cases,
+        "service_contacted": False, "generation_executed": False,
+        "rendering_executed": False, "real_upstream_smoke_verified": False,
+    }
 
 
 def run_prepared_pilot(
@@ -288,10 +374,7 @@ def run_prepared_pilot(
     root = Path(prepared_dir).expanduser().resolve()
     manifest_path = root / "pilot_manifest.json"
     manifest = read_json(manifest_path)
-    if not isinstance(manifest, Mapping) or manifest.get("status") not in {
-        "prepared",
-        "completed",
-    }:
+    if not isinstance(manifest, Mapping):
         raise ArtifactValidationError("prepared pilot manifest is invalid")
     asset_selection_status = manifest.get("asset_selection_status")
     if (
@@ -308,7 +391,13 @@ def run_prepared_pilot(
         raise FileExistsError(
             "pilot result tables already exist; failed/completed runs are never overwritten"
         )
-    catalog = load_asset_catalog(manifest["catalog"], hash_local_meshes=True)
+    if manifest.get("status") != "prepared":
+        raise ArtifactValidationError("pilot is not a fresh prepared run")
+    verified = verify_prepared_artifacts(root, manifest)
+    write_json(root / "run_preflight.json", verified["report"])
+    catalog = verified["catalog"]
+    evaluation_runtime, runtime_readiness = _evaluation_readiness(verified["evaluator_policy"])
+    write_json(root / "evaluation_readiness.json", runtime_readiness)
     configs = _method_configs(method_configs)
     outputs = method_outputs or {}
     cases = list(manifest["cases"])
@@ -317,10 +406,13 @@ def run_prepared_pilot(
 
     rows: list[dict[str, Any]] = []
     passed_dry_run: list[str] = []
-    first_case = cases[0]
-    for method in manifest["methods"]:
-        offline = outputs.get(method, {}).get(first_case["case_id"])
-        protocol = ComparisonProtocol.from_mapping(read_json(first_case["protocol"]))
+    planned_cases = cases[:1] if dry_run_only else cases
+    plan = [(case, method) for case in planned_cases for method in manifest["methods"]]
+    for index, (case, method) in enumerate(plan):
+        offline = outputs.get(method, {}).get(case["case_id"])
+        # Validate all prepared cases at the start, and each unit again before
+        # launching; edits to a later case must not spend any generation calls.
+        protocol = verified["cases"][case["case_id"]]["protocol"]
         active_model_policy = protocol.as_dict()["generation"].get("model_policy")
         active_model_policy = (
             active_model_policy if isinstance(active_model_policy, Mapping) else {}
@@ -352,6 +444,10 @@ def run_prepared_pilot(
                 "icl_sha256"
             ),
         )
+        if offline is None and not runtime_readiness["ready"]:
+            readiness = {**readiness, "ready": False,
+                         "reasons": list(readiness.get("reasons", [])) + ["evaluator_runtime_not_ready"],
+                         "evaluation_runtime": runtime_readiness}
         config = _adapter_config(configs.get(method))
         semantic = check_method_eligibility(
             adapter_name=method,
@@ -369,61 +465,155 @@ def run_prepared_pilot(
             or not model_control["valid"]
             or not readiness["ready"]
         ):
+            rows.append(_unattempted_row(
+                case_manifest=case, method=method, status="blocked",
+                reason="method readiness, eligibility or model policy rejected",
+                gate={"execution_readiness": readiness, "semantic_eligibility": semantic,
+                      "model_policy": model_control},
+            ))
+            _write_results(root, rows)
             continue
-        row = _run_case(
-            root=root,
-            case_manifest=first_case,
-            method=method,
-            catalog=catalog,
-            config=configs.get(method),
-            method_output=offline,
-        )
+        if case["case_id"] != cases[0]["case_id"] and method not in passed_dry_run:
+            rows.append(_unattempted_row(
+                case_manifest=case, method=method, status="skipped",
+                reason="first-case full evaluation did not pass; no further generation",
+            ))
+            _write_results(root, rows)
+            continue
+        try:
+            row = _run_case(
+                root=root, case_manifest=case, method=method, catalog=catalog,
+                config=configs.get(method), method_output=offline,
+                prepared_manifest=manifest,
+                evaluation_runtime=evaluation_runtime,
+            )
+        except (KeyboardInterrupt, SystemExit):
+            row = _unattempted_row(
+                case_manifest=case, method=method, status="cancelled",
+                reason="operator cancellation; cohort stopped",
+            )
+            row["attempted"] = True
+            row.update(_upstream_execution_evidence(root / "cases" / case["case_id"] / method))
+            rows.append(row)
+            rows.extend(_unattempted_row(
+                case_manifest=pending_case, method=pending_method, status="skipped",
+                reason="cohort cancelled before this unit",
+            ) for pending_case, pending_method in plan[index + 1:])
+            _finish_pilot(root, manifest, rows, passed_dry_run, dry_run_only,
+                          len(planned_cases), cancelled=True)
+            raise
+        except Exception as exc:
+            # _run_case records execution/evaluation failures itself. An error
+            # escaping it occurred at the pre-launch integrity/output gate.
+            # Stop the cohort, preserve every planned unit, and propagate it.
+            rows.append(_unattempted_row(
+                case_manifest=case, method=method, status="blocked",
+                reason=f"pre-launch gate failed: {redact_private_locators(str(exc))}",
+            ))
+            rows.extend(_unattempted_row(
+                case_manifest=pending_case, method=pending_method, status="skipped",
+                reason="cohort stopped by pre-launch integrity/output gate",
+            ) for pending_case, pending_method in plan[index + 1:])
+            _finish_pilot(root, manifest, rows, passed_dry_run, dry_run_only, len(planned_cases))
+            raise
         rows.append(row)
         if row["valid_comparison_run"] and row["evaluation_success"]:
-            passed_dry_run.append(method)
+            if method not in passed_dry_run:
+                passed_dry_run.append(method)
+        _write_results(root, rows)
+    return _finish_pilot(root, manifest, rows, passed_dry_run, dry_run_only,
+                         len(planned_cases))
 
-    if not dry_run_only:
-        for case in cases[1:]:
-            for method in passed_dry_run:
-                offline = outputs.get(method, {}).get(case["case_id"])
-                if offline is not None and not allow_offline_artifacts:
-                    continue
-                rows.append(
-                    _run_case(
-                        root=root,
-                        case_manifest=case,
-                        method=method,
-                        catalog=catalog,
-                        config=configs.get(method),
-                        method_output=offline,
-                    )
-                )
 
+def _finish_pilot(
+    root: Path, manifest: Mapping[str, Any], rows: list[dict[str, Any]],
+    passed_dry_run: list[str], dry_run_only: bool, planned_case_count: int,
+    *, cancelled: bool = False,
+) -> dict[str, Any]:
     _write_results(root, rows)
     compatibility = read_json(manifest["compatibility_report"])
     summary = _summarize_results(
         rows,
         methods=list(manifest["methods"]),
-        case_count=len(cases),
+        case_count=planned_case_count,
     )
     summary_path = write_json(root / "summary.json", summary)
     updated = dict(manifest)
+    attempted = sum(bool(row["attempted"]) for row in rows)
+    completed = sum(row["run_status"] == "completed" for row in rows)
+    status = (
+        "cancelled" if cancelled else "blocked" if attempted == 0
+        else "completed" if completed == len(rows)
+        else "failed" if attempted == len(rows) and completed == 0 else "partial"
+    )
     updated.update(
         {
-            "status": "completed",
+            "status": status,
+            "scheduler_status": "cancelled" if cancelled else "finished",
+            "planned_runs": len(rows),
+            "experiment_complete": status == "completed",
             "dry_run_only": bool(dry_run_only),
             "dry_run_passed_methods": passed_dry_run,
-            "attempted_runs": len(rows),
+            "attempted_runs": attempted,
+            "unattempted_runs": len(rows) - attempted,
             "valid_runs": sum(bool(row["valid_comparison_run"]) for row in rows),
             "summary": summary_path.resolve().as_posix(),
             "real_upstream_execution_performed": any(
-                row["execution_mode"] == "real_generation" for row in rows
+                row.get("upstream_process_started") is True
+                for row in rows
             ),
         }
     )
+    manifest_path = root / "pilot_manifest.json"
     write_json(manifest_path, updated)
     _write_readme(root, updated, compatibility, summary=summary)
     return {**updated, "manifest_path": manifest_path.resolve().as_posix()}
+
+
+def _upstream_execution_evidence(method_dir: Path) -> dict[str, Any]:
+    """A scheduled attempt is not proof that an upstream process started.
+
+    The common executor only records a subprocess return code after Popen, or
+    a timeout after communication started. Callbacks and configured artifacts
+    must not be counted as real external process execution. This proves launch,
+    not successful native-workflow or production-API certification.
+    """
+    path = method_dir / "generator" / "execution" / "execution_result.json"
+    evidence: dict[str, Any] = {"upstream_process_started": False,
+                                "execution_result": None}
+    if not path.is_file():
+        return evidence
+    try:
+        value = read_json(path)
+    except (ValueError, OSError):
+        return evidence
+    if not isinstance(value, Mapping):
+        return evidence
+    evidence.update({
+        "execution_result": path.resolve().as_posix(),
+        "execution_result_sha256": _file_sha256(path),
+        "upstream_process_started": value.get("runner_kind") == "subprocess" and (
+            value.get("return_code") is not None or value.get("timed_out") is True
+        ),
+    })
+    return evidence
+
+
+def _unattempted_row(
+    *, case_manifest: Mapping[str, Any], method: str, status: str, reason: str,
+    gate: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    row = _failure_row(
+        case_manifest=case_manifest, method=method, execution_mode="not_executed",
+        method_dir=Path(case_manifest["case_manifest"]).parent / method,
+        error=ArtifactValidationError(reason),
+    )
+    row.update({"run_status": status, "attempted": False, "generation_success": False,
+                "failure_class": status, "failure_source": "orchestration",
+                "run_manifest": None,
+                "upstream_process_started": False, "execution_result": None,
+                "readiness": deepcopy(gate) if gate is not None else None})
+    return row
 
 
 def _run_case(
@@ -434,6 +624,8 @@ def _run_case(
     catalog: CanonicalAssetCatalog,
     config: Mapping[str, Any] | None,
     method_output: str | Path | None,
+    prepared_manifest: Mapping[str, Any],
+    evaluation_runtime: CanonicalEvaluationRuntime | None = None,
 ) -> dict[str, Any]:
     case_id = str(case_manifest["case_id"])
     method_dir = root / "cases" / case_id / method
@@ -441,10 +633,14 @@ def _run_case(
         raise FileExistsError(
             f"method/case output already exists and will not be overwritten: {method_dir}"
         )
-    generation_input = read_json(case_manifest["generation_input"])
-    object_plan = read_json(case_manifest["evaluation_object_plan"])
-    protocol = ComparisonProtocol.from_mapping(read_json(case_manifest["protocol"]))
-    evaluator_policy = read_json(root / "evaluator_config.json")
+    # Revalidate immediately before each unit and use the verified parsed bytes,
+    # not another unverified read after the gate.
+    verified = verify_prepared_artifacts(root, prepared_manifest)
+    case = verified["cases"][case_id]
+    generation_input = case["generation_input"]
+    object_plan = case["object_plan"]
+    protocol = case["protocol"]
+    evaluator_policy = verified["evaluator_policy"]
     static_evaluator_kwargs = evaluator_policy.get("static_kwargs")
     static_evaluator_kwargs = (
         dict(static_evaluator_kwargs)
@@ -475,6 +671,7 @@ def _run_case(
                 "scene_request": generation_input["scene_request"],
                 "object_plan": object_plan,
             },
+            evaluation_runtime=evaluation_runtime,
         )
         evaluation = read_json(result["evaluator"]["report"])
         row = _success_row(
@@ -484,7 +681,7 @@ def _run_case(
             result=result,
             evaluation=evaluation,
         )
-    except BaseException as exc:
+    except Exception as exc:
         row = _failure_row(
             case_manifest=case_manifest,
             method=method,
@@ -506,6 +703,7 @@ def _run_case(
                 "reason": row["failure_reason"],
             },
         )
+    row.update(_upstream_execution_evidence(method_dir))
     return row
 
 
@@ -523,17 +721,22 @@ def _success_row(
     resources = result.get("generation_resources")
     resources = resources if isinstance(resources, Mapping) else {}
     score = evaluation.get("benchmark_score")
-    score_available = isinstance(score, (int, float)) and not isinstance(score, bool)
+    score_available = (
+        isinstance(score, (int, float)) and not isinstance(score, bool) and math.isfinite(score)
+    )
+    evaluation_success = score_available and evaluation.get("benchmark_score_status") == "complete"
     evaluation_failure_reason = (
         None
-        if score_available
-        else "canonical evaluator produced no benchmark score: "
+        if evaluation_success
+        else "canonical evaluator did not produce a complete benchmark score: "
         f"{evaluation.get('benchmark_score_status')}"
     )
     return {
         "schema_version": RESULT_SCHEMA_VERSION,
         "case_id": case_manifest["case_id"],
         "method": method,
+        "run_status": "completed" if evaluation_success and result["valid_comparison_run"] else "failed",
+        "attempted": True,
         "execution_mode": execution_mode,
         "protocol_id": result["protocol_id"],
         "protocol_hash": result["protocol_sha256"],
@@ -546,7 +749,7 @@ def _success_row(
         **complexity,
         "generation_success": True,
         "valid_comparison_run": bool(result["valid_comparison_run"]),
-        "evaluation_success": score_available,
+        "evaluation_success": evaluation_success,
         "score_available": score_available,
         "benchmark_score": score,
         "benchmark_score_100": evaluation.get("benchmark_score_100"),
@@ -564,8 +767,8 @@ def _success_row(
         "generation_iterations": resources.get("iteration_count"),
         "tokens": resources.get("tokens"),
         "tool_calls": resources.get("tool_calls"),
-        "failure_class": None if score_available else "evaluator_infrastructure_failure",
-        "failure_source": None if score_available else "infrastructure",
+        "failure_class": None if evaluation_success else "evaluator_infrastructure_failure",
+        "failure_source": None if evaluation_success else "infrastructure",
         "failure_reason": evaluation_failure_reason,
         "run_manifest": result.get("manifest_path"),
         "evaluation_report": result["evaluator"]["report"],
@@ -589,6 +792,8 @@ def _failure_row(
         "schema_version": RESULT_SCHEMA_VERSION,
         "case_id": case_manifest["case_id"],
         "method": method,
+        "run_status": "failed",
+        "attempted": True,
         "execution_mode": execution_mode,
         "protocol_id": "generation_comparison_v1",
         "protocol_hash": case_manifest["protocol_sha256"],
@@ -1441,13 +1646,16 @@ def _summarize_results(
 ) -> dict[str, Any]:
     method_rows = {}
     for method in methods:
-        selected = [row for row in rows if row["method"] == method]
+        planned = [row for row in rows if row["method"] == method]
+        selected = [row for row in planned if row.get("attempted", True)]
         valid = [row for row in selected if row["valid_comparison_run"]]
+        complete = [row for row in valid if row.get("evaluation_success")]
         scores = [
             float(row["benchmark_score"])
-            for row in valid
+            for row in complete
             if isinstance(row.get("benchmark_score"), (int, float))
             and not isinstance(row.get("benchmark_score"), bool)
+            and math.isfinite(row["benchmark_score"])
         ]
         runtimes = [
             float(row["generation_runtime_seconds"])
@@ -1457,7 +1665,15 @@ def _summarize_results(
         method_rows[method] = {
             "attempted_cases": len(selected),
             "planned_cases": case_count,
+            "unattempted_cases": len(planned) - len(selected),
+            "unattempted": [
+                {"case_id": row["case_id"], "status": row["run_status"],
+                 "reason": row["failure_reason"], "readiness": row.get("readiness")}
+                for row in planned if not row.get("attempted", True)
+            ],
             "valid_runs": len(valid),
+            "complete_evaluations": len(complete),
+            "incomplete_evaluations": len(valid) - len(complete),
             "scored_runs": len(scores),
             "generation_success_rate": (
                 sum(bool(row["generation_success"]) for row in selected) / len(selected)
@@ -1492,7 +1708,9 @@ def _summarize_results(
     valid_by_case: dict[str, dict[str, float]] = {}
     for row in rows:
         score = row.get("benchmark_score")
-        if row["valid_comparison_run"] and isinstance(score, (int, float)):
+        if (row["valid_comparison_run"] and row.get("evaluation_success")
+                and isinstance(score, (int, float)) and not isinstance(score, bool)
+                and math.isfinite(score)):
             valid_by_case.setdefault(row["case_id"], {})[row["method"]] = float(score)
     paired = []
     for case_id, values in sorted(valid_by_case.items()):
@@ -1510,7 +1728,8 @@ def _summarize_results(
     return {
         "schema_version": "controlled_generation_pilot_summary_v1",
         "label": "pilot / integration validation",
-        "attempted_runs": len(rows),
+        "score_aggregation_policy": "valid_comparison_and_complete_evaluation_only",
+        "attempted_runs": sum(bool(row.get("attempted", True)) for row in rows),
         "valid_runs": sum(bool(row["valid_comparison_run"]) for row in rows),
         "methods": method_rows,
         "paired_score_deltas": paired,
@@ -1748,10 +1967,14 @@ def main() -> None:
     prepare.add_argument("--asset-bundle-root")
     prepare.add_argument("--out-dir", required=True)
     prepare.add_argument("--method-configs")
+    prepare.add_argument("--evaluation-runtime-config", help="trusted Judge/Blender runtime JSON; required before real generation")
     run = subparsers.add_parser("run")
     run.add_argument("--prepared-dir", required=True)
     run.add_argument("--method-configs", required=True)
     run.add_argument("--dry-run-only", action="store_true")
+    preflight = subparsers.add_parser("preflight", help="read-only checks; NEVER generates, renders or calls a model")
+    preflight.add_argument("--prepared-dir", required=True)
+    preflight.add_argument("--method-configs")
     source_hash = subparsers.add_parser(
         "hash-bridge",
         help="print the entrypoint and canonical bridge-bundle source pins",
@@ -1765,7 +1988,11 @@ def main() -> None:
             out_dir=args.out_dir,
             method_configs=args.method_configs,
             asset_bundle_root=args.asset_bundle_root,
+            evaluation_runtime_config=args.evaluation_runtime_config,
         )
+    elif args.command == "preflight":
+        result = preflight_prepared_pilot(prepared_dir=args.prepared_dir,
+                                          method_configs=args.method_configs)
     elif args.command == "run":
         result = run_prepared_pilot(
             prepared_dir=args.prepared_dir,
@@ -1775,6 +2002,10 @@ def main() -> None:
     else:
         result = bridge_execution_hashes(args.entrypoint)
     print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+    if args.command == "run" and result["status"] != "completed":
+        raise SystemExit(2)
+    if args.command == "preflight" and not result["ready_for_generation"]:
+        raise SystemExit(2)
 
 
 if __name__ == "__main__":
@@ -1791,5 +2022,6 @@ __all__ = [
     "RESULT_SCHEMA_VERSION",
     "bridge_execution_hashes",
     "prepare_controlled_pilot",
+    "preflight_prepared_pilot",
     "run_prepared_pilot",
 ]

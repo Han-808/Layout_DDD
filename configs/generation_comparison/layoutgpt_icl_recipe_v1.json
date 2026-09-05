@@ -1,0 +1,109 @@
+{
+  "schema_version": "layoutgpt_released_icl_recipe_v1",
+  "upstream_repo": "https://github.com/UCSB-AI/LayoutGPT",
+  "upstream_commit": "fc31954962553e5b65bf267a904a6930d50b1f5e",
+  "source_url": "https://drive.google.com/file/d/1NV3pmRpWcehPO5iKJPmShsRp_lNbxJuK/view",
+  "selection_policy": "first_four_in_each_pinned_rect_train_order_bedroom_then_livingroom",
+  "selections": [
+    {
+      "room": "bedroom",
+      "selected_ids": [
+        "ae6e05dc-ce87-415f-b98e-3349488d984b_SecondBedroom-12902",
+        "1b21fb55-10f7-47ac-bf69-4ea9b62b417f_Bedroom-43442",
+        "625cc958-7f61-487f-a076-427034fedc1a_MasterBedroom-232",
+        "43f7c2b8-5eed-4aa6-ae66-8cb06a47148e_MasterBedroom-2827"
+      ],
+      "source_split": "rect_train",
+      "split_sha256": "436bff1f249acaa3d601f17cbbe6e44bef7877ef183fba8ab8611c274158392d"
+    },
+    {
+      "room": "livingroom",
+      "selected_ids": [
+        "a603c8bd-8ff0-42b5-b836-b0e693d1b0aa_LivingRoom-322397",
+        "fbb124a7-d4d2-46a0-9465-fc790f714350_LivingRoom-14341",
+        "491af85e-3c8f-40f2-a204-392483bb4308_LivingRoom-2602",
+        "7a1e44d1-5828-441d-b041-238b1f0cb76b_LivingRoom-42866"
+      ],
+      "source_split": "rect_train",
+      "split_sha256": "839e2eb25307086d8dbacd34bc3209628671d844ff326fc9435da0a3a8c7f8a9"
+    }
+  ],
+  "files": [
+    {
+      "archive_member": "data_output/bedroom/dataset_stats.txt",
+      "bytes": 2508,
+      "crc32": 3872001974,
+      "local_path": "bedroom/dataset_stats.txt",
+      "sha256": "afffbbba492db51682e1042a85bbdceca19b930f843fa8900106048760a3214c"
+    },
+    {
+      "archive_member": "data_output/bedroom/ae6e05dc-ce87-415f-b98e-3349488d984b_SecondBedroom-12902/boxes.npz",
+      "bytes": 3584,
+      "crc32": 724398681,
+      "local_path": "bedroom/ae6e05dc-ce87-415f-b98e-3349488d984b_SecondBedroom-12902/boxes.npz",
+      "sha256": "a137bf13af6af2e400d91dfd62912c3adbf368bd85f334d16461f2761737a55e"
+    },
+    {
+      "archive_member": "data_output/bedroom/1b21fb55-10f7-47ac-bf69-4ea9b62b417f_Bedroom-43442/boxes.npz",
+      "bytes": 3652,
+      "crc32": 1871436692,
+      "local_path": "bedroom/1b21fb55-10f7-47ac-bf69-4ea9b62b417f_Bedroom-43442/boxes.npz",
+      "sha256": "f7665bb6fdfa0c17383e1c8ae2d04259c1245edc3fbe13db55962e0dec059eb4"
+    },
+    {
+      "archive_member": "data_output/bedroom/625cc958-7f61-487f-a076-427034fedc1a_MasterBedroom-232/boxes.npz",
+      "bytes": 3480,
+      "crc32": 3542103461,
+      "local_path": "bedroom/625cc958-7f61-487f-a076-427034fedc1a_MasterBedroom-232/boxes.npz",
+      "sha256": "655ada1bf8c855205decae246857991c8bb1ca248f8e092f3ec651dcda5be4e2"
+    },
+    {
+      "archive_member": "data_output/bedroom/43f7c2b8-5eed-4aa6-ae66-8cb06a47148e_MasterBedroom-2827/boxes.npz",
+      "bytes": 3778,
+      "crc32": 1523613954,
+      "local_path": "bedroom/43f7c2b8-5eed-4aa6-ae66-8cb06a47148e_MasterBedroom-2827/boxes.npz",
+      "sha256": "0d854484ecf9d63f5c15d690c1d689123f8ee3ec646a703ed48f3a78a955ebcb"
+    },
+    {
+      "archive_member": "data_output/livingroom/dataset_stats.txt",
+      "bytes": 2954,
+      "crc32": 4157025164,
+      "local_path": "livingroom/dataset_stats.txt",
+      "sha256": "e4882b676b684b35f7757a80af0e4c2a6f09252095442b6a07c0ec0d785434d4"
+    },
+    {
+      "archive_member": "data_output/livingroom/a603c8bd-8ff0-42b5-b836-b0e693d1b0aa_LivingRoom-322397/boxes.npz",
+      "bytes": 3770,
+      "crc32": 1727577784,
+      "local_path": "livingroom/a603c8bd-8ff0-42b5-b836-b0e693d1b0aa_LivingRoom-322397/boxes.npz",
+      "sha256": "814add0afa13354fec896ec086253c51be785e08371ab0604d7a03bed3244eba"
+    },
+    {
+      "archive_member": "data_output/livingroom/fbb124a7-d4d2-46a0-9465-fc790f714350_LivingRoom-14341/boxes.npz",
+      "bytes": 3837,
+      "crc32": 1549354819,
+      "local_path": "livingroom/fbb124a7-d4d2-46a0-9465-fc790f714350_LivingRoom-14341/boxes.npz",
+      "sha256": "c974da5a45b55388f341d1d4af48ac01eb283b5ed79e95a3387da5d4edc2398a"
+    },
+    {
+      "archive_member": "data_output/livingroom/491af85e-3c8f-40f2-a204-392483bb4308_LivingRoom-2602/boxes.npz",
+      "bytes": 4114,
+      "crc32": 3925323128,
+      "local_path": "livingroom/491af85e-3c8f-40f2-a204-392483bb4308_LivingRoom-2602/boxes.npz",
+      "sha256": "99948b81cd9eff8e3f656d159d4b80b9833c1fca9de1f245f2d65ddfbbe442b9"
+    },
+    {
+      "archive_member": "data_output/livingroom/7a1e44d1-5828-441d-b041-238b1f0cb76b_LivingRoom-42866/boxes.npz",
+      "bytes": 9396,
+      "crc32": 3044526536,
+      "local_path": "livingroom/7a1e44d1-5828-441d-b041-238b1f0cb76b_LivingRoom-42866/boxes.npz",
+      "sha256": "6adb3f49b7e6b25193e1bc58aa9da2f076ad6b8d34dcb0df6e97fbc239131d41"
+    }
+  ],
+  "released_loader_sha256": "8aab0891a1cf60aab64b184f04170a42c7cee2832f299643ecb88a7c38048c24",
+  "unit": "m",
+  "normalize": false,
+  "example_count": 8,
+  "hidden_evaluator_data_used": false,
+  "selection_approval": "user_approved_released_frozen_icl_protocol_2026_09_05"
+}

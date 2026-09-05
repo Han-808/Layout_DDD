@@ -116,6 +116,7 @@ def execute_external_harness(
     stderr = ""
     return_code: int | None = None
     timed_out = False
+    cancelled = False
     command_for_audit: list[str] | None = None
     cwd: Path | None = None
     repo_path: Path | None = None
@@ -235,7 +236,14 @@ def execute_external_harness(
                 default_native_artifact=default_native_artifact,
                 default_native_artifact_glob=default_native_artifact_glob,
             )
-    except BaseException as exc:  # Persist every upstream/configuration failure.
+    except (KeyboardInterrupt, SystemExit) as exc:
+        # Cancellation is an operator stop, never an ordinary generator failure.
+        cancelled = True
+        stdout = _process_text(getattr(exc, "upstream_stdout", stdout))
+        stderr = _process_text(getattr(exc, "upstream_stderr", stderr))
+        return_code = getattr(exc, "upstream_return_code", return_code)
+        error = exc
+    except Exception as exc:
         error = exc
 
     stdout_path.write_text(stdout, encoding="utf-8")
@@ -251,7 +259,7 @@ def execute_external_harness(
                 runner_provenance=runner_provenance,
                 require_unchanged=True,
             )
-        except BaseException as exc:
+        except Exception as exc:
             error = exc
     runtime_seconds = time.monotonic() - started_monotonic
     base_result: dict[str, Any] = {
@@ -273,6 +281,7 @@ def execute_external_harness(
         "ended_at": _utc_now(),
         "runtime_seconds": runtime_seconds,
         "timed_out": timed_out,
+        "cancelled": cancelled,
         "upstream_repo": repo_path.as_posix() if repo_path is not None else None,
         "upstream_commit": upstream_commit,
         "upstream_repo_clean_before_execution": upstream_repo_clean_before,
@@ -290,12 +299,14 @@ def execute_external_harness(
         "callback_metadata": _sanitize(callback_metadata),
     }
     if error is not None:
-        base_result["status"] = "failed"
+        base_result["status"] = "cancelled" if cancelled else "failed"
         base_result["error"] = {
             "type": type(error).__name__,
             "message": redact_private_locators(str(error)),
         }
         write_json(result_path, base_result)
+        if cancelled:
+            raise error
         if isinstance(error, ExternalExecutionError):
             raise error
         raise ExternalExecutionError(
@@ -322,7 +333,7 @@ def execute_external_harness(
                 execution_config=execution_config,
             ),
         )
-    except BaseException as exc:
+    except Exception as exc:
         base_result["status"] = "failed"
         base_result["error"] = {
             "type": type(exc).__name__,
@@ -1236,7 +1247,7 @@ def _run_external_process(
     environment: Mapping[str, str],
     timeout_seconds: float,
 ) -> subprocess.CompletedProcess[str]:
-    """Run one harness command and kill its process tree on timeout.
+    """Run one harness command and reap its process tree on timeout or cancel.
 
     The real bridges can launch Blender or other worker processes. Killing only
     the immediate bridge would leave those workers running after the benchmark
@@ -1256,26 +1267,62 @@ def _run_external_process(
     try:
         stdout, stderr = process.communicate(timeout=timeout_seconds)
     except subprocess.TimeoutExpired as exc:
-        if os.name == "posix":
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-        else:
-            process.kill()
-        stdout, stderr = process.communicate()
+        stdout, stderr = _terminate_external_process(process)
         raise subprocess.TimeoutExpired(
             list(command),
             timeout_seconds,
             output=stdout,
             stderr=stderr,
         ) from exc
+    except BaseException as exc:
+        # Catch only to clean up, preserving the original cancellation/control
+        # exception. The caller persists these streams and re-raises it.
+        stdout, stderr = _terminate_external_process(process)
+        exc.upstream_stdout = stdout
+        exc.upstream_stderr = stderr
+        exc.upstream_return_code = process.returncode
+        raise
     return subprocess.CompletedProcess(
         args=list(command),
         returncode=int(process.returncode),
         stdout=stdout,
         stderr=stderr,
     )
+
+
+def _terminate_external_process(
+    process: subprocess.Popen[str],
+) -> tuple[str, str]:
+    """Bounded cleanup of the controlled session, including remaining workers."""
+
+    def signal_tree(sig: int) -> None:
+        try:
+            if os.name == "posix":
+                os.killpg(process.pid, sig)
+            elif process.poll() is None:
+                process.kill()
+        except ProcessLookupError:
+            pass
+
+    signal_tree(signal.SIGTERM)
+    try:
+        stdout, stderr = process.communicate(timeout=2.0)
+    except (subprocess.TimeoutExpired, KeyboardInterrupt):
+        signal_tree(signal.SIGKILL)
+        try:
+            stdout, stderr = process.communicate(timeout=2.0)
+        except subprocess.TimeoutExpired as exc:
+            # Do not hang on an inherited pipe if a worker violated the session
+            # boundary. The caller still receives the original cancellation.
+            stdout, stderr = _process_text(exc.stdout), _process_text(exc.stderr)
+            for stream in (process.stdout, process.stderr):
+                if stream is not None:
+                    stream.close()
+            process.wait(timeout=2.0)
+    finally:
+        # The leader may exit before descendants that have closed their pipes.
+        signal_tree(signal.SIGKILL)
+    return stdout or "", stderr or ""
 
 
 def _file_sha256(path: Path) -> str:

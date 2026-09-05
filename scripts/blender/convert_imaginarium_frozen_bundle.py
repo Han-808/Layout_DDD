@@ -77,6 +77,8 @@ def main() -> None:
     ):
         raise RuntimeError("worker tolerance differs from the frozen bundle plan")
     tolerance = float(tolerance)
+    if args.report.exists() or any(Path(item["target_glb"]).exists() for item in plan["assets"]):
+        raise FileExistsError("bundle report/GLB already exists; use a fresh attempt directory")
     rows = []
     failed = []
     for item in plan["assets"]:
@@ -106,6 +108,11 @@ def main() -> None:
                 filepath=target.as_posix(),
                 export_format="GLB",
                 use_selection=False,
+                # FBX bbox can include native loose vertices/edges. The glTF
+                # defaults drop them (observed on the approved refrigerator).
+                # Preserve them, never pad/rescale/recenter the exported mesh.
+                use_mesh_edges=True,
+                use_mesh_vertices=True,
             )
             _clear()
             bpy.ops.import_scene.gltf(filepath=target.as_posix())
@@ -133,12 +140,12 @@ def main() -> None:
                     roundtrip_center, source_center, tolerance
                 ),
                 "roundtrip_xy_order_vs_metadata": (
-                    (roundtrip_size[0] - roundtrip_size[1]) == 0.0
-                    or (
+                    abs(roundtrip_size[0] - roundtrip_size[1]) <= tolerance
+                    or abs(
                         item["expected_bbox_size"][0]
                         - item["expected_bbox_size"][1]
                     )
-                    == 0.0
+                    <= tolerance
                     or (
                         (roundtrip_size[0] - roundtrip_size[1])
                         * (
@@ -163,6 +170,11 @@ def main() -> None:
         "status": "passed" if not failed else "failed",
         "plan": args.plan.resolve().as_posix(),
         "geometry_tolerance_m": tolerance,
+        "xy_order_tolerance_m": tolerance,
+        "blender_version": bpy.app.version_string,
+        "worker_sha256": _sha256(Path(__file__)),
+        "plan_sha256": _sha256(args.plan),
+        "export_settings": {"format": "GLB", "use_mesh_edges": True, "use_mesh_vertices": True},
         "asset_count": len(rows),
         "failed_asset_ids": failed,
         "assets": rows,

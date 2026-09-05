@@ -26,6 +26,7 @@ layout-ddd-evaluate = "benchmark.api.evaluation:main"
 layout-ddd-evaluate-sceneweaver-iterations = "benchmark.api.scene_weaver_iterations:main"
 layout-ddd-compare-generation = "benchmark.generation_comparison.execution:main"
 layout-ddd-controlled-pilot = "benchmark.generation_comparison.pilot:main"
+layout-ddd-reevaluate-controlled = "benchmark.generation_comparison.reevaluation:main"
 layout-ddd-evaluate-submission = "benchmark.api.submission:main"
 layout-ddd-evaluate-game = "benchmark.game_scene.route:main"
 
@@ -109,6 +110,8 @@ testpaths = [
   "tests/test_generation_campaign_v2.py",
   "tests/test_generation_comparison_protocol.py",
   "tests/test_controlled_generation_pilot.py",
+  "tests/test_pipeline_evaluation_runtime.py",
+  "tests/test_layoutgpt_frozen_icl.py",
   "tests/test_frozen_imaginarium_scene10.py",
   "tests/test_generation_legacy_forwarding_d1.py",
   "tests/test_multi_room_generation.py",

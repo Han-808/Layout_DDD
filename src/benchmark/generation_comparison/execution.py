@@ -21,9 +21,13 @@ from benchmark.generation_comparison.catalog import (
     load_asset_catalog,
 )
 from benchmark.generation_comparison.eligibility import check_method_eligibility
+from benchmark.generation_comparison.evaluation_runtime import (
+    CanonicalEvaluationRuntime, RUNTIME_KEYS, runtime_evaluation_options,
+)
 from benchmark.generation_comparison.identity import (
     architecture_from_generation_input,
     architecture_sha256,
+    canonical_json_sha256,
 )
 from benchmark.generation_comparison.inputs import build_controlled_generation_input
 from benchmark.generation_comparison.materializers import (
@@ -67,6 +71,7 @@ def run_controlled_generation(
     method_output: str | Path | None = None,
     run_generation: bool = True,
     evaluation_kwargs: Mapping[str, Any] | None = None,
+    evaluation_runtime: CanonicalEvaluationRuntime | None = None,
     evaluate_sceneweaver_trajectory: bool = True,
 ) -> dict[str, Any]:
     """Run one auditable comparison case without altering conversion/evaluation."""
@@ -74,6 +79,29 @@ def run_controlled_generation(
     source_input = deepcopy(dict(generation_input))
     validate_generation_input(source_input)
     contract = load_comparison_protocol(protocol)
+    evaluation_options = dict(evaluation_kwargs or {})
+    policy = dict(contract.as_dict()["evaluator"])
+    expected_policy_hash = policy.pop("config_sha256", None)
+    if expected_policy_hash is not None:
+        if canonical_json_sha256(policy) != expected_policy_hash:
+            raise ArtifactValidationError("actual evaluator policy differs from declared config_sha256")
+        frozen_static = policy.get("static_kwargs") or {}
+        # Private scene_request/object_plan and constructed runtime are the only
+        # additions to a prepared evaluator configuration. Scoring overrides
+        # must already be in the frozen config whose bytes were verified.
+        extra = set(evaluation_options) - set(frozen_static) - {"scene_request", "object_plan"}
+        if extra or any(evaluation_options.get(k) != v for k, v in frozen_static.items()):
+            raise ArtifactValidationError("actual evaluator arguments differ from frozen static_kwargs")
+    if isinstance(policy.get("runtime"), Mapping):
+        if evaluation_runtime is None:
+            evaluation_runtime = CanonicalEvaluationRuntime(policy["runtime"])
+        if evaluation_runtime.config_sha256 != canonical_json_sha256(policy["runtime"]):
+            raise ArtifactValidationError("actual evaluator runtime differs from frozen runtime config")
+    forbidden = set(evaluation_options) & {"scene", "out", "evaluation_mode"}
+    if evaluation_runtime is not None:
+        forbidden |= set(evaluation_options) & RUNTIME_KEYS
+    if forbidden:
+        raise ArtifactValidationError(f"controlled comparison owns evaluator arguments {sorted(forbidden)}")
     catalog = (
         load_asset_catalog(asset_catalog, hash_local_meshes=True)
         if asset_catalog is not None
@@ -294,6 +322,7 @@ def run_controlled_generation(
                 asset_bytes_after_path.resolve().as_posix()
             )
     except BaseException as exc:
+        # Persist cancellation separately and always re-raise it to the scheduler.
         if catalog is not None and materialization is not None:
             failed_asset_bytes_after = _asset_byte_snapshot(
                 catalog,
@@ -321,7 +350,7 @@ def run_controlled_generation(
         )
         manifest.update(
             {
-                "status": "GENERATION_FAILED",
+                "status": "CANCELLED" if isinstance(exc, (KeyboardInterrupt, SystemExit)) else "GENERATION_FAILED",
                 "valid_comparison_run": False,
                 "controlled_generation_input": controlled_input_path.resolve().as_posix(),
                 "error": {
@@ -457,22 +486,42 @@ def run_controlled_generation(
             f"manifest={manifest_path.resolve().as_posix()}"
         )
 
-    evaluation_options = dict(evaluation_kwargs or {})
-    forbidden = sorted(
-        key
-        for key in ("scene", "out", "evaluation_mode")
-        if key in evaluation_options
-    )
-    if forbidden:
-        raise ArtifactValidationError(
-            f"controlled comparison owns evaluator arguments {forbidden}"
-        )
     evaluation_report_path = root / "evaluation_report.json"
-    evaluation_report = run_evaluate(
-        scene=scene,
-        out=evaluation_report_path,
-        **evaluation_options,
+    generation_manifest = _completed_manifest(
+        adapter_name=adapter_name, contract=contract, catalog=catalog,
+        protocol_path=protocol_path, eligibility=eligibility, eligibility_path=eligibility_path,
+        materialization=materialization, result=result, execution_metadata=execution_metadata,
+        controlled_input_path=controlled_input_path, native_selection_path=native_selection_path,
+        validation=validation, validation_path=validation_path,
+        evaluation_report_path=None, evaluation_report=None, trajectory=None,
     )
+    generation_manifest["status"] = "GENERATED_AWAITING_EVALUATION"
+    # Persist the successfully validated generation independently of evaluator
+    # availability. Failed post-hoc evaluation must never force regeneration.
+    # Only JSON evaluator inputs are recoverable this way; programmatic runtime
+    # callbacks remain an explicitly non-replayable API path.
+    if set(evaluation_options) <= set(policy.get("static_kwargs") or {}) | {"scene_request", "object_plan"}:
+        evaluation_input_path = write_json(comparison_dir / "evaluation_input.json", evaluation_options)
+        generation_manifest["evaluation_input"] = evaluation_input_path.resolve().as_posix()
+        generation_manifest["evaluation_input_sha256"] = _file_sha256(evaluation_input_path)
+    write_json(comparison_dir / "generation_manifest.json", generation_manifest)
+    write_json(comparison_dir / "run_manifest.json", generation_manifest)
+    try:
+        evaluation_report = run_evaluate(
+            scene=scene,
+            out=evaluation_report_path,
+            **runtime_evaluation_options(evaluation_options, evaluation_runtime,
+                                         scene=scene, out_dir=root / "evaluation_runtime"),
+        )
+    except BaseException as exc:
+        failure = {
+            **generation_manifest,
+            "status": "EVALUATION_CANCELLED" if isinstance(exc, (KeyboardInterrupt, SystemExit)) else "EVALUATION_FAILED",
+            "evaluation_error": {"type": type(exc).__name__, "message": redact_private_locators(str(exc))},
+            "generation_preserved": True,
+        }
+        write_json(comparison_dir / "run_manifest.json", failure)
+        raise
 
     trajectory: dict[str, Any] | None = None
     if adapter_name == "scene_weaver" and evaluate_sceneweaver_trajectory:
@@ -502,6 +551,7 @@ def run_controlled_generation(
             native_selection=native_selection,
             method_architecture_hash=method_architecture_hash,
             eligibility=eligibility,
+            evaluation_runtime=evaluation_runtime,
         )
         if not trajectory["valid_comparison_trajectory"]:
             validation["valid_comparison_run"] = False
@@ -536,6 +586,9 @@ def run_controlled_generation(
     )
     if not validation["valid_comparison_run"]:
         manifest["status"] = "INVALID_COMPARISON"
+    if evaluation_runtime is not None:
+        manifest["evaluator"]["runtime_config_sha256"] = evaluation_runtime.config_sha256
+        manifest["evaluator"]["runtime_manifest"] = (root / "evaluation_runtime/runtime_manifest.json").resolve().as_posix()
     manifest_path = write_json(comparison_dir / "run_manifest.json", manifest)
     if not validation["valid_comparison_run"]:
         raise ComparisonRunError(
@@ -719,6 +772,7 @@ def _evaluate_sceneweaver_comparison_trajectory(
     native_selection: Mapping[str, Any],
     method_architecture_hash: str,
     eligibility: Mapping[str, Any],
+    evaluation_runtime: CanonicalEvaluationRuntime | None = None,
 ) -> dict[str, Any]:
     summary = evaluate_scene_weaver_iterations(
         native_output=native_artifact,
@@ -726,6 +780,7 @@ def _evaluate_sceneweaver_comparison_trajectory(
         out_dir=out_dir,
         adapter_config=adapter_config,
         evaluation_kwargs=evaluation_kwargs,
+        evaluation_runtime=evaluation_runtime,
     )
     rows = []
     invalid = []
@@ -974,6 +1029,9 @@ def _evaluator_metadata(
     report: Mapping[str, Any] | None,
     contract: ComparisonProtocol,
 ) -> dict[str, Any]:
+    actual_policy = dict(contract.as_dict()["evaluator"])
+    actual_policy.pop("config_sha256", None)
+    actual_policy_hash = canonical_json_sha256(actual_policy)
     if path is None or report is None:
         return {
             "policy": contract.as_dict()["evaluator"]["policy"],
@@ -985,6 +1043,7 @@ def _evaluator_metadata(
     return {
         "policy": contract.as_dict()["evaluator"]["policy"],
         "config_sha256": contract.as_dict()["evaluator"].get("config_sha256"),
+        "actual_policy_sha256": actual_policy_hash,
         "entrypoint": "benchmark.api.evaluation.run_evaluate",
         "workflow": report.get("workflow"),
         "profile_version": report.get("evaluation_profile_version")

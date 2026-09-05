@@ -231,6 +231,79 @@ placed in the method input or fed into SceneWeaver's native reflection loop.
 
 ## Invocation
 
+### Prepared pilot safety and evaluator runtime
+
+The prepared pilot verifies the actual bytes of **all** cases before starting
+any method and rechecks before each unit. Pins cover public generation input,
+evaluation object plan, protocol, catalog and local mesh contents, and evaluator
+configuration. A drifted directory cannot be accepted by refreshing its hashes:
+prepare a new directory. Independently archive
+`prepared_manifest_identity_sha256`; local checks detect accidental drift, not
+replacement of an entire manifest and all of its pins by a malicious operator.
+
+Use `prepare --evaluation-runtime-config` with a private copy of
+`configs/generation_comparison/canonical_evaluation_runtime.example.json`.
+This constructs the existing Blender/Judge/grouping/camera runtime. Configuration
+contains environment-variable names, never literal credentials. Runtime and
+evaluator-private evidence remain outside method inputs. Every final scene and
+SceneWeaver iteration gets fresh, scene-bound evidence through the same
+`benchmark.api.evaluation.run_evaluate`; no metric or scoring branch is added.
+
+```bash
+layout-ddd-controlled-pilot preflight \
+  --prepared-dir /ABSOLUTE/PATH/TO/prepared \
+  --method-configs /ABSOLUTE/PATH/TO/private_methods.json
+```
+
+`preflight` is read-only and performs **no generation, rendering or model calls**.
+It checks files, identities and credential presence, not service availability.
+It exits 2 when not ready. In contrast, `run --dry-run-only` still executes the
+first case and can spend generation and evaluation API calls; it is not an
+offline preflight. Real generation is blocked if evaluator runtime or the
+complete-score policy is not ready.
+
+Known baseline limitation: honest FrozenAssets ownership makes Style and Pairing
+`not_relevant`, but the current canonical evaluator retains their defaulted,
+ungrounded terms in the denominator. A deterministic external-observation
+fixture through the unchanged evaluator yields L3 coverage `0.84` and
+`partial_coverage`. The preflight reports
+`canonical_applicability_prevents_complete_coverage`. This implementation does
+not falsify ownership, change weights, disable metrics or label partial scores
+complete. Resolving that experiment-policy issue needs a separate user decision.
+
+Pilot status distinguishes `blocked`, `failed`, `partial`, `cancelled` and
+`completed`; every planned method/case gets a row, including skipped units with
+reasons. Zero attempts never succeeds. Complete-score summaries and paired
+deltas exclude incomplete reports, while raw numeric partial scores remain in
+per-run rows. Cancellation is propagated after generation process-group cleanup
+and log preservation; subsequent cohort units are not launched.
+
+### Append-only evaluation recovery
+
+Successful native generation and fairness validation are frozen in
+`comparison/generation_manifest.json` **before** evaluation. If rendering or a
+Judge fails, `run_manifest.json` records `EVALUATION_FAILED` (or cancellation),
+without discarding the native/canonical outputs.
+
+```bash
+layout-ddd-reevaluate-controlled \
+  --prepared-dir /ABSOLUTE/PATH/TO/original_prepared \
+  --case-id S100 --method direct_layout \
+  --out-dir /ABSOLUTE/PATH/TO/new_reevaluation_attempt
+```
+
+This verifies original native/canonical/input hashes, reuses the frozen evaluator
+policy, and calls the same evaluator in a fresh directory outside the source
+run. It does not rerun generation, retrieval or conversion. It **can** spend
+evaluation API calls. Incomplete scores remain incomplete (exit 2). This is a
+final-state recovery utility, not a generation `--resume` feature or a new
+SceneWeaver loop; the existing iteration API remains available for trajectories.
+
+Current preparation evidence, remaining blockers and real-vs-mocked status are
+recorded in [the runs work ledger](PIPELINE_COMPATIBILITY_RUNS_READINESS.md).
+
+### Single controlled unit
+
 ```bash
 layout-ddd-compare-generation \
   --generation-input generation_input.json \

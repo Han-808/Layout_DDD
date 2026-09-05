@@ -137,6 +137,9 @@ def main() -> None:
         os.chdir(repo)
         from langchain_openai import ChatOpenAI
         from src.layoutvlm.layoutvlm import LayoutVLM
+        from src.layoutvlm import constraints as native_constraints
+
+        optimization_backend = _require_differentiable_overlap_backend(native_constraints)
 
         chat = _CountingChat(
             ChatOpenAI(
@@ -221,6 +224,7 @@ def main() -> None:
             "exact_asset_size_literal_shim": precision_tracking,
             "constraint_program_guard": constraint_guard,
             "prepared_scene_config_sha256": prepared_scene_config_sha256,
+            "optimization_backend": optimization_backend,
         },
         observed_model_identities=observed_identities,
         model_identity_evidence="observed_response",
@@ -231,6 +235,20 @@ def main() -> None:
             "prepared_scene_config_sha256": prepared_scene_config_sha256,
         },
     )
+
+
+def _require_differentiable_overlap_backend(native_constraints: Any) -> dict[str, Any]:
+    # The release's CPU fallback detaches corners to NumPy/Shapely and creates
+    # unrelated leaf tensors. Import success is not proof that overlap forces
+    # can update object poses. Do not silently run that different ablation.
+    if getattr(native_constraints, "ORIENTED_IOU_AVAILABLE", None) is not True:
+        raise RuntimeError(
+            "LayoutVLM differentiable Rotated_IoU backend is unavailable; "
+            "build the released CUDA extension on a compatible host before "
+            "controlled generation. The detached CPU fallback is not certified."
+        )
+    return {"policy": "released_differentiable_rotated_iou_required_v1",
+            "oriented_iou_available": True, "detached_cpu_fallback_allowed": False}
 
 
 def _prepare_task(
