@@ -18,6 +18,7 @@ CameraObservation = Literal[
     "depth_baseline_available",
     "group_context_visible",
     "interaction_side_visible",
+    "approach_zone_visible",
     "limited_local_context",
     "global_context_preserved",
     "occluder_avoided",
@@ -59,6 +60,8 @@ CAMERA_VIEW_FAMILIES = frozenset(
         "oblique_sw",
         "canonical_high_oblique_pair_v1",
         "canonical_style_local_v1",
+        "functional_frontage_probe",
+        "functional_relation_wide",
     }
 )
 
@@ -191,6 +194,21 @@ METRIC_CAMERA_REQUIREMENTS: dict[str, MetricCameraRequirement] = {
             "contact_surface_visible",
             "support_chain_visible",
             "front_back_disambiguated",
+            "approach_zone_visible",
+            "architecture_plane_visible",
+        ),
+    ),
+    "semantic_placement_consistency": _requirement(
+        (
+            "target_visible",
+            "group_context_visible",
+            "limited_local_context",
+            "global_context_preserved",
+        ),
+        extra=(
+            "contact_surface_visible",
+            "joint_visibility",
+            "architecture_plane_visible",
         ),
     ),
     "scale_consistency": _requirement(
@@ -223,6 +241,9 @@ _METRIC_ALIASES = {
     "functional_semantic": "functional_semantic_fidelity",
     "functional_plausibility": "functional_consistency",
     "functional_validity": "functional_consistency",
+    "semantic_placement": "semantic_placement_consistency",
+    "semantics_placement": "semantic_placement_consistency",
+    "placement_consistency": "semantic_placement_consistency",
     "scale": "scale_consistency",
     "object_pairing": "object_pairing_consistency",
     "style": "style_consistency",
@@ -285,6 +306,9 @@ _OBSERVATION_ALIASES.update(
         "depth_baseline": ("depth_baseline_available",),
         "group_context": ("group_context_visible",),
         "interaction_side": ("interaction_side_visible",),
+        "approach_zone": ("approach_zone_visible",),
+        "user_approach_zone": ("approach_zone_visible",),
+        "operating_clearance": ("approach_zone_visible",),
         "bounded_local_context": ("limited_local_context",),
         "limited_local_context": ("limited_local_context",),
         "global_context": ("global_context_preserved",),

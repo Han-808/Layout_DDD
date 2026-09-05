@@ -1,0 +1,12 @@
+{
+  "schema_version": "generation_additive_registry_manifest_v1",
+  "fragments": [
+    {
+      "fragment_id": "multi-room-with-architecture-v1",
+      "path": "multi_room_v1/registry_v1.json",
+      "sha256": "7d4411040645c9050b5c199c431bee0c2e1576cc6a3f95004a9ca6abe5e7e529",
+      "generation_mode": "multi_room_with_architecture_v1",
+      "workflow_profile_id": "frozen-two-stage-multi-room-with-architecture-v1"
+    }
+  ]
+}

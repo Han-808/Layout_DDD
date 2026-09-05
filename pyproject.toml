@@ -19,14 +19,20 @@ dependencies = [
 
 [project.scripts]
 layout-ddd-generate = "benchmark.api.generation:main"
+layout-ddd-generate-nonrect = "benchmark.scene_generation.non_rectangular_multi_room.cli:main"
 layout-ddd-evaluate = "benchmark.api.evaluation:main"
+layout-ddd-evaluate-sceneweaver-iterations = "benchmark.api.scene_weaver_iterations:main"
+layout-ddd-compare-generation = "benchmark.generation_comparison.execution:main"
+layout-ddd-controlled-pilot = "benchmark.generation_comparison.pilot:main"
 layout-ddd-evaluate-submission = "benchmark.api.submission:main"
 layout-ddd-evaluate-game = "benchmark.game_scene.route:main"
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
 retrieval = [
-    "sentence-transformers>=5.6.0",
+    "numpy==2.5.0",
+    "sentence-transformers==5.6.0",
+    "transformers==5.13.0",
 ]
 mesh-collision = [
     "trimesh>=4.5.0,<5",
@@ -46,6 +52,21 @@ include-package-data = false
 
 [tool.setuptools.package-data]
 "benchmark.game_scene" = ["*.js", "*.mjs"]
+"benchmark._resources" = [
+  "schemas/*.json",
+  "schemas/multi_room/*.json",
+  "schemas/non_rectangular/*.json",
+  "configs/evaluation/*.yaml",
+  "configs/evaluation/*.json",
+  "configs/grouping/*.yaml",
+  "configs/game/*.yaml",
+  "configs/game/*.json",
+  "configs/game/counter_strike/*.yaml",
+  "configs/retrieval/*.json",
+  "configs/retrieval/golden/*.json",
+]
+"benchmark.scene_generation.multi_room" = ["prompts/*.txt"]
+"benchmark.scene_generation.non_rectangular_multi_room" = ["prompts/*.txt"]
 
 [tool.pytest.ini_options]
 testpaths = [
@@ -59,10 +80,50 @@ testpaths = [
   "tests/test_camera_acquisition_cascade.py",
   "tests/test_camera_pose_modes.py",
   "tests/test_camera_dsl.py",
+  "tests/test_camera_cal_scene_level_e0_contract.py",
+  "tests/test_camera_cal_scene_level_leaf_runtime.py",
+  "tests/test_camera_cal_scene_level_structure_e2.py",
+  "tests/test_camera_cal_scene_level_structure_e3.py",
+  "tests/test_camera_cal_scene_level_structure_e4.py",
+  "tests/test_camera_cal_scene_level_structure_e5.py",
+  "tests/test_catalog_materialization_blender.py",
+  "tests/test_catalog_placement_adapter.py",
   "tests/test_current_namespace_boundaries.py",
   "tests/test_current_evaluation_profile.py",
   "tests/test_deterministic_local_camera_selector.py",
   "tests/test_evidence_contract.py",
+  "tests/test_evaluation_campaign.py",
+  "tests/test_external_converter_correctness.py",
+  "tests/test_external_harness_adapters.py",
+  "tests/test_external_harness_execution.py",
+  "tests/test_external_room_contracts.py",
+  "tests/test_evaluation_mode_interface.py",
+  "tests/test_multi_room_evaluation.py",
+  "tests/test_functional_discovery.py",
+  "tests/test_functional_planner_adapter.py",
+  "tests/test_frozen_two_stage_generation_compatibility.py",
+  "tests/test_generation_campaign_v2.py",
+  "tests/test_generation_comparison_protocol.py",
+  "tests/test_controlled_generation_pilot.py",
+  "tests/test_frozen_imaginarium_scene10.py",
+  "tests/test_generation_legacy_forwarding_d1.py",
+  "tests/test_multi_room_generation.py",
+  "tests/test_non_rectangular_generation_contracts.py",
+  "tests/test_non_rectangular_generation_architecture.py",
+  "tests/test_non_rectangular_generation_campaign.py",
+  "tests/test_non_rectangular_generation_runtime.py",
+  "tests/test_non_rectangular_spatiallm_conversion.py",
+  "tests/test_non_rectangular_spatiallm_cohort.py",
+  "tests/test_non_rectangular_spatiallm_programs.py",
+  "tests/test_non_rectangular_density_reference.py",
+  "tests/test_non_rectangular_spatiallm_program_cohort.py",
+  "tests/test_non_rectangular_contracts.py",
+  "tests/test_non_rectangular_preflight.py",
+  "tests/test_non_rectangular_report.py",
+  "tests/test_non_rectangular_room_layout.py",
+  "tests/test_non_rectangular_room_unit.py",
+  "tests/test_non_rectangular_workflow.py",
+  "tests/test_non_rectangular_whole_workflow.py",
   "tests/test_game_canonical_track.py",
   "tests/test_game_harness.py",
   "tests/test_game_mode.py",
@@ -70,8 +131,10 @@ testpaths = [
   "tests/test_generic_validity.py",
   "tests/test_grouping_algorithms.py",
   "tests/test_grouping_blind30_experiment.py",
+  "tests/test_grouping_blind30_scoring.py",
   "tests/test_input_chain_boundaries.py",
   "tests/test_layout_json_adapter.py",
+  "tests/test_materialization_consistency.py",
   "tests/test_nl_scene_mvp.py",
   "tests/test_oar_evaluator.py",
   "tests/test_openai_vlm_judge.py",
@@ -84,18 +147,29 @@ testpaths = [
   "tests/test_p0b_oob.py",
   "tests/test_p0b_support.py",
   "tests/test_p0a_reference_and_geometry.py",
+  "tests/test_persisted_scoring_projection.py",
   "tests/test_relationship_mapper.py",
   "tests/test_scene_harness.py",
+  "tests/test_sceneeval_hy4_local_runner.py",
+  "tests/test_scene_generation_leaderboard_weights.py",
+  "tests/test_select_first_publishable_scene_evaluations.py",
   "tests/test_scene_quality_interfaces.py",
   "tests/test_coarse_specification_interfaces.py",
   "tests/test_specification_contract.py",
   "tests/test_submission_api.py",
+  "tests/test_submission_readiness_report.py",
   "tests/test_visual_style_spec.py",
   "tests/test_vlm_control_loop.py",
   "tests/test_vlm_evaluation_control_config.py",
 ]
 pythonpath = ["src", "."]
 addopts = "-q"
+markers = [
+  "requires_blender: requires a validated external Blender runtime",
+  "requires_git_history: requires pinned historical Git objects",
+  "requires_loopback: opens a loopback HTTP server",
+  "requires_local_data: requires frozen local datasets or assets",
+]
 
 [dependency-groups]
 dev = [

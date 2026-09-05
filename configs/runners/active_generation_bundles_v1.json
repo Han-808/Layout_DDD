@@ -1,0 +1,874 @@
+{
+  "schema_version": "active_generation_bundles_v1",
+  "bundles": [
+    {
+      "bundle_id": "sceneeval_hy4_runner_v050",
+      "root": "tools/sceneeval_hy4_runner_v050",
+      "role": "canonical_sceneeval_runner",
+      "entrypoints": [
+        "run.py",
+        "sceneeval_hy4/cli.py"
+      ],
+      "files": [
+        {
+          "path": "README.md",
+          "sha256": "2c30f93fa36112839a26ec71783a58b218ccb8ceb787c84ce31b8bc184172e76",
+          "mode": "0644"
+        },
+        {
+          "path": "data/sceneeval_human100_generation.jsonl",
+          "sha256": "4f632141aa5539e33a6e5f9b63c26f7d66a1882c48c07ba0fd5036af74fa892f",
+          "mode": "0644"
+        },
+        {
+          "path": "data/sceneeval_human100_generation.source.json",
+          "sha256": "1f21a2b34f84f1c4c1f66c1bf757d23ae992c841e1da7f4d26ff0b9f72847cfe",
+          "mode": "0644"
+        },
+        {
+          "path": "examples/human100.input.example.jsonl",
+          "sha256": "893965499d21dc183af9d6fc742ba2f4034e5bd1a71cb6be424896948b8182f3",
+          "mode": "0644"
+        },
+        {
+          "path": "local_openai_profile.yaml",
+          "sha256": "67f5a5cd1dceb5c38a107080b071872ab25110a074b857a47e03d99d41c094f9",
+          "mode": "0644"
+        },
+        {
+          "path": "openai_clients.yaml",
+          "sha256": "a127bd55896fbefb0063fff2e726b625912cdeab7b8dd816f3074e7200c25e61",
+          "mode": "0644"
+        },
+        {
+          "path": "prompt_protocol.txt",
+          "sha256": "a3106dbbc611a44b8eee39f7f90ce693ed6096bffecb1f420c9b96a97f964ee9",
+          "mode": "0644"
+        },
+        {
+          "path": "run.py",
+          "sha256": "288f688433dc0a8f860e79b19e0bf86f6ce5d66b1ac953ba89b32aaf3f2546d9",
+          "mode": "0644"
+        },
+        {
+          "path": "run_local_multimodel.py",
+          "sha256": "c521fd430c2a37aea1fc299ecba67857d885ec068bd048607d8a42b4c36c2f68",
+          "mode": "0644"
+        },
+        {
+          "path": "sceneeval_hy4/__init__.py",
+          "sha256": "188e9c6beacbfeba7c729da634be85a54b7f644fe60812d348c4524812a365ad",
+          "mode": "0644"
+        },
+        {
+          "path": "sceneeval_hy4/artifacts.py",
+          "sha256": "d9784a6a780ef187026ba4b64da9d978b80ed271fd0b2b0e0c4c4b5a6ddd4738",
+          "mode": "0644"
+        },
+        {
+          "path": "sceneeval_hy4/cli.py",
+          "sha256": "bbc844c0acee593156e7001481c7312a986dccd5b1a26831ed178686b7028f2b",
+          "mode": "0644"
+        },
+        {
+          "path": "sceneeval_hy4/client_config.py",
+          "sha256": "6b5321d28b1da4581c31c67a59ba5d98766f19da09bc5217dee3ea16ae0a7799",
+          "mode": "0644"
+        },
+        {
+          "path": "sceneeval_hy4/constants.py",
+          "sha256": "c5282d8522d9545c408413bf8384ca4a293313bb3915677c378f7ffa42ec6e02",
+          "mode": "0644"
+        },
+        {
+          "path": "sceneeval_hy4/inputs.py",
+          "sha256": "7aead9e95ed83607b51a563eee4dab3d22ea99b6820ccfe418e2001c190e2385",
+          "mode": "0644"
+        },
+        {
+          "path": "sceneeval_hy4/layout_schema.py",
+          "sha256": "339b6e23405f245e15368e432b2b0385674f722003106fd95aa61834c6d0b98f",
+          "mode": "0644"
+        },
+        {
+          "path": "sceneeval_hy4/prompt.py",
+          "sha256": "64ffb72951730a5a919e7d16173a5dc8c7bab98dcea17684c3eebefc25e69517",
+          "mode": "0644"
+        },
+        {
+          "path": "sceneeval_hy4/runner.py",
+          "sha256": "95326c44ec4a483d1f2185a46236675e8008182a0bd6ef28d1d1e693d3f83b0e",
+          "mode": "0644"
+        },
+        {
+          "path": "sceneeval_hy4/strict_json.py",
+          "sha256": "c2e0947c6fbd40f96606311545444489197dcbf34bfeeaab58fb783e23647b40",
+          "mode": "0644"
+        },
+        {
+          "path": "sceneeval_hy4/transport.py",
+          "sha256": "26203ee4293824ab393668fbc6e45bfba10f94bb0f017f697a9c33954cc01632",
+          "mode": "0644"
+        },
+        {
+          "path": "sceneeval_local_multimodel.py",
+          "sha256": "50be2691c1cab6c961015bdb6b133b215fb584e49566cbc73c49e7c908e25491",
+          "mode": "0644"
+        },
+        {
+          "path": "schema/layout.schema.json",
+          "sha256": "5b31966b64a0d1244b66c75a204967b74792fd69d4d1ecfa7ab1d47311840816",
+          "mode": "0644"
+        },
+        {
+          "path": "tests/test_client_config.py",
+          "sha256": "4c7cee7edf6582bcfc1ce652ea1a8f0435cc0b62767fc70bf6ac7cea934c1ec8",
+          "mode": "0644"
+        },
+        {
+          "path": "tests/test_inputs_and_prompt.py",
+          "sha256": "9896296abe833fe5bf6ce7c221f25bf124421426d80bf812b24cf0614b968a00",
+          "mode": "0644"
+        },
+        {
+          "path": "tests/test_strict_json_and_schema.py",
+          "sha256": "8e94828e81ad2ea73330c21bb2d30ae6da97c0c77c9f4fce43424da6e46db13f",
+          "mode": "0644"
+        },
+        {
+          "path": "tests/test_transport_and_runner.py",
+          "sha256": "2d95d2d9dc1dffe8abc4ba0cdd58d18baddc137937f70f4aa91cede66d06af8a",
+          "mode": "0644"
+        }
+      ]
+    },
+    {
+      "bundle_id": "api3_anthropic_runner_v2",
+      "root": "tools/api3_anthropic_runner_v2",
+      "role": "frozen_generation_core",
+      "entrypoints": [
+        "generation_runner.py",
+        "run_generation.sh"
+      ],
+      "compatibility_mirrors": [
+        {
+          "path": "retriever_runtime.pod.json",
+          "state": "frozen_replay",
+          "sha256": "1814be3b7fae3a56b43a310f579a8b9de2dc0ed724892b7ffd77d748770f1831",
+          "replacement": "configs/retrieval/profiles_v2.json"
+        },
+        {
+          "path": "retriever_golden_v1.json",
+          "state": "frozen_replay",
+          "sha256": "28992804c7dd6653dfddbfe95f5d4560039290d16ee38a10384176137a5d28fb",
+          "replacement": "configs/retrieval/golden/imaginarium_qwen3_0_6b_v2.json"
+        }
+      ],
+      "files": [
+        {
+          "path": "README.md",
+          "sha256": "284cbcc49bbf1ccdc6001253d2bbf0a58a6fe3463877d6dc7cc250d7bea3bb2c",
+          "mode": "0644"
+        },
+        {
+          "path": "__init__.py",
+          "sha256": "4c90c76c815929ba739f5ae0166c6f7b8a8b02726ebff5308959c4b1f5fc2d6f",
+          "mode": "0644"
+        },
+        {
+          "path": "artifacts.py",
+          "sha256": "c267e56617e5e020de39bef7b33df43b62c57895347c966e9b610b16179cf768",
+          "mode": "0644"
+        },
+        {
+          "path": "briefs.json",
+          "sha256": "c016ed9b926309c2a02278936dbc0e777a46b0bd30a71bcc1f563919418dcb55",
+          "mode": "0644"
+        },
+        {
+          "path": "contracts.py",
+          "sha256": "c214f1237403e08277c750c2b5eebf03e5ec280c0fc3a6d455514bca75f4438e",
+          "mode": "0644"
+        },
+        {
+          "path": "diagnose_api3_compat.py",
+          "sha256": "a3335bcbe58c683b61a9839a24f72272ef917d72c721c2f5e177e53b4eb1e8a6",
+          "mode": "0755"
+        },
+        {
+          "path": "generation_runner.py",
+          "sha256": "c5bd82c9cf5b1cf38a8e53c4a199c357134f438685b42d9728f034811200950a",
+          "mode": "0755"
+        },
+        {
+          "path": "launch_all_local_api3_anthropic_scene10.sh",
+          "sha256": "3b2f4b384255bb456c8956ebfd1edfa04fc9dd413c4b0cb4de6707ce470f7df6",
+          "mode": "0755"
+        },
+        {
+          "path": "launch_all_local_api3_failed_retry3.sh",
+          "sha256": "1110e4d7e7c084bdaf499278a3524ad085d722942350c1732cdae4e4e58b2991",
+          "mode": "0755"
+        },
+        {
+          "path": "launch_all_local_api3_failed_retry6.sh",
+          "sha256": "2cf28c6da80f2030a34a5349e932de2e370d1a51ed3bca133af124ee50b24a74",
+          "mode": "0755"
+        },
+        {
+          "path": "launch_all_local_api3_failed_retry_max2.sh",
+          "sha256": "411e5e266ed4d2ae8773b81115285b6202eef1c9572c35a83c36fd335e81a7a3",
+          "mode": "0755"
+        },
+        {
+          "path": "launch_local_api3_opus5_unresolved3_until_valid_or10.sh",
+          "sha256": "4e5d3d2424d59a9001b0a0c9ec2c443d8f0fb027ed36a7a0fbf74b1a3fd4f1cf",
+          "mode": "0755"
+        },
+        {
+          "path": "launch_local_api3_retry3_watchdog.sh",
+          "sha256": "2bba61b065c36aa5328358c48f3470c54f9ed38d11450545bd2ecea2e7c8c540",
+          "mode": "0755"
+        },
+        {
+          "path": "launch_local_api3_retry_watchdog.sh",
+          "sha256": "807f12f9cfc4967ad1bad20d22ec01757bbed3bffb899c16d6ccf3269c07376b",
+          "mode": "0755"
+        },
+        {
+          "path": "models.pod.json",
+          "sha256": "2da772438d77cb6ae401aa4a72d3843c448eadd296e52212e95620b9dc5b26d7",
+          "mode": "0644"
+        },
+        {
+          "path": "preflight_api3.py",
+          "sha256": "3e08b77257d16a43ab53265350ea84295918aae52230d6b94c67284eabc41188",
+          "mode": "0755"
+        },
+        {
+          "path": "retriever_golden_v1.json",
+          "sha256": "28992804c7dd6653dfddbfe95f5d4560039290d16ee38a10384176137a5d28fb",
+          "mode": "0644"
+        },
+        {
+          "path": "retriever_runtime.pod.json",
+          "sha256": "1814be3b7fae3a56b43a310f579a8b9de2dc0ed724892b7ffd77d748770f1831",
+          "mode": "0644"
+        },
+        {
+          "path": "retriever_runtime.py",
+          "sha256": "2ace18795781dac83e884528eb4c343052abd50707f834e103669d873261fe20",
+          "mode": "0644"
+        },
+        {
+          "path": "run_generation.sh",
+          "sha256": "e42b820f17c92a77e38ecc096b892444319112c7a1bd0e055b8194f808584258",
+          "mode": "0755"
+        },
+        {
+          "path": "run_local_api3_failed_retry3.sh",
+          "sha256": "3f2f897c22280d9b1e4ee9f99d31b6e4eff8ff025324bd68a69e2173f70bdcca",
+          "mode": "0755"
+        },
+        {
+          "path": "run_local_api3_failed_retry6.sh",
+          "sha256": "41fddc230e50461efd23661224563cfff0984f273d724e859c2dfb8df2d4cd81",
+          "mode": "0755"
+        },
+        {
+          "path": "run_local_api3_failed_retry_max2.sh",
+          "sha256": "25350052570a2ebd6711c553c7d67ff80abe6f49d9d5876319b3bd5375430eea",
+          "mode": "0755"
+        },
+        {
+          "path": "run_local_api3_model_scene10.sh",
+          "sha256": "e8ebccfbb245b4d55641ed537dfd94c131b61fa3c58dac15c5ff71eea46a1703",
+          "mode": "0755"
+        },
+        {
+          "path": "run_local_api3_opus5_unresolved3_until_valid_or10.py",
+          "sha256": "34ff662717ff76a1d066ca9379ed5a043a5f995b2918330ee537fc38ec31d320",
+          "mode": "0755"
+        },
+        {
+          "path": "run_local_api3_retry3_watchdog.sh",
+          "sha256": "46c9932be0f46c269b9b3da7ccb3207ba6c0ffb28c07d3b5b507052099111e81",
+          "mode": "0755"
+        },
+        {
+          "path": "run_local_api3_retry_watchdog.sh",
+          "sha256": "a1ab82c28fbde23bbfe1bc2a0d4dcef81b03a89304597c9d062f049e916b8825",
+          "mode": "0755"
+        },
+        {
+          "path": "run_retriever.sh",
+          "sha256": "e274e1cc620e62090bcf9c1850b3d530ff88ebc36f803675c82197e529e22b22",
+          "mode": "0755"
+        },
+        {
+          "path": "schemas/catalog_placement.schema.json",
+          "sha256": "89dcb769c92b11bbb86ac899a69394f253210dd9c0baa1e272783e3a75975c08",
+          "mode": "0644"
+        },
+        {
+          "path": "schemas/object_plan.schema.json",
+          "sha256": "83bf270024ac02adf5adf59f200fdd02ed3dd7a151533950e7f599080b93c6b1",
+          "mode": "0644"
+        },
+        {
+          "path": "stage_a_prompt.txt",
+          "sha256": "546d76f6a76e2530f3c18c4b6d85a1bfa094a113352585799c650589664a7754",
+          "mode": "0644"
+        },
+        {
+          "path": "stage_c_prompt.txt",
+          "sha256": "d4a055b01cdbdb3f2548d440bc3bcbdb1aa86c65a76972d32a1d545fc23f4b56",
+          "mode": "0644"
+        },
+        {
+          "path": "strict_json.py",
+          "sha256": "48df502194010aa8162b1fb9615465e39856141a08bfb667d51c55163bad81b3",
+          "mode": "0644"
+        },
+        {
+          "path": "transport.py",
+          "sha256": "c5fb77f09817653637ea18ae9f3344fe3cb725217657ee72fac70b075ca6c532",
+          "mode": "0644"
+        }
+      ]
+    },
+    {
+      "bundle_id": "api2_generation_recovery_v1",
+      "root": "tools/api2_generation_recovery_v1",
+      "role": "api2_recovery",
+      "entrypoints": [
+        "recovery_runner.py",
+        "fresh_case_retry_runner.py"
+      ],
+      "files": [
+        {
+          "path": "fresh_case_retry_runner.py",
+          "sha256": "981d16e2742f20eddaee3f892b0a8405fd78ca07214fe4c7ee8a89be8eaa52a4",
+          "mode": "0755"
+        },
+        {
+          "path": "recovery_runner.py",
+          "sha256": "f4bf9f7aa2362dc45283063d75a9c02e6d55edaa164f18c4d62a337901a13980",
+          "mode": "0644"
+        }
+      ]
+    },
+    {
+      "bundle_id": "api2_kimi_k3_runner_v1",
+      "root": "tools/api2_kimi_k3_runner_v1",
+      "role": "api2_kimi_adapter",
+      "entrypoints": [
+        "kimi_k3_generation_runner.py"
+      ],
+      "files": [
+        {
+          "path": "kimi_k3_generation_runner.py",
+          "sha256": "25ae25a6ddae36b4e66207d6accf4139a043123b46cb02f2009171264b08a006",
+          "mode": "0755"
+        },
+        {
+          "path": "models.pod.json",
+          "sha256": "52d2581601a2c3dd54f998069ad2a3b11189fdf0384e91fe92c3d40fef27f9ae",
+          "mode": "0644"
+        }
+      ]
+    },
+    {
+      "bundle_id": "api2_glm53_runner_v1",
+      "root": "tools/api2_glm53_runner_v1",
+      "role": "api2_glm_adapter",
+      "entrypoints": [
+        "glm53_generation_runner.py"
+      ],
+      "files": [
+        {
+          "path": "glm53_generation_runner.py",
+          "sha256": "56aee6b201335f4f87952924f27a883f4b30732f61b01adc6ac774b018635bee",
+          "mode": "0755"
+        },
+        {
+          "path": "models.pod.json",
+          "sha256": "55921c496a8551bbf7d4a485845545a57ae065777a5c34b1db32343c97564b3a",
+          "mode": "0644"
+        }
+      ]
+    },
+    {
+      "bundle_id": "api3_opus48_thinking_runner_v1",
+      "root": "tools/api3_opus48_thinking_runner_v1",
+      "role": "api3_opus48_adapter",
+      "entrypoints": [
+        "generation_runner.py",
+        "preflight.py",
+        "retry_runner.py"
+      ],
+      "files": [
+        {
+          "path": "generation_runner.py",
+          "sha256": "427a1e35ddc79b3ddb4742f7d085df8e75e64bb908ee062d7a83d395cd4e39c2",
+          "mode": "0644"
+        },
+        {
+          "path": "models.pod.json",
+          "sha256": "e75c29e024e0943eaa574aa3e46b71d4776ea1c2cb2bbf9389dd04fc8a5a0af6",
+          "mode": "0644"
+        },
+        {
+          "path": "preflight.py",
+          "sha256": "154ffc05b4dc2ffebc88362f8e0ceddb4dcf690d4a154cecf2ef993e4627e03c",
+          "mode": "0644"
+        },
+        {
+          "path": "retry_runner.py",
+          "sha256": "dc795506dce8a97ddebec3d1a02d3f13a539ea9945a8fe6c93aa809bea73e22e",
+          "mode": "0644"
+        }
+      ]
+    },
+    {
+      "bundle_id": "frozen_two_stage_compatibility_runtime_v1",
+      "root": "src/benchmark/scene_generation/frozen_two_stage",
+      "role": "shared_generation_compatibility_runtime",
+      "entrypoints": [
+        "__main__.py",
+        "cli.py",
+        "orchestrator.py",
+        "providers/routes.py"
+      ],
+      "files": [
+        {
+          "path": "__init__.py",
+          "sha256": "9d7fc113ae84b87506056059c47a482288a5dab2fa13dda8f7f49c78aa5307b5",
+          "mode": "0644"
+        },
+        {
+          "path": "__main__.py",
+          "sha256": "611cfa26942bb85eca3ea55d9739c9a8689f9b081c5cf3ce1a3b348ebf12d501",
+          "mode": "0644"
+        },
+        {
+          "path": "artifact_layout.py",
+          "sha256": "26ff6fbe97ecf491d16b542458ade65920932ddfc6813a4c64993cfe7d954fb0",
+          "mode": "0644"
+        },
+        {
+          "path": "cli.py",
+          "sha256": "159c11404738f4fb569c171db380ba7764d56980c2594eb1021aea77fe04e838",
+          "mode": "0644"
+        },
+        {
+          "path": "compatibility/__init__.py",
+          "sha256": "7f8cabf749222a9c7381e6c0e2466280ce24d19e5cf356c427276e8de2104c54",
+          "mode": "0644"
+        },
+        {
+          "path": "compatibility/loader.py",
+          "sha256": "22998beee3b33966c6607773cd4a3631a531ebf56b4d926362a039cceb6ccb74",
+          "mode": "0644"
+        },
+        {
+          "path": "config.py",
+          "sha256": "0b801cabc424de6194d22ec42d7c2612a013292bbaeab1d41ae9ebb9d52ce5d7",
+          "mode": "0644"
+        },
+        {
+          "path": "orchestrator.py",
+          "sha256": "79577a31bd1096fa5cb65709cc54cc145bbd57a32d90f838dc66c39669eb651c",
+          "mode": "0644"
+        },
+        {
+          "path": "provenance.py",
+          "sha256": "cd8ffe7e4be30a3daadec803e9c9f7ea7733f97e064cfb0cce8ca711272f5664",
+          "mode": "0644"
+        },
+        {
+          "path": "providers/__init__.py",
+          "sha256": "2081f472c67de4f353691d440e30abc302c68f710b8cb64075983ecd2cadddd9",
+          "mode": "0644"
+        },
+        {
+          "path": "providers/base.py",
+          "sha256": "3926d3896954f1ec2630076c969adc005f5873f603c1922e1ebbe32bc3e276f1",
+          "mode": "0644"
+        },
+        {
+          "path": "providers/codecs/__init__.py",
+          "sha256": "2722dd9d92fcbadb07580524c17d2de059a01ea65cb187b9f6c92f4abcd9748a",
+          "mode": "0644"
+        },
+        {
+          "path": "providers/codecs/openai_chat.py",
+          "sha256": "4b35f37b5561831d9bb1b3d043fdd69c9c1521b6641786b56fe764143df8a60f",
+          "mode": "0644"
+        },
+        {
+          "path": "providers/codecs/openai_responses.py",
+          "sha256": "9bde689732bc4781e7856dfe4c5055dd199c2db3e1eacfa31942071fc3a166f6",
+          "mode": "0644"
+        },
+        {
+          "path": "providers/gateways/__init__.py",
+          "sha256": "880247031d8ea61456017e1196e53a3f0c9e2d18b578a4934de0002d017a785b",
+          "mode": "0644"
+        },
+        {
+          "path": "providers/gateways/api2.py",
+          "sha256": "070d89fdcb869bf105657a8b08a8fde8be14a3fde5983595a9d7af6cdd647c8e",
+          "mode": "0644"
+        },
+        {
+          "path": "providers/gateways/api3.py",
+          "sha256": "95ecb136fcf20f18c366f83d4aecc5449f7739693f5cb66909a4e0ecd87eae71",
+          "mode": "0644"
+        },
+        {
+          "path": "providers/gateways/standard.py",
+          "sha256": "b858099e3ca5c68d48cdb8f9a6693b7895899131c20292dbc837d192fbf0a1ed",
+          "mode": "0644"
+        },
+        {
+          "path": "providers/routes.py",
+          "sha256": "5e6a5c9fd82937377324b9cef54e4a09a5d38561355650fd9de3930626abb0a2",
+          "mode": "0644"
+        },
+        {
+          "path": "retry_policy.py",
+          "sha256": "4501285bf5bdc9e63fbcfe782778e7e646adc12f143b6de984fadf7b40a67777",
+          "mode": "0644"
+        },
+        {
+          "path": "spec.py",
+          "sha256": "dc9a044e2ca76911581b4e4aec78dd4600220f3901951015a239962b2ade8f23",
+          "mode": "0644"
+        },
+        {
+          "path": "trust.py",
+          "sha256": "e306f7f98a45f46c8805bcf291236d079367b629795e7ce706bf9e23e12ac0cf",
+          "mode": "0644"
+        }
+      ]
+    },
+    {
+      "bundle_id": "frozen_two_stage_generation_configs_v1",
+      "root": "configs/generation",
+      "role": "config_only_generation_routes",
+      "entrypoints": [
+        "api2_glm53_scene10_v2.json",
+        "api2_kimi_k3_scene10_v2.json",
+        "api3_opus48_high_scene10_v2.json",
+        "campaign_v2/campaigns_v2.json"
+      ],
+      "files": [
+        {
+          "path": "api2_glm53_scene10_v1.json",
+          "sha256": "39208e820d97636bf1228342dee933bcaefc8db1dd4a566ed8edd907d75be1c1",
+          "mode": "0644"
+        },
+        {
+          "path": "api2_glm53_scene10_v2.json",
+          "sha256": "74adf98d02e280ccce90cf925ea934a1caf1dc34fb543a2d7ea7fdb4d5fb791b",
+          "mode": "0644"
+        },
+        {
+          "path": "api2_kimi_k3_scene10_v1.json",
+          "sha256": "01d74913501264651bcd761ff272aea659677b7d6bf6aa3d6f44f5eb13278abe",
+          "mode": "0644"
+        },
+        {
+          "path": "api2_kimi_k3_scene10_v2.json",
+          "sha256": "1976c976af6d90572391c90805065b7b22034cf68f31ad167583133a7e835a25",
+          "mode": "0644"
+        },
+        {
+          "path": "api3_opus48_high_scene10_v1.json",
+          "sha256": "93f27ebd48e07c7d4d054cc830e64edfb7f2d33a4f2997ae1a7fa9325ff66ce1",
+          "mode": "0644"
+        },
+        {
+          "path": "api3_opus48_high_scene10_v2.json",
+          "sha256": "0895b49ec5d866c5481c65bf512553e777e55e9732fafb2101dd9a4a53f0999d",
+          "mode": "0644"
+        },
+        {
+          "path": "campaign_v2/campaigns_v2.json",
+          "sha256": "7d1fb1c0304d2df16da786ea09047ba31af59e077c76c7b45d66171e6be2fa6a",
+          "mode": "0644"
+        },
+        {
+          "path": "campaign_v2/contracts_v2.json",
+          "sha256": "ae4452aa3f13ad621fd87f0db5dc067466aabbee58d3d508543ea0677905c386",
+          "mode": "0644"
+        },
+        {
+          "path": "campaign_v2/generation_bindings.local.example.json",
+          "sha256": "03f7d18cf8ff651d28f67c467df3ded07485672cc254aba54ca3abd96a80dbee",
+          "mode": "0644"
+        },
+        {
+          "path": "campaign_v2/model_profiles_v2.json",
+          "sha256": "9a00e1086dd6d502a26ee565bf8baaf05211c0ef0a19c9e0bb950f3422e81507",
+          "mode": "0644"
+        },
+        {
+          "path": "campaign_v2/route_profiles_v2.json",
+          "sha256": "6fb0c0edc5e5a7a4be2cec97b6e13b603318af3bd68110b17dfba79779bf1bba",
+          "mode": "0644"
+        }
+      ]
+    },
+    {
+      "bundle_id": "generation_campaign_runtime_v2",
+      "root": "src/benchmark/scene_generation/campaign",
+      "role": "generation_campaign_runtime",
+      "entrypoints": [
+        "__main__.py",
+        "cli.py",
+        "execution.py"
+      ],
+      "files": [
+        {
+          "path": "__init__.py",
+          "sha256": "b50c26eba80fd9fe0fc52a72b69b4aea6b8f1118ab5448dcc7a8b74e8737022b",
+          "mode": "0644"
+        },
+        {
+          "path": "__main__.py",
+          "sha256": "411e5cc0d736ca9d9a9ac56cf38aa1a36f4313c540ab9ca8e4e65c026822cecc",
+          "mode": "0644"
+        },
+        {
+          "path": "api.py",
+          "sha256": "0ab4946eaf039719521d8849aa454d7c55d03b3d20edad0aec280f796fcde593",
+          "mode": "0644"
+        },
+        {
+          "path": "bindings.py",
+          "sha256": "90e1bab3e5b0994d4a2e50b88fd4e13e3994673286b738ab81739c12891b8118",
+          "mode": "0644"
+        },
+        {
+          "path": "cli.py",
+          "sha256": "c26f7bb8d182a16d82e7302eebb4a0df7477e10e056bd3248fc176d62afd5937",
+          "mode": "0644"
+        },
+        {
+          "path": "execution.py",
+          "sha256": "e57e63e9c11f96b5b23140d8114971590198676b372777b86085357c931bfcea",
+          "mode": "0644"
+        },
+        {
+          "path": "legacy_v1.py",
+          "sha256": "133540e7184b558bc3813ee737a24cf446b21ee68cdc77f01e96e49c42c79e96",
+          "mode": "0644"
+        },
+        {
+          "path": "loader.py",
+          "sha256": "ec7101c6ab5aa834eccdfe48471c2f432424f7663203d7fc5a9018078e91c647",
+          "mode": "0644"
+        },
+        {
+          "path": "multi_room_execution.py",
+          "sha256": "473f59d11207da7282beb7775ab823c55a7e2b153b687cd54ea8fa93d5c2b3ce",
+          "mode": "0644"
+        },
+        {
+          "path": "multi_room_profiles.py",
+          "sha256": "c2e3cf4c377bf318ebfbc29dc0d166f7e674c7f7627e9b79ef284d81a071e48b",
+          "mode": "0644"
+        },
+        {
+          "path": "profiles.py",
+          "sha256": "9762e2c6ce0a11982ef7e41dd30565081efe27335fbb9a49b3feec4c95dcf8c9",
+          "mode": "0644"
+        },
+        {
+          "path": "runtime.py",
+          "sha256": "7d1d25466adba9d84fb0698ae55b24bdda4a0c88233d046dc3a9e603e4517133",
+          "mode": "0644"
+        }
+      ]
+    },
+    {
+      "bundle_id": "generation_retrieval_runtime_v2",
+      "root": "src/benchmark/scene_generation/retrieval",
+      "role": "shared_generation_retrieval_runtime",
+      "entrypoints": [
+        "__main__.py",
+        "cli.py",
+        "factory.py"
+      ],
+      "files": [
+        {
+          "path": "__init__.py",
+          "sha256": "b6b1ecdaa7ddbd5600f087d2a9451da2994f99310d75fbed8d7671fb683dec9c",
+          "mode": "0644"
+        },
+        {
+          "path": "__main__.py",
+          "sha256": "0f7d54f3fbb1f79a85eb8110f11793db99da6f3c61ee979de5abe9a1b5f3fdb3",
+          "mode": "0644"
+        },
+        {
+          "path": "_common.py",
+          "sha256": "01adbf2ae7f4588ecd96f6292d312ef304ad0f5daa4938d198e7914fdda387c2",
+          "mode": "0644"
+        },
+        {
+          "path": "bindings.py",
+          "sha256": "57b07d1b2052abbb8ff2853ee1336ab00be2a3d2f8acf9bccada998ad10b05ea",
+          "mode": "0644"
+        },
+        {
+          "path": "cli.py",
+          "sha256": "db89e3e2de88bf0fbe1f49d43127d93c0610ce960448f69d57bc67c3aa639ad4",
+          "mode": "0644"
+        },
+        {
+          "path": "dataset.py",
+          "sha256": "aac2b4dff052854c1a4ef17aead6e9f858327dcaf3d5d6d4b5c0bc1324673d3c",
+          "mode": "0644"
+        },
+        {
+          "path": "encoder.py",
+          "sha256": "9f16e8e32b091234b38300b29fe91efb4bf11c0e5f456d1fa77031e105bd0ddb",
+          "mode": "0644"
+        },
+        {
+          "path": "factory.py",
+          "sha256": "83a4f35f36a18240a093a16825017e110e0013a3831998fd067e32d19a5eeeeb",
+          "mode": "0644"
+        },
+        {
+          "path": "index.py",
+          "sha256": "27409c7d8bf3ad13ed9e3662fe365f59a0daa0e3b4d0104c8ef2ebe7478e7095",
+          "mode": "0644"
+        },
+        {
+          "path": "profile.py",
+          "sha256": "73fcef384905f5f7d437667add38e554bae61c8a06b14c542b787bf6368b5c51",
+          "mode": "0644"
+        },
+        {
+          "path": "profiles.py",
+          "sha256": "0386eed9fa6c169889848e957af4c323a7a13640d16ccd805c6b7c3587be7a18",
+          "mode": "0644"
+        },
+        {
+          "path": "provenance.py",
+          "sha256": "70f05ab3595f4f427302cda2942c5bd7ffaf21aa498769ecc184eb3caca4e412",
+          "mode": "0644"
+        },
+        {
+          "path": "runtime.py",
+          "sha256": "433475ae186c3a4c281863254c45b2ae353ef5fa105489bc9e5d424247c8a65b",
+          "mode": "0644"
+        }
+      ]
+    },
+    {
+      "bundle_id": "generation_retrieval_profiles_v2",
+      "root": "configs/retrieval",
+      "role": "generation_retrieval_profiles",
+      "entrypoints": [
+        "profiles_v2.json"
+      ],
+      "files": [
+        {
+          "path": "golden/imaginarium_qwen3_0_6b_v2.json",
+          "sha256": "a9f5bda10f3f60525b708d0364421611d7ee873c065926bde2c08ef844dc900d",
+          "mode": "0644"
+        },
+        {
+          "path": "profiles_v2.json",
+          "sha256": "2f7f8e73aa65bbe30cafe74246512d732c47bc74b4823d6acb3136c4f99ded49",
+          "mode": "0644"
+        },
+        {
+          "path": "resource_bindings.example.json",
+          "sha256": "f2765f2357964aab379ea6c942b5a76f56c831cceabc0ce049a8f5c78847b005",
+          "mode": "0644"
+        }
+      ]
+    },
+    {
+      "bundle_id": "multi_room_generation_runtime_v1",
+      "root": "src/benchmark/scene_generation/multi_room",
+      "role": "generation_campaign_runtime",
+      "entrypoints": [
+        "runtime.py"
+      ],
+      "files": [
+        {
+          "path": "__init__.py",
+          "sha256": "cd2f10ca6c011b05a8903a5bd0585bbacf3f67b5c171ddd0d0f2ed0397ffe185",
+          "mode": "0644"
+        },
+        {
+          "path": "artifacts.py",
+          "sha256": "1c6ee54e1d01aeb2fb60ef38ad71001aecd82b6cca938709180fa80917c7d58d",
+          "mode": "0644"
+        },
+        {
+          "path": "assembly.py",
+          "sha256": "6d2ba68d81888ae55168af47ec49325aa69bd6e40d9964354747932b0efbc38c",
+          "mode": "0644"
+        },
+        {
+          "path": "contracts.py",
+          "sha256": "607689f173c03e136c917b38ca9c6add71613d7d5da5d3ae4cf2884fb559e84b",
+          "mode": "0644"
+        },
+        {
+          "path": "floor_plan.py",
+          "sha256": "f01c72c67b5be61ec9735f8dfc3d97c464b34d27f5b000b7a9b53748bf0b91f9",
+          "mode": "0644"
+        },
+        {
+          "path": "prompts/stage_a_prompt_v1.txt",
+          "sha256": "399470578efae7dcab9fe2698f7300a2be78b2d8296b4a69106a7da2f3d0efba",
+          "mode": "0644"
+        },
+        {
+          "path": "prompts/stage_c_prompt_v1.txt",
+          "sha256": "d5bf9841308a11646b2d5d061897f7ebe7a7cb590ecc24ceb7264b19987ced9f",
+          "mode": "0644"
+        },
+        {
+          "path": "provenance.py",
+          "sha256": "4e9e886e8639416b67f7e398f12597686012d46b130af58d49f22c70cfeb026a",
+          "mode": "0644"
+        },
+        {
+          "path": "runtime.py",
+          "sha256": "816cf64856029ee8c95ac82deb6f5cbe91e53053b6fdea39bd0cf87ac0e74acc",
+          "mode": "0644"
+        }
+      ]
+    },
+    {
+      "bundle_id": "multi_room_generation_configs_v1",
+      "root": "configs/generation_extensions",
+      "role": "config_only_generation_routes",
+      "entrypoints": [
+        "additive_registry_manifest_v1.json"
+      ],
+      "files": [
+        {
+          "path": "additive_registry_manifest_v1.json",
+          "sha256": "49dd9ee1675174c170f56653011418d0c0899eca17c7e3675c9206f4ef874a21",
+          "mode": "0644"
+        },
+        {
+          "path": "multi_room_v1/registry_v1.json",
+          "sha256": "7d4411040645c9050b5c199c431bee0c2e1576cc6a3f95004a9ca6abe5e7e529",
+          "mode": "0644"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,54 @@
+model_list:
+  - model_name: claude-fable-5
+    litellm_params:
+      model: anthropic/claude-fable-5
+      api_key: os.environ/OPENAPI_API_KEY
+      api_base: os.environ/OPENAPI_BASE_URL
+      allowed_openai_params:
+        - thinking
+        - output_config
+      thinking:
+        type: adaptive
+      output_config:
+        effort: low
+      # The benchmark does not need sampling temperature, and the verified
+      # direct Anthropic request omits it.
+      additional_drop_params:
+        - temperature
+    model_info:
+      base_model: claude-fable-5
+
+  - model_name: gpt-5.6-sol
+    litellm_params:
+      model: openai/gpt-5.6-sol
+      api_key: os.environ/OPENAPI_GPT_KEY
+      api_base: os.environ/OPENAPI_BASE_URL_V1
+      reasoning_effort: xhigh
+      # Anthropic-only output_config must not reach the OpenAI upstream.
+      additional_drop_params:
+        - output_config
+        - temperature
+    model_info:
+      base_model: gpt-5.6-sol
+
+  - model_name: hy3
+    litellm_params:
+      model: anthropic/hy3
+      # The launcher resolves these from the explicit HY3_ROUTE selection.
+      # This keeps TokenHub credentials separate from gateway credentials.
+      api_key: os.environ/HY3_RESOLVED_API_KEY
+      api_base: os.environ/HY3_RESOLVED_API_BASE
+      max_tokens: 32768
+      additional_drop_params:
+        - temperature
+    model_info:
+      base_model: hy3
+
+litellm_settings:
+  drop_params: true
+  telemetry: false
+  num_retries: 1
+  request_timeout: 3000
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY

@@ -359,6 +359,7 @@ def build_conditional_active_camera_evidence_provider(
     candidate_policy: str = DEFAULT_CAMERA_CANDIDATE_POLICY,
     fail_on_exhausted: bool = True,
     shadow_mode: bool = True,
+    architecture_contract: dict[str, Any] | None = None,
 ) -> ConditionalActiveCameraEvidenceProvider:
     if deterministic_mode == "query_cov" or "query_cov" in set((metric_modes or {}).values()):
         raise ValueError(
@@ -395,6 +396,7 @@ def build_conditional_active_camera_evidence_provider(
         collision_geometry=collision_geometry,
         highlighted_global_pose_policy=highlighted_global_pose_policy,
         candidate_policy=candidate_policy,
+        architecture_contract=architecture_contract,
     )
     active = CameraEvidenceProvider(
         renderer=renderer,
@@ -411,6 +413,7 @@ def build_conditional_active_camera_evidence_provider(
         highlighted_global_pose_policy=highlighted_global_pose_policy,
         candidate_policy=candidate_policy,
         active_repair=True,
+        architecture_contract=architecture_contract,
     )
     return ConditionalActiveCameraEvidenceProvider(
         deterministic_provider=deterministic,

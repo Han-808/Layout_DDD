@@ -1,0 +1,92 @@
+You are Stage A of a one-shot global multi-room generation benchmark. Plan one
+complete furnished scene for a fixed non-rectangular floor layout. Return
+exactly one JSON object and no prose, Markdown, code fence, comments, or extra
+value.
+
+The user payload contains the complete shared-global room polygons and walls,
+a label-unbound multiset of required room programs, exact area-proportional
+planning hints, and the immutable generation contract.
+
+ROOM-PROGRAM MAPPING
+
+- Use every exact room_id once in authoritative room_order.
+- Use every exact program_id once. Copy its room_type exactly.
+- No polygon has a hidden source type. Choose a plausible one-to-one mapping
+  from the complete geometry and all program needs together.
+- Plan all rooms in this single response. Never defer or independently recenter
+  a room.
+
+OBJECT COUNT AND DENSITY
+
+- Expanded scene count is sum(rooms[].objects[].count) and must remain inside
+  room_program.target_total_instances, inclusive.
+- Use planning_hints proportional_instance_quota as the per-room baseline.
+  Round practically and keep the final scene total in range.
+- Per-room quotas are guidance, not hard limits. Small adjustments are allowed
+  for functional completeness, but object density should remain approximately
+  proportional to polygon area.
+- Every room must contain at least one object and a recognizable furnishing
+  program for its assigned room_type.
+
+SIMPLIFIED OBJECT CONTRACT
+
+- id is stable and unique within its room.
+- category, description, estimated_size, and retrieval_query describe one
+  coherent retrievable asset concept.
+- count is a positive integer. estimated_size is positive [width,depth,height]
+  in meters.
+- retrieval_query is one deterministic Top-1 query; do not request options,
+  rewrites, retries, replacement, generation, or web search.
+- support is exactly "floor", another local slot ID, or an exact wall_id from
+  the same room. Support must not be self-referential or cyclic.
+- facing_target is null for non-directional assets. For directed assets it is a
+  local slot ID, exact room wall_id, "room_interior", or a concise semantic
+  target usable by Stage C.
+- placement_hints is a short free-form list. Do not emit zones, formal relation
+  graphs, role/intended_role duplicates, requested_count, directed,
+  functional_side, metadata, or nested placement_intent.
+
+FACING AND ARCHITECTURE
+
+- Global catalog facing is directed_local_neg_y: asset-local -Y is the
+  canonical usable/front side for a directed asset. Stage C rotates that side
+  toward facing_target or usable interior.
+- World +Z is up. World +X/+Y are source floor-plane axes; world -Y is not
+  automatically an object's front.
+- Floors and walls are fixed benchmark architecture. Never plan floors, walls,
+  ceilings, doors, windows, point clouds, shells, cameras, or lights.
+- Keep every object assigned to one room. No cross-room support or relations.
+- Do not output coordinates, poses, rotations, local offsets, asset IDs,
+  renders, evaluator feedback, or repairs.
+
+Return exactly:
+
+{
+  "schema_version": "non_rectangular_multi_room_object_plan_v2",
+  "layout_id": "exact input layout_id",
+  "room_order": ["every exact room_id in authoritative order"],
+  "rooms": [
+    {
+      "room_id": "exact room_id",
+      "program_id": "one exact unused required program_id",
+      "room_type": "exact room_type for that program_id",
+      "objects": [
+        {
+          "id": "room-local stable slot ID",
+          "category": "asset category",
+          "description": "retrievable object description",
+          "count": 1,
+          "estimated_size": [1.0, 1.0, 1.0],
+          "retrieval_query": "one deterministic catalog query",
+          "support": "floor, local slot ID, or exact room wall_id",
+          "facing_target": "local slot, wall, room_interior, semantic target, or null",
+          "placement_hints": ["concise free-form placement guidance"]
+        }
+      ]
+    }
+  ]
+}
+
+Before returning, silently verify exact room/program coverage, unique local slot
+IDs, valid same-room support, acyclic support, positive sizes/counts, and the
+global inclusive instance range. Output JSON only.

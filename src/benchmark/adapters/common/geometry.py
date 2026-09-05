@@ -1,0 +1,470 @@
+"""Small, dependency-free geometry helpers for harness conversion."""
+
+from __future__ import annotations
+
+import math
+import re
+from collections.abc import Iterable, Mapping, Sequence
+from typing import Any
+
+from benchmark.scene_io.validate import (
+    CANONICAL_SCENE_SCHEMA_VERSION,
+    ArtifactValidationError,
+)
+
+
+def finite_float(value: Any, path: str) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ArtifactValidationError(f"{path} must be numeric") from exc
+    if not math.isfinite(number):
+        raise ArtifactValidationError(f"{path} must be finite")
+    return number
+
+
+def vector3(value: Any, path: str, *, positive: bool = False) -> list[float]:
+    if isinstance(value, Mapping):
+        if all(axis in value for axis in ("x", "y", "z")):
+            value = [value["x"], value["y"], value["z"]]
+        elif all(axis in value for axis in ("length", "width", "height")):
+            value = [value["length"], value["width"], value["height"]]
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)) or len(value) < 3:
+        raise ArtifactValidationError(f"{path} must be a 3-vector")
+    result = [finite_float(value[index], f"{path}[{index}]") for index in range(3)]
+    if positive and any(item <= 0.0 for item in result):
+        raise ArtifactValidationError(f"{path} must contain positive values")
+    return result
+
+
+def canonical_room(generation_input: dict) -> tuple[list[list[float]], float, str]:
+    request = generation_input.get("scene_request")
+    if not isinstance(request, dict):
+        raise ArtifactValidationError("generation_input.scene_request must be a JSON object")
+    room = request.get("room")
+    if not isinstance(room, dict):
+        raise ArtifactValidationError("external harness conversion requires scene_request.room")
+    boundary = boundary2(room.get("boundary"), "generation_input.scene_request.room.boundary")
+    height = finite_float(room.get("height"), "generation_input.scene_request.room.height")
+    if height <= 0.0:
+        raise ArtifactValidationError("generation_input.scene_request.room.height must be positive")
+    return boundary, height, str(request.get("scene_type") or "room")
+
+
+def boundary2(value: Any, path: str) -> list[list[float]]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)) or len(value) < 3:
+        raise ArtifactValidationError(f"{path} must contain at least three points")
+    result: list[list[float]] = []
+    for index, point in enumerate(value):
+        if not isinstance(point, Sequence) or isinstance(point, (str, bytes)) or len(point) < 2:
+            raise ArtifactValidationError(f"{path}[{index}] must contain two coordinates")
+        result.append(
+            [
+                finite_float(point[0], f"{path}[{index}][0]"),
+                finite_float(point[1], f"{path}[{index}][1]"),
+            ]
+        )
+    return result
+
+
+def boundary_model(boundary: Iterable[Sequence[float]]) -> str:
+    """Classify a valid 2D boundary without approximating its geometry."""
+
+    points = [(float(point[0]), float(point[1])) for point in boundary]
+    if len(points) > 3 and points[0] == points[-1]:
+        points.pop()
+    if len(points) != 4:
+        return "polygon"
+    xs = sorted({point[0] for point in points})
+    ys = sorted({point[1] for point in points})
+    if len(xs) != 2 or len(ys) != 2:
+        return "polygon"
+    expected = {(x, y) for x in xs for y in ys}
+    if set(points) != expected:
+        return "polygon"
+    edges = zip(points, points[1:] + points[:1])
+    if any((start[0] == end[0]) == (start[1] == end[1]) for start, end in edges):
+        return "polygon"
+    return "axis_aligned_rectangle"
+
+
+def require_boundary_model(
+    boundary: Iterable[Sequence[float]],
+    *,
+    supported: Sequence[str],
+    path: str,
+) -> str:
+    observed = boundary_model(boundary)
+    if observed not in supported:
+        raise ArtifactValidationError(
+            f"{path} uses unsupported boundary model {observed!r}; "
+            f"supported={list(supported)}. The converter will not approximate or flatten it."
+        )
+    return observed
+
+
+def require_room_geometry_match(
+    native_boundary: Sequence[Sequence[float]],
+    native_height: float,
+    benchmark_boundary: Sequence[Sequence[float]],
+    benchmark_height: float,
+    *,
+    path: str,
+    tolerance: float = 1.0e-6,
+) -> None:
+    """Require the same room modulo origin, cyclic start, and winding."""
+
+    require_boundary_match(
+        native_boundary,
+        benchmark_boundary,
+        path=f"{path}.boundary",
+        allow_translation=True,
+        tolerance=tolerance,
+    )
+    if abs(float(native_height) - float(benchmark_height)) > tolerance:
+        raise ArtifactValidationError(
+            f"{path} height {float(native_height):g} conflicts with benchmark "
+            f"height {float(benchmark_height):g}"
+        )
+
+
+def require_boundary_match(
+    native_boundary: Sequence[Sequence[float]],
+    expected_boundary: Sequence[Sequence[float]],
+    *,
+    path: str,
+    allow_translation: bool,
+    tolerance: float = 1.0e-6,
+) -> None:
+    """Compare polygon rings while allowing only declared normalizations."""
+
+    if allow_translation:
+        native = _origin_normalized_ring(native_boundary, path)
+        expected = _origin_normalized_ring(expected_boundary, f"{path}.expected")
+    else:
+        native = _open_ring(boundary2(native_boundary, path))
+        expected = _open_ring(
+            boundary2(expected_boundary, f"{path}.expected")
+        )
+    if not _rings_equivalent(native, expected, tolerance=tolerance):
+        raise ArtifactValidationError(
+            f"{path} conflicts with the expected boundary; native geometry "
+            "will not be replaced or approximated"
+        )
+
+
+def euler_xyz_to_matrix(
+    value: Sequence[float],
+    path: str,
+    *,
+    unit: str,
+) -> list[list[float]]:
+    """Build an active Rz @ Ry @ Rx rotation from explicit XYZ Euler input."""
+
+    angles = vector3(value, path)
+    if unit == "degree":
+        x, y, z = (math.radians(angle) for angle in angles)
+    elif unit == "radian":
+        x, y, z = angles
+    else:
+        raise ArtifactValidationError(f"{path} unit must be degree or radian")
+    cx, cy, cz = math.cos(x), math.cos(y), math.cos(z)
+    sx, sy, sz = math.sin(x), math.sin(y), math.sin(z)
+    return [
+        [cz * cy, cz * sy * sx - sz * cx, cz * sy * cx + sz * sx],
+        [sz * cy, sz * sy * sx + cz * cx, sz * sy * cx - cz * sx],
+        [-sy, cy * sx, cy * cx],
+    ]
+
+
+def reject_unsupported_architecture(
+    payload: Mapping[str, Any],
+    *,
+    path: str,
+) -> None:
+    """Reject native architecture that a flat object-state converter would drop."""
+
+    architecture_fields = (
+        "architecture",
+        "doors",
+        "openings",
+        "room_topology",
+        "structure",
+        "walls",
+        "windows",
+    )
+    present = sorted(field for field in architecture_fields if payload.get(field))
+    if present:
+        raise ArtifactValidationError(
+            f"{path} contains unsupported architecture fields {present}; "
+            "the converter will not discard walls, openings, or room topology"
+        )
+
+
+def _origin_normalized_ring(
+    boundary: Sequence[Sequence[float]],
+    path: str,
+) -> list[list[float]]:
+    points = _open_ring(boundary2(boundary, path))
+    minimum_x = min(point[0] for point in points)
+    minimum_y = min(point[1] for point in points)
+    return [
+        [point[0] - minimum_x, point[1] - minimum_y]
+        for point in points
+    ]
+
+
+def _open_ring(points: list[list[float]]) -> list[list[float]]:
+    if len(points) > 3 and points[0] == points[-1]:
+        points.pop()
+    return points
+
+
+def _rings_equivalent(
+    left: Sequence[Sequence[float]],
+    right: Sequence[Sequence[float]],
+    *,
+    tolerance: float,
+) -> bool:
+    if len(left) != len(right):
+        return False
+
+    def points_match(a: Sequence[float], b: Sequence[float]) -> bool:
+        return all(abs(float(a[axis]) - float(b[axis])) <= tolerance for axis in range(2))
+
+    candidates = [list(right), list(reversed(right))]
+    for candidate in candidates:
+        for offset in range(len(candidate)):
+            shifted = candidate[offset:] + candidate[:offset]
+            if all(points_match(a, b) for a, b in zip(left, shifted)):
+                return True
+    return False
+
+
+def shift_boundary_to_origin(
+    boundary: Iterable[Sequence[float]],
+) -> tuple[list[list[float]], list[float]]:
+    points = [[float(point[0]), float(point[1])] for point in boundary]
+    if len(points) > 3 and points[0] == points[-1]:
+        points.pop()
+    min_x = min(point[0] for point in points)
+    min_y = min(point[1] for point in points)
+    return (
+        [[point[0] - min_x, point[1] - min_y] for point in points],
+        [-min_x, -min_y, 0.0],
+    )
+
+
+def shift_center(center: Sequence[float], offset: Sequence[float]) -> list[float]:
+    return [
+        float(center[0]) + float(offset[0]),
+        float(center[1]) + float(offset[1]),
+        float(center[2]) + float(offset[2]),
+    ]
+
+
+def category_from_identifier(value: Any, fallback: str = "object") -> str:
+    text = str(value or "").strip()
+    if not text:
+        return fallback
+    text = text.split("(", 1)[0]
+    text = re.sub(r"\[[0-9]+\]$", "", text)
+    text = re.sub(r"[-_][0-9]+$", "", text)
+    text = text.rsplit(".", 1)[-1]
+    text = re.sub(r"Factory$", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"[_-]+", " ", text).strip().lower()
+    return text or fallback
+
+
+def quaternion_xyzw_to_matrix(value: Any, path: str) -> list[list[float]]:
+    quat = vector4(value, path)
+    x, y, z, w = quat
+    norm = math.sqrt(x * x + y * y + z * z + w * w)
+    if norm <= 1.0e-12:
+        raise ArtifactValidationError(f"{path} must not be the zero quaternion")
+    x, y, z, w = (component / norm for component in quat)
+    return [
+        [1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
+        [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
+        [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)],
+    ]
+
+
+def vector4(value: Any, path: str) -> list[float]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)) or len(value) < 4:
+        raise ArtifactValidationError(f"{path} must be a 4-vector")
+    return [finite_float(value[index], f"{path}[{index}]") for index in range(4)]
+
+
+def matrix_multiply(left: list[list[float]], right: list[list[float]]) -> list[list[float]]:
+    return [
+        [sum(left[row][k] * right[k][column] for k in range(3)) for column in range(3)]
+        for row in range(3)
+    ]
+
+
+def matrix_transpose(value: list[list[float]]) -> list[list[float]]:
+    return [[value[column][row] for column in range(3)] for row in range(3)]
+
+
+def matrix_vector(value: list[list[float]], vector: Sequence[float]) -> list[float]:
+    return [
+        sum(
+            value[row][column] * float(vector[column])
+            for column in range(3)
+        )
+        for row in range(3)
+    ]
+
+
+def rotation_matrix_to_euler_xyz_degrees(matrix: list[list[float]]) -> list[float]:
+    """Return XYZ Euler angles for a matrix composed as Rz @ Ry @ Rx."""
+
+    sy = math.sqrt(matrix[0][0] * matrix[0][0] + matrix[1][0] * matrix[1][0])
+    singular = sy < 1.0e-9
+    if not singular:
+        roll = math.atan2(matrix[2][1], matrix[2][2])
+        pitch = math.atan2(-matrix[2][0], sy)
+        yaw = math.atan2(matrix[1][0], matrix[0][0])
+    else:
+        roll = math.atan2(-matrix[1][2], matrix[1][1])
+        pitch = math.atan2(-matrix[2][0], sy)
+        yaw = 0.0
+    return [math.degrees(roll), math.degrees(pitch), math.degrees(yaw)]
+
+
+def compose_front_basis_rotation(
+    source_rotation_xyz_degrees: Sequence[float],
+    *,
+    canonical_front: Sequence[float],
+    native_zero_front: Sequence[float],
+    path: str,
+) -> tuple[list[float], float]:
+    """Compose a native pose with the local-frame transform between fronts.
+
+    ``source_rotation`` acts in the harness's local asset frame. The returned
+    rotation acts on the catalog's canonical local frame, preserving the world
+    facing direction selected by the harness.
+    """
+
+    source = vector3(source_rotation_xyz_degrees, f"{path}.source_rotation")
+    canonical = vector3(canonical_front, f"{path}.canonical_front")
+    native = vector3(native_zero_front, f"{path}.native_zero_front")
+    if abs(canonical[2]) > 1.0e-6 or abs(native[2]) > 1.0e-6:
+        raise ArtifactValidationError(
+            f"{path} supports only horizontal canonical/native front vectors"
+        )
+    canonical_norm = math.hypot(canonical[0], canonical[1])
+    native_norm = math.hypot(native[0], native[1])
+    if canonical_norm <= 1.0e-12 or native_norm <= 1.0e-12:
+        raise ArtifactValidationError(f"{path} front vectors must be non-zero")
+    basis_yaw = math.degrees(
+        math.atan2(native[1], native[0])
+        - math.atan2(canonical[1], canonical[0])
+    )
+    source_matrix = euler_xyz_to_matrix(
+        source,
+        f"{path}.source_rotation",
+        unit="degree",
+    )
+    basis_matrix = euler_xyz_to_matrix(
+        [0.0, 0.0, basis_yaw],
+        f"{path}.front_basis",
+        unit="degree",
+    )
+    composed = matrix_multiply(source_matrix, basis_matrix)
+    return rotation_matrix_to_euler_xyz_degrees(composed), basis_yaw
+
+
+def scene_state_matrix(value: Any, path: str) -> tuple[list[list[float]], list[float], list[float]]:
+    """Decode a SceneState column-major 4x4 transform.
+
+    Returns a normalized 3x3 rotation, per-axis scale, and translation.
+    """
+
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)) or len(value) != 16:
+        raise ArtifactValidationError(f"{path} must contain 16 column-major values")
+    data = [finite_float(item, f"{path}[{index}]") for index, item in enumerate(value)]
+    matrix = [[data[column * 4 + row] for column in range(4)] for row in range(4)]
+    linear = [[matrix[row][column] for column in range(3)] for row in range(3)]
+    scales = [
+        math.sqrt(sum(linear[row][column] ** 2 for row in range(3)))
+        for column in range(3)
+    ]
+    if any(scale <= 1.0e-12 for scale in scales):
+        raise ArtifactValidationError(f"{path} contains a singular scale")
+    rotation = [
+        [linear[row][column] / scales[column] for column in range(3)]
+        for row in range(3)
+    ]
+    translation = [matrix[0][3], matrix[1][3], matrix[2][3]]
+    return rotation, scales, translation
+
+
+def build_scene(
+    generation_input: dict,
+    *,
+    adapter_name: str,
+    native_schema: str,
+    boundary: list[list[float]],
+    scene_height: float,
+    objects: list[dict],
+    coordinate_conversion: dict,
+    extra_metadata: dict | None = None,
+) -> dict:
+    request_id = str(generation_input.get("request_id") or "").strip()
+    if not request_id:
+        raise ArtifactValidationError("generation_input.request_id must be non-empty")
+    request = generation_input.get("scene_request")
+    request = request if isinstance(request, dict) else {}
+    metadata = {
+        "coordinate_frame": {
+            "origin": "room_min_corner_floor",
+            "axes": "x_width_y_depth_z_up",
+            "unit": "meter",
+            "rotation_unit": "degree",
+        },
+        "harness_compatibility": {
+            "adapter": adapter_name,
+            "native_schema": native_schema,
+            "coordinate_conversion": coordinate_conversion,
+        },
+    }
+    if extra_metadata:
+        metadata["harness_compatibility"].update(extra_metadata)
+    return {
+        "schema_version": CANONICAL_SCENE_SCHEMA_VERSION,
+        "scene_id": f"{adapter_name}_{request_id}",
+        "request_id": request_id,
+        "scene_type": str(request.get("scene_type") or "room"),
+        "boundary": boundary,
+        "scene_height": float(scene_height),
+        "objects": objects,
+        "metadata": metadata,
+    }
+
+
+__all__ = [
+    "boundary2",
+    "boundary_model",
+    "build_scene",
+    "canonical_room",
+    "category_from_identifier",
+    "euler_xyz_to_matrix",
+    "compose_front_basis_rotation",
+    "finite_float",
+    "matrix_multiply",
+    "matrix_transpose",
+    "matrix_vector",
+    "quaternion_xyzw_to_matrix",
+    "require_boundary_match",
+    "reject_unsupported_architecture",
+    "require_boundary_model",
+    "require_room_geometry_match",
+    "rotation_matrix_to_euler_xyz_degrees",
+    "scene_state_matrix",
+    "shift_boundary_to_origin",
+    "shift_center",
+    "vector3",
+    "vector4",
+]

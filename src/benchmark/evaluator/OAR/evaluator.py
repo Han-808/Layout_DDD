@@ -4,6 +4,11 @@ import re
 from copy import deepcopy
 from typing import Any
 
+from benchmark.architecture_policy import (
+    active_wall_ids_from_contract,
+    architecture_contract_from_scene,
+    walls_required_for_architecture_target,
+)
 from benchmark.evaluator.OAR.corner import check_at_corner
 from benchmark.evaluator.OAR.floor import check_on_floor
 from benchmark.evaluator.OAR.geometry import NormalizedRoom, normalize_object, normalize_room
@@ -20,6 +25,9 @@ from benchmark.evaluator.OOR.geometry import NormalizedObject
 from benchmark.evaluator.relationship_vlm import adjudicate_unsupported_relation, pending_relation_result
 from benchmark.relation_identity import copy_relation_identity, normalize_relation_id, provisional_relation_id
 from benchmark.visual_judge.runtime import EvidenceControlUnresolvedError
+from benchmark.visual_judge.contracts import (
+    response_schema_audit_from_exception,
+)
 
 
 # Compatibility export shared with the legacy module surface.
@@ -102,7 +110,7 @@ OAR_NOTES = [
     "Known OAR predicates use deterministic room, OBB, wall, floor, ceiling, and region geometry.",
     "Wall and ceiling attachment predicates use deterministic geometry only as evidence and require binary VLM adjudication.",
     "Explicit predicates outside the frozen registry require a binary VLM judgement with prompt, claim, scene, and renders.",
-    "The active architecture contract is floor, four named walls, ceiling, corners, and room regions.",
+    "Logical room boundaries and active physical walls are separate; wall checks use only benchmark-activated physical walls.",
 ]
 
 
@@ -141,6 +149,24 @@ def evaluate_oar(
                 ),
                 spec,
             ))
+            continue
+
+        architecture_error = _architecture_target_error(
+            scene,
+            spec,
+            relation,
+        )
+        if architecture_error is not None:
+            checks.append(
+                copy_relation_identity(
+                    _architecture_contract_result(
+                        spec,
+                        relation,
+                        architecture_error,
+                    ),
+                    spec,
+                )
+            )
             continue
 
         if relation in SUPPORTED_OAR_RELATIONS:
@@ -303,7 +329,13 @@ def _adjudicate_unknown(
             error=f"{exc}; stop_reason={exc.result.stop_reason}",
         )
     except Exception as exc:
-        return pending_relation_result(family="oar", relation=spec, reason="vlm_adjudication_failed", error=str(exc))
+        return pending_relation_result(
+            family="oar",
+            relation=spec,
+            reason="vlm_adjudication_failed",
+            error=str(exc),
+            error_audit=response_schema_audit_from_exception(exc),
+        )
 
 
 def _adjudicate_ambiguous_known_relation(
@@ -365,6 +397,7 @@ def _adjudicate_ambiguous_known_relation(
             relation=spec,
             reason="vlm_adjudication_failed",
             error=str(exc),
+            error_audit=response_schema_audit_from_exception(exc),
             detector_evidence=detector_evidence,
             preliminary=preliminary,
         )
@@ -377,12 +410,14 @@ def _pending_known_relation(
     detector_evidence: dict[str, Any],
     preliminary: dict[str, Any],
     error: str | None = None,
+    error_audit: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     result = pending_relation_result(
         family="oar",
         relation=relation,
         reason=reason,
         error=error,
+        error_audit=error_audit,
         detector_evidence=detector_evidence,
     )
     result["category"] = str(preliminary.get("category") or "vlm_fallback")
@@ -399,9 +434,18 @@ def _aggregate(
 ) -> dict[str, Any]:
     scored = [item for item in checks if item.get("status") in {"checked", "invalid_input"}]
     alignment = [item for item in checks if item.get("status") == "insufficient_alignment"]
+    architecture_mismatch = [
+        item
+        for item in checks
+        if item.get("status") == "architecture_contract_mismatch"
+    ]
     pending = [item for item in checks if item.get("status") in {"requires_vlm", "vlm_adjudication_failed"}]
     partial_score = sum(float(item.get("score", 0.0)) for item in scored) / float(len(scored)) if scored else None
-    if pending:
+    if architecture_mismatch:
+        score = None
+        status = "architecture_contract_mismatch"
+        reason = "inactive_architecture_target"
+    elif pending:
         score = None
         status = "incomplete"
         reason = "mandatory_vlm_relation_adjudication_incomplete"
@@ -417,7 +461,12 @@ def _aggregate(
         score = None
         status = "no_checks_called"
         reason = None
-    eligible = len(scored) + len(alignment) + len(pending)
+    eligible = (
+        len(scored)
+        + len(alignment)
+        + len(architecture_mismatch)
+        + len(pending)
+    )
     resolved = len(scored)
     runtime = {
         "mode": "deterministic_with_vlm_fallback",
@@ -444,13 +493,18 @@ def _aggregate(
         "coverage": {
             "eligible_count": eligible,
             "resolved_count": resolved,
-            "unresolved_count": len(alignment) + len(pending),
+            "unresolved_count": (
+                len(alignment) + len(architecture_mismatch) + len(pending)
+            ),
             "alignment_unresolved_count": len(alignment),
+            "architecture_contract_mismatch_count": len(
+                architecture_mismatch
+            ),
             "vlm_pending_count": len(pending),
             "coverage": resolved / float(eligible) if eligible else None,
         },
         "checks": checks,
-        "unresolved": [*alignment, *pending],
+        "unresolved": [*alignment, *architecture_mismatch, *pending],
         "skipped": [],
         "notes": list(OAR_NOTES),
     }
@@ -560,6 +614,68 @@ def _insufficient_alignment_result(spec: dict, relation: str, reason: str) -> di
         "status": "insufficient_alignment",
         "backend": "alignment",
         "evidence": {"reason": reason},
+    }
+
+
+def _architecture_target_error(
+    scene: dict,
+    spec: dict,
+    relation: str,
+) -> dict[str, Any] | None:
+    if relation not in {
+        "against_wall",
+        "near_wall",
+        "along_wall",
+        "mounted_on_wall",
+        "at_corner",
+        "near_corner",
+    }:
+        return None
+    contract = architecture_contract_from_scene(scene)
+    active = set(active_wall_ids_from_contract(contract))
+    target = spec.get("wall") or spec.get("corner")
+    required = walls_required_for_architecture_target(target)
+    if not required:
+        if active:
+            return None
+        required = ("any_active_wall",)
+    missing = [wall_id for wall_id in required if wall_id not in active]
+    if not missing:
+        return None
+    return {
+        "reason_code": "inactive_architecture_target",
+        "message": (
+            "explicit wall/corner relation targets physical architecture that "
+            "is inactive under the benchmark contract"
+        ),
+        "target": target,
+        "required_wall_ids": list(required),
+        "missing_wall_ids": missing,
+        "active_wall_ids": sorted(active),
+        "architecture_policy_version": contract.get(
+            "architecture_policy_version"
+        ),
+        "wall_policy": (
+            (contract.get("physical_walls") or {}).get("policy")
+        ),
+    }
+
+
+def _architecture_contract_result(
+    spec: dict,
+    relation: str,
+    error: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "relation": relation,
+        "category": _category_for_relation(relation),
+        "subject_id": spec.get("subject_id"),
+        "passed": None,
+        "score": None,
+        "score_effect": "none",
+        "status": "architecture_contract_mismatch",
+        "backend": "architecture_contract",
+        "evidence": error,
     }
 
 

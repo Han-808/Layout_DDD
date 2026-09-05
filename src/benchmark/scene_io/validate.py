@@ -404,9 +404,13 @@ def _validate_resolved_room_metadata(room: dict) -> None:
         raise ArtifactValidationError(
             "scene_request.room.resolution_policy must be 'room_dimension_policy_v1'"
         )
-    if room.get("topology") != "rectangular_enclosed_room":
+    if room.get("topology") not in {
+        "rectangular_logical_boundary",
+        "rectangular_enclosed_room",
+    }:
         raise ArtifactValidationError(
-            "scene_request.room.topology must be 'rectangular_enclosed_room'"
+            "scene_request.room.topology must be 'rectangular_logical_boundary' "
+            "or the legacy 'rectangular_enclosed_room'"
         )
     if float(room.get("floor_z", 0.0)) != 0.0:
         raise ArtifactValidationError("scene_request.room.floor_z must be 0")
@@ -614,7 +618,7 @@ def _require_min_corner_boundary(value: list, path: str) -> None:
 
 def _require_axis_aligned_rectangular_boundary(value: list, path: str) -> None:
     if len(value) != 4:
-        raise ArtifactValidationError(f"{path} must contain four corners for rectangular_enclosed_room_v1")
+        raise ArtifactValidationError(f"{path} must contain four corners for the rectangular room contract")
     points = [(float(point[0]), float(point[1])) for point in value]
     xs = sorted({point[0] for point in points})
     ys = sorted({point[1] for point in points})

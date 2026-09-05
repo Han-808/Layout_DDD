@@ -1,0 +1,23 @@
+openai_clients:
+  main:
+    name: litellm
+    config:
+      client_args:
+        api_key: EMPTY
+        base_url: http://infer-proxy-yb-test.production.polaris:8000/openapi
+      request_args:
+        model: openai/Hy4-T3-A49B-DSA-1M-SFT0730-Opus5
+        timeout: 1800.0
+        max_retries: 2
+        temperature: 0.9
+        top_p: 1.0
+        top_k: -1
+        max_tokens: 65536
+        repetition_penalty: 1.0
+        extra_body:
+          chat_template_kwargs:
+            reasoning_effort: high
+            preserved_thinking: true
+        extra_headers:
+          SessionID: DYNAMIC_UNIQUE_PER_REQUEST
+          StrategyType: ConsistentHash

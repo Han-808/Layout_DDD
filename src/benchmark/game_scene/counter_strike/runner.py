@@ -29,6 +29,7 @@ from typing import Any
 from benchmark.game_scene.case_bundle import build_game_case_bundle
 from benchmark.game_scene.mode import GameModeConfig, load_game_mode_config
 from benchmark.rendering.browser import HeadlessBrowserRenderer
+from benchmark.resources import runtime_resource_path
 from benchmark.utils.io import read_json, write_json
 from benchmark.visual_judge import build_openai_compatible_vlm_judge
 
@@ -69,10 +70,14 @@ def run_counter_strike_case(
     out_dir: str | Path,
     model_config: dict[str, Any] | str | Path,
     game_mode_config: GameModeConfig | str | Path = (
-        "configs/game/game_mode_canonical_v1.yaml"
+        str(runtime_resource_path("configs/game/game_mode_canonical_v1.yaml"))
     ),
     benchmark_config: CounterStrikeBenchmarkConfig | str | Path = (
-        "configs/game/counter_strike/benchmark_v1.yaml"
+        str(
+            runtime_resource_path(
+                "configs/game/counter_strike/benchmark_v1.yaml"
+            )
+        )
     ),
     entry_html: str | Path = "index.html",
     three_replacement: str | Path | None = None,
@@ -282,6 +287,11 @@ def run_counter_strike_case(
         cs_visual_judge = build_counter_strike_visual_judge(
             deepcopy(model_payload),
             benchmark_config=config,
+            evidence_repair_dir=(
+                destination
+                / "counter_strike_l4"
+                / "observation_repairs"
+            ),
         )
         result = evaluate_counter_strike_frozen_capture(
             out_dir=destination,
@@ -542,11 +552,17 @@ def main() -> None:
     parser.add_argument("--model-config")
     parser.add_argument(
         "--game-mode-config",
-        default="configs/game/game_mode_canonical_v1.yaml",
+        default=str(
+            runtime_resource_path("configs/game/game_mode_canonical_v1.yaml")
+        ),
     )
     parser.add_argument(
         "--benchmark-config",
-        default="configs/game/counter_strike/benchmark_v1.yaml",
+        default=str(
+            runtime_resource_path(
+                "configs/game/counter_strike/benchmark_v1.yaml"
+            )
+        ),
     )
     parser.add_argument("--entry-html", default="index.html")
     parser.add_argument("--three-replacement", default=None)

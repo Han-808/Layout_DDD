@@ -23,7 +23,9 @@ from typing import Any
 
 from benchmark.rendering import BlenderRenderer
 from benchmark.rendering.camera_pose import generate_camera_pose_candidates
-from benchmark.visual_judge.openai_compatible import build_openai_compatible_vlm_judge
+from benchmark.visual_judge.openai_camera_selector import (
+    build_openai_compatible_camera_selector,
+)
 from benchmark.visual_judge.p0b import build_p0b_local_evidence_request
 from benchmark.visual_judge.render_views import (
     CameraEvidenceProvider,
@@ -239,7 +241,7 @@ def prepare_bank(args: argparse.Namespace) -> int:
             collision_overlay=True,
             collision_geometry=geometry,
             highlighted_global_pose_policy="legacy_metric",
-            candidate_policy="legacy_v1",
+            candidate_policy="legacy",
         )
         preparation_contract = _candidate_preparation_contract(
             args=args,
@@ -260,7 +262,7 @@ def prepare_bank(args: argparse.Namespace) -> int:
             candidates = generate_camera_pose_candidates(
                 keyed_request,
                 max_candidates=int(args.candidate_count),
-                policy="legacy_v1",
+                policy="legacy",
             )
             overlay_spec = provider._build_focus_spec(local_request)
             preview_role = "highlighted_focus"
@@ -440,9 +442,13 @@ def select_candidates(args: argparse.Namespace) -> int:
         if packet.get("preparation_error"):
             raise RuntimeError(str(packet["preparation_error"]))
         _validate_candidate_packet(packet, path)
-        judge = build_openai_compatible_vlm_judge(deepcopy(config))
+        selector = build_openai_compatible_camera_selector(
+            deepcopy(config)
+        )
         call_started = time.time()
-        decision = judge.select_camera_views(deepcopy(packet["selector_request"]))
+        decision = selector.select_camera_views(
+            deepcopy(packet["selector_request"])
+        )
         elapsed = time.time() - call_started
         if decision.get("action") is not None:
             raise ValueError("selection-only arm returned a forbidden camera action")
@@ -560,7 +566,7 @@ def finalize_case(args: argparse.Namespace) -> int:
                 collision_geometry=geometry,
                 frozen_view_ids=selected_ids,
                 highlighted_global_pose_policy="legacy_metric",
-                candidate_policy="legacy_v1",
+                candidate_policy="legacy",
             )
             finalization_contract = _finalization_resume_contract(
                 args=args,
@@ -798,7 +804,7 @@ def _candidate_preparation_contract(
         "blend_sha256": _file_sha256(blend_file),
         "collision_geometry_sha256": provider.collision_geometry_sha256,
         "configuration": {
-            "candidate_policy": "legacy_v1",
+            "candidate_policy": "legacy",
             "max_views": int(args.max_views),
             "candidate_count": int(args.candidate_count),
             "provider_policy": provider.policy_config,
@@ -871,7 +877,7 @@ def _finalization_resume_contract(
         "blend_sha256": _file_sha256(blend_file),
         "collision_geometry_sha256": provider.collision_geometry_sha256,
         "configuration": {
-            "candidate_policy": "legacy_v1",
+            "candidate_policy": "legacy",
             "camera_mode": str(arm["camera_mode"]),
             "metric_camera_modes": deepcopy(arm["metric_modes"]),
             "evidence_style": str(arm["evidence_style"]),

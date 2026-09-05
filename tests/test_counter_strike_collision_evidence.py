@@ -38,6 +38,14 @@ def _view(
     role: str | None,
     target_object_ids: list[str],
 ) -> dict:
+    locations = {
+        "style_region_00": [2.0, -6.0, 4.0],
+        "style_region_01": [12.0, 2.0, 4.0],
+        "style_region_02": [5.0, -10.0, 8.0],
+        "style_region_03": [-2.0, 5.0, 4.0],
+        "global_oblique_00": [-4.0, -4.0, 10.0],
+        "global_oblique_01": [14.0, 14.0, 10.0],
+    }
     return {
         "id": view_id,
         "name": view_id,
@@ -49,7 +57,7 @@ def _view(
         "appearance_fidelity": CONTROLLED_CAMERA_APPEARANCE_FIDELITY,
         "camera_pose_canonical": {
             "camera_type": "PERSP",
-            "location": [5.0, -10.0, 8.0],
+            "location": locations[view_id],
             "target": [5.0, 5.0, 1.0],
             "vertical_fov_degrees": 48.0,
             "near_m": 0.02,
@@ -59,7 +67,11 @@ def _view(
     }
 
 
-def _write_capture(tmp_path: Path) -> Path:
+def _write_capture(
+    tmp_path: Path,
+    *,
+    dark_regionals: bool = False,
+) -> Path:
     capture = tmp_path / "capture"
     capture.mkdir()
     scene_path = capture / "probe_exported_scene.json"
@@ -113,7 +125,11 @@ def _write_capture(tmp_path: Path) -> Path:
         Image.new(
             "RGB",
             (256, 256),
-            (180 + 5 * index, 186, 192),
+            (
+                (2 + index, 3 + index, 4 + index)
+                if dark_regionals
+                else (180 + 5 * index, 186, 192)
+            ),
         ).save(path)
         artifacts.append(path)
         regionals.append(
@@ -157,9 +173,16 @@ def _write_capture(tmp_path: Path) -> Path:
     return capture
 
 
-def _renderer(tmp_path: Path) -> CounterStrikeFrozenCaptureRenderer:
+def _renderer(
+    tmp_path: Path,
+    *,
+    dark_regionals: bool = False,
+) -> CounterStrikeFrozenCaptureRenderer:
     return CounterStrikeFrozenCaptureRenderer(
-        capture_dir=_write_capture(tmp_path),
+        capture_dir=_write_capture(
+            tmp_path,
+            dark_regionals=dark_regionals,
+        ),
         evidence_out_dir=tmp_path / "derived",
         benchmark_config=load_counter_strike_benchmark_config(
             BENCHMARK_CONFIG
@@ -167,7 +190,7 @@ def _renderer(tmp_path: Path) -> CounterStrikeFrozenCaptureRenderer:
     )
 
 
-def test_collision_provider_returns_same_pose_raw_and_honest_obb_overlay(
+def test_collision_provider_returns_two_pose_raw_and_honest_obb_overlays(
     tmp_path: Path,
 ) -> None:
     renderer = _renderer(tmp_path)
@@ -182,18 +205,49 @@ def test_collision_provider_returns_same_pose_raw_and_honest_obb_overlay(
     assert [item["role"] for item in evidence] == [
         "collision_rgb",
         "collision_pair_overlay",
+        "collision_rgb",
+        "collision_pair_overlay",
     ]
-    assert {item["view_id"] for item in evidence} == {"style_region_02"}
+    assert len({item["view_id"] for item in evidence}) == 2
     assert evidence[0]["pair_id"] == evidence[1]["pair_id"]
-    assert evidence[1]["representation"] == (
-        "same_pose_projected_canonical_obb_wireframe"
-    )
-    assert "segmentation" not in evidence[1]["representation"]
-    raw = Path(evidence[0]["path"])
-    overlay = Path(evidence[1]["path"])
-    assert raw.is_file() and overlay.is_file()
-    assert _sha256(raw) != _sha256(overlay)
+    assert evidence[2]["pair_id"] == evidence[3]["pair_id"]
+    assert evidence[0]["pair_id"] != evidence[2]["pair_id"]
+    for raw_item, overlay_item in zip(evidence[::2], evidence[1::2]):
+        assert overlay_item["representation"] == (
+            "same_pose_projected_canonical_obb_wireframe"
+        )
+        assert "segmentation" not in overlay_item["representation"]
+        raw = Path(raw_item["path"])
+        overlay = Path(overlay_item["path"])
+        assert raw.is_file() and overlay.is_file()
+        assert _sha256(raw) != _sha256(overlay)
+    assert renderer.policy_config["local_view_count"] == 2
     assert renderer.policy_config["segmentation_contour_claimed"] is False
+
+
+def test_collision_provider_brightness_repairs_dark_selected_angles(
+    tmp_path: Path,
+) -> None:
+    renderer = _renderer(tmp_path, dark_regionals=True)
+
+    evidence = renderer(
+        {
+            "metric": "collision",
+            "object_ids": ["crate_a", "crate_b"],
+        }
+    )
+
+    raw_items = evidence[::2]
+    assert len(raw_items) == 2
+    assert all(item["presentation"] == "brightness_repair" for item in raw_items)
+    assert all(item["luminance"]["repaired"] is True for item in raw_items)
+    assert all(
+        item["luminance"]["output"]["median_luminance"]
+        > item["luminance"]["input"]["median_luminance"]
+        for item in raw_items
+    )
+    assert all(item["source_view_id"] == item["view_id"] for item in raw_items)
+    assert all(len(item["source_sha256"]) == 64 for item in raw_items)
 
 
 def test_collision_provider_is_metric_scoped_and_fails_on_unknown_target(

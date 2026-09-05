@@ -1,0 +1,48 @@
+{
+  "schema_version": "generation_retrieval_golden_v2",
+  "source": "e2e_scene40_complex_top1_facing_v3/t061",
+  "queries": [
+    {
+      "id": "kitchen_counter_run",
+      "description": "kitchen base cabinet unit with worktop counter",
+      "size_constraint": [1.2, 0.62, 0.9],
+      "expected_asset_id": "e_SM_Kitchen_3",
+      "expected_score": 0.6418103146553039
+    },
+    {
+      "id": "kitchen_sink_cabinet",
+      "description": "kitchen sink unit with basin and tap",
+      "size_constraint": [1.0, 0.62, 0.9],
+      "expected_asset_id": "20_SM_Sink",
+      "expected_score": 0.714577989578247
+    },
+    {
+      "id": "kitchen_range_cooker",
+      "description": "freestanding kitchen range cooker with oven and hob",
+      "size_constraint": [0.9, 0.62, 0.92],
+      "expected_asset_id": "44_sk36_Oven01",
+      "expected_score": 0.5366799521446228
+    },
+    {
+      "id": "kitchen_refrigerator",
+      "description": "tall two door kitchen refrigerator",
+      "size_constraint": [0.8, 0.72, 1.9],
+      "expected_asset_id": "a_SM_Kitchen_Refrigerator",
+      "expected_score": 0.6967744398117065
+    },
+    {
+      "id": "kitchen_dishwasher",
+      "description": "front loading kitchen dishwasher appliance",
+      "size_constraint": [0.6, 0.6, 0.85],
+      "expected_asset_id": "27_Dryer_01",
+      "expected_score": 0.6294775176048278
+    },
+    {
+      "id": "island_bar_stool",
+      "description": "tall bar stool with footrest for a kitchen counter",
+      "size_constraint": [0.4, 0.4, 1.05],
+      "expected_asset_id": "16_SM_Chair",
+      "expected_score": 0.7199591565132141
+    }
+  ]
+}

@@ -1,0 +1,25 @@
+{
+  "asset_resolution_policy": "exact_only",
+  "execution": {
+    "repo_path": "/ABSOLUTE/PATH/TO/LayoutGPT",
+    "python_executable": "/ABSOLUTE/PATH/TO/layoutgpt/python",
+    "command": [
+      "{python_executable}",
+      "{repo_path}/integration_entrypoint.py",
+      "--request",
+      "{native_input}",
+      "--output",
+      "{upstream_output_dir}/layoutgpt.json",
+      "--dataset-dir",
+      "{dataset_dir}"
+    ],
+    "template_variables": {
+      "dataset_dir": "/ABSOLUTE/PATH/TO/LayoutGPT/ATISS/data_output"
+    },
+    "native_artifact": "{upstream_output_dir}/layoutgpt.json",
+    "auxiliary_artifacts": {
+      "asset_ids": "{upstream_output_dir}/asset_ids.json"
+    },
+    "timeout_seconds": 3600
+  }
+}

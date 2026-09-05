@@ -34,6 +34,7 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
+from benchmark.architecture_policy import architecture_contract_from_scene
 from benchmark.evaluator.evidence_contract import (
     FINAL_VLM_CONTEXT_CONTRACT,
     FUNCTIONAL_SEMANTIC_COMPONENTS,
@@ -1373,6 +1374,7 @@ def _compact_scene(scene: dict[str, Any]) -> dict[str, Any]:
         "scene_type": scene.get("scene_type"),
         "boundary": deepcopy(scene.get("boundary")),
         "scene_height": scene.get("scene_height"),
+        "architecture": architecture_contract_from_scene(scene),
         "objects": [
             {
                 "id": obj.get("id"),

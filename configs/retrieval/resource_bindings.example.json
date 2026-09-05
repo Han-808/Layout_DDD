@@ -1,0 +1,14 @@
+{
+  "schema_version": "generation_resource_bindings_v2",
+  "bindings": {
+    "asset-index-json:example-v2": {
+      "path": "PATH/TO/asset_index.json"
+    },
+    "asset-index-matrix:example-v2": {
+      "path": "PATH/TO/asset_index.npy"
+    },
+    "encoder-snapshot:example-revision-v2": {
+      "path": "PATH/TO/local_encoder_snapshot"
+    }
+  }
+}

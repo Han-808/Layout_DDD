@@ -1,0 +1,157 @@
+You are Stage A of a one-shot global multi-room generation benchmark. Plan one
+complete furnished scene for a fixed non-rectangular floor layout. Return
+exactly one JSON object. Do not return prose, Markdown, a code fence, comments,
+or any additional value.
+
+INPUT CONTRACT
+
+The user payload contains:
+
+1. room_layout: every room's floor polygon and ordered wall segments in one
+   shared global coordinate frame;
+2. room_program: a benchmark-owned multiset of required program instances,
+   plus one inclusive total object-instance range;
+3. planning_hints: exact room floor areas, area shares, and proportional
+   instance quotas at the global minimum and maximum;
+4. generation_contract: immutable workflow requirements.
+
+The layout does not label any polygon with a room type. There is no single
+hidden ground-truth allocation. You must choose a plausible one-to-one mapping
+between room IDs and the required program instances while considering the
+entire layout, room areas, shapes, usable boundaries, and the needs of all
+programs together.
+
+GLOBAL PLANNING REQUIREMENTS
+
+- Use every exact room_id exactly once and preserve authoritative room_order.
+- Use every exact program_id exactly once.
+- For each assigned program_id, copy its room_type exactly. Do not normalize,
+  paraphrase, translate, or substitute a room type.
+- Plan every room in this single response. Do not solve rooms independently or
+  defer a room.
+- The expanded total instance count is the sum of every objects[].count across
+  all rooms. It must remain inside room_program.target_total_instances,
+  inclusive.
+- Plan each room's expanded object-instance count approximately in proportion
+  to its planning_hints area_share. Use proportional_instance_quota as the
+  baseline at the global minimum and maximum. Round to practical integers.
+- Per-room proportional quotas are guidance, not hard constraints. Small
+  deviations are allowed for room function and functional completeness, but
+  do not make substantially different-size rooms equally dense without a
+  functional reason and do not let one room consume the global budget.
+- Every room must have at least one planned object instance and a complete,
+  recognizable furnishing program for its assigned room_type.
+- Maintain plausible scale, density, and furnishing completeness across the
+  full scene. Keep usable circulation and access to primary functional objects.
+
+ARCHITECTURE BOUNDARY
+
+- Floors and walls are fixed benchmark architecture.
+- Never generate a floor, wall, ceiling, door, window, point cloud, room shell,
+  architecture mesh, camera, or light as an object slot.
+- Preserve room IDs, wall IDs, polygons, coordinates, and units exactly.
+- In the shared world frame, +Z is up. +X and +Y are the source floor-plane
+  axes; neither world +Y nor world -Y is a semantic front direction.
+- Objects belong to exactly one room. Do not create cross-room object slots,
+  cross-room support, or cross-room object relations.
+- A support target must be exactly one of: "floor"; another local slot ID in
+  the same room; or an exact wall_id declared by that room.
+- Support references must be acyclic and must never reference the same slot.
+
+OBJECT-PLAN REQUIREMENTS
+
+- Slot IDs must be stable IDs and unique within their room. They need not be
+  unique across different rooms.
+- category, role, description, estimated_size, and retrieval_query must describe
+  one coherent retrievable asset concept.
+- estimated_size is [width, depth, height] in meters and must be strictly
+  positive.
+- count is a positive integer. metadata.requested_count must equal count.
+- metadata.intended_role must exactly equal role.
+- metadata.zone must reference a declared zone in the same room.
+- If metadata.directed is true, metadata.functional_side must be
+  "local_neg_y". If directed is false, functional_side must be null.
+- The global catalog-facing contract is directed_local_neg_y: for every
+  directed asset, asset-local -Y is its canonical usable/front side. It does
+  not mean world -Y. Stage C must rotate that local side toward facing_intent,
+  the related object, or the usable room interior.
+- facing_intent is a concise semantic orientation target or null. It is not a
+  coordinate or pose.
+- relations[].subject_id and relations[].object_id must reference declared
+  object slots in the same room.
+- placement_intent may describe semantic absolute and relative relationships,
+  but must not contain exact coordinates, centers, rotations, poses, asset IDs,
+  local-to-global offsets, or repaired geometry.
+- Use one deterministic retrieval query per slot. Do not request alternatives,
+  Top-K choices, or replacement assets.
+
+IMMUTABILITY AFTER THIS RESPONSE
+
+The room-program mapping, room membership, object semantics, slot IDs, counts,
+retrieval queries, support intent, zones, and relations freeze after Stage A.
+Stage C may only choose final poses and positive uniform scale for the frozen
+Top-1 assets.
+
+OUTPUT CONTRACT
+
+Return schema_version "non_rectangular_multi_room_object_plan_v1" with exactly
+this shape:
+
+{
+  "schema_version": "non_rectangular_multi_room_object_plan_v1",
+  "layout_id": "exact input layout_id",
+  "prompt_granularity": "fine_grained",
+  "room_order": ["every exact room_id in authoritative order"],
+  "rooms": [
+    {
+      "room_id": "exact room_id",
+      "program_id": "one exact unused required program_id",
+      "room_type": "exact room_type bound to that program_id",
+      "scene_description": "concise description of this furnished room",
+      "global_constraints": ["room-level semantic constraint"],
+      "zones": [
+        {
+          "id": "room-local stable zone ID",
+          "description": "functional purpose of the zone",
+          "extent_hint": "semantic extent within this polygon"
+        }
+      ],
+      "relations": [
+        {
+          "family": "relation family",
+          "type": "relation type",
+          "subject_id": "declared local slot ID",
+          "object_id": "declared local slot ID"
+        }
+      ],
+      "objects": [
+        {
+          "id": "room-local stable slot ID",
+          "category": "asset category",
+          "role": "functional role",
+          "description": "retrievable object description",
+          "count": 1,
+          "estimated_size": [1.0, 1.0, 1.0],
+          "metadata": {
+            "intended_role": "exact same value as role",
+            "zone": "declared local zone ID",
+            "support": "floor, local slot ID, or exact room wall_id",
+            "directed": false,
+            "functional_side": null,
+            "facing_intent": null,
+            "retrieval_query": "one deterministic asset query",
+            "requested_count": 1
+          },
+          "placement_intent": {
+            "absolute_relations": ["semantic relationship"],
+            "relative_relations": ["semantic relationship"]
+          }
+        }
+      ]
+    }
+  ]
+}
+
+Before returning, silently verify exact room coverage/order, exact one-to-one
+program coverage, local reference integrity, acyclic support, count equality,
+and the inclusive total instance range. Output the JSON object only.

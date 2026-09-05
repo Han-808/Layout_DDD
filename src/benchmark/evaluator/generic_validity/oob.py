@@ -14,6 +14,9 @@ from benchmark.scene_io.object_normalization import (
     normalize_objects,
 )
 from benchmark.visual_judge.p0b import LocalViewProvider, adjudicate_p0b_event
+from benchmark.visual_judge.contracts import (
+    response_schema_audit_from_exception,
+)
 from benchmark.visual_judge.runtime import EvidenceControlUnresolvedError
 
 
@@ -306,6 +309,9 @@ def _evaluate_object(
     except Exception as exc:
         record["adjudication_error"] = f"{type(exc).__name__}: {exc}"
         record["route"] = "vlm_adjudication_failed"
+        schema_audit = response_schema_audit_from_exception(exc)
+        if schema_audit is not None:
+            record["adjudication_failure_audit"] = schema_audit
         if bool(cfg.get("official_mode")):
             raise OOBEvaluationError(record["adjudication_error"]) from exc
         return record

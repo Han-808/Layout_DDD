@@ -191,6 +191,31 @@ def _as_explicit_selector(
                 "with camera_acquisition.vlm.max_repair_plans"
             )
         return value
+    if (
+        backend == "vlm"
+        and getattr(
+            value,
+            "production_camera_selector_transport",
+            False,
+        )
+        is True
+    ):
+        return ActiveVLMCameraSelector(
+            value,
+            selection_mode=vlm_selection_mode,
+            repair_solver=DeterministicCameraRepairSolver(
+                DeterministicLocalCameraSelector(
+                    ranking_config=deterministic_ranking_config,
+                    ranking_config_sources=(
+                        deterministic_ranking_sources
+                    ),
+                )
+            ),
+            pose_validator=getattr(value, "pose_validator", None),
+            allow_freeform_pose=allow_freeform_pose,
+            max_repair_plans=max_repair_plans,
+            max_repair_plans_source=max_repair_plans_source,
+        )
     if callable(getattr(value, "select", None)):
         return value
     if backend == "vlm":
@@ -389,6 +414,7 @@ def build_selection_request(
     actions_used: int,
     rounds_used: int,
     total_images_acquired: int,
+    vlm_selection_mode_override: str | None = None,
 ) -> CameraSelectionRequest:
     stage_max_views = (
         control.vlm_max_selected_views
@@ -401,6 +427,7 @@ def build_selection_request(
     # Judge/Selector/Renderer interfaces directly rather than a legacy wrapper.
     for key in (
         "group_scope",
+        "target_scope",
         "grouping_role",
         "member_ids",
         "target_bounds",
@@ -427,6 +454,34 @@ def build_selection_request(
             "target_extent",
             deepcopy(group_scope.get("extent")),
         )
+    target_scope = context.get("target_scope")
+    if isinstance(target_scope, dict):
+        context.setdefault(
+            "member_ids",
+            deepcopy(target_scope.get("framing_ids")),
+        )
+        context.setdefault(
+            "target_bounds",
+            deepcopy(target_scope.get("target_bounds")),
+        )
+        context.setdefault(
+            "focus_center",
+            deepcopy(target_scope.get("focus_center")),
+        )
+        context.setdefault(
+            "target_extent",
+            deepcopy(target_scope.get("extent")),
+        )
+    functional_repair = _functional_repair_context(
+        request=request,
+        evidence_goal=goal,
+        target_ids=targets,
+    )
+    if functional_repair is not None:
+        # This is a bounded routing hint, not the full Functional ledger.  In
+        # particular, the CameraSelector does not need unrelated checks or
+        # discovery prose from the owning group.
+        context["functional_repair"] = functional_repair
     context.update(
         {
             "camera_acquisition_policy": state.policy,
@@ -436,7 +491,10 @@ def build_selection_request(
             "known_target_ids": list(known_target_ids),
             "attempted_view_ids": list(state.attempted_view_ids),
             "attempted_plan_ids": list(state.attempted_plan_ids),
-            "vlm_selection_mode": control.vlm_selection_mode,
+            "vlm_selection_mode": (
+                vlm_selection_mode_override
+                or control.vlm_selection_mode
+            ),
             "camera_repair_plans": [
                 plan.to_dict() for plan in repair_plans
             ],
@@ -494,12 +552,275 @@ def build_selection_request(
         evidence_round=rounds_used + 1,
         allow_freeform_pose=(
             state.stage == "vlm"
-            and control.vlm_selection_mode == "freeform_pose"
+            and (
+                vlm_selection_mode_override
+                or control.vlm_selection_mode
+            )
+            == "freeform_pose"
             and control.allow_freeform_pose
         ),
         allow_scene_mutation=False,
         context=context,
     )
+
+
+def _functional_repair_context(
+    *,
+    request: JudgeRequest,
+    evidence_goal: dict[str, Any],
+    target_ids: tuple[str, ...],
+) -> dict[str, Any] | None:
+    """Project one pending Functional request into compact camera routing.
+
+    Required checks remain Judge-owned.  This projection only identifies the
+    target, owning group, requested observations, and any already-decoded
+    usable side so deterministic candidate generation can choose the existing
+    side-conditioned repair family instead of reframing the whole group.
+    """
+
+    if request.metric != "functional_consistency":
+        return None
+    raw_request = evidence_goal.get("judge_evidence_request")
+    raw_request = raw_request if isinstance(raw_request, dict) else {}
+    requested_ids = list(
+        dict.fromkeys(
+            str(item)
+            for item in (
+                raw_request.get("target_ids") or target_ids
+            )
+            if str(item).strip() and str(item) != "scene"
+        )
+    )
+    if not requested_ids:
+        return None
+    requested_observations = list(
+        dict.fromkeys(
+            str(item)
+            for item in (
+                raw_request.get("missing_observations")
+                or evidence_goal.get("missing_observations")
+                or []
+            )
+            if str(item).strip()
+        )
+    )
+    if not requested_observations:
+        return None
+
+    functional_packet = request.context.get(
+        "functional_probe_evidence"
+    )
+    functional_packet = (
+        functional_packet
+        if isinstance(functional_packet, dict)
+        else {}
+    )
+    metadata = raw_request.get("metadata")
+    metadata = metadata if isinstance(metadata, dict) else {}
+    preflight = request.context.get("functional_evidence_preflight")
+    preflight = preflight if isinstance(preflight, dict) else {}
+    usable_side_fallback = bool(
+        metadata.get("usable_side_fallback") is True
+        or str(metadata.get("source") or "")
+        == "functional_evidence_preflight_v1"
+    )
+    unresolved_usable_side_target_ids = list(
+        dict.fromkeys(
+            str(item)
+            for item in (
+                metadata.get("unresolved_usable_side_target_ids")
+                or preflight.get("target_ids")
+                or []
+            )
+            if str(item).strip() and str(item) in set(requested_ids)
+        )
+    )
+    requested_check_ids = {
+        str(item)
+        for item in [
+            *(metadata.get("check_ids") or []),
+            *(metadata.get("unresolved_check_ids") or []),
+        ]
+        if str(item).strip()
+    }
+    requested_id_set = set(requested_ids)
+    all_required_checks = [
+        deepcopy(item)
+        for item in functional_packet.get("required_checks") or []
+        if isinstance(item, dict)
+    ]
+    if requested_check_ids:
+        required_checks = [
+            item
+            for item in all_required_checks
+            if str(item.get("check_id") or "") in requested_check_ids
+        ]
+    else:
+        exact_checks = [
+            item
+            for item in all_required_checks
+            if {
+                str(target_id)
+                for target_id in item.get("target_ids") or []
+            }
+            == requested_id_set
+        ]
+        required_checks = exact_checks or [
+            item
+            for item in all_required_checks
+            if requested_id_set
+            & {
+                str(target_id)
+                for target_id in item.get("target_ids") or []
+            }
+        ]
+    boundary = functional_packet.get("boundary_clearance_evidence")
+    boundary = boundary if isinstance(boundary, dict) else {}
+    hypotheses = [
+        deepcopy(item)
+        for item in boundary.get("usable_surface_hypotheses") or []
+        if isinstance(item, dict)
+        and str(item.get("target_id") or "") in requested_id_set
+    ]
+    surface_targets: list[dict[str, Any]] = []
+    for target_id in requested_ids:
+        affordances = [
+            affordance
+            for check in required_checks
+            for affordance in check.get("target_affordances") or []
+            if isinstance(affordance, dict)
+            and str(affordance.get("target_id") or "") == target_id
+        ]
+        roles = list(
+            dict.fromkeys(
+                str(role)
+                for affordance in affordances
+                for role in affordance.get("surface_roles") or []
+                if str(role).strip()
+            )
+        )
+        matching_hypothesis = next(
+            (
+                deepcopy(item)
+                for item in hypotheses
+                if str(item.get("target_id") or "") == target_id
+            ),
+            None,
+        )
+        surface_targets.append(
+            {
+                "target_id": target_id,
+                "directionality": (
+                    "directed"
+                    if any(
+                        str(affordance.get("directionality") or "")
+                        == "directed"
+                        for affordance in affordances
+                    )
+                    else "non_directed"
+                ),
+                "surface_roles": roles,
+                "need_clearance": any(
+                    affordance.get("need_clearance") is True
+                    for affordance in affordances
+                )
+                or any(
+                    str(check.get("check_type") or "") == "clearance"
+                    and target_id
+                    in {
+                        str(item)
+                        for item in check.get("target_ids") or []
+                    }
+                    for check in required_checks
+                ),
+                **(
+                    {"precomputed_hypothesis": matching_hypothesis}
+                    if matching_hypothesis is not None
+                    else {}
+                ),
+            }
+        )
+
+    group_scope = request.context.get("group_scope")
+    group_scope = group_scope if isinstance(group_scope, dict) else {}
+    source_check_ids = list(
+        dict.fromkeys(
+            str(item.get("check_id") or "")
+            for item in required_checks
+            if str(item.get("check_id") or "").strip()
+        )
+    )
+    owner_stages = list(
+        dict.fromkeys(
+            str(item.get("owner_stage") or "")
+            for item in required_checks
+            if str(item.get("owner_stage") or "").strip()
+        )
+    )
+    return {
+        "schema_version": "functional_camera_repair_v3",
+        "source": (
+            "usable_side_soft_fallback"
+            if usable_side_fallback
+            else "judge_need_more_evidence"
+        ),
+        "target_ids": requested_ids,
+        "route_scope": (
+            "cross_group"
+            if "cross_group_relation" in owner_stages
+            else "group_local"
+        ),
+        "group_id": group_scope.get("group_id"),
+        "group_member_ids": [
+            str(item)
+            for item in group_scope.get("member_ids") or []
+            if str(item).strip()
+        ],
+        "required_observations": requested_observations,
+        "view_goal": str(
+            raw_request.get("view_goal")
+            or evidence_goal.get("view_goal")
+            or "functional target clarification"
+        )[:1000],
+        "source_check_ids": source_check_ids,
+        "check_types": list(
+            dict.fromkeys(
+                str(item.get("check_type") or "")
+                for item in required_checks
+                if str(item.get("check_type") or "").strip()
+            )
+        ),
+        "check_relations": list(
+            dict.fromkeys(
+                str(item.get("relation") or "")
+                for item in required_checks
+                if str(item.get("relation") or "").strip()
+            )
+        ),
+        "relation_predicates": list(
+            dict.fromkeys(
+                str(value)
+                for item in required_checks
+                for value in (
+                    item.get("observation_kinds")
+                    or ([item.get("predicate")] if item.get("predicate") else [])
+                )
+                if str(value).strip()
+            )
+        ),
+        "surface_targets": surface_targets,
+        "usable_surface_hypotheses": hypotheses,
+        "usable_side_fallback": usable_side_fallback,
+        "unresolved_usable_side_target_ids": (
+            unresolved_usable_side_target_ids
+        ),
+        "fallback_policy": (
+            "deterministic_opposing_target_views_then_selector_review"
+            if usable_side_fallback
+            else None
+        ),
+        "decision_authority": "none",
+    }
 
 
 def escalation_allowed(
@@ -537,6 +858,8 @@ def deterministic_escalation_reason(
     constraints: CameraConstraintSet | None = None,
 ) -> str:
     codes = set(selection.reason_codes)
+    if "semantic_selection_required" in codes:
+        return "semantic_selection_required"
     if constraints is not None and diagnose_camera_constraint_conflicts(
         constraints,
         candidate_evaluations=candidate_conflict_evaluations(selection),
@@ -556,12 +879,20 @@ def repair_plans_for_vlm(
     deterministic_selection: CameraSelectionResult | None,
     max_plans: int = 3,
 ) -> tuple[CameraRepairPlan, ...]:
+    if (
+        deterministic_selection is not None
+        and "semantic_selection_required"
+        in deterministic_selection.reason_codes
+    ):
+        return ()
     conflicts = diagnose_camera_constraint_conflicts(
         constraints,
         candidate_evaluations=candidate_conflict_evaluations(
             deterministic_selection
         ),
     )
+    if not conflicts:
+        return ()
     return generate_camera_repair_plans(
         constraints,
         conflicts=conflicts,

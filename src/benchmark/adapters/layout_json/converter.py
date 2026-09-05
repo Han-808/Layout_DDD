@@ -7,6 +7,10 @@ from typing import Any
 
 from jsonschema import Draft202012Validator
 
+from benchmark.architecture_policy import (
+    require_generated_architecture_targets_active,
+    validate_architecture_contract,
+)
 from benchmark.adapters.layout_json.prompt import (
     AXIS_CONVENTION,
     CENTER_ORIGIN,
@@ -15,11 +19,13 @@ from benchmark.adapters.layout_json.prompt import (
     ROTATION_UNIT,
 )
 from benchmark.models.json_response import parse_json_object
+from benchmark.resources import runtime_resource_path
 from benchmark.scene_io.validate import ArtifactValidationError, validate_generated_scene
+from benchmark.task_contract import architecture_contract_for_room
 from benchmark.utils.io import load_json_schema
 
 
-SCHEMA_PATH = Path(__file__).resolve().parents[4] / "schemas" / "generator_layout_v1.schema.json"
+SCHEMA_PATH = runtime_resource_path("schemas/generator_layout_v1.schema.json")
 
 
 def validate_layout_json(layout: dict) -> dict:
@@ -98,6 +104,25 @@ def convert_layout_json_to_scene(layout: dict, generation_input: dict) -> dict:
             oar_relations.append(converted)
         else:
             relations.append(converted)
+    raw_architecture = (
+        (generation_input.get("generation_contract") or {}).get(
+            "architecture"
+        )
+    )
+    architecture_contract = validate_architecture_contract(
+        raw_architecture
+        if raw_architecture is not None
+        else architecture_contract_for_room(room)
+    )
+    try:
+        require_generated_architecture_targets_active(
+            oar_relations,
+            architecture_contract,
+        )
+    except ValueError as exc:
+        raise ArtifactValidationError(
+            f"layout_json_v1 architecture-contract mismatch: {exc}"
+        ) from exc
     scene = {
         "schema_version": "canonical_scene_v1",
         "scene_id": str(layout.get("scene_id") or f"generated_{request_id}"),
@@ -113,9 +138,7 @@ def convert_layout_json_to_scene(layout: dict, generation_input: dict) -> dict:
             "output_adapter": "layout_json",
             "asset_grounding": "explicit_asset_id" if selection_enforced else "none",
             "asset_binding": asset_binding_summary,
-            "architecture_contract": deepcopy(
-                (generation_input.get("generation_contract") or {}).get("architecture")
-            ),
+            "architecture_contract": deepcopy(architecture_contract),
             "source_coordinate_frame": source_coordinate_frame,
             "coordinate_frame": {
                 "origin": MIN_CORNER_ORIGIN,

@@ -3,6 +3,11 @@ from __future__ import annotations
 from copy import deepcopy
 from pathlib import Path
 
+from benchmark.architecture_policy import (
+    architecture_contract_from_scene,
+    require_generated_architecture_targets_active,
+    validate_architecture_contract,
+)
 from benchmark.scene_io.assets import enrich_object_with_asset_metadata
 from benchmark.scene_io.validate import (
     CANONICAL_SCENE_SCHEMA_VERSION,
@@ -38,6 +43,37 @@ def bind_scene_to_generation_request(scene: dict, generation_input: dict) -> dic
     # semantic inference. A native scene declaring a different version is left
     # untouched and rejected by the canonical validator.
     bound.setdefault("schema_version", CANONICAL_SCENE_SCHEMA_VERSION)
+    generation_contract = generation_input.get("generation_contract")
+    architecture = (
+        generation_contract.get("architecture")
+        if isinstance(generation_contract, dict)
+        else None
+    )
+    if architecture is None:
+        architecture = architecture_contract_from_scene(bound)
+    try:
+        architecture = validate_architecture_contract(architecture)
+        require_generated_architecture_targets_active(
+            bound.get("oar_relations") or (),
+            architecture,
+        )
+    except ValueError as exc:
+        raise ArtifactValidationError(
+            f"generated scene architecture-contract mismatch: {exc}"
+        ) from exc
+    metadata = bound.get("metadata")
+    if metadata is None:
+        metadata = {}
+        bound["metadata"] = metadata
+    if not isinstance(metadata, dict):
+        raise ArtifactValidationError("generated_scene.metadata must be a JSON object")
+    existing_architecture = metadata.get("architecture_contract")
+    if existing_architecture is not None and existing_architecture != architecture:
+        raise ArtifactValidationError(
+            "generated_scene.metadata.architecture_contract conflicts with the "
+            "benchmark generation contract"
+        )
+    metadata["architecture_contract"] = deepcopy(architecture)
     return bound
 
 

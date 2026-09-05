@@ -1,7 +1,37 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
+from copy import deepcopy
 from typing import Any
+
+
+class ResponseSchemaRepairError(ValueError):
+    """Raised after the one allowed response-schema repair also fails."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        schema_audit: dict[str, Any],
+    ) -> None:
+        super().__init__(message)
+        self.schema_audit = deepcopy(schema_audit)
+
+
+def response_schema_audit_from_exception(
+    error: BaseException,
+) -> dict[str, Any] | None:
+    """Recover response-schema audit data through wrapped exception chains."""
+
+    seen: set[int] = set()
+    current: BaseException | None = error
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        audit = getattr(current, "schema_audit", None)
+        if isinstance(audit, dict):
+            return deepcopy(audit)
+        current = current.__cause__ or current.__context__
+    return None
 
 
 def validate_generic_visual_response(result: dict[str, Any]) -> dict[str, Any]:
@@ -25,7 +55,12 @@ def validate_canonical_metric_response(
     *,
     allowed_scopes: Iterable[str] = (),
     allowed_missing_observations: Iterable[str] = (),
-    allowed_target_ids: Iterable[str] = (),
+    allowed_defect_target_ids: Iterable[str] = (),
+    allowed_evidence_request_target_ids: Iterable[str] = (),
+    required_defect_fields: Iterable[str] = (),
+    allowed_defect_field_values: (
+        Mapping[str, Iterable[str]] | None
+    ) = None,
 ) -> dict[str, Any]:
     """Validate the strict canonical metric verdict contract."""
 
@@ -56,6 +91,24 @@ def validate_canonical_metric_response(
             "canonical metric valid verdict cannot retain defect records"
         )
     allowed = set(allowed_scopes)
+    allowed_defect_targets = set(allowed_defect_target_ids)
+    allowed_evidence_targets = set(
+        allowed_evidence_request_target_ids
+    )
+    required_fields = {
+        str(field).strip()
+        for field in required_defect_fields
+        if str(field).strip()
+    }
+    field_values = {
+        str(field): {
+            str(item)
+            for item in values
+        }
+        for field, values in (
+            allowed_defect_field_values or {}
+        ).items()
+    }
     for defect in defects:
         if not isinstance(defect, dict):
             raise ValueError(
@@ -85,10 +138,42 @@ def validate_canonical_metric_response(
             raise ValueError(
                 "canonical metric defects must identify non-empty target_ids"
             )
+        if allowed_defect_targets:
+            outside_targets = sorted(
+                set(target_ids) - allowed_defect_targets
+            )
+            if outside_targets:
+                raise ValueError(
+                    "canonical metric defect target_ids are outside the "
+                    f"requested evidence scope: {outside_targets}"
+                )
         if not str(defect.get("relation") or "").strip():
             raise ValueError(
                 "canonical metric defects must identify the defective relation"
             )
+        missing_fields = sorted(
+            field
+            for field in required_fields
+            if field not in defect
+            or (
+                isinstance(defect.get(field), str)
+                and not str(defect.get(field) or "").strip()
+            )
+            or defect.get(field) is None
+        )
+        if missing_fields:
+            raise ValueError(
+                "canonical metric defects are missing required fields: "
+                f"{missing_fields}"
+            )
+        for field, allowed_values in field_values.items():
+            if field not in defect:
+                continue
+            if str(defect[field]) not in allowed_values:
+                raise ValueError(
+                    f"canonical metric defect {field} must be one of "
+                    f"{sorted(allowed_values)}, got {defect[field]!r}"
+                )
     missing_evidence = result.get("missing_evidence")
     if not isinstance(missing_evidence, list):
         raise ValueError("canonical metric missing_evidence must be a JSON list")
@@ -111,29 +196,24 @@ def validate_canonical_metric_response(
             )
     evidence_request = result.get("evidence_request")
     if evidence_status == "insufficient":
-        if evidence_request is None and not missing_evidence:
+        if evidence_request is None:
             raise ValueError(
-                "insufficient canonical metric evidence must name missing "
-                "evidence or include a structured evidence_request"
+                "insufficient canonical metric evidence requires a "
+                "structured evidence_request"
             )
-        if evidence_request is not None:
-            _validate_canonical_evidence_request(
-                evidence_request,
-                allowed_missing_observations=allowed_observations,
-                allowed_target_ids=set(allowed_target_ids),
+        _validate_canonical_evidence_request(
+            evidence_request,
+            allowed_missing_observations=allowed_observations,
+            allowed_target_ids=allowed_evidence_targets,
+        )
+        requested_missing = evidence_request["missing_observations"]
+        if missing_evidence and list(dict.fromkeys(missing_evidence)) != list(
+            dict.fromkeys(requested_missing)
+        ):
+            raise ValueError(
+                "canonical metric missing_evidence conflicts with "
+                "evidence_request.missing_observations"
             )
-            requested_missing = evidence_request[
-                "missing_observations"
-            ]
-            if (
-                missing_evidence
-                and list(dict.fromkeys(missing_evidence))
-                != list(dict.fromkeys(requested_missing))
-            ):
-                raise ValueError(
-                    "canonical metric missing_evidence conflicts with "
-                    "evidence_request.missing_observations"
-                )
     elif evidence_request is not None:
         raise ValueError(
             "sufficient canonical metric evidence cannot retain an "
@@ -142,10 +222,6 @@ def validate_canonical_metric_response(
     if evidence_status == "insufficient" and defects:
         raise ValueError(
             "insufficient canonical metric evidence cannot assert defects"
-        )
-    if evidence_status == "sufficient" and missing_evidence:
-        raise ValueError(
-            "sufficient canonical metric evidence cannot retain missing_evidence"
         )
     return result
 

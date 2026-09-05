@@ -10,6 +10,11 @@ from benchmark.visual_judge.interfaces.camera import (
     CameraSelectionRequest,
     CameraSelectionResult,
     CameraSelector,
+    EVIDENCE_READINESS_OUTCOMES,
+    EvidenceReadinessOutcome,
+    EvidenceReadinessRequest,
+    EvidenceReadinessResult,
+    TrustedCameraCandidateBank,
 )
 from benchmark.visual_judge.interfaces.evidence import (
     EvidenceGate,
@@ -32,6 +37,11 @@ __all__ = [
     "CameraSelectionResult",
     "CameraSelectionOutcome",
     "CameraSelector",
+    "EvidenceReadinessOutcome",
+    "EvidenceReadinessRequest",
+    "EvidenceReadinessResult",
+    "EVIDENCE_READINESS_OUTCOMES",
+    "TrustedCameraCandidateBank",
     "CAMERA_SELECTION_OUTCOMES",
     "DeterministicCameraSelector",
     "EvidenceGate",

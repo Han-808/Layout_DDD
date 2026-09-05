@@ -127,6 +127,7 @@ def scene_quality_applicability(policy: dict[str, Any] | None) -> dict[str, dict
                 "object_pairing_consistency",
                 "style_consistency",
                 "functional_consistency",
+                "semantic_placement_consistency",
             )
         }
 
@@ -170,12 +171,22 @@ def scene_quality_applicability(policy: dict[str, Any] | None) -> dict[str, dict
     if _owner(policy, "category_selection_owner") == "generator":
         functional_basis.append("category_selection_owner=generator")
 
+    # Semantic placement is activated only by arrangement ownership. It judges
+    # where an otherwise plausible object is placed, not which category was
+    # selected and not whether L1 physical support/collision checks pass.
+    placement_basis: list[str] = []
+    if _owner(policy, "arrangement_owner") == "generator":
+        placement_basis.append("arrangement_owner=generator")
+
     return {
         "scale_consistency": _applicability_record(scale_basis),
         "object_pairing_consistency": _applicability_record(pairing_basis),
         "style_consistency": _applicability_record(style_basis),
         "functional_consistency": _applicability_record(
             functional_basis
+        ),
+        "semantic_placement_consistency": _applicability_record(
+            placement_basis
         ),
     }
 

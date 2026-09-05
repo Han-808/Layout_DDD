@@ -222,8 +222,8 @@ def test_unresolved_oob_score_none_not_coerced() -> None:
     assert report["metrics"]["oob"]["score"] is None
     # None is preserved in per-metric scores rather than coerced to 0.0.
     assert report["metric_scores"]["oob"] is None
-    # Numeric metrics remain available as diagnostics, but unresolved OOB blocks
-    # the official aggregate instead of being silently removed from its denominator.
+    # Numeric metrics remain available as a coverage-conditioned diagnostic;
+    # unresolved OOB still blocks the complete-coverage generic score.
     assert report["metrics"]["collision"]["score"] == 1.0
     assert report["active_metric_count"] == 1
     assert report["partial_score"] == 1.0

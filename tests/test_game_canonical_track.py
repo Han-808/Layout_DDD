@@ -11,6 +11,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from PIL import Image
 
 from benchmark.api.submission import (
     SubmissionEvaluationError,
@@ -93,8 +94,11 @@ class _Renderer:
     way the browser renderer does.
     """
 
+    camera_selector_backend = "deterministic"
+
     def __init__(self, collision_geometry: dict) -> None:
         self._collision_geometry = collision_geometry
+        self._style_local_path: str | None = None
 
     def render_scene(self, *, scene_path: Path, out_dir: Path, asset_root=None) -> dict:
         destination = Path(out_dir)
@@ -102,12 +106,43 @@ class _Renderer:
         views = []
         for name in ("top", "perspective"):
             frame = destination / f"game_{name}.png"
-            frame.write_bytes(f"game {name} frame".encode())
+            image = Image.new("RGB", (2, 2), (35, 55, 75))
+            image.putpixel((0, 0), (170, 110, 50))
+            image.save(frame)
             views.append({"name": name, "path": frame.as_posix()})
+        style_local = destination / "game_style_local.png"
+        image = Image.new("RGB", (2, 2), (45, 65, 85))
+        image.putpixel((0, 0), (185, 125, 65))
+        image.save(style_local)
+        self._style_local_path = style_local.as_posix()
         return {
             "backend": "fake_game_renderer",
             "views": views,
             "collision_geometry": self._collision_geometry,
+        }
+
+    def provide_scene_quality_evidence(
+        self,
+        request: dict,
+    ) -> dict:
+        if (
+            request.get("metric") != "style_consistency"
+            or request.get("evidence_scope") != "group_local"
+            or self._style_local_path is None
+        ):
+            return {
+                "status": "insufficient",
+                "reason": "unsupported_test_evidence_request",
+                "render_evidence_items": [],
+            }
+        return {
+            "status": "available",
+            "render_evidence_items": [
+                {
+                    "path": self._style_local_path,
+                    "role": "group_local",
+                }
+            ],
         }
 
 
@@ -120,6 +155,18 @@ class _Judge:
 
     def adjudicate_relation(self, request: dict) -> dict:
         return {"verdict": "valid", "confidence": 1.0, "reason": "test"}
+
+    def chat_messages(
+        self,
+        messages: list[dict],
+        **kwargs: object,
+    ) -> str:
+        return (
+            '{"object_groups":[{"object_ids":["cube_0000","cube_0001"],'
+            '"label":"arena ensemble","anchor_object_id":null,'
+            '"reason":"Both objects share one local evidence scope."}],'
+            '"reason":"Complete two-object partition."}'
+        )
 
     def adjudicate_scene_quality(self, request: dict) -> dict:
         self.scene_quality_requests.append(request)
@@ -265,7 +312,9 @@ def test_report_records_the_l1_thresholds_that_produced_the_score(tmp_path: Path
     assert recorded[L1] == _game_profile()[L1]["metric_config"]
 
 
-def test_l3_stays_unresolved_when_the_case_declares_no_asset_policy(tmp_path: Path) -> None:
+def test_l3_pending_applicability_fails_official_coverage_threshold(
+    tmp_path: Path,
+) -> None:
     scene, geometry = _exported_level(tmp_path)
     root = _bundle(tmp_path, scene)
 
@@ -273,9 +322,10 @@ def test_l3_stays_unresolved_when_the_case_declares_no_asset_policy(tmp_path: Pa
     del manifest["artifacts"]["asset_policy"]
     write_json(root / "case_bundle.json", manifest)
 
-    # Without an asset policy every L3 metric is conservatively 'pending', so
-    # Scene Quality cannot score and the official run refuses to certify.
-    with pytest.raises(SubmissionEvaluationError, match="complete metric coverage"):
+    with pytest.raises(
+        SubmissionEvaluationError,
+        match="complete metric coverage",
+    ):
         evaluate_submission(
             scene=scene,
             case_bundle=load_case_bundle(root),
@@ -285,7 +335,10 @@ def test_l3_stays_unresolved_when_the_case_declares_no_asset_policy(tmp_path: Pa
             official_mode=True,
         )
 
-    written = json.loads((tmp_path / "run" / "evaluation_report.json").read_text())
+    written = read_json(tmp_path / "run" / "evaluation_report.json")
     style = written["layer_reports"][L3]["metrics"]["style_consistency"]
-    assert style["status"] == "unresolved"
-    assert style["reason"] == "metric_applicability_pending"
+    assert style["status"] == "evaluated"
+    assert style["terminal_state"] == "evaluated_degraded"
+    assert style["coverage"]["score_grounding"]["fraction"] == 0.0
+    assert style["judgement"]["evidence_ambiguous"] is True
+    assert written["benchmark_score_status"] == "failed_coverage_threshold"

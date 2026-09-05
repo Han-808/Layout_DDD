@@ -6,7 +6,7 @@ Summary:
 
 Input:
     - A canonical ``generation_input`` (or a method's raw ``--method-output``).
-    - ``--adapter`` (e.g. ``layout_json`` / ``object_state``) and optional
+    - ``--adapter`` (default ``catalog_placement``) and optional
       ``--adapter-config``.
     - ``--out-dir`` for artifacts.
 
@@ -28,8 +28,10 @@ from copy import deepcopy
 from pathlib import Path
 
 from benchmark.adapters import get_adapter
+from benchmark.adapters.defaults import DEFAULT_GENERATION_ADAPTER
 from benchmark.io_contracts import O1_OBJECT_STATE
 from benchmark.nl_scene.generation_input import build_direct_natural_language_generation_input
+from benchmark.scene_io.validate import ArtifactValidationError
 from benchmark.utils.io import read_json, write_json
 
 
@@ -44,6 +46,7 @@ def run_generate(
     evaluation_report: dict | None = None,
     previous_generated_scene: dict | None = None,
     iteration: int | None = None,
+    materialize_native_output: bool = True,
 ) -> dict:
     output_dir = Path(out_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -56,30 +59,99 @@ def run_generate(
         iteration=iteration,
     )
     adapter = get_adapter(adapter_name)
-    config = adapter_config or {}
+    config = _resolve_supplied_output_sidecars(
+        dict(adapter_config or {}),
+        method_output=method_output,
+    )
     io_contract = adapter.resolve_io_contract(prepared_generation_input, config=config)
     method_input_path = adapter.prepare_input(prepared_generation_input, generator_dir, config=config)
     generated_scene_path: Path | None = None
+    native_output_path: Path | None = None
+    generation_validation_failure: str | None = None
 
     if method_output:
-        generated_scene_path = adapter.materialize_output(
-            Path(method_output),
-            prepared_generation_input,
-            output_dir,
-            config=config,
-            execution_dir=generator_dir,
+        supplied_output_path = Path(method_output).expanduser().resolve()
+        preserve_output = getattr(adapter, "preserve_supplied_native_output", None)
+        native_output_path = (
+            Path(
+                preserve_output(
+                    supplied_output_path,
+                    method_input_path,
+                    generator_dir,
+                    config=config,
+                )
+            )
+            if callable(preserve_output)
+            else supplied_output_path
         )
-        status = {"status": "generated_scene_available", "reason": "native method output was provided", "generated_scene": generated_scene_path.name}
+        if materialize_native_output:
+            generated_scene_path = adapter.materialize_output(
+                native_output_path,
+                prepared_generation_input,
+                output_dir,
+                config=config,
+                execution_dir=generator_dir,
+            )
+            _verify_preserved_native_output(adapter, generated_scene_path)
+            status = {
+                "status": "generated_scene_available",
+                "reason": "native method output was provided",
+                "generated_scene": generated_scene_path.name,
+            }
+        else:
+            status = {
+                "status": "native_output_available",
+                "reason": (
+                    "native method output was provided for trusted preparation"
+                ),
+                "native_output": native_output_path.as_posix(),
+            }
     elif run_generation:
-        method_output_path = adapter.run_generation(method_input_path, generator_dir, config=config)
-        generated_scene_path = adapter.materialize_output(
-            method_output_path,
-            prepared_generation_input,
-            output_dir,
-            config=config,
-            execution_dir=generator_dir,
-        )
-        status = {"status": "generated_scene_available", "reason": "adapter generation completed", "generated_scene": generated_scene_path.name}
+        try:
+            native_output_path = Path(
+                adapter.run_generation(
+                    method_input_path,
+                    generator_dir,
+                    config=config,
+                )
+            )
+        except ArtifactValidationError as exc:
+            raw_failed_output = _metadata_path(
+                getattr(adapter, "last_run_metadata", None),
+                "raw_response_path",
+            )
+            if materialize_native_output or raw_failed_output is None:
+                raise
+            # A trusted preparation/readiness boundary must receive malformed
+            # generator artifacts too, so it can produce the official audit
+            # envelope instead of failing before preparation.
+            native_output_path = raw_failed_output
+            generation_validation_failure = str(exc)
+        if materialize_native_output:
+            generated_scene_path = adapter.materialize_output(
+                native_output_path,
+                prepared_generation_input,
+                output_dir,
+                config=config,
+                execution_dir=generator_dir,
+            )
+            _verify_preserved_native_output(adapter, generated_scene_path)
+            status = {
+                "status": "generated_scene_available",
+                "reason": "adapter generation completed",
+                "generated_scene": generated_scene_path.name,
+            }
+        else:
+            status = {
+                "status": "native_output_available",
+                "reason": (
+                    "adapter generation completed for trusted preparation"
+                    if generation_validation_failure is None
+                    else "generator output was preserved for fail-closed trusted preparation"
+                ),
+                "native_output": native_output_path.as_posix(),
+                "adapter_validation_failure": generation_validation_failure,
+            }
     else:
         status = {
             "status": "generation_skipped",
@@ -87,15 +159,35 @@ def run_generate(
             "next_expected_input": "method_output",
         }
 
+    raw_native_artifact_path = _raw_native_artifact_path(
+        adapter,
+        provided_method_output=(
+            Path(method_output).expanduser().resolve() if method_output else None
+        ),
+        native_output_path=native_output_path,
+    )
     workflow_status_path = write_json(output_dir / "workflow_status.json", status)
     metadata = {
         "adapter": adapter.name,
+        "output_ingestion_kind": adapter.scene_output_route().kind,
         "adapter_capabilities": adapter.capabilities.as_dict(),
         "io_contract": io_contract.as_dict(),
         "generator_output_schema": getattr(adapter, "output_schema", None),
+        "executable_integration": bool(
+            getattr(adapter, "executable_integration", False)
+        ),
         "method_input_path": method_input_path.as_posix(),
+        "preparation": getattr(adapter, "last_preparation_metadata", None),
         "generator_dir": generator_dir.as_posix(),
         "generated_scene_path": generated_scene_path.as_posix() if generated_scene_path else None,
+        "native_output_path": native_output_path.as_posix() if native_output_path else None,
+        "raw_native_artifact_path": (
+            raw_native_artifact_path.as_posix()
+            if raw_native_artifact_path is not None
+            else None
+        ),
+        "materialize_native_output": bool(materialize_native_output),
+        "generation_validation_failure": generation_validation_failure,
         "run_generation": bool(run_generation),
         "provided_method_output": str(method_output) if method_output else None,
         "generation_run": getattr(adapter, "last_run_metadata", None),
@@ -110,10 +202,80 @@ def run_generate(
         "adapter": adapter.name,
         "method_input": method_input_path.as_posix(),
         "generated_scene": generated_scene_path.as_posix() if generated_scene_path else None,
+        "native_output": native_output_path.as_posix() if native_output_path else None,
+        "raw_native_artifact": (
+            raw_native_artifact_path.as_posix()
+            if raw_native_artifact_path is not None
+            else None
+        ),
         "workflow_status": workflow_status_path.as_posix(),
         "adapter_metadata": metadata_path.as_posix(),
         "status": status,
     }
+
+
+def _raw_native_artifact_path(
+    adapter: object,
+    *,
+    provided_method_output: Path | None,
+    native_output_path: Path | None,
+) -> Path | None:
+    for metadata, key in (
+        (
+            getattr(adapter, "last_run_metadata", None),
+            "preserved_native_artifact_path",
+        ),
+        (getattr(adapter, "last_parse_metadata", None), "raw_artifact_path"),
+        (getattr(adapter, "last_run_metadata", None), "raw_response_path"),
+    ):
+        path = _metadata_path(metadata, key)
+        if path is not None:
+            return path
+    return provided_method_output or native_output_path
+
+
+def _verify_preserved_native_output(
+    adapter: object,
+    generated_scene_path: Path,
+) -> None:
+    verify = getattr(adapter, "verify_preserved_native_output", None)
+    if callable(verify):
+        verify(Path(generated_scene_path))
+
+
+def _resolve_supplied_output_sidecars(
+    config: dict,
+    *,
+    method_output: str | Path | None,
+) -> dict:
+    if method_output is None:
+        return config
+    source = Path(method_output).expanduser().resolve()
+    base = source if source.is_dir() else source.parent
+    resolved = dict(config)
+    for key in (
+        "asset_manifest_path",
+        "asset_ids_path",
+        "asset_bindings_path",
+        "layout_vlm_scene_config_path",
+        "scene_config_path",
+    ):
+        value = resolved.get(key)
+        if not value:
+            continue
+        path = Path(str(value)).expanduser()
+        if not path.is_absolute():
+            resolved[key] = (base / path).resolve().as_posix()
+    return resolved
+
+
+def _metadata_path(metadata: object, key: str) -> Path | None:
+    if not isinstance(metadata, dict):
+        return None
+    value = metadata.get(key)
+    if not isinstance(value, (str, Path)) or not str(value):
+        return None
+    return Path(value).expanduser().resolve()
 
 
 def run_generate_from_natural_language(
@@ -179,7 +341,7 @@ def attach_self_reflection_feedback(
 def main() -> None:
     parser = argparse.ArgumentParser(description="Dispatch canonical generation_input.json through a generation adapter.")
     parser.add_argument("--generation-input", required=True)
-    parser.add_argument("--adapter", default="layout_json")
+    parser.add_argument("--adapter", default=DEFAULT_GENERATION_ADAPTER)
     parser.add_argument("--out-dir", required=True)
     parser.add_argument(
         "--method-output",

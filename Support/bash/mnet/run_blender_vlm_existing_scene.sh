@@ -176,6 +176,7 @@ else
 fi
 if [[ -n "$CAMERA_POSE_MODE" || -n "$CAMERA_POSE_METRIC_MODES" ]]; then
   EVAL_ARGS+=(
+    --camera-selector-config "$JUDGE_CONFIG"
     --camera-blend-file "$BLEND_FILE"
     --camera-evidence-dir "$OUT_DIR/camera_evidence"
     --camera-pose-max-views "$CAMERA_POSE_MAX_VIEWS"

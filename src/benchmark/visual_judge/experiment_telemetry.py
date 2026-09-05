@@ -172,6 +172,35 @@ class CameraExperimentTelemetry:
             }
         )
 
+    def record_preview_render(
+        self,
+        *,
+        stage: str,
+        preview_count: int,
+        gpu_time_seconds: float,
+        evidence_round: int,
+        episode_index: int,
+        provenance: dict[str, Any],
+    ) -> None:
+        """Record selector-only previews without consuming evidence rounds."""
+
+        count = _count(preview_count)
+        duration = _duration(gpu_time_seconds)
+        self.preview_render_count += count
+        self.render_gpu_time_seconds += duration
+        self.events.append(
+            {
+                "kind": "candidate_preview_render",
+                "stage": str(stage),
+                "evidence_round": int(evidence_round),
+                "episode_index": int(episode_index),
+                "preview_render_count": count,
+                "full_render_count": 0,
+                "render_gpu_time_seconds": duration,
+                "provenance": deepcopy(provenance),
+            }
+        )
+
     def record_judge(
         self,
         *,

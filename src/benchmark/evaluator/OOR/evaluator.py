@@ -21,6 +21,9 @@ from benchmark.evaluator.relationship_vlm import adjudicate_unsupported_relation
 from benchmark.evaluator.generic_validity.support import check_support
 from benchmark.relation_identity import copy_relation_identity, normalize_relation_id, provisional_relation_id
 from benchmark.visual_judge.runtime import EvidenceControlUnresolvedError
+from benchmark.visual_judge.contracts import (
+    response_schema_audit_from_exception,
+)
 
 
 # Kept as a compatibility export. OOR now has deterministic handlers plus a
@@ -365,7 +368,13 @@ def _adjudicate_unknown(
             error=f"{exc}; stop_reason={exc.result.stop_reason}",
         )
     except Exception as exc:  # The report must preserve a failed mandatory judge call.
-        return pending_relation_result(family="oor", relation=spec, reason="vlm_adjudication_failed", error=str(exc))
+        return pending_relation_result(
+            family="oor",
+            relation=spec,
+            reason="vlm_adjudication_failed",
+            error=str(exc),
+            error_audit=response_schema_audit_from_exception(exc),
+        )
 
 
 def _adjudicate_ambiguous_known_relation(
@@ -432,6 +441,7 @@ def _adjudicate_ambiguous_known_relation(
             relation=spec,
             reason="vlm_adjudication_failed",
             error=str(exc),
+            error_audit=response_schema_audit_from_exception(exc),
             detector_evidence=detector_evidence,
             preliminary=preliminary,
         )
@@ -445,12 +455,14 @@ def _pending_known_relation(
     detector_evidence: dict[str, Any],
     preliminary: dict[str, Any],
     error: str | None = None,
+    error_audit: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     result = pending_relation_result(
         family=family,
         relation=relation,
         reason=reason,
         error=error,
+        error_audit=error_audit,
         detector_evidence=detector_evidence,
     )
     result["category"] = str(preliminary.get("category") or "target_support")

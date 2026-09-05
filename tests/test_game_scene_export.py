@@ -535,3 +535,34 @@ def test_interpenetrating_game_objects_are_not_certified_separated(tmp_path: Pat
     pair = collision["pairs"][0]
     assert pair["route"] != "direct_valid_obb_separated"
     assert pair["obb_evidence"]["obb_certifiably_separated"] is False
+
+
+def test_legacy_game_collision_report_excludes_new_scoring_audit(
+    tmp_path: Path,
+) -> None:
+    payload = _probe(
+        [
+            _probe_object("cube_0000", translation=(0.0, 0.5, 0.0)),
+            _probe_object("cube_0001", translation=(0.2, 0.5, 0.0)),
+        ]
+    )
+    scene, manifest = _export(payload, tmp_path)
+    profile = load_yaml(
+        Path("configs/evaluation/metric_profile_game_v1.yaml"),
+        default={},
+    )
+
+    report = run_evaluate(
+        scene=scene,
+        out=tmp_path / "legacy_game_out",
+        eval_generic_validity=True,
+        collision_geometry=manifest,
+        evaluation_profile=profile,
+    )
+
+    validity = report["reports"]["generic_validity"]
+    assert "scoring" not in validity
+    assert all(
+        "scoring_geometry" not in pair
+        for pair in validity["metrics"]["collision"]["pairs"]
+    )

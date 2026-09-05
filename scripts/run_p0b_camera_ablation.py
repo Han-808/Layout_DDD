@@ -18,6 +18,9 @@ from typing import Any, Callable
 
 from benchmark.rendering import BlenderRenderer
 from benchmark.rendering.camera_pose import CAMERA_POSE_MODES, resolve_camera_pose_mode
+from benchmark.visual_judge.openai_camera_selector import (
+    build_openai_compatible_camera_selector,
+)
 from benchmark.visual_judge.openai_compatible import build_openai_compatible_vlm_judge
 from benchmark.visual_judge.p0b import adjudicate_p0b_event
 from benchmark.visual_judge.render_views import CameraEvidenceProvider
@@ -125,7 +128,7 @@ HIGHLIGHT_EVIDENCE_ROLES = {"metric_local_highlight", "collision_pair_overlay"}
 GLOBAL_HIGHLIGHT_ROLE = "metric_highlighted_global"
 EVENT_SCHEMA_VERSION = "p0b_camera_ablation_event_v2"
 RESUME_CONTRACT_SCHEMA_VERSION = "p0b_camera_ablation_resume_contract_v1"
-CAMERA_CANDIDATE_POLICY = "legacy_v1"
+CAMERA_CANDIDATE_POLICY = "legacy"
 HIGHLIGHTED_GLOBAL_POSE_POLICY = "legacy_metric"
 
 
@@ -158,6 +161,9 @@ def main() -> None:
     out_dir = Path(args.out_dir).expanduser().resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
     judge = build_openai_compatible_vlm_judge(judge_config)
+    camera_selector = build_openai_compatible_camera_selector(
+        judge_config
+    )
     judge_identity = _judge_identity(judge_config)
     run_started = time.time()
     experiment_specs = _experiment_specs(args)
@@ -166,7 +172,7 @@ def main() -> None:
         shared_visibility_provider = _provider(
             args,
             "visibility_ranked",
-            judge,
+            camera_selector,
             scene,
             out_dir / "_shared_visibility_evidence",
             collision_geometry=collision_geometry,
@@ -196,7 +202,7 @@ def main() -> None:
             else _provider(
                 args,
                 camera_mode,
-                judge,
+                camera_selector,
                 scene,
                 experiment_dir,
                 collision_geometry=collision_geometry,
@@ -474,7 +480,7 @@ def _parse_args() -> argparse.Namespace:
 def _provider(
     args: argparse.Namespace,
     mode: str,
-    judge: Any,
+    camera_selector: Any,
     scene: dict[str, Any],
     mode_dir: Path,
     *,
@@ -503,7 +509,7 @@ def _provider(
         blend_file=args.blend_file,
         out_dir=mode_dir / "camera_evidence",
         mode=mode,
-        selector=judge,
+        selector=camera_selector,
         metric_modes=metric_modes,
         max_views=args.max_views,
         max_steps=max_steps,

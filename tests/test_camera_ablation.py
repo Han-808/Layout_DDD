@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import json
 from copy import deepcopy
 from pathlib import Path
@@ -103,6 +104,23 @@ def test_controlled_arms_isolate_camera_highlight_and_global_context() -> None:
     assert ARM_CONFIGS["visibility_highlight"]["include_overview"] is False
 
 
+def test_ablation_builds_judge_and_camera_selector_separately() -> None:
+    source = (
+        Path(__file__).resolve().parents[1]
+        / "scripts"
+        / "run_p0b_camera_ablation.py"
+    ).read_text(encoding="utf-8")
+    called_names = {
+        node.func.id
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+    }
+
+    assert "build_openai_compatible_vlm_judge" in called_names
+    assert "build_openai_compatible_camera_selector" in called_names
+
+
 def test_visual_policy_arms_change_only_evidence_selection_policy() -> None:
     fixed = ARM_CONFIGS["fixed_global"]
     deterministic = ARM_CONFIGS["deterministic_metric_local"]
@@ -172,7 +190,7 @@ def test_camera_ablation_resume_requires_exact_successful_contract(tmp_path: Pat
             "implementation": {"camera_pose.py": "code-a"},
         },
         "observation_config": {
-            "candidate_policy": "legacy_v1",
+            "candidate_policy": "legacy",
             "max_views": 2,
             "candidate_count": 6,
         },

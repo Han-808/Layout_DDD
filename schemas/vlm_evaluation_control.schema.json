@@ -6,11 +6,15 @@
   "type": "object",
   "additionalProperties": false,
   "default": {
-    "schema_version": "vlm_evaluation_control_v1",
+    "schema_version": "vlm_evaluation_control_v2",
     "camera_selector": {
       "backend": "existing",
       "allow_freeform_pose": false,
       "allow_scene_mutation": false
+    },
+    "initial_group_camera": {
+      "mode": "visibility_ranked",
+      "selector": "deterministic"
     },
     "camera_acquisition": {
       "policy": "deterministic_then_vlm",
@@ -38,10 +42,10 @@
         "max_repair_plans": 3
       },
       "total": {
-        "max_evidence_rounds": 2,
-        "max_total_images": 6,
-        "max_selector_calls": 3,
-        "max_camera_actions": 2
+        "max_evidence_rounds": 3,
+        "max_total_images": 8,
+        "max_selector_calls": 4,
+        "max_camera_actions": 3
       },
       "escalation": {
         "on_no_feasible_candidate": true,
@@ -59,22 +63,22 @@
       "allow_need_more_evidence": true
     },
     "budgets": {
-      "max_evidence_rounds": 2,
+      "max_evidence_rounds": 3,
       "max_views_per_round": 2,
-      "max_total_images": 6,
-      "max_camera_actions": 2,
-      "max_selector_calls": 3
+      "max_total_images": 8,
+      "max_camera_actions": 3,
+      "max_selector_calls": 4
     },
     "require_evidence_gate_after_render": true,
     "on_non_camera_repairable_evidence": "unresolved",
-    "on_budget_exhausted": "unresolved",
+    "on_budget_exhausted": "force_choice",
     "on_selector_failure": "keep_previous_evidence",
     "on_render_failure": "unresolved"
   },
   "properties": {
     "schema_version": {
-      "const": "vlm_evaluation_control_v1",
-      "default": "vlm_evaluation_control_v1"
+      "const": "vlm_evaluation_control_v2",
+      "default": "vlm_evaluation_control_v2"
     },
     "camera_selector": {
       "type": "object",
@@ -102,6 +106,24 @@
         "allow_scene_mutation": {
           "const": false,
           "default": false
+        }
+      }
+    },
+    "initial_group_camera": {
+      "type": "object",
+      "additionalProperties": false,
+      "default": {
+        "mode": "visibility_ranked",
+        "selector": "deterministic"
+      },
+      "properties": {
+        "mode": {
+          "const": "visibility_ranked",
+          "default": "visibility_ranked"
+        },
+        "selector": {
+          "const": "deterministic",
+          "default": "deterministic"
         }
       }
     },
@@ -134,10 +156,10 @@
           "max_repair_plans": 3
         },
         "total": {
-          "max_evidence_rounds": 2,
-          "max_total_images": 6,
-          "max_selector_calls": 3,
-          "max_camera_actions": 2
+          "max_evidence_rounds": 3,
+          "max_total_images": 8,
+          "max_selector_calls": 4,
+          "max_camera_actions": 3
         },
         "escalation": {
           "on_no_feasible_candidate": true,
@@ -303,31 +325,31 @@
           "type": "object",
           "additionalProperties": false,
           "default": {
-            "max_evidence_rounds": 2,
-            "max_total_images": 6,
-            "max_selector_calls": 3,
-            "max_camera_actions": 2
+            "max_evidence_rounds": 3,
+            "max_total_images": 8,
+            "max_selector_calls": 4,
+            "max_camera_actions": 3
           },
           "properties": {
             "max_evidence_rounds": {
               "type": "integer",
               "minimum": 0,
-              "default": 2
+              "default": 3
             },
             "max_total_images": {
               "type": "integer",
               "minimum": 1,
-              "default": 6
+              "default": 8
             },
             "max_selector_calls": {
               "type": "integer",
               "minimum": 1,
-              "default": 3
+              "default": 4
             },
             "max_camera_actions": {
               "type": "integer",
               "minimum": 0,
-              "default": 2
+              "default": 3
             }
           }
         },
@@ -401,17 +423,17 @@
       "type": "object",
       "additionalProperties": false,
       "default": {
-        "max_evidence_rounds": 2,
+        "max_evidence_rounds": 3,
         "max_views_per_round": 2,
-        "max_total_images": 6,
-        "max_camera_actions": 2,
-        "max_selector_calls": 3
+        "max_total_images": 8,
+        "max_camera_actions": 3,
+        "max_selector_calls": 4
       },
       "properties": {
         "max_evidence_rounds": {
           "type": "integer",
           "minimum": 0,
-          "default": 2
+          "default": 3
         },
         "max_views_per_round": {
           "type": "integer",
@@ -421,17 +443,17 @@
         "max_total_images": {
           "type": "integer",
           "minimum": 1,
-          "default": 6
+          "default": 8
         },
         "max_camera_actions": {
           "type": "integer",
           "minimum": 0,
-          "default": 2
+          "default": 3
         },
         "max_selector_calls": {
           "type": "integer",
           "minimum": 1,
-          "default": 3
+          "default": 4
         }
       }
     },
@@ -444,8 +466,8 @@
       "default": "unresolved"
     },
     "on_budget_exhausted": {
-      "const": "unresolved",
-      "default": "unresolved"
+      "const": "force_choice",
+      "default": "force_choice"
     },
     "on_selector_failure": {
       "type": "string",

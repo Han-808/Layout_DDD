@@ -680,9 +680,12 @@ def test_scene_harness_executes_group_l3_deterministic_to_vlm_cascade(
             )
             views = []
             for index, pose in enumerate(camera_views):
+                view_code = sum(
+                    str(pose.get("id") or f"view_{index}").encode("utf-8")
+                ) % 200
                 path = self._image(
                     Path(out_dir) / f"rgb_{index:02d}.png",
-                    (60, 120, 160),
+                    (30 + view_code, 120, 160),
                 )
                 views.append(
                     {
@@ -823,8 +826,12 @@ def test_scene_harness_executes_group_l3_deterministic_to_vlm_cascade(
         out_dir=out_dir,
         evaluator_vlm_judge=judge,
         blender_bin="/usr/bin/false",
-        camera_pose_mode="auto",
         camera_active_selector=selector,
+        vlm_evaluation_control={
+            "camera_acquisition": {
+                "policy": "deterministic_then_vlm",
+            }
+        },
         object_grouping_report={
             "status": "complete",
             "grouping_backend": "vlm",
@@ -838,10 +845,19 @@ def test_scene_harness_executes_group_l3_deterministic_to_vlm_cascade(
         },
         scene_quality_config={
             "metrics": {
-                "scale_consistency": {"enabled": True},
+                    "scale_consistency": {
+                        "enabled": True,
+                        # Keep this test focused on the Controller repair
+                        # cascade after an initial visual Judge request.
+                        "evidence_plan": {
+                            "evidence_strategy": "global_and_local",
+                            "router_options": None,
+                        },
+                    },
                 "object_pairing_consistency": {"enabled": False},
                 "style_consistency": {"enabled": False},
                 "functional_consistency": {"enabled": False},
+                "semantic_placement_consistency": {"enabled": False},
             }
         },
         asset_policy={
@@ -859,6 +875,11 @@ def test_scene_harness_executes_group_l3_deterministic_to_vlm_cascade(
         "scale_consistency"
     ]
     assert metric["judgement"]["verdict"] == "valid"
+    assert metric["renderer_invoked"] is True
+    assert metric["final_render_count"] >= 1
+    assert report["reports"]["scene_quality"][
+        "renderer_invoked"
+    ] is True
     assert len(judge.scene_quality_requests) == 2
     assert len(selector.requests) == 1
     grouping_protocol = report["evaluation_config"]["object_grouping"][
@@ -877,6 +898,11 @@ def test_scene_harness_executes_group_l3_deterministic_to_vlm_cascade(
         "vlm_selector_configured": True,
         "renderer": "CameraViewEvidenceRenderer",
         "scene_access": "read_only",
+        "initial_group_camera": {
+            "mode": "visibility_ranked",
+            "selector": "deterministic",
+            "source": "default",
+        },
     }
     controlled = report["evaluation_config"]["vlm_evaluation_control"][
         "integration"
@@ -890,8 +916,10 @@ def test_scene_harness_executes_group_l3_deterministic_to_vlm_cascade(
         "evidence_gate",
         "judge",
         "acquisition_planner",
+        "trusted_candidate_bank",
         "camera_selector",
         "camera_escalation",
+        "candidate_preview_render",
         "camera_selector",
         "render",
         "evidence_gate",

@@ -1,0 +1,21 @@
+{
+  "asset_resolution_policy": "exact_only",
+  "selected_iteration": 0,
+  "execution": {
+    "repo_path": "/ABSOLUTE/PATH/TO/SceneWeaver",
+    "python_executable": "/ABSOLUTE/PATH/TO/sceneweaver/python",
+    "command": [
+      "{python_executable}",
+      "{repo_path}/integration_entrypoint.py",
+      "--request",
+      "{native_input}",
+      "--output-root",
+      "{upstream_output_dir}/sceneweaver_native"
+    ],
+    "native_artifact": "{upstream_output_dir}/sceneweaver_native",
+    "auxiliary_artifacts": {
+      "asset_bindings": "{upstream_output_dir}/asset_bindings.json"
+    },
+    "timeout_seconds": 7200
+  }
+}

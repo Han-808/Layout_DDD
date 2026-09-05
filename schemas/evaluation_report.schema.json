@@ -13,6 +13,372 @@
       "minimum": 0,
       "maximum": 1
     },
+    "score100": {
+      "type": ["number", "null"],
+      "minimum": 0,
+      "maximum": 100
+    },
+    "budgetExhaustionForcedChoice": {
+      "type": "object",
+      "required": ["applied"],
+      "properties": {
+        "applied": {"type": "boolean"},
+        "forced_binary": {"type": "boolean"},
+        "evidence_ambiguous": {"type": "boolean"},
+        "stop_reason": {"type": ["string", "null"]},
+        "trigger": {"type": ["string", "null"]},
+        "ambiguity_before_forcing": {"type": "boolean"},
+        "pre_force_judge_status": {
+          "type": ["string", "null"]
+        },
+        "pre_force_evidence_request": {
+          "type": ["object", "null"]
+        },
+        "pre_force_reason": {"type": ["string", "null"]},
+        "available_image_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "final_verdict": {
+          "enum": ["valid", "invalid", null]
+        },
+        "final_confidence": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "maximum": 1
+        },
+        "evidence_artifacts": {
+          "type": "array"
+        },
+        "occurrence_count": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "events": {
+          "type": "array",
+          "items": {"type": "object"}
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {"applied": {"const": true}},
+            "required": ["applied"]
+          },
+          "then": {
+            "required": [
+              "trigger",
+              "ambiguity_before_forcing",
+              "pre_force_judge_status",
+              "pre_force_evidence_request",
+              "pre_force_reason",
+              "available_image_count",
+              "final_verdict",
+              "final_confidence",
+              "evidence_artifacts"
+            ]
+          }
+        }
+      ]
+    },
+    "l3MetricAudit": {
+      "type": "object",
+      "properties": {
+        "budget_exhaustion_forced_choice": {
+          "$ref": "#/$defs/budgetExhaustionForcedChoice"
+        },
+        "functional_ownership_ledger": {
+          "$ref": "#/$defs/functionalOwnershipLedger"
+        },
+        "functional_measurement_bank": {
+          "$ref": "#/$defs/functionalMeasurementBank"
+        },
+        "functional_spatial_context": {
+          "$ref": "#/$defs/functionalSpatialContext"
+        },
+        "placement_check_ledger": {
+          "$ref": "#/$defs/placementCheckLedger"
+        },
+        "placement_check_coverage": {
+          "$ref": "#/$defs/typedCheckCoverage"
+        },
+        "cross_metric_ownership_audit": {
+          "$ref": "#/$defs/crossMetricOwnershipAudit"
+        }
+      }
+    },
+    "functionalMeasurementBank": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "generation_stage",
+        "measurement_role",
+        "decision_authority",
+        "accepted_check_count",
+        "check_measurement_count",
+        "coverage",
+        "check_measurements"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "functional_measurement_bank_v1"
+        },
+        "generation_stage": {
+          "const": "accepted_checks_before_camera_scheduling"
+        },
+        "measurement_role": {
+          "type": "string"
+        },
+        "decision_authority": {
+          "const": "none"
+        },
+        "accepted_check_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "check_measurement_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "coverage": {
+          "type": "object"
+        },
+        "check_measurements": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "check_id",
+              "check_type",
+              "target_ids",
+              "status",
+              "measurement_extensions",
+              "decision_authority"
+            ],
+            "properties": {
+              "check_id": {"type": "string", "minLength": 1},
+              "check_type": {"type": "string", "minLength": 1},
+              "target_ids": {
+                "type": "array",
+                "items": {"type": "string", "minLength": 1},
+                "minItems": 1,
+                "uniqueItems": true
+              },
+              "status": {
+                "enum": ["complete", "partial", "unavailable"]
+              },
+              "measurement_extensions": {"type": "object"},
+              "decision_authority": {"const": "none"}
+            }
+          }
+        }
+      }
+    },
+    "functionalSpatialContext": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "context_role",
+        "decision_authority",
+        "clearance_requirements",
+        "related_pairs",
+        "projection_audit"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "functional_spatial_context_v3"
+        },
+        "context_role": {
+          "const": "attention_only"
+        },
+        "decision_authority": {
+          "const": "none"
+        },
+        "clearance_requirements": {"type": "array"},
+        "related_pairs": {"type": "array"},
+        "projection_audit": {"type": "object"}
+      }
+    },
+    "functionalOwnershipLedger": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "source_metric",
+        "events",
+        "event_count",
+        "decision_authority",
+        "projection_mode"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "functional_ownership_ledger_v2"
+        },
+        "source_metric": {
+          "const": "functional_consistency"
+        },
+        "events": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "event_id",
+              "affected_object_ids",
+              "cause_kind",
+              "causal_object_ids",
+              "scoring_target_ids",
+              "counterpart_object_ids",
+              "owning_metric",
+              "decision_ref",
+              "lifecycle_status",
+              "decision_authority"
+            ],
+            "properties": {
+              "event_id": {"type": "string", "minLength": 1},
+              "affected_object_ids": {
+                "type": "array",
+                "items": {"type": "string", "minLength": 1},
+                "minItems": 1,
+                "uniqueItems": true
+              },
+              "cause_kind": {
+                "enum": ["external_object", "self_layout"]
+              },
+              "causal_object_ids": {
+                "type": "array",
+                "items": {"type": "string", "minLength": 1},
+                "minItems": 1,
+                "uniqueItems": true
+              },
+              "scoring_target_ids": {
+                "type": "array",
+                "items": {"type": "string", "minLength": 1},
+                "minItems": 1,
+                "uniqueItems": true
+              },
+              "counterpart_object_ids": {
+                "type": "array",
+                "items": {"type": "string", "minLength": 1},
+                "uniqueItems": true
+              },
+              "owning_metric": {
+                "const": "functional_consistency"
+              },
+              "decision_ref": {"type": "string", "minLength": 1},
+              "lifecycle_status": {"const": "final"},
+              "decision_authority": {"const": "none"}
+            }
+          }
+        },
+        "event_count": {"type": "integer", "minimum": 0},
+        "decision_authority": {"const": "none"},
+        "projection_mode": {"const": "posthoc_read_only"}
+      }
+    },
+    "placementCheckLedger": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "checks",
+        "accepted_check_count",
+        "decision_authority"
+      ],
+      "properties": {
+        "schema_version": {"const": "placement_check_ledger_v1"},
+        "checks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "check_id",
+              "check_type",
+              "subject_id",
+              "context_ids",
+              "owner_stage"
+            ],
+            "properties": {
+              "check_id": {"type": "string", "minLength": 1},
+              "check_type": {
+                "enum": [
+                  "support_and_height",
+                  "scene_zone",
+                  "contextual_anchor"
+                ]
+              },
+              "subject_id": {"type": "string", "minLength": 1},
+              "context_ids": {
+                "type": "array",
+                "items": {"type": "string", "minLength": 1},
+                "uniqueItems": true
+              },
+              "owner_stage": {
+                "enum": ["scene_global", "group_local"]
+              }
+            }
+          }
+        },
+        "accepted_check_count": {"type": "integer", "minimum": 0},
+        "decision_authority": {"const": "none"}
+      }
+    },
+    "typedCheckCoverage": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "required_check_count",
+        "resolved_check_ids",
+        "unresolved_check_ids",
+        "complete",
+        "decision_authority"
+      ],
+      "properties": {
+        "schema_version": {"type": "string", "minLength": 1},
+        "required_check_count": {"type": "integer", "minimum": 0},
+        "resolved_check_count": {"type": "integer", "minimum": 0},
+        "resolved_check_ids": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "uniqueItems": true
+        },
+        "unresolved_check_ids": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "uniqueItems": true
+        },
+        "complete": {"type": "boolean"},
+        "decision_authority": {"const": "none"}
+      }
+    },
+    "crossMetricOwnershipAudit": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "functional_event_count",
+        "potential_overlaps",
+        "independent_invalid_placement_check_ids",
+        "runtime_cross_metric_suppression",
+        "object_identity_alone_suppresses_placement",
+        "placement_claims_judged_independently",
+        "decision_authority"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "cross_metric_ownership_audit_v2"
+        },
+        "functional_event_count": {"type": "integer", "minimum": 0},
+        "potential_overlaps": {"type": "array"},
+        "independent_invalid_placement_check_ids": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "uniqueItems": true
+        },
+        "object_identity_alone_suppresses_placement": {
+          "const": false
+        },
+        "runtime_cross_metric_suppression": {"const": false},
+        "placement_claims_judged_independently": {"const": true},
+        "decision_authority": {"const": "none"}
+      }
+    },
     "canonicalLayerName": {
       "enum": [
         "l0_structural_validity",
@@ -60,7 +426,12 @@
         "scene_id": {"type": ["string", "null"]},
         "request_id": {"type": ["string", "null"]},
         "evaluator_version": {"const": "scene_harness_evaluator_v2"},
-        "profile_version": {"const": "canonical_scene_evaluation_v1"},
+        "profile_version": {
+          "enum": [
+            "canonical_scene_evaluation_v1",
+            "canonical_scene_evaluation_v2"
+          ]
+        },
         "workflow": {"const": "canonical_l0_l4"},
         "protocol_scope": {
           "enum": [
@@ -75,14 +446,80 @@
         },
         "prompt_granularity_role": {"const": "metadata_only"},
         "evaluation_status": {
-          "enum": ["complete", "incomplete"]
+          "enum": ["complete", "incomplete", "not_evaluable"]
         },
         "benchmark_score": {"$ref": "#/$defs/score"},
+        "benchmark_score_100": {"$ref": "#/$defs/score100"},
         "benchmark_score_status": {
-          "enum": ["complete", "insufficient_metric_coverage"]
+          "enum": [
+            "complete",
+            "partial_coverage",
+            "failed_coverage_threshold",
+            "insufficient_metric_coverage",
+            "not_evaluable"
+          ]
         },
         "evaluation_plan": {
           "$ref": "#/$defs/canonicalEvaluationPlan"
+        },
+        "scoring_profile": {
+          "type": "object",
+          "required": [
+            "scoring_profile_id",
+            "scoring_spec_version",
+            "layer_weights"
+          ],
+          "properties": {
+            "scoring_profile_id": {"type": "string"},
+            "scoring_spec_version": {"type": "string"},
+            "layer_weights": {"$ref": "#/$defs/canonicalLayerWeights"},
+            "l3_metric_weights": {
+              "$ref": "#/$defs/canonicalL3MetricWeights"
+            },
+            "requires_l2_task": {"type": "boolean"},
+            "deduction_multiplier": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "deduction_multiplier_metrics": {
+              "type": "array",
+              "items": {"type": "string"},
+              "uniqueItems": true
+            }
+          },
+          "additionalProperties": false,
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "scoring_profile_id": {
+                    "enum": [
+                      "intrinsic_validity_v2",
+                      "prompt_conditioned_quality_v2"
+                    ]
+                  }
+                },
+                "required": ["scoring_profile_id"]
+              },
+              "then": {"required": ["l3_metric_weights"]}
+            }
+          ]
+        },
+        "canonical_object_denominator": {
+          "type": "object",
+          "required": ["ordered_object_ids", "n_scene"],
+          "properties": {
+            "ordered_object_ids": {
+              "type": "array",
+              "items": {"type": "string"},
+              "uniqueItems": true
+            },
+            "n_scene": {"type": "integer", "minimum": 0}
+          },
+          "additionalProperties": false
+        },
+        "scoring_reliability": {
+          "$ref": "#/$defs/scoringReliability"
         },
         "layer_reports": {
           "$ref": "#/$defs/canonicalLayerMap"
@@ -125,6 +562,58 @@
           },
           "then": {
             "required": ["case_bundle", "evidence_provenance"]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "profile_version": {
+                "const": "canonical_scene_evaluation_v1"
+              }
+            },
+            "required": ["profile_version"]
+          },
+          "then": {
+            "properties": {
+              "evaluation_plan": {
+                "properties": {
+                  "profile_version": {
+                    "const": "canonical_scene_evaluation_v1"
+                  }
+                }
+              },
+              "coverage": {
+                "properties": {
+                  "active_metrics_by_layer": {
+                    "$ref": "#/$defs/canonicalMetricsByLayerV1"
+                  },
+                  "resolved_metrics_by_layer": {
+                    "$ref": "#/$defs/canonicalMetricsByLayerV1"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "profile_version": {
+                "const": "canonical_scene_evaluation_v2"
+              }
+            },
+            "required": ["profile_version"]
+          },
+          "then": {
+            "properties": {
+              "evaluation_plan": {
+                "properties": {
+                  "profile_version": {
+                    "const": "canonical_scene_evaluation_v2"
+                  }
+                }
+              }
+            }
           }
         }
       ]
@@ -171,7 +660,7 @@
       "properties": {
         "layer": {"const": "l0_structural_validity"},
         "status": {
-          "enum": ["passed", "failed", "incomplete"]
+          "enum": ["passed", "failed", "incomplete", "not_evaluable"]
         },
         "score": {"type": "null"},
         "affects_score": {"const": false},
@@ -180,7 +669,88 @@
           "items": {"type": "string"},
           "minItems": 1
         },
-        "reason": {"type": ["string", "null"]}
+        "reason": {"type": ["string", "null"]},
+        "readiness": {
+          "$ref": "#/$defs/submissionReadinessReport"
+        }
+      }
+    },
+    "submissionReadinessReport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "gate_version",
+        "status",
+        "reason_codes",
+        "failure_owner",
+        "checks",
+        "provenance"
+      ],
+      "properties": {
+        "gate_version": {"const": "submission_readiness_v1"},
+        "status": {
+          "enum": ["ready", "not_evaluable"]
+        },
+        "reason_codes": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "failure_stage": {
+          "type": ["string", "null"]
+        },
+        "primary_failure_owner": {
+          "type": ["string", "null"]
+        },
+        "contributing_owners": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "failure_owner": {
+          "type": ["string", "null"]
+        },
+        "checks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true,
+            "required": ["id", "passed"],
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "passed": {"type": "boolean"},
+              "reason_codes": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "uniqueItems": true
+              },
+              "failure_owner": {
+                "type": "string",
+                "minLength": 1
+              },
+              "failure_stage": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          },
+          "minItems": 1
+        },
+        "provenance": {
+          "type": "object"
+        }
       }
     },
     "l1Report": {
@@ -257,6 +827,40 @@
           "type": "integer",
           "minimum": 0
         },
+        "eligible_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "resolved_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "fraction": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "grounded_score_fraction": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "observed_score": {
+          "$ref": "#/$defs/score"
+        },
+        "earned_score_mass": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "maximum": 1
+        },
+        "minimum_publishable_coverage": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "coverage_threshold_passed": {
+          "type": "boolean"
+        },
         "unresolved_metrics": {
           "type": "array",
           "items": {
@@ -317,25 +921,20 @@
               "type": "object",
               "additionalProperties": false,
               "properties": {
-                "scale_consistency": {"type": "object"},
-                "object_pairing_consistency": {"type": "object"},
-                "style_consistency": {"type": "object"},
+                "scale_consistency": {
+                  "$ref": "#/$defs/l3MetricAudit"
+                },
+                "object_pairing_consistency": {
+                  "$ref": "#/$defs/l3MetricAudit"
+                },
+                "style_consistency": {
+                  "$ref": "#/$defs/l3MetricAudit"
+                },
                 "functional_consistency": {
-                  "type": "object",
-                  "properties": {
-                    "metric_status": {
-                      "const": "experimental_non_scoring"
-                    },
-                    "activation_policy": {
-                      "const": "explicit_config_only"
-                    },
-                    "included_in_canonical_aggregate": {
-                      "const": false
-                    },
-                    "affects_score": {
-                      "const": false
-                    }
-                  }
+                  "$ref": "#/$defs/l3MetricAudit"
+                },
+                "semantic_placement_consistency": {
+                  "$ref": "#/$defs/l3MetricAudit"
                 }
               }
             }
@@ -430,6 +1029,11 @@
         "covered_weight",
         "required_weight",
         "complete",
+        "score_resolution_complete",
+        "score_grounding_complete",
+        "grounded_score_weight",
+        "grounded_score_fraction",
+        "layer_grounding_fractions",
         "aggregation_denominator",
         "case_comparability"
       ],
@@ -472,6 +1076,37 @@
           "maximum": 1
         },
         "complete": {"type": "boolean"},
+        "score_resolution_complete": {"type": "boolean"},
+        "score_grounding_complete": {"type": "boolean"},
+        "grounded_score_weight": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "grounded_score_fraction": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "minimum_publishable_coverage": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "coverage_threshold_passed": {
+          "type": "boolean"
+        },
+        "layer_grounding_fractions": {
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/canonicalScoringLayerName"
+          },
+          "additionalProperties": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          }
+        },
         "aggregation_denominator": {
           "type": "number",
           "minimum": 0,
@@ -482,7 +1117,209 @@
         }
       }
     },
+    "scoringReliability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "rate_denominator_unit",
+        "active_metric_count",
+        "judge_episode_count",
+        "forced_binary_metric_count",
+        "forced_binary_episode_count",
+        "forced_binary_rate",
+        "evidence_ambiguous_metric_count",
+        "evidence_ambiguous_episode_count",
+        "evidence_ambiguity_rate",
+        "unresolved_metric_ids",
+        "unresolved_claims",
+        "infrastructure_failures",
+        "terminal_state",
+        "episodes",
+        "metrics"
+      ],
+      "properties": {
+        "schema_version": {"const": "scoring_reliability_v2"},
+        "rate_denominator_unit": {"const": "judge_episode"},
+        "active_metric_count": {"type": "integer", "minimum": 0},
+        "judge_episode_count": {"type": "integer", "minimum": 0},
+        "forced_binary_metric_count": {"type": "integer", "minimum": 0},
+        "forced_binary_episode_count": {"type": "integer", "minimum": 0},
+        "forced_binary_rate": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "maximum": 1
+        },
+        "evidence_ambiguous_metric_count": {"type": "integer", "minimum": 0},
+        "evidence_ambiguous_episode_count": {"type": "integer", "minimum": 0},
+        "evidence_ambiguity_rate": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "maximum": 1
+        },
+        "unresolved_metric_ids": {
+          "type": "array",
+          "items": {"type": "string"},
+          "uniqueItems": true
+        },
+        "unresolved_claims": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["metric_id", "family", "claim_id", "resolution", "reason"],
+            "properties": {
+              "metric_id": {"type": "string"},
+              "family": {"type": "string"},
+              "claim_id": {"type": "string"},
+              "resolution": {"type": "string"},
+              "reason": {"type": ["string", "null"]}
+            }
+          }
+        },
+        "infrastructure_failures": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "metric_id",
+              "status",
+              "reason",
+              "error_type",
+              "adjudication_failures"
+            ],
+            "properties": {
+              "metric_id": {"type": "string"},
+              "status": {"type": "string"},
+              "reason": {"type": ["string", "null"]},
+              "error_type": {"type": ["string", "null"]},
+              "adjudication_failures": {
+                "type": "array",
+                "items": {"type": "string"}
+              },
+              "family": {"type": "string"},
+              "claim_id": {"type": "string"}
+            }
+          }
+        },
+        "terminal_state": {
+          "enum": ["complete", "unresolved", "infrastructure_failure"]
+        },
+        "episodes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "episode_id",
+              "judge_method",
+              "layer",
+              "metric",
+              "metric_id",
+              "status",
+              "stop_reason",
+              "forced_binary",
+              "evidence_ambiguous",
+              "trigger",
+              "claim_or_event",
+              "group_id"
+            ],
+            "properties": {
+              "episode_id": {"type": "string"},
+              "judge_method": {"type": "string"},
+              "layer": {"type": "string"},
+              "metric": {"type": "string"},
+              "metric_id": {"type": "string"},
+              "status": {"type": "string"},
+              "stop_reason": {"type": ["string", "null"]},
+              "forced_binary": {"type": "boolean"},
+              "evidence_ambiguous": {"type": "boolean"},
+              "trigger": {"type": ["string", "null"]},
+              "claim_or_event": {},
+              "group_id": {"type": ["string", "null"]}
+            }
+          }
+        },
+        "metrics": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "metric_id",
+              "status",
+              "active",
+              "scientifically_complete",
+              "forced_binary",
+              "evidence_ambiguous",
+              "infrastructure_failure",
+              "judge_episode_count"
+            ],
+            "properties": {
+              "metric_id": {"type": "string"},
+              "status": {"type": "string"},
+              "active": {"type": "boolean"},
+              "scientifically_complete": {"type": "boolean"},
+              "forced_binary": {"type": "boolean"},
+              "evidence_ambiguous": {"type": "boolean"},
+              "infrastructure_failure": {"type": "boolean"},
+              "judge_episode_count": {"type": "integer", "minimum": 0}
+            }
+          }
+        }
+      }
+    },
     "canonicalMetricsByLayer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "l1_physical_plausibility",
+        "l2_specification_fidelity",
+        "l3_scene_quality",
+        "l4_downstream_task_functionality"
+      ],
+      "properties": {
+        "l1_physical_plausibility": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "collision",
+              "oob",
+              "support",
+              "navigability",
+              "accessibility"
+            ]
+          },
+          "uniqueItems": true
+        },
+        "l2_specification_fidelity": {
+          "type": "array",
+          "items": {
+            "enum": ["oor", "oar", "functional_semantic_fidelity"]
+          },
+          "uniqueItems": true
+        },
+        "l3_scene_quality": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "scale_consistency",
+              "object_pairing_consistency",
+              "style_consistency",
+              "functional_consistency",
+              "semantic_placement_consistency"
+            ]
+          },
+          "uniqueItems": true
+        },
+        "l4_downstream_task_functionality": {
+          "type": "array",
+          "maxItems": 0
+        }
+      }
+    },
+    "canonicalMetricsByLayerV1": {
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -562,7 +1399,10 @@
       ],
       "properties": {
         "profile_version": {
-          "const": "canonical_scene_evaluation_v1"
+          "enum": [
+            "canonical_scene_evaluation_v1",
+            "canonical_scene_evaluation_v2"
+          ]
         },
         "profile_status": {"const": "frozen"},
         "workflow": {"const": "canonical_l0_l4"},
@@ -583,6 +1423,9 @@
         "prompt_granularity_resolution_source": {
           "type": "string",
           "minLength": 1
+        },
+        "scoring_profile": {
+          "type": "object"
         }
       }
     },
@@ -612,6 +1455,24 @@
           "maximum": 1
         },
         "l4_downstream_task_functionality": {"const": 0.0}
+      }
+    },
+    "canonicalL3MetricWeights": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scale_consistency",
+        "style_consistency",
+        "object_pairing_consistency",
+        "functional_consistency",
+        "semantic_placement_consistency"
+      ],
+      "properties": {
+        "scale_consistency": {"type": "number", "minimum": 0, "maximum": 1},
+        "style_consistency": {"type": "number", "minimum": 0, "maximum": 1},
+        "object_pairing_consistency": {"type": "number", "minimum": 0, "maximum": 1},
+        "functional_consistency": {"type": "number", "minimum": 0, "maximum": 1},
+        "semantic_placement_consistency": {"type": "number", "minimum": 0, "maximum": 1}
       }
     },
     "canonicalPlanLayers": {
@@ -678,6 +1539,10 @@
         },
         "authorized_deviations": {
           "type": ["array", "null"]
+        },
+        "scene_quality_prompt_context": {
+          "type": ["object", "null"],
+          "description": "Resolved metric-scoped public context supplied to L3 Judge prompts."
         },
         "metric_applicability": {
           "$ref": "#/$defs/canonicalMetricApplicability"
@@ -827,7 +1692,8 @@
             "scale_consistency": {"type": "object"},
             "object_pairing_consistency": {"type": "object"},
             "style_consistency": {"type": "object"},
-            "functional_consistency": {"type": "object"}
+            "functional_consistency": {"type": "object"},
+            "semantic_placement_consistency": {"type": "object"}
           }
         },
         "l4_downstream_task_functionality": {
@@ -899,6 +1765,26 @@
         },
         "visual_style_spec": {
           "enum": ["benchmark_hash_verified", "not_applicable"]
+        },
+        "trusted_render_source": {
+          "type": "string"
+        },
+        "trusted_render_source_sha256": {
+          "type": ["string", "null"],
+          "pattern": "^[0-9a-fA-F]{64}$"
+        },
+        "prepared_trusted_render_source": {
+          "type": "string"
+        },
+        "prepared_trusted_render_source_sha256": {
+          "type": ["string", "null"],
+          "pattern": "^[0-9a-fA-F]{64}$"
+        },
+        "trusted_render_source_rederived_at_evaluation": {
+          "const": true
+        },
+        "submitted_native_blend_rendered_directly": {
+          "type": "boolean"
         }
       }
     },

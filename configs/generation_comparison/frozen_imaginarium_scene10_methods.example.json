@@ -1,0 +1,255 @@
+{
+  "methods": {
+    "catalog_placement": {
+      "adapter_config": {
+        "endpoint": "https://YOUR-AUTHORIZED-ENDPOINT/v1/chat/completions",
+        "model": "YOUR-CATALOG-PLACEMENT-BASELINE-MODEL",
+        "api_key_env": "YOUR_AUTHORIZED_API_KEY_ENV",
+        "temperature": 0.0,
+        "max_tokens": 8192,
+        "timeout_seconds": 600,
+        "max_retries": 1,
+        "response_format_json": true
+      }
+    },
+    "layout_gpt": {
+      "adapter_config": {
+        "model_identity": {
+          "provider": "openai_compatible",
+          "model_id": "gpt-5.6-sol"
+        },
+        "model_deployment_id": "scene10_shared_model_deployment_v1",
+        "comparison_support": {
+          "fixed_object_inventory": true,
+          "exact_asset_ids": true,
+          "fixed_native_scale": true
+        },
+        "layoutgpt_unit": "m",
+        "unit": "m",
+        "execution": {
+          "repo_path": "/ABSOLUTE/PATH/TO/LayoutGPT",
+          "expected_upstream_commit": "fc31954962553e5b65bf267a904a6930d50b1f5e",
+          "expected_entrypoint_sha256": "0794f1a868cdf44d69903c54687636f08bcafb8a56dc3d8a8f79a7fd2b711c6e",
+          "expected_bridge_bundle_sha256": "1ed312be6c00d0a4d266abbd35cb95050e15ffd057e20c8d7f184a09c40fc449",
+          "python_executable": "/ABSOLUTE/PATH/TO/layoutgpt/python",
+          "template_variables": {
+            "bridge_script": "/ABSOLUTE/PATH/TO/Layout_DDD/scripts/external_harness_bridges/layout_gpt_frozen.py",
+            "layoutgpt_icl_examples": "/ABSOLUTE/PATH/TO/FROZEN/layoutgpt_icl_messages.json",
+            "layoutgpt_icl_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "environment": {
+            "LAYOUT_DDD_API_ENDPOINT": "https://YOUR-AUTHORIZED-ENDPOINT/v1/chat/completions"
+          },
+          "command": [
+            "{python_executable}",
+            "{bridge_script}",
+            "--repo-path",
+            "{repo_path}",
+            "--request",
+            "{native_input}",
+            "--method-input",
+            "{method_input}",
+            "--comparison-input",
+            "{comparison_input}",
+            "--comparison-catalog",
+            "{comparison_catalog}",
+            "--output",
+            "{upstream_output_dir}/layoutgpt.json",
+            "--asset-ids-output",
+            "{upstream_output_dir}/asset_ids.json",
+            "--raw-response",
+            "{upstream_output_dir}/raw_model_response.txt",
+            "--icl-examples",
+            "{layoutgpt_icl_examples}",
+            "--icl-snapshot-output",
+            "{upstream_output_dir}/layoutgpt_icl_messages.json",
+            "--expected-icl-sha256",
+            "{layoutgpt_icl_sha256}",
+            "--runner-report",
+            "{upstream_output_dir}/runner_report.json"
+          ],
+          "native_artifact": "{upstream_output_dir}/layoutgpt.json",
+          "auxiliary_artifacts": {
+            "asset_ids": "{upstream_output_dir}/asset_ids.json",
+            "icl_examples": "{upstream_output_dir}/layoutgpt_icl_messages.json",
+            "raw_model_response": "{upstream_output_dir}/raw_model_response.txt",
+            "runner_report": "{upstream_output_dir}/runner_report.json"
+          },
+          "timeout_seconds": 900
+        }
+      }
+    },
+    "direct_layout": {
+      "adapter_config": {
+        "model_identity": {
+          "provider": "openai_compatible",
+          "model_id": "gpt-5.6-sol"
+        },
+        "model_deployment_id": "scene10_shared_model_deployment_v1",
+        "comparison_support": {
+          "fixed_object_inventory": true,
+          "exact_asset_ids": true,
+          "fixed_native_scale": true
+        },
+        "execution": {
+          "repo_path": "/ABSOLUTE/PATH/TO/DirectLayout",
+          "expected_upstream_commit": "4430535304124dbc8d48f6bb0ea5891e92267986",
+          "expected_entrypoint_sha256": "0f984699824a5849651e639610fd554f5f58e54640f3de8d48ecf6beb96288f1",
+          "expected_bridge_bundle_sha256": "8ad3007fdd4bcd80c4bf894b9a755e240d600d7a04d7e68d1d99db064f7d6db6",
+          "python_executable": "/ABSOLUTE/PATH/TO/directlayout/python",
+          "template_variables": {
+            "bridge_script": "/ABSOLUTE/PATH/TO/Layout_DDD/scripts/external_harness_bridges/direct_layout_frozen.py"
+          },
+          "environment": {
+            "LAYOUT_DDD_API_BASE_URL": "https://YOUR-AUTHORIZED-ENDPOINT/v1"
+          },
+          "command": [
+            "{python_executable}",
+            "{bridge_script}",
+            "--repo-path",
+            "{repo_path}",
+            "--request",
+            "{native_input}",
+            "--method-input",
+            "{method_input}",
+            "--comparison-input",
+            "{comparison_input}",
+            "--comparison-catalog",
+            "{comparison_catalog}",
+            "--work-dir",
+            "{upstream_output_dir}/directlayout_work",
+            "--output",
+            "{upstream_output_dir}/direct.json",
+            "--asset-bindings-output",
+            "{upstream_output_dir}/asset_bindings.json",
+            "--runner-report",
+            "{upstream_output_dir}/runner_report.json"
+          ],
+          "native_artifact": "{upstream_output_dir}/direct.json",
+          "auxiliary_artifacts": {
+            "asset_bindings": "{upstream_output_dir}/asset_bindings.json",
+            "upstream_artifacts": "{upstream_output_dir}/directlayout_work",
+            "runner_report": "{upstream_output_dir}/runner_report.json"
+          },
+          "timeout_seconds": 3600
+        }
+      }
+    },
+    "layout_vlm": {
+      "adapter_config": {
+        "model_identity": {
+          "provider": "openai_compatible",
+          "model_id": "gpt-5.6-sol"
+        },
+        "model_deployment_id": "scene10_shared_model_deployment_v1",
+        "execution": {
+          "repo_path": "/ABSOLUTE/PATH/TO/LayoutVLM",
+          "expected_upstream_commit": "85d06b4cd2478551188a0b4a47cd658c85c41315",
+          "expected_entrypoint_sha256": "201cbb4933ad9171138a0ed018b0daea4570bc86d7f0a77241af837f5b230db0",
+          "expected_bridge_bundle_sha256": "cf27f61c1c9fdf0dd6489b468c8b2349f26f91341cb7d87478b1f357ce42c121",
+          "python_executable": "/ABSOLUTE/PATH/TO/layoutvlm/python",
+          "template_variables": {
+            "bridge_script": "/ABSOLUTE/PATH/TO/Layout_DDD/scripts/external_harness_bridges/layout_vlm_frozen.py"
+          },
+          "environment": {
+            "LAYOUT_DDD_API_BASE_URL": "https://YOUR-AUTHORIZED-ENDPOINT/v1"
+          },
+          "command": [
+            "{python_executable}",
+            "{bridge_script}",
+            "--repo-path",
+            "{repo_path}",
+            "--request",
+            "{native_input}",
+            "--method-input",
+            "{method_input}",
+            "--comparison-input",
+            "{comparison_input}",
+            "--comparison-catalog",
+            "{comparison_catalog}",
+            "--work-dir",
+            "{upstream_output_dir}/layoutvlm_work",
+            "--prepared-scene-config-output",
+            "{upstream_output_dir}/prepared_scene_config.json",
+            "--output",
+            "{upstream_output_dir}/layout.json",
+            "--runner-report",
+            "{upstream_output_dir}/runner_report.json"
+          ],
+          "native_artifact": "{upstream_output_dir}/layout.json",
+          "auxiliary_artifacts": {
+            "scene_config": "{upstream_output_dir}/prepared_scene_config.json",
+            "upstream_artifacts": "{upstream_output_dir}/layoutvlm_work",
+            "runner_report": "{upstream_output_dir}/runner_report.json"
+          },
+          "timeout_seconds": 3600
+        }
+      }
+    },
+    "scene_weaver": {
+      "adapter_config": {
+        "model_identity": {
+          "provider": "openai_compatible",
+          "model_id": "gpt-5.6-sol"
+        },
+        "model_deployment_id": "scene10_shared_model_deployment_v1",
+        "iteration_selection_policy": "latest",
+        "comparison_support": {
+          "fixed_object_inventory": true,
+          "exact_asset_ids": true,
+          "fixed_native_scale": true,
+          "frozen_iteration_bindings": true,
+          "no_object_insertion_removal": true,
+          "sceneweaver_released_export_contract": true
+        },
+        "execution": {
+          "repo_path": "/ABSOLUTE/PATH/TO/SceneWeaver",
+          "expected_upstream_commit": "7ae54b2ec3fc66147704faa7daf7b017ba8b1bd9",
+          "expected_entrypoint_sha256": "5431e9e8cb2f244b46f3d0419f6a446cabb3bebf71dfada0d974a27845ce2a0b",
+          "expected_bridge_bundle_sha256": "e9d0e7172268d45e03094d360729de9a14013249c4a154732fd6a77587cb40ef",
+          "python_executable": "/ABSOLUTE/PATH/TO/sceneweaver/python",
+          "template_variables": {
+            "bridge_script": "/ABSOLUTE/PATH/TO/Layout_DDD/scripts/external_harness_bridges/scene_weaver_frozen.py",
+            "frozen_plugin": "/ABSOLUTE/PATH/TO/VERSIONED/sceneweaver_frozen_plugin.py",
+            "frozen_plugin_sha256": "REPLACE_WITH_64_LOWERCASE_HEX_SHA256"
+          },
+          "environment": {
+            "LAYOUT_DDD_API_BASE_URL": "https://YOUR-AUTHORIZED-ENDPOINT/v1"
+          },
+          "command": [
+            "{python_executable}",
+            "{bridge_script}",
+            "--repo-path",
+            "{repo_path}",
+            "--plugin-entrypoint",
+            "{frozen_plugin}",
+            "--expected-plugin-sha256",
+            "{frozen_plugin_sha256}",
+            "--plugin-python",
+            "{python_executable}",
+            "--request",
+            "{native_input}",
+            "--method-input",
+            "{method_input}",
+            "--comparison-input",
+            "{comparison_input}",
+            "--comparison-catalog",
+            "{comparison_catalog}",
+            "--output-root",
+            "{upstream_output_dir}/sceneweaver_native",
+            "--asset-bindings-output",
+            "{upstream_output_dir}/asset_bindings.json",
+            "--runner-report",
+            "{upstream_output_dir}/runner_report.json"
+          ],
+          "native_artifact": "{upstream_output_dir}/sceneweaver_native",
+          "auxiliary_artifacts": {
+            "asset_bindings": "{upstream_output_dir}/asset_bindings.json",
+            "runner_report": "{upstream_output_dir}/runner_report.json"
+          },
+          "timeout_seconds": 14400
+        }
+      }
+    }
+  }
+}

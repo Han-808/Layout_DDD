@@ -1,0 +1,89 @@
+You are completing Phase C of one benchmark scene. Return exactly one JSON
+object and no prose, Markdown, code fence, comments, or additional value.
+
+The user message contains the original scene request, generation contract, your
+frozen Phase A object plan, and deterministic rank-1 asset selection. The plan,
+queries, object membership, counts, and returned asset IDs are immutable. A poor
+Top-1 match is a frozen retrieval outcome and must be preserved.
+
+After all rank-1 results are frozen, reason about the whole room and emit every
+instance transform in one complete placement. This response is the first and
+only placement emission. It will not be sent back for correction or
+regeneration.
+
+The evaluated capability is end-to-end scene layout generation: physically and
+semantically reasonable positions, functional orientations, plausible support,
+usable circulation and clearance, accessible storage and equipment, and
+coherent multi-zone organization.
+
+COORDINATE AND FACING CONTRACT
+
+Coordinates are meters in a room-min-corner frame: +X is room width, +Y is room
+depth, and +Z is up. The logical room boundary and floor exist. There are no
+physical wall objects. All center coordinates must be non-negative. Use only yaw
+around Z; X and Y rotations must be zero.
+
+For directed assets, canonical local -Y (local_neg_y) is the functional/front
+side. Convert it to the intended world-facing direction using yaw:
+
+- yaw 0 degrees: local -Y faces world -Y;
+- yaw 90 degrees: local -Y faces world +X;
+- yaw 180 degrees: local -Y faces world +Y;
+- yaw -90 degrees: local -Y faces world -X.
+
+For a desired horizontal unit heading [hx, hy], the equivalent yaw in degrees is
+atan2(hx, -hy). Non-directed assets have no functional-facing requirement.
+
+DETERMINISTIC SIZE AND SUPPORT ARITHMETIC
+
+Use the returned catalog bbox size when choosing scale, spacing, support height,
+and center Z. For an asset whose local bbox center is [0, 0, 0]:
+
+floor object center_z = 0.5 * asset_bbox_z * uniform_scale
+
+supported object center_z =
+  support_center_z
+  + 0.5 * support_bbox_z * support_uniform_scale
+  + 0.5 * object_bbox_z * object_uniform_scale
+  + optional non-negative stack gap
+
+These formulas are deterministic arithmetic, not geometry feedback. The model
+still owns x/y position, scale, support choice, world heading, and organization.
+Any uniform scale must be chosen now and can never be adjusted afterward.
+
+STRICT ONE-SHOT CONTRACT
+
+After this response, the benchmark must not:
+
+- edit or regenerate any transform;
+- change position, rotation, scale, support, or object membership;
+- move, clamp, nudge, pack, space, optimize, or repair objects;
+- replace assets;
+- use conversion failure to revise placement;
+- inspect geometry or renders and then revise placement.
+
+No collision, penetration, out-of-bounds, support, clearance, usable-side,
+evaluator/Judge, camera, Blender, render, geometry-packing, or previous-output
+feedback is available before or after placement freeze.
+
+Expand repeated public slots into unique lowercase snake_case instance IDs. Use
+every frozen slot, preserve each count, and use exactly the returned asset ID.
+
+Required JSON shape, with no additional keys:
+{
+  "schema_version": "catalog_placement_v1",
+  "instances": [
+    {
+      "instance_id": "unique_snake_case",
+      "asset_id": "exact_frozen_rank1_asset_id",
+      "slot_id": "exact_frozen_public_slot_id",
+      "center_m": [0.0, 0.0, 0.0],
+      "uniform_scale": 1.0,
+      "rotation_euler_xyz_deg": [0.0, 0.0, 0.0]
+    }
+  ]
+}
+
+Emit every instance exactly once. Do not output scene_id and do not change any
+frozen generator-owned semantics.
+

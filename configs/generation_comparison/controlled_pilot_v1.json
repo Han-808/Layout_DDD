@@ -1,0 +1,117 @@
+{
+  "schema_version": "controlled_generation_pilot_v1",
+  "pilot_id": "frozen_assets_rect_furniture_pilot_v1",
+  "label": "pilot / integration validation",
+  "protocol_id": "generation_comparison_v1",
+  "protocol_version": 1,
+  "mode": "frozen_assets",
+  "catalog": {
+    "catalog_id": "imaginarium_furniture_pilot_v1",
+    "catalog_version": "2026-09-03",
+    "source_db": "imaginarium",
+    "assets": [
+      {"asset_id": "0_SM_Bed", "category": "bed", "description": "grey upholstered bed"},
+      {"asset_id": "a_SM_Side_Table_01", "category": "nightstand", "description": "dark brown wooden nightstand"},
+      {"asset_id": "c_SM_Dresser", "category": "dresser", "description": "gray woodgrain dresser"},
+      {"asset_id": "0_Modern_sofa", "category": "sofa", "description": "white multi person sofa"},
+      {"asset_id": "0_SM_Coffee_table_1", "category": "table", "description": "light wood coffee table"},
+      {"asset_id": "0_SM_Armchair", "category": "chair", "description": "taupe upholstered armchair"},
+      {"asset_id": "46_Table01", "category": "table", "description": "gray wood grain table"},
+      {"asset_id": "4_SM_Chair01", "category": "chair", "description": "dark green padded folding chair"},
+      {"asset_id": "0_SM_Desk_Fir001", "category": "desk", "description": "white ornate desk"},
+      {"asset_id": "0_Office_leather_chair", "category": "chair", "description": "brown leather office chair"},
+      {"asset_id": "0_chinese_cabinet_2k_packed", "category": "cabinet", "description": "dark wood display cabinet"},
+      {"asset_id": "a_SM_BookShelf_01a", "category": "bookcase", "description": "dark brown wooden bookshelf"}
+    ]
+  },
+  "evaluator": {
+    "policy": "same_canonical_run_evaluate",
+    "profile": "repository_default_canonical_l0_l4",
+    "evidence_policy": "repository_default_no_injected_evidence",
+    "rendering_policy": "repository_default_no_forced_render",
+    "static_kwargs": {}
+  },
+  "generation": {
+    "budget_policy": "method_native_recorded",
+    "scale_policy": "fixed_native_scale"
+  },
+  "methods": [
+    "catalog_placement",
+    "layout_gpt",
+    "direct_layout",
+    "layout_vlm",
+    "respace",
+    "scene_weaver"
+  ],
+  "cases": [
+    {
+      "case_id": "pilot_bedroom_balanced_01",
+      "scene_type": "bedroom",
+      "seed": 3101,
+      "room": {"boundary": [[0.0, 0.0], [5.2, 0.0], [5.2, 4.5], [0.0, 4.5]], "height": 3.0, "unit": "meter"},
+      "instruction": "Arrange one grey upholstered bed, two dark brown wooden nightstands, and one gray woodgrain dresser as a coherent bedroom. Keep every frozen asset at native scale 1.0 and place every object fully inside the room.",
+      "objects": [
+        {"slot_id": "bed_0", "category": "bed", "description": "grey upholstered bed", "asset_id": "0_SM_Bed"},
+        {"slot_id": "nightstand_0", "category": "nightstand", "description": "dark brown wooden nightstand", "asset_id": "a_SM_Side_Table_01"},
+        {"slot_id": "nightstand_1", "category": "nightstand", "description": "dark brown wooden nightstand", "asset_id": "a_SM_Side_Table_01"},
+        {"slot_id": "dresser_0", "category": "dresser", "description": "gray woodgrain dresser", "asset_id": "c_SM_Dresser"}
+      ]
+    },
+    {
+      "case_id": "pilot_living_wide_02",
+      "scene_type": "living_room",
+      "seed": 3102,
+      "room": {"boundary": [[0.0, 0.0], [6.5, 0.0], [6.5, 4.5], [0.0, 4.5]], "height": 3.0, "unit": "meter"},
+      "instruction": "Arrange one white multi person sofa, one light wood coffee table, two taupe upholstered armchairs, and one dark brown wooden nightstand as a conversational living room. Keep native scale 1.0, maintain usable circulation, and keep all objects inside the room.",
+      "objects": [
+        {"slot_id": "sofa_0", "category": "sofa", "description": "white multi person sofa", "asset_id": "0_Modern_sofa"},
+        {"slot_id": "coffee_table_0", "category": "table", "description": "light wood coffee table", "asset_id": "0_SM_Coffee_table_1"},
+        {"slot_id": "armchair_0", "category": "chair", "description": "taupe upholstered armchair", "asset_id": "0_SM_Armchair"},
+        {"slot_id": "armchair_1", "category": "chair", "description": "taupe upholstered armchair", "asset_id": "0_SM_Armchair"},
+        {"slot_id": "side_table_0", "category": "nightstand", "description": "dark brown wooden nightstand", "asset_id": "a_SM_Side_Table_01"}
+      ]
+    },
+    {
+      "case_id": "pilot_dining_compact_03",
+      "scene_type": "dining_room",
+      "seed": 3103,
+      "room": {"boundary": [[0.0, 0.0], [4.8, 0.0], [4.8, 4.2], [0.0, 4.2]], "height": 3.0, "unit": "meter"},
+      "instruction": "Create a compact dining arrangement with one gray wood grain table and four dark green padded folding chairs. Keep all exact frozen assets at native scale 1.0, orient the chairs toward the table, and preserve circulation around the group.",
+      "objects": [
+        {"slot_id": "dining_table_0", "category": "table", "description": "gray wood grain table", "asset_id": "46_Table01"},
+        {"slot_id": "dining_chair_0", "category": "chair", "description": "dark green padded folding chair", "asset_id": "4_SM_Chair01"},
+        {"slot_id": "dining_chair_1", "category": "chair", "description": "dark green padded folding chair", "asset_id": "4_SM_Chair01"},
+        {"slot_id": "dining_chair_2", "category": "chair", "description": "dark green padded folding chair", "asset_id": "4_SM_Chair01"},
+        {"slot_id": "dining_chair_3", "category": "chair", "description": "dark green padded folding chair", "asset_id": "4_SM_Chair01"}
+      ]
+    },
+    {
+      "case_id": "pilot_office_narrow_04",
+      "scene_type": "office",
+      "seed": 3104,
+      "room": {"boundary": [[0.0, 0.0], [4.2, 0.0], [4.2, 3.4], [0.0, 3.4]], "height": 3.2, "unit": "meter"},
+      "instruction": "Arrange one white ornate desk, one brown leather office chair, one dark wood display cabinet, and one dark brown wooden bookshelf in a narrow office. Keep each frozen asset at scale 1.0, make the chair usable with the desk, and avoid blocking circulation.",
+      "objects": [
+        {"slot_id": "desk_0", "category": "desk", "description": "white ornate desk", "asset_id": "0_SM_Desk_Fir001"},
+        {"slot_id": "office_chair_0", "category": "chair", "description": "brown leather office chair", "asset_id": "0_Office_leather_chair"},
+        {"slot_id": "cabinet_0", "category": "cabinet", "description": "dark wood display cabinet", "asset_id": "0_chinese_cabinet_2k_packed"},
+        {"slot_id": "bookcase_0", "category": "bookcase", "description": "dark brown wooden bookshelf", "asset_id": "a_SM_BookShelf_01a"}
+      ]
+    },
+    {
+      "case_id": "pilot_living_dense_05",
+      "scene_type": "living_room",
+      "seed": 3105,
+      "room": {"boundary": [[0.0, 0.0], [5.0, 0.0], [5.0, 4.0], [0.0, 4.0]], "height": 3.0, "unit": "meter"},
+      "instruction": "Create a dense but usable living room with one white multi person sofa, one light wood coffee table, two taupe upholstered armchairs, one gray woodgrain dresser, and one dark brown wooden nightstand. Keep every exact asset at native scale 1.0 and keep all objects inside without collisions.",
+      "objects": [
+        {"slot_id": "sofa_0", "category": "sofa", "description": "white multi person sofa", "asset_id": "0_Modern_sofa"},
+        {"slot_id": "coffee_table_0", "category": "table", "description": "light wood coffee table", "asset_id": "0_SM_Coffee_table_1"},
+        {"slot_id": "armchair_0", "category": "chair", "description": "taupe upholstered armchair", "asset_id": "0_SM_Armchair"},
+        {"slot_id": "armchair_1", "category": "chair", "description": "taupe upholstered armchair", "asset_id": "0_SM_Armchair"},
+        {"slot_id": "dresser_0", "category": "dresser", "description": "gray woodgrain dresser", "asset_id": "c_SM_Dresser"},
+        {"slot_id": "side_table_0", "category": "nightstand", "description": "dark brown wooden nightstand", "asset_id": "a_SM_Side_Table_01"}
+      ]
+    }
+  ]
+}

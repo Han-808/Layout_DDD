@@ -1,0 +1,49 @@
+{
+  "schema_version": "hy34_legacy_contract_fixture_v1",
+  "lineage": "hy34_retrieval_conditioned_runner_v1",
+  "lifecycle": "historical_fixture_only",
+  "execution_supported": false,
+  "parity_with_active_successor": false,
+  "active_successor": "tools.api3_anthropic_runner_v2",
+  "brief": {
+    "brief_id": "brief_00",
+    "room_type": "test room",
+    "room_dimensions_m": [4.0, 4.0, 3.0],
+    "target_instances": {"min": 1, "max": 1},
+    "instruction": "Generate one useful chair.",
+    "physical_wall_policy": "explicit_only",
+    "active_wall_ids": []
+  },
+  "object_plan": {
+    "schema_version": "hy34_object_plan_v1",
+    "scene_description": "A single useful chair in a small room.",
+    "global_constraints": ["keep the chair usable"],
+    "zones": [
+      {"id": "main_zone", "description": "main area", "extent_hint": "center"}
+    ],
+    "objects": [
+      {
+        "id": "chair",
+        "category": "chair",
+        "role": "seating",
+        "description": "one chair",
+        "count": 1,
+        "estimated_size": [0.5, 0.5, 0.9],
+        "zone": "main_zone",
+        "support": "floor",
+        "directed": true,
+        "facing_intent": "face world -Y",
+        "retrieval_query": "simple chair with backrest",
+        "absolute_relations": ["center of room"],
+        "relative_relations": []
+      }
+    ]
+  },
+  "historical_invariants": {
+    "object_plan_response_count": 1,
+    "retrieval_invocation_count_per_slot": 1,
+    "placement_response_count": 1,
+    "semantic_regeneration_count": 0,
+    "post_emission_transform_edit_count": 0
+  }
+}

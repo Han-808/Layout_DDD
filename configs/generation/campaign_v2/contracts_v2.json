@@ -1,0 +1,86 @@
+{
+  "schema_version": "generation_campaign_contract_registry_v2",
+  "workflows": [
+    {
+      "workflow_profile_id": "frozen-two-stage-generation-v2",
+      "core_bundle_id": "api3-anthropic-runner-core-v2",
+      "runner_version": "2.0.0",
+      "runner_source_sha256": "c5bd82c9cf5b1cf38a8e53c4a199c357134f438685b42d9728f034811200950a",
+      "stage_a_prompt_sha256": "546d76f6a76e2530f3c18c4b6d85a1bfa094a113352585799c650589664a7754",
+      "stage_c_prompt_sha256": "d4a055b01cdbdb3f2548d440bc3bcbdb1aa86c65a76972d32a1d545fc23f4b56"
+    }
+  ],
+  "brief_sets": [
+    {
+      "brief_set_id": "hy34-paired-briefs-v1",
+      "core_bundle_id": "api3-anthropic-runner-core-v2",
+      "content_sha256": "c016ed9b926309c2a02278936dbc0e777a46b0bd30a71bcc1f563919418dcb55",
+      "ordered_brief_ids": [
+        "brief_00", "brief_01", "brief_02", "brief_03", "brief_04",
+        "brief_05", "brief_06", "brief_07", "brief_08", "brief_09"
+      ]
+    }
+  ],
+  "execution_policies": [
+    {
+      "execution_policy_id": "api2-scene10-retry3-continue-v1",
+      "max_infrastructure_retries": 3,
+      "retry_delay_seconds": 30.0,
+      "retryable_transport_statuses": ["transport_failure"],
+      "retryable_http_statuses": [408, 409, 425, 429, 500, 502, 503, 504],
+      "retry_ambiguous_timeouts": false,
+      "continue_after_case_failure": true
+    },
+    {
+      "execution_policy_id": "api3-scene10-retry2-continue-v1",
+      "max_infrastructure_retries": 2,
+      "retry_delay_seconds": 30.0,
+      "retryable_transport_statuses": ["transport_failure"],
+      "retryable_http_statuses": [408, 409, 425, 429, 500, 502, 503, 504],
+      "retry_ambiguous_timeouts": false,
+      "continue_after_case_failure": true
+    }
+  ],
+  "artifact_contracts": [
+    {
+      "artifact_contract_id": "hy34-two-stage-artifacts-v3",
+      "run_manifest_schema_version": "hy34_two_stage_run_manifest_v3",
+      "case_result_schema_version": "hy34_case_result_v2",
+      "public_model_contract": "runtime-transport-private-public-model-redacted-v1"
+    }
+  ],
+  "preflight_contracts": [
+    {
+      "preflight_contract_id": "api2-chat-json-content-v1",
+      "response_contract_id": "openai_chat_single_choice_v1",
+      "content_validation": "json_object",
+      "require_model_identity": false,
+      "require_reasoning_signal": false,
+      "record_reasoning_diagnostic": false
+    },
+    {
+      "preflight_contract_id": "api2-responses-completed-json-v1",
+      "response_contract_id": "openai_responses_completed_output_text_v1",
+      "content_validation": "json_object",
+      "require_model_identity": false,
+      "require_reasoning_signal": false,
+      "record_reasoning_diagnostic": false
+    },
+    {
+      "preflight_contract_id": "api3-chat-content-model-identity-v1",
+      "response_contract_id": "openai_chat_single_choice_v1",
+      "content_validation": "nonempty_text",
+      "require_model_identity": true,
+      "require_reasoning_signal": false,
+      "record_reasoning_diagnostic": false
+    },
+    {
+      "preflight_contract_id": "api3-chat-adaptive-thinking-diagnostic-v1",
+      "response_contract_id": "openai_chat_single_choice_v1",
+      "content_validation": "nonempty_text",
+      "require_model_identity": true,
+      "require_reasoning_signal": false,
+      "record_reasoning_diagnostic": true
+    }
+  ]
+}

@@ -298,6 +298,7 @@ prepare_cases() {
       --instruction "$instruction" \
       --scene-type "$scene_type" \
       --room-json "$room_file" \
+      --physical-wall-policy always_enclosed \
       --prompt-granularity fine_grained \
       --no-structure \
       --reference-annotation "$annotation" \

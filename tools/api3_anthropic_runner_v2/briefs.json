@@ -1,0 +1,96 @@
+{
+  "schema_version": "hy34_paired_briefs_v1",
+  "briefs": [
+    {
+      "brief_id": "brief_00",
+      "room_type": "open-plan living, dining, and reading room",
+      "room_dimensions_m": [9.2, 7.2, 3.1],
+      "target_instances": {"min": 20, "max": 23},
+      "instruction": "Generate a coherent multi-zone living, dining, and reading room. Aim for functional orientations, usable circulation, and a naturally organized scene.",
+      "physical_wall_policy": "explicit_only",
+      "active_wall_ids": []
+    },
+    {
+      "brief_id": "brief_01",
+      "room_type": "combined kitchen, dining, and utility room",
+      "room_dimensions_m": [10.0, 5.6, 3.0],
+      "target_instances": {"min": 22, "max": 25},
+      "instruction": "Generate a coherent kitchen, dining, and utility room. Aim for sensible work areas, functional object relationships, accessible storage, and clear circulation.",
+      "physical_wall_policy": "explicit_only",
+      "active_wall_ids": []
+    },
+    {
+      "brief_id": "brief_02",
+      "room_type": "shared office, library, and meeting room",
+      "room_dimensions_m": [8.8, 6.6, 3.0],
+      "target_instances": {"min": 21, "max": 24},
+      "instruction": "Generate a coherent office, library, and meeting room. Aim for usable workstations, accessible storage, functional seating relationships, and clear circulation.",
+      "physical_wall_policy": "explicit_only",
+      "active_wall_ids": []
+    },
+    {
+      "brief_id": "brief_03",
+      "room_type": "bedroom, dressing, and workspace",
+      "room_dimensions_m": [8.2, 6.4, 3.0],
+      "target_instances": {"min": 19, "max": 22},
+      "instruction": "Generate a coherent bedroom, dressing, and workspace. Aim for usable furniture orientation, accessible storage, sensible support relationships, and clear circulation.",
+      "physical_wall_policy": "explicit_only",
+      "active_wall_ids": []
+    },
+    {
+      "brief_id": "brief_04",
+      "room_type": "media, music, game, and recreation room",
+      "room_dimensions_m": [10.4, 7.6, 3.2],
+      "target_instances": {"min": 25, "max": 28},
+      "instruction": "Generate a coherent media, music, game, and recreation room. Aim for functional activity zones, sensible viewing and interaction relationships, accessible equipment, and clear circulation.",
+      "physical_wall_policy": "explicit_only",
+      "active_wall_ids": []
+    },
+    {
+      "brief_id": "brief_05",
+      "room_type": "children's study, play, and art room",
+      "room_dimensions_m": [9.0, 6.8, 3.0],
+      "target_instances": {"min": 20, "max": 23},
+      "instruction": "Generate a coherent children's study, play, and art room. Aim for usable activity zones, sensible object relationships, accessible storage, and clear circulation.",
+      "physical_wall_policy": "explicit_only",
+      "active_wall_ids": []
+    },
+    {
+      "brief_id": "brief_06",
+      "room_type": "bathroom, laundry, and linen utility room",
+      "room_dimensions_m": [8.4, 5.8, 3.0],
+      "target_instances": {"min": 22, "max": 25},
+      "instruction": "Generate a coherent bathroom, laundry, and linen utility room. Aim for usable fixtures and appliances, accessible operating sides, sensible support and storage relationships, and clear circulation.",
+      "physical_wall_policy": "explicit_only",
+      "active_wall_ids": []
+    },
+    {
+      "brief_id": "brief_07",
+      "room_type": "workshop, repair, and storage room",
+      "room_dimensions_m": [9.2, 6.6, 3.1],
+      "target_instances": {"min": 21, "max": 24},
+      "instruction": "Generate a coherent workshop, repair, and storage room. Aim for usable workstations, accessible tools and storage, safe operating clearances, and clear circulation.",
+      "physical_wall_policy": "explicit_only",
+      "active_wall_ids": []
+    },
+    {
+      "brief_id": "brief_08",
+      "room_type": "café-style reading, conversation, and coworking lounge",
+      "room_dimensions_m": [8.6, 6.4, 3.0],
+      "target_instances": {"min": 19, "max": 22},
+      "instruction": "Generate a coherent café-style reading, conversation, and coworking lounge. Aim for functional seating and table relationships, accessible shared resources, and clear circulation.",
+      "physical_wall_policy": "explicit_only",
+      "active_wall_ids": []
+    },
+    {
+      "brief_id": "brief_09",
+      "room_type": "home fitness, yoga, recovery, and hobby room",
+      "room_dimensions_m": [10.2, 7.4, 3.2],
+      "target_instances": {"min": 25, "max": 28},
+      "instruction": "Generate a coherent home fitness, yoga, recovery, and hobby room. Aim for usable activity zones, safe operating clearances, accessible equipment, and clear circulation.",
+      "physical_wall_policy": "explicit_only",
+      "active_wall_ids": []
+    }
+  ]
+}
+

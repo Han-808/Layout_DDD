@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://layout-ddd.local/schemas/assembly_manifest_v1.schema.json",
+  "title": "MultiRoomAssemblyManifestV1",
+  "description": "Hash-addressed multi-room assembly provenance and completion invariants.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "layout_id",
+    "completion_status",
+    "source_hashes",
+    "artifact_hashes",
+    "invariants"
+  ],
+  "properties": {
+    "schema_version": {"const": "assembly_manifest_v1"},
+    "layout_id": {"type": "string", "pattern": "^layout_[0-9]{2}$"},
+    "completion_status": {
+      "enum": ["complete", "incomplete", "failed"]
+    },
+    "source_hashes": {"$ref": "#/$defs/sourceHashes"},
+    "artifact_hashes": {"$ref": "#/$defs/artifactHashes"},
+    "invariants": {"$ref": "#/$defs/invariants"},
+    "provenance": {"$ref": "#/$defs/provenance"}
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "hashRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["room_id", "sha256"],
+      "properties": {
+        "room_id": {"type": "string", "pattern": "^room_[0-9]+$"},
+        "sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "sourceHashes": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["floor_plan", "room_results"],
+      "properties": {
+        "floor_plan": {"$ref": "#/$defs/sha256"},
+        "room_results": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/hashRecord"}
+        },
+        "object_plans": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/hashRecord"}
+        },
+        "retrieval_results": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/hashRecord"}
+        },
+        "placements": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/hashRecord"}
+        }
+      }
+    },
+    "artifactHashes": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "compiled_architecture",
+        "scene",
+        "room_evaluation_index"
+      ],
+      "properties": {
+        "compiled_architecture": {"$ref": "#/$defs/sha256"},
+        "scene": {"$ref": "#/$defs/sha256"},
+        "room_evaluation_index": {"$ref": "#/$defs/sha256"},
+        "room_projections": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/hashRecord"}
+        }
+      }
+    },
+    "invariants": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "room_order_preserved",
+        "translation_only",
+        "object_partition_exact",
+        "global_instance_ids_unique",
+        "projection_hashes_verified",
+        "evaluation_input_hashes_verified",
+        "current_canonical_validator_passed",
+        "evaluator_feedback_used"
+      ],
+      "properties": {
+        "room_order_preserved": {"const": true},
+        "translation_only": {"const": true},
+        "object_partition_exact": {"const": true},
+        "global_instance_ids_unique": {"const": true},
+        "projection_hashes_verified": {"const": true},
+        "evaluation_input_hashes_verified": {"const": true},
+        "current_canonical_validator_passed": {"const": true},
+        "evaluator_feedback_used": {"const": false}
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": true
+    }
+  }
+}

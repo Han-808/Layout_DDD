@@ -4,6 +4,7 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
+from benchmark.architecture_policy import architecture_contract_from_scene
 from benchmark.relation_identity import copy_relation_identity
 from benchmark.visual_judge.roles import (
     DecisionContract,
@@ -56,6 +57,7 @@ def adjudicate_unsupported_relation(
             "scene_type": scene.get("scene_type"),
             "boundary": deepcopy(scene.get("boundary")),
             "scene_height": scene.get("scene_height"),
+            "architecture": architecture_contract_from_scene(scene),
             "objects": [
                 _compact_object(obj)
                 for obj in scene.get("objects", []) if isinstance(scene.get("objects"), list)
@@ -108,11 +110,14 @@ def pending_relation_result(
     relation: dict,
     reason: str,
     error: str | None = None,
+    error_audit: dict[str, Any] | None = None,
     detector_evidence: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     evidence: dict[str, Any] = {"reason": reason}
     if error:
         evidence["error"] = str(error)
+    if isinstance(error_audit, dict):
+        evidence["adjudication_failure_audit"] = deepcopy(error_audit)
     if isinstance(detector_evidence, dict):
         evidence["detector_evidence"] = deepcopy(detector_evidence)
     return copy_relation_identity({

@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from benchmark.evaluator import evaluate_oar
+from benchmark.task_contract import architecture_contract_for_room
 
 
 def _scene(objects: list[dict], extra: dict | None = None) -> dict:
@@ -12,6 +13,16 @@ def _scene(objects: list[dict], extra: dict | None = None) -> dict:
         "boundary": [[0, 0], [4, 0], [4, 3], [0, 3]],
         "scene_height": 2.8,
         "objects": objects,
+        "metadata": {
+            "architecture_contract": architecture_contract_for_room(
+                {
+                    "boundary": [[0, 0], [4, 0], [4, 3], [0, 3]],
+                    "height": 2.8,
+                },
+                physical_wall_policy="always_enclosed",
+                policy_source="legacy_test_fixture",
+            )
+        },
     }
     if extra:
         scene.update(extra)

@@ -25,6 +25,9 @@ from benchmark.game_scene.counter_strike.loader import (
     VerifiedSourceAssertion,
     load_counter_strike_benchmark_config,
 )
+from benchmark.game_scene.counter_strike.judge import (
+    CounterStrikeVisualJudgeError,
+)
 from benchmark.game_scene.counter_strike.topology import CounterStrikeTopology
 from benchmark.rendering.browser import (
     BROWSER_RENDER_BACKEND,
@@ -149,9 +152,11 @@ class _VisualJudge:
         *,
         fail_metric: str | None = None,
         invalid_metric: str | None = None,
+        failure_exception: Exception | None = None,
     ) -> None:
         self.fail_metric = fail_metric
         self.invalid_metric = invalid_metric
+        self.failure_exception = failure_exception
         self.calls: list[str] = []
         self.kwargs: list[dict[str, Any]] = []
 
@@ -159,7 +164,9 @@ class _VisualJudge:
         self.calls.append(metric)
         self.kwargs.append(kwargs)
         if metric == self.fail_metric:
-            raise RuntimeError("provider body must not be serialized")
+            raise self.failure_exception or RuntimeError(
+                "provider body must not be serialized"
+            )
         if metric == self.invalid_metric:
             return {
                 "metric": metric,
@@ -355,6 +362,40 @@ def test_l4_visual_metric_failure_isolated_and_composite_stays_null(
     assert report["metrics"]["route_structure"]["score"] == 0.7
     assert report["score"] is None
     assert report["coverage"]["complete"] is False
+
+
+def test_l4_visual_metric_failure_preserves_safe_error_code_only(
+    tmp_path: Path,
+) -> None:
+    visual_judge = _VisualJudge(
+        fail_metric="cover_diversity",
+        failure_exception=CounterStrikeVisualJudgeError(
+            "verdict_score_inconsistent",
+            "provider response body must not be persisted",
+        ),
+    )
+
+    report = evaluate_counter_strike_l4(
+        {"schema_version": "canonical_scene_v1", "objects": []},
+        case_contract=_case_contract(tmp_path),
+        benchmark_config=_config(),
+        visual_judge=visual_judge,
+        frozen_evidence=object(),
+        out_dir=tmp_path / "l4",
+        topology_analyzer=lambda *_args, **_kwargs: (
+            _topology(),
+            _deterministic_metrics(),
+        ),
+        diagram_renderer=_diagram_renderer,
+    )
+
+    failure = report["metrics"]["cover_diversity"]["failure"]
+    assert failure == {
+        "stage": "visual_judge.cover_diversity",
+        "error_type": "CounterStrikeVisualJudgeError",
+        "error_code": "verdict_score_inconsistent",
+    }
+    assert "provider response body" not in json.dumps(report)
 
 
 def test_integrated_composite_uses_canonical_l1_l3_and_complete_l4() -> None:

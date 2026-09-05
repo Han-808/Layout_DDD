@@ -850,15 +850,26 @@ def _finalize_visual_metric(
 
 
 def _safe_metric_failure(*, stage: str, exc: Exception) -> dict[str, Any]:
+    failure = {
+        "stage": stage,
+        "error_type": type(exc).__name__,
+    }
+    error_code = getattr(exc, "code", None)
+    if (
+        isinstance(error_code, str)
+        and error_code
+        and all(
+            character.islower() or character.isdigit() or character == "_"
+            for character in error_code
+        )
+    ):
+        failure["error_code"] = error_code
     return {
         "status": "metric_failed",
         "score": None,
         "verdict": "ambiguous",
         "reason": "metric_execution_failed",
-        "failure": {
-            "stage": stage,
-            "error_type": type(exc).__name__,
-        },
+        "failure": failure,
     }
 
 

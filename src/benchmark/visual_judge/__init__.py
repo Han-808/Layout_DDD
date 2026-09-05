@@ -24,10 +24,13 @@ from benchmark.visual_judge.adapters.active_camera import (
 )
 from benchmark.visual_judge.adapters.deterministic_camera import (
     DETERMINISTIC_SUPPORTED_OBSERVATIONS,
+    SEMANTIC_SELECTION_OBSERVATIONS,
     DeterministicCameraRepairSolver,
     DeterministicLocalCameraSelector,
+    TrustedTechnicalCameraCandidateBankBuilder,
 )
 from benchmark.visual_judge.adapters.legacy_renderer import (
+    CameraCandidatePreviewRenderer,
     CameraViewEvidenceRenderer,
 )
 from benchmark.visual_judge.camera_dsl import (
@@ -60,11 +63,31 @@ from benchmark.visual_judge.evidence_sufficiency import (
     assess_preview_selection_sufficiency,
     assess_visual_evidence_sufficiency,
 )
+from benchmark.visual_judge.functional_evidence import (
+    FUNCTIONAL_PROBE_KINDS,
+    FUNCTIONAL_PROBE_DEFAULT_UNITS,
+    FUNCTIONAL_PROBE_MAX_UNITS,
+    FUNCTIONAL_PROBE_PLANNER_PROMPT_VERSION,
+    FUNCTIONAL_PROBE_PLAN_VERSION,
+)
+from benchmark.visual_judge.functional_discovery import (
+    FUNCTIONAL_COUNTERPART_MODES,
+    FUNCTIONAL_DISCOVERY_PROMPT_VERSION,
+    FUNCTIONAL_DISCOVERY_SCHEMA_VERSION,
+    FUNCTIONAL_ORDINARY_MOBILITY,
+    FUNCTIONAL_RELATION_DEPENDENCIES,
+    FUNCTIONAL_RELATION_PREDICATES,
+    FUNCTIONAL_SURFACE_ROLES,
+    FunctionalDiscoveryResult,
+)
 from benchmark.visual_judge.evaluator import evaluate_vlm_category
 from benchmark.visual_judge.interfaces import (
     CameraSelectionRequest,
     CameraSelectionResult,
     CameraSelector,
+    EvidenceReadinessRequest,
+    EvidenceReadinessResult,
+    TrustedCameraCandidateBank,
     DeterministicCameraSelector,
     EvidenceGate,
     EvidenceGateRequest,
@@ -83,9 +106,27 @@ from benchmark.visual_judge.openai_compatible import (
     OpenAICompatibleVLMJudge,
     build_openai_compatible_vlm_judge,
 )
+from benchmark.visual_judge.openai_camera_selector import (
+    CAMERA_SELECTOR_PROMPT_VERSION,
+    OpenAICompatibleCameraSelector,
+    build_openai_compatible_camera_selector,
+)
 from benchmark.visual_judge.p0b import LocalViewProvider, adjudicate_p0b_event
 from benchmark.visual_judge.render_views import CameraEvidenceProvider
 from benchmark.visual_judge.roles import DecisionContract, VLMRole
+from benchmark.visual_judge.usable_surface import (
+    CATALOG_CONTRACT_USABLE_SURFACE_DETECTOR_BACKEND,
+    CATALOG_CONTRACT_USABLE_SURFACE_DETECTOR_VERSION,
+    DEFAULT_USABLE_SURFACE_DETECTOR_BACKEND,
+    USABLE_SURFACE_DETECTOR_INTERFACE_VERSION,
+    USABLE_SURFACE_PROMPT_VERSION,
+    USABLE_SURFACE_SCHEMA_VERSION,
+    USABLE_SURFACE_SIDE_IDS,
+    UsableSurfaceDetector,
+    CatalogContractThenVLMUsableSurfaceDetector,
+    VLMTrustedSideUsableSurfaceDetector,
+    build_usable_surface_detector,
+)
 from benchmark.visual_judge.runtime import (
     ControlledVLMJudge,
     EvidenceControlUnresolvedError,
@@ -105,18 +146,27 @@ __all__ = [
     "CameraSelectionRequest",
     "CameraSelectionResult",
     "CameraSelector",
+    "EvidenceReadinessRequest",
+    "EvidenceReadinessResult",
+    "CameraCandidatePreviewRenderer",
     "CameraViewEvidenceRenderer",
+    "CATALOG_CONTRACT_USABLE_SURFACE_DETECTOR_BACKEND",
+    "CATALOG_CONTRACT_USABLE_SURFACE_DETECTOR_VERSION",
+    "CatalogContractThenVLMUsableSurfaceDetector",
     "ConditionalActiveCameraEvidenceProvider",
     "ControlledVLMJudge",
     "DEFAULT_P0B_VISUAL_CONFIGS",
     "DEFAULT_DETERMINISTIC_CAMERA_RANKING",
+    "DEFAULT_USABLE_SURFACE_DETECTOR_BACKEND",
     "DETERMINISTIC_SUPPORTED_OBSERVATIONS",
+    "SEMANTIC_SELECTION_OBSERVATIONS",
     "DEFAULT_VLM_EVALUATION_CONTROL",
     "DecisionContract",
     "DeterministicCameraSelector",
     "DeterministicCameraRepairSolver",
     "DeterministicCameraRankingConfig",
     "DeterministicLocalCameraSelector",
+    "TrustedTechnicalCameraCandidateBankBuilder",
     "DeterministicEvidenceGate",
     "EvidenceGate",
     "EvidenceGateRequest",
@@ -130,6 +180,19 @@ __all__ = [
     "ExistingCameraSelectorAdapter",
     "ExistingEvidenceRendererAdapter",
     "ExistingJudgeAdapter",
+    "FUNCTIONAL_PROBE_KINDS",
+    "FUNCTIONAL_PROBE_DEFAULT_UNITS",
+    "FUNCTIONAL_PROBE_MAX_UNITS",
+    "FUNCTIONAL_PROBE_PLANNER_PROMPT_VERSION",
+    "FUNCTIONAL_PROBE_PLAN_VERSION",
+    "FUNCTIONAL_DISCOVERY_PROMPT_VERSION",
+    "FUNCTIONAL_DISCOVERY_SCHEMA_VERSION",
+    "FUNCTIONAL_COUNTERPART_MODES",
+    "FUNCTIONAL_ORDINARY_MOBILITY",
+    "FUNCTIONAL_RELATION_DEPENDENCIES",
+    "FUNCTIONAL_RELATION_PREDICATES",
+    "FUNCTIONAL_SURFACE_ROLES",
+    "FunctionalDiscoveryResult",
     "HybridCameraSelector",
     "InsufficientVisualEvidenceError",
     "Judge",
@@ -139,6 +202,9 @@ __all__ = [
     "MetricAcquisitionPlanningRequest",
     "MetricSpecificAcquisitionPlanner",
     "OpenAICompatibleVLMJudge",
+    "CAMERA_SELECTOR_PROMPT_VERSION",
+    "OpenAICompatibleCameraSelector",
+    "TrustedCameraCandidateBank",
     "VLMCameraSelector",
     "ActiveVLMCameraSelector",
     "VLMSelectionMode",
@@ -146,6 +212,12 @@ __all__ = [
     "VLMEvaluationController",
     "VLMEvaluationResult",
     "VLMRole",
+    "USABLE_SURFACE_PROMPT_VERSION",
+    "USABLE_SURFACE_SCHEMA_VERSION",
+    "USABLE_SURFACE_SIDE_IDS",
+    "USABLE_SURFACE_DETECTOR_INTERFACE_VERSION",
+    "UsableSurfaceDetector",
+    "VLMTrustedSideUsableSurfaceDetector",
     "adjudicate_p0b_event",
     "assess_preview_selection_sufficiency",
     "assess_visual_evidence_sufficiency",
@@ -153,6 +225,8 @@ __all__ = [
     "build_controlled_vlm_judge",
     "build_camera_selector",
     "build_openai_compatible_vlm_judge",
+    "build_openai_compatible_camera_selector",
+    "build_usable_surface_detector",
     "evaluate_vlm_category",
     "generate_corrective_camera_proposals",
     "resolve_vlm_evaluation_control",

@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://layout-ddd.local/schemas/non_rectangular/compiled_architecture_v1.schema.json",
+  "title": "NonRectangularCompiledArchitectureV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "layout_id",
+    "coordinate_frame",
+    "room_order",
+    "rooms",
+    "floors",
+    "logical_walls",
+    "physical_walls",
+    "excluded_architecture"
+  ],
+  "properties": {
+    "schema_version": {"const": "non_rectangular_compiled_architecture_v1"},
+    "layout_id": {"type": "string", "minLength": 1},
+    "coordinate_frame": {"type": "object"},
+    "room_order": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+    "rooms": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/room"}},
+    "floors": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/floor"}},
+    "logical_walls": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/logicalWall"}},
+    "physical_walls": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/physicalWall"}},
+    "excluded_architecture": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"enum": ["ceiling", "doors", "windows"]}
+    }
+  },
+  "$defs": {
+    "point2": {"type": "array", "minItems": 2, "maxItems": 2, "items": {"type": "number"}},
+    "segment": {"type": "array", "minItems": 2, "maxItems": 2, "items": {"$ref": "#/$defs/point2"}},
+    "room": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["room_id", "floor_id", "logical_wall_ids"],
+      "properties": {
+        "room_id": {"type": "string", "minLength": 1},
+        "floor_id": {"type": "string", "minLength": 1},
+        "logical_wall_ids": {"type": "array", "minItems": 3, "uniqueItems": true, "items": {"type": "string", "minLength": 1}}
+      }
+    },
+    "floor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["floor_id", "room_id", "floor_z_m", "polygon_xy"],
+      "properties": {
+        "floor_id": {"type": "string", "minLength": 1},
+        "room_id": {"type": "string", "minLength": 1},
+        "floor_z_m": {"const": 0.0},
+        "polygon_xy": {"type": "array", "minItems": 3, "items": {"$ref": "#/$defs/point2"}}
+      }
+    },
+    "logicalWall": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["wall_id", "room_id", "segment_global_m", "inward_normal_xy", "height_m", "thickness_m"],
+      "properties": {
+        "wall_id": {"type": "string", "minLength": 1},
+        "room_id": {"type": "string", "minLength": 1},
+        "segment_global_m": {"$ref": "#/$defs/segment"},
+        "inward_normal_xy": {"$ref": "#/$defs/point2"},
+        "height_m": {"type": "number", "exclusiveMinimum": 0},
+        "thickness_m": {"type": "number", "minimum": 0}
+      }
+    },
+    "wallEndpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["room_id", "wall_id"],
+      "properties": {
+        "room_id": {"type": "string", "minLength": 1},
+        "wall_id": {"type": "string", "minLength": 1}
+      }
+    },
+    "physicalWall": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["physical_wall_id", "segment_global_m", "height_m", "thickness_m", "shared", "logical_endpoints"],
+      "properties": {
+        "physical_wall_id": {"type": "string", "minLength": 1},
+        "segment_global_m": {"$ref": "#/$defs/segment"},
+        "height_m": {"type": "number", "exclusiveMinimum": 0},
+        "thickness_m": {"type": "number", "minimum": 0},
+        "shared": {"type": "boolean"},
+        "logical_endpoints": {"type": "array", "minItems": 1, "maxItems": 2, "items": {"$ref": "#/$defs/wallEndpoint"}}
+      }
+    }
+  }
+}

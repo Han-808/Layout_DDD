@@ -493,6 +493,29 @@ def test_layout_json_adapter_calls_openai_compatible_endpoint(monkeypatch: pytes
     assert (tmp_path / "generator" / "model_request_metadata.json").exists()
 
 
+def test_layout_json_v1_raw_response_replays_with_frozen_semantics(
+    tmp_path: Path,
+) -> None:
+    raw_response = tmp_path / "historical_model_response.txt"
+    raw_response.write_text(
+        json.dumps(_layout_json(), ensure_ascii=False, separators=(",", ":"))
+        + "\n",
+        encoding="utf-8",
+    )
+    adapter = get_adapter("layout_json")
+
+    replayed_path = adapter.materialize_output(
+        raw_response,
+        _generation_input(),
+        tmp_path / "replay",
+    )
+
+    assert read_json(replayed_path) == convert_layout_json_to_scene(
+        _layout_json(),
+        _generation_input(),
+    )
+
+
 def test_layout_json_adapter_does_not_repair_schema_invalid_output(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     payloads: list[dict] = []
     invalid_layout = _layout_json()
@@ -792,8 +815,17 @@ def test_harness_renders_current_scene_for_canonical_evidence(
     assert manifest["artifacts"]["render_manifest"].endswith("renders/render_manifest.json")
     assert len(manifest["artifacts"]["render_evidence"]) == 2
     # No canonical L2 contract or L3 asset-policy applicability was supplied,
-    # so rendering is available evidence but cannot silently activate a judge.
+    # so the evaluator does not silently activate a Judge. Active L3 metrics
+    # retain audited zero-grounding diagnostics, but fail closed for publishing.
     assert judge_calls == []
     report = read_json(out_dir / "evaluation_report.json")
     assert report["evaluator_version"] == "scene_harness_evaluator_v2"
-    assert report["benchmark_score_status"] == "insufficient_metric_coverage"
+    assert report["benchmark_score"] is None
+    assert report["benchmark_score_status"] == "failed_coverage_threshold"
+    assert all(
+        metric["coverage"]["score_grounding"]["fraction"] == 0.0
+        and metric["terminal_state"] == "evaluated_degraded"
+        for metric in report["layer_reports"][
+            "l3_scene_quality"
+        ]["metrics"].values()
+    )

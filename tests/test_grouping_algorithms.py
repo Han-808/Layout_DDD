@@ -11,6 +11,7 @@ import yaml
 from benchmark.grouping import (
     ACTIVE_GROUPING_BACKENDS,
     DEFAULT_GROUPING_BACKEND,
+    DEFAULT_GROUPING_FALLBACK_CONFIG,
     DEPRECATED_GROUPING_BACKENDS,
     GROUPING_ROLE,
     AnchorGroupingAlgorithm,
@@ -18,6 +19,7 @@ from benchmark.grouping import (
     GroupingResult,
     TopologyGroupingAlgorithm,
     VLMGroupingAlgorithm,
+    VLMPrimaryGroupingAlgorithm,
     build_grouping_algorithm,
     group_scene,
     prepare_grouping_evidence,
@@ -100,6 +102,19 @@ class _Model:
     def chat_messages(self, messages, **kwargs) -> str:
         self.calls.append({"messages": messages, "kwargs": kwargs})
         return json.dumps(self.response)
+
+
+class _RaisingModel:
+    model_id = "grouping-failure-model"
+    endpoint = "http://127.0.0.1:9999/v1"
+
+    def __init__(self, error: Exception) -> None:
+        self.error = error
+        self.calls = 0
+
+    def chat_messages(self, messages, **kwargs) -> str:
+        self.calls += 1
+        raise self.error
 
 
 def _vlm_response() -> dict:
@@ -295,25 +310,32 @@ def test_vlm_backend_uses_partition_prompt_and_visual_context(
     assert result.object_groups[1].group_id == "group_002"
     assert result.provenance["images_used"] == ["view_00"]
     assert result.provenance["model"] == "grouping-test-model"
+    assert result.provenance["vlm_role"] == "vlm_grouping"
+    assert (
+        result.provenance["decision_contract"]
+        == "grouping_partition_v1"
+    )
     assert scene == original
     call = model.calls[0]
     assert call["kwargs"]["response_format_json"] is True
     assert call["kwargs"]["call_type"] == "vlm_grouping.partition"
     system = call["messages"][0]["content"]
     assert "not a benchmark metric" in system
-    assert "verdict, score, confidence" in system
-    assert "make groups look more plausible" in system
-    assert "A group is a downstream visual-evidence scope." in system
-    assert (
-        "Do not merge spatially distant zones merely because their objects "
-        "have related semantic roles."
-    ) in system
+    assert "verdicts, scores, confidence" in system
+    assert "make the partition appear more plausible" in system
+    assert "smallest local scope" in system
+    assert "Do not chain weak proximity links" in system
+    assert "lower supplied source_index" in system
+    assert 'Set label exactly to "local_scope:<anchor_object_id>"' in system
+    assert result.provenance["prompt_version"] == "vlm_grouping_prompt_v3"
     content = call["messages"][1]["content"]
     assert content[1]["type"] == "image_url"
     assert content[1]["image_url"]["url"].startswith(
         "data:image/png;base64,"
     )
     prompt = content[0]["text"]
+    assert '"vlm_role":"vlm_grouping"' in prompt
+    assert '"decision_contract":"grouping_partition_v1"' in prompt
     assert '"role":"evidence_partition_not_metric_verdict"' in prompt
     assert '"identity_overlay":true' in prompt
     assert all(object_id in prompt for object_id in ("bed", "nightstand", "desk", "chair"))
@@ -472,21 +494,32 @@ def test_factory_backends_share_one_interface() -> None:
             {"grouping": {"backend": "vlm"}},
             model=_Model(_vlm_response()),
         ),
-        VLMGroupingAlgorithm,
+        VLMPrimaryGroupingAlgorithm,
     )
-    with pytest.raises(ValueError, match="requires an injected chat model"):
-        build_grouping_algorithm({"grouping": {"backend": "vlm"}})
+    assert isinstance(
+        build_grouping_algorithm({"grouping": {"backend": "vlm"}}),
+        VLMPrimaryGroupingAlgorithm,
+    )
 
 
-def test_group_scene_default_is_vlm_and_never_falls_back() -> None:
+def test_group_scene_default_is_vlm_primary_with_topology_fallback() -> None:
     assert DEFAULT_GROUPING_BACKEND == "vlm"
+    assert DEFAULT_GROUPING_FALLBACK_CONFIG == {
+        "enabled": True,
+        "backend": "topology",
+    }
     assert ACTIVE_GROUPING_BACKENDS == ("vlm",)
     assert DEPRECATED_GROUPING_BACKENDS == ("topology", "anchor")
-    with pytest.raises(
-        ValueError,
-        match="requires an injected chat model",
-    ):
-        group_scene(_mixed_scene())
+
+    fallback = group_scene(_mixed_scene())
+    assert fallback.backend == "topology"
+    assert fallback.to_dict()["fallback_used"] is True
+    route = fallback.provenance["grouping_fallback"]
+    assert route["primary_outcome"] == "failed"
+    assert route["vlm_role"] == "vlm_grouping"
+    assert route["decision_contract"] == "grouping_partition_v1"
+    assert route["primary_failure"]["error_type"] == "ValueError"
+    assert route["fallback_backend"] == "topology"
 
     result = group_scene(
         _mixed_scene(),
@@ -495,9 +528,172 @@ def test_group_scene_default_is_vlm_and_never_falls_back() -> None:
 
     assert isinstance(result, GroupingResult)
     assert result.backend == "vlm"
+    assert result.to_dict()["fallback_used"] is False
+    route = result.provenance["grouping_fallback"]
+    assert route["primary_outcome"] == "complete"
+    assert route["vlm_role"] == "vlm_grouping"
+    assert route["decision_contract"] == "grouping_partition_v1"
+    assert route["model"] == "grouping-test-model"
+    assert route["endpoint"] == "http://127.0.0.1:9999/v1"
+    assert route["last_request_metadata"] == {"image_count": 1}
 
 
-def test_canonical_grouping_route_is_vlm_only_and_fail_closed() -> None:
+def test_vlm_transport_failure_uses_audited_topology_fallback() -> None:
+    result = group_scene(
+        _mixed_scene(),
+        model=_RaisingModel(RuntimeError("transport unavailable")),
+    )
+
+    assert result.backend == "topology"
+    assert {
+        object_id
+        for group in result.object_groups
+        for object_id in group.object_ids
+    } == {"bed", "nightstand", "desk", "chair"}
+    route = result.provenance["grouping_fallback"]
+    assert route["fallback_used"] is True
+    assert route["primary_failure"] == {
+        "error_type": "RuntimeError",
+        "message": "transport unavailable",
+    }
+    assert route["vlm_role"] == "vlm_grouping"
+    assert route["decision_contract"] == "grouping_partition_v1"
+    assert route["model"] == "grouping-failure-model"
+    assert route["endpoint"] == "http://127.0.0.1:9999/v1"
+    assert result.resolved_grouping_config["fallback"]["backend"] == (
+        "topology"
+    )
+
+
+def test_grouping_fallback_audit_sanitizes_model_request_metadata() -> None:
+    model = _RaisingModel(RuntimeError("transport unavailable"))
+    model.endpoint = (
+        "https://audit-user:credential@example.test/v1"
+        "?api_key=endpoint-secret"
+    )
+    model.last_request_metadata = {
+        "endpoint": model.endpoint,
+        "url": (
+            "https://audit-user:credential@example.test/v1/chat/completions"
+            "?token=url-secret"
+        ),
+        "model": "grouping-failure-model",
+        "call_type": "vlm_grouping.partition",
+        "message_count": 2,
+        "image_count": 1,
+        "prompt_chars": 1234,
+        "api_key_env": "LITELLM_MASTER_KEY",
+        "authorization_configured": True,
+        "usage": {
+            "prompt_tokens": 100,
+            "completion_tokens": 20,
+            "total_tokens": 120,
+            "raw_response": "must-not-be-copied",
+        },
+        "prompt_budget_report": {
+            "call_type": "vlm_grouping.partition",
+            "prompt_chars": 1234,
+            "estimated_prompt_tokens": 308,
+            "sections": [
+                {
+                    "name": "scene_context",
+                    "chars": 900,
+                    "estimated_tokens": 225,
+                    "text": "full-prompt-must-not-be-copied",
+                }
+            ],
+        },
+        "api_key": "literal-api-secret",
+        "authorization": "Bearer bearer-secret",
+        "messages": [{"content": "full-prompt-must-not-be-copied"}],
+        "image_data": "data:image/png;base64,full-image-must-not-be-copied",
+    }
+
+    result = group_scene(_mixed_scene(), model=model)
+
+    route = result.provenance["grouping_fallback"]
+    assert route["vlm_role"] == "vlm_grouping"
+    assert route["decision_contract"] == "grouping_partition_v1"
+    assert route["model"] == "grouping-failure-model"
+    assert route["endpoint"] == "https://example.test/v1"
+    metadata = route["last_request_metadata"]
+    assert metadata["endpoint"] == "https://example.test/v1"
+    assert metadata["url"] == (
+        "https://example.test/v1/chat/completions"
+    )
+    assert metadata["api_key_env"] == "LITELLM_MASTER_KEY"
+    assert metadata["usage"] == {
+        "completion_tokens": 20,
+        "prompt_tokens": 100,
+        "total_tokens": 120,
+    }
+    assert metadata["prompt_budget_report"]["sections"] == [
+        {
+            "name": "scene_context",
+            "chars": 900,
+            "estimated_tokens": 225,
+        }
+    ]
+    serialized = json.dumps(route, sort_keys=True)
+    for secret in (
+        "credential",
+        "endpoint-secret",
+        "url-secret",
+        "literal-api-secret",
+        "bearer-secret",
+        "full-prompt-must-not-be-copied",
+        "full-image-must-not-be-copied",
+    ):
+        assert secret not in serialized
+
+
+def test_vlm_schema_failure_uses_audited_topology_fallback() -> None:
+    invalid = _vlm_response()
+    invalid["object_groups"][1]["object_ids"] = ["bed"]
+
+    result = group_scene(_mixed_scene(), model=_Model(invalid))
+
+    assert result.backend == "topology"
+    route = result.provenance["grouping_fallback"]
+    assert route["fallback_used"] is True
+    assert route["primary_failure"]["error_type"] == "ValueError"
+    assert "missing" in route["primary_failure"]["message"]
+
+
+@pytest.mark.parametrize(
+    "fallback",
+    [
+        True,
+        {"enabled": "yes"},
+        {"backend": "anchor"},
+        {"enabled": True, "unknown": 1},
+    ],
+)
+def test_grouping_fallback_config_fails_closed(fallback: object) -> None:
+    with pytest.raises((TypeError, ValueError)):
+        build_grouping_algorithm(
+            {"grouping": {"backend": "vlm", "fallback": fallback}},
+            model=_Model(_vlm_response()),
+        )
+
+
+def test_explicit_custom_algorithm_does_not_silently_fallback() -> None:
+    class _CustomFailure:
+        backend = "custom"
+        policy_id = "custom_v1"
+
+        def group(self, request):
+            raise RuntimeError("custom grouping failed")
+
+    with pytest.raises(RuntimeError, match="custom grouping failed"):
+        group_scene(
+            _mixed_scene(),
+            model=_Model(_vlm_response()),
+            algorithm=_CustomFailure(),
+        )
+
+
+def test_canonical_grouping_route_uses_vlm_then_topology_fallback() -> None:
     resolved = _resolve_object_grouping_report(
         None,
         scene=_mixed_scene(),
@@ -513,22 +709,23 @@ def test_canonical_grouping_route_is_vlm_only_and_fail_closed() -> None:
     )
     assert resolved["fallback_used"] is False
 
-    unavailable = _resolve_object_grouping_report(
+    fallback = _resolve_object_grouping_report(
         None,
         scene=_mixed_scene(),
         request={},
         visual_evidence=[],
         model=None,
     )
-    assert unavailable == {
-        "status": "unavailable",
-        "source": "canonical_runtime_default",
-        "grouping_backend": "vlm",
-        "grouping_policy_id": "vlm_visual_evidence_scope_v2",
-        "reason": "vlm_grouping_model_not_configured",
-        "fallback_used": False,
-        "provenance": {"grouping_input_protocol": {}},
-    }
+    assert fallback["status"] == "complete"
+    assert fallback["source"] == "canonical_runtime_default"
+    assert fallback["grouping_backend"] == "topology"
+    assert fallback["grouping_policy_id"] == (
+        "topology_metadata_geometry_v2"
+    )
+    assert fallback["fallback_used"] is True
+    assert fallback["provenance"]["grouping_fallback"][
+        "primary_failure"
+    ]["error_type"] == "ValueError"
 
 
 def test_canonical_grouping_evidence_protocol_is_identity_aware(
@@ -688,6 +885,16 @@ def test_non_vlm_frozen_grouping_is_rejected_unless_diagnostic() -> None:
     )
     assert rejected["status"] == "unavailable"
     assert rejected["non_canonical_grouping_input"] is True
+    assert rejected["reported_grouping_backend"] == "topology"
+    assert (
+        rejected["reported_grouping_policy_id"]
+        == "topology_grouping_v1"
+    )
+    assert rejected["expected_grouping_backend"] == "vlm"
+    assert (
+        rejected["expected_grouping_policy_id"]
+        == "vlm_visual_evidence_scope_v2"
+    )
     assert "grouping_backend_must_be_vlm" in rejected[
         "validation_errors"
     ]
@@ -703,6 +910,39 @@ def test_non_vlm_frozen_grouping_is_rejected_unless_diagnostic() -> None:
     assert diagnostic["grouping_backend"] == "topology"
     assert diagnostic["non_canonical_grouping_input"] is True
     assert diagnostic["diagnostic_only"] is True
+
+
+def test_validated_runtime_fallback_report_can_be_replayed() -> None:
+    fallback = group_scene(_mixed_scene()).to_dict()
+    fallback["status"] = "complete"
+
+    resolved = _resolve_object_grouping_report(
+        fallback,
+        scene=_mixed_scene(),
+        request={},
+        visual_evidence=[],
+    )
+
+    assert resolved["status"] == "complete"
+    assert resolved["grouping_backend"] == "topology"
+    assert resolved["fallback_used"] is True
+    assert resolved["non_canonical_grouping_input"] is False
+
+
+def test_fallback_can_be_explicitly_disabled() -> None:
+    config = {
+        "grouping": {
+            "backend": "vlm",
+            "fallback": {"enabled": False, "backend": "topology"},
+        }
+    }
+    with pytest.raises(ValueError, match="requires an injected chat model"):
+        build_grouping_algorithm(config)
+
+    model = _RaisingModel(RuntimeError("primary failed"))
+    algorithm = build_grouping_algorithm(config, model=model)
+    with pytest.raises(RuntimeError, match="primary failed"):
+        algorithm.group(GroupingRequest(scene=_mixed_scene()))
 
 
 def test_invalid_partition_is_rejected_even_in_diagnostic_mode() -> None:
@@ -810,3 +1050,38 @@ def test_reference_grouping_configs_construct_expected_backend(
     )
 
     assert algorithm.backend == backend
+
+
+def test_grouping_identity_legend_must_cover_unique_scene_ids(
+    tmp_path: Path,
+) -> None:
+    from PIL import Image
+    from benchmark.grouping import prepare_grouping_evidence
+
+    items = []
+    for name, role in (
+        ("perspective", "global_perspective_rgb"),
+        ("top", "global_top_rgb"),
+        ("identity_map", "global_identity_overlay"),
+    ):
+        path = tmp_path / f"{name}.png"
+        Image.new("RGB", (8, 8), (20, 40, 60)).save(path)
+        item = {
+            "path": str(path),
+            "role": role,
+            "representation": (
+                "identity_map" if name == "identity_map" else "rgb"
+            ),
+        }
+        if name == "identity_map":
+            item["identity_legend"] = {
+                "red": "a",
+                "blue": "a",
+            }
+        items.append(item)
+
+    with pytest.raises(ValueError, match="unique canonical object ID"):
+        prepare_grouping_evidence(
+            items,
+            expected_object_ids=("a", "b"),
+        )

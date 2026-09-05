@@ -1,0 +1,198 @@
+from __future__ import annotations
+
+import json
+from copy import deepcopy
+from typing import Any
+
+from benchmark.assets.facing import benchmark_catalog_facing_contract
+from benchmark.nl_scene.generation_input import (
+    STRUCTURED_ASSETS_INPUT_MODE,
+    build_generator_visible_payload,
+)
+
+
+CATALOG_PLACEMENT_VERSION = "catalog_placement_v1"
+
+SYSTEM_PROMPT = """You place instances of benchmark-provided frozen catalog assets.
+Return exactly one JSON object and no explanation or Markdown. The only root fields are
+schema_version and instances. schema_version, when present, is "catalog_placement_v1".
+Each instance has exactly instance_id, asset_id, center_m, uniform_scale,
+rotation_euler_xyz_deg, and slot_id. Never emit category, description,
+scene type, coordinate declarations, relationships, evaluator IDs, metric claims,
+verdicts, scores, lighting, materials, cameras, or rendering settings.
+
+instance_id is generator-owned identity. It must be unique and remain stable if the
+instances array is reordered. Reusing one asset for multiple instances is allowed, but
+every instance still needs a distinct instance_id. asset_id must exactly equal a
+selected_asset.jid from the supplied frozen catalog.
+
+Coordinates are fixed and must not be declared in the output: meters, z-up, +x along
+room width, +y along room depth, with the room-min-corner floor as origin. center_m is
+the world position of the scaled catalog canonical local-bbox center. uniform_scale is
+a finite positive scalar applied exactly and equally on all three local axes of the
+frozen asset. The materializer must not shrink, contain-fit, or otherwise reinterpret
+this generator-owned scale.
+When generation_comparison.scale_policy is "fixed_native_scale", uniform_scale must
+be exactly 1.0 for every instance. Never compensate by changing the frozen bbox.
+rotation_euler_xyz_deg is intrinsic XYZ Euler degrees, applied to column vectors as
+Rz @ Ry @ Rx about the canonical bbox center. Express floor or support placement
+directly through center_m; there is no vertical-anchor field.
+
+For directed assets in the supplied Imaginarium catalog, use the benchmark-owned
+catalog_facing_contract. Their canonical functional front defaults to local -Y;
+do not assume local +Y. First decide the intended world-space facing direction,
+then rotate that local side with rotation_euler_xyz_deg[2]. With the default
+local_neg_y front: yaw 0 faces world -Y, yaw 90 faces world +X, yaw 180 faces
+world +Y, and yaw -90 faces world -X. A benchmark-provided explicit per-asset
+override supersedes the default. Non-directed assets have no facing constraint.
+This convention changes neither the asset mesh nor the generator-owned transform.
+
+Because this adapter receives structured_assets input, slot_id is required on every
+instance and must exactly match one of public_slot_ids supplied below. Multiple
+instances may use the same public slot when its requested count is greater than one;
+stable instance_id values distinguish them. Never invent private or numbered slot
+identifiers. slot_id binds the instance to intended task semantics, but it does not
+repair the selected asset, choose evaluator identity or actual category, or make any
+metric claim."""
+
+OUTPUT_CONTRACT = {
+    "schema_version": CATALOG_PLACEMENT_VERSION,
+    "instances": [
+        {
+            "instance_id": "chair_left",
+            "asset_id": "selected_asset.jid",
+            "center_m": [1.0, 2.0, 0.5],
+            "uniform_scale": 1.0,
+            "rotation_euler_xyz_deg": [0.0, 0.0, 90.0],
+            "slot_id": "required_public_slot_id",
+        }
+    ],
+}
+
+
+def public_slot_ids_from_generation_input(generation_input: dict) -> list[str]:
+    """Return only slots derivable from the public structured object plan."""
+
+    object_plan = generation_input.get("object_plan")
+    if not isinstance(object_plan, dict):
+        return []
+    slots: list[str] = []
+    for item in object_plan.get("objects", []):
+        if not isinstance(item, dict):
+            continue
+        # Use only a literal identifier already present in generator-visible
+        # structure. If a future object-plan schema exposes slot_id directly,
+        # it supersedes the object's public id; count never creates new names.
+        literal_slot_id = str(item.get("slot_id") or item.get("id") or "").strip()
+        if not literal_slot_id:
+            continue
+        if literal_slot_id not in slots:
+            slots.append(literal_slot_id)
+    return slots
+
+
+def build_catalog_placement_method_input(generation_input: dict) -> dict:
+    """Build the model-facing fixed-catalog placement request."""
+
+    contract = (
+        generation_input.get("generation_contract")
+        if isinstance(generation_input.get("generation_contract"), dict)
+        else {}
+    )
+    input_mode = str(contract.get("input_mode") or "")
+    if input_mode != STRUCTURED_ASSETS_INPUT_MODE:
+        raise ValueError(
+            "catalog_placement requires generation_contract.input_mode='structured_assets'"
+        )
+    visible = build_generator_visible_payload(generation_input)
+    assistance = visible.get("assistance")
+    asset_selection = (
+        assistance.get("asset_selection") if isinstance(assistance, dict) else None
+    )
+    if not isinstance(asset_selection, dict):
+        raise ValueError("catalog_placement requires generator-visible asset_selection")
+
+    public_slots = public_slot_ids_from_generation_input(generation_input)
+    user_payload: dict[str, Any] = {
+        "natural_language": visible["natural_language"],
+        "benchmark_environment": visible["benchmark_environment"],
+        "structure": visible.get("structure"),
+        "asset_selection": _model_visible_asset_selection(asset_selection),
+        "public_slot_ids": public_slots,
+        "catalog_facing_contract": benchmark_catalog_facing_contract(),
+    }
+    reflection = visible.get("self_reflection")
+    if isinstance(reflection, dict):
+        user_payload["repair_context"] = {
+            "instruction": (
+                "Return a complete revised placement that fixes the reported deterministic "
+                "evaluation failures while preserving stable instance_id values."
+            ),
+            "previous_generated_scene": reflection.get("previous_generated_scene"),
+            "previous_evaluation": reflection.get("previous_evaluation"),
+        }
+    comparison = visible.get("generation_comparison")
+    if isinstance(comparison, dict):
+        user_payload["generation_comparison"] = _model_visible_comparison(comparison)
+
+    user_prompt = (
+        "Output-shape example (replace every example value and include every intended instance):\n"
+        f"{json.dumps(OUTPUT_CONTRACT, ensure_ascii=True, separators=(',', ':'))}\n"
+        "Generator-visible request and frozen selected-asset catalog:\n"
+        f"{json.dumps(user_payload, ensure_ascii=True, separators=(',', ':'))}"
+    )
+    return {
+        "adapter": "catalog_placement",
+        "provider": "openai_compatible",
+        "output_schema": CATALOG_PLACEMENT_VERSION,
+        "input_mode": input_mode,
+        "request_id": str(generation_input.get("request_id") or "request_001"),
+        "public_slot_ids": public_slots,
+        "catalog_facing_contract": benchmark_catalog_facing_contract(),
+        "generation_comparison": (
+            deepcopy(comparison) if isinstance(comparison, dict) else None
+        ),
+        "messages": [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": user_prompt},
+        ],
+    }
+
+
+def _model_visible_asset_selection(value: dict[str, Any]) -> dict[str, Any]:
+    """Remove host-local locators that cannot help a placement-only model."""
+
+    result = deepcopy(value)
+    private_locator_keys = {
+        "file_path",
+        "glb_path",
+        "mesh_path",
+        "mesh_uri",
+        "metadata_path",
+        "metadata_uri",
+        "path",
+        "pointcloud_uri",
+    }
+
+    def strip(item: Any) -> None:
+        if isinstance(item, dict):
+            for key in list(item):
+                if str(key).casefold() in private_locator_keys:
+                    item.pop(key, None)
+                else:
+                    strip(item[key])
+        elif isinstance(item, list):
+            for child in item:
+                strip(child)
+
+    strip(result)
+    return result
+
+
+def _model_visible_comparison(value: dict[str, Any]) -> dict[str, Any]:
+    result = deepcopy(value)
+    materialization = result.get("method_materialization")
+    if isinstance(materialization, dict):
+        for key in ("comparison_control_path", "method_catalog_path"):
+            materialization.pop(key, None)
+    return result

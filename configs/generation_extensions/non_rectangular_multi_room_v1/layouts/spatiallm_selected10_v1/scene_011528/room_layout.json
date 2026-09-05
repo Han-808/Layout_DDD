@@ -1,0 +1,614 @@
+{
+  "coordinate_frame": {
+    "axes": "x_width_y_depth_z_up",
+    "handedness": "right_handed",
+    "origin": "shared_scene_global",
+    "rotation_unit": "degree",
+    "unit": "meter"
+  },
+  "geometry_conventions": {
+    "inward_normal": "left_of_directed_wall_segment",
+    "polygon_closure": "implicit_last_to_first",
+    "polygon_winding": "counter_clockwise",
+    "wall_segment_order": "matches_floor_polygon_edges"
+  },
+  "geometry_tolerance_m": 1e-06,
+  "layout_id": "scene_011528",
+  "room_count": 5,
+  "room_order": [
+    "room_000",
+    "room_001",
+    "room_002",
+    "room_003",
+    "room_004"
+  ],
+  "rooms": [
+    {
+      "floor_polygon_xy": [
+        [
+          0.4431514892578125,
+          1.875
+        ],
+        [
+          -0.635,
+          1.875
+        ],
+        [
+          -0.635,
+          -1.125
+        ],
+        [
+          -3.58,
+          -1.125
+        ],
+        [
+          -3.58,
+          -4.865
+        ],
+        [
+          3.955,
+          -4.865
+        ],
+        [
+          3.955,
+          -3.49
+        ],
+        [
+          2.843151611328125,
+          -3.49
+        ],
+        [
+          2.843151611328125,
+          -1.125
+        ],
+        [
+          0.4431514892578125,
+          -1.125
+        ]
+      ],
+      "floor_z_m": 0.0,
+      "room_id": "room_000",
+      "wall_segments": [
+        {
+          "end_xy": [
+            -0.635,
+            1.875
+          ],
+          "height_m": 2.7999699042935657,
+          "inward_normal_xy": [
+            0.0,
+            -1.0
+          ],
+          "start_xy": [
+            0.4431514892578125,
+            1.875
+          ],
+          "thickness_m": 0.0,
+          "wall_id": "room_000.wall_000"
+        },
+        {
+          "end_xy": [
+            -0.635,
+            -1.125
+          ],
+          "height_m": 2.7999699042935657,
+          "inward_normal_xy": [
+            1.0,
+            0.0
+          ],
+          "start_xy": [
+            -0.635,
+            1.875
+          ],
+          "thickness_m": 0.0,
+          "wall_id": "room_000.wall_001"
+        },
+        {
+          "end_xy": [
+            -3.58,
+            -1.125
+          ],
+          "height_m": 2.7999699042935657,
+          "inward_normal_xy": [
+            0.0,
+            -1.0
+          ],
+          "start_xy": [
+            -0.635,
+            -1.125
+          ],
+          "thickness_m": 0.0,
+          "wall_id": "room_000.wall_002"
+        },
+        {
+          "end_xy": [
+            -3.58,
+            -4.865
+          ],
+          "height_m": 2.7999699042935657,
+          "inward_normal_xy": [
+            1.0,
+            0.0
+          ],
+          "start_xy": [
+            -3.58,
+            -1.125
+          ],
+          "thickness_m": 0.0,
+          "wall_id": "room_000.wall_003"
+        },
+        {
+          "end_xy": [
+            3.955,
+            -4.865
+          ],
+          "height_m": 2.7999699042935657,
+          "inward_normal_xy": [
+            0.0,
+            1.0
+          ],
+          "start_xy": [
+            -3.58,
+            -4.865
+          ],
+          "thickness_m": 0.0,
+          "wall_id": "room_000.wall_004"
+        },
+        {
+          "end_xy": [
+            3.955,
+            -3.49
+          ],
+          "height_m": 2.7999699042935657,
+          "inward_normal_xy": [
+            -1.0,
+            0.0
+          ],
+          "start_xy": [
+            3.955,
+            -4.865
+          ],
+          "thickness_m": 0.0,
+          "wall_id": "room_000.wall_005"
+        },
+        {
+          "end_xy": [
+            2.843151611328125,
+            -3.49
+          ],
+          "height_m": 2.7999699042935657,
+          "inward_normal_xy": [
+            0.0,
+            -1.0
+          ],
+          "start_xy": [
+            3.955,
+            -3.49
+          ],
+          "thickness_m": 0.0,
+          "wall_id": "room_000.wall_006"
+        },
+        {
+          "end_xy": [
+            2.843151611328125,
+            -1.125
+          ],
+          "height_m": 2.7999699042935657,
+          "inward_normal_xy": [
+            -1.0,
+            0.0
+          ],
+          "start_xy": [
+            2.843151611328125,
+            -3.49
+          ],
+          "thickness_m": 0.0,
+          "wall_id": "room_000.wall_007"
+        },
+        {
+          "end_xy": [
+            0.4431514892578125,
+            -1.125
+          ],
+          "height_m": 2.7999699042935657,
+          "inward_normal_xy": [
+            0.0,
+            -1.0
+          ],
+          "start_xy": [
+            2.843151611328125,
+            -1.125
+          ],
+          "thickness_m": 0.0,
+          "wall_id": "room_000.wall_008"
+        },
+        {
+          "end_xy": [
+            0.4431514892578125,
+            1.875
+          ],
+          "height_m": 2.7999699042935657,
+          "inward_normal_xy": [
+            -1.0,
+            0.0
+          ],
+          "start_xy": [
+            0.4431514892578125,
+            -1.125
+          ],
+          "thickness_m": 0.0,
+          "wall_id": "room_000.wall_009"
+        }
+      ]
+    },
+    {
+      "floor_polygon_xy": [
+        [
+          -3.58,
+          2.095
+        ],
+        [
+          0.4431514892578125,
+          2.095
+        ],
+        [
+          0.4431514892578125,
+          5.115
+        ],
+        [
+          -3.58,
+          5.115
+        ]
+      ],
+      "floor_z_m": 0.0,
+      "room_id": "room_001",
+      "wall_segments": [
+        {
+          "end_xy": [
+            0.4431514892578125,
+            2.095
+          ],
+          "height_m": 2.7999699042935653,
+          "inward_normal_xy": [
+            0.0,
+            1.0
+          ],
+          "start_xy": [
+            -3.58,
+            2.095
+          ],
+          "thickness_m": 0.0,
+          "wall_id": "room_001.wall_000"
+        },
+        {
+          "end_xy": [
+            0.4431514892578125,
+            5.115
+          ],
+          "height_m": 2.7999699042935653,
+          "inward_normal_xy": [
+            -1.0,
+            0.0
+          ],
+          "start_xy": [
+            0.4431514892578125,
+            2.095
+          ],
+          "thickness_m": 0.0,
+          "wall_id": "room_001.wall_001"
+        },
+        {
+          "end_xy": [
+            -3.58,
+            5.115
+          ],
+          "height_m": 2.7999699042935653,
+          "inward_normal_xy": [
+            0.0,
+            -1.0
+          ],
+          "start_xy": [
+            0.4431514892578125,
+            5.115
+          ],
+          "thickness_m": 0.0,
+          "wall_id": "room_001.wall_002"
+        },
+        {
+          "end_xy": [
+            -3.58,
+            2.095
+          ],
+          "height_m": 2.7999699042935653,
+          "inward_normal_xy": [
+            1.0,
+            0.0
+          ],
+          "start_xy": [
+            -3.58,
+            5.115
+          ],
+          "thickness_m": 0.0,
+          "wall_id": "room_001.wall_003"
+        }
+      ]
+    },
+    {
+      "floor_polygon_xy": [
+        [
+          -0.785,
+          1.875
+        ],
+        [
+          -3.58,
+          1.875
+        ],
+        [
+          -3.58,
+          -0.905
+        ],
+        [
+          -0.785,
+          -0.905
+        ]
+      ],
+      "floor_z_m": 0.0,
+      "room_id": "room_002",
+      "wall_segments": [
+        {
+          "end_xy": [
+            -3.58,
+            1.875
+          ],
+          "height_m": 2.799868790029597,
+          "inward_normal_xy": [
+            0.0,
+            -1.0
+          ],
+          "start_xy": [
+            -0.785,
+            1.875
+          ],
+          "thickness_m": 0.0,
+          "wall_id": "room_002.wall_000"
+        },
+        {
+          "end_xy": [
+            -3.58,
+            -0.905
+          ],
+          "height_m": 2.799868790029597,
+          "inward_normal_xy": [
+            1.0,
+            0.0
+          ],
+          "start_xy": [
+            -3.58,
+            1.875
+          ],
+          "thickness_m": 0.0,
+          "wall_id": "room_002.wall_001"
+        },
+        {
+          "end_xy": [
+            -0.785,
+            -0.905
+          ],
+          "height_m": 2.799868790029597,
+          "inward_normal_xy": [
+            0.0,
+            1.0
+          ],
+          "start_xy": [
+            -3.58,
+            -0.905
+          ],
+          "thickness_m": 0.0,
+          "wall_id": "room_002.wall_002"
+        },
+        {
+          "end_xy": [
+            -0.785,
+            1.875
+          ],
+          "height_m": 2.799868790029597,
+          "inward_normal_xy": [
+            -1.0,
+            0.0
+          ],
+          "start_xy": [
+            -0.785,
+            -0.905
+          ],
+          "thickness_m": 0.0,
+          "wall_id": "room_002.wall_003"
+        }
+      ]
+    },
+    {
+      "floor_polygon_xy": [
+        [
+          0.5931514892578125,
+          3.735
+        ],
+        [
+          0.5931514892578125,
+          0.785
+        ],
+        [
+          2.843151611328125,
+          0.785
+        ],
+        [
+          2.843151611328125,
+          3.735
+        ]
+      ],
+      "floor_z_m": 0.0,
+      "room_id": "room_003",
+      "wall_segments": [
+        {
+          "end_xy": [
+            0.5931514892578125,
+            0.785
+          ],
+          "height_m": 2.7998742103693073,
+          "inward_normal_xy": [
+            1.0,
+            0.0
+          ],
+          "start_xy": [
+            0.5931514892578125,
+            3.735
+          ],
+          "thickness_m": 0.0,
+          "wall_id": "room_003.wall_000"
+        },
+        {
+          "end_xy": [
+            2.843151611328125,
+            0.785
+          ],
+          "height_m": 2.7998742103693073,
+          "inward_normal_xy": [
+            0.0,
+            1.0
+          ],
+          "start_xy": [
+            0.5931514892578125,
+            0.785
+          ],
+          "thickness_m": 0.0,
+          "wall_id": "room_003.wall_001"
+        },
+        {
+          "end_xy": [
+            2.843151611328125,
+            3.735
+          ],
+          "height_m": 2.7998742103693073,
+          "inward_normal_xy": [
+            -1.0,
+            0.0
+          ],
+          "start_xy": [
+            2.843151611328125,
+            0.785
+          ],
+          "thickness_m": 0.0,
+          "wall_id": "room_003.wall_002"
+        },
+        {
+          "end_xy": [
+            0.5931514892578125,
+            3.735
+          ],
+          "height_m": 2.7998742103693073,
+          "inward_normal_xy": [
+            0.0,
+            -1.0
+          ],
+          "start_xy": [
+            2.843151611328125,
+            3.735
+          ],
+          "thickness_m": 0.0,
+          "wall_id": "room_003.wall_003"
+        }
+      ]
+    },
+    {
+      "floor_polygon_xy": [
+        [
+          -5.17,
+          -4.865
+        ],
+        [
+          -3.8,
+          -4.865
+        ],
+        [
+          -3.8,
+          -1.125
+        ],
+        [
+          -5.17,
+          -1.125
+        ]
+      ],
+      "floor_z_m": 0.0,
+      "room_id": "room_004",
+      "wall_segments": [
+        {
+          "end_xy": [
+            -3.8,
+            -4.865
+          ],
+          "height_m": 2.7992598695772912,
+          "inward_normal_xy": [
+            0.0,
+            1.0
+          ],
+          "start_xy": [
+            -5.17,
+            -4.865
+          ],
+          "thickness_m": 0.0,
+          "wall_id": "room_004.wall_000"
+        },
+        {
+          "end_xy": [
+            -3.8,
+            -1.125
+          ],
+          "height_m": 2.7992598695772912,
+          "inward_normal_xy": [
+            -1.0,
+            0.0
+          ],
+          "start_xy": [
+            -3.8,
+            -4.865
+          ],
+          "thickness_m": 0.0,
+          "wall_id": "room_004.wall_001"
+        },
+        {
+          "end_xy": [
+            -5.17,
+            -1.125
+          ],
+          "height_m": 2.7992598695772912,
+          "inward_normal_xy": [
+            0.0,
+            -1.0
+          ],
+          "start_xy": [
+            -3.8,
+            -1.125
+          ],
+          "thickness_m": 0.0,
+          "wall_id": "room_004.wall_002"
+        },
+        {
+          "end_xy": [
+            -5.17,
+            -4.865
+          ],
+          "height_m": 2.7992598695772912,
+          "inward_normal_xy": [
+            1.0,
+            0.0
+          ],
+          "start_xy": [
+            -5.17,
+            -1.125
+          ],
+          "thickness_m": 0.0,
+          "wall_id": "room_004.wall_003"
+        }
+      ]
+    }
+  ],
+  "schema_version": "non_rectangular_room_layout_v1"
+}

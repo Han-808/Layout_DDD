@@ -1,0 +1,75 @@
+schema_version: l3_mutation_experiment_v1
+experiment_id: l3_mutation90_20260731_r1
+seed: 20260731
+
+source_dir: Support/Scenes/converted_scenes
+asset_root: Support/Assets/imaginarium_assets
+asset_csv: Support/Assets/imaginarium_asset_info.csv
+output_root: Support/artifacts/outputs/l3_mutation90_20260731_r1
+
+sample:
+  main_scene_count: 20
+  extra_mixed_scene_count: 10
+  min_objects: 8
+  max_objects: 25
+  min_boundary_area_m2: 5.0
+  # Extremely corridor-like rooms can hide every object behind the standardized
+  # perspective wall; keep the source pool compatible with the frozen renderer.
+  max_boundary_aspect_ratio: 4.0
+  strata:
+    - name: 08-12_objects
+      min_objects: 8
+      max_objects: 12
+      main_count: 7
+      extra_count: 4
+    - name: 13-18_objects
+      min_objects: 13
+      max_objects: 18
+      main_count: 7
+      extra_count: 3
+    - name: 19-25_objects
+      min_objects: 19
+      max_objects: 25
+      main_count: 6
+      extra_count: 3
+
+mutations:
+  # Counts are indexed by the 20 frozen main scenes.  Angle and scale range
+  # from one/two-object edits to five/eight-object major edits.
+  single_target_counts:
+    [1, 2, 1, 2, 2, 3, 4, 3, 4, 4, 5, 6, 5, 6, 6, 7, 8, 7, 8, 8]
+  # Cross-scene replacements use multiple donor objects and never replace the
+  # whole target scene.
+  replacement_target_counts:
+    [2, 2, 2, 2, 2, 3, 4, 3, 4, 4, 5, 6, 5, 6, 6, 7, 8, 7, 8, 8]
+  angle_degrees:
+    minor: [30, 45]
+    moderate: [60, 90]
+    major: [90, 135, 180]
+  scale_factors:
+    minor: [0.78, 0.84, 1.22, 1.30]
+    moderate: [0.64, 0.72, 1.38, 1.52]
+    major: [0.50, 0.60, 1.60, 1.80]
+  mixed:
+    angle_target_counts: [1, 1, 2]
+    scale_target_counts: [1, 2, 2]
+    replacement_target_counts: [2, 4, 6]
+    # The ten additional local-repository scenes span all three severity tiers.
+    extra_schedule_indices: [0, 6, 12, 2, 8, 14, 4, 9, 16, 19]
+
+render:
+  blender_bin: /Applications/Blender.app/Contents/MacOS/Blender
+  asset_root: Support/Assets/imaginarium_assets
+  engine: BLENDER_WORKBENCH
+  width: 512
+  height: 512
+  timeout_seconds: 1800
+  cycles_device: CPU
+  cycles_samples: 1
+  cycles_denoising: false
+  require_asset_mesh: true
+
+review:
+  host: 127.0.0.1
+  port: 8770
+  persist_file: human_reviews/reviews.json

@@ -28,6 +28,7 @@ L3_CAMERA_METRICS = (
     "object_pairing_consistency",
     "style_consistency",
     "functional_consistency",
+    "semantic_placement_consistency",
 )
 CAMERA_EVIDENCE_METRICS = (*P0B_CAMERA_METRICS, *L3_CAMERA_METRICS)
 DEFAULT_CAMERA_MODE_BY_METRIC = {
@@ -43,6 +44,7 @@ DEFAULT_CAMERA_MODE_BY_METRIC = {
     "scale_consistency": "visibility_ranked",
     "object_pairing_consistency": "visibility_ranked",
     "functional_consistency": "visibility_ranked",
+    "semantic_placement_consistency": "visibility_ranked",
     # Style consumes the trusted overview packet by default.
     "style_consistency": "global_only",
 }
@@ -77,6 +79,21 @@ CAMERA_SENSOR_WIDTH_MM = 36.0
 CAMERA_SENSOR_FIT = "HORIZONTAL"
 CAMERA_MIN_LENS_MM = 24.0
 CAMERA_FRAME_MARGIN_NDC = 0.85
+FUNCTIONAL_PROBE_CANDIDATE_BUDGETS = {
+    "functional_frontage": 4,
+    "functional_correspondence": 4,
+    "approach_clearance": 4,
+}
+FUNCTIONAL_CORRESPONDENCE_POOL_SIZE = 6
+USABLE_SURFACE_PREVIEW_DISTANCE_SCALES = (1.0, 1.35, 0.7)
+USABLE_SURFACE_PREVIEW_LATERAL_OFFSETS_M = (0.0, 0.25, -0.25, 0.5, -0.5)
+USABLE_SURFACE_PREVIEW_HEIGHT_OFFSETS_M = (0.0, 0.25, -0.25, 0.5)
+USABLE_SURFACE_LOCAL_AXES = {
+    "local_pos_x": (1.0, 0.0, 0.0),
+    "local_neg_x": (-1.0, 0.0, 0.0),
+    "local_pos_y": (0.0, 1.0, 0.0),
+    "local_neg_y": (0.0, -1.0, 0.0),
+}
 
 
 @dataclass(frozen=True)
@@ -197,6 +214,27 @@ def generate_camera_pose_candidates(
     """
 
     policy_name = normalize_camera_candidate_policy(policy)
+    scene = request.get("scene") if isinstance(request, dict) else None
+    from benchmark.non_rectangular.geometry import (
+        is_non_rectangular_camera_scene,
+    )
+
+    if is_non_rectangular_camera_scene(scene):
+        from benchmark.non_rectangular.camera import (
+            generate_polygon_camera_pose_candidates,
+        )
+
+        base_generator = (
+            _generate_legacy_camera_pose_candidates
+            if policy_name == "legacy"
+            else _generate_feasible_camera_pose_candidates
+        )
+        return generate_polygon_camera_pose_candidates(
+            request,
+            max_candidates=max_candidates,
+            policy=policy_name,
+            base_generator=base_generator,
+        )
     if policy_name == "legacy":
         return _generate_legacy_camera_pose_candidates(
             request,
@@ -206,6 +244,293 @@ def generate_camera_pose_candidates(
         request,
         max_candidates=max_candidates,
     )
+
+
+def generate_usable_surface_side_bank(
+    scene: dict[str, Any],
+    *,
+    target_id: str,
+) -> list[dict[str, Any]]:
+    """Render-facing, deterministic previews of the four object-local sides."""
+
+    from benchmark.non_rectangular.geometry import (
+        is_non_rectangular_camera_scene,
+    )
+
+    if is_non_rectangular_camera_scene(scene):
+        from benchmark.non_rectangular.camera import (
+            generate_polygon_usable_surface_side_bank,
+        )
+
+        return generate_polygon_usable_surface_side_bank(
+            scene,
+            target_id=target_id,
+            repair=False,
+        )
+    return _generate_usable_surface_side_bank(
+        scene,
+        target_id=target_id,
+        elevation_degrees=10.0,
+        distance_scale=1.0,
+        context_margin_m=0.45,
+        preferred_lens_mm=45.0,
+        policy_source="usable_surface_local_side_bank_v1",
+    )
+
+
+def generate_usable_surface_side_repair_bank(
+    scene: dict[str, Any],
+    *,
+    target_id: str,
+) -> list[dict[str, Any]]:
+    """Return one bounded deterministic comparison bank after ambiguity.
+
+    The repair bank preserves the same four trusted object-local side IDs and
+    camera rays.  A higher elevation and tighter context expose top, seat,
+    opening, control, and back geometry that a low side-on preview can hide.
+    It remains visual evidence only and never infers a usable side or verdict.
+    """
+
+    from benchmark.non_rectangular.geometry import (
+        is_non_rectangular_camera_scene,
+    )
+
+    if is_non_rectangular_camera_scene(scene):
+        from benchmark.non_rectangular.camera import (
+            generate_polygon_usable_surface_side_bank,
+        )
+
+        return generate_polygon_usable_surface_side_bank(
+            scene,
+            target_id=target_id,
+            repair=True,
+        )
+    return _generate_usable_surface_side_bank(
+        scene,
+        target_id=target_id,
+        elevation_degrees=24.0,
+        distance_scale=1.0,
+        context_margin_m=0.30,
+        preferred_lens_mm=52.0,
+        policy_source="usable_surface_elevated_detail_repair_v1",
+    )
+
+
+def _generate_usable_surface_side_bank(
+    scene: dict[str, Any],
+    *,
+    target_id: str,
+    elevation_degrees: float,
+    distance_scale: float,
+    context_margin_m: float,
+    preferred_lens_mm: float,
+    policy_source: str,
+) -> list[dict[str, Any]]:
+    if not isinstance(scene, dict):
+        raise TypeError("usable-surface side bank requires a scene")
+    object_id = str(target_id or "").strip()
+    objects = _target_objects(scene, [object_id])
+    if len(objects) != 1:
+        raise ValueError(
+            f"usable-surface target {object_id!r} is unavailable"
+        )
+    obj = objects[0]
+    room = _room_bounds(scene)
+    bounds = _object_bounds(obj)
+    extent = np.maximum(bounds[1] - bounds[0], 0.1)
+    target = np.asarray(obj.center, dtype=float).copy()
+    target[2] = float(
+        np.clip(
+            target[2],
+            room[4] + 0.25,
+            max(room[4] + 0.25, room[5] - 0.25),
+        )
+    )
+    desired_distance = max(
+        1.0,
+        min(4.0, float(max(extent[0], extent[1], extent[2])) * 2.2),
+    ) * max(0.5, float(distance_scale))
+    framing_bounds = _functional_probe_framing_bounds(
+        bounds,
+        room=room,
+        context_margin_m=context_margin_m,
+    )
+    scene_objects = _target_objects(scene, [])
+    result: list[dict[str, Any]] = []
+    for side_id, raw_axis in USABLE_SURFACE_LOCAL_AXES.items():
+        local_axis = np.asarray(raw_axis, dtype=float)
+        world_axis = np.asarray(obj.R @ local_axis, dtype=float)
+        world_axis[2] = 0.0
+        norm = float(np.linalg.norm(world_axis))
+        if norm <= 1.0e-9:
+            # Non-upright object transforms can make one intrinsic side
+            # vertical.  That side is unavailable for a horizontal approach
+            # preview; the independent remaining sides stay valid.
+            continue
+        world_axis /= norm
+        azimuth = math.degrees(
+            math.atan2(float(world_axis[1]), float(world_axis[0]))
+        ) % 360.0
+        elevation = float(elevation_degrees)
+        direction = _direction_from_angles(azimuth, elevation)
+        placement = _place_on_feasible_ray(
+            target=target,
+            direction=direction,
+            desired_distance=desired_distance,
+            room=room,
+        )
+        resolved = _repair_usable_surface_preview_location(
+            target=target,
+            direction=direction,
+            desired_distance=desired_distance,
+            room=room,
+            scene_objects=scene_objects,
+            initial_placement=placement,
+        )
+        if resolved is None:
+            # A failed intrinsic side is audited by its absence. Other trusted
+            # sides remain usable; one blocked ray no longer discards the bank.
+            continue
+        location, feasibility = resolved
+        actual_azimuth, actual_elevation, measured_distance = (
+            _pose_angles(location, target)
+        )
+        lens, framing = _fit_proxy_framing_lens(
+            location=location,
+            target=target,
+            bounds=framing_bounds,
+            preferred_lens_mm=preferred_lens_mm,
+            aspect_ratio=16.0 / 9.0,
+        )
+        result.append(
+            {
+                "id": side_id,
+                "name": side_id,
+                "camera_type": "PERSP",
+                "location": _vector_list(location),
+                "target": _vector_list(target),
+                "lens_mm": float(lens),
+                "sensor_width_mm": CAMERA_SENSOR_WIDTH_MM,
+                "sensor_fit": CAMERA_SENSOR_FIT,
+                "clip_start_m": 0.02,
+                "clip_end_m": max(100.0, room[5] * 10.0),
+                "azimuth_degrees": actual_azimuth,
+                "elevation_degrees": actual_elevation,
+                "distance_m": measured_distance,
+                "target_object_ids": [object_id],
+                "target_bounds": [
+                    _vector_list(bounds[0]),
+                    _vector_list(bounds[1]),
+                ],
+                "proxy_framing_bounds": [
+                    _vector_list(framing_bounds[0]),
+                    _vector_list(framing_bounds[1]),
+                ],
+                "policy_source": policy_source,
+                "candidate_policy": "local",
+                "technical_feasibility": True,
+                "local_side_id": side_id,
+                "local_outward_axis": list(raw_axis),
+                "world_outward_axis": _vector_list(world_axis),
+                "feasibility": feasibility,
+                "proxy_framing": framing,
+            }
+        )
+    return result
+
+
+def _repair_usable_surface_preview_location(
+    *,
+    target: np.ndarray,
+    direction: np.ndarray,
+    desired_distance: float,
+    room: tuple[float, float, float, float, float, float],
+    scene_objects: list[_CameraObject],
+    initial_placement: tuple[np.ndarray, float, dict[str, Any]] | None,
+) -> tuple[np.ndarray, dict[str, Any]] | None:
+    """Resolve one intrinsic preview independently with bounded repairs."""
+
+    direction = np.asarray(direction, dtype=float)
+    direction /= max(float(np.linalg.norm(direction)), 1.0e-12)
+    lateral = np.asarray([-direction[1], direction[0], 0.0], dtype=float)
+    lateral_norm = float(np.linalg.norm(lateral))
+    if lateral_norm > 1.0e-12:
+        lateral /= lateral_norm
+    candidates: list[tuple[np.ndarray, dict[str, Any]]] = []
+    if initial_placement is not None:
+        location, _, feasibility = initial_placement
+        candidates.append(
+            (
+                np.asarray(location, dtype=float),
+                {
+                    **deepcopy(feasibility),
+                    "room_feasible": True,
+                    "preview_only": True,
+                    "repair": "none",
+                },
+            )
+        )
+    for distance_scale in USABLE_SURFACE_PREVIEW_DISTANCE_SCALES:
+        for lateral_offset in USABLE_SURFACE_PREVIEW_LATERAL_OFFSETS_M:
+            for height_offset in USABLE_SURFACE_PREVIEW_HEIGHT_OFFSETS_M:
+                location = (
+                    np.asarray(target, dtype=float)
+                    + direction * float(desired_distance) * distance_scale
+                    + lateral * lateral_offset
+                    + np.asarray([0.0, 0.0, height_offset])
+                )
+                lower, upper = _room_interior_bounds(room)
+                room_feasible = bool(
+                    np.all(location >= lower) and np.all(location <= upper)
+                )
+                candidates.append(
+                    (
+                        location,
+                        {
+                            "method": "intrinsic_side_preview_bounded_repair_v1",
+                            "ray_preserved": lateral_offset == 0.0,
+                            "room_feasible": room_feasible,
+                            "preview_only": True,
+                            "repair": {
+                                "distance_scale": distance_scale,
+                                "lateral_offset_m": lateral_offset,
+                                "height_offset_m": height_offset,
+                            },
+                        },
+                    )
+                )
+    feasible = [
+        (location, provenance)
+        for location, provenance in candidates
+        if not any(
+            _point_inside_object_obb(
+                location,
+                candidate,
+                clearance_m=0.03,
+            )
+            for candidate in scene_objects
+        )
+    ]
+    if not feasible:
+        return None
+    # Prefer in-room, ray-preserving, least-moved previews. Unbounded previews
+    # are permitted only because they are decoder inputs, never Judge evidence.
+    feasible.sort(
+        key=lambda item: (
+            not bool(item[1].get("room_feasible")),
+            not bool(item[1].get("ray_preserved")),
+            float(
+                np.linalg.norm(
+                    np.asarray(item[0], dtype=float)
+                    - (
+                        np.asarray(target, dtype=float)
+                        + direction * float(desired_distance)
+                    )
+                )
+            ),
+        )
+    )
+    return feasible[0]
 
 
 def _generate_legacy_camera_pose_candidates(
@@ -225,6 +550,7 @@ def _generate_legacy_camera_pose_candidates(
     if not isinstance(scene, dict):
         raise ValueError("camera evidence request requires a canonical scene")
     count = max(1, min(12, int(max_candidates)))
+    generation_target_count = count
     room = _room_bounds(scene)
     target_object_ids = _object_id_list(request.get("object_ids"))
     objects = _legacy_target_objects(scene, target_object_ids)
@@ -334,6 +660,39 @@ def _generate_feasible_camera_pose_candidates(
         "support_contact_plane",
         "query_cov",
     }
+    functional_probe = (
+        request.get("functional_probe")
+        if metric == "functional_consistency"
+        and isinstance(request.get("functional_probe"), dict)
+        else None
+    )
+    functional_repair = (
+        request.get("functional_repair")
+        if metric == "functional_consistency"
+        and isinstance(request.get("functional_repair"), dict)
+        else None
+    )
+
+    if functional_repair is not None:
+        repair_target_ids = _object_id_list(
+            functional_repair.get("target_ids")
+        )
+        if repair_target_ids:
+            target_object_ids = repair_target_ids
+            objects = _target_objects(scene, target_object_ids)
+        if _functional_repair_requires_side_bank(functional_repair):
+            # A directed, single-object repair can reuse the decoded usable
+            # side.  Non-directed clearance and pair relations must not be
+            # mislabeled as frontage repairs.
+            repair_candidates = _functional_target_repair_candidates(
+                scene=scene,
+                repair=functional_repair,
+                target_object_ids=target_object_ids,
+                requested_count=count,
+            )
+            if repair_candidates:
+                return repair_candidates
+        functional_probe = _functional_probe_from_repair(functional_repair)
 
     # _target_objects preserves request order.  Support requests put the
     # subject first and candidate supporting objects afterwards, so this is now
@@ -352,6 +711,7 @@ def _generate_feasible_camera_pose_candidates(
     event_focus_radius_m: float | None = None
     axis_source: str | None = None
     render_aspect_ratio = _render_aspect_ratio(request)
+    generation_target_count = count
     if support_contact_policy:
         support_focus = _support_contact_focus(request, framing_objects, target_bounds, room)
         target = np.asarray(support_focus["target"], dtype=float)
@@ -372,6 +732,101 @@ def _generate_feasible_camera_pose_candidates(
         )
         policy_source = "support_contact_plane_candidate_bank_v2"
         event_focus_source = str(support_focus.get("source") or "support_contact_focus")
+    elif functional_probe is not None:
+        primary_ids = set(
+            [
+                *_object_id_list(functional_probe.get("target_ids")),
+                *_object_id_list(
+                    functional_probe.get("related_target_ids")
+                ),
+            ]
+        )
+        primary_objects = [
+            item for item in objects if item.id in primary_ids
+        ]
+        primary_bounds = (
+            _union_bounds(primary_objects)
+            if primary_objects
+            else target_bounds
+        )
+        group_member_ids = _object_id_list(
+            functional_probe.get("group_member_ids")
+        )
+        group_objects = (
+            _target_objects(scene, group_member_ids)
+            if group_member_ids
+            else []
+        )
+        group_context_bounds = (
+            _union_bounds(group_objects)
+            if group_objects
+            else target_bounds
+        )
+        functional_context_bounds = (
+            np.minimum(target_bounds[0], group_context_bounds[0]),
+            np.maximum(target_bounds[1], group_context_bounds[1]),
+        )
+        target = (
+            np.asarray(primary_bounds[0], dtype=float)
+            + np.asarray(primary_bounds[1], dtype=float)
+        ) / 2.0
+        target[2] = float(
+            np.clip(
+                target[2],
+                room[4] + 0.35,
+                max(room[4] + 0.35, room[5] - 0.35),
+            )
+        )
+        functional_framing_bounds = _functional_probe_framing_bounds(
+            primary_bounds,
+            room=room,
+            context_margin_m=0.0,
+        )
+        functional_wide_framing_bounds = (
+            _functional_probe_framing_bounds(
+                functional_context_bounds,
+                room=room,
+                context_margin_m=0.35,
+            )
+            if group_objects
+            else None
+        )
+        horizontal_span = float(
+            max(
+                functional_framing_bounds[1][0]
+                - functional_framing_bounds[0][0],
+                functional_framing_bounds[1][1]
+                - functional_framing_bounds[0][1],
+                0.1,
+            )
+        )
+        desired_distance = max(1.5, min(6.0, horizontal_span * 1.35))
+        base_lens = 32.0
+        generation_target_count = (
+            max(count, FUNCTIONAL_CORRESPONDENCE_POOL_SIZE)
+            if str(functional_probe.get("kind") or "")
+            == "functional_correspondence"
+            and count <= FUNCTIONAL_CORRESPONDENCE_POOL_SIZE
+            else count
+        )
+        preferred_azimuths = _functional_preferred_azimuths(
+            functional_probe,
+            objects=objects,
+        )
+        specifications = _functional_probe_specifications(
+            target=target,
+            framing_bounds=functional_framing_bounds,
+            wider_framing_bounds=functional_wide_framing_bounds,
+            probe_kind=str(
+                functional_probe.get("kind")
+                or "functional_frontage"
+            ),
+            desired_distance=desired_distance,
+            count=generation_target_count,
+            preferred_azimuths=preferred_azimuths,
+        )
+        policy_source = "functional_required_observation_candidate_bank_v3"
+        event_focus_source = "functional_probe_relation_target_union"
     elif metric in {"oob", "object_architecture_penetration"}:
         desired_distance = max(1.2, float(max(extent)) * 2.2)
         base_lens = 52.0 if float(max(extent)) < 2.5 else 45.0
@@ -412,6 +867,11 @@ def _generate_feasible_camera_pose_candidates(
         )
         policy_source = "metric_aware_feasible_candidate_bank_v2"
 
+    functional_surface_side_ids = (
+        _functional_surface_side_ids(functional_probe)
+        if functional_probe is not None
+        else []
+    )
     candidates: list[dict[str, Any]] = []
     for specification in specifications:
         candidate_target = np.asarray(specification["target"], dtype=float)
@@ -475,6 +935,26 @@ def _generate_feasible_camera_pose_candidates(
                     preferred_lens_mm=base_lens,
                     aspect_ratio=render_aspect_ratio,
                 )
+        if functional_probe is not None and (
+            framing.get("all_corners_in_front") is not True
+            or framing.get("proxy_bounds_fit") is not True
+        ):
+            continue
+        surface_coverage = (
+            _functional_surface_observability(
+                functional_probe,
+                objects=objects,
+                camera_location=location,
+            )
+            if functional_probe is not None
+            else {
+                "eligible": True,
+                "covered_hypotheses": [],
+                "required_target_ids": [],
+            }
+        )
+        if surface_coverage["eligible"] is not True:
+            continue
         framing["validation_status"] = (
             "fits_proxy_bounds"
             if framing.get("proxy_bounds_fit")
@@ -510,6 +990,48 @@ def _generate_feasible_camera_pose_candidates(
             "candidate_policy": "local",
             "event_focus_source": event_focus_source,
             "focus_kind": str(specification.get("focus_kind") or "event"),
+            "view_family": str(
+                specification.get("view_family") or "metric_local"
+            ),
+            **(
+                {
+                    "functional_probe_kind": str(
+                        functional_probe.get("kind")
+                        or "functional_frontage"
+                    ),
+                    "functional_probe_id": str(
+                        functional_probe.get("probe_id") or ""
+                    ),
+                    "functional_context_margin_m": 1.25,
+                    "functional_group_id": (
+                        str(functional_probe.get("group_id"))
+                        if functional_probe.get("group_id")
+                        else None
+                    ),
+                    "functional_group_member_ids": list(
+                        _object_id_list(
+                            functional_probe.get("group_member_ids")
+                        )
+                    ),
+                    "functional_specific_target_bounds": [
+                        _vector_list(target_bounds[0]),
+                        _vector_list(target_bounds[1]),
+                    ],
+                    "functional_group_context_bounds": [
+                        _vector_list(functional_context_bounds[0]),
+                        _vector_list(functional_context_bounds[1]),
+                    ],
+                    "usable_surface_informed": bool(
+                        functional_surface_side_ids
+                    ),
+                    "usable_surface_side_ids": list(
+                        functional_surface_side_ids
+                    ),
+                    "usable_surface_observability": surface_coverage,
+                }
+                if functional_probe is not None
+                else {}
+            ),
             **(
                 {"event_focus_radius_m": event_focus_radius_m}
                 if event_focus_radius_m is not None
@@ -532,15 +1054,704 @@ def _generate_feasible_camera_pose_candidates(
         if _duplicates_existing_pose(candidate, candidates):
             continue
         candidates.append(candidate)
-        if len(candidates) == count:
+        if len(candidates) == generation_target_count:
             break
 
-    if len(candidates) != count:
-        raise ValueError(
-            "feasible camera candidate generation could not satisfy the exact "
-            f"bank size: requested={count}, generated={len(candidates)}, metric={metric}"
+    if functional_probe is not None and candidates:
+        pool_generated_count = len(candidates)
+        candidates = _shortlist_functional_probe_candidates(
+            candidates,
+            limit=count,
         )
+        generated_count = len(candidates)
+        for candidate in candidates:
+            candidate.update(
+                candidate_bank_requested_count=count,
+                candidate_bank_generated_count=generated_count,
+                candidate_bank_complete=generated_count == count,
+                functional_probe_candidate_pool_count=(
+                    pool_generated_count
+                ),
+                functional_probe_shortlist_limit=count,
+                functional_probe_shortlist_policy=(
+                    "local_proxy_framing_context_rank_v1"
+                ),
+            )
+    if (
+        functional_probe is not None
+        and not candidates
+        and str(functional_probe.get("route_scope") or "")
+        == "cross_group"
+        and str(functional_probe.get("kind") or "")
+        == "functional_correspondence"
+    ):
+        candidates = _functional_cross_group_context_fallback_candidates(
+            scene=scene,
+            functional_probe=functional_probe,
+            target_object_ids=target_object_ids,
+            target_bounds=target_bounds,
+            requested_count=count,
+        )
+    if (
+        functional_probe is not None
+        and not candidates
+        and str(functional_probe.get("fallback_mode") or "")
+        == "soft_visibility"
+    ):
+        candidates = _functional_soft_visibility_fallback_candidates(
+            scene=scene,
+            functional_probe=functional_probe,
+            target_object_ids=target_object_ids,
+            target_bounds=target_bounds,
+            requested_count=count,
+        )
+    if functional_probe is not None:
+        return candidates
+    # ``count`` is a deterministic upper bound, not a feasibility promise.
+    # Geometry and framing constraints may yield fewer safe poses.  Returning
+    # that bounded trusted bank lets the acquisition state machine either use
+    # it or take its explicit empty-bank route without fabricating candidates.
     return candidates
+
+
+def _functional_soft_visibility_fallback_candidates(
+    *,
+    scene: dict[str, Any],
+    functional_probe: dict[str, Any],
+    target_object_ids: list[str],
+    target_bounds: tuple[np.ndarray, np.ndarray],
+    requested_count: int,
+) -> list[dict[str, Any]]:
+    """Return a bounded broader bank after strict local framing fails.
+
+    This route supplies evidence, not a visibility certificate.  A singleton
+    receives deterministic opposing object-local views; a relation receives
+    the frozen global context poses.  The caller marks the resulting packet as
+    partial whenever target identity cannot be verified.
+    """
+
+    targets = list(
+        dict.fromkeys(
+            str(item)
+            for item in target_object_ids
+            if str(item).strip()
+        )
+    )
+    limit = max(1, int(requested_count))
+    if len(targets) == 1:
+        side_bank = generate_usable_surface_side_repair_bank(
+            scene,
+            target_id=targets[0],
+        )
+        result: list[dict[str, Any]] = []
+        for index, pose in enumerate(side_bank[:limit]):
+            result.append(
+                {
+                    **deepcopy(pose),
+                    "id": (
+                        f"functional_consistency_{index:02d}_"
+                        f"soft_{pose.get('id') or index}"
+                    ),
+                    "target_object_ids": targets,
+                    "target_bounds": [
+                        _vector_list(target_bounds[0]),
+                        _vector_list(target_bounds[1]),
+                    ],
+                    "policy_source": (
+                        "functional_soft_visibility_object_fallback_v1"
+                    ),
+                    "functional_probe_kind": str(
+                        functional_probe.get("kind") or ""
+                    ),
+                    "functional_probe_id": str(
+                        functional_probe.get("probe_id") or ""
+                    ),
+                    "usable_surface_observability": {
+                        "eligible": True,
+                        "coverage_status": "partial_but_usable",
+                        "covered_hypotheses": [],
+                        "required_target_ids": targets,
+                        "fallback_reason": (
+                            "strict_local_candidate_bank_empty"
+                        ),
+                    },
+                    "fallback_reason": (
+                        "strict_local_candidate_bank_empty"
+                    ),
+                }
+            )
+        return result
+
+    ordered = sorted(
+        generate_global_context_poses(scene),
+        key=lambda item: (
+            0 if str(item.get("id")) == "global_perspective" else 1,
+            str(item.get("id") or ""),
+        ),
+    )
+    result = []
+    for index, pose in enumerate(ordered[:limit]):
+        source_id = str(pose.get("id") or f"global_{index:02d}")
+        result.append(
+            {
+                **deepcopy(pose),
+                "id": (
+                    f"functional_consistency_{index:02d}_soft_"
+                    f"{source_id}"
+                ),
+                "name": f"functional_soft_{source_id}",
+                "target_object_ids": targets,
+                "target_bounds": [
+                    _vector_list(target_bounds[0]),
+                    _vector_list(target_bounds[1]),
+                ],
+                "proxy_framing_bounds": [
+                    _vector_list(target_bounds[0]),
+                    _vector_list(target_bounds[1]),
+                ],
+                "policy_source": (
+                    "functional_soft_visibility_global_fallback_v1"
+                ),
+                "functional_probe_kind": str(
+                    functional_probe.get("kind") or ""
+                ),
+                "functional_probe_id": str(
+                    functional_probe.get("probe_id") or ""
+                ),
+                "usable_surface_observability": {
+                    "eligible": True,
+                    "coverage_status": "partial_but_usable",
+                    "covered_hypotheses": [],
+                    "required_target_ids": targets,
+                    "fallback_reason": (
+                        "strict_local_candidate_bank_empty"
+                    ),
+                },
+                "fallback_reason": "strict_local_candidate_bank_empty",
+            }
+        )
+    return result
+
+
+def _functional_cross_group_context_fallback_candidates(
+    *,
+    scene: dict[str, Any],
+    functional_probe: dict[str, Any],
+    target_object_ids: list[str],
+    target_bounds: tuple[np.ndarray, np.ndarray],
+    requested_count: int,
+) -> list[dict[str, Any]]:
+    """Use frozen global poses when no room-interior pair framing is feasible.
+
+    Cross-group relations can span most of the room. In that case an interior
+    perspective camera may be unable to fit both target bounds even at the
+    widest allowed lens. The benchmark already owns two deterministic global
+    context poses for exactly this bounded scene-scale observation. Reusing
+    those poses keeps the scene read-only and lets the normal identity-preview
+    check reject a pose if either relation endpoint is actually invisible.
+    """
+
+    ordered = sorted(
+        generate_global_context_poses(scene),
+        key=lambda item: (
+            0 if str(item.get("id")) == "global_perspective" else 1,
+            str(item.get("id") or ""),
+        ),
+    )
+    limit = max(1, min(int(requested_count), len(ordered)))
+    candidates: list[dict[str, Any]] = []
+    for index, pose in enumerate(ordered[:limit]):
+        source_id = str(pose.get("id") or f"global_{index:02d}")
+        candidate = {
+            **deepcopy(pose),
+            "id": (
+                f"functional_consistency_{index:02d}_"
+                f"cross_group_{source_id}"
+            ),
+            "name": f"functional_cross_group_{source_id}",
+            "target_object_ids": list(target_object_ids),
+            "target_bounds": [
+                _vector_list(target_bounds[0]),
+                _vector_list(target_bounds[1]),
+            ],
+            "proxy_framing_bounds": [
+                _vector_list(target_bounds[0]),
+                _vector_list(target_bounds[1]),
+            ],
+            "policy_source": (
+                "functional_cross_group_global_context_fallback_v1"
+            ),
+            "candidate_policy": "legacy",
+            "event_focus_source": (
+                "functional_cross_group_relation_global_context"
+            ),
+            "focus_kind": "cross_group_relation_context",
+            "view_family": "functional_relation_global_context",
+            "functional_probe_kind": "functional_correspondence",
+            "functional_probe_id": str(
+                functional_probe.get("probe_id") or ""
+            ),
+            "functional_group_id": None,
+            "functional_group_member_ids": [],
+            "usable_surface_informed": bool(
+                _functional_surface_side_ids(functional_probe)
+            ),
+            "usable_surface_side_ids": list(
+                _functional_surface_side_ids(functional_probe)
+            ),
+            "usable_surface_observability": {
+                "eligible": True,
+                "coverage_status": (
+                    "partial_but_usable"
+                    if _functional_surface_side_ids(functional_probe)
+                    else "sufficient"
+                ),
+                "covered_hypotheses": [],
+                "required_target_ids": list(target_object_ids),
+                "fallback_reason": (
+                    "room_interior_joint_framing_infeasible"
+                ),
+                "rule": "predicate_aware_surface_observability_v2",
+            },
+            "candidate_bank_requested_count": int(requested_count),
+            "candidate_bank_generated_count": limit,
+            "candidate_bank_complete": limit == int(requested_count),
+            "functional_probe_candidate_pool_count": len(ordered),
+            "functional_probe_shortlist_limit": int(requested_count),
+            "functional_probe_shortlist_policy": (
+                "frozen_global_context_after_local_infeasible_v1"
+            ),
+            "functional_probe_shortlist_rank": index + 1,
+            "functional_probe_shortlist_score": float(limit - index),
+            "fallback_reason": "room_interior_joint_framing_infeasible",
+        }
+        candidates.append(candidate)
+    return candidates
+
+
+def _functional_target_repair_candidates(
+    *,
+    scene: dict[str, Any],
+    repair: dict[str, Any],
+    target_object_ids: list[str],
+    requested_count: int,
+) -> list[dict[str, Any]]:
+    """Build side-conditioned candidates for a Functional repair.
+
+    Ordinary Judge repairs retain the established single-target behaviour.
+    A failed usable-side decode explicitly activates a bounded deterministic
+    fallback: object-centric opposing views are proposed for every unresolved
+    directed endpoint, after which the CameraSelector reviews sufficiency.
+    """
+
+    repair_ids = list(
+        dict.fromkeys(
+            str(item)
+            for item in (
+                repair.get("target_ids") or target_object_ids
+            )
+            if str(item).strip()
+        )
+    )
+    usable_side_fallback = repair.get("usable_side_fallback") is True
+    if usable_side_fallback:
+        fallback_ids = list(
+            dict.fromkeys(
+                str(item)
+                for item in (
+                    repair.get("unresolved_usable_side_target_ids")
+                    or repair_ids
+                )
+                if str(item).strip()
+            )
+        )
+        if fallback_ids:
+            return _usable_side_fallback_repair_candidates(
+                scene=scene,
+                repair=repair,
+                target_ids=fallback_ids,
+                requested_count=requested_count,
+            )
+    if len(repair_ids) != 1:
+        return []
+    target_id = repair_ids[0]
+    candidates = generate_usable_surface_side_repair_bank(
+        scene,
+        target_id=target_id,
+    )
+    preferred_side_ids = list(
+        dict.fromkeys(
+            str(surface.get("side_id") or "")
+            for hypothesis in repair.get(
+                "usable_surface_hypotheses"
+            )
+            or []
+            if isinstance(hypothesis, dict)
+            and str(hypothesis.get("target_id") or "") == target_id
+            and str(hypothesis.get("status") or "")
+            != "no_directed_surface"
+            for surface in hypothesis.get("surfaces") or []
+            if isinstance(surface, dict)
+            and str(surface.get("side_id") or "").strip()
+        )
+    )
+    preferred_rank = {
+        side_id: index for index, side_id in enumerate(preferred_side_ids)
+    }
+    candidates.sort(
+        key=lambda item: (
+            preferred_rank.get(
+                str(item.get("local_side_id") or item.get("id") or ""),
+                len(preferred_rank),
+            ),
+            str(item.get("id") or ""),
+        )
+    )
+    limit = max(1, min(int(requested_count), len(candidates)))
+    result: list[dict[str, Any]] = []
+    for index, candidate in enumerate(candidates[:limit]):
+        local_side_id = str(
+            candidate.get("local_side_id")
+            or candidate.get("id")
+            or f"side_{index:02d}"
+        )
+        result.append(
+            {
+                **deepcopy(candidate),
+                "id": (
+                    "functional_consistency_repair_"
+                    f"{index:02d}_{local_side_id}"
+                ),
+                "name": f"functional_repair_{local_side_id}",
+                "target_object_ids": [target_id],
+                "focus_kind": "functional_target_repair",
+                "view_family": "functional_frontage_probe",
+                "functional_repair_schema_version": str(
+                    repair.get("schema_version")
+                    or "functional_camera_repair_v1"
+                ),
+                "functional_repair_source_check_ids": [
+                    str(item)
+                    for item in repair.get("source_check_ids") or []
+                    if str(item).strip()
+                ],
+                "usable_surface_informed": bool(preferred_side_ids),
+                "usable_surface_side_ids": list(preferred_side_ids),
+                "candidate_bank_requested_count": int(requested_count),
+                "candidate_bank_generated_count": limit,
+                "candidate_bank_complete": limit
+                == int(requested_count),
+                "candidate_policy": "local",
+                "policy_source": (
+                    "functional_judge_requested_elevated_side_repair_v1"
+                ),
+                "decision_authority": "none",
+            }
+        )
+    return result
+
+
+def _usable_side_fallback_repair_candidates(
+    *,
+    scene: dict[str, Any],
+    repair: dict[str, Any],
+    target_ids: list[str],
+    requested_count: int,
+) -> list[dict[str, Any]]:
+    side_order = (
+        "local_pos_y",
+        "local_neg_y",
+        "local_pos_x",
+        "local_neg_x",
+    )
+    banks: dict[str, dict[str, dict[str, Any]]] = {}
+    for target_id in target_ids:
+        banks[target_id] = {
+            str(item.get("local_side_id") or item.get("id") or ""): item
+            for item in generate_usable_surface_side_repair_bank(
+                scene,
+                target_id=target_id,
+            )
+        }
+    ordered: list[tuple[str, str, dict[str, Any]]] = []
+    for side_id in side_order:
+        for target_id in target_ids:
+            candidate = banks.get(target_id, {}).get(side_id)
+            if candidate is not None:
+                ordered.append((target_id, side_id, candidate))
+    limit = max(1, min(int(requested_count), len(ordered)))
+    result: list[dict[str, Any]] = []
+    for index, (target_id, side_id, candidate) in enumerate(
+        ordered[:limit]
+    ):
+        safe_target = "".join(
+            character if character.isalnum() else "_"
+            for character in target_id
+        ).strip("_") or f"target_{index:02d}"
+        result.append(
+            {
+                **deepcopy(candidate),
+                "id": (
+                    "functional_consistency_usable_side_fallback_"
+                    f"{index:02d}_{safe_target}_{side_id}"
+                ),
+                "name": (
+                    f"usable_side_fallback_{safe_target}_{side_id}"
+                ),
+                "target_object_ids": [target_id],
+                "focus_kind": "functional_usable_side_fallback",
+                "view_family": "functional_frontage_probe",
+                "functional_repair_schema_version": str(
+                    repair.get("schema_version")
+                    or "functional_camera_repair_v3"
+                ),
+                "functional_repair_source_check_ids": [
+                    str(item)
+                    for item in repair.get("source_check_ids") or []
+                    if str(item).strip()
+                ],
+                "usable_side_fallback": True,
+                "fallback_target_id": target_id,
+                "fallback_local_side_id": side_id,
+                "fallback_opposing_side_id": (
+                    "local_neg_y"
+                    if side_id == "local_pos_y"
+                    else "local_pos_y"
+                    if side_id == "local_neg_y"
+                    else "local_neg_x"
+                    if side_id == "local_pos_x"
+                    else "local_pos_x"
+                ),
+                "fallback_policy": (
+                    "deterministic_opposing_target_views_then_selector_review"
+                ),
+                "candidate_bank_requested_count": int(requested_count),
+                "candidate_bank_generated_count": limit,
+                "candidate_bank_complete": limit
+                == int(requested_count),
+                "candidate_policy": "local",
+                "policy_source": (
+                    "functional_usable_side_soft_fallback_v1"
+                ),
+                "decision_authority": "none",
+            }
+        )
+    return result
+
+
+def _functional_repair_requires_side_bank(
+    repair: dict[str, Any],
+) -> bool:
+    target_ids = _object_id_list(repair.get("target_ids"))
+    if repair.get("usable_side_fallback") is True:
+        return bool(
+            _object_id_list(
+                repair.get("unresolved_usable_side_target_ids")
+            )
+            or target_ids
+        )
+    if len(target_ids) != 1:
+        return False
+    required = {
+        str(item)
+        for item in repair.get("required_observations") or []
+    }
+    usable_hypothesis = any(
+        isinstance(item, dict)
+        and str(item.get("target_id") or "") == target_ids[0]
+        and str(item.get("status") or "") != "no_directed_surface"
+        and bool(item.get("surfaces"))
+        for item in repair.get("usable_surface_hypotheses") or []
+    )
+    side_observation = bool(
+        required
+        & {
+            "interaction_side_visible",
+            "front_back_disambiguated",
+        }
+    ) or usable_hypothesis
+    directed_target = any(
+        isinstance(item, dict)
+        and str(item.get("target_id") or "") == target_ids[0]
+        and (
+            str(item.get("directionality") or "") == "directed"
+            or bool(item.get("surface_roles"))
+        )
+        for item in repair.get("surface_targets") or []
+    )
+    return bool(
+        side_observation and (directed_target or usable_hypothesis)
+    )
+
+
+def _functional_probe_from_repair(
+    repair: dict[str, Any],
+) -> dict[str, Any]:
+    """Route unresolved Functional checks through the normal probe geometry."""
+
+    target_ids = _object_id_list(repair.get("target_ids"))
+    if not target_ids:
+        raise ValueError("functional camera repair requires target_ids")
+    required = _object_id_list(repair.get("required_observations"))
+    predicates = _object_id_list(repair.get("relation_predicates"))
+    if len(target_ids) > 1 and not predicates:
+        predicates = [
+            "directional_correspondence"
+            if {
+                "interaction_side_visible",
+                "front_back_disambiguated",
+            }
+            & set(required)
+            else "relative_use_geometry"
+        ]
+    return {
+        "probe_id": "functional_judge_repair",
+        "kind": (
+            "functional_correspondence"
+            if len(target_ids) > 1
+            else "approach_clearance"
+            if "approach_zone_visible" in required
+            else "functional_frontage"
+        ),
+        "target_ids": target_ids[:1],
+        "related_target_ids": target_ids[1:],
+        "required_observations": required,
+        "reason": str(
+            repair.get("view_goal") or "functional check clarification"
+        )[:1000],
+        "view_goal": str(
+            repair.get("view_goal") or "functional check clarification"
+        )[:1000],
+        "observation_goals": [
+            str(
+                repair.get("view_goal")
+                or "functional check clarification"
+            )[:1000]
+        ],
+        "route_scope": str(
+            repair.get("route_scope")
+            or ("cross_group" if len(target_ids) > 1 else "group_local")
+        ),
+        "owning_group_id": repair.get("group_id"),
+        "group_member_ids": _object_id_list(
+            repair.get("group_member_ids")
+        ),
+        "surface_targets": deepcopy(
+            repair.get("surface_targets") or []
+        ),
+        "usable_surface_hypotheses": deepcopy(
+            repair.get("usable_surface_hypotheses") or []
+        ),
+        "check_ids": _object_id_list(repair.get("source_check_ids")),
+        "check_types": _object_id_list(repair.get("check_types")),
+        "relation_predicates": predicates,
+        "source": "judge_need_more_evidence",
+        "decision_authority": "none",
+    }
+
+
+def _shortlist_functional_probe_candidates(
+    candidates: list[dict[str, Any]],
+    *,
+    limit: int,
+) -> list[dict[str, Any]]:
+    """Keep the best technically framed local probes before preview render.
+
+    The six-way correspondence pool is cheap geometry. Only this deterministic
+    four-view shortlist is rendered for the VLM selector. The score uses the
+    existing local pose solver's proxy framing and feasible-ray diagnostics;
+    it never estimates metric validity or claims that evidence is sufficient.
+    """
+
+    ranked: list[tuple[float, str, dict[str, Any]]] = []
+    for candidate in candidates:
+        framing = candidate.get("proxy_framing")
+        framing = framing if isinstance(framing, dict) else {}
+        feasibility = candidate.get("feasibility")
+        feasibility = (
+            feasibility if isinstance(feasibility, dict) else {}
+        )
+        max_abs_values = [
+            float(value)
+            for value in (
+                framing.get("max_abs_ndc_x"),
+                framing.get("max_abs_ndc_y"),
+            )
+            if isinstance(value, (int, float))
+            and math.isfinite(float(value))
+        ]
+        max_abs_ndc = max(max_abs_values, default=math.inf)
+        framing_quality = (
+            1.0 / (1.0 + max(0.0, max_abs_ndc - CAMERA_FRAME_MARGIN_NDC))
+            if math.isfinite(max_abs_ndc)
+            else 0.0
+        )
+        actual_distance = _finite_float(
+            feasibility.get("actual_distance_m"),
+            fallback=float(candidate.get("distance_m") or 0.0),
+        )
+        intended_distance = max(
+            1.0e-6,
+            _finite_float(
+                candidate.get("intended_distance_m"),
+                fallback=actual_distance,
+            ),
+        )
+        context_distance_ratio = min(
+            1.0,
+            max(0.0, actual_distance / intended_distance),
+        )
+        observability = candidate.get("usable_surface_observability")
+        observability = (
+            observability if isinstance(observability, dict) else {}
+        )
+        coverage_status = str(
+            observability.get("coverage_status") or "sufficient"
+        )
+        coverage_quality = (
+            4.0
+            if coverage_status == "sufficient"
+            else 2.0
+            if coverage_status == "partial_but_usable"
+            else 0.0
+        )
+        score = (
+            (8.0 if framing.get("proxy_bounds_fit") is True else 0.0)
+            + (
+                4.0
+                if framing.get("all_corners_in_front") is True
+                else 0.0
+            )
+            + 3.0 * framing_quality
+            + 2.0 * context_distance_ratio
+            + coverage_quality
+            + (
+                0.5
+                if feasibility.get("distance_truncated") is False
+                else 0.0
+            )
+        )
+        ranked.append(
+            (
+                -score,
+                str(candidate.get("id") or ""),
+                deepcopy(candidate),
+            )
+        )
+    ranked.sort(key=lambda item: (item[0], item[1]))
+    selected = ranked[: max(1, int(limit))]
+    result: list[dict[str, Any]] = []
+    for rank, (negative_score, _, candidate) in enumerate(
+        selected,
+        start=1,
+    ):
+        candidate["functional_probe_shortlist_rank"] = rank
+        candidate["functional_probe_shortlist_score"] = round(
+            -negative_score,
+            8,
+        )
+        result.append(candidate)
+    return result
 
 
 def _collision_event_focus(
@@ -839,6 +2050,379 @@ def _expanded_angle_specifications(
     return result
 
 
+def _functional_probe_framing_bounds(
+    bounds: tuple[np.ndarray, np.ndarray],
+    *,
+    room: tuple[float, float, float, float, float, float],
+    context_margin_m: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Frame the target plus a bounded floor-level approach neighborhood."""
+
+    margin = max(0.0, min(1.5, float(context_margin_m)))
+    room_lower = np.array(
+        [room[0], room[2], room[4]],
+        dtype=float,
+    )
+    room_upper = np.array(
+        [room[1], room[3], room[5]],
+        dtype=float,
+    )
+    lower = np.asarray(bounds[0], dtype=float).copy()
+    upper = np.asarray(bounds[1], dtype=float).copy()
+    lower[:2] -= margin
+    upper[:2] += margin
+    # The approach zone is floor space, so preserve the target silhouette
+    # while explicitly including the floor beneath the wider neighborhood.
+    lower[2] = room[4]
+    upper[2] += min(0.4, max(0.15, float(upper[2] - lower[2]) * 0.1))
+    lower = np.maximum(lower, room_lower)
+    upper = np.minimum(upper, room_upper)
+    return lower, upper
+
+
+def _functional_probe_specifications(
+    *,
+    target: np.ndarray,
+    framing_bounds: tuple[np.ndarray, np.ndarray],
+    wider_framing_bounds: tuple[np.ndarray, np.ndarray] | None = None,
+    probe_kind: str,
+    desired_distance: float,
+    count: int,
+    preferred_azimuths: list[float] | None = None,
+) -> list[dict[str, Any]]:
+    """Create low/interaction-height wide candidates around a probe unit."""
+
+    elevations = (8.0, 12.0, 16.0, 10.0)
+    family = (
+        "functional_relation_wide"
+        if probe_kind == "functional_correspondence"
+        else "functional_frontage_probe"
+    )
+    requested = max(1, count)
+    azimuths: list[float] = []
+
+    def add_azimuth(value: float) -> None:
+        normalized = float(value) % 360.0
+        if all(
+            abs(
+                ((normalized - existing + 180.0) % 360.0)
+                - 180.0
+            )
+            >= 8.0
+            for existing in azimuths
+        ):
+            azimuths.append(normalized)
+
+    # Preserve one exact candidate for every independently supplied
+    # correspondence/surface hypothesis before spending the remaining bank on
+    # obliques.  This prevents the first hypothesis from consuming all four
+    # trusted candidate slots.
+    preferred = [float(raw) % 360.0 for raw in preferred_azimuths or []]
+    for raw in preferred:
+        add_azimuth(raw)
+    for raw in preferred:
+        base = float(raw) % 360.0
+        for candidate in (base + 24.0, base - 24.0):
+            add_azimuth(candidate)
+    # Geometry feasibility and strict proxy framing may reject a large part
+    # of the orbit in a small room. Generate a bounded refill pool, while the
+    # caller still returns at most ``requested`` valid candidates.
+    for raw in range(0, 360, 45):
+        add_azimuth(float(raw))
+    specifications: list[dict[str, Any]] = []
+    specification_budget = max(requested * 4, len(azimuths))
+    orbit_variants = [
+        (azimuth, elevations[variant % len(elevations)])
+        for variant in range(len(elevations))
+        for azimuth in azimuths
+    ]
+    for index, (azimuth, elevation) in enumerate(
+        orbit_variants[:specification_budget]
+    ):
+        candidate_bounds = (
+            wider_framing_bounds
+            if wider_framing_bounds is not None
+            and specification_budget > 1
+            and index == specification_budget - 1
+            else framing_bounds
+        )
+        specifications.append(
+            {
+                "target": _vector_list(target),
+                "framing_bounds": [
+                    _vector_list(candidate_bounds[0]),
+                    _vector_list(candidate_bounds[1]),
+                ],
+                "focus_kind": probe_kind,
+                "view_family": family,
+                "azimuth_degrees": azimuth,
+                "elevation_degrees": elevation,
+                "distance_m": float(desired_distance),
+                "label": (
+                    f"{probe_kind.replace('functional_', '')}_"
+                    f"{int(round(azimuth)) % 360:03d}"
+                ),
+                "context_scope": (
+                    "owning_group_wide"
+                    if candidate_bounds is wider_framing_bounds
+                    else "relation_targets"
+                ),
+            }
+        )
+    return specifications
+
+
+def _functional_surface_side_ids(
+    probe: dict[str, Any],
+) -> list[str]:
+    return list(
+        dict.fromkeys(
+            str(surface.get("side_id"))
+            for hypothesis in probe.get("usable_surface_hypotheses") or []
+            if isinstance(hypothesis, dict)
+            and str(hypothesis.get("status") or "")
+            != "no_directed_surface"
+            for surface in hypothesis.get("surfaces") or []
+            if isinstance(surface, dict) and surface.get("side_id")
+        )
+    )
+
+
+def _functional_preferred_azimuths(
+    probe: dict[str, Any],
+    *,
+    objects: list[_CameraObject],
+) -> list[float]:
+    """Map trusted local-side IDs to world camera azimuths."""
+
+    by_id = {item.id: item for item in objects}
+    result: list[float] = []
+    if (
+        str(probe.get("kind") or "") == "functional_correspondence"
+        and len(objects) >= 2
+    ):
+        relation = np.asarray(objects[1].center - objects[0].center)
+        relation[2] = 0.0
+        if float(np.linalg.norm(relation)) > 1.0e-9:
+            relation_azimuth = math.degrees(
+                math.atan2(float(relation[1]), float(relation[0]))
+            )
+            # Side-on views expose mutual facing and the intervening region.
+            result.extend(
+                [
+                    (relation_azimuth + 90.0) % 360.0,
+                    (relation_azimuth - 90.0) % 360.0,
+                ]
+            )
+    for hypothesis in probe.get("usable_surface_hypotheses") or []:
+        if (
+            not isinstance(hypothesis, dict)
+            or str(hypothesis.get("status") or "")
+            == "no_directed_surface"
+        ):
+            continue
+        obj = by_id.get(str(hypothesis.get("target_id") or ""))
+        if obj is None:
+            continue
+        for surface in hypothesis.get("surfaces") or []:
+            if not isinstance(surface, dict):
+                continue
+            raw_axis = USABLE_SURFACE_LOCAL_AXES.get(
+                str(surface.get("side_id") or "")
+            )
+            if raw_axis is None:
+                continue
+            world_axis = obj.R @ np.asarray(raw_axis, dtype=float)
+            world_axis[2] = 0.0
+            if float(np.linalg.norm(world_axis)) <= 1.0e-9:
+                continue
+            result.append(
+                math.degrees(
+                    math.atan2(
+                        float(world_axis[1]),
+                        float(world_axis[0]),
+                    )
+                )
+                % 360.0
+            )
+    return list(dict.fromkeys(round(value, 8) for value in result))
+
+
+def _functional_surface_observability(
+    probe: dict[str, Any],
+    *,
+    objects: list[_CameraObject],
+    camera_location: np.ndarray,
+) -> dict[str, Any]:
+    """Classify minimum usable-side coverage without semantic inference.
+
+    A technically useful oblique or near-profile view is retained as
+    ``partial_but_usable`` instead of demanding a difficult ideal frontage.
+    Strongly rear-facing candidates remain ``not_covered``.  Correspondence
+    views use a wider profile tolerance because their joint framing is paired
+    with deterministic endpoint headings from the Functional Measurement
+    Bank.
+    """
+
+    by_id = {item.id: item for item in objects}
+    predicates = {
+        str(item)
+        for item in probe.get("relation_predicates") or []
+        if str(item).strip()
+    }
+    directional_relation = bool(
+        str(probe.get("kind") or "") == "functional_correspondence"
+        and "directional_correspondence" in predicates
+    )
+    sufficient_alignment = 0.2 if directional_relation else 0.35
+    partial_alignment = -0.2 if directional_relation else -0.1
+    expected_target_ids = list(
+        dict.fromkeys(
+            [
+                str(item.get("target_id") or "")
+                for item in probe.get("surface_targets") or []
+                if isinstance(item, dict) and item.get("target_id")
+            ]
+            + [
+                str(item.get("target_id") or "")
+                for item in probe.get("usable_surface_hypotheses") or []
+                if isinstance(item, dict) and item.get("target_id")
+            ]
+        )
+    )
+    hypotheses_by_target = {
+        str(item.get("target_id") or ""): item
+        for item in probe.get("usable_surface_hypotheses") or []
+        if isinstance(item, dict) and item.get("target_id")
+    }
+    required: list[str] = []
+    covered: list[dict[str, Any]] = []
+    partial: list[dict[str, Any]] = []
+    rejected: list[dict[str, Any]] = []
+    for target_id in expected_target_ids:
+        hypothesis = hypotheses_by_target.get(target_id)
+        obj = by_id.get(target_id)
+        surfaces = [
+            item
+            for item in (
+                hypothesis.get("surfaces")
+                if isinstance(hypothesis, dict)
+                else []
+            )
+            or []
+            if isinstance(item, dict)
+        ]
+        required.append(target_id)
+        if obj is None:
+            rejected.append(
+                {
+                    "target_id": target_id,
+                    "reason_code": "target_not_available_for_camera",
+                }
+            )
+            continue
+        if not surfaces:
+            # A missing/ambiguous side hypothesis limits what this camera can
+            # establish, but rejecting every candidate would conflate decoder
+            # uncertainty with camera infeasibility.  Keep the view usable for
+            # visual semantics and local context while reporting honest partial
+            # predicate coverage.
+            partial.append(
+                {
+                    "target_id": target_id,
+                    "side_id": None,
+                    "coverage_status": "partial_but_usable",
+                    "reason_code": (
+                        "usable_side_hypothesis_has_no_trusted_side"
+                        if isinstance(hypothesis, dict)
+                        else "usable_side_hypothesis_not_available"
+                    ),
+                    "surface_hypothesis_status": (
+                        str(hypothesis.get("status") or "unknown")
+                        if isinstance(hypothesis, dict)
+                        else "missing"
+                    ),
+                }
+            )
+            continue
+        camera_delta = np.asarray(camera_location, dtype=float) - obj.center
+        camera_delta[2] = 0.0
+        delta_norm = float(np.linalg.norm(camera_delta))
+        if delta_norm <= 1.0e-12:
+            rejected.append(
+                {
+                    "target_id": target_id,
+                    "reason_code": "camera_at_target_center",
+                }
+            )
+            continue
+        camera_delta /= delta_norm
+        target_sufficient: list[dict[str, Any]] = []
+        target_partial: list[dict[str, Any]] = []
+        for surface in surfaces:
+            side_id = str(surface.get("side_id") or "")
+            local_axis = USABLE_SURFACE_LOCAL_AXES.get(side_id)
+            if local_axis is None:
+                continue
+            world_axis = obj.R @ np.asarray(local_axis, dtype=float)
+            world_axis[2] = 0.0
+            axis_norm = float(np.linalg.norm(world_axis))
+            if axis_norm <= 1.0e-12:
+                continue
+            world_axis /= axis_norm
+            signed_alignment = float(np.dot(camera_delta, world_axis))
+            record = {
+                "target_id": target_id,
+                "side_id": side_id,
+                "signed_outward_alignment": signed_alignment,
+            }
+            if signed_alignment >= sufficient_alignment:
+                record["coverage_status"] = "sufficient"
+                target_sufficient.append(record)
+            elif signed_alignment >= partial_alignment:
+                record["coverage_status"] = "partial_but_usable"
+                target_partial.append(record)
+        if target_sufficient:
+            covered.extend(target_sufficient)
+        elif target_partial:
+            partial.extend(target_partial)
+        else:
+            rejected.append(
+                {
+                    "target_id": target_id,
+                    "reason_code": "usable_side_materially_rear_facing",
+                    "available_side_ids": [
+                        str(item.get("side_id") or "") for item in surfaces
+                    ],
+                }
+            )
+    coverage_status = (
+        "not_covered"
+        if rejected
+        else "partial_but_usable"
+        if partial
+        else "sufficient"
+    )
+    return {
+        "eligible": coverage_status != "not_covered",
+        "coverage_status": coverage_status,
+        "required_target_ids": list(dict.fromkeys(required)),
+        "covered_hypotheses": covered,
+        "partial_hypotheses": partial,
+        "rejections": rejected,
+        "contract": (
+            "directional_correspondence_joint_profile_plus_measurements"
+            if directional_relation
+            else "front_oblique_minimum_sufficient_evidence"
+        ),
+        "thresholds": {
+            "sufficient_min_signed_alignment": sufficient_alignment,
+            "partial_min_signed_alignment": partial_alignment,
+        },
+        "rule": "predicate_aware_surface_observability_v2",
+    }
+
+
 def _direction_from_angles(azimuth_degrees: float, elevation_degrees: float) -> np.ndarray:
     azimuth = math.radians(azimuth_degrees)
     elevation = math.radians(elevation_degrees)
@@ -1073,6 +2657,16 @@ def generate_global_context_poses(scene: dict[str, Any]) -> list[dict[str, Any]]
 
     if not isinstance(scene, dict):
         raise TypeError("global camera poses require a canonical scene")
+    from benchmark.non_rectangular.geometry import (
+        is_non_rectangular_camera_scene,
+    )
+
+    if is_non_rectangular_camera_scene(scene):
+        from benchmark.non_rectangular.camera import (
+            generate_polygon_global_context_poses,
+        )
+
+        return generate_polygon_global_context_poses(scene)
     min_x, max_x, min_y, max_y, floor_z, ceiling_z = _room_bounds(scene)
     center_x = (min_x + max_x) / 2.0
     center_y = (min_y + max_y) / 2.0
@@ -1285,6 +2879,16 @@ def apply_camera_action(
     )
     result["active_action_validation"] = validation
     result["policy_source"] = CAMERA_ACTION_PROTOCOL_VERSION
+    from benchmark.non_rectangular.geometry import (
+        is_non_rectangular_camera_scene,
+    )
+
+    if is_non_rectangular_camera_scene(scene):
+        from benchmark.non_rectangular.camera import (
+            revalidate_polygon_camera_pose,
+        )
+
+        return revalidate_polygon_camera_pose(result, scene=scene)
     return result
 
 

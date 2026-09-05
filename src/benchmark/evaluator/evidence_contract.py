@@ -25,6 +25,8 @@ Canonical hierarchy (single source of truth for ownership labels):
     grouping algorithm; position, angle, and functional arrangement are outside
     its verdict.
   - L3b Perceptual Visual Quality: style_consistency.
+  - L3c Functional Validity: functional_consistency.
+  - L3d Semantic Placement: semantic_placement_consistency.
 
 Rules encoded here:
 
@@ -42,9 +44,9 @@ from copy import deepcopy
 from typing import Any, Iterable
 
 
-# Active grouping is a VLM-produced downstream visual-evidence partition. The
-# deterministic topology/anchor implementations remain explicit deprecated
-# replay backends but are not active defaults or silent fallbacks.
+# Active grouping is a VLM-produced downstream visual-evidence partition.
+# Topology is the explicit, audited deterministic recovery backend when that
+# VLM primary fails; anchor remains available only for deprecated replay.
 GROUPING_POLICY_ID = "vlm_visual_evidence_scope_v2"
 GROUPING_IMPLEMENTATION = "src/benchmark/grouping/vlm.py"
 GROUPING_CONFIG_PATH = "configs/grouping/vlm_visual_evidence_scope_v2.yaml"
@@ -54,6 +56,8 @@ GROUPING_ROLE = "evidence_partition_not_metric_verdict"
 EVIDENCE_STRATEGIES = (
     "global_only",
     "global_screen_then_local",
+    "global_discovery_then_group_local",
+    "json_screen_then_visual",
     "script_screen_then_local",
     "global_and_local",
 )
@@ -65,6 +69,7 @@ ROUTER_STATES = (
     "not_suspicious",
     "suspicious",
     "insufficient_evidence",
+    "confirmed_invalid",
     "failed",
 )
 
@@ -178,6 +183,8 @@ CANONICAL_HIERARCHY: dict[str, Any] = {
         "question": "Is the scene coherent, except for prompt-authorized deviations?",
         "semantic_coherence": ["scale_consistency", "object_pairing_consistency"],
         "perceptual_visual_quality": ["style_consistency"],
+        "functional_validity": ["functional_consistency"],
+        "semantic_placement": ["semantic_placement_consistency"],
         "object_pairing_scope": "group_member_category_and_role_compatibility_only",
     },
     "l4_downstream_task_functionality": {
@@ -283,6 +290,39 @@ def validate_local_policy(policy: Any, *, where: str = "local_policy") -> dict[s
         raise EvidenceContractError(
             f"{where}.include_global_context must be boolean"
         )
+    for budget_name in (
+        "image_budget",
+        "global_context_image_budget",
+        "max_packet_images",
+    ):
+        if budget_name not in policy:
+            continue
+        budget = policy[budget_name]
+        if (
+            isinstance(budget, bool)
+            or not isinstance(budget, int)
+            or budget < 1
+        ):
+            raise EvidenceContractError(
+                f"{where}.{budget_name} must be a positive integer"
+            )
+    if "minimum_group_members" in policy:
+        minimum_members = policy["minimum_group_members"]
+        if (
+            isinstance(minimum_members, bool)
+            or not isinstance(minimum_members, int)
+            or minimum_members < 1
+        ):
+            raise EvidenceContractError(
+                f"{where}.minimum_group_members must be a positive integer"
+            )
+    if (
+        "force_for_eligible_groups" in policy
+        and not isinstance(policy["force_for_eligible_groups"], bool)
+    ):
+        raise EvidenceContractError(
+            f"{where}.force_for_eligible_groups must be boolean"
+        )
     return policy
 
 
@@ -321,9 +361,15 @@ def validate_text_context(values: Any, *, where: str = "text_context") -> list[s
     for token in values:
         if not isinstance(token, str) or not token.strip():
             raise EvidenceContractError(f"{where} entries must be non-empty strings")
-    if "original_prompt" not in values:
+    has_metric_scoped_context = any(
+        token == "metric_prompt_context"
+        or token.startswith("metric_prompt_context.")
+        for token in values
+    )
+    if "original_prompt" not in values and not has_metric_scoped_context:
         raise EvidenceContractError(
-            f"{where} must include 'original_prompt'; every L2/L3 evidence plan must carry prompt context"
+            f"{where} must include 'original_prompt' or an explicit "
+            "'metric_prompt_context.*' selection"
         )
     return list(values)
 
@@ -333,7 +379,8 @@ def validate_evidence_plan(plan: Any, *, where: str = "evidence_plan") -> dict[s
 
     A plan may declare a single ``evidence_strategy`` and/or a ``router_options``
     map of candidate routers, plus optional ``global_policy``, ``local_policy``,
-    and a required ``text_context`` that always carries the prompt. Unknown,
+    and a required ``text_context`` that declares either the full original
+    prompt or a metric-scoped public-context selection. Unknown,
     future-compatible fields are preserved.
     """
 

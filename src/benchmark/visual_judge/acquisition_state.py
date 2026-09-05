@@ -43,11 +43,24 @@ class CameraAcquisitionState:
     def create(
         cls,
         policy: CameraAcquisitionPolicy,
+        *,
+        total_rounds_used: int = 0,
+        total_deterministic_rounds_used: int = 0,
+        total_vlm_rounds_used: int = 0,
     ) -> CameraAcquisitionState:
         resolved = _policy(policy)
         return cls(
             policy=resolved,
             stage=_initial_stage(resolved),
+            total_rounds_used=max(0, int(total_rounds_used)),
+            total_deterministic_rounds_used=max(
+                0,
+                int(total_deterministic_rounds_used),
+            ),
+            total_vlm_rounds_used=max(
+                0,
+                int(total_vlm_rounds_used),
+            ),
         )
 
     def start_episode(self) -> None:

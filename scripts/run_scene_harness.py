@@ -42,14 +42,28 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from benchmark.api.evaluation import run_evaluate
 from benchmark.api.generation import run_generate
+from benchmark.api.submission import (
+    evaluate_prepared_submission,
+    prepare_submission,
+)
 
+from benchmark.architecture_policy import (
+    DEFAULT_PHYSICAL_WALL_POLICY,
+    PHYSICAL_WALL_POLICIES,
+    resolve_architecture_activation,
+)
 from benchmark.adapters import get_adapter
+from benchmark.adapters.defaults import (
+    DEFAULT_GENERATION_ADAPTER,
+    LEGACY_LAYOUT_REPLAY_ADAPTER,
+)
 from benchmark.evaluator.profile import (
     build_evaluation_plan,
     is_legacy_game_profile,
     resolve_evaluation_profile,
 )
 from benchmark.io_contracts import O1_OBJECT_STATE, O3_SCENE_PACKAGE
+from benchmark.materialization import NativeRegistryAuthority
 from benchmark.assets.generation import load_asset_generation_tool
 from benchmark.assets.mode import resolve_asset_mode
 from benchmark.nl_scene.asset_retrieval import retrieve_assets_for_object_plan
@@ -70,18 +84,19 @@ from benchmark.rendering.camera_pose import (
     validate_metric_camera_modes,
 )
 from benchmark.task_contract import (
-    architecture_contract_for_room,
     require_scene_matches_architecture,
     resolve_room_contract,
 )
 from benchmark.utils.io import load_yaml, read_json, write_json
 from benchmark.grouping import grouping_evidence_from_render_manifest
 from benchmark.visual_judge import (
+    CameraCandidatePreviewRenderer,
     CameraViewEvidenceRenderer,
     CameraEvidenceProvider,
     DeterministicLocalCameraSelector,
     build_conditional_active_camera_evidence_provider,
     build_openai_compatible_vlm_judge,
+    build_openai_compatible_camera_selector,
 )
 from benchmark.vlm_assistance import budget_for_output
 
@@ -99,7 +114,7 @@ def run_scene_harness(
     asset_selector_model_config: dict | None = None,
     asset_generation_tool: Any | None = None,
     asset_mode: str = "off",
-    adapter: str = "layout_json",
+    adapter: str | None = None,
     adapter_config: dict | None = None,
     vlm_budget_config: dict | None = None,
     # Retained only to fail old callers with an explicit boundary message.
@@ -107,6 +122,10 @@ def run_scene_harness(
     method_output: str | Path | None = None,
     run_generation: bool = False,
     iteration_limit: int = 0,
+    case_bundle: Any | str | Path | None = None,
+    native_registry_path: str | Path | None = None,
+    native_registry_authority: Any | None = None,
+    native_instance_mapping_path: str | Path | None = None,
     structure: bool | None = None,
     prompt_granularity: str = FINE_GRAINED,
     generator_structure: dict | None = None,
@@ -122,7 +141,7 @@ def run_scene_harness(
     authorized_deviations: list | None = None,
     visual_style_spec: dict | None = None,
     asset_selection: dict | None = None,
-    evaluator_output_type: str = O1_OBJECT_STATE,
+    evaluator_output_type: str | None = None,
     # Deprecated compatibility inputs. Canonical L0--L4 routing is owned by the
     # frozen profile and specification contract, not runtime booleans.
     eval_generic_validity: bool = False,
@@ -140,6 +159,7 @@ def run_scene_harness(
     blender_cycles_samples: int = 16,
     blender_cycles_denoising: bool = False,
     evaluation_profile: dict | None = None,
+    vlm_evaluation_control: dict[str, Any] | None = None,
     spatial_fidelity_ontology: dict | str | Path | None = None,
     support_enabled: bool = True,
     p0b_official_mode: bool = False,
@@ -152,7 +172,9 @@ def run_scene_harness(
     camera_active_shadow_mode: bool = True,
     camera_active_candidate_count: int = 5,
     camera_active_selector: Any | None = None,
+    l3_vlm_camera_selector: Any | None = None,
     collision_pair_overlay: bool = True,
+    physical_wall_policy: str = DEFAULT_PHYSICAL_WALL_POLICY,
 ) -> dict:
     _reject_literal_api_key(asset_selector_model_config, "asset selector config")
     _reject_literal_api_key(adapter_config, "adapter config")
@@ -237,8 +259,72 @@ def run_scene_harness(
     if public_object_plan is not None:
         public_object_plan = _canonical_object_plan(scene_request, public_object_plan)
         validate_object_plan(public_object_plan)
+    resolved_architecture = resolve_architecture_activation(
+        resolved_room,
+        instruction=instruction,
+        specification_contract=specification_contract,
+        reference_annotation=reference_annotation,
+        object_plan=public_object_plan,
+        visual_style_spec=visual_style_spec,
+        physical_wall_policy=physical_wall_policy,
+        policy_source=(
+            "canonical_default"
+            if physical_wall_policy == DEFAULT_PHYSICAL_WALL_POLICY
+            else "runtime_config"
+        ),
+    )
 
-    generation_adapter = get_adapter(adapter)
+    requested_adapter = adapter or DEFAULT_GENERATION_ADAPTER
+    skip_only_legacy_compatibility = (
+        adapter is None
+        and method_output is None
+        and not run_generation
+        and asset_mode == "off"
+    )
+    resolved_adapter = (
+        LEGACY_LAYOUT_REPLAY_ADAPTER
+        if skip_only_legacy_compatibility
+        else requested_adapter
+    )
+    generation_adapter = get_adapter(resolved_adapter)
+    trusted_catalog_route = (
+        resolved_adapter == DEFAULT_GENERATION_ADAPTER
+        and (method_output is not None or run_generation)
+    )
+    if int(iteration_limit) < 0:
+        raise ValueError("iteration_limit must be >= 0")
+    if trusted_catalog_route:
+        if int(iteration_limit) != 0:
+            raise ValueError(
+                "catalog_placement trusted submission does not support "
+                "self-reflection iterations; set iteration_limit=0"
+            )
+        if case_bundle is None:
+            raise ValueError(
+                "active catalog_placement generation requires a trusted case_bundle"
+            )
+        if asset_root is None or asset_csv is None or blender_bin is None:
+            raise ValueError(
+                "active catalog_placement generation requires asset_root, asset_csv, "
+                "and blender_bin for benchmark-owned preparation"
+            )
+        if render_evidence:
+            raise ValueError(
+                "catalog_placement trusted submission does not accept submitted "
+                "render_evidence; official evidence is rendered from the sanitized blend"
+            )
+    resolved_evaluator_output_type = (
+        evaluator_output_type
+        if evaluator_output_type is not None
+        else O3_SCENE_PACKAGE
+        if resolved_adapter == DEFAULT_GENERATION_ADAPTER
+        else O1_OBJECT_STATE
+    )
+    if trusted_catalog_route and resolved_evaluator_output_type != O3_SCENE_PACKAGE:
+        raise ValueError(
+            "active catalog_placement generation requires "
+            "evaluator_output_type='o3_scene_package'"
+        )
     declared_asset_support = generation_adapter.capabilities.asset_support
     asset_decision = resolve_asset_mode(
         mode=asset_mode,
@@ -269,18 +355,16 @@ def run_scene_harness(
         scene_request=scene_request,
         object_plan=public_object_plan,
         asset_selection=asset_selection,
-        evaluator_output_type=evaluator_output_type,
+        evaluator_output_type=resolved_evaluator_output_type,
+        architecture_contract=resolved_architecture,
     )
     input_mode = generation_input["generation_contract"]["input_mode"]
     if input_mode not in generation_adapter.capabilities.input_modes:
         raise ValueError(
-            f"Adapter {adapter!r} does not declare support for input mode {input_mode!r}; "
+            f"Adapter {resolved_adapter!r} does not declare support for input mode {input_mode!r}; "
             f"supported modes: {list(generation_adapter.capabilities.input_modes)}"
         )
     io_contract = generation_adapter.resolve_io_contract(generation_input, config=adapter_config)
-    if int(iteration_limit) < 0:
-        raise ValueError("iteration_limit must be >= 0")
-
     resolved_enrich_assets = bool(enrich_assets) if enrich_assets is not None else bool(asset_csv or asset_root)
     resolved_adapter_config = dict(adapter_config or {})
     resolved_vlm_budget = budget_for_output(vlm_budget_config, io_contract.native_output_type)
@@ -363,7 +447,7 @@ def run_scene_harness(
     try:
         loop_result = _run_generation_evaluation_loop(
             generation_input=generation_input,
-            adapter=adapter,
+            adapter=resolved_adapter,
             output_dir=output_dir,
             method_output=method_output,
             adapter_config=resolved_adapter_config,
@@ -389,6 +473,7 @@ def run_scene_harness(
             vlm_judge=evaluator_vlm_judge,
             scene_renderer=scene_renderer,
             evaluation_profile=resolved_profile,
+            vlm_evaluation_control=vlm_evaluation_control,
             spatial_fidelity_ontology=spatial_fidelity_ontology,
             support_enabled=(support_enabled if legacy_game_profile else None),
             p0b_official_mode=p0b_official_mode,
@@ -401,7 +486,16 @@ def run_scene_harness(
             camera_active_shadow_mode=bool(camera_active_shadow_mode),
             camera_active_candidate_count=int(camera_active_candidate_count),
             camera_active_selector=camera_active_selector,
+            l3_vlm_camera_selector=l3_vlm_camera_selector,
             collision_pair_overlay=bool(collision_pair_overlay),
+            architecture_contract=resolved_architecture,
+            trusted_catalog_route=trusted_catalog_route,
+            case_bundle=case_bundle,
+            native_registry_path=native_registry_path,
+            native_registry_authority=native_registry_authority,
+            native_instance_mapping_path=native_instance_mapping_path,
+            blender_bin=blender_bin,
+            blender_timeout_seconds=int(blender_timeout_seconds),
         )
     finally:
         # Benchmark artifacts are persisted only after generator code returns.
@@ -479,7 +573,13 @@ def run_scene_harness(
         "vlm_assistance": vlm_assistance,
         "rendering": {
             "enabled": scene_renderer is not None,
-            "backend": "blender_canonical_scene_v1" if scene_renderer is not None else None,
+            "backend": (
+                "benchmark_owned_sanitized_blend"
+                if trusted_catalog_route
+                else "blender_canonical_scene_v1"
+                if scene_renderer is not None
+                else None
+            ),
             "blender_bin": str(blender_bin) if blender_bin else None,
             "width": int(render_width),
             "height": int(render_height),
@@ -488,6 +588,7 @@ def run_scene_harness(
             "cycles_samples": int(blender_cycles_samples),
             "cycles_denoising": bool(blender_cycles_denoising),
             "require_asset_mesh": asset_decision.retrieval_enabled,
+            "submitted_native_blend_rendered_directly": False,
         },
         "evaluation": {
             "profile": resolved_profile,
@@ -568,11 +669,19 @@ def run_scene_harness(
             },
         },
         "task_contract": {
-            "architecture": architecture_contract_for_room(resolved_room),
+            "architecture": resolved_architecture,
             "prompt_room_dimensions": prompt_room_dimensions,
         },
         "adapter": {
             "name": generation_adapter.name,
+            "requested": requested_adapter,
+            "default": DEFAULT_GENERATION_ADAPTER,
+            "legacy_skip_only_compatibility": skip_only_legacy_compatibility,
+            "trusted_submission_route": (
+                "prepare_submission_then_evaluate_prepared_submission"
+                if trusted_catalog_route
+                else None
+            ),
             "capabilities": generation_adapter.capabilities.as_dict(),
             "io_contract": io_contract.as_dict(),
             "generator_output_schema": getattr(generation_adapter, "output_schema", None),
@@ -620,6 +729,16 @@ def main() -> None:
             "natural-language dimensions; conflicts fail and missing axes use the benchmark policy."
         ),
     )
+    parser.add_argument(
+        "--physical-wall-policy",
+        choices=PHYSICAL_WALL_POLICIES,
+        default=DEFAULT_PHYSICAL_WALL_POLICY,
+        help=(
+            "Versioned physical-wall policy. explicit_only is the canonical "
+            "wall-free default unless benchmark-owned claims activate walls; "
+            "always_enclosed is legacy replay compatibility."
+        ),
+    )
     parser.add_argument("--asset-csv", default=None)
     parser.add_argument("--asset-root", default=None)
     parser.add_argument("--asset-index-path", default=None)
@@ -659,7 +778,15 @@ def main() -> None:
         default=None,
         help="Optional module:attribute or /path/plugin.py:attribute asset-generation tool.",
     )
-    parser.add_argument("--adapter", default="layout_json")
+    parser.add_argument(
+        "--adapter",
+        default=None,
+        help=(
+            f"Generation adapter (default for active generation: "
+            f"{DEFAULT_GENERATION_ADAPTER}; generation-skipped legacy harness "
+            "calls retain layout_json replay compatibility)."
+        ),
+    )
     parser.add_argument("--adapter-config", default=None, help="JSON configuration for the selected generation adapter.")
     parser.add_argument(
         "--vlm-budget-config",
@@ -697,6 +824,44 @@ def main() -> None:
         default=None,
         help="Preferred generic name for external O1, O2, or O3 native generator output.",
     )
+    parser.add_argument(
+        "--case-bundle",
+        default=None,
+        help=(
+            "Hash-verified benchmark case bundle required by active "
+            "catalog_placement preparation/evaluation."
+        ),
+    )
+    parser.add_argument(
+        "--native-registry",
+        default=None,
+        help=(
+            "Benchmark-owned native placement registry required only when the "
+            "catalog_placement method output is a registered .blend."
+        ),
+    )
+    parser.add_argument(
+        "--native-instance-mapping",
+        default=None,
+        help=(
+            "Submitter-authored public_native_instance_mapping_v1 JSON for "
+            "a fixed-catalog .blend. The benchmark derives and seals the "
+            "authoritative registry after read-only inspection."
+        ),
+    )
+    parser.add_argument(
+        "--native-registry-authority-key-file",
+        default=None,
+        help=(
+            "Benchmark-operator secret key file used to verify the signed "
+            "native registry. Never generator-visible."
+        ),
+    )
+    parser.add_argument(
+        "--native-registry-authority-key-id",
+        default=None,
+        help="Trusted key identifier embedded in the signed native registry.",
+    )
     parser.add_argument("--run-generation", action="store_true", help="Ask the adapter to run generation when no --method-output is supplied.")
     parser.add_argument("--iteration-limit", type=int, default=0, help="Maximum self-reflexive regeneration attempts after the initial evaluation.")
     parser.add_argument(
@@ -711,8 +876,11 @@ def main() -> None:
     parser.add_argument(
         "--evaluator-output-type",
         choices=[O1_OBJECT_STATE, O3_SCENE_PACKAGE],
-        default=O1_OBJECT_STATE,
-        help="Canonical evaluator boundary after any O2 program execution/export.",
+        default=None,
+        help=(
+            "Canonical evaluator boundary after native output. Defaults to O3 for "
+            "catalog_placement and O1 for legacy/other adapters."
+        ),
     )
     parser.add_argument(
         "--generator-structure",
@@ -854,6 +1022,14 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--vlm-evaluation-control",
+        default=None,
+        help=(
+            "Optional JSON patch selecting the canonical L3 camera-acquisition "
+            "policy and bounded Controller budgets."
+        ),
+    )
+    parser.add_argument(
         "--collision-pair-overlay",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -911,7 +1087,7 @@ def main() -> None:
             PROJECT_ROOT
             / "configs"
             / "evaluation"
-            / "metric_profile_canonical_v1.yaml"
+            / "metric_profile_canonical_v2.yaml"
         ),
     )
     parser.add_argument(
@@ -1007,11 +1183,65 @@ def main() -> None:
         _reject_literal_api_key(camera_selector_config, "camera selector config")
     except ValueError as exc:
         parser.error(str(exc))
-    camera_active_selector = (
-        build_openai_compatible_vlm_judge(camera_selector_config)
+    production_camera_selector = (
+        build_openai_compatible_camera_selector(
+            camera_selector_config
+        )
         if camera_selector_config
         else None
     )
+    # The legacy P0b camera path and the canonical L3 Controller receive the
+    # same dedicated camera-selector transport.  A selector config must never
+    # be materialized as a metric Judge.
+    camera_active_selector = production_camera_selector
+    l3_vlm_camera_selector = production_camera_selector
+    vlm_evaluation_control = (
+        read_json(_path_arg(args.vlm_evaluation_control))
+        if args.vlm_evaluation_control
+        else None
+    )
+    if (
+        vlm_evaluation_control is not None
+        and not isinstance(vlm_evaluation_control, dict)
+    ):
+        parser.error(
+            "--vlm-evaluation-control must point to a JSON object"
+        )
+
+    native_registry_authority = None
+    native_authority_args = (
+        args.native_registry_authority_key_file,
+        args.native_registry_authority_key_id,
+    )
+    if any(native_authority_args):
+        if not all(native_authority_args):
+            parser.error(
+                "--native-registry-authority-key-file and "
+                "--native-registry-authority-key-id must be supplied together"
+            )
+        try:
+            native_registry_authority = (
+                NativeRegistryAuthority.from_secret(
+                    key_id=args.native_registry_authority_key_id,
+                    secret=_path_arg(
+                        args.native_registry_authority_key_file
+                    ).read_bytes(),
+                )
+            )
+        except (OSError, ValueError) as exc:
+            parser.error(f"cannot load native registry authority: {exc}")
+    if args.native_registry and args.native_instance_mapping:
+        parser.error(
+            "--native-registry and --native-instance-mapping are mutually "
+            "exclusive"
+        )
+    if (
+        args.native_registry or args.native_instance_mapping
+    ) and native_registry_authority is None:
+        parser.error(
+            "native Blender submission requires the benchmark-owned "
+            "authority key file and key id"
+        )
 
     manifest = run_scene_harness(
         instruction=args.instruction,
@@ -1029,6 +1259,16 @@ def main() -> None:
         adapter_config=adapter_config or None,
         vlm_budget_config=vlm_budget_config,
         method_output=_path_arg(args.method_output) if args.method_output else None,
+        case_bundle=_path_arg(args.case_bundle) if args.case_bundle else None,
+        native_registry_path=(
+            _path_arg(args.native_registry) if args.native_registry else None
+        ),
+        native_registry_authority=native_registry_authority,
+        native_instance_mapping_path=(
+            _path_arg(args.native_instance_mapping)
+            if args.native_instance_mapping
+            else None
+        ),
         run_generation=args.run_generation,
         iteration_limit=args.iteration_limit,
         structure=args.structure,
@@ -1093,6 +1333,7 @@ def main() -> None:
         blender_cycles_samples=args.blender_cycles_samples,
         blender_cycles_denoising=args.blender_cycles_denoising,
         evaluation_profile=evaluation_profile,
+        vlm_evaluation_control=vlm_evaluation_control,
         spatial_fidelity_ontology=(
             _path_arg(args.spatial_fidelity_ontology)
             if args.spatial_fidelity_ontology
@@ -1108,7 +1349,9 @@ def main() -> None:
         camera_active_shadow_mode=args.camera_active_shadow_mode,
         camera_active_candidate_count=args.camera_active_candidate_count,
         camera_active_selector=camera_active_selector,
+        l3_vlm_camera_selector=l3_vlm_camera_selector,
         collision_pair_overlay=args.collision_pair_overlay,
+        physical_wall_policy=args.physical_wall_policy,
         out_dir=_path_arg(args.out_dir),
     )
     print(f"status: {manifest['status']}")
@@ -1144,6 +1387,7 @@ def _run_generation_evaluation_loop(
     vlm_judge: Any | None,
     scene_renderer: Any | None,
     evaluation_profile: dict | None,
+    vlm_evaluation_control: dict[str, Any] | None,
     spatial_fidelity_ontology: dict | str | Path | None,
     support_enabled: bool | None = None,
     p0b_official_mode: bool = False,
@@ -1156,7 +1400,16 @@ def _run_generation_evaluation_loop(
     camera_active_shadow_mode: bool = True,
     camera_active_candidate_count: int = 5,
     camera_active_selector: Any | None = None,
+    l3_vlm_camera_selector: Any | None = None,
     collision_pair_overlay: bool = True,
+    architecture_contract: dict | None = None,
+    trusted_catalog_route: bool = False,
+    case_bundle: Any | str | Path | None = None,
+    native_registry_path: str | Path | None = None,
+    native_registry_authority: Any | None = None,
+    native_instance_mapping_path: str | Path | None = None,
+    blender_bin: str | Path | None = None,
+    blender_timeout_seconds: int = 900,
 ) -> dict:
     attempts: list[dict[str, Any]] = []
     previous_report: dict | None = None
@@ -1176,6 +1429,7 @@ def _run_generation_evaluation_loop(
             evaluation_report=previous_report,
             previous_generated_scene=previous_scene,
             iteration=iteration if previous_report is not None else None,
+            materialize_native_output=not trusted_catalog_route,
         )
         attempt_record: dict[str, Any] = {
             "iteration": iteration,
@@ -1184,10 +1438,147 @@ def _run_generation_evaluation_loop(
             "method_input": generate_result.get("method_input"),
             "workflow_status": generate_result.get("workflow_status"),
             "adapter_metadata": generate_result.get("adapter_metadata"),
+            "native_output": generate_result.get("native_output"),
+            "raw_native_artifact": generate_result.get("raw_native_artifact"),
             "generated_scene": generate_result.get("generated_scene"),
             "evaluation_report": None,
             "valid": None,
         }
+
+        if trusted_catalog_route:
+            raw_native_artifact = generate_result.get("raw_native_artifact")
+            if not raw_native_artifact:
+                attempts.append(attempt_record)
+                break
+            if (
+                case_bundle is None
+                or asset_root is None
+                or asset_csv is None
+                or blender_bin is None
+                or scene_renderer is None
+            ):
+                raise RuntimeError(
+                    "trusted catalog route requires case_bundle, asset_root, "
+                    "asset_csv, blender_bin, and a prepared-scene renderer"
+                )
+            prepared = prepare_submission(
+                artifact=raw_native_artifact,
+                case_bundle=case_bundle,
+                out_dir=attempt_dir / "preparation",
+                asset_root=asset_root,
+                asset_csv=asset_csv,
+                blender_bin=blender_bin,
+                generation_input=generation_input,
+                native_registry_path=native_registry_path,
+                native_registry_authority=native_registry_authority,
+                native_instance_mapping_path=(
+                    native_instance_mapping_path
+                ),
+                timeout_seconds=blender_timeout_seconds,
+            )
+            report = evaluate_prepared_submission(
+                prepared_submission=prepared,
+                case_bundle=case_bundle,
+                out_dir=attempt_dir,
+                renderer=scene_renderer,
+                vlm_judge=vlm_judge,
+                camera_selector=(
+                    l3_vlm_camera_selector
+                    if l3_vlm_camera_selector is not None
+                    else camera_active_selector
+                ),
+                asset_root=asset_root,
+                asset_csv=asset_csv,
+                blender_bin=blender_bin,
+                generation_input=generation_input,
+                native_registry_path=native_registry_path,
+                native_registry_authority=native_registry_authority,
+                native_instance_mapping_path=(
+                    native_instance_mapping_path
+                ),
+                official_mode=True,
+                vlm_evaluation_control=vlm_evaluation_control,
+            )
+            trusted_scene_path = (
+                prepared.normalized_scene_path.as_posix()
+                if prepared.normalized_scene_path.is_file()
+                else None
+            )
+            evaluation_report_path = attempt_dir / "evaluation_report.json"
+            if not evaluation_report_path.is_file():
+                write_json(evaluation_report_path, report)
+            submission_run_manifest_path = (
+                attempt_dir / "submission_run_manifest.json"
+            )
+            submission_run_manifest = (
+                read_json(submission_run_manifest_path)
+                if submission_run_manifest_path.is_file()
+                else {}
+            )
+            trusted_rendering = (
+                submission_run_manifest.get("rendering")
+                if isinstance(submission_run_manifest, dict)
+                and isinstance(
+                    submission_run_manifest.get("rendering"),
+                    dict,
+                )
+                else {}
+            )
+            trusted_overview_views = trusted_rendering.get(
+                "overview_views"
+            )
+            trusted_overview_views = (
+                [
+                    str(path)
+                    for path in trusted_overview_views
+                    if str(path)
+                ]
+                if isinstance(trusted_overview_views, list)
+                else []
+            )
+            attempt_record.update(
+                {
+                    "status": _prepared_evaluation_attempt_status(report),
+                    "generated_scene": trusted_scene_path,
+                    "evaluation_report": evaluation_report_path.as_posix(),
+                    "benchmark_score": report.get("benchmark_score"),
+                    "valid": _evaluation_is_valid(report),
+                    "preparation": prepared.as_dict(),
+                    "submission_run_manifest": (
+                        submission_run_manifest_path.as_posix()
+                        if submission_run_manifest_path.is_file()
+                        else None
+                    ),
+                    "render_input_policy": str(
+                        trusted_rendering.get("input_policy")
+                        or "benchmark_owned_sanitized_blend"
+                    ),
+                    "render_manifest": trusted_rendering.get(
+                        "manifest_path"
+                    ),
+                    "render_manifest_sha256": trusted_rendering.get(
+                        "manifest_sha256"
+                    ),
+                    "render_evidence": trusted_overview_views,
+                    "evaluation_render_authority": (
+                        dict(
+                            submission_run_manifest.get(
+                                "evaluation_render_authority"
+                            )
+                        )
+                        if isinstance(
+                            submission_run_manifest.get(
+                                "evaluation_render_authority"
+                            ),
+                            dict,
+                        )
+                        else None
+                    ),
+                }
+            )
+            attempts.append(attempt_record)
+            final_evaluated_attempt = attempt_record
+            break
 
         if not generate_result.get("generated_scene"):
             attempts.append(attempt_record)
@@ -1207,7 +1598,11 @@ def _run_generation_evaluation_loop(
             attempt_render_evidence = [
                 str(item["path"])
                 for item in render_manifest.get("views", [])
-                if isinstance(item, dict) and item.get("path")
+                if (
+                    isinstance(item, dict)
+                    and item.get("path")
+                    and str(item.get("name") or "") != "identity_map"
+                )
             ]
             attempt_grouping_visual_evidence = (
                 grouping_evidence_from_render_manifest(
@@ -1224,10 +1619,21 @@ def _run_generation_evaluation_loop(
         attempt_deterministic_camera_selector = None
         attempt_vlm_camera_selector = None
         attempt_evidence_renderer = None
+        attempt_candidate_preview_renderer = None
+        blend_file = (
+            render_manifest.get("blend_file")
+            if scene_renderer is not None
+            else None
+        )
         if camera_pose_mode is not None:
-            blend_file = render_manifest.get("blend_file") if scene_renderer is not None else None
-            if not isinstance(blend_file, str) or not Path(blend_file).is_file():
-                raise RuntimeError("camera pose mode requires the Blender render manifest to contain scene.blend")
+            if (
+                not isinstance(blend_file, str)
+                or not Path(blend_file).is_file()
+            ):
+                raise RuntimeError(
+                    "camera pose mode requires the Blender render manifest "
+                    "to contain scene.blend"
+                )
             if camera_active_fallback:
                 attempt_local_view_provider = build_conditional_active_camera_evidence_provider(
                     renderer=scene_renderer,
@@ -1248,6 +1654,7 @@ def _run_generation_evaluation_loop(
                     ),
                     fail_on_exhausted=True,
                     shadow_mode=camera_active_shadow_mode,
+                    architecture_contract=architecture_contract,
                 )
             else:
                 attempt_local_view_provider = CameraEvidenceProvider(
@@ -1262,51 +1669,77 @@ def _run_generation_evaluation_loop(
                     collision_overlay=collision_pair_overlay,
                     collision_contour=collision_pair_overlay,
                     collision_geometry=collision_geometry if isinstance(collision_geometry, dict) else None,
+                    architecture_contract=architecture_contract,
                 )
             attempt_record["camera_evidence_policy"] = attempt_local_view_provider.policy_config
-            if not is_legacy_game_profile(evaluation_profile):
-                # Canonical L3 receives deterministic initial local evidence,
-                # then semantic repair is owned by the separated Controller.
-                # The P0b provider above remains its historical compatibility
-                # path and is not reused as the L3 repair controller.
-                attempt_l3_initial_evidence_provider = (
-                    CameraEvidenceProvider(
-                        renderer=scene_renderer,
-                        blend_file=blend_file,
-                        out_dir=(
-                            attempt_dir
-                            / "camera_evidence"
-                            / "l3_initial"
-                        ),
-                        mode=camera_pose_mode,
-                        metric_modes=camera_pose_metric_modes,
-                        selector=camera_active_selector,
-                        max_views=camera_pose_max_views,
-                        max_steps=camera_pose_max_steps,
-                        candidate_count=(
-                            camera_active_candidate_count
-                            if camera_active_fallback
-                            else max(camera_pose_max_views, 6)
-                        ),
-                        collision_overlay=False,
-                        collision_contour=False,
-                        collision_geometry=(
-                            collision_geometry
-                            if isinstance(collision_geometry, dict)
-                            else None
-                        ),
-                        active_repair=False,
+        l3_camera_components_requested = (
+            not is_legacy_game_profile(evaluation_profile)
+            and scene_renderer is not None
+            and (
+                camera_pose_mode is not None
+                or vlm_evaluation_control is not None
+                or l3_vlm_camera_selector is not None
+            )
+        )
+        if l3_camera_components_requested:
+            if (
+                not isinstance(blend_file, str)
+                or not Path(blend_file).is_file()
+            ):
+                raise RuntimeError(
+                    "canonical L3 camera acquisition requires the Blender "
+                    "render manifest to contain scene.blend"
+                )
+            # Canonical L3 receives frozen deterministic initial evidence.
+            # Repair is owned independently by the Controller; the P0b
+            # provider above retains its historical compatibility path.
+            attempt_l3_initial_evidence_provider = CameraEvidenceProvider(
+                renderer=scene_renderer,
+                blend_file=blend_file,
+                out_dir=(
+                    attempt_dir / "camera_evidence" / "l3_initial"
+                ),
+                mode="visibility_ranked",
+                metric_modes={},
+                selector=None,
+                max_views=camera_pose_max_views,
+                max_steps=camera_pose_max_steps,
+                candidate_count=(
+                    camera_active_candidate_count
+                    if camera_active_fallback
+                    else max(camera_pose_max_views, 6)
+                ),
+                collision_overlay=False,
+                collision_contour=False,
+                collision_geometry=(
+                    collision_geometry
+                    if isinstance(collision_geometry, dict)
+                    else None
+                ),
+                active_repair=False,
+                architecture_contract=architecture_contract,
+            )
+            attempt_deterministic_camera_selector = (
+                DeterministicLocalCameraSelector(
+                    candidate_policy=(
+                        attempt_l3_initial_evidence_provider.candidate_policy
                     )
                 )
-                attempt_deterministic_camera_selector = (
-                    DeterministicLocalCameraSelector(
-                        candidate_policy=(
-                            attempt_l3_initial_evidence_provider.candidate_policy
-                        )
-                    )
-                )
-                attempt_vlm_camera_selector = camera_active_selector
-                attempt_evidence_renderer = CameraViewEvidenceRenderer(
+            )
+            attempt_vlm_camera_selector = (
+                l3_vlm_camera_selector
+                if l3_vlm_camera_selector is not None
+                else camera_active_selector
+            )
+            attempt_evidence_renderer = CameraViewEvidenceRenderer(
+                renderer=scene_renderer,
+                blend_file=blend_file,
+                out_dir=(
+                    attempt_dir / "camera_evidence" / "l3_controller"
+                ),
+            )
+            attempt_candidate_preview_renderer = (
+                CameraCandidatePreviewRenderer(
                     renderer=scene_renderer,
                     blend_file=blend_file,
                     out_dir=(
@@ -1315,21 +1748,40 @@ def _run_generation_evaluation_loop(
                         / "l3_controller"
                     ),
                 )
-                attempt_record["l3_camera_control"] = {
-                    "mode": "judge_driven_independent_components",
-                    "deterministic_selector": (
-                        type(
-                            attempt_deterministic_camera_selector
-                        ).__name__
-                    ),
-                    "vlm_selector_configured": (
-                        attempt_vlm_camera_selector is not None
-                    ),
-                    "renderer": type(
-                        attempt_evidence_renderer
-                    ).__name__,
-                    "scene_access": "read_only",
-                }
+            )
+            initial_camera_source = (
+                "config"
+                if (
+                    isinstance(vlm_evaluation_control, dict)
+                    and isinstance(
+                        vlm_evaluation_control.get(
+                            "initial_group_camera"
+                        ),
+                        dict,
+                    )
+                )
+                else "default"
+            )
+            attempt_record["l3_camera_control"] = {
+                "mode": "judge_driven_independent_components",
+                "deterministic_selector": (
+                    type(
+                        attempt_deterministic_camera_selector
+                    ).__name__
+                ),
+                "vlm_selector_configured": (
+                    attempt_vlm_camera_selector is not None
+                ),
+                "renderer": type(
+                    attempt_evidence_renderer
+                ).__name__,
+                "scene_access": "read_only",
+                "initial_group_camera": {
+                    "mode": "visibility_ranked",
+                    "selector": "deterministic",
+                    "source": initial_camera_source,
+                },
+            }
         report = run_evaluate(
             scene=previous_scene,
             out=attempt_dir / "evaluation_report.json",
@@ -1368,16 +1820,33 @@ def _run_generation_evaluation_loop(
                     "evidence_renderer": (
                         attempt_evidence_renderer
                     ),
+                    "candidate_preview_renderer": (
+                        attempt_candidate_preview_renderer
+                    ),
                 }
                 if not is_legacy_game_profile(evaluation_profile)
                 else {}
             ),
             vlm_judge=vlm_judge,
             evaluation_profile=evaluation_profile,
+            **(
+                {
+                    "vlm_evaluation_control": (
+                        vlm_evaluation_control
+                    )
+                }
+                if not is_legacy_game_profile(evaluation_profile)
+                else {}
+            ),
             support_enabled=support_enabled,
             p0b_official_mode=p0b_official_mode,
             p0b_local_view_provider=attempt_local_view_provider,
             spatial_fidelity_ontology=spatial_fidelity_ontology,
+        )
+        _record_external_execution_evaluation(
+            generate_result,
+            evaluation_report_path=attempt_dir / "evaluation_report.json",
+            report=report,
         )
         attempt_record["evaluation_report"] = (attempt_dir / "evaluation_report.json").as_posix()
         attempt_record["benchmark_score"] = report.get("benchmark_score")
@@ -1407,12 +1876,18 @@ def _run_generation_evaluation_loop(
         "evaluation_report": read_json(final_report_path) if final_report_path else None,
         "artifacts": {
             "method_input": latest_attempt.get("method_input"),
+            "native_output": latest_attempt.get("native_output"),
+            "raw_native_artifact": latest_attempt.get("raw_native_artifact"),
             "generated_scene": final_scene_path,
             "workflow_status": latest_attempt.get("workflow_status"),
             "adapter_metadata": latest_attempt.get("adapter_metadata"),
             "evaluation_report": final_report_path,
             "render_manifest": final_attempt.get("render_manifest"),
             "render_evidence": final_attempt.get("render_evidence"),
+            "preparation": final_attempt.get("preparation"),
+            "submission_run_manifest": final_attempt.get(
+                "submission_run_manifest"
+            ),
             "self_reflexive_history": history_path.as_posix(),
         },
         "self_reflexive": {
@@ -1424,6 +1899,50 @@ def _run_generation_evaluation_loop(
             "attempts": attempts,
         },
     }
+
+
+def _record_external_execution_evaluation(
+    generate_result: dict[str, Any],
+    *,
+    evaluation_report_path: Path,
+    report: dict[str, Any],
+) -> None:
+    """Link post-generation evaluation without exposing it to the generator."""
+
+    metadata_value = generate_result.get("adapter_metadata")
+    if not metadata_value:
+        return
+    metadata_path = Path(str(metadata_value))
+    if not metadata_path.is_file():
+        return
+    adapter_metadata = read_json(metadata_path)
+    generation_run = (
+        adapter_metadata.get("generation_run")
+        if isinstance(adapter_metadata, dict)
+        else None
+    )
+    if not isinstance(generation_run, dict):
+        return
+    execution_result_value = generation_run.get("execution_result_path")
+    if not execution_result_value:
+        return
+    execution_result_path = Path(str(execution_result_value))
+    if not execution_result_path.is_file():
+        return
+    evaluation_link = {
+        "evaluation_report_path": evaluation_report_path.resolve().as_posix(),
+        "evaluation_workflow": report.get("workflow"),
+        "benchmark_score": report.get("benchmark_score"),
+        "benchmark_score_status": report.get("benchmark_score_status"),
+        "evaluation_link_recorded_after_generation": True,
+    }
+    execution_result = read_json(execution_result_path)
+    if isinstance(execution_result, dict):
+        execution_result.update(evaluation_link)
+        write_json(execution_result_path, execution_result)
+    generation_run.update(evaluation_link)
+    adapter_metadata["generation_run"] = generation_run
+    write_json(metadata_path, adapter_metadata)
 
 
 def _publish_json_artifact(source: str | None, destination: Path) -> str | None:
@@ -1457,6 +1976,27 @@ def _evaluation_is_valid(report: dict) -> bool:
         return isinstance(score, (int, float)) and not isinstance(score, bool) and float(score) >= 0.999
     except (TypeError, ValueError):
         return False
+
+
+def _prepared_evaluation_attempt_status(report: dict[str, Any]) -> str:
+    evaluation_status = str(report.get("evaluation_status") or "").strip()
+    score_status = str(
+        report.get("benchmark_score_status") or ""
+    ).strip()
+    if (
+        evaluation_status == "not_evaluable"
+        or score_status == "not_evaluable"
+    ):
+        return "not_evaluable"
+    score = report.get("benchmark_score")
+    if (
+        evaluation_status == "complete"
+        and score_status == "complete"
+        and isinstance(score, (int, float))
+        and not isinstance(score, bool)
+    ):
+        return "prepared_evaluation_complete"
+    return "prepared_evaluation_incomplete"
 
 
 def _evaluation_summary(report: dict) -> dict:

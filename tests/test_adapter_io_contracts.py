@@ -5,7 +5,16 @@ from pathlib import Path
 
 import pytest
 
-from benchmark.adapters import OutputMaterializationRequired, get_adapter, list_adapters
+from benchmark.adapters import (
+    OUTPUT_CONVERTER,
+    OUTPUT_LOADER,
+    AdapterRegistry,
+    GenerationAdapter,
+    OutputMaterializationRequired,
+    SceneOutputRoute,
+    get_adapter,
+    list_adapters,
+)
 from benchmark.io_contracts import (
     I1_NATURAL_LANGUAGE,
     I2_NATURAL_LANGUAGE_STRUCTURE,
@@ -53,11 +62,114 @@ def test_six_i1_i2_o1_o2_o3_combinations_are_declared(
 
 
 def test_current_registry_contains_no_legacy_adapter_aliases() -> None:
-    assert list_adapters() == ["layout_json", "object_state", "scene_package", "scene_program"]
+    assert list_adapters() == [
+        "catalog_placement",
+        "direct_layout",
+        "holodeck",
+        "layout_gpt",
+        "layout_json",
+        "layout_vlm",
+        "object_state",
+        "respace",
+        "scene_package",
+        "scene_program",
+        "scene_smith",
+        "scene_weaver",
+    ]
     with pytest.raises(KeyError):
         get_adapter("manual")
     with pytest.raises(KeyError):
         get_adapter("passthrough")
+
+
+def test_builtin_adapters_declare_loader_or_converter_route() -> None:
+    expected = {
+        "catalog_placement": OUTPUT_CONVERTER,
+        "direct_layout": OUTPUT_CONVERTER,
+        "holodeck": OUTPUT_CONVERTER,
+        "layout_json": OUTPUT_CONVERTER,
+        "layout_gpt": OUTPUT_CONVERTER,
+        "layout_vlm": OUTPUT_CONVERTER,
+        "object_state": OUTPUT_LOADER,
+        "respace": OUTPUT_CONVERTER,
+        "scene_package": OUTPUT_LOADER,
+        "scene_program": OUTPUT_LOADER,
+        "scene_smith": OUTPUT_CONVERTER,
+        "scene_weaver": OUTPUT_CONVERTER,
+    }
+
+    assert {
+        name: get_adapter(name).scene_output_route().kind
+        for name in list_adapters()
+    } == expected
+
+
+@pytest.mark.parametrize(
+    ("route_factory", "expected_kind"),
+    [
+        (SceneOutputRoute.existing_loader, OUTPUT_LOADER),
+        (SceneOutputRoute.converter, OUTPUT_CONVERTER),
+    ],
+)
+def test_scene_output_route_calls_exactly_one_selected_handler(
+    route_factory,
+    expected_kind: str,
+    tmp_path: Path,
+) -> None:
+    calls: list[tuple] = []
+
+    def handler(source_path, generation_input, out_dir, config):
+        calls.append((source_path, generation_input, out_dir, config))
+        return out_dir / "generated_scene.json"
+
+    route = route_factory(handler)
+    result = route.materialize(
+        tmp_path / "native.json",
+        {"request_id": "request-1"},
+        tmp_path / "out",
+        {"adapter_option": True},
+    )
+
+    assert route.kind == expected_kind
+    assert result == tmp_path / "out" / "generated_scene.json"
+    assert calls == [
+        (
+            tmp_path / "native.json",
+            {"request_id": "request-1"},
+            tmp_path / "out",
+            {"adapter_option": True},
+        )
+    ]
+
+
+def test_external_harness_adapter_factory_is_pluggable() -> None:
+    class HarnessXAdapter(GenerationAdapter):
+        name = "harness_x"
+        output_ingestion_kind = OUTPUT_CONVERTER
+
+        def convert_output(self, method_output_path, generation_input, out_dir, config=None):
+            raise AssertionError("the structural registry must not run the converter")
+
+    registry = AdapterRegistry()
+    registry.register("harness_x", HarnessXAdapter)
+
+    first = registry.create("harness_x")
+    second = registry.create("HARNESS_X")
+
+    assert isinstance(first, HarnessXAdapter)
+    assert isinstance(second, HarnessXAdapter)
+    assert first is not second
+    assert registry.names() == ["harness_x"]
+
+
+def test_external_harness_adapter_must_choose_one_output_route() -> None:
+    class IncompleteHarnessAdapter(GenerationAdapter):
+        name = "incomplete_harness"
+
+    registry = AdapterRegistry({"incomplete_harness": IncompleteHarnessAdapter})
+
+    with pytest.raises(ValueError, match="output_ingestion_kind"):
+        registry.create("incomplete_harness")
 
 
 @pytest.mark.parametrize("adapter_name", ["scene_program", "scene_package"])
@@ -171,6 +283,7 @@ def test_scene_program_materializes_through_external_export(tmp_path: Path) -> N
     generated = read_json(generated_path)
     assert generated["metadata"]["native_output_type"] == O2_SCENE_PROGRAM
     assert adapter.last_materialization_metadata["requires_execution"] is True
+    assert adapter.last_materialization_metadata["output_ingestion_kind"] == OUTPUT_LOADER
     assert adapter.last_materialization_metadata["executed_output_path"] == exported_path.as_posix()
 
 
@@ -190,6 +303,7 @@ def test_generation_dispatcher_accepts_native_o2_method_output(tmp_path: Path) -
 
     assert result["status"]["status"] == "generated_scene_available"
     metadata = read_json(result["adapter_metadata"])
+    assert metadata["output_ingestion_kind"] == OUTPUT_LOADER
     assert metadata["io_contract"]["native_output_type"] == O2_SCENE_PROGRAM
     assert metadata["materialization"]["canonical_output_path"] == result["generated_scene"]
 

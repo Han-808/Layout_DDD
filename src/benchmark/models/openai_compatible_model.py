@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import math
 import os
 import re
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -20,6 +22,8 @@ from benchmark.models.prompt_budget import (
 MAX_HTTP_ERROR_BODY_BYTES = 8_192
 MAX_HTTP_ERROR_DETAIL_CHARS = 2_000
 _ENVIRONMENT_VARIABLE_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_REQUEST_THROTTLE_LOCK = threading.Lock()
+_REQUEST_THROTTLE_NEXT_AT: dict[str, float] = {}
 
 
 class OpenAICompatibleModelError(RuntimeError):
@@ -32,6 +36,10 @@ class EndpointConnectionError(OpenAICompatibleModelError):
 
 class EndpointHTTPError(OpenAICompatibleModelError):
     """Raised when the endpoint returns a non-success HTTP status."""
+
+
+class EndpointConfigurationError(EndpointHTTPError):
+    """Raised for a non-retryable upstream model-route configuration error."""
 
 
 class EndpointMalformedResponseError(OpenAICompatibleModelError):
@@ -63,6 +71,7 @@ class OpenAICompatibleModel:
     response_format_json: bool = False
     max_retries: int = 0
     retry_backoff_seconds: float = 1.0
+    min_request_interval_seconds: float = 0.0
     retry_on_status: list[int] | None = None
     max_tokens_field: str = "max_tokens"
     send_temperature: bool = True
@@ -84,6 +93,7 @@ class OpenAICompatibleModel:
         response_format_json: bool = False,
         max_retries: int = 0,
         retry_backoff_seconds: float = 1.0,
+        min_request_interval_seconds: float = 0.0,
         retry_on_status: list[int] | None = None,
         max_tokens_field: str = "max_tokens",
         send_temperature: bool = True,
@@ -108,6 +118,12 @@ class OpenAICompatibleModel:
         self.response_format_json = response_format_json
         self.max_retries = max_retries
         self.retry_backoff_seconds = retry_backoff_seconds
+        resolved_min_interval = float(min_request_interval_seconds)
+        if not math.isfinite(resolved_min_interval) or resolved_min_interval < 0.0:
+            raise ValueError(
+                "min_request_interval_seconds must be finite and non-negative"
+            )
+        self.min_request_interval_seconds = resolved_min_interval
         self.retry_on_status = retry_on_status or [429, 500, 502, 503, 504]
         if max_tokens_field not in {"max_tokens", "max_completion_tokens"}:
             raise ValueError(
@@ -180,6 +196,9 @@ class OpenAICompatibleModel:
         )
         self.last_request_metadata["max_tokens_field"] = self.max_tokens_field
         self.last_request_metadata["send_temperature"] = self.send_temperature
+        self.last_request_metadata["min_request_interval_seconds"] = (
+            self.min_request_interval_seconds
+        )
         self.last_request_metadata["prompt_budget_report"] = budget_report
         self.last_request_metadata["prompt_budget_warning"] = budget_report.get("warning")
         self.last_request_metadata["prompt_budget_exceeded"] = budget_report.get("fits_context") is False
@@ -276,6 +295,10 @@ class OpenAICompatibleModel:
         for attempt in range(attempts):
             if attempt > 0:
                 time.sleep(max(0.0, float(self.retry_backoff_seconds)) * attempt)
+            _wait_for_request_slot(
+                key=f"{self.endpoint}|{self.model_id}",
+                min_interval_seconds=self.min_request_interval_seconds,
+            )
             try:
                 with _urlopen_no_redirect(request, self.timeout_seconds) as response:
                     return response.read().decode("utf-8")
@@ -288,7 +311,17 @@ class OpenAICompatibleModel:
                     secret=self._resolved_api_key(),
                     body_truncated=len(raw_detail.encode("utf-8")) > MAX_HTTP_ERROR_BODY_BYTES,
                 )
-                last_error = EndpointHTTPError(f"Model endpoint returned HTTP {exc.code}: {detail}")
+                error_class = (
+                    EndpointConfigurationError
+                    if _is_upstream_route_configuration_error(
+                        status_code=exc.code,
+                        detail=detail,
+                    )
+                    else EndpointHTTPError
+                )
+                last_error = error_class(
+                    f"Model endpoint returned HTTP {exc.code}: {detail}"
+                )
                 if exc.code not in self.retry_on_status or attempt == attempts - 1:
                     raise last_error from exc
             except urllib.error.URLError as exc:
@@ -316,6 +349,18 @@ class OpenAICompatibleModel:
             return None
         token = token.strip()
         return token or None
+
+
+def _wait_for_request_slot(*, key: str, min_interval_seconds: float) -> None:
+    interval = float(min_interval_seconds)
+    if interval <= 0.0:
+        return
+    with _REQUEST_THROTTLE_LOCK:
+        now = time.monotonic()
+        wait_seconds = max(0.0, _REQUEST_THROTTLE_NEXT_AT.get(key, 0.0) - now)
+        if wait_seconds > 0.0:
+            time.sleep(wait_seconds)
+        _REQUEST_THROTTLE_NEXT_AT[key] = time.monotonic() + interval
 
 
 def _is_official_openai_endpoint(endpoint: str) -> bool:
@@ -352,6 +397,35 @@ def _validate_api_key_env_name(value: Any) -> None:
             "api_key_env must be an environment-variable name such as OPENAI_API_KEY; "
             "literal API-key values are not accepted"
         )
+
+
+def _is_upstream_route_configuration_error(
+    *,
+    status_code: int,
+    detail: str,
+) -> bool:
+    """Recognize permanent provider-route failures that retries cannot repair.
+
+    Bedrock rejects some foundation-model IDs for on-demand invocation and
+    requires an inference-profile ID or ARN instead.  Retrying the same model
+    alias only consumes calls; the proxy/service configuration must change.
+    """
+
+    normalized = (
+        str(detail)
+        .casefold()
+        .replace("\\u2019", "'")
+        .replace("’", "'")
+    )
+    if int(status_code) != 400:
+        return False
+    return (
+        "on-demand throughput" in normalized
+        and (
+            "isn't supported" in normalized or "is not supported" in normalized
+        )
+        and "inference profile" in normalized
+    )
 
 
 def _is_loopback_hostname(hostname: str) -> bool:

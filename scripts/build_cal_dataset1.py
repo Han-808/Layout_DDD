@@ -577,7 +577,7 @@ def main() -> None:
                 "reviewed_at": HUMAN_REVIEWED_AT,
             },
             "experiment_entrypoint": {
-                "path": "scripts/run_cal_dataset1_experiment.py",
+                "path": "Support/legacy/scripts/run_cal_dataset1_experiment.py",
                 "default_track": "deterministic",
                 "tracks": ["deterministic", "spatial", "fine_fidelity"],
                 "frozen_scene_input": True,
@@ -1576,7 +1576,7 @@ The requested `Scenes/ConcertedScenes` path is absent. Source fixtures therefore
 .venv/bin/python scripts/build_cal_dataset1.py --ontology cal_dataset1/ontology/SceneOnto.json
 .venv/bin/python scripts/run_cal_dataset1.py
 .venv/bin/python cal_dataset1/validate_dataset.py
-.venv/bin/python scripts/run_cal_dataset1_experiment.py --track all --plan-only
+.venv/bin/python Support/legacy/scripts/run_cal_dataset1_experiment.py --track all --plan-only
 ```
 
 ## Model-backed experiment
@@ -1588,11 +1588,11 @@ separate opt-in tracks.
 
 ```bash
 # Shared deterministic calibration only (Scale and Co-occurrence excluded)
-.venv/bin/python scripts/run_cal_dataset1_experiment.py \
+.venv/bin/python Support/legacy/scripts/run_cal_dataset1_experiment.py \
   --judge-config configs/models/qwen3vl_mnet_judge.json
 
 # All explicit tracks: 31 deterministic + 4 isolated spatial + 5 Fine fidelity
-.venv/bin/python scripts/run_cal_dataset1_experiment.py \
+.venv/bin/python Support/legacy/scripts/run_cal_dataset1_experiment.py \
   --track all \
   --judge-config configs/models/qwen3vl_mnet_judge.json
 ```

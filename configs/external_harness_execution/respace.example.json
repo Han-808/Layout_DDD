@@ -1,0 +1,20 @@
+{
+  "asset_resolution_policy": "exact_only",
+  "execution": {
+    "repo_path": "/ABSOLUTE/PATH/TO/respace",
+    "python_executable": "/ABSOLUTE/PATH/TO/respace/python",
+    "command": [
+      "{python_executable}",
+      "{repo_path}/integration_entrypoint.py",
+      "--request",
+      "{native_input}",
+      "--output",
+      "{upstream_output_dir}/scene.json"
+    ],
+    "native_artifact": "{upstream_output_dir}/scene.json",
+    "timeout_seconds": 3600,
+    "environment": {
+      "PTH_3DFUTURE_ASSETS": "/ABSOLUTE/PATH/TO/3D-FUTURE"
+    }
+  }
+}

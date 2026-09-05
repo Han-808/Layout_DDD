@@ -36,6 +36,7 @@ _OBSERVATION_METRIC = {
     "depth_baseline_available": "depth_relation",
     "group_context_visible": "functional_semantic_fidelity",
     "interaction_side_visible": "functional_semantic_fidelity",
+    "approach_zone_visible": "functional_consistency",
     "limited_local_context": "object_pairing_consistency",
     "global_context_preserved": "style_consistency",
     "occluder_avoided": "collision",
@@ -156,6 +157,59 @@ def test_functional_consistency_maps_to_local_usability_observations() -> None:
         "interaction_side_visible",
     )
     assert result.metric == "functional_consistency"
+
+
+def test_functional_consistency_accepts_architecture_boundary_observation() -> None:
+    result = MetricSpecificAcquisitionPlanner().plan(
+        MetricAcquisitionPlanningRequest(
+            metric="functional_consistency",
+            evidence_request=EvidenceRequest(
+                target_ids=("toilet",),
+                missing_observations=(
+                    "interaction_side_visible",
+                    "approach_zone_visible",
+                    "architecture_plane_visible",
+                    "global_context_preserved",
+                ),
+                view_goal=(
+                    "show the usable side, nearest logical boundary, and "
+                    "interior approach region"
+                ),
+            ),
+            known_target_ids=("toilet",),
+        )
+    )
+
+    assert result.required_observations == (
+        "interaction_side_visible",
+        "approach_zone_visible",
+        "architecture_plane_visible",
+        "global_context_preserved",
+    )
+
+
+def test_semantic_placement_maps_to_context_not_physical_support() -> None:
+    result = MetricSpecificAcquisitionPlanner().plan(
+        MetricAcquisitionPlanningRequest(
+            metric="semantic_placement_consistency",
+            evidence_request=EvidenceRequest(
+                target_ids=("phone", "side_table"),
+                missing_observations=(
+                    "target_visible",
+                    "group_context_visible",
+                ),
+                view_goal="show whether the phone location makes sense",
+            ),
+            known_target_ids=("phone", "side_table"),
+        )
+    )
+
+    assert result.metric == "semantic_placement_consistency"
+    assert result.required_observations == (
+        "target_visible",
+        "group_context_visible",
+    )
+    assert "support_chain_visible" not in result.required_observations
 
 
 def test_metric_acquisition_planner_rejects_unknown_target() -> None:

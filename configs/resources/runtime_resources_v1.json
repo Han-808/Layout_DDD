@@ -1,0 +1,114 @@
+{
+  "schema_version": "runtime_resources_v1",
+  "camera_evidence_implementation_sha256": "457ff95848300defe71e613c24e772aa2f541ee258b66471d894a566499f0929",
+  "resources": [
+    {
+      "resource": "schemas/generator_catalog_placement_v1.schema.json",
+      "source_path": "schemas/generator_catalog_placement_v1.schema.json",
+      "package_path": "src/benchmark/_resources/schemas/generator_catalog_placement_v1.schema.json",
+      "sha256": "b17c67114db8a18c7be3978e492e7b91ec993c2cbc9e4190189e64c02194ad5b"
+    },
+    {
+      "resource": "schemas/generator_layout_v1.schema.json",
+      "source_path": "schemas/generator_layout_v1.schema.json",
+      "package_path": "src/benchmark/_resources/schemas/generator_layout_v1.schema.json",
+      "sha256": "a4bf0f16c24365c13f519d9cf07fafdfb8cbcd48169d594771b5efe312200051"
+    },
+    {
+      "resource": "configs/evaluation/metric_profile_canonical_v2.yaml",
+      "source_path": "configs/evaluation/metric_profile_canonical_v2.yaml",
+      "package_path": "src/benchmark/_resources/configs/evaluation/metric_profile_canonical_v2.yaml",
+      "sha256": "61ab645e2e5989dc61fff8e4193c67af135661991542f2eb56a2bd90e0ed7f9d"
+    },
+    {
+      "resource": "configs/evaluation/scene_generation_leaderboard_scoring_v1.json",
+      "source_path": "configs/evaluation/scene_generation_leaderboard_scoring_v1.json",
+      "package_path": "src/benchmark/_resources/configs/evaluation/scene_generation_leaderboard_scoring_v1.json",
+      "sha256": "aebc56f0044cb0d0c7da0b64462b2d9f2cb4f7b00191e45d81b6d1ef26c55e2e"
+    },
+    {
+      "resource": "configs/grouping/vlm_visual_evidence_scope_v2.yaml",
+      "source_path": "configs/grouping/vlm_visual_evidence_scope_v2.yaml",
+      "package_path": "src/benchmark/_resources/configs/grouping/vlm_visual_evidence_scope_v2.yaml",
+      "sha256": "701d9b8fe1f46679472a9e732d8eb1874ab39317862d67ff9cb9d442f195d970"
+    },
+    {
+      "resource": "configs/game/game_mode_canonical_v1.yaml",
+      "source_path": "configs/game/game_mode_canonical_v1.yaml",
+      "package_path": "src/benchmark/_resources/configs/game/game_mode_canonical_v1.yaml",
+      "sha256": "01f5ef33735d6b33221661c38335d0ac1a438293f5c9aea31c9537f223d6d781"
+    },
+    {
+      "resource": "configs/evaluation/metric_profile_game_canonical_v1.yaml",
+      "source_path": "configs/evaluation/metric_profile_game_canonical_v1.yaml",
+      "package_path": "src/benchmark/_resources/configs/evaluation/metric_profile_game_canonical_v1.yaml",
+      "sha256": "947aeb34e6a61cc450c22be11c360eb1edbbcb1113fde6c931bd79800aa1296f"
+    },
+    {
+      "resource": "configs/game/counter_strike_static_arena_style_v1.json",
+      "source_path": "configs/game/counter_strike_static_arena_style_v1.json",
+      "package_path": "src/benchmark/_resources/configs/game/counter_strike_static_arena_style_v1.json",
+      "sha256": "2f30b622f7668b7431708bca840d6f80fdf62e4636ae10661f19fe839965b78c"
+    },
+    {
+      "resource": "configs/game/counter_strike/benchmark_v1.yaml",
+      "source_path": "configs/game/counter_strike/benchmark_v1.yaml",
+      "package_path": "src/benchmark/_resources/configs/game/counter_strike/benchmark_v1.yaml",
+      "sha256": "f5bcbe7a1cd8094065f5050107b9f714dd0b286760aa1d0927f8ace72c052418"
+    },
+    {
+      "resource": "configs/retrieval/profiles_v2.json",
+      "source_path": "configs/retrieval/profiles_v2.json",
+      "package_path": "src/benchmark/_resources/configs/retrieval/profiles_v2.json",
+      "sha256": "2f7f8e73aa65bbe30cafe74246512d732c47bc74b4823d6acb3136c4f99ded49"
+    },
+    {
+      "resource": "configs/retrieval/golden/imaginarium_qwen3_0_6b_v2.json",
+      "source_path": "configs/retrieval/golden/imaginarium_qwen3_0_6b_v2.json",
+      "package_path": "src/benchmark/_resources/configs/retrieval/golden/imaginarium_qwen3_0_6b_v2.json",
+      "sha256": "a9f5bda10f3f60525b708d0364421611d7ee873c065926bde2c08ef844dc900d"
+    },
+    {
+      "resource": "schemas/multi_room/assembly_manifest_v1.schema.json",
+      "source_path": "schemas/multi_room/assembly_manifest_v1.schema.json",
+      "package_path": "src/benchmark/_resources/schemas/multi_room/assembly_manifest_v1.schema.json",
+      "sha256": "622360d10472bb37b4a5cdc6c89595f193d4c5f29800141ee10bf26340b92d5c"
+    },
+    {
+      "resource": "schemas/multi_room/compiled_architecture_v1.schema.json",
+      "source_path": "schemas/multi_room/compiled_architecture_v1.schema.json",
+      "package_path": "src/benchmark/_resources/schemas/multi_room/compiled_architecture_v1.schema.json",
+      "sha256": "a4a17a7ec22651f15bd18078874bd2e86d2196808132aceda702bf87cf067b2c"
+    },
+    {
+      "resource": "schemas/multi_room/floor_plan_v1.schema.json",
+      "source_path": "schemas/multi_room/floor_plan_v1.schema.json",
+      "package_path": "src/benchmark/_resources/schemas/multi_room/floor_plan_v1.schema.json",
+      "sha256": "3b521f056834c66872b506f7f69cd7a20187bb6c3d56c1e799b9556f43eb77b1"
+    },
+    {
+      "resource": "schemas/multi_room/object_plan_v1.schema.json",
+      "source_path": "schemas/multi_room/object_plan_v1.schema.json",
+      "package_path": "src/benchmark/_resources/schemas/multi_room/object_plan_v1.schema.json",
+      "sha256": "4070f1dbf141c602029a17c3a0fffde29edab74e187604d8dd1ca466a8afe696"
+    },
+    {
+      "resource": "schemas/multi_room/room_evaluation_index_v1.schema.json",
+      "source_path": "schemas/multi_room/room_evaluation_index_v1.schema.json",
+      "package_path": "src/benchmark/_resources/schemas/multi_room/room_evaluation_index_v1.schema.json",
+      "sha256": "ad31217154f76f58d1492c9eda1d805e7547a7200190544d928580fdea5427f5"
+    },
+    {
+      "resource": "schemas/multi_room/room_evaluation_object_plan_v1.schema.json",
+      "source_path": "schemas/multi_room/room_evaluation_object_plan_v1.schema.json",
+      "package_path": "src/benchmark/_resources/schemas/multi_room/room_evaluation_object_plan_v1.schema.json",
+      "sha256": "494f53f1ab718ff0719409cc1e3f9e166d872342d3c2d35fba5fab6fccf7f446"
+    },
+    {
+      "resource": "schemas/multi_room/scene_v1.schema.json",
+      "source_path": "schemas/multi_room/scene_v1.schema.json",
+      "package_path": "src/benchmark/_resources/schemas/multi_room/scene_v1.schema.json",
+      "sha256": "9e2072076735b293985e91bd767b8f17f02f6b34fb7f8e17ab2b3609f8b31f00"
+    }
+  ]
+}

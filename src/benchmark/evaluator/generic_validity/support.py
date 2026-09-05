@@ -18,6 +18,10 @@ from typing import Any
 
 import numpy as np
 
+from benchmark.architecture_policy import (
+    active_wall_ids_from_contract,
+    architecture_contract_from_scene,
+)
 from benchmark.evaluator.generic_validity.geometry import (
     get_obb_corners,
     get_room_boundary,
@@ -27,6 +31,9 @@ from benchmark.evaluator.generic_validity.geometry import (
     ray_intersects_obb,
     sample_bottom_face_points,
 )
+from benchmark.evaluator.context_projection import (
+    project_scene_for_evaluator_context,
+)
 from benchmark.evaluator.generic_validity.mesh_geometry import (
     geometry_entry_for_object,
     geometry_unavailable_reason,
@@ -34,13 +41,17 @@ from benchmark.evaluator.generic_validity.mesh_geometry import (
     load_triangle_mesh,
 )
 from benchmark.visual_judge.p0b import LocalViewProvider, adjudicate_p0b_event
+from benchmark.visual_judge.contracts import (
+    response_schema_audit_from_exception,
+)
 from benchmark.visual_judge.runtime import EvidenceControlUnresolvedError
 
 
-SUPPORT_EVALUATOR_VERSION = "support_p0b_v7"
+SUPPORT_EVALUATOR_VERSION = "support_p0b_v11"
 GRAVITY = [0.0, 0.0, -1.0]
 SUPPORT_CANDIDATE_SELECTION_POLICY = "high_recall_candidate_no_label_prior"
-GROUNDED_SUPPORT_POLICY = "fixed_point_tolerance_contact_path_to_floor_v2"
+GROUNDED_SUPPORT_POLICY = "fixed_point_contact_path_to_floor_v4"
+ZERO_VISUAL_SUPPORT_POLICY = "nearest_logical_wall_distance_binary_v3"
 
 # Scale-aware contact thresholds (meters). Small positive clearances within the
 # hard band are treated as ordinary geometry/render fitting tolerance, matching
@@ -76,6 +87,7 @@ DEFAULT_SUPPORT_CONFIG = {
     "max_representative_samples": 8,
     "mesh_bounds_tolerance_m": 0.03,
     "mesh_center_tolerance_m": 0.05,
+    "logical_wall_attachment_tolerance_m": 0.06,
 }
 
 SUPPORT_VLM_INSTRUCTION = (
@@ -94,7 +106,9 @@ SUPPORT_VLM_INSTRUCTION = (
     "grounded ancestry is unproven is not by itself proof of valid support; inspect the entire "
     "visible support chain. Use the prompt, relationships, "
     "architecture clearances, object semantics, and renders to decide. Treat exact detector "
-    "distances as evidence and return exactly one binary verdict."
+    "distances as evidence and return exactly one binary verdict. Category or description "
+    "never proves wall attachment; decide attachment from the complete visual and geometric "
+    "evidence. Mere wall proximity is not an invalidity trigger."
 )
 
 SUPPORT_NOTES = [
@@ -107,10 +121,11 @@ SUPPORT_NOTES = [
     "Contact samples come only from the lowest base-contact band, not the full footprint or body envelope.",
     "Any reliable floor contact, or object contact with certified grounded ancestry, establishes non-floating support; contact fraction and the center ray are diagnostic only.",
     "Object contact bypasses VLM only when a fixed-point tolerance-contact graph proves a path to the floor.",
+    "Wall or ceiling attachment is never category-whitelisted or deterministically auto-valid; it is decided by the VLM only after an independent missing-support concern routes the object.",
     "Floating stacks, ungrounded contact components, and contact cycles route to VLM; they are never direct-invalid.",
     "Sparse leg/frame contacts and support split across multiple targets are valid Support evidence; stability is evaluated elsewhere.",
-    "Missing contact, attachment/suspension, or degraded geometry requires a binary VLM verdict; "
-    "Support has no deterministic direct-invalid route.",
+    "Missing contact, attachment/suspension, or degraded geometry normally requires a binary VLM verdict.",
+    "If the local visual-evidence provider returns zero views, Support uses the final distance-only binary fallback: nearest logical-wall distance below logical_wall_attachment_tolerance_m is valid; otherwise invalid.",
     "Mesh evidence must be consistent with the canonical object frame or it is rejected and explicitly routed as degraded evidence.",
     "No static stability, center-of-mass, affordance, or physics simulation is used.",
 ]
@@ -183,6 +198,41 @@ class SupportEvaluationError(RuntimeError):
     """Raised when official support evaluation cannot complete required adjudication."""
 
 
+class _SupportZeroVisualEvidence(RuntimeError):
+    """Signal the metric-local zero-view condition to the final fallback."""
+
+
+class _SupportLocalEvidenceGuard:
+    """Preserve provider attributes while turning a zero-view result into a signal."""
+
+    def __init__(self, provider: LocalViewProvider) -> None:
+        self._provider = provider
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._provider, name)
+
+    def __call__(self, request: dict[str, Any]) -> list[Any]:
+        try:
+            items = list(self._provider(request))
+        except Exception as exc:
+            usage = getattr(self._provider, "last_call_usage", None)
+            generated = (
+                usage.get("candidate_count_generated")
+                if isinstance(usage, dict)
+                else None
+            )
+            if generated == 0:
+                raise _SupportZeroVisualEvidence(
+                    "support local visual evidence count is zero"
+                ) from exc
+            raise
+        if not items:
+            raise _SupportZeroVisualEvidence(
+                "support local visual evidence count is zero"
+            )
+        return items
+
+
 def check_support(
     scene: dict,
     config: dict | None = None,
@@ -198,6 +248,16 @@ def check_support(
     _validate_support_config(cfg)
     if not bool(cfg.get("enabled", True)):
         return disabled_support_report()
+
+    scene = project_scene_for_evaluator_context(scene)
+    from benchmark.non_rectangular.geometry import polygon_geometry_from_scene
+
+    polygon_room_geometry = polygon_geometry_from_scene(scene)
+    floor_z_m = (
+        float(polygon_room_geometry.floor_z_m)
+        if polygon_room_geometry is not None
+        else 0.0
+    )
 
     objects, object_errors = normalize_objects(scene)
     num_objects = len(objects)
@@ -246,6 +306,7 @@ def check_support(
         base_band_tol=base_band_tol,
         minimum_contact_count=minimum_contact_count,
         grid=grid,
+        floor_z_m=floor_z_m,
     )
 
     records: list[dict[str, Any]] = []
@@ -273,6 +334,7 @@ def check_support(
             render_evidence=render_evidence,
             vlm_judge=vlm_judge,
             local_view_provider=local_view_provider,
+            floor_z_m=floor_z_m,
         )
         records.append(record)
         if record.get("requires_vlm"):
@@ -319,6 +381,33 @@ def check_support(
         "gravity": list(GRAVITY),
         "candidate_selection_policy": SUPPORT_CANDIDATE_SELECTION_POLICY,
         "grounded_support_policy": GROUNDED_SUPPORT_POLICY,
+        **(
+            {"architecture_scope": "floor_wall_object_support_no_ceiling"}
+            if polygon_room_geometry is not None
+            else {}
+        ),
+        "logical_architecture_attachment_policy": {
+            "policy": "vlm_only_no_category_allowlist",
+            "wall_tolerance_m": float(
+                cfg["logical_wall_attachment_tolerance_m"]
+            ),
+            "category_or_description_auto_valid": False,
+            "decision_authority": "vlm_after_missing_support_route",
+            **(
+                {"ceiling_attachment_enabled": False}
+                if polygon_room_geometry is not None
+                else {}
+            ),
+        },
+        "zero_visual_support_policy": {
+            "policy": ZERO_VISUAL_SUPPORT_POLICY,
+            "wall_tolerance_m": float(
+                cfg["logical_wall_attachment_tolerance_m"]
+            ),
+            "comparison": "distance_m < wall_tolerance_m",
+            "category_or_description_gate": False,
+            "decision_authority": "deterministic_terminal_fallback",
+        },
         "certified_grounded_object_ids": list(grounding_analysis["certified_grounded_object_ids"]),
         "unresolved_grounding_object_ids": list(grounding_analysis["unresolved_grounding_object_ids"]),
         "support_contact_graph_edges": deepcopy(grounding_analysis["contact_graph_edges"]),
@@ -368,7 +457,18 @@ def check_support(
             "mixed_evidence_objects": sum(1 for record in records if record.get("evidence_level") == "mixed"),
             "obb_evidence_objects": sum(1 for record in records if record.get("evidence_level") == "obb"),
         },
-        "notes": list(SUPPORT_NOTES),
+        "notes": (
+            [
+                note
+                for note in SUPPORT_NOTES
+                if "ceiling" not in note.lower()
+            ]
+            + [
+                "Non-rectangular mode evaluates floor, wall-segment, and object support only; ceiling attachment is excluded."
+            ]
+            if polygon_room_geometry is not None
+            else list(SUPPORT_NOTES)
+        ),
     }
 
 
@@ -382,6 +482,7 @@ def _analyze_grounded_contact_graph(
     base_band_tol: float,
     minimum_contact_count: int,
     grid: tuple[int, int],
+    floor_z_m: float,
 ) -> dict[str, Any]:
     """Certify tolerance-contact paths to the floor with an order-independent pass.
 
@@ -389,8 +490,8 @@ def _analyze_grounded_contact_graph(
     the contacted object may itself float, or several penetrating objects may
     form an ungrounded cycle. This fixed-point graph seeds reliable floor
     contacts within the scale-aware hard tolerance, then propagates through
-    equally bounded object contacts. Wall and ceiling attachment never seed the graph because their
-    semantic validity remains VLM-owned.
+    equally bounded object contacts. Architecture attachment is deliberately
+    excluded from this deterministic graph and remains VLM-owned.
     """
 
     snapshots: dict[str, dict[str, Any]] = {}
@@ -411,6 +512,7 @@ def _analyze_grounded_contact_graph(
                 candidate_tol,
                 direct_contact_tolerance,
                 obj.id,
+                floor_z_m=floor_z_m,
             )
             for point in sample_points
         ]
@@ -562,6 +664,7 @@ def _evaluate_object(
     render_evidence: list[str] | None,
     vlm_judge: object | None,
     local_view_provider: LocalViewProvider | None,
+    floor_z_m: float,
 ) -> dict[str, Any]:
     source_cache = mesh_cache.get(obj.id) or {}
     grounding = deepcopy((grounding_analysis.get("objects") or {}).get(obj.id) or {})
@@ -588,6 +691,7 @@ def _evaluate_object(
             candidate_tol,
             direct_contact_tolerance,
             obj.id,
+            floor_z_m=floor_z_m,
         )
         for point in sample_points
     ]
@@ -618,6 +722,7 @@ def _evaluate_object(
             candidate_tol,
             direct_contact_tolerance,
             obj.id,
+            floor_z_m=floor_z_m,
         )
     center_source_available = source_center_point is not None
     center_ray_supported = bool(center_hit["contact"])
@@ -663,16 +768,57 @@ def _evaluate_object(
     )
     evidence_level = _evidence_level(hits, source_representation=source_representation)
     geometry_provenance = _geometry_provenance(scene, obj.id, mesh_cache.get(obj.id))
-    architecture_plane_clearances = _architecture_plane_clearances(
-        scene,
-        obj,
-        boundary,
-        has_boundary,
+    from benchmark.non_rectangular.support_geometry import (
+        polygon_support_architecture_evidence,
     )
-    architecture_contact_candidates = _architecture_contact_candidates(
-        architecture_plane_clearances,
+
+    raw_object = next(
+        (
+            item
+            for item in scene.get("objects", [])
+            if isinstance(item, dict) and str(item.get("id")) == obj.id
+        ),
+        {},
+    )
+    polygon_architecture = polygon_support_architecture_evidence(
+        scene,
+        raw_object=raw_object,
         tolerance_m=candidate_tol,
     )
+    if polygon_architecture is not None:
+        architecture_plane_clearances = polygon_architecture[
+            "architecture_plane_clearances_m"
+        ]
+        active_physical_wall_ids = list(
+            polygon_architecture["active_physical_wall_ids"]
+        )
+        architecture_contact_candidates = list(
+            polygon_architecture["architecture_contact_candidates"]
+        )
+        nearest_logical_wall_measurement = polygon_architecture[
+            "nearest_logical_wall_measurement"
+        ]
+    else:
+        architecture_plane_clearances = _architecture_plane_clearances(
+            scene,
+            obj,
+            boundary,
+            has_boundary,
+        )
+        active_physical_wall_ids = list(
+            active_wall_ids_from_contract(
+                architecture_contract_from_scene(scene)
+            )
+        )
+        architecture_contact_candidates = _architecture_contact_candidates(
+            architecture_plane_clearances,
+            tolerance_m=candidate_tol,
+        )
+        nearest_logical_wall_measurement = _nearest_logical_wall_measurement(
+            obj,
+            boundary=boundary,
+            has_boundary=has_boundary,
+        )
     lower_envelope_zs = [float(point[2]) for point in lower_envelope_points]
     geometry_degraded_reasons = _geometry_degraded_reasons(
         source_id=obj.id,
@@ -713,7 +859,7 @@ def _evaluate_object(
         "contact_tolerance_m": direct_contact_tolerance,
         "direct_contact_tolerance_m": direct_contact_tolerance,
         # Retained as a report compatibility alias; this is a tolerance band,
-        # not a frozen numerical epsilon in support_p0b_v7.
+        # not a frozen numerical epsilon in support_p0b_v11.
         "direct_contact_epsilon_m": direct_contact_tolerance,
         "support_candidate_tolerance_m": candidate_tol,
         "hard_contact_tolerance_m": hard_contact_tolerance,
@@ -764,6 +910,10 @@ def _evaluate_object(
         "geometry_provenance": geometry_provenance,
         "architecture_plane_clearances_m": architecture_plane_clearances,
         "architecture_contact_candidates": architecture_contact_candidates,
+        "nearest_logical_wall_measurement": (
+            deepcopy(nearest_logical_wall_measurement)
+        ),
+        "active_physical_wall_ids": active_physical_wall_ids,
         "representative_samples": _representative_samples(hits, center_hit, max_rep),
         "routing_reasons": routing_reasons,
         "requires_vlm": False,
@@ -774,16 +924,18 @@ def _evaluate_object(
         "adjudication_error": None,
     }
 
-    direct_valid = (
+    direct_contact_valid = (
         contact_hit_count >= minimum_contact_count
         and not geometry_degraded_reasons
         and bool(grounding.get("certified_grounded_support"))
     )
-    if direct_valid:
+    if direct_contact_valid:
         record.update(
             {
                 "route": "direct_valid_contact",
-                "direct_valid_reason": "reliable_contact_with_certified_ground_path",
+                "direct_valid_reason": (
+                    "reliable_contact_with_certified_ground_path"
+                ),
                 "final_verdict": "valid",
                 "affects_support_score": True,
             }
@@ -799,11 +951,19 @@ def _evaluate_object(
     event = {
         "object_id": obj.id,
         "object_ids": [obj.id, *candidate_support_ids],
-        "architecture_element": "floor_walls_ceiling_and_supports",
+        "architecture_element": (
+            "floor_walls_and_supports"
+            if polygon_architecture is not None
+            else "floor_walls_ceiling_and_supports"
+        ),
+        "active_physical_wall_ids": active_physical_wall_ids,
         "candidate_selection_policy": SUPPORT_CANDIDATE_SELECTION_POLICY,
         "gap_band": gap_band,
         "measured_support_modes": measured_support_modes,
         "architecture_contact_candidates": architecture_contact_candidates,
+        "nearest_logical_wall_measurement": deepcopy(
+            nearest_logical_wall_measurement
+        ),
     }
     detector_evidence = _detector_evidence(
         obj=obj,
@@ -817,6 +977,18 @@ def _evaluate_object(
         objects=objects,
         mesh_cache=mesh_cache,
     )
+    guarded_local_view_provider = (
+        _SupportLocalEvidenceGuard(local_view_provider)
+        if local_view_provider is not None
+        and polygon_architecture is None
+        else None
+    )
+    if polygon_architecture is not None:
+        # The explicit non-rectangular evaluator owns a geometry-first
+        # zero-local fallback. Do not let the rectangular distance-only guard
+        # intercept before P0b can force a binary Judge from exact polygon,
+        # grounded-path, gap, and object evidence.
+        guarded_local_view_provider = local_view_provider
     try:
         judge_result = adjudicate_p0b_event(
             metric="support",
@@ -828,8 +1000,55 @@ def _evaluate_object(
             judge=vlm_judge,
             object_ids=[obj.id, *candidate_support_ids],
             overview_render_evidence=list(render_evidence or []),
-            local_view_provider=local_view_provider,
+            local_view_provider=guarded_local_view_provider,
         )
+    except _SupportZeroVisualEvidence:
+        measurement = nearest_logical_wall_measurement
+        distance_m = (
+            float(measurement["distance_m"])
+            if measurement is not None
+            else None
+        )
+        threshold_m = float(
+            cfg["logical_wall_attachment_tolerance_m"]
+        )
+        verdict = (
+            "valid"
+            if distance_m is not None and distance_m < threshold_m
+            else "invalid"
+        )
+        record.update(
+            {
+                "requires_vlm": False,
+                "route": (
+                    f"direct_{verdict}_zero_visual_wall_distance"
+                ),
+                "final_verdict": verdict,
+                "affects_support_score": True,
+                "zero_visual_support_fallback": {
+                    "schema_version": (
+                        "support_zero_visual_wall_distance_v3"
+                    ),
+                    "policy": ZERO_VISUAL_SUPPORT_POLICY,
+                    "available": 0,
+                    "distance_m": distance_m,
+                    "threshold_m": threshold_m,
+                    "comparison": "distance_m < threshold_m",
+                    "nearest_plane": (
+                        measurement.get("plane")
+                        if measurement is not None
+                        else None
+                    ),
+                    "signed_clearance_m": (
+                        measurement.get("signed_clearance_m")
+                        if measurement is not None
+                        else None
+                    ),
+                    "verdict": verdict,
+                },
+            }
+        )
+        return record
     except EvidenceControlUnresolvedError as exc:
         record["route"] = "unresolved"
         record["evidence_control"] = exc.result.to_dict()
@@ -837,6 +1056,9 @@ def _evaluate_object(
     except Exception as exc:
         record["adjudication_error"] = f"{type(exc).__name__}: {exc}"
         record["route"] = "vlm_adjudication_failed"
+        schema_audit = response_schema_audit_from_exception(exc)
+        if schema_audit is not None:
+            record["adjudication_failure_audit"] = schema_audit
         if bool(cfg.get("official_mode")):
             raise SupportEvaluationError(record["adjudication_error"]) from exc
         return record
@@ -947,6 +1169,10 @@ def _detector_evidence(
         "representative_ray_hits": record["representative_samples"],
         "architecture_plane_clearances_m": record["architecture_plane_clearances_m"],
         "architecture_contact_candidates": record["architecture_contact_candidates"],
+        "nearest_logical_wall_measurement": record[
+            "nearest_logical_wall_measurement"
+        ],
+        "active_physical_wall_ids": record["active_physical_wall_ids"],
         "routing_reasons": record["routing_reasons"],
         "evidence_level": record["evidence_level"],
         "evaluated_object": {
@@ -1002,6 +1228,9 @@ def _architecture_plane_clearances(
     corners = np.asarray(get_obb_corners(obj), dtype=float)
     minimum = np.min(corners, axis=0)
     maximum = np.max(corners, axis=0)
+    active_wall_ids = set(
+        active_wall_ids_from_contract(architecture_contract_from_scene(scene))
+    )
     result: dict[str, float | None] = {
         "west": None,
         "east": None,
@@ -1013,15 +1242,48 @@ def _architecture_plane_clearances(
     if has_boundary:
         room_minimum = np.min(boundary[:, :2], axis=0)
         room_maximum = np.max(boundary[:, :2], axis=0)
-        result.update(
-            {
-                "west": float(minimum[0] - room_minimum[0]),
-                "east": float(room_maximum[0] - maximum[0]),
-                "south": float(minimum[1] - room_minimum[1]),
-                "north": float(room_maximum[1] - maximum[1]),
-            }
-        )
+        values = {
+            "west": float(minimum[0] - room_minimum[0]),
+            "east": float(room_maximum[0] - maximum[0]),
+            "south": float(minimum[1] - room_minimum[1]),
+            "north": float(room_maximum[1] - maximum[1]),
+        }
+        for direction, clearance in values.items():
+            if f"{direction}_wall" in active_wall_ids:
+                result[direction] = clearance
     return result
+
+
+def _nearest_logical_wall_measurement(
+    obj: Any,
+    *,
+    boundary: np.ndarray,
+    has_boundary: bool,
+) -> dict[str, Any] | None:
+    """Return the nearest absolute OBB-to-logical-wall clearance."""
+
+    if not has_boundary:
+        return None
+    corners = np.asarray(get_obb_corners(obj), dtype=float)
+    minimum = np.min(corners, axis=0)
+    maximum = np.max(corners, axis=0)
+    room_minimum = np.min(boundary[:, :2], axis=0)
+    room_maximum = np.max(boundary[:, :2], axis=0)
+    clearances = {
+        "west": float(minimum[0] - room_minimum[0]),
+        "east": float(room_maximum[0] - maximum[0]),
+        "south": float(minimum[1] - room_minimum[1]),
+        "north": float(room_maximum[1] - maximum[1]),
+    }
+    plane, signed_clearance = min(
+        clearances.items(),
+        key=lambda item: (abs(item[1]), item[0]),
+    )
+    return {
+        "plane": plane,
+        "signed_clearance_m": float(signed_clearance),
+        "distance_m": abs(float(signed_clearance)),
+    }
 
 
 def _architecture_contact_candidates(
@@ -1160,6 +1422,8 @@ def _nearest_support(
     candidate_tol: float,
     direct_contact_tolerance: float,
     source_id: str,
+    *,
+    floor_z_m: float = 0.0,
 ) -> dict[str, Any]:
     x, y, z_p = float(point[0]), float(point[1]), float(point[2])
     best_h: float | None = None
@@ -1207,8 +1471,17 @@ def _nearest_support(
             best_degraded_reason = str(cache.get("load_error")) if cache.get("degraded") else None
 
     inside_room = (not has_boundary) or point_in_polygon_2d([x, y], boundary)
-    if inside_room and 0.0 <= z_p + candidate_tol and (best_h is None or 0.0 > best_h):
-        best_h, best_target, best_rep, best_source = 0.0, "floor", "architecture", "floor_plane"
+    if (
+        inside_room
+        and floor_z_m <= z_p + candidate_tol
+        and (best_h is None or floor_z_m > best_h)
+    ):
+        best_h, best_target, best_rep, best_source = (
+            floor_z_m,
+            "floor",
+            "architecture",
+            "floor_plane",
+        )
         best_degraded_reason = None
 
     if best_h is not None:
@@ -1230,9 +1503,9 @@ def _nearest_support(
         return {
             "target": "floor",
             "target_representation": "architecture",
-            "height_m": 0.0,
+            "height_m": floor_z_m,
             "gap_m": z_p,
-            "position": [x, y, 0.0],
+            "position": [x, y, floor_z_m],
             "evidence_source": "floor_penetration",
             "target_geometry_degraded_reason": None,
             "contact": True,
@@ -1556,6 +1829,12 @@ def _validate_support_config(config: dict[str, Any]) -> None:
         raise ValueError("support.mesh_bounds_tolerance_m must be a finite non-negative number")
     if not math.isfinite(mesh_center_tolerance) or mesh_center_tolerance < 0.0:
         raise ValueError("support.mesh_center_tolerance_m must be a finite non-negative number")
+    for name in ("logical_wall_attachment_tolerance_m",):
+        value = float(config.get(name, DEFAULT_SUPPORT_CONFIG[name]))
+        if not math.isfinite(value) or value < 0.0:
+            raise ValueError(
+                f"support.{name} must be a finite non-negative number"
+            )
     legacy_threshold = config.get("contact_fraction_threshold")
     if legacy_threshold is not None:
         threshold = float(legacy_threshold)

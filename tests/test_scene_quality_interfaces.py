@@ -1,20 +1,30 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from pathlib import Path
 
+from jsonschema import Draft202012Validator
 import pytest
 from PIL import Image
 
 from benchmark.evaluator.scene_quality import (
     PERCEPTUAL_VISUAL_QUALITY_METRICS,
     SCENE_QUALITY_INTERFACE_METRICS,
+    SEMANTIC_PLACEMENT_METRICS,
     SEMANTIC_COHERENCE_METRICS,
     evaluate_scene_quality_interfaces,
     resolve_scene_quality_config,
     validate_authorized_deviations,
 )
 from benchmark.visual_judge import CameraEvidenceProvider
+from benchmark.visual_judge.contracts import ResponseSchemaRepairError
+from benchmark.visual_judge.l3_prompts import (
+    L3_METRIC_BOUNDARY_RULES,
+    L3_METRIC_PHASE_PROMPTS,
+    L3_METRIC_PROMPT_VERSION,
+    L3_METRIC_RUBRICS,
+)
 from benchmark.evaluator.scene_quality.authorized_deviations import (
     AuthorizedDeviationError,
     deviation_matches,
@@ -22,6 +32,21 @@ from benchmark.evaluator.scene_quality.authorized_deviations import (
 from benchmark.evaluator.scene_quality.interfaces import (
     SCENE_QUALITY_INTERFACE_NAMESPACE,
     SceneQualityInterfaceConfigError,
+    _apply_prompt_exemptions,
+    _resolved_functional_ownership_for_placement,
+)
+from benchmark.evaluator.scene_quality.global_group_first import (
+    _aggregate_global_and_group_results,
+    _apply_functional_acquisition_budget_status,
+    _evaluate_global_scope,
+    _functional_probe_budget,
+    _registered_placement_checks_from_controller_audit,
+    _relation_episode_defect_violations,
+    _score_grounding_coverage,
+    _validate_and_tag_residual_placement_result,
+)
+from benchmark.evaluator.scene_quality.functional_probe import (
+    acquire_functional_probe_evidence,
 )
 
 
@@ -66,13 +91,30 @@ def _grouping_report() -> dict:
 
 
 def _only(metric: str) -> dict:
-    return {
+    config = {
         "enabled": True,
         "metrics": {
             name: {"enabled": name == metric}
             for name in SCENE_QUALITY_INTERFACE_METRICS
         },
     }
+    # Most tests below isolate the final visual-Judge contract. Keep that
+    # legacy/direct route explicit; JSON-first routing has dedicated tests.
+    if metric in {
+        "scale_consistency",
+        "object_pairing_consistency",
+    }:
+        config["metrics"][metric]["evidence_plan"] = {
+            "evidence_strategy": "global_and_local",
+            "router_options": None,
+        }
+    return config
+
+
+def _json_first_only(metric: str) -> dict:
+    config = _only(metric)
+    config["metrics"][metric].pop("evidence_plan", None)
+    return config
 
 
 def _relevant(*metrics: str) -> dict:
@@ -91,14 +133,146 @@ def _images(tmp_path, *names: str) -> dict[str, str]:
     return paths
 
 
-def _valid() -> dict:
-    return {
+def _valid(request: dict | None = None) -> dict:
+    result = {
         "evidence_status": "sufficient",
         "verdict": "valid",
         "confidence": 0.9,
         "reason": "No significant in-scope defect.",
         "missing_evidence": [],
         "defects": [],
+    }
+    return _with_required_placement_checks(
+        request,
+        _with_required_functional_checks(request, result),
+    )
+
+
+def _with_required_placement_checks(
+    request: dict | None,
+    response: dict,
+) -> dict:
+    result = deepcopy(response)
+    checks = (
+        request.get("required_placement_checks")
+        if isinstance(request, dict)
+        and isinstance(request.get("required_placement_checks"), list)
+        else []
+    )
+    if not checks:
+        return result
+    result["placement_check_results"] = [
+        {
+            "check_id": str(check.get("check_id") or ""),
+            "subject_id": str(check.get("subject_id") or ""),
+            "context_ids": [
+                str(item) for item in check.get("context_ids") or []
+            ],
+            "observation_status": "observed",
+            "conclusion": "valid",
+            "reason": (
+                "The fixture explicitly acknowledges this required "
+                "placement check."
+            ),
+        }
+        for check in checks
+    ]
+    return result
+
+
+def _with_required_functional_checks(
+    request: dict | None,
+    response: dict,
+) -> dict:
+    result = deepcopy(response)
+    checks = (
+        request.get("required_functional_checks")
+        if isinstance(request, dict)
+        and isinstance(request.get("required_functional_checks"), list)
+        else []
+    )
+    if not checks:
+        return result
+    invalid_targets = [
+        {
+            str(item)
+            for item in defect.get("target_ids") or []
+            if str(item).strip()
+        }
+        for defect in result.get("defects") or []
+        if isinstance(defect, dict)
+    ]
+    rows = []
+    for index, check in enumerate(checks):
+        target_ids = [str(item) for item in check.get("target_ids") or []]
+        invalid = any(
+            defect_targets
+            and defect_targets <= set(target_ids)
+            for defect_targets in invalid_targets
+        )
+        if (
+            result.get("verdict") == "invalid"
+            and not invalid_targets
+            and index == 0
+        ):
+            invalid = True
+        unresolved = result.get("verdict") == "ambiguous"
+        rows.append(
+            {
+                "check_id": str(check.get("check_id") or ""),
+                "target_ids": target_ids,
+                "observation_status": (
+                    "missing" if unresolved else "observed"
+                ),
+                "conclusion": (
+                    "unresolved"
+                    if unresolved
+                    else "invalid"
+                    if invalid
+                    else "valid"
+                ),
+                "reason": (
+                    "The fixture explicitly acknowledges this required check."
+                ),
+            }
+        )
+    result["functional_check_results"] = rows
+    for defect in result.get("defects") or []:
+        if not isinstance(defect, dict):
+            continue
+        defect_targets = {
+            str(item)
+            for item in defect.get("target_ids") or []
+            if str(item).strip()
+        }
+        refs = [
+            row["check_id"]
+            for row in rows
+            if row["conclusion"] == "invalid"
+            and defect_targets
+            and defect_targets <= set(row["target_ids"])
+        ]
+        if refs:
+            defect["check_refs"] = refs
+    return result
+
+
+def _style_needs_local(target_id: str = "chair_01") -> dict:
+    return {
+        "evidence_status": "insufficient",
+        "verdict": "ambiguous",
+        "confidence": 0.5,
+        "reason": "The possible style outlier needs a closer local view.",
+        "missing_evidence": ["group_context_visible"],
+        "defects": [],
+        "evidence_request": {
+            "target_ids": [target_id],
+            "missing_observations": ["group_context_visible"],
+            "view_goal": (
+                "show the possible style outlier with its local ensemble"
+            ),
+            "metadata": {},
+        },
     }
 
 
@@ -108,9 +282,9 @@ def _style_global_then_local_config() -> dict:
         {
             "evidence_policy": {
                 "camera_scope": "global",
-                "camera_mode": "global_top",
+                "camera_mode": "global_oblique",
                 "selector": "deterministic",
-                "image_budget": 2,
+                "image_budget": 1,
                 "presentation": "raw",
                 "image_order": None,
                 "include_global_context": True,
@@ -119,29 +293,25 @@ def _style_global_then_local_config() -> dict:
             "evidence_plan": {
                 "evidence_strategy": "global_screen_then_local",
                 "global_policy": {
-                    "view_family": "canonical_high_oblique_pair_v1",
-                    "image_budget": 2,
+                    "view_family": "canonical_overview_perspective",
+                    "image_budget": 1,
                     "top_down": False,
+                    "perspective_diversity_required": False,
                 },
                 "local_policy": {
-                    "camera_scope": "object_local",
+                    "camera_scope": "group_local",
                     "grouping_policy_id": "vlm_visual_evidence_scope_v2",
-                    "image_budget": 4,
-                    "trigger_states": [
-                        "suspicious",
-                        "insufficient_evidence",
+                    "image_budget": 1,
+                    "global_context_image_budget": 1,
+                    "max_packet_images": 2,
+                    "image_order": [
+                        "global_context",
+                        "group_local",
                     ],
+                    "minimum_group_members": 2,
+                    "force_for_eligible_groups": False,
                 },
-                "router_options": {
-                    "global_screen_then_local": {
-                        "router": "vlm_global_screen",
-                        "trigger_states": [
-                            "suspicious",
-                            "insufficient_evidence",
-                        ],
-                        "executes_router": False,
-                    }
-                },
+                "router_options": None,
                 "text_context": [
                     "original_prompt",
                     "authorized_deviations",
@@ -151,6 +321,173 @@ def _style_global_then_local_config() -> dict:
         }
     )
     return config
+
+
+def test_l3_metric_prompts_have_versioned_generic_boundaries() -> None:
+    assert L3_METRIC_PROMPT_VERSION == "l3_burden_categories_v30"
+    assert set(L3_METRIC_RUBRICS) == {
+        "scale_consistency",
+        "style_consistency",
+        "object_pairing_consistency",
+        "functional_consistency",
+        "semantic_placement_consistency",
+    }
+    assert any(
+        "named observable fact is missing"
+        in rule
+        for rule in L3_METRIC_BOUNDARY_RULES
+    )
+    assert any(
+        "not universal validity thresholds"
+        in rule
+        for rule in L3_METRIC_BOUNDARY_RULES
+    )
+    assert any(
+        "current authored scene" in rule
+        for rule in L3_METRIC_BOUNDARY_RULES
+    )
+    assert "relocation test" in (
+        L3_METRIC_RUBRICS["object_pairing_consistency"]
+    )
+    assert "ordinary real-world use" in (
+        L3_METRIC_RUBRICS["functional_consistency"]
+    )
+    assert "directional_correspondence" in (
+        L3_METRIC_RUBRICS["functional_consistency"]
+    )
+    assert "relative_use_geometry" in (
+        L3_METRIC_RUBRICS["functional_consistency"]
+    )
+    assert "Resolve every listed check explicitly" in (
+        L3_METRIC_RUBRICS["functional_consistency"]
+    )
+    assert "logical room boundary" in (
+        L3_METRIC_RUBRICS["functional_consistency"]
+    )
+    assert "visible geometry and affordances" in (
+        L3_METRIC_RUBRICS["functional_consistency"]
+    )
+    assert "standalone defect threshold" in (
+        L3_METRIC_RUBRICS["functional_consistency"]
+    )
+    assert "relocation-only test" in (
+        L3_METRIC_RUBRICS["semantic_placement_consistency"]
+    )
+
+
+def test_functional_acquisition_budget_is_neutral_coverage_metadata() -> None:
+    valid = _apply_functional_acquisition_budget_status(
+        {
+            "status": "evaluated",
+            "score": 1.0,
+            "judgement": {"verdict": "valid"},
+            "functional_probe_acquisition": {
+                "budget_exhausted": True
+            },
+        },
+        metric_name="functional_consistency",
+    )
+    assert valid["status"] == "evaluated"
+    assert valid["score"] == 1.0
+    assert valid["judgement"]["verdict"] == "valid"
+    assert valid["functional_acquisition_coverage_complete"] is False
+
+    invalid = _apply_functional_acquisition_budget_status(
+        {
+            "status": "evaluated",
+            "score": 0.0,
+            "judgement": {"verdict": "invalid"},
+            "functional_probe_acquisition": {
+                "budget_exhausted": True
+            },
+        },
+        metric_name="functional_consistency",
+    )
+    assert invalid["status"] == "evaluated"
+    assert invalid["score"] == 0.0
+    assert invalid["functional_acquisition_coverage_complete"] is False
+    assert "Apparent image size alone" in (
+        L3_METRIC_RUBRICS["scale_consistency"]
+    )
+    assert "multiple coherent visual languages" in (
+        L3_METRIC_RUBRICS["style_consistency"]
+    )
+    functional_global = L3_METRIC_PHASE_PROMPTS[
+        "functional_consistency"
+    ]["global_discovery"]
+    functional_local = L3_METRIC_PHASE_PROMPTS[
+        "functional_consistency"
+    ]["group_local_review"]
+    functional_relation = L3_METRIC_PHASE_PROMPTS[
+        "functional_consistency"
+    ]["cross_group_relation_review"]
+    assert "overall scene-level" in functional_global
+    assert "Do not decide discovered cross-group" in functional_global
+    assert "exactly the supplied cross-group" in functional_relation
+    assert "non-empty subset" in functional_relation
+    assert "within-group direct-use relations" in functional_local
+    assert "architecture and zone context" in functional_local
+    assert "dedicated relation phase owns it" in functional_local
+    assert "surface hypothesis as established fact" in functional_local
+
+
+def test_cross_group_relation_defect_attribution_is_object_level() -> None:
+    assert _relation_episode_defect_violations(
+        [
+            {
+                "target_ids": ["sofa"],
+                "scope": "orientation_for_use",
+                "relation": "faces away from television",
+            }
+        ],
+        required_target_ids=["sofa", "television"],
+    ) == []
+    assert _relation_episode_defect_violations(
+        [
+            {
+                "target_ids": ["lamp"],
+                "scope": "orientation_for_use",
+                "relation": "unrelated object",
+            }
+        ],
+        required_target_ids=["sofa", "television"],
+    ) == [["lamp"]]
+
+    placement_global = L3_METRIC_PHASE_PROMPTS[
+        "semantic_placement_consistency"
+    ]["global_discovery"]
+    placement_local = L3_METRIC_PHASE_PROMPTS[
+        "semantic_placement_consistency"
+    ]["group_local_review"]
+    assert "scene zones, architecture" in placement_global
+    assert "contextual anchors" in placement_global
+    assert "only potential defect owner" in placement_global
+    assert "support-surface meaning" in placement_local
+    assert "Context IDs are evidence context" in placement_local
+    assert "orientation or operability" in placement_local
+
+
+def test_functional_probe_budget_does_not_propagate_episode_cap_metric_wide() -> None:
+    class Control:
+        max_total_images = 6
+
+    class Judge:
+        control = Control()
+
+    class Provider:
+        functional_probe_judge_artifacts_per_selected_view = 1
+        functional_probe_full_artifacts_per_selected_view = 2
+
+    assert _functional_probe_budget(
+        {
+            "prejudgement_probe_policy": {
+                "max_probe_units": 8,
+            }
+        },
+        judge=Judge(),
+        global_image_count=1,
+        provider=Provider(),
+    ) == 8
 
 
 def test_default_is_canonical_l3_and_policy_remains_overridable() -> None:
@@ -166,23 +503,123 @@ def test_default_is_canonical_l3_and_policy_remains_overridable() -> None:
         "object_pairing_consistency",
     }
     assert set(PERCEPTUAL_VISUAL_QUALITY_METRICS) == {"style_consistency"}
-    assert (
-        resolved["metrics"]["functional_consistency"]["enabled"]
-        is False
-    )
     functional = resolved["metrics"]["functional_consistency"]
-    assert functional["metric_status"] == "experimental_non_scoring"
-    assert functional["activation_policy"] == "explicit_config_only"
-    assert functional["included_in_canonical_aggregate"] is False
+    assert functional["enabled"] is True
+    assert functional["metric_status"] == "canonical_scoring"
+    assert functional["activation_policy"] == "profile_and_applicability"
+    assert functional["included_in_canonical_aggregate"] is True
+    assert functional["group_local_check_granularity"] == "per_check"
+    assert functional["group_local_evidence_policy"] == "shared_group_bank"
+    assert functional["group_local_active_window_max_images"] == 6
+    placement = resolved["metrics"]["semantic_placement_consistency"]
+    assert placement["enabled"] is True
+    assert placement["metric_status"] == "canonical_scoring"
+    assert placement["activation_policy"] == "profile_and_applicability"
+    assert placement["included_in_canonical_aggregate"] is True
+    assert {
+        name: resolved["metrics"][name]["weight"]
+        for name in SCENE_QUALITY_INTERFACE_METRICS
+    } == pytest.approx(
+        {
+            "scale_consistency": 0.04,
+            "style_consistency": 0.07,
+            "object_pairing_consistency": 0.09,
+            "functional_consistency": 0.52,
+            "semantic_placement_consistency": 0.28,
+        }
+    )
+    assert set(SEMANTIC_PLACEMENT_METRICS) == {
+        "semantic_placement_consistency"
+    }
     serialized = json.dumps(resolved, sort_keys=True)
     assert "object_coexistence_consistency" not in serialized
     assert "sceneonto_scale_candidate_router" not in serialized
     assert "benchmark.evaluator.spatial_fidelity.scale" not in serialized
     scale = resolved["metrics"]["scale_consistency"]
     assert scale["evidence_policy"]["camera_scope"] == "group_local"
+    assert scale["evidence_policy"]["image_budget"] == 3
+    assert scale["evidence_policy"]["global_image_budget"] == 1
+    assert scale["evidence_policy"]["scoped_image_budget"] == 1
+    assert scale["evidence_plan"]["evidence_strategy"] == (
+        "json_screen_then_visual"
+    )
     assert scale["evidence_plan"]["local_policy"][
         "grouping_policy_id"
     ] == "vlm_visual_evidence_scope_v2"
+    pairing = resolved["metrics"]["object_pairing_consistency"]
+    assert pairing["evidence_plan"]["evidence_strategy"] == (
+        "json_screen_then_visual"
+    )
+    assert pairing["evidence_policy"]["image_order"] == [
+        "global_context",
+        "group_local",
+    ]
+    style = resolved["metrics"]["style_consistency"]
+    assert style["evidence_policy"]["image_budget"] == 1
+    assert style["evidence_plan"]["local_policy"]["image_budget"] == 1
+    assert style["evidence_plan"]["local_policy"]["image_order"] == [
+        "global_context",
+        "group_local",
+    ]
+    for name in (
+        "functional_consistency",
+        "semantic_placement_consistency",
+    ):
+        metric = resolved["metrics"][name]
+        policy = metric["evidence_policy"]
+        assert policy["camera_scope"] == "global"
+        assert policy["camera_mode"] == "global_oblique"
+        assert policy["image_budget"] == 1
+        assert policy["image_order"] is None
+        assert metric["evidence_plan"]["evidence_strategy"] == (
+            "global_discovery_then_group_local"
+        )
+        assert metric["evidence_plan"]["global_policy"] == {
+            "view_family": "canonical_overview_perspective",
+            "image_budget": 1,
+            "top_down": False,
+            "perspective_diversity_required": False,
+        }
+        assert metric["evidence_plan"]["local_policy"][
+            "minimum_group_members"
+        ] == 2
+        assert metric["evidence_plan"]["local_policy"][
+            "force_for_eligible_groups"
+        ] is True
+        assert metric["evidence_plan"]["local_policy"][
+            "global_context_image_budget"
+        ] == 1
+        assert metric["evidence_plan"]["local_policy"][
+            "max_packet_images"
+        ] == 2
+        assert metric["evidence_plan"]["local_policy"]["image_order"] == [
+            "global_context",
+            "group_local",
+        ]
+    assert style["evidence_plan"]["evidence_strategy"] == (
+        "global_screen_then_local"
+    )
+    assert style["evidence_plan"]["local_policy"][
+        "force_for_eligible_groups"
+    ] is False
+    probe_policy = functional["evidence_plan"][
+        "prejudgement_probe_policy"
+    ]
+    assert probe_policy["enabled"] is True
+    assert probe_policy["max_probe_units"] == 32
+    assert probe_policy["candidate_count_by_probe_kind"] == {
+        "functional_frontage": 4,
+        "functional_correspondence": 4,
+        "approach_clearance": 4,
+    }
+    assert probe_policy["preferred_lens_mm"] == 32.0
+    assert probe_policy["judge_presentation"] == "raw_rgb_only"
+    assert probe_policy["usable_surface"]["decode_scope"] == (
+        "directed_or_uncertain_clearance_targets_before_probe_budget"
+    )
+    assert "decode_only_scheduled_targets" not in (
+        probe_policy["usable_surface"]
+    )
 
     overridden = resolve_scene_quality_config(
         {
@@ -204,35 +641,860 @@ def test_default_is_canonical_l3_and_policy_remains_overridable() -> None:
     assert policy["image_budget"] == 3
     assert policy["presentation"] == "highlight"
 
-    attempted_promotion = resolve_scene_quality_config(
-        {
-            "metrics": {
-                "functional_consistency": {
-                    "enabled": True,
-                    "metric_status": "canonical_scoring",
-                    "activation_policy": "profile_and_applicability",
-                    "included_in_canonical_aggregate": True,
+    historical = resolve_scene_quality_config(
+        profile={
+            "profile_version": "canonical_scene_evaluation_v1",
+            "l3_scene_quality": {
+                "metrics": {
+                    "style_consistency": {
+                        "enabled": True,
+                        "weight": 1.0 / 3.0,
+                    },
+                    "scale_consistency": {
+                        "enabled": True,
+                        "weight": 1.0 / 3.0,
+                    },
+                    "object_pairing_consistency": {
+                        "enabled": True,
+                        "weight": 1.0 / 3.0,
+                    },
                 }
-            }
+            },
         }
-    )["metrics"]["functional_consistency"]
-    assert attempted_promotion["enabled"] is True
-    assert (
-        attempted_promotion["metric_status"]
-        == "experimental_non_scoring"
     )
-    assert attempted_promotion["activation_policy"] == "explicit_config_only"
-    assert attempted_promotion["included_in_canonical_aggregate"] is False
+    for name in (
+        "functional_consistency",
+        "semantic_placement_consistency",
+    ):
+        assert historical["metrics"][name]["enabled"] is False
+        assert (
+            historical["metrics"][name]["metric_status"]
+            == "historical_profile_excluded"
+        )
+        assert (
+            historical["metrics"][name][
+                "included_in_canonical_aggregate"
+            ]
+            is False
+        )
 
 
-def test_style_global_screen_does_not_request_local_when_clear(tmp_path) -> None:
-    images = _images(tmp_path, "global_a", "global_b")
+def test_style_global_clear_skips_group_local_review(tmp_path) -> None:
+    images = _images(tmp_path, "global_a", "global_b", "local")
     provider_calls: list[dict] = []
     judge_calls: list[dict] = []
 
-    def provider(request: dict) -> dict:
+    def provider(request: dict) -> list[dict]:
         provider_calls.append(request)
-        return {"status": "available", "paths": []}
+        return [{"path": images["local"], "role": "group_local"}]
+
+    def judge(request: dict) -> dict:
+        judge_calls.append(request)
+        return _valid(request)
+
+    metric = evaluate_scene_quality_interfaces(
+        _scene(),
+        config=_style_global_then_local_config(),
+        object_grouping_report=_grouping_report(),
+        render_evidence={"global": [images["global_a"], images["global_b"]]},
+        camera_evidence_provider=provider,
+        vlm_judge=judge,
+        metric_applicability=_relevant("style_consistency"),
+    )["metrics"]["style_consistency"]
+
+    assert metric["score"] == 1.0
+    assert metric["route"] == "global_clear"
+    assert metric["judge_call_count"] == 1
+    assert metric["local_review"]["requested"] is False
+    assert metric["budget_exhaustion_forced_choice"] == {
+        "applied": False,
+        "forced_binary": False,
+        "evidence_ambiguous": False,
+        "stop_reason": None,
+    }
+    assert len(provider_calls) == 0
+    assert [call["evidence_phase"] for call in judge_calls] == [
+        "global_screen",
+    ]
+    assert judge_calls[0]["render_evidence"] == [images["global_a"]]
+
+
+def test_metric_report_exposes_forced_choice_without_reason_parsing(
+    tmp_path,
+) -> None:
+    global_image = _images(tmp_path, "global")["global"]
+    forced = {
+        "applied": True,
+        "trigger": "max_total_images_exhausted",
+        "ambiguity_before_forcing": True,
+        "pre_force_judge_status": "need_more_evidence",
+        "pre_force_evidence_request": {
+            "target_ids": ["chair_01"],
+        },
+        "pre_force_reason": "need local detail",
+        "available_image_count": 1,
+        "final_verdict": "valid",
+        "final_confidence": 0.7,
+        "evidence_artifacts": [global_image],
+    }
+    response = {
+        **_valid(),
+        "budget_exhaustion_forced_choice": forced,
+    }
+
+    metric = evaluate_scene_quality_interfaces(
+        _scene(),
+        config=_only("style_consistency"),
+        object_grouping_report=_grouping_report(),
+        render_evidence={"global": [global_image]},
+        vlm_judge=lambda request: response,
+        metric_applicability=_relevant("style_consistency"),
+    )["metrics"]["style_consistency"]
+
+    assert metric["budget_exhaustion_forced_choice"]["applied"] is True
+    assert metric["budget_exhaustion_forced_choice"]["forced_binary"] is True
+    assert metric["budget_exhaustion_forced_choice"][
+        "evidence_ambiguous"
+    ] is True
+    assert metric["budget_exhaustion_forced_choice"]["stop_reason"] == (
+        "max_total_images_exhausted"
+    )
+    assert metric["budget_exhaustion_forced_choice"]["trigger"] == (
+        "max_total_images_exhausted"
+    )
+    assert metric["budget_exhaustion_forced_choice"][
+        "occurrence_count"
+    ] == 1
+
+
+def test_evaluation_schema_accepts_forced_choice_metric_audit() -> None:
+    schema_path = (
+        Path(__file__).resolve().parents[1]
+        / "schemas"
+        / "evaluation_report.schema.json"
+    )
+    schema = json.loads(schema_path.read_text(encoding="utf-8"))
+    metric_schema = {
+        "$schema": schema["$schema"],
+        "$defs": schema["$defs"],
+        "$ref": "#/$defs/l3MetricAudit",
+    }
+    validator = Draft202012Validator(metric_schema)
+
+    validator.validate(
+        {
+            "budget_exhaustion_forced_choice": {
+                "applied": False
+            }
+        }
+    )
+    validator.validate(
+        {
+            "budget_exhaustion_forced_choice": {
+                "applied": True,
+                "trigger": "max_total_images_exhausted",
+                "ambiguity_before_forcing": True,
+                "pre_force_judge_status": "need_more_evidence",
+                "pre_force_evidence_request": {
+                    "target_ids": ["chair_01"]
+                },
+                "pre_force_reason": "need another view",
+                "available_image_count": 2,
+                "final_verdict": "valid",
+                "final_confidence": 0.8,
+                "evidence_artifacts": [
+                    "global.png",
+                    "local.png",
+                ],
+            }
+        }
+    )
+
+
+def test_style_global_suspicion_requires_local_confirmation(
+    tmp_path,
+) -> None:
+    images = _images(tmp_path, "global", "local")
+    judge_calls: list[dict] = []
+    provider_calls: list[dict] = []
+    confirmed = {
+        "evidence_status": "sufficient",
+        "verdict": "invalid",
+        "confidence": 0.9,
+        "reason": "The chair is a conclusive visible style outlier.",
+        "missing_evidence": [],
+        "defects": [
+            {
+                "scope": "significant_visible_style_incompatibility",
+                "target_ids": ["chair_01"],
+                "relation": "rendering_style_outlier",
+                "reason": "The global view conclusively shows the mismatch.",
+            }
+        ],
+    }
+
+    def provider(request: dict) -> list[dict]:
+        provider_calls.append(request)
+        return [{"path": images["local"], "role": "group_local"}]
+
+    def judge(request: dict) -> dict:
+        judge_calls.append(request)
+        return confirmed if len(judge_calls) == 1 else _valid()
+
+    metric = evaluate_scene_quality_interfaces(
+        _scene(),
+        config=_style_global_then_local_config(),
+        object_grouping_report=_grouping_report(),
+        render_evidence={"global": [images["global"]]},
+        camera_evidence_provider=provider,
+        vlm_judge=judge,
+        metric_applicability=_relevant("style_consistency"),
+    )["metrics"]["style_consistency"]
+
+    assert metric["status"] == "evaluated"
+    assert metric["score"] == 1.0
+    assert metric["route"] == "global_screen_then_group_local"
+    assert metric["judge_call_count"] == 2
+    assert metric["global_screen"]["final_metric_verdict"] is False
+    assert len(metric["global_screen_candidate_claims"]) == 1
+    assert metric["final_defect_claims"] == []
+    assert metric["final_object_findings"] == []
+    assert metric["judgement"]["object_penalty_count"] == 0
+    assert len(provider_calls) == 1
+    assert len(judge_calls) == 2
+
+
+def test_style_localized_suspicion_reviews_only_implicated_group(
+    tmp_path,
+) -> None:
+    scene = _scene()
+    scene["objects"].extend(
+        [
+            {
+                "id": "sofa_01",
+                "category": "sofa",
+                "size": [2.0, 0.8, 0.9],
+                "center": [3.5, 3.5, 0.45],
+                "rotation": [0, 0, 0],
+            },
+            {
+                "id": "table_01",
+                "category": "coffee_table",
+                "size": [1.0, 0.6, 0.4],
+                "center": [3.5, 2.7, 0.2],
+                "rotation": [0, 0, 0],
+            },
+        ]
+    )
+    images = _images(tmp_path, "global", "work_local")
+    provider_calls: list[dict] = []
+    judge_calls: list[dict] = []
+    suspicion = {
+        "evidence_status": "sufficient",
+        "verdict": "invalid",
+        "confidence": 0.8,
+        "reason": "The chair may be a style outlier.",
+        "missing_evidence": [],
+        "defects": [
+            {
+                "scope": "significant_visible_style_incompatibility",
+                "target_ids": ["chair_01"],
+                "relation": "possible_style_outlier",
+                "reason": "Confirm locally.",
+            }
+        ],
+    }
+
+    def provider(request: dict) -> list[dict]:
+        provider_calls.append(request)
+        return [{"path": images["work_local"], "role": "group_local"}]
+
+    def judge(request: dict) -> dict:
+        judge_calls.append(request)
+        return suspicion if len(judge_calls) == 1 else _valid()
+
+    metric = evaluate_scene_quality_interfaces(
+        scene,
+        config=_style_global_then_local_config(),
+        object_grouping_report={
+            "object_groups": [
+                {
+                    "group_id": "work",
+                    "object_ids": ["chair_01", "desk_01"],
+                },
+                {
+                    "group_id": "lounge",
+                    "object_ids": ["sofa_01", "table_01"],
+                },
+            ]
+        },
+        render_evidence={"global": [images["global"]]},
+        camera_evidence_provider=provider,
+        vlm_judge=judge,
+        metric_applicability=_relevant("style_consistency"),
+    )["metrics"]["style_consistency"]
+
+    assert metric["score"] == 1.0
+    assert metric["selected_group_ids"] == ["work"]
+    assert len(provider_calls) == 1
+    assert provider_calls[0]["group_scope"]["group_id"] == "work"
+    assert len(judge_calls) == 2
+
+
+def test_style_required_local_confirmation_without_grouping_is_infrastructure_failure(
+    tmp_path,
+) -> None:
+    global_image = _images(tmp_path, "global")["global"]
+    judge_calls: list[dict] = []
+
+    def judge(request: dict) -> dict:
+        judge_calls.append(request)
+        return _style_needs_local()
+
+    metric = evaluate_scene_quality_interfaces(
+        _scene(),
+        config=_style_global_then_local_config(),
+        render_evidence={"global": [global_image]},
+        camera_evidence_provider=lambda request: pytest.fail(
+            "local provider must not run without trusted grouping"
+        ),
+        vlm_judge=judge,
+        metric_applicability=_relevant("style_consistency"),
+    )["metrics"]["style_consistency"]
+
+    assert metric["status"] == "failed"
+    assert metric["terminal_state"] == "infrastructure_failure"
+    assert metric["score"] is None
+    assert metric["reason"] == (
+        "object_grouping_unavailable_for_style_confirmation"
+    )
+    assert metric["local_review"]["requested"] is True
+    assert len(judge_calls) == 1
+
+
+def test_style_global_screen_exception_is_infrastructure_failure(
+    tmp_path,
+) -> None:
+    global_image = _images(tmp_path, "global")["global"]
+
+    def judge(_request: dict) -> dict:
+        raise RuntimeError("style endpoint unavailable")
+
+    metric = evaluate_scene_quality_interfaces(
+        _scene(),
+        config=_style_global_then_local_config(),
+        object_grouping_report=_grouping_report(),
+        render_evidence={"global": [global_image]},
+        vlm_judge=judge,
+        metric_applicability=_relevant("style_consistency"),
+    )["metrics"]["style_consistency"]
+
+    assert metric["status"] == "failed"
+    assert metric["terminal_state"] == "infrastructure_failure"
+    assert metric["reason"] == "vlm_global_style_screen_failed"
+    assert metric["infrastructure_failure"]["error_type"] == (
+        "RuntimeError"
+    )
+
+
+def test_default_style_flow_uses_one_global_then_global_plus_local(
+    tmp_path,
+) -> None:
+    images = _images(tmp_path, "global_a", "global_b", "local")
+    judge_calls: list[dict] = []
+
+    def judge(request: dict) -> dict:
+        judge_calls.append(request)
+        return (
+            _style_needs_local()
+            if len(judge_calls) == 1
+            else _valid()
+        )
+
+    metric = evaluate_scene_quality_interfaces(
+        _scene(),
+        config=_only("style_consistency"),
+        object_grouping_report=_grouping_report(),
+        render_evidence={"global": [images["global_a"], images["global_b"]]},
+        camera_evidence_provider=lambda request: [
+            {"path": images["local"], "role": "group_local"}
+        ],
+        vlm_judge=judge,
+        metric_applicability=_relevant("style_consistency"),
+    )["metrics"]["style_consistency"]
+
+    assert metric["status"] == "evaluated"
+    assert len(judge_calls) == 2
+    assert judge_calls[0]["render_evidence"] == [
+        images["global_a"]
+    ]
+    assert judge_calls[1]["render_evidence"] == [
+        images["global_a"],
+        images["local"],
+    ]
+    assert judge_calls[0]["scene_summary"]["objects"]
+
+
+@pytest.mark.parametrize(
+    "metric_name",
+    [
+        "scale_consistency",
+        "object_pairing_consistency",
+    ],
+)
+def test_json_screen_clear_skips_camera_and_visual_confirmation(
+    tmp_path,
+    metric_name,
+) -> None:
+    global_image = _images(tmp_path, "global")["global"]
+    judge_calls: list[dict] = []
+
+    class Provider:
+        def __call__(self, request: dict) -> list[dict]:
+            raise AssertionError(
+                "clear JSON screen must not request camera evidence"
+            )
+
+    def judge(request: dict) -> dict:
+        judge_calls.append(request)
+        return _valid(request)
+
+    metric = evaluate_scene_quality_interfaces(
+        _scene(),
+        config=_json_first_only(metric_name),
+        object_grouping_report=_grouping_report(),
+        render_evidence={"global": [global_image]},
+        camera_evidence_provider=Provider(),
+        vlm_judge=judge,
+        metric_applicability=_relevant(metric_name),
+    )["metrics"][metric_name]
+
+    assert metric["status"] == "evaluated"
+    assert metric["score"] == 1.0
+    assert metric["route"] == "json_screen_resolved"
+    assert metric["judge_call_count"] == 1
+    assert metric["renderer_invoked"] is False
+    assert len(judge_calls) == 1
+    assert judge_calls[0]["evidence_phase"] == "json_screen"
+    assert judge_calls[0]["decision_mode"] == "screen"
+    assert judge_calls[0]["render_evidence"] == []
+    assert metric["dependencies"]["evidence_source"] == (
+        "structured_scene_json"
+    )
+    assert metric["dependencies"]["evidence_scope_satisfied"] is True
+    assert metric["json_screen"]["screen_state"] == "clear"
+
+
+def test_json_screen_exception_is_infrastructure_failure() -> None:
+    def judge(_request: dict) -> dict:
+        raise RuntimeError("JSON screen endpoint unavailable")
+
+    metric = evaluate_scene_quality_interfaces(
+        _scene(),
+        config=_json_first_only("scale_consistency"),
+        object_grouping_report=_grouping_report(),
+        vlm_judge=judge,
+        metric_applicability=_relevant("scale_consistency"),
+    )["metrics"]["scale_consistency"]
+
+    assert metric["status"] == "failed"
+    assert metric["terminal_state"] == "infrastructure_failure"
+    assert metric["reason"] == "vlm_json_screen_failed"
+    assert metric["infrastructure_failure"]["error_type"] == (
+        "RuntimeError"
+    )
+
+
+def test_json_screen_scale_keeps_legacy_object_local_confirmation_without_grouping(
+    tmp_path,
+) -> None:
+    config = _json_first_only("scale_consistency")
+    config["metrics"]["scale_consistency"]["evidence_policy"] = {
+        "camera_scope": "object_local"
+    }
+    local_image = _images(tmp_path, "scale_object_local")[
+        "scale_object_local"
+    ]
+    judge_calls: list[dict] = []
+    provider_calls: list[dict] = []
+    suspicious = {
+        "evidence_status": "sufficient",
+        "verdict": "invalid",
+        "confidence": 0.8,
+        "reason": "The structured dimensions require visual confirmation.",
+        "missing_evidence": [],
+        "defects": [
+            {
+                "scope": "significant_visible_category_relative_scale_incoherence",
+                "target_ids": ["chair_01"],
+                "relation": "scale_outlier_candidate",
+                "reason": "Confirm against the local visual context.",
+            }
+        ],
+    }
+
+    def judge(request: dict) -> dict:
+        judge_calls.append(request)
+        return suspicious if len(judge_calls) == 1 else _valid(request)
+
+    def provider(request: dict) -> list[dict]:
+        provider_calls.append(request)
+        return [{"path": local_image, "role": "object_local"}]
+
+    metric = evaluate_scene_quality_interfaces(
+        _scene(),
+        config=config,
+        camera_evidence_provider=provider,
+        vlm_judge=judge,
+        metric_applicability=_relevant("scale_consistency"),
+    )["metrics"]["scale_consistency"]
+
+    assert metric["status"] == "evaluated"
+    assert metric["terminal_state"] == "evaluated"
+    assert metric["route"] == "json_screen_then_object_visual"
+    assert metric["compatibility_scope_fallback"] == (
+        "target_local_without_grouping"
+    )
+    assert metric["selected_group_ids"] == ["compat_target_chair_01"]
+    assert metric["selected_object_ids"] == ["chair_01"]
+    assert metric["evidence_paths"] == [local_image]
+    assert len(provider_calls) == 1
+    assert [call["evidence_phase"] for call in judge_calls] == [
+        "json_screen",
+        "visual_confirmation",
+    ]
+
+
+def test_json_screen_scale_without_grouping_or_evidence_fails_as_infrastructure(
+) -> None:
+    suspicious = {
+        "evidence_status": "sufficient",
+        "verdict": "invalid",
+        "confidence": 0.8,
+        "reason": "The structured dimensions require visual confirmation.",
+        "missing_evidence": [],
+        "defects": [
+            {
+                "scope": (
+                    "significant_visible_category_relative_scale_incoherence"
+                ),
+                "target_ids": ["chair_01"],
+                "relation": "scale_outlier_candidate",
+                "reason": "Confirm against the local visual context.",
+            }
+        ],
+    }
+
+    metric = evaluate_scene_quality_interfaces(
+        _scene(),
+        config=_json_first_only("scale_consistency"),
+        vlm_judge=lambda _request: suspicious,
+        metric_applicability=_relevant("scale_consistency"),
+    )["metrics"]["scale_consistency"]
+
+    assert metric["status"] == "failed"
+    assert metric["terminal_state"] == "infrastructure_failure"
+    assert metric["reason"] == "required_scope_infrastructure_failure"
+    assert metric["route"] == "json_screen_then_object_visual"
+    assert metric["compatibility_scope_fallback"] == (
+        "target_local_without_grouping"
+    )
+
+
+@pytest.mark.parametrize(
+    ("screen_response", "expected_router_state"),
+    [
+        (
+            {
+                "evidence_status": "sufficient",
+                "verdict": "invalid",
+                "confidence": 0.7,
+                "reason": "The chair dimensions look suspicious.",
+                "missing_evidence": [],
+                "defects": [
+                    {
+                        "scope": (
+                            "significant_visible_category_relative_"
+                            "scale_incoherence"
+                        ),
+                        "target_ids": ["chair_01"],
+                        "relation": "scale_outlier_candidate",
+                        "reason": "The JSON dimensions merit confirmation.",
+                    }
+                ],
+            },
+            "suspicious",
+        ),
+        (
+            {
+                "evidence_status": "insufficient",
+                "verdict": "ambiguous",
+                "confidence": 0.2,
+                "reason": "Relative scale needs visual context.",
+                "missing_evidence": ["group_context_visible"],
+                "defects": [],
+                "evidence_request": {
+                    "target_ids": ["chair_01"],
+                    "missing_observations": [
+                        "group_context_visible"
+                    ],
+                    "view_goal": (
+                        "show the chair with a nearby reference object"
+                    ),
+                    "metadata": {},
+                },
+            },
+            "insufficient_evidence",
+        ),
+    ],
+)
+def test_json_screen_routes_only_suspicious_or_insufficient_to_visual(
+    tmp_path,
+    screen_response,
+    expected_router_state,
+) -> None:
+    images = _images(
+        tmp_path,
+        "global",
+        "local_a",
+        "local_over_budget",
+    )
+    provider_calls: list[dict] = []
+    judge_calls: list[dict] = []
+
+    def provider(request: dict) -> list[dict]:
+        provider_calls.append(request)
+        return [
+            {
+                "path": images["local_a"],
+                "role": "group_local",
+            },
+            {
+                "path": images["local_over_budget"],
+                "role": "group_local",
+            },
+        ]
+
+    def judge(request: dict) -> dict:
+        judge_calls.append(request)
+        return screen_response if len(judge_calls) == 1 else _valid()
+
+    metric = evaluate_scene_quality_interfaces(
+        _scene(),
+        config=_json_first_only("scale_consistency"),
+        object_grouping_report=_grouping_report(),
+        render_evidence={"global": [images["global"]]},
+        camera_evidence_provider=provider,
+        vlm_judge=judge,
+        metric_applicability=_relevant("scale_consistency"),
+    )["metrics"]["scale_consistency"]
+
+    assert metric["status"] == "evaluated"
+    assert metric["score"] == 1.0
+    assert metric["route"] == "json_screen_then_group_visual"
+    assert metric["router_state"] == expected_router_state
+    assert metric["judge_call_count"] == 2
+    assert len(provider_calls) == 1
+    assert [call["evidence_phase"] for call in judge_calls] == [
+        "json_screen",
+        "visual_confirmation",
+    ]
+    assert judge_calls[0]["render_evidence"] == []
+    assert judge_calls[1]["render_evidence"] == [
+        images["global"],
+        images["local_a"],
+    ]
+    assert metric["evidence_request"]["global_image_budget"] == 1
+    assert metric["evidence_request"]["scoped_image_budget"] == 1
+    assert metric["dependencies"]["evidence_source"] == (
+        "per_group_camera_evidence"
+    )
+    assert metric["dependencies"]["evidence_scope_satisfied"] is True
+    if expected_router_state == "suspicious":
+        assert metric["json_screen"]["screen_state"] == (
+            "material_candidate"
+        )
+        assert metric["json_screen"]["verdict"] == "candidate"
+        assert metric["json_screen"]["defects"] == []
+        assert len(metric["json_screen"]["candidate_defects"]) == 1
+        assert metric["json_screen"]["final_metric_verdict"] is False
+        assert len(metric["routed_candidate_claims"]) == 1
+        assert judge_calls[1]["routed_screen_claims"] == (
+            metric["routed_candidate_claims"]
+        )
+        assert metric["group_results"][0][
+            "claim_correspondence"
+        ][0]["relationship"] == "routed_candidate_not_confirmed"
+    else:
+        assert metric["json_screen"]["screen_state"] == (
+            "review_required"
+        )
+
+
+def test_object_pairing_suspicious_json_screen_routes_to_visual(
+    tmp_path,
+) -> None:
+    images = _images(tmp_path, "global", "local")
+    judge_calls: list[dict] = []
+    suspicious = {
+        "evidence_status": "sufficient",
+        "verdict": "invalid",
+        "confidence": 0.7,
+        "reason": "One group member may not belong in this scene.",
+        "missing_evidence": [],
+        "defects": [
+            {
+                "scope": "group_member_category_compatibility",
+                "target_ids": ["chair_01"],
+                "relation": "category_compatibility_candidate",
+                "reason": "The JSON category merits visual confirmation.",
+            }
+        ],
+    }
+
+    def judge(request: dict) -> dict:
+        judge_calls.append(request)
+        return suspicious if len(judge_calls) == 1 else _valid()
+
+    metric = evaluate_scene_quality_interfaces(
+        _scene(),
+        config=_json_first_only("object_pairing_consistency"),
+        object_grouping_report=_grouping_report(),
+        render_evidence={"global": [images["global"]]},
+        camera_evidence_provider=lambda request: [
+            {"path": images["local"], "role": "group_local"}
+        ],
+        vlm_judge=judge,
+        metric_applicability=_relevant(
+            "object_pairing_consistency"
+        ),
+    )["metrics"]["object_pairing_consistency"]
+
+    assert metric["status"] == "evaluated"
+    assert metric["router_state"] == "suspicious"
+    assert metric["route"] == "json_screen_then_group_visual"
+    assert [call["evidence_phase"] for call in judge_calls] == [
+        "json_screen",
+        "visual_confirmation",
+    ]
+    assert judge_calls[1]["render_evidence"] == [
+        images["global"],
+        images["local"],
+    ]
+
+
+def test_json_candidate_confirmation_is_one_final_defect(
+    tmp_path,
+) -> None:
+    images = _images(tmp_path, "global", "local")
+    candidate = {
+        "evidence_status": "sufficient",
+        "verdict": "invalid",
+        "confidence": 0.7,
+        "reason": "The dimensions identify a candidate.",
+        "missing_evidence": [],
+        "defects": [
+            {
+                "scope": (
+                    "significant_visible_category_relative_"
+                    "scale_incoherence"
+                ),
+                "target_ids": ["chair_01", "desk_01"],
+                "relation": "chair_too_large_for_desk",
+                "reason": "The JSON dimensions merit visual confirmation.",
+            }
+        ],
+    }
+    confirmed = {
+        "evidence_status": "sufficient",
+        "verdict": "invalid",
+        "confidence": 0.9,
+        "reason": "The visual evidence confirms the routed candidate.",
+        "missing_evidence": [],
+        "defects": [
+            {
+                "scope": (
+                    "significant_visible_category_relative_"
+                    "scale_incoherence"
+                ),
+                "target_ids": ["desk_01", "chair_01"],
+                "relation": "chair_too_large_for_desk",
+                "reason": "The local view confirms the scale defect.",
+            }
+        ],
+    }
+    judge_calls: list[dict] = []
+
+    def judge(request: dict) -> dict:
+        judge_calls.append(request)
+        return candidate if len(judge_calls) == 1 else confirmed
+
+    metric = evaluate_scene_quality_interfaces(
+        _scene(),
+        config=_json_first_only("scale_consistency"),
+        object_grouping_report=_grouping_report(),
+        render_evidence={"global": [images["global"]]},
+        camera_evidence_provider=lambda request: [
+            {"path": images["local"], "role": "group_local"}
+        ],
+        vlm_judge=judge,
+        metric_applicability=_relevant("scale_consistency"),
+    )["metrics"]["scale_consistency"]
+
+    assert metric["score"] == pytest.approx(0.0)
+    assert metric["json_screen"]["verdict"] == "candidate"
+    assert metric["json_screen"]["defects"] == []
+    assert len(metric["judgement"]["defects"]) == 1
+    assert len(metric["final_defect_claims"]) == 1
+    correspondence = metric["group_results"][0][
+        "claim_correspondence"
+    ]
+    assert correspondence[0]["relationship"] == (
+        "confirmed_routed_candidate"
+    )
+    assert correspondence[0]["routed_candidate_id"] == (
+        metric["routed_candidate_claims"][0]["claim_id"]
+    )
+
+
+@pytest.mark.parametrize(
+    "metric_name",
+    [
+        "functional_consistency",
+        "semantic_placement_consistency",
+    ],
+)
+def test_function_and_placement_force_every_eligible_group_review(
+    tmp_path,
+    metric_name,
+) -> None:
+    images = _images(
+        tmp_path,
+        "global_perspective",
+        "global_top",
+        "local",
+        "local_over_budget",
+    )
+    provider_calls: list[dict] = []
+    judge_calls: list[dict] = []
+    config = {
+        "enabled": True,
+        "metrics": {
+            name: {"enabled": False}
+            for name in SCENE_QUALITY_INTERFACE_METRICS
+        },
+    }
+    config["metrics"][metric_name] = {"enabled": True}
+
+    def provider(request: dict) -> list[dict]:
+        provider_calls.append(request)
+        return [
+            {"path": images["local"], "role": "group_local"},
+            {
+                "path": images["local_over_budget"],
+                "role": "group_local",
+            },
+        ]
 
     def judge(request: dict) -> dict:
         judge_calls.append(request)
@@ -240,24 +1502,2171 @@ def test_style_global_screen_does_not_request_local_when_clear(tmp_path) -> None
 
     metric = evaluate_scene_quality_interfaces(
         _scene(),
-        config=_style_global_then_local_config(),
-        render_evidence=[images["global_a"], images["global_b"]],
+        config=config,
+        object_grouping_report=_grouping_report(),
+        render_evidence={
+            "global": [
+                images["global_top"],
+                images["global_perspective"],
+            ]
+        },
+        camera_evidence_provider=provider,
+        vlm_judge=judge,
+        metric_applicability=_relevant(metric_name),
+    )["metrics"][metric_name]
+
+    assert metric["status"] == "evaluated"
+    assert len(provider_calls) == 1
+    assert len(judge_calls) == 2
+    assert [call["evidence_phase"] for call in judge_calls] == [
+        "global_discovery",
+        "group_local_review",
+    ]
+    assert judge_calls[0]["render_evidence"] == [
+        images["global_perspective"],
+    ]
+    assert judge_calls[1]["render_evidence"] == [
+        images["global_perspective"],
+        images["local"],
+    ]
+    assert metric["route"] == (
+        "global_then_cross_group_relations_then_group_local"
+        if metric_name == "functional_consistency"
+        else "global_discovery_then_forced_group_local"
+    )
+    assert metric["global_discovery"]["final_metric_verdict"] is True
+    assert metric["group_phase"]["status"] == "complete"
+    assert metric["judge_call_count"] == 2
+    assert metric["combined_evidence_budget"][
+        "budget_enforcement_scope"
+    ] == "judge_episode"
+    assert metric["combined_evidence_budget"][
+        "episode_seed_counting"
+    ] == "judge_facing_evidence"
+    assert metric["combined_evidence_budget"][
+        "judge_triggered_render_counting"
+    ] == "physical_artifacts"
+    assert metric["combined_evidence_budget"][
+        "metric_aggregate_counting"
+    ] == "physical_artifacts"
+    assert metric["combined_evidence_budget"][
+        "metric_aggregate_is_budget_authority"
+    ] is False
+    assert metric["global_evidence_paths"] == [
+        images["global_perspective"],
+    ]
+    assert provider_calls[0]["evidence_policy"][
+        "scoped_image_budget"
+    ] == 1
+    assert provider_calls[0]["evidence_policy"][
+        "global_image_budget"
+    ] == 1
+    assert provider_calls[0]["evidence_policy"]["image_budget"] == 2
+    assert provider_calls[0]["existing_global_evidence"] == [
+        images["global_perspective"]
+    ]
+
+
+def test_functional_global_uses_prejudgement_raw_probe_packet(
+    tmp_path,
+) -> None:
+    images = _images(
+        tmp_path,
+        "global_perspective",
+        "probe_frontage",
+        "probe_relation",
+        "group_local",
+    )
+    order: list[str] = []
+    planner_calls: list[dict] = []
+    probe_calls: list[dict] = []
+    local_calls: list[dict] = []
+    judge_calls: list[dict] = []
+
+    class Planner:
+        def plan_functional_evidence(self, request: dict) -> dict:
+            order.append("planner")
+            planner_calls.append(request)
+            return {
+                "schema_version": "functional_probe_plan_v2",
+                "probe_units": [
+                    {
+                        "probe_id": "functional_probe_01",
+                        "kind": "functional_frontage",
+                        "target_ids": ["chair_01"],
+                        "related_target_ids": [],
+                        "required_observations": [
+                            "target_visible",
+                            "interaction_side_visible",
+                            "front_back_disambiguated",
+                            "approach_zone_visible",
+                            "limited_local_context",
+                        ],
+                        "priority": 1,
+                        "reason": "decode the usable side",
+                    },
+                    {
+                        "probe_id": "functional_probe_02",
+                        "kind": "functional_correspondence",
+                        "target_ids": ["chair_01"],
+                        "related_target_ids": ["desk_01"],
+                        "required_observations": [
+                            "target_visible",
+                            "joint_visibility",
+                            "interaction_side_visible",
+                            "front_back_disambiguated",
+                            "approach_zone_visible",
+                            "group_context_visible",
+                            "limited_local_context",
+                        ],
+                        "priority": 2,
+                        "reason": "show the interaction orientation",
+                    },
+                ],
+                "reason": "bounded visual coverage",
+                "request_metadata": {"model": "planner"},
+            }
+
+    def probe_provider(request: dict) -> list[dict]:
+        order.append("probe")
+        probe_calls.append(request)
+        path = (
+            images["probe_frontage"]
+            if len(probe_calls) == 1
+            else images["probe_relation"]
+        )
+        return [
+            {
+                "path": path,
+                "role": "functional_probe_rgb",
+                "evidence_style": "raw",
+                "image_transform": "none",
+            },
+            {
+                "path": images["global_perspective"],
+                "role": "metric_highlighted_global",
+                "evidence_style": "raw_highlight",
+            },
+        ]
+
+    def local_provider(request: dict) -> list[dict]:
+        local_calls.append(request)
+        return [
+            {
+                "path": images["group_local"],
+                "role": "group_local",
+            }
+        ]
+
+    def judge(request: dict) -> dict:
+        order.append("judge")
+        judge_calls.append(request)
+        return _valid()
+
+    metric = evaluate_scene_quality_interfaces(
+        _scene(),
+        config={
+            "metrics": {
+                "style_consistency": {"enabled": False},
+                "scale_consistency": {"enabled": False},
+                "object_pairing_consistency": {"enabled": False},
+                "functional_consistency": {
+                    "enabled": True,
+                    "weight": 1.0,
+                },
+                "semantic_placement_consistency": {
+                    "enabled": False,
+                },
+            }
+        },
+        object_grouping_report={
+            "object_groups": [
+                {
+                    "group_id": "group_001",
+                    "object_ids": ["chair_01", "desk_01"],
+                    "reason": "must not reach functional Judge",
+                }
+            ]
+        },
+        render_evidence={
+            "global": [images["global_perspective"]]
+        },
+        camera_evidence_provider=local_provider,
+        functional_evidence_planner=Planner(),
+        functional_probe_evidence_provider=probe_provider,
+        vlm_judge=judge,
+        metric_applicability=_relevant(
+            "functional_consistency"
+        ),
+    )["metrics"]["functional_consistency"]
+
+    assert metric["status"] == "evaluated"
+    assert order[:4] == ["planner", "probe", "probe", "judge"]
+    assert len(planner_calls) == 1
+    assert planner_calls[0]["objects"] == [
+        {"id": "chair_01", "category": "chair"},
+        {"id": "desk_01", "category": "desk"},
+    ]
+    assert planner_calls[0]["architecture_context"] == {
+        "source": "scene_boundary_adapter",
+        "logical_boundary_enabled": True,
+        "logical_boundary_xy": [
+            [0, 0],
+            [5, 0],
+            [5, 5],
+            [0, 5],
+        ],
+        "physical_walls_rendered": False,
+        "physical_wall_ids": [],
+    }
+    assert metric["functional_probe_acquisition"]["planner_input"][
+        "architecture_context"
+    ] == planner_calls[0]["architecture_context"]
+    assert "center" not in planner_calls[0]["objects"][0]
+    # The configured limit is four; the planner emitted two concrete needs,
+    # so acquisition must not synthesize two unnecessary calls.
+    assert len(probe_calls) == 2
+    assert all(
+        request["evidence_policy"]["camera_pose_mode"]
+        == "query_cov"
+        and request["evidence_policy"]["presentation"] == "raw"
+        and request["presentation_invariant"][
+            "overlay_allowed_in_judge_packet"
+        ]
+        is False
+        for request in probe_calls
+    )
+    assert judge_calls[0]["render_evidence"] == [
+        images["global_perspective"],
+        images["probe_frontage"],
+        images["probe_relation"],
+    ]
+    assert judge_calls[0]["camera_acquisition_ledger"][
+        "total_images_acquired"
+    ] == 3
+    assert judge_calls[1]["render_evidence"] == [
+        images["global_perspective"],
+        images["group_local"],
+    ]
+    assert judge_calls[1]["camera_acquisition_ledger"][
+        "total_images_acquired"
+    ] == 2
+    assert judge_calls[1]["scene_summary"]["group_scope"] == {
+        "group_id": "group_001",
+        "member_ids": ["chair_01", "desk_01"],
+    }
+    assert "target_bounds" not in judge_calls[1]["scene_summary"][
+        "group_scope"
+    ]
+    assert judge_calls[0]["scene_summary"]["objects"] == [
+        {"id": "chair_01", "category": "chair"},
+        {"id": "desk_01", "category": "desk"},
+    ]
+    assert judge_calls[0]["object_groups"] == [
+        {
+            "group_id": "group_001",
+            "object_ids": ["chair_01", "desk_01"],
+        }
+    ]
+    packet = judge_calls[0]["functional_probe_evidence"]
+    assert [item["role"] for item in packet["image_order"]] == [
+        "scene_global",
+        "functional_probe",
+        "functional_probe",
+    ]
+    assert packet["probe_inclusion_is_invalidity_prior"] is False
+    assert metric["functional_probe_acquisition"]["status"] == (
+        "complete"
+    )
+    assert metric["functional_probe_evidence_paths"] == [
+        images["probe_frontage"],
+        images["probe_relation"],
+    ]
+    assert metric["global_context_evidence_paths"] == [
+        images["global_perspective"]
+    ]
+    assert len(local_calls) == 1
+
+
+@pytest.mark.parametrize(
+    ("metric_name", "planner_method", "defaulted_unit_id"),
+    [
+        (
+            "functional_consistency",
+            "discover_functional_evidence",
+            "functional_probe_planner",
+        ),
+        (
+            "semantic_placement_consistency",
+            "discover_placement_evidence",
+            "placement_discovery",
+        ),
+    ],
+)
+def test_recoverable_discovery_failure_isolated_to_coverage(
+    tmp_path,
+    metric_name: str,
+    planner_method: str,
+    defaulted_unit_id: str,
+) -> None:
+    images = _images(tmp_path, "global", "local")
+
+    class Planner:
+        pass
+
+    def fail(_self, _request):
+        raise ValueError("discovery schema rejected")
+
+    setattr(Planner, planner_method, fail)
+
+    def provider(_request: dict) -> list[dict]:
+        return [{"path": images["local"], "role": "group_local"}]
+
+    metric = evaluate_scene_quality_interfaces(
+        _scene(),
+        config=_only(metric_name),
+        object_grouping_report={
+            "object_groups": [
+                {
+                    "group_id": "group_001",
+                    "object_ids": ["chair_01", "desk_01"],
+                }
+            ]
+        },
+        render_evidence={"global": [images["global"]]},
+        camera_evidence_provider=provider,
+        functional_evidence_planner=Planner(),
+        functional_probe_evidence_provider=provider,
+        vlm_judge=lambda request: _valid(request),
+        metric_applicability=_relevant(metric_name),
+    )["metrics"][metric_name]
+
+    assert metric["status"] == "evaluated"
+    assert metric["terminal_state"] == "evaluated_degraded"
+    assert metric["score"] is None
+    assert metric["coverage"]["complete"] is False
+    assert metric["coverage"]["score_grounding"]["fraction"] < 1.0
+    assert metric["coverage"]["score_projection"][
+        "excluded_from_aggregate"
+    ] is True
+    assert metric["coverage"]["score_projection"][
+        "coverage_threshold_passed"
+    ] is False
+    assert metric["coverage"]["score_projection"][
+        "coverage_conditioned"
+    ] is True
+    assert defaulted_unit_id in {
+        item["unit_id"]
+        for item in metric["coverage"]["score_grounding"][
+            "defaulted_units"
+        ]
+    }
+
+
+@pytest.mark.parametrize(
+    ("metric_name", "planner_method", "planner_error"),
+    [
+        (
+            "functional_consistency",
+            "discover_functional_evidence",
+            ResponseSchemaRepairError(
+                "functional repair transport failed",
+                schema_audit={
+                    "attempts": [
+                        {"attempt": 2, "failure_kind": "transport"}
+                    ]
+                },
+            ),
+        ),
+        (
+            "semantic_placement_consistency",
+            "discover_placement_evidence",
+            ResponseSchemaRepairError(
+                "placement repair transport failed",
+                schema_audit={
+                    "attempts": [
+                        {"attempt": 2, "failure_kind": "transport"}
+                    ]
+                },
+            ),
+        ),
+        (
+            "functional_consistency",
+            "discover_functional_evidence",
+            TypeError("unexpected functional planner error"),
+        ),
+        (
+            "semantic_placement_consistency",
+            "discover_placement_evidence",
+            KeyError("unexpected placement planner error"),
+        ),
+    ],
+)
+def test_discovery_transport_and_program_failures_remain_hard(
+    tmp_path,
+    metric_name: str,
+    planner_method: str,
+    planner_error: Exception,
+) -> None:
+    images = _images(tmp_path, "global", "local")
+
+    class Planner:
+        pass
+
+    def fail(_self, _request):
+        raise planner_error
+
+    setattr(Planner, planner_method, fail)
+
+    metric = evaluate_scene_quality_interfaces(
+        _scene(),
+        config=_only(metric_name),
+        object_grouping_report=_grouping_report(),
+        render_evidence={"global": [images["global"]]},
+        camera_evidence_provider=lambda _request: [
+            {"path": images["local"], "role": "group_local"}
+        ],
+        functional_evidence_planner=Planner(),
+        functional_probe_evidence_provider=lambda _request: [
+            {"path": images["local"], "role": "group_local"}
+        ],
+        vlm_judge=lambda request: _valid(request),
+        metric_applicability=_relevant(metric_name),
+    )["metrics"][metric_name]
+
+    assert metric["status"] == "failed"
+    assert metric["terminal_state"] == "infrastructure_failure"
+    assert metric["score"] is None
+
+
+def test_partial_functional_discovery_coverage_reaches_acquisition_audit(
+) -> None:
+    class Planner:
+        def discover_functional_evidence(self, _request: dict) -> dict:
+            return {
+                "schema_version": "functional_discovery_v4",
+                "inspected_object_ids": ["chair_01", "desk_01"],
+                "object_coverage": [
+                    {"object_id": "chair_01", "inspected": True},
+                    {
+                        "object_id": "desk_01",
+                        "inspected": False,
+                        "defaulted": True,
+                    },
+                ],
+                "object_affordance_ledger": [],
+                "directed_surface_targets": [],
+                "within_group_correspondences": [],
+                "cross_group_correspondences": [],
+                "approach_clearance_targets": [],
+                "boundary_sensitive_targets": [],
+                "unusual_unconfirmed": [],
+                "reason": "one object row defaulted after schema retry",
+                "coverage": {
+                    "unit": "discovery_contract_obligation",
+                    "eligible_count": 3,
+                    "grounded_count": 2,
+                    "fraction": 2 / 3,
+                    "complete": False,
+                },
+            }
+
+    paths, audit = acquire_functional_probe_evidence(
+        planner=Planner(),
+        provider=None,
+        scene=_scene(),
+        global_image_path="/tmp/fixed-global-evidence.png",
+        groups=_grouping_report()["object_groups"],
+    )
+
+    assert paths == []
+    assert audit["status"] == "complete_no_probes"
+    assert audit["coverage"] == {
+        "unit": "discovery_contract_obligation",
+        "eligible_count": 3,
+        "grounded_count": 2,
+        "fraction": pytest.approx(2 / 3),
+        "complete": False,
+    }
+
+
+def test_disabled_functional_prejudgement_skips_only_proactive_stage(
+    tmp_path,
+) -> None:
+    images = _images(tmp_path, "global", "group_local")
+    local_calls: list[dict] = []
+    judge_calls: list[dict] = []
+
+    class Planner:
+        def __getattr__(self, name: str):
+            raise AssertionError(
+                f"disabled proactive stage called planner.{name}"
+            )
+
+    def proactive_provider(request: dict) -> list[dict]:
+        raise AssertionError(
+            f"disabled proactive stage called provider: {request}"
+        )
+
+    def local_provider(request: dict) -> list[dict]:
+        local_calls.append(request)
+        return [
+            {
+                "path": images["group_local"],
+                "role": "group_local",
+            }
+        ]
+
+    def judge(request: dict) -> dict:
+        judge_calls.append(request)
+        return _valid()
+
+    metric = evaluate_scene_quality_interfaces(
+        _scene(),
+        config={
+            "functional_prejudgement_evidence": {
+                "mode": "disabled"
+            },
+            "metrics": {
+                "style_consistency": {"enabled": False},
+                "scale_consistency": {"enabled": False},
+                "object_pairing_consistency": {"enabled": False},
+                "functional_consistency": {
+                    "enabled": True,
+                    "weight": 1.0,
+                },
+                "semantic_placement_consistency": {
+                    "enabled": False,
+                },
+            },
+        },
+        object_grouping_report=_grouping_report(),
+        render_evidence={"global": [images["global"]]},
+        camera_evidence_provider=local_provider,
+        functional_evidence_planner=Planner(),
+        functional_probe_evidence_provider=proactive_provider,
+        vlm_judge=judge,
+        metric_applicability=_relevant(
+            "functional_consistency"
+        ),
+    )["metrics"]["functional_consistency"]
+
+    assert metric["status"] == "evaluated"
+    assert metric["functional_prejudgement_evidence_mode"] == (
+        "disabled"
+    )
+    assert metric["functional_prejudgement_evidence"]["status"] == (
+        "disabled"
+    )
+    assert metric["prejudgement_functional_stage"] == {
+        "planner_calls": 0,
+        "usable_surface_detector_calls": 0,
+        "selector_calls": 0,
+        "preview_render_count": 0,
+        "full_render_count": 0,
+        "judge_facing_image_count": 0,
+        "cache_hits": 0,
+    }
+    assert len(local_calls) == 1
+    assert [call["evidence_phase"] for call in judge_calls] == [
+        "global_discovery",
+        "group_local_review",
+    ]
+    assert judge_calls[0]["functional_probe_evidence"] is None
+
+
+def test_functional_discovery_routes_cross_group_and_unusual_to_group(
+    tmp_path,
+) -> None:
+    scene = {
+        **_scene(),
+        "scene_type": "living_room",
+        "objects": [
+            {
+                "id": "sofa",
+                "category": "sofa",
+                "size": [2.0, 0.9, 0.9],
+                "center": [1.2, 2.5, 0.45],
+                "rotation": [0, 0, 0],
+            },
+            {
+                "id": "television",
+                "category": "television",
+                "size": [1.2, 0.2, 0.8],
+                "center": [4.0, 2.5, 1.2],
+                "rotation": [0, 0, 0],
+            },
+            {
+                "id": "cabinet",
+                "category": "cabinet",
+                "size": [0.8, 0.5, 1.5],
+                "center": [4.1, 3.4, 0.75],
+                "rotation": [0, 0, 0],
+            },
+        ],
+    }
+    images = _images(
+        tmp_path,
+        "global",
+        "cross_group",
+        "baseline_group_local",
+        "group_confirmation",
+    )
+    probe_calls: list[dict] = []
+    local_calls: list[dict] = []
+    judge_calls: list[dict] = []
+
+    class Discovery:
+        def discover_functional_evidence(self, request: dict) -> dict:
+            return {
+                "schema_version": "functional_discovery_v1",
+                "inspected_object_ids": [
+                    "sofa",
+                    "television",
+                    "cabinet",
+                ],
+                "object_coverage": [
+                    {"object_id": object_id, "inspected": True}
+                    for object_id in (
+                        "sofa",
+                        "television",
+                        "cabinet",
+                    )
+                ],
+                "directed_surface_targets": [
+                    {
+                        "discovery_id": "directed_surface_01",
+                        "target_id": "sofa",
+                        "surface_roles": ["seating_side"],
+                        "need_clearance": False,
+                        "observation_goal": "show the seating side",
+                        "owning_group_id": "group_001",
+                    },
+                    {
+                        "discovery_id": "directed_surface_02",
+                        "target_id": "television",
+                        "surface_roles": ["display_side"],
+                        "need_clearance": False,
+                        "observation_goal": "show the display side",
+                        "owning_group_id": "group_002",
+                    },
+                    {
+                        "discovery_id": "directed_surface_03",
+                        "target_id": "cabinet",
+                        "surface_roles": ["opening_side"],
+                        "need_clearance": False,
+                        "observation_goal": "show the opening side",
+                        "owning_group_id": "group_002",
+                    },
+                ],
+                "within_group_correspondences": [],
+                    "cross_group_correspondences": [
+                        {
+                            "discovery_id": "functional_direction_01",
+                            "target_ids": ["sofa", "television"],
+                            "group_ids": ["group_001", "group_002"],
+                            "scope": "cross_group",
+                            "predicate": "directional_correspondence",
+                            "observation_goal": (
+                                "show both usable sides and mutual orientation"
+                            ),
+                        },
+                        {
+                            "discovery_id": "functional_geometry_01",
+                            "target_ids": ["sofa", "television"],
+                            "group_ids": ["group_001", "group_002"],
+                            "scope": "cross_group",
+                            "predicate": "relative_use_geometry",
+                            "observation_goal": (
+                                "show their relative layout for ordinary use"
+                            ),
+                        }
+                    ],
+                "approach_clearance_targets": [],
+                "boundary_sensitive_targets": [],
+                "unusual_unconfirmed": [
+                    {
+                        "discovery_id": "unusual_unconfirmed_01",
+                        "target_ids": ["cabinet"],
+                        "owning_group_id": "group_002",
+                        "observation_goal": (
+                            "show cabinet access within its group context"
+                        ),
+                        "audit_reason": (
+                            "the global view leaves the access side unclear"
+                        ),
+                        "confirmation_scope": "group_local",
+                        "decision_authority": "none",
+                    }
+                ],
+                "reason": "complete",
+                "provenance": {"request_metadata": {"model": "discovery"}},
+            }
+
+    def probe_provider(request: dict) -> list[dict]:
+        probe_calls.append(request)
+        path = (
+            images["cross_group"]
+            if request["functional_acquisition_route"]["route_scope"]
+            == "cross_group"
+            else images["group_confirmation"]
+        )
+        return [
+            {
+                "path": path,
+                "role": "functional_probe_rgb",
+                "evidence_style": "raw",
+                "image_transform": "none",
+            }
+        ]
+
+    def local_provider(request: dict) -> list[dict]:
+        local_calls.append(request)
+        return [
+            {
+                "path": images["baseline_group_local"],
+                "role": "group_local",
+                "evidence_style": "raw",
+                "image_transform": "none",
+            }
+        ]
+
+    def judge(request: dict) -> dict:
+        judge_calls.append(request)
+        return _valid(request)
+
+    metric = evaluate_scene_quality_interfaces(
+        scene,
+        config={
+            "metrics": {
+                "style_consistency": {"enabled": False},
+                "scale_consistency": {"enabled": False},
+                "object_pairing_consistency": {"enabled": False},
+                "functional_consistency": {
+                    "enabled": True,
+                    "weight": 1.0,
+                },
+                "semantic_placement_consistency": {"enabled": False},
+            }
+        },
+        object_grouping_report={
+            "object_groups": [
+                {"group_id": "group_001", "object_ids": ["sofa"]},
+                {
+                    "group_id": "group_002",
+                    "object_ids": ["television", "cabinet"],
+                },
+            ]
+        },
+        render_evidence={"global": [images["global"]]},
+        camera_evidence_provider=local_provider,
+        functional_evidence_planner=Discovery(),
+        functional_probe_evidence_provider=probe_provider,
+        vlm_judge=judge,
+        metric_applicability=_relevant("functional_consistency"),
+    )["metrics"]["functional_consistency"]
+
+    assert metric["status"] == "evaluated"
+    # Exact-target reuse leaves four unique probe identities even though
+    # the default bounded capacity is six.
+    assert len(probe_calls) == 4
+    assert len(local_calls) == 2
+    cross_request = next(
+        request
+        for request in probe_calls
+        if request["functional_acquisition_route"]["route_scope"]
+        == "cross_group"
+    )
+    group_request = next(
+        request
+        for request in probe_calls
+        if request["functional_acquisition_route"]["route_scope"]
+        == "group_local"
+    )
+    assert cross_request["group_ids"] == []
+    assert cross_request["object_groups"] == []
+    assert group_request["group_ids"] == ["group_002"]
+    assert group_request["object_groups"] == [
+        {
+            "group_id": "group_002",
+            "object_ids": ["television", "cabinet"],
+        }
+    ]
+    assert group_request["functional_probe"]["group_member_ids"] == [
+        "television",
+        "cabinet",
+    ]
+    assert group_request["functional_probe"][
+        "camera_scope_composition"
+    ] == "specific_target_focus_plus_owning_group_context"
+    assert {
+        item["id"] for item in group_request["scene_summary"]["objects"]
+    } == {"television", "cabinet"}
+    assert judge_calls[0]["render_evidence"] == [images["global"]]
+    assert judge_calls[0]["functional_probe_evidence"] is None
+    assert judge_calls[1]["evidence_phase"] == (
+        "cross_group_relation_review"
+    )
+    assert judge_calls[1]["target_object_ids"] == [
+        "sofa",
+        "television",
+    ]
+    assert judge_calls[1]["render_evidence"] == [
+        images["global"],
+        images["cross_group"],
+    ]
+    assert judge_calls[1]["functional_probe_evidence"][
+        "episode_scope"
+    ] == "single_cross_group_relation_target_set"
+    assert judge_calls[1]["functional_probe_evidence"][
+        "required_check_count"
+    ] == 2
+    assert {
+        item["predicate"]
+        for item in judge_calls[1]["required_functional_checks"]
+    } == {
+        "directional_correspondence",
+        "relative_use_geometry",
+    }
+    assert sum(
+        request["evidence_phase"] == "cross_group_relation_review"
+        for request in judge_calls
+    ) == 1
+    group_002_judge = next(
+        request
+        for request in judge_calls[2:]
+        if request["scene_summary"]["group_scope"]["group_id"]
+        == "group_002"
+    )
+    assert group_002_judge["render_evidence"] == [
+        images["global"],
+        images["baseline_group_local"],
+    ]
+    observation_goals = [
+        item["neutral_observation_goal"]
+        for item in group_002_judge["functional_probe_evidence"][
+            "observation_requests"
+        ]
+    ]
+    assert any(
+        "show cabinet access within its group context" in goal
+        for goal in observation_goals
+    )
+    assert "global view leaves" not in json.dumps(
+        judge_calls[1]["functional_probe_evidence"]
+    )
+    assert metric["functional_probe_acquisition"][
+        "cross_group_evidence_paths"
+    ] == [images["cross_group"]]
+    assert metric["functional_probe_acquisition"][
+        "group_evidence_paths"
+    ] == {
+        "group_001": [images["group_confirmation"]],
+        "group_002": [images["group_confirmation"]],
+    }
+    group_002_result = next(
+        item
+        for item in metric["group_results"]
+        if item["group_id"] == "group_002"
+    )
+    assert group_002_result["evidence_resolution"][
+        "functional_probe_reuse"
+    ]["baseline_group_local_preserved"] is True
+    assert group_002_result["evidence_resolution"][
+        "functional_probe_reuse"
+    ]["appended_probe_paths"] == [images["group_confirmation"]]
+    assert metric["cross_group_relation_phase"] == {
+        "required": True,
+        "scheduled_relation_count": 1,
+        "judge_eligible_relation_count": 1,
+        "skipped_missing_pair_evidence_count": 0,
+        "resolved_relation_count": 1,
+        "status": "complete",
+            "max_probe_units": 32,
+    }
+    group_check_calls = [
+        request
+        for request in judge_calls
+        if request["evidence_phase"] == "group_local_review"
+    ]
+    assert len(group_check_calls) == 3
+    assert all(
+        len(request["required_functional_checks"]) == 1
+        for request in group_check_calls
+    )
+    assert metric["group_local_check_granularity"] == "per_check"
+    assert metric["judge_call_count"] == 5
+
+    probe_calls.clear()
+    local_calls.clear()
+    judge_calls.clear()
+    batched_metric = evaluate_scene_quality_interfaces(
+        scene,
+        config={
+            "metrics": {
+                "style_consistency": {"enabled": False},
+                "scale_consistency": {"enabled": False},
+                "object_pairing_consistency": {"enabled": False},
+                "functional_consistency": {
+                    "enabled": True,
+                    "weight": 1.0,
+                    "group_local_check_granularity": "batched",
+                    "group_local_evidence_policy": "isolated_episode",
+                },
+                "semantic_placement_consistency": {"enabled": False},
+            }
+        },
+        object_grouping_report={
+            "object_groups": [
+                {"group_id": "group_001", "object_ids": ["sofa"]},
+                {
+                    "group_id": "group_002",
+                    "object_ids": ["television", "cabinet"],
+                },
+            ]
+        },
+        render_evidence={"global": [images["global"]]},
+        camera_evidence_provider=local_provider,
+        functional_evidence_planner=Discovery(),
+        functional_probe_evidence_provider=probe_provider,
+        vlm_judge=judge,
+        metric_applicability=_relevant("functional_consistency"),
+    )["metrics"]["functional_consistency"]
+    batched_group_calls = [
+        request
+        for request in judge_calls
+        if request["evidence_phase"] == "group_local_review"
+    ]
+    assert len(batched_group_calls) == 2
+    assert any(
+        len(request["required_functional_checks"]) > 1
+        for request in batched_group_calls
+    )
+    assert batched_metric["group_local_check_granularity"] == "batched"
+    assert batched_metric["judge_call_count"] == 4
+
+
+def test_each_acquired_cross_group_relation_gets_one_judge_episode(
+    tmp_path,
+) -> None:
+    images = _images(
+        tmp_path,
+        "global",
+        "sofa_tv",
+        "piano_bench",
+    )
+    scene = {
+        **_scene(),
+        "scene_type": "living_room",
+        "objects": [
+            {"id": "sofa", "category": "sofa"},
+            {"id": "television", "category": "television"},
+            {"id": "piano", "category": "piano"},
+            {"id": "bench", "category": "piano_bench"},
+        ],
+    }
+
+    class Discovery:
+        def discover_functional_evidence(self, request: dict) -> dict:
+            return {
+                "schema_version": "functional_discovery_v3",
+                "inspected_object_ids": [
+                    "sofa",
+                    "television",
+                    "piano",
+                    "bench",
+                ],
+                "directed_surface_targets": [],
+                "within_group_correspondences": [],
+                "cross_group_correspondences": [
+                    {
+                        "discovery_id": "sofa_tv_relation",
+                        "target_ids": ["sofa", "television"],
+                        "group_ids": ["sofa_group", "tv_group"],
+                        "scope": "cross_group",
+                        "observation_kinds": ["mutual_orientation"],
+                        "observation_goal": (
+                            "show sofa and television facing compatibility"
+                        ),
+                    },
+                    {
+                        "discovery_id": "piano_bench_relation",
+                        "target_ids": ["piano", "bench"],
+                        "group_ids": ["piano_group", "bench_group"],
+                        "scope": "cross_group",
+                        "observation_kinds": ["cooperative_operation"],
+                        "observation_goal": (
+                            "show piano and bench joint-use alignment"
+                        ),
+                    },
+                ],
+                "approach_clearance_targets": [],
+                "boundary_sensitive_targets": [],
+                "unusual_unconfirmed": [],
+                "reason": "two cross-group relations",
+                "provenance": {},
+            }
+
+    def probe_provider(request: dict) -> list[dict]:
+        targets = set(request["object_ids"])
+        path = (
+            images["sofa_tv"]
+            if targets == {"sofa", "television"}
+            else images["piano_bench"]
+        )
+        return [
+            {
+                "path": path,
+                "role": "functional_probe_rgb",
+                "evidence_style": "raw",
+                "image_transform": "none",
+            }
+        ]
+
+    judge_calls: list[dict] = []
+
+    def judge(request: dict) -> dict:
+        judge_calls.append(request)
+        phase = request.get("evidence_phase")
+        relation_targets = set(
+            request.get("target_object_ids") or []
+        )
+        if (
+            phase == "cross_group_relation_review"
+            and relation_targets == {"sofa", "television"}
+        ):
+            return _with_required_functional_checks(request, {
+                "evidence_status": "sufficient",
+                "verdict": "invalid",
+                "confidence": 0.9,
+                "reason": "The two usable sides do not correspond.",
+                "missing_evidence": [],
+                "defects": [
+                    {
+                        "scope": "orientation_for_use",
+                        "target_ids": ["sofa", "television"],
+                        "relation": "incompatible_facing_direction",
+                        "reason": (
+                            "The seating and display sides face away from "
+                            "their intended joint-use direction."
+                        ),
+                    }
+                ],
+            })
+        return _valid(request)
+
+    metric = evaluate_scene_quality_interfaces(
+        scene,
+        config={
+            "metrics": {
+                "style_consistency": {"enabled": False},
+                "scale_consistency": {"enabled": False},
+                "object_pairing_consistency": {"enabled": False},
+                "functional_consistency": {
+                    "enabled": True,
+                    "weight": 1.0,
+                },
+                "semantic_placement_consistency": {"enabled": False},
+            }
+        },
+        object_grouping_report={
+            "object_groups": [
+                {"group_id": "sofa_group", "object_ids": ["sofa"]},
+                {
+                    "group_id": "tv_group",
+                    "object_ids": ["television"],
+                },
+                {"group_id": "piano_group", "object_ids": ["piano"]},
+                {"group_id": "bench_group", "object_ids": ["bench"]},
+            ]
+        },
+        render_evidence={"global": [images["global"]]},
+        camera_evidence_provider=lambda request: pytest.fail(
+            "singleton groups must not enter group-local review"
+        ),
+        functional_evidence_planner=Discovery(),
+        functional_probe_evidence_provider=probe_provider,
+        vlm_judge=judge,
+        metric_applicability=_relevant("functional_consistency"),
+    )["metrics"]["functional_consistency"]
+
+    assert [call["evidence_phase"] for call in judge_calls] == [
+        "global_discovery",
+        "cross_group_relation_review",
+        "cross_group_relation_review",
+    ]
+    relation_calls = judge_calls[1:]
+    assert [
+        set(call["target_object_ids"]) for call in relation_calls
+    ] == [
+        {"piano", "bench"},
+        {"sofa", "television"},
+    ]
+    assert all(
+        len(call["functional_probe_evidence"][
+            "relation_observation_requests"
+        ])
+        == 1
+        for call in relation_calls
+    )
+    assert metric["cross_group_relation_phase"][
+        "scheduled_relation_count"
+    ] == 2
+    assert metric["cross_group_relation_phase"]["status"] == "complete"
+    assert metric["group_phase"]["status"] == (
+        "not_required_singleton_only"
+    )
+    assert metric["judge_call_count"] == 3
+    assert metric["status"] == "evaluated"
+    assert metric["score"] == pytest.approx(0.8)
+    assert metric["global_discovery"]["final_metric_verdict"] is True
+    assert metric["global_scene_claims"] == []
+    assert len(metric["cross_group_relation_claims"]) == 1
+    assert metric["cross_group_relation_claims"][0][
+        "source_phase"
+    ] == "cross_group_relation_review:sofa_tv_relation"
+
+
+def test_failed_cross_group_acquisition_forces_judge_with_retained_global(
+    tmp_path,
+) -> None:
+    images = _images(tmp_path, "global")
+    scene = {
+        **_scene(),
+        "scene_type": "living_room",
+        "objects": [
+            {"id": "sofa", "category": "sofa"},
+            {"id": "television", "category": "television"},
+        ],
+    }
+
+    class Discovery:
+        def discover_functional_evidence(self, request: dict) -> dict:
+            return {
+                "schema_version": "functional_discovery_v3",
+                "inspected_object_ids": ["sofa", "television"],
+                "directed_surface_targets": [],
+                "within_group_correspondences": [],
+                "cross_group_correspondences": [
+                    {
+                        "discovery_id": "sofa_tv_relation",
+                        "target_ids": ["sofa", "television"],
+                        "group_ids": ["sofa_group", "tv_group"],
+                        "scope": "cross_group",
+                        "observation_kinds": ["mutual_orientation"],
+                        "observation_goal": (
+                            "show sofa and television facing compatibility"
+                        ),
+                    }
+                ],
+                "approach_clearance_targets": [],
+                "boundary_sensitive_targets": [],
+                "unusual_unconfirmed": [],
+                "reason": "one cross-group relation",
+                "provenance": {},
+            }
+
+    def failed_probe_provider(request: dict) -> list[dict]:
+        raise RuntimeError(
+            "no_feasible_candidate: functional candidate bank is empty"
+        )
+
+    judge_calls: list[dict] = []
+
+    def judge(request: dict) -> dict:
+        judge_calls.append(request)
+        return _valid(request)
+
+    metric = evaluate_scene_quality_interfaces(
+        scene,
+        config={
+            "metrics": {
+                "style_consistency": {"enabled": False},
+                "scale_consistency": {"enabled": False},
+                "object_pairing_consistency": {"enabled": False},
+                "functional_consistency": {
+                    "enabled": True,
+                    "weight": 1.0,
+                },
+                "semantic_placement_consistency": {"enabled": False},
+            }
+        },
+        object_grouping_report={
+            "object_groups": [
+                {"group_id": "sofa_group", "object_ids": ["sofa"]},
+                {
+                    "group_id": "tv_group",
+                    "object_ids": ["television"],
+                },
+            ]
+        },
+        render_evidence={"global": [images["global"]]},
+        camera_evidence_provider=lambda request: pytest.fail(
+            "singleton groups must not enter group-local review"
+        ),
+        functional_evidence_planner=Discovery(),
+        functional_probe_evidence_provider=failed_probe_provider,
+        vlm_judge=judge,
+        metric_applicability=_relevant("functional_consistency"),
+    )["metrics"]["functional_consistency"]
+
+    assert [call["evidence_phase"] for call in judge_calls] == [
+        "global_discovery",
+        "cross_group_relation_review",
+    ]
+    relation_call = judge_calls[1]
+    assert relation_call["render_evidence"] == [images["global"]]
+    assert relation_call["budget_exhaustion_finalization"] == {
+        "required": True,
+        "trigger_stop_reason": "pair_specific_evidence_unavailable",
+        "ambiguity_before_forcing": True,
+        "visual_evidence_policy": "retained_global_context_only",
+        "available_visual_count": 1,
+        "previous_missing_observations": [
+            "target_visible",
+            "joint_visibility",
+            "interaction_side_visible",
+            "front_back_disambiguated",
+        ],
+        "previous_evidence_request": {
+            "target_ids": ["sofa", "television"],
+            "missing_observations": [
+                "target_visible",
+                "joint_visibility",
+                "interaction_side_visible",
+                "front_back_disambiguated",
+            ],
+            "view_goal": (
+                "show sofa and television facing compatibility"
+            ),
+            "metadata": {
+                "source": "failed_pair_specific_acquisition",
+            },
+        },
+    }
+    assert metric["cross_group_relation_phase"] == {
+        "required": True,
+        "scheduled_relation_count": 1,
+        "judge_eligible_relation_count": 1,
+        "skipped_missing_pair_evidence_count": 0,
+        "resolved_relation_count": 1,
+        "status": "complete",
+        "max_probe_units": 32,
+    }
+    scheduled = metric["functional_cross_group_relation_schedule"][0]
+    assert scheduled["pair_specific_evidence_available"] is False
+    assert scheduled["judge_episode"] == (
+        "required_forced_binary_with_retained_global_evidence"
+    )
+    relation_result = metric["cross_group_relation_results"][0]
+    assert relation_result["vlm_invoked"] is True
+    assert relation_result["status"] == "evaluated"
+    assert relation_result["terminal_state"] == "evaluated_degraded"
+    assert relation_result["retained_evidence_forced_choice"] is True
+    assert relation_result["evidence_coverage"] == {
+        "pair_specific": False,
+        "retained_global": True,
+        "grounded": False,
+        "defaulted": False,
+    }
+    assert relation_result["judgement"][
+        "budget_exhaustion_forced_choice"
+    ]["applied"] is True
+    assert metric["status"] == "evaluated"
+    assert metric["terminal_state"] == "evaluated_degraded"
+    assert metric["coverage"]["terminal_resolved_count"] == 2
+    assert metric["coverage"]["resolved_count"] == 1
+    assert metric["coverage"]["fraction"] == pytest.approx(0.5)
+    assert metric["coverage"]["complete"] is False
+
+
+def test_functional_discovery_forces_singleton_unusual_confirmation(
+    tmp_path,
+) -> None:
+    scene = {
+        **_scene(),
+        "objects": [
+            {
+                "id": "cabinet",
+                "category": "cabinet",
+                "size": [0.8, 0.5, 1.5],
+                "center": [4.1, 3.4, 0.75],
+                "rotation": [0, 0, 0],
+            }
+        ],
+    }
+    images = _images(
+        tmp_path,
+        "global",
+        "baseline_group_local",
+        "confirmation",
+    )
+    judge_calls: list[dict] = []
+
+    class Discovery:
+        def discover_functional_evidence(self, request: dict) -> dict:
+            return {
+                "schema_version": "functional_discovery_v1",
+                "inspected_object_ids": ["cabinet"],
+                "object_coverage": [
+                    {"object_id": "cabinet", "inspected": True}
+                ],
+                "directed_surface_targets": [],
+                "within_group_correspondences": [],
+                "cross_group_correspondences": [],
+                "approach_clearance_targets": [],
+                "boundary_sensitive_targets": [],
+                "unusual_unconfirmed": [
+                    {
+                        "discovery_id": "unusual_unconfirmed_01",
+                        "target_ids": ["cabinet"],
+                        "owning_group_id": "group_001",
+                        "observation_goal": (
+                            "show the usable side and limited local context"
+                        ),
+                        "audit_reason": "global cue remains unresolved",
+                        "confirmation_scope": "group_local",
+                        "decision_authority": "none",
+                    }
+                ],
+                "reason": "complete",
+                "provenance": {"request_metadata": {}},
+            }
+
+    def probe_provider(request: dict) -> list[dict]:
+        return [
+            {
+                "path": images["confirmation"],
+                "role": "functional_probe_rgb",
+                "evidence_style": "raw",
+                "image_transform": "none",
+            }
+        ]
+
+    def local_provider(request: dict) -> list[dict]:
+        return [
+            {
+                "path": images["baseline_group_local"],
+                "role": "group_local",
+                "evidence_style": "raw",
+                "image_transform": "none",
+            }
+        ]
+
+    def judge(request: dict) -> dict:
+        judge_calls.append(request)
+        return _valid(request)
+
+    metric = evaluate_scene_quality_interfaces(
+        scene,
+        config={
+            "metrics": {
+                "style_consistency": {"enabled": False},
+                "scale_consistency": {"enabled": False},
+                "object_pairing_consistency": {"enabled": False},
+                "functional_consistency": {
+                    "enabled": True,
+                    "weight": 1.0,
+                },
+                "semantic_placement_consistency": {"enabled": False},
+            }
+        },
+        object_grouping_report={
+            "object_groups": [
+                {"group_id": "group_001", "object_ids": ["cabinet"]}
+            ]
+        },
+        render_evidence={"global": [images["global"]]},
+        camera_evidence_provider=local_provider,
+        functional_evidence_planner=Discovery(),
+        functional_probe_evidence_provider=probe_provider,
+        vlm_judge=judge,
+        metric_applicability=_relevant("functional_consistency"),
+    )["metrics"]["functional_consistency"]
+
+    assert metric["status"] == "evaluated"
+    assert metric["group_filter"][
+        "functional_confirmation_forced_group_ids"
+    ] == ["group_001"]
+    assert metric["group_filter"]["eligible_group_ids"] == ["group_001"]
+    assert len(judge_calls) == 2
+    assert judge_calls[1]["render_evidence"] == [
+        images["global"],
+        images["baseline_group_local"],
+        images["confirmation"],
+    ]
+
+
+def test_functional_boundary_facts_reach_judge_with_zero_probe_budget(
+    tmp_path,
+) -> None:
+    images = _images(tmp_path, "global", "group_local")
+    judge_calls: list[dict] = []
+    boundary_calls: list[dict] = []
+
+    class Planner:
+        def discover_functional_evidence(self, request: dict) -> dict:
+            return {
+                "schema_version": "functional_discovery_v3",
+                "inspected_object_ids": ["chair_01", "desk_01"],
+                "directed_surface_targets": [
+                    {
+                        "discovery_id": "directed_surface_01",
+                        "target_id": "chair_01",
+                        "directionality": "directed",
+                        "surface_roles": ["seating_side"],
+                        "need_clearance": True,
+                        "boundary_review_state": "routine",
+                        "owning_group_id": "group_001",
+                        "observation_goal": (
+                            "identify seating-side approach space"
+                        ),
+                    }
+                ],
+                "within_group_correspondences": [],
+                "cross_group_correspondences": [],
+                "approach_clearance_targets": [
+                    {
+                        "discovery_id": "approach_clearance_01",
+                        "target_id": "chair_01",
+                        "need_clearance": True,
+                        "owning_group_id": "group_001",
+                        "observation_goal": (
+                            "show ordinary seating approach"
+                        ),
+                    }
+                ],
+                "boundary_sensitive_targets": [],
+                "unusual_unconfirmed": [],
+                "reason": "complete",
+                "provenance": {},
+            }
+
+    class BoundaryProvider:
+        def provide_functional_boundary_evidence(
+            self,
+            request: dict,
+        ) -> dict:
+            boundary_calls.append(request)
+            return {
+                "status": "complete",
+                "decision_authority": "none",
+                "scene_access": "read_only",
+                "surface_targets": request["surface_targets"],
+                "usable_surface_hypotheses": [
+                    {
+                        "target_id": "chair_01",
+                        "status": "identified",
+                        "surfaces": [
+                            {
+                                "surface_role": "seating_side",
+                                "side_id": "local_pos_x",
+                                "visual_cues": ["seat and back geometry"],
+                                "confidence": 0.8,
+                            }
+                        ],
+                        "reason": "seating side",
+                    }
+                ],
+                "functional_geometry": {
+                    "schema_version": "functional_geometry_v1",
+                    "decision_authority": "none",
+                    "scene_access": "read_only",
+                    "logical_boundary_available": True,
+                    "surface_observations": [
+                        {
+                            "target_id": "chair_01",
+                            "nearest_boundary_distance_m": 0.2,
+                            "outward_ray_boundary_distance_m": 0.2,
+                            "approach_samples": [],
+                        }
+                    ],
+                    "observation_status": "available",
+                },
+                "decoder_audit": {
+                    "decoder_calls": 1,
+                    "cache_hits": 0,
+                    "preview_render_count": 8,
+                },
+                "provenance": {"geometry_source": "deterministic"},
+            }
+
+    def local_provider(request: dict) -> list[dict]:
+        return [
+            {
+                "path": images["group_local"],
+                "role": "group_local",
+            }
+        ]
+
+    def judge(request: dict) -> dict:
+        judge_calls.append(request)
+        return _valid(request)
+
+    config = {
+        "metrics": {
+            "style_consistency": {"enabled": False},
+            "scale_consistency": {"enabled": False},
+            "object_pairing_consistency": {"enabled": False},
+            "functional_consistency": {
+                "enabled": True,
+                "weight": 1.0,
+                "evidence_plan": {
+                    "prejudgement_probe_policy": {
+                        "enabled": True,
+                        "max_probe_units": 0,
+                    }
+                },
+            },
+            "semantic_placement_consistency": {"enabled": False},
+        }
+    }
+    metric = evaluate_scene_quality_interfaces(
+        _scene(),
+        config=config,
+        object_grouping_report=_grouping_report(),
+        render_evidence={"global": [images["global"]]},
+        camera_evidence_provider=local_provider,
+        functional_evidence_planner=Planner(),
+        functional_probe_evidence_provider=BoundaryProvider(),
+        vlm_judge=judge,
+        metric_applicability=_relevant("functional_consistency"),
+    )["metrics"]["functional_consistency"]
+
+    assert metric["status"] == "evaluated"
+    assert len(boundary_calls) == 1
+    assert metric["functional_probe_evidence_paths"] == []
+    assert judge_calls[0]["render_evidence"] == [images["global"]]
+    assert judge_calls[0]["functional_probe_evidence"] is None
+    structured = judge_calls[1]["functional_probe_evidence"][
+        "boundary_clearance_evidence"
+    ]
+    assert structured["decision_authority"] == "none"
+    assert structured["functional_geometry"][
+        "surface_observations"
+    ][0]["outward_ray_boundary_distance_m"] == 0.2
+    assert judge_calls[0]["camera_acquisition_ledger"][
+        "total_images_acquired"
+    ] == 1
+
+
+@pytest.mark.parametrize(
+    "metric_name",
+    [
+        "style_consistency",
+        "functional_consistency",
+        "semantic_placement_consistency",
+    ],
+)
+def test_visual_global_local_metrics_skip_singleton_group_review(
+    tmp_path,
+    metric_name,
+) -> None:
+    scene = _scene()
+    scene["objects"].append(
+        {
+            "id": "lamp_01",
+            "category": "floor_lamp",
+            "size": [0.3, 0.3, 1.6],
+            "center": [3.5, 3.5, 0.8],
+            "rotation": [0, 0, 0],
+        }
+    )
+    images = _images(tmp_path, "global", "work_local")
+    provider_calls: list[dict] = []
+    judge_calls: list[dict] = []
+
+    def provider(request: dict) -> list[dict]:
+        provider_calls.append(request)
+        return [
+            {"path": images["work_local"], "role": "group_local"}
+        ]
+
+    def judge(request: dict) -> dict:
+        judge_calls.append(request)
+        if (
+            metric_name == "style_consistency"
+            and len(judge_calls) == 1
+        ):
+            return _style_needs_local("chair_01")
+        return _valid()
+
+    metric = evaluate_scene_quality_interfaces(
+        scene,
+        config={
+            "metrics": {
+                "style_consistency": {"enabled": False},
+                "scale_consistency": {"enabled": False},
+                "object_pairing_consistency": {"enabled": False},
+                metric_name: {"enabled": True, "weight": 1.0},
+            }
+        },
+        object_grouping_report={
+            "object_groups": [
+                {
+                    "group_id": "work",
+                    "object_ids": ["chair_01", "desk_01"],
+                },
+                {
+                    "group_id": "lamp",
+                    "object_ids": ["lamp_01"],
+                },
+            ]
+        },
+        render_evidence={"global": [images["global"]]},
+        camera_evidence_provider=provider,
+        vlm_judge=judge,
+        metric_applicability=_relevant(metric_name),
+    )["metrics"][metric_name]
+
+    assert metric["status"] == "evaluated"
+    assert len(judge_calls) == 2
+    assert len(provider_calls) == 1
+    assert provider_calls[0]["group_scope"]["group_id"] == "work"
+    assert metric["group_filter"]["eligible_group_ids"] == ["work"]
+    assert metric["group_filter"]["skipped_groups"] == [
+        {
+            "group_id": "lamp",
+            "member_ids": ["lamp_01"],
+            "member_count": 1,
+            "reason": "singleton_group",
+        }
+    ]
+
+
+def test_localized_style_candidate_forces_its_singleton_group(
+    tmp_path,
+) -> None:
+    scene = _scene()
+    scene["objects"].append(
+        {
+            "id": "lamp_01",
+            "category": "floor_lamp",
+            "size": [0.3, 0.3, 1.6],
+            "center": [3.5, 3.5, 0.8],
+            "rotation": [0, 0, 0],
+        }
+    )
+    images = _images(tmp_path, "global", "singleton_local")
+    provider_calls: list[dict] = []
+    judge_calls: list[dict] = []
+
+    def provider(request: dict) -> list[dict]:
+        provider_calls.append(request)
+        return [
+            {"path": images["singleton_local"], "role": "group_local"}
+        ]
+
+    def judge(request: dict) -> dict:
+        judge_calls.append(request)
+        if len(judge_calls) == 1:
+            return _style_needs_local("lamp_01")
+        return _valid()
+
+    metric = evaluate_scene_quality_interfaces(
+        scene,
+        config=_only("style_consistency"),
+        object_grouping_report={
+            "object_groups": [
+                {
+                    "group_id": "work",
+                    "object_ids": ["chair_01", "desk_01"],
+                },
+                {
+                    "group_id": "lamp",
+                    "object_ids": ["lamp_01"],
+                },
+            ]
+        },
+        render_evidence={"global": [images["global"]]},
         camera_evidence_provider=provider,
         vlm_judge=judge,
         metric_applicability=_relevant("style_consistency"),
     )["metrics"]["style_consistency"]
 
-    assert metric["score"] == 1.0
-    assert metric["route"] == "global_screen_resolved"
-    assert metric["router_state"] == "not_suspicious"
-    assert metric["judge_call_count"] == 1
-    assert provider_calls == []
-    assert [call["evidence_phase"] for call in judge_calls] == [
-        "global_screen"
+    assert metric["status"] == "evaluated"
+    assert len(judge_calls) == 2
+    assert provider_calls[0]["group_scope"]["group_id"] == "lamp"
+    assert metric["selected_group_ids"] == ["lamp"]
+    assert metric["group_filter"]["explicit_singleton_group_ids"] == [
+        "lamp"
     ]
 
 
-def test_style_suspicion_requests_local_then_rejudges(tmp_path) -> None:
+def test_supported_invalid_does_not_mask_incomplete_coverage() -> None:
+    base = {
+        "functional_check_coverage": {
+            "unresolved_check_ids": ["functional_check_pending"],
+        }
+    }
+    result = _aggregate_global_and_group_results(
+        base,
+        metric_name="functional_consistency",
+        global_record={
+            "verdict": "valid",
+            "confidence": 0.9,
+            "defects": [],
+        },
+        global_outcome={"status": "evaluated", "score": 1.0},
+        scene_claims=[],
+        relation_claims=[],
+        relation_results=[],
+        relation_phase_complete=True,
+        group_results=[
+            {
+                "group_id": "work",
+                "status": "evaluated",
+                "score": 0.0,
+                "judgement": {
+                    "verdict": "invalid",
+                    "confidence": 0.8,
+                    "defects": [
+                        {
+                            "scope": "clearance",
+                            "target_ids": ["chair_01"],
+                            "relation": "clearance",
+                            "reason": "Ordinary use is materially blocked.",
+                        }
+                    ],
+                },
+            },
+            {
+                "group_id": "other",
+                "status": "unresolved",
+                "score": None,
+            },
+        ],
+        group_phase_required=True,
+        group_phase_complete=False,
+        functional_check_phase_complete=False,
+        placement_check_phase_complete=True,
+    )
+
+    assert result["status"] == "evaluated"
+    assert result["terminal_state"] == "evaluated_degraded"
+    assert result["score"] == 0.0
+    assert result["coverage"]["complete"] is False
+    assert result["judgement"]["verdict"] == "invalid"
+    assert result["judgement"]["evidence_status"] == "sufficient"
+    assert result["judgement"]["unresolved_scopes"] == [
+        "functional_check:functional_check_pending",
+    ]
+    assert result["final_object_findings"][0]["object_id"] == "chair_01"
+    assert "infrastructure_failures" not in result
+
+
+def test_functional_global_pass_preserves_cross_group_defect(
+    tmp_path,
+) -> None:
+    scene = {
+        **_scene(),
+        "objects": [
+            {
+                "id": "sofa_01",
+                "category": "sofa",
+                "size": [2.0, 0.8, 0.9],
+                "center": [1.5, 2.0, 0.45],
+                "rotation": [0, 0, 180],
+            },
+            {
+                "id": "coffee_table_01",
+                "category": "coffee_table",
+                "size": [1.0, 0.6, 0.4],
+                "center": [2.4, 2.0, 0.2],
+                "rotation": [0, 0, 0],
+            },
+            {
+                "id": "television_01",
+                "category": "television",
+                "size": [1.2, 0.2, 0.8],
+                "center": [4.2, 2.0, 1.2],
+                "rotation": [0, 0, 180],
+            },
+            {
+                "id": "tv_cabinet_01",
+                "category": "tv_cabinet",
+                "size": [1.5, 0.5, 0.6],
+                "center": [4.2, 2.0, 0.3],
+                "rotation": [0, 0, 0],
+            },
+        ],
+    }
+    images = _images(
+        tmp_path,
+        "global",
+        "seating_local",
+        "media_local",
+    )
+    judge_calls: list[dict] = []
+
+    global_invalid = {
+        "evidence_status": "sufficient",
+        "verdict": "invalid",
+        "confidence": 0.92,
+        "reason": "The sofa faces away from the television.",
+        "missing_evidence": [],
+        "defects": [
+            {
+                "scope": "facing_and_interaction_direction",
+                "target_ids": ["sofa_01", "television_01"],
+                "relation": "sofa_faces_away_from_television",
+                "reason": (
+                    "The seating-to-display interaction direction is unusable."
+                ),
+            }
+        ],
+    }
+
+    def provider(request: dict) -> list[dict]:
+        group_id = request["group_scope"]["group_id"]
+        return [
+            {
+                "path": images[f"{group_id}_local"],
+                "role": "group_local",
+            }
+        ]
+
+    def judge(request: dict) -> dict:
+        judge_calls.append(request)
+        return global_invalid if len(judge_calls) == 1 else _valid()
+
+    metric = evaluate_scene_quality_interfaces(
+        scene,
+        config={
+            "metrics": {
+                "style_consistency": {"enabled": False},
+                "scale_consistency": {"enabled": False},
+                "object_pairing_consistency": {"enabled": False},
+                "functional_consistency": {
+                    "enabled": True,
+                    "weight": 1.0,
+                },
+            }
+        },
+        object_grouping_report={
+            "object_groups": [
+                {
+                    "group_id": "seating",
+                    "object_ids": ["sofa_01", "coffee_table_01"],
+                },
+                {
+                    "group_id": "media",
+                    "object_ids": [
+                        "television_01",
+                        "tv_cabinet_01",
+                    ],
+                },
+            ]
+        },
+        render_evidence={"global": [images["global"]]},
+        camera_evidence_provider=provider,
+        vlm_judge=judge,
+        metric_applicability=_relevant("functional_consistency"),
+    )["metrics"]["functional_consistency"]
+
+    assert len(judge_calls) == 3
+    assert metric["status"] == "evaluated"
+    assert metric["score"] == pytest.approx(0.8)
+    assert metric["coverage"]["complete"] is True
+    assert metric["judgement"]["defects"] == global_invalid["defects"]
+    assert len(metric["global_scene_claims"]) == 1
+    assert len(metric["final_defect_claims"]) == 1
+
+
+@pytest.mark.parametrize(
+    ("metric_name", "scope"),
+    [
+        (
+            "style_consistency",
+            "significant_visible_style_incompatibility",
+        ),
+        (
+            "semantic_placement_consistency",
+            "implausible_local_context",
+        ),
+    ],
+)
+def test_global_local_duplicate_claim_is_one_metric_object_penalty(
+    tmp_path,
+    metric_name,
+    scope,
+) -> None:
+    images = _images(tmp_path, "global", "local")
+    defect = {
+        "scope": scope,
+        "target_ids": ["chair_01", "desk_01"],
+        "relation": "same_object_level_defect",
+        "reason": "The same object-level defect is visible in both phases.",
+    }
+    if metric_name == "semantic_placement_consistency":
+        defect.update(
+            scope="semantically_inappropriate_scene_zone",
+            target_ids=["chair_01"],
+            relation="scene_zone",
+            check_id="placement_scene_zone_proposal",
+        )
+        defect["severity"] = "material_contextual_mismatch"
+    invalid = {
+        "evidence_status": "sufficient",
+        "verdict": "invalid",
+        "confidence": 0.9,
+        "reason": defect["reason"],
+        "missing_evidence": [],
+        "defects": [defect],
+    }
+    if metric_name == "semantic_placement_consistency":
+        invalid["judge_originated_placement_results"] = [
+            {
+                "proposal_id": "placement_scene_zone_proposal",
+                "subject_id": "chair_01",
+                "context_ids": [],
+                "check_type": "scene_zone",
+                "observation_goal": (
+                    "Inspect the chair's room zone in global context."
+                ),
+                "observation_status": "observed",
+                "conclusion": "invalid",
+                "reason": defect["reason"],
+                "severity": "material_contextual_mismatch",
+            }
+        ]
+
+    judge_call_count = 0
+
+    def judge(request: dict) -> dict:
+        nonlocal judge_call_count
+        judge_call_count += 1
+        if (
+            metric_name == "semantic_placement_consistency"
+            and judge_call_count > 1
+        ):
+            return _valid(request)
+        return deepcopy(invalid)
+
+    metric = evaluate_scene_quality_interfaces(
+        _scene(),
+        config={
+            "metrics": {
+                "style_consistency": {"enabled": False},
+                "scale_consistency": {"enabled": False},
+                "object_pairing_consistency": {"enabled": False},
+                metric_name: {
+                    "enabled": True,
+                    "weight": 1.0,
+                },
+            }
+        },
+        object_grouping_report=_grouping_report(),
+        render_evidence={"global": [images["global"]]},
+        camera_evidence_provider=lambda request: [
+            {"path": images["local"], "role": "group_local"}
+        ],
+        vlm_judge=judge,
+        metric_applicability=_relevant(metric_name),
+    )["metrics"][metric_name]
+
+    expected_score = 0.2 if metric_name == "style_consistency" else 0.6
+    assert metric["score"] == pytest.approx(expected_score)
+    assert len(metric["judgement"]["defects"]) == 1
+    assert len(metric["final_defect_claims"]) == 1
+    if metric_name == "style_consistency":
+        correspondence = metric["group_results"][0][
+            "claim_correspondence"
+        ]
+        assert correspondence[0]["relationship"] == (
+            "confirmed_routed_candidate"
+        )
+        assert correspondence[0]["routed_candidate_id"] == (
+            metric["global_screen_candidate_claims"][0]["claim_id"]
+        )
+        assert metric["object_level_attribution"] == {
+            "enabled": True,
+            "unit": "object",
+            "deduplication_key": ["metric", "object_id"],
+            "cross_phase_deduplication": True,
+            "cross_metric_deduplication": False,
+            "raw_defect_observation_count": 2,
+            "unique_object_count": 2,
+            "merged_duplicate_observation_count": 0,
+            "penalty_unit_count": 2,
+        }
+    else:
+        assert metric["placement_check_coverage"]["complete"] is True
+        assert len(metric["placement_check_ledger"]["checks"]) == 1
+        assert metric["object_level_attribution"] == {
+            "enabled": True,
+            "unit": "object",
+            "deduplication_key": ["metric", "object_id"],
+            "cross_phase_deduplication": True,
+            "cross_metric_deduplication": False,
+            "raw_defect_observation_count": 1,
+            "unique_object_count": 1,
+            "merged_duplicate_observation_count": 0,
+            "penalty_unit_count": 1,
+        }
+        assert metric["placement_severity"][
+            "highest_severity"
+        ] == "atypical"
+        assert metric["placement_severity"][
+            "strict_failure_present"
+        ] is False
+        assert metric["placement_severity"][
+            "extended_issue_present"
+        ] is True
+    expected_findings = {
+        "chair_01": 1,
+    } if metric_name == "semantic_placement_consistency" else {
+        "chair_01": 1,
+        "desk_01": 1,
+    }
+    assert {
+        finding["object_id"]: finding["observation_count"]
+        for finding in metric["final_object_findings"]
+    } == expected_findings
+    assert all(
+        finding["observed_in_global_and_local"]
+        is False
+        for finding in metric["final_object_findings"]
+    )
+
+
+def test_same_metric_object_is_one_penalty_across_distinct_phase_claims(
+    tmp_path,
+) -> None:
+    images = _images(tmp_path, "global", "local")
+    global_invalid = {
+        "evidence_status": "sufficient",
+        "verdict": "invalid",
+        "confidence": 0.9,
+        "reason": "The chair is unusably far from the desk.",
+        "missing_evidence": [],
+        "defects": [
+            {
+                "scope": "reachability",
+                "target_ids": ["chair_01"],
+                "relation": "chair_cannot_reach_desk",
+                "reason": "The chair cannot serve the desk.",
+            }
+        ],
+    }
+    local_invalid = {
+        "evidence_status": "sufficient",
+        "verdict": "invalid",
+        "confidence": 0.85,
+        "reason": "The chair's interaction side is unusable.",
+        "missing_evidence": [],
+        "defects": [
+            {
+                "scope": "interaction_side_accessibility",
+                "target_ids": ["chair_01"],
+                "relation": "chair_interaction_side_blocked",
+                "reason": "The same chair cannot be used from this side.",
+            }
+        ],
+    }
+    judge_calls: list[dict] = []
+
+    def judge(request: dict) -> dict:
+        judge_calls.append(request)
+        return global_invalid if len(judge_calls) == 1 else local_invalid
+
+    metric = evaluate_scene_quality_interfaces(
+        _scene(),
+        config={
+            "metrics": {
+                "style_consistency": {"enabled": False},
+                "scale_consistency": {"enabled": False},
+                "object_pairing_consistency": {"enabled": False},
+                "functional_consistency": {
+                    "enabled": True,
+                    "weight": 1.0,
+                },
+                "semantic_placement_consistency": {"enabled": False},
+            }
+        },
+        object_grouping_report=_grouping_report(),
+        render_evidence={"global": [images["global"]]},
+        camera_evidence_provider=lambda request: [
+            {"path": images["local"], "role": "group_local"}
+        ],
+        vlm_judge=judge,
+        metric_applicability=_relevant("functional_consistency"),
+    )["metrics"]["functional_consistency"]
+
+    # Distinct claims remain auditable, but Function uses the strongest
+    # burden per object rather than stacking every check on that object.
+    assert metric["score"] == pytest.approx(0.6)
+    assert len(metric["final_defect_claims"]) == 2
+    assert len(metric["final_object_findings"]) == 1
+    finding = metric["final_object_findings"][0]
+    assert finding["metric"] == "functional_consistency"
+    assert finding["object_id"] == "chair_01"
+    assert finding["observation_count"] == 2
+    assert finding["merged_duplicate_observation_count"] == 1
+    assert finding["observed_in_global_and_local"] is True
+    assert metric["judgement"]["object_penalty_count"] == 1
+    correspondence = metric["group_results"][0][
+        "scene_claim_correspondence"
+    ][0]
+    assert correspondence["relationship"] == (
+        "same_metric_object_already_flagged_global"
+    )
+    assert correspondence["object_level_deduplication"][
+        "duplicate_penalty_suppressed"
+    ] is True
+    assert correspondence["object_level_deduplication"][
+        "cross_metric_deduplication"
+    ] is False
+
+
+def test_visual_confirmation_accepts_fewer_images_than_budget_when_sufficient(
+    tmp_path,
+) -> None:
+    local_image = _images(tmp_path, "local")["local"]
+    judge_calls: list[dict] = []
+    suspicious = {
+        "evidence_status": "sufficient",
+        "verdict": "invalid",
+        "confidence": 0.7,
+        "reason": "The chair dimensions look suspicious.",
+        "missing_evidence": [],
+        "defects": [
+            {
+                "scope": (
+                    "significant_visible_category_relative_"
+                    "scale_incoherence"
+                ),
+                "target_ids": ["chair_01"],
+                "relation": "scale_outlier_candidate",
+                "reason": "The JSON dimensions merit confirmation.",
+            }
+        ],
+    }
+
+    def judge(request: dict) -> dict:
+        judge_calls.append(request)
+        return suspicious if len(judge_calls) == 1 else _valid()
+
+    metric = evaluate_scene_quality_interfaces(
+        _scene(),
+        config=_json_first_only("scale_consistency"),
+        object_grouping_report=_grouping_report(),
+        render_evidence=None,
+        camera_evidence_provider=lambda request: [
+            {"path": local_image, "role": "group_local"}
+        ],
+        vlm_judge=judge,
+        metric_applicability=_relevant("scale_consistency"),
+    )["metrics"]["scale_consistency"]
+
+    assert metric["status"] == "evaluated"
+    assert judge_calls[1]["render_evidence"] == [local_image]
+    assert metric["evidence_request"]["image_budget"] == 3
+
+
+def test_style_global_screen_plan_clear_skips_local(
+    tmp_path,
+) -> None:
     images = _images(tmp_path, "global_a", "global_b", "local_a", "local_b")
     provider_calls: list[dict] = []
     judge_calls: list[dict] = []
@@ -272,53 +3681,32 @@ def test_style_suspicion_requests_local_then_rejudges(tmp_path) -> None:
             ],
         }
 
-    suspicious = {
-        "evidence_status": "sufficient",
-        "verdict": "invalid",
-        "confidence": 0.8,
-        "reason": "The chair appears to use a conflicting rendering style.",
-        "missing_evidence": [],
-        "defects": [
-            {
-                "scope": "significant_visible_style_incompatibility",
-                "target_ids": ["chair_01"],
-                "relation": "rendering_style_outlier",
-                "reason": "The chair appears to use a conflicting rendering style.",
-            }
-        ],
-    }
+    config = _style_global_then_local_config()
+    config["metrics"]["style_consistency"]["evidence_plan"][
+        "evidence_strategy"
+    ] = "global_screen_then_local"
 
     def judge(request: dict) -> dict:
         judge_calls.append(request)
-        return suspicious if len(judge_calls) == 1 else _valid()
+        return _valid(request)
 
     metric = evaluate_scene_quality_interfaces(
         _scene(),
-        config=_style_global_then_local_config(),
-        render_evidence=[images["global_a"], images["global_b"]],
+        config=config,
+        object_grouping_report=_grouping_report(),
+        render_evidence={"global": [images["global_a"], images["global_b"]]},
         camera_evidence_provider=provider,
         vlm_judge=judge,
         metric_applicability=_relevant("style_consistency"),
     )["metrics"]["style_consistency"]
 
     assert metric["score"] == 1.0
-    assert metric["route"] == "global_screen_then_local"
-    assert metric["router_state"] == "suspicious"
-    assert metric["judge_call_count"] == 2
-    assert metric["local_evidence_paths"] == [
-        images["local_a"],
-        images["local_b"],
-    ]
-    assert provider_calls[0]["object_ids"] == ["chair_01"]
+    assert metric["route"] == "global_clear"
+    assert metric["judge_call_count"] == 1
+    assert metric["local_evidence_paths"] == []
+    assert provider_calls == []
     assert [call["evidence_phase"] for call in judge_calls] == [
         "global_screen",
-        "local_confirmation",
-    ]
-    assert judge_calls[1]["render_evidence"] == [
-        images["local_a"],
-        images["local_b"],
-        images["global_a"],
-        images["global_b"],
     ]
 
 
@@ -390,7 +3778,7 @@ class _StyleLocalRenderer:
         return {"views": views}
 
 
-def test_style_suspicion_uses_real_provider_group_local_override(
+def test_style_routed_local_uses_real_provider_group_local_override(
     tmp_path,
 ) -> None:
     images = _images(tmp_path, "global_a", "global_b")
@@ -405,25 +3793,13 @@ def test_style_suspicion_uses_real_provider_group_local_override(
         max_views=1,
     )
     judge_calls: list[dict] = []
-    suspicious = {
-        "evidence_status": "sufficient",
-        "verdict": "invalid",
-        "confidence": 0.8,
-        "reason": "The chair appears to use a conflicting style.",
-        "missing_evidence": [],
-        "defects": [
-            {
-                "scope": "significant_visible_style_incompatibility",
-                "target_ids": ["chair_01"],
-                "relation": "rendering_style_outlier",
-                "reason": "The chair appears to use a conflicting style.",
-            }
-        ],
-    }
-
     def judge(request: dict) -> dict:
         judge_calls.append(request)
-        return suspicious if len(judge_calls) == 1 else _valid()
+        return (
+            _style_needs_local()
+            if len(judge_calls) == 1
+            else _valid()
+        )
 
     metric = evaluate_scene_quality_interfaces(
         _scene(),
@@ -470,9 +3846,16 @@ def test_canonical_profile_l3_section_is_the_profile_override() -> None:
     assert resolved["metrics"]["style_consistency"]["weight"] == 0.5
 
 
-def test_all_three_metrics_evaluate_and_aggregate_when_complete(tmp_path) -> None:
+def test_three_metric_subset_evaluates_and_aggregates_when_complete(tmp_path) -> None:
     calls: list[dict] = []
-    images = _images(tmp_path, "global", "scale", "pair_1", "pair_2")
+    images = _images(
+        tmp_path,
+        "global",
+        "style_local",
+        "scale",
+        "pair_1",
+        "pair_2",
+    )
 
     def judge(request: dict) -> dict:
         calls.append(request)
@@ -480,9 +3863,18 @@ def test_all_three_metrics_evaluate_and_aggregate_when_complete(tmp_path) -> Non
 
     report = evaluate_scene_quality_interfaces(
         _scene(),
+        config={
+            "metrics": {
+                "functional_consistency": {"enabled": False},
+                "semantic_placement_consistency": {"enabled": False},
+            }
+        },
         object_grouping_report=_grouping_report(),
         render_evidence={
             "global": [images["global"]],
+            "style_consistency": {
+                "group_001": [images["style_local"]],
+            },
             "scale_consistency": [images["scale"]],
             "object_pairing_consistency": [
                 images["pair_1"],
@@ -491,7 +3883,11 @@ def test_all_three_metrics_evaluate_and_aggregate_when_complete(tmp_path) -> Non
         },
         vlm_judge=judge,
         prompt="Create a coherent bedroom work corner.",
-        metric_applicability=_relevant(*SCENE_QUALITY_INTERFACE_METRICS),
+        metric_applicability=_relevant(
+            "style_consistency",
+            "scale_consistency",
+            "object_pairing_consistency",
+        ),
     )
     assert report["category"] == SCENE_QUALITY_INTERFACE_NAMESPACE == "l3_scene_quality"
     assert report["implemented"] is True
@@ -502,12 +3898,22 @@ def test_all_three_metrics_evaluate_and_aggregate_when_complete(tmp_path) -> Non
         "resolved_count": 3,
         "fraction": 1.0,
         "complete": True,
+        "score_grounding_complete": True,
+        "grounded_score_weight": pytest.approx(0.20),
+        "required_score_weight": pytest.approx(0.20),
+        "grounded_score_fraction": 1.0,
+        "observed_score": 1.0,
+        "earned_score_mass": 1.0,
+        "minimum_publishable_coverage": 0.8,
+        "coverage_threshold_passed": True,
     }
     assert report["renderer_invoked"] is False
     assert report["vlm_invoked"] is True
-    assert {request["metric"] for request in calls} == set(
-        SCENE_QUALITY_INTERFACE_METRICS
-    )
+    assert {request["metric"] for request in calls} == {
+        "style_consistency",
+        "scale_consistency",
+        "object_pairing_consistency",
+    }
     assert all(request["vlm_role"] == "judge" for request in calls)
     assert all(
         request["decision_contract"] == "canonical_metric_v1"
@@ -517,6 +3923,13 @@ def test_all_three_metrics_evaluate_and_aggregate_when_complete(tmp_path) -> Non
         request["judge_method"] == "adjudicate_scene_quality"
         for request in calls
     )
+    assert all(
+        request["metric_prompt_version"] == L3_METRIC_PROMPT_VERSION
+        and request["metric_boundary_rules"] == list(
+            L3_METRIC_BOUNDARY_RULES
+        )
+        for request in calls
+    )
     pairing_request = next(
         request
         for request in calls
@@ -524,12 +3937,21 @@ def test_all_three_metrics_evaluate_and_aggregate_when_complete(tmp_path) -> Non
     )
     assert pairing_request["object_groups"][0]["group_id"] == "group_001"
     assert "orientation" in pairing_request["judgment_scope"]["excluded"]
-    assert pairing_request["natural_language_prompt"].startswith("Create")
-    assert pairing_request["render_evidence"] == [
-        images["global"],
-        images["pair_1"],
-        images["pair_2"],
+    assert "scene_member_category_compatibility" in (
+        pairing_request["judgment_scope"]["included"]
+    )
+    assert "evidence scope, not compatibility ground truth" in (
+        pairing_request["metric_rubric"]
+    )
+    assert "room_type: bedroom" in pairing_request[
+        "natural_language_prompt"
     ]
+    assert "coherent bedroom work corner" not in pairing_request[
+        "natural_language_prompt"
+    ]
+    assert pairing_request["render_evidence"] == []
+    assert pairing_request["evidence_phase"] == "json_screen"
+    assert pairing_request["decision_mode"] == "screen"
     assert report["active_metric_signature"] == (
         "style_consistency+scale_consistency+object_pairing_consistency"
     )
@@ -582,21 +4004,29 @@ def test_all_three_metrics_evaluate_and_aggregate_when_complete(tmp_path) -> Non
                 "missing_evidence": [],
                 "defects": [],
             },
-            "unresolved",
+            "evaluated",
+            1.0,
             None,
-            "ambiguous_scene_quality_judgement",
         ),
         (
-            {
-                "evidence_status": "insufficient",
-                "verdict": "ambiguous",
-                "reason": "The complete silhouettes are not visible.",
+                {
+                    "evidence_status": "insufficient",
+                    "verdict": "ambiguous",
+                    "reason": "The complete silhouettes are not visible.",
                     "missing_evidence": ["complete target silhouettes"],
                     "defects": [],
-            },
-            "unresolved",
+                    "evidence_request": {
+                        "target_ids": ["chair_01", "desk_01"],
+                        "missing_observations": [
+                            "complete target silhouettes"
+                        ],
+                        "view_goal": "show complete target silhouettes",
+                        "metadata": {},
+                    },
+                },
+            "evaluated",
+            1.0,
             None,
-            "insufficient_visual_evidence",
         ),
     ],
 )
@@ -617,13 +4047,20 @@ def test_canonical_judgement_states(
     )
     metric = report["metrics"]["scale_consistency"]
     assert metric["status"] == status
-    assert metric["score"] == score
+    if score is None:
+        assert metric["score"] is None
+    else:
+        assert metric["score"] == pytest.approx(score)
     assert metric["reason"] == reason
-    if status == "unresolved":
+    if status == "failed":
         assert report["score"] is None
+    if response["verdict"] == "ambiguous":
+        assert metric["terminal_state"] == "evaluated_degraded"
+        assert metric["judgement"]["evidence_ambiguous"] is True
+        assert metric["judgement"]["defaulted"] is True
 
 
-def test_missing_inputs_are_unresolved_never_valid() -> None:
+def test_missing_inputs_are_infrastructure_failure_never_valid() -> None:
     report = evaluate_scene_quality_interfaces(
         _scene(),
         object_grouping_report=None,
@@ -632,12 +4069,17 @@ def test_missing_inputs_are_unresolved_never_valid() -> None:
         metric_applicability=_relevant(*SCENE_QUALITY_INTERFACE_METRICS),
     )
     assert report["score"] is None
-    assert report["status"] == "unresolved"
+    assert report["status"] == "failed"
+    assert report["terminal_state"] == "infrastructure_failure"
     assert report["metrics"]["style_consistency"]["reason"] == "vlm_judge_not_configured"
     assert report["metrics"]["scale_consistency"]["reason"] == "vlm_judge_not_configured"
     pairing = report["metrics"]["object_pairing_consistency"]
-    assert pairing["status"] == "unresolved"
-    assert pairing["reason"] == "object_grouping_unavailable"
+    assert pairing["status"] == "failed"
+    assert pairing["terminal_state"] == "infrastructure_failure"
+    # Object Pairing can now screen target-centered singleton candidates even
+    # when no trusted grouping report is available, so the first missing
+    # dependency here is the Judge rather than grouping.
+    assert pairing["reason"] == "vlm_judge_not_configured"
 
     no_judge = evaluate_scene_quality_interfaces(
         _scene(),
@@ -659,7 +4101,8 @@ def test_pairing_requires_grouping_and_ignores_singleton_groups(tmp_path) -> Non
         vlm_judge=lambda request: _valid(),
         metric_applicability=_relevant("object_pairing_consistency"),
     )["metrics"]["object_pairing_consistency"]
-    assert missing["status"] == "unresolved"
+    assert missing["status"] == "failed"
+    assert missing["terminal_state"] == "infrastructure_failure"
     assert missing["reason"] == "object_grouping_unavailable"
 
     singleton = evaluate_scene_quality_interfaces(
@@ -675,9 +4118,14 @@ def test_pairing_requires_grouping_and_ignores_singleton_groups(tmp_path) -> Non
         vlm_judge=lambda request: pytest.fail("singleton groups must not be judged"),
         metric_applicability=_relevant("object_pairing_consistency"),
     )["metrics"]["object_pairing_consistency"]
-    assert singleton["status"] == "not_applicable"
-    assert singleton["reason"] == "no_eligible_targets"
-    assert singleton["affects_score"] is False
+    assert singleton["status"] == "evaluated"
+    assert singleton["terminal_state"] == "evaluated_degraded"
+    assert singleton["score"] is None
+    assert singleton["coverage"]["score_projection"][
+        "excluded_from_aggregate"
+    ] is True
+    assert singleton["coverage"]["fraction"] == 0.0
+    assert singleton["judgement"]["defaulted"] is True
 
 
 def test_pairing_mechanically_drops_structured_out_of_scope_defects(tmp_path) -> None:
@@ -898,7 +4346,8 @@ def test_group_local_judge_cannot_report_a_defect_from_another_group(
         ),
     )["metrics"]["object_pairing_consistency"]
 
-    assert metric["status"] == "unresolved"
+    assert metric["status"] == "failed"
+    assert metric["terminal_state"] == "infrastructure_failure"
     assert metric["score"] is None
     assert metric["group_results"][0]["reason"] == "vlm_judge_failed"
     assert metric["group_results"][1]["status"] == "evaluated"
@@ -949,7 +4398,12 @@ def test_group_scope_bounds_include_object_rotation(tmp_path) -> None:
 
 @pytest.mark.parametrize(
     "metric_name",
-    ["scale_consistency", "functional_consistency"],
+    [
+        "scale_consistency",
+        "style_consistency",
+        "functional_consistency",
+        "semantic_placement_consistency",
+    ],
 )
 def test_other_group_metrics_keep_camera_requests_per_group(
     tmp_path,
@@ -1009,11 +4463,20 @@ def test_other_group_metrics_keep_camera_requests_per_group(
 
     def judge(request: dict) -> dict:
         judge_calls.append(request)
+        if (
+            metric_name == "style_consistency"
+            and len(judge_calls) == 1
+        ):
+            return _style_needs_local("scene")
         return _valid()
 
     config = _only(metric_name)
-    if metric_name == "functional_consistency":
-        config["metrics"]["functional_consistency"] = {
+    if metric_name in {
+        "style_consistency",
+        "functional_consistency",
+        "semantic_placement_consistency",
+    }:
+        config["metrics"][metric_name] = {
             "enabled": True,
             "weight": 1.0,
         }
@@ -1028,17 +4491,48 @@ def test_other_group_metrics_keep_camera_requests_per_group(
     )["metrics"][metric_name]
 
     assert metric["status"] == "evaluated"
-    assert metric["affects_score"] is (
-        metric_name == "scale_consistency"
-    )
+    assert metric["affects_score"] is True
     assert [request["object_ids"] for request in provider_calls] == [
         ["chair_01", "desk_01"],
         ["sofa_01", "table_01"],
     ]
-    assert [request["target_object_ids"] for request in judge_calls] == [
+    expected_local_targets = [
         ["chair_01", "desk_01"],
         ["sofa_01", "table_01"],
     ]
+    if metric_name == "style_consistency":
+        assert judge_calls[0]["target_object_ids"] == []
+        assert [
+            request["target_object_ids"]
+            for request in judge_calls[1:]
+        ] == expected_local_targets
+        assert [
+            request["evidence_phase"] for request in judge_calls
+        ] == [
+            "global_screen",
+            "local_confirmation",
+            "local_confirmation",
+        ]
+    elif metric_name in {
+        "functional_consistency",
+        "semantic_placement_consistency",
+    }:
+        assert judge_calls[0]["target_object_ids"] == []
+        assert [
+            request["target_object_ids"]
+            for request in judge_calls[1:]
+        ] == expected_local_targets
+        assert [
+            request["evidence_phase"] for request in judge_calls
+        ] == [
+            "global_discovery",
+            "group_local_review",
+            "group_local_review",
+        ]
+    else:
+        assert [
+            request["target_object_ids"] for request in judge_calls
+        ] == expected_local_targets
     assert all(
         request["group_scope"]["member_ids"] == request["object_ids"]
         for request in provider_calls
@@ -1052,30 +4546,158 @@ def test_other_group_metrics_keep_camera_requests_per_group(
         images["global"] in request["render_evidence"]
         for request in judge_calls
     )
+    group_judge_calls = [
+        request
+        for request in judge_calls
+        if isinstance(request.get("group_scope"), dict)
+    ]
+    assert len(group_judge_calls) == 2
+    assert [
+        request["camera_acquisition_ledger"][
+            "total_images_acquired"
+        ]
+        for request in group_judge_calls
+    ] == [2, 2]
+    if metric_name == "semantic_placement_consistency":
+        assert all(
+                "collision" in request["judgment_scope"]["excluded"]
+                and "physical_support" in request["judgment_scope"]["excluded"]
+                and "Evaluate the current support surface"
+                in request["metric_rubric"]
+                for request in judge_calls
+            )
 
 
-def test_style_suspicion_drills_into_the_implicated_group_only(
+def test_placement_discovery_context_frames_camera_but_not_defect_scope(
+    tmp_path,
+) -> None:
+    images = _images(tmp_path, "global", "placement_local")
+    provider_calls: list[dict] = []
+    judge_calls: list[dict] = []
+
+    class Planner:
+        def discover_functional_evidence(self, request: dict) -> dict:
+            raise AssertionError(
+                "placement must not invoke functional discovery"
+            )
+
+        def discover_placement_evidence(self, request: dict) -> dict:
+            return {
+                "schema_version": "placement_discovery_v1",
+                "considered_object_ids": ["chair_01", "desk_01"],
+                "candidates": [
+                    {
+                        "subject_id": "chair_01",
+                        "context_ids": ["desk_01"],
+                        "check_type": "contextual_anchor",
+                        "observation_goal": (
+                            "show the subject relative to its context"
+                        ),
+                    }
+                ],
+                "reason": "complete",
+                "decision_authority": "none",
+            }
+
+    class Provider:
+        def provide_functional_boundary_evidence(
+            self,
+            request: dict,
+        ) -> dict:
+            raise AssertionError(
+                "placement must not request usable-side boundary evidence"
+            )
+
+        def __call__(self, request: dict) -> list[dict]:
+            provider_calls.append(request)
+            return [
+                {
+                    "path": images["placement_local"],
+                    "role": "group_local",
+                }
+            ]
+
+    def judge(request: dict) -> dict:
+        judge_calls.append(request)
+        return _valid(request)
+
+    config = _only("semantic_placement_consistency")
+    config["metrics"]["semantic_placement_consistency"] = {
+        "enabled": True,
+        "weight": 1.0,
+    }
+    metric = evaluate_scene_quality_interfaces(
+        _scene(),
+        config=config,
+        object_grouping_report={
+            "object_groups": [
+                {
+                    "group_id": "chair_group",
+                    "object_ids": ["chair_01"],
+                },
+                {
+                    "group_id": "desk_group",
+                    "object_ids": ["desk_01"],
+                },
+            ]
+        },
+        render_evidence={"global": [images["global"]]},
+        camera_evidence_provider=Provider(),
+        functional_evidence_planner=Planner(),
+        vlm_judge=judge,
+        metric_applicability=_relevant(
+            "semantic_placement_consistency"
+        ),
+    )["metrics"]["semantic_placement_consistency"]
+
+    assert metric["status"] == "evaluated"
+    assert provider_calls == []
+    assert len(judge_calls) == 1
+    global_request = judge_calls[0]
+    assert global_request["target_object_ids"] == []
+    assert global_request["response_contract"][
+        "allowed_target_ids"
+    ] == ["chair_01", "desk_01"]
+    required = global_request["required_placement_checks"]
+    assert len(required) == 1
+    assert required[0]["check_type"] == "contextual_anchor"
+    assert required[0]["subject_id"] == "chair_01"
+    assert required[0]["context_ids"] == ["desk_01"]
+    assert required[0]["owner_stage"] == "scene_global"
+    assert global_request["response_contract"]["defects"]["fields"] == [
+        "scope",
+        "target_ids",
+        "relation",
+        "reason",
+        "category",
+        "attribution_mode",
+        "severity",
+        "check_id",
+        "check_type",
+    ]
+    assert global_request["response_contract"]["defects"][
+        "allowed_field_values"
+    ] == {
+        "category": [
+            "local_arrangement_mismatch",
+            "semantic_surface_mismatch",
+            "zone_placement_mismatch",
+        ],
+        "severity": ["atypical", "implausible"],
+        "attribution_mode": [
+            "unary",
+            "responsible_endpoint",
+            "minimum_repair_set",
+        ],
+    }
+
+
+def test_style_unlocalized_screen_reviews_every_eligible_group(
     tmp_path,
 ) -> None:
     images = _images(tmp_path, "global", "work_local")
     provider_calls: list[dict] = []
     judge_calls: list[dict] = []
-    suspicious = {
-        "evidence_status": "sufficient",
-        "verdict": "invalid",
-        "confidence": 0.8,
-        "reason": "The chair may use an inconsistent style.",
-        "missing_evidence": [],
-        "defects": [
-            {
-                "scope": "significant_visible_style_incompatibility",
-                "target_ids": ["chair_01"],
-                "relation": "rendering_style_outlier",
-                "reason": "The chair is the suspected outlier.",
-            }
-        ],
-    }
-
     def provider(request: dict) -> list[dict]:
         provider_calls.append(request)
         return [
@@ -1087,7 +4709,11 @@ def test_style_suspicion_drills_into_the_implicated_group_only(
 
     def judge(request: dict) -> dict:
         judge_calls.append(request)
-        return suspicious if len(judge_calls) == 1 else _valid()
+        return (
+            _style_needs_local("scene")
+            if len(judge_calls) == 1
+            else _valid()
+        )
 
     metric = evaluate_scene_quality_interfaces(
         _scene(),
@@ -1101,6 +4727,9 @@ def test_style_suspicion_drills_into_the_implicated_group_only(
 
     assert metric["status"] == "evaluated"
     assert metric["route"] == "global_screen_then_group_local"
+    assert metric["local_review"]["routing_fallback"] == (
+        "all_eligible_non_singleton_groups"
+    )
     assert len(provider_calls) == 1
     assert provider_calls[0]["group_scope"]["group_id"] == "group_001"
     assert provider_calls[0]["object_ids"] == ["chair_01", "desk_01"]
@@ -1110,30 +4739,18 @@ def test_style_suspicion_drills_into_the_implicated_group_only(
     ]
 
 
-def test_style_drilldown_reuses_presupplied_group_evidence(
+def test_style_group_review_reuses_presupplied_group_evidence(
     tmp_path,
 ) -> None:
     images = _images(tmp_path, "global", "local")
     judge_calls: list[dict] = []
-    suspicious = {
-        "evidence_status": "sufficient",
-        "verdict": "invalid",
-        "confidence": 0.8,
-        "reason": "The chair may be a style outlier.",
-        "missing_evidence": [],
-        "defects": [
-            {
-                "scope": "significant_visible_style_incompatibility",
-                "target_ids": ["chair_01"],
-                "relation": "rendering_style_outlier",
-                "reason": "suspected outlier",
-            }
-        ],
-    }
-
     def judge(request: dict) -> dict:
         judge_calls.append(request)
-        return suspicious if len(judge_calls) == 1 else _valid()
+        return (
+            _style_needs_local()
+            if len(judge_calls) == 1
+            else _valid()
+        )
 
     metric = evaluate_scene_quality_interfaces(
         _scene(),
@@ -1152,8 +4769,8 @@ def test_style_drilldown_reuses_presupplied_group_evidence(
     assert metric["status"] == "evaluated"
     assert len(judge_calls) == 2
     assert judge_calls[1]["render_evidence"] == [
-        images["local"],
         images["global"],
+        images["local"],
     ]
     assert metric["evidence_request"]["provider_invoked"] is False
 
@@ -1173,20 +4790,6 @@ def test_style_local_quota_does_not_truncate_global_anchor(
         "local_policy"
     ]["image_budget"] = 2
     judge_calls: list[dict] = []
-    suspicious = {
-        "evidence_status": "insufficient",
-        "verdict": "ambiguous",
-        "confidence": 0.4,
-        "reason": "Local confirmation is needed.",
-        "missing_evidence": ["local group style"],
-        "defects": [],
-        "evidence_request": {
-            "target_ids": ["chair_01"],
-            "missing_observations": ["group_context_visible"],
-            "view_goal": "inspect the suspected group style",
-        },
-    }
-
     def provider(request: dict) -> list[dict]:
         return [
             {"path": images["local_a"], "role": "group_local"},
@@ -1199,7 +4802,11 @@ def test_style_local_quota_does_not_truncate_global_anchor(
 
     def judge(request: dict) -> dict:
         judge_calls.append(request)
-        return suspicious if len(judge_calls) == 1 else _valid()
+        return (
+            _style_needs_local()
+            if len(judge_calls) == 1
+            else _valid()
+        )
 
     metric = evaluate_scene_quality_interfaces(
         _scene(),
@@ -1213,9 +4820,9 @@ def test_style_local_quota_does_not_truncate_global_anchor(
 
     assert metric["status"] == "evaluated"
     assert judge_calls[1]["render_evidence"] == [
+        images["global"],
         images["local_a"],
         images["local_b"],
-        images["global"],
     ]
 
 
@@ -1249,7 +4856,8 @@ def test_global_context_cannot_replace_group_scoped_evidence(
 
     assert len(provider_calls) == 1
     assert judge_calls == []
-    assert metric["status"] == "unresolved"
+    assert metric["status"] == "failed"
+    assert metric["terminal_state"] == "infrastructure_failure"
     assert metric["score"] is None
     assert metric["group_results"][0]["evidence_resolution"][
         "scope_satisfied"
@@ -1368,7 +4976,66 @@ def test_exact_prompt_exemption_removes_only_the_matching_defect(tmp_path) -> No
     )
 
 
-def test_asset_applicability_controls_denominator_without_defaulting_valid() -> None:
+def test_functional_exemption_reconciles_only_its_explicit_check_ref() -> None:
+    deviation = {
+        "metric": "functional_consistency",
+        "target_ids": ["chair_01"],
+        "relation": "authorized_direction",
+        "source": "explicit_prompt_requirement",
+        "prompt_span": "author the chair with this exact direction",
+    }
+    judgement = {
+        "verdict": "invalid",
+        "reason": "Two independent checks fail.",
+        "defects": [
+            {
+                "scope": "orientation_for_use",
+                "target_ids": ["chair_01"],
+                "relation": "authorized_direction",
+                "reason": "The authored direction is explicitly required.",
+                "check_refs": ["check_direction"],
+            },
+            {
+                "scope": "functional_relation",
+                "target_ids": ["chair_01"],
+                "relation": "relative_use_geometry",
+                "reason": "The chair remains too far from the table.",
+                "check_refs": ["check_geometry"],
+            },
+        ],
+        "functional_check_results": [
+            {
+                "check_id": "check_direction",
+                "target_ids": ["chair_01", "desk_01"],
+                "observation_status": "observed",
+                "conclusion": "invalid",
+                "reason": "The direction check fails.",
+            },
+            {
+                "check_id": "check_geometry",
+                "target_ids": ["chair_01", "desk_01"],
+                "observation_status": "observed",
+                "conclusion": "invalid",
+                "reason": "The use-geometry check fails.",
+            },
+        ],
+    }
+
+    adjusted = _apply_prompt_exemptions(
+        judgement,
+        metric_name="functional_consistency",
+        authorized_deviations=[deviation],
+    )
+
+    assert adjusted["verdict"] == "invalid"
+    assert [
+        row["conclusion"]
+        for row in adjusted["functional_check_results"]
+    ] == ["valid", "invalid"]
+    assert adjusted["defects"][0]["check_refs"] == ["check_geometry"]
+
+
+def test_asset_applicability_defaults_valid_without_invoking_the_model() -> None:
     calls: list[dict] = []
 
     not_relevant = evaluate_scene_quality_interfaces(
@@ -1381,8 +5048,11 @@ def test_asset_applicability_controls_denominator_without_defaulting_valid() -> 
         },
     )
     metric = not_relevant["metrics"]["style_consistency"]
-    assert metric["status"] == "not_applicable"
-    assert metric["affects_score"] is False
+    assert metric["status"] == "evaluated"
+    assert metric["terminal_state"] == "evaluated_degraded"
+    assert metric["score"] is None
+    assert metric["coverage"]["fraction"] == 0.0
+    assert metric["judgement"]["defaulted"] is True
     assert calls == []
 
     pending = evaluate_scene_quality_interfaces(
@@ -1395,9 +5065,11 @@ def test_asset_applicability_controls_denominator_without_defaulting_valid() -> 
         },
     )
     metric = pending["metrics"]["style_consistency"]
-    assert metric["status"] == "unresolved"
-    assert metric["reason"] == "metric_applicability_pending"
+    assert metric["status"] == "evaluated"
+    assert metric["terminal_state"] == "evaluated_degraded"
+    assert metric["reason"] is None
     assert metric["score"] is None
+    assert metric["coverage"]["fraction"] == 0.0
     assert calls == []
 
 
@@ -1449,11 +5121,17 @@ def test_camera_provider_not_invoked_when_scope_correct_evidence_exists(tmp_path
         def __getattr__(self, name: str) -> object:
             raise AssertionError(f"camera provider must not be invoked: {name}")
 
-    global_image = _images(tmp_path, "global")["global"]
+    images = _images(tmp_path, "global", "local")
     report = evaluate_scene_quality_interfaces(
         _scene(),
         config=_only("style_consistency"),
-        render_evidence=[global_image],
+        object_grouping_report=_grouping_report(),
+        render_evidence={
+            "global": [images["global"]],
+            "style_consistency": {
+                "group_001": [images["local"]],
+            },
+        },
         camera_evidence_provider=Provider(),
         vlm_judge=lambda request: {
             "evidence_status": "sufficient",
@@ -1468,7 +5146,9 @@ def test_camera_provider_not_invoked_when_scope_correct_evidence_exists(tmp_path
     assert report["metrics"]["style_consistency"]["status"] == "evaluated"
 
 
-def test_flat_overview_satisfies_only_global_style_scope(tmp_path) -> None:
+def test_flat_overview_can_resolve_a_clear_global_style_screen(
+    tmp_path,
+) -> None:
     global_image = _images(tmp_path, "global")["global"]
     calls: list[str] = []
 
@@ -1483,17 +5163,102 @@ def test_flat_overview_satisfies_only_global_style_scope(tmp_path) -> None:
         vlm_judge=judge,
         metric_applicability=_relevant(*SCENE_QUALITY_INTERFACE_METRICS),
     )
-    assert calls == ["style_consistency"]
+    assert calls == [
+        "style_consistency",
+        "scale_consistency",
+        "object_pairing_consistency",
+        "functional_consistency",
+        "semantic_placement_consistency",
+    ]
     assert report["metrics"]["style_consistency"]["status"] == "evaluated"
-    assert report["metrics"]["scale_consistency"]["reason"] == (
-        "group_local_render_evidence_unavailable"
+    assert report["metrics"]["style_consistency"]["route"] == (
+        "global_clear"
     )
-    assert report["metrics"]["object_pairing_consistency"]["reason"] == (
-        "group_local_render_evidence_unavailable"
+    assert report["metrics"]["scale_consistency"]["route"] == (
+        "json_screen_resolved"
     )
-    assert report["status"] == "partial"
+    assert report["metrics"]["object_pairing_consistency"][
+        "route"
+    ] == "json_screen_resolved"
+    # The global image resolves the three global/screen-first metrics, but it
+    # cannot replace the required local scopes of functional and placement.
+    assert report["status"] == "failed"
     assert report["score"] is None
     assert report["resolved_score"] == 1.0
+    assert report["reason"] == "below_minimum_score_coverage"
+
+
+def test_current_contract_all_l3_metrics_complete_with_mock_dependencies(
+    tmp_path,
+) -> None:
+    """Exercise the five-metric public workflow, not a legacy Judge stub."""
+
+    images = _images(tmp_path, "global", "group_local")
+    judge_calls: list[dict] = []
+    provider_calls: list[dict] = []
+
+    class Planner:
+        def discover_placement_evidence(self, request: dict) -> dict:
+            return {
+                "considered_object_ids": [
+                    item["id"] for item in request["objects"]
+                ],
+                "candidates": [],
+                "reason": "No additional target-local question is needed.",
+            }
+
+    def provider(request: dict) -> list[dict]:
+        provider_calls.append(deepcopy(request))
+        return [
+            {
+                "path": images["group_local"],
+                "role": "group_local",
+            }
+        ]
+
+    def judge(request: dict) -> dict:
+        judge_calls.append(deepcopy(request))
+        return _valid(request)
+
+    report = evaluate_scene_quality_interfaces(
+        _scene(),
+        config={
+            # This test isolates the current reactive five-metric contract;
+            # proactive Function discovery has its own end-to-end tests.
+            "functional_prejudgement_evidence": {"mode": "disabled"},
+        },
+        object_grouping_report=_grouping_report(),
+        render_evidence={"global": [images["global"]]},
+        camera_evidence_provider=provider,
+        functional_evidence_planner=Planner(),
+        vlm_judge=judge,
+        metric_applicability=_relevant(
+            *SCENE_QUALITY_INTERFACE_METRICS
+        ),
+    )
+
+    assert report["status"] == "evaluated"
+    assert report["score"] == pytest.approx(1.0)
+    assert report["terminal_state"] == "evaluated"
+    assert {
+        name: metric["status"]
+        for name, metric in report["metrics"].items()
+        if name in SCENE_QUALITY_INTERFACE_METRICS
+    } == {
+        name: "evaluated" for name in SCENE_QUALITY_INTERFACE_METRICS
+    }
+    assert report["coverage"]["complete"] is True
+    assert all(
+        metric["coverage"]["score_projection"][
+            "coverage_threshold_passed"
+        ]
+        for metric in report["metrics"].values()
+        if metric.get("affects_score") is True
+    )
+    assert provider_calls
+    assert {
+        call["metric"] for call in judge_calls
+    } == set(SCENE_QUALITY_INTERFACE_METRICS)
 
 
 def test_local_provider_is_selection_only_and_supplies_missing_scope(tmp_path) -> None:
@@ -1561,7 +5326,10 @@ def test_provider_not_invoked_before_applicability_gate(
         metric_applicability={"scale_consistency": applicability},
     )
     assert calls == []
-    assert report["metrics"]["scale_consistency"]["score"] is None
+    metric = report["metrics"]["scale_consistency"]
+    assert metric["score"] is None
+    assert metric["coverage"]["fraction"] == 0.0
+    assert metric["judgement"]["defaulted"] is True
 
 
 def test_provider_not_invoked_without_final_judge() -> None:
@@ -1600,7 +5368,8 @@ def test_provider_failure_never_calls_final_judge(
         metric_applicability=_relevant("scale_consistency"),
     )
     metric = report["metrics"]["scale_consistency"]
-    assert metric["status"] == "unresolved"
+    assert metric["status"] == "failed"
+    assert metric["terminal_state"] == "infrastructure_failure"
     assert metric["score"] is None
     assert judge_calls == []
 
@@ -1615,7 +5384,8 @@ def test_nonexistent_scoped_evidence_never_reaches_custom_judge() -> None:
         metric_applicability=_relevant("scale_consistency"),
     )
     metric = report["metrics"]["scale_consistency"]
-    assert metric["status"] == "unresolved"
+    assert metric["status"] == "failed"
+    assert metric["terminal_state"] == "infrastructure_failure"
     assert metric["reason"] == "render_evidence_path_missing"
     assert metric["evidence_request"]["missing_paths"] == [
         "/definitely/missing/image.png"
@@ -1675,7 +5445,7 @@ def test_nonexistent_scoped_evidence_never_reaches_custom_judge() -> None:
         },
     ],
 )
-def test_malformed_judgement_is_unresolved(
+def test_malformed_judgement_is_infrastructure_failure(
     tmp_path,
     response: dict,
 ) -> None:
@@ -1687,7 +5457,8 @@ def test_malformed_judgement_is_unresolved(
         vlm_judge=lambda request: response,
         metric_applicability=_relevant("scale_consistency"),
     )["metrics"]["scale_consistency"]
-    assert metric["status"] == "unresolved"
+    assert metric["status"] == "failed"
+    assert metric["terminal_state"] == "infrastructure_failure"
     assert metric["reason"] == "vlm_judge_failed"
     assert metric["score"] is None
 
@@ -1698,8 +5469,11 @@ def test_declared_applicability_map_is_closed() -> None:
         config=_only("style_consistency"),
         metric_applicability={"scale_consistency": {"applicability": "relevant"}},
     )
-    assert report["metrics"]["style_consistency"]["reason"] == (
-        "metric_applicability_pending"
+    metric = report["metrics"]["style_consistency"]
+    assert metric["status"] == "evaluated"
+    assert metric["score"] is None
+    assert metric["judgement"]["fallback_reason"] == (
+        "metric_applicability_not_resolved"
     )
     with pytest.raises(ValueError, match="unknown metrics"):
         evaluate_scene_quality_interfaces(
@@ -1744,8 +5518,8 @@ def test_malformed_grouping_is_rejected(grouping: dict) -> None:
         )
 
 
-def test_complete_l3_aggregation_uses_only_canonical_metric_scores(tmp_path) -> None:
-    images = _images(tmp_path, "global", "scale", "pair")
+def test_complete_l3_subset_aggregation_uses_enabled_metric_scores(tmp_path) -> None:
+    images = _images(tmp_path, "global", "style_local", "scale", "pair")
 
     def judge(request: dict) -> dict:
         if request["metric"] != "scale_consistency":
@@ -1766,21 +5540,72 @@ def test_complete_l3_aggregation_uses_only_canonical_metric_scores(tmp_path) -> 
             ],
         }
 
+    config = {
+        "metrics": {
+            "functional_consistency": {"enabled": False},
+            "semantic_placement_consistency": {"enabled": False},
+        }
+    }
+    render_evidence = {
+        "global": [images["global"]],
+        "style_consistency": {
+            "group_001": [images["style_local"]],
+        },
+        "scale_consistency": [images["scale"]],
+        "object_pairing_consistency": [images["pair"]],
+    }
+    applicability = _relevant(
+        "style_consistency",
+        "scale_consistency",
+        "object_pairing_consistency",
+    )
     report = evaluate_scene_quality_interfaces(
         _scene(),
+        config=config,
         object_grouping_report=_grouping_report(),
-        render_evidence={
-            "global": [images["global"]],
-            "scale_consistency": [images["scale"]],
-            "object_pairing_consistency": [images["pair"]],
-        },
+        render_evidence=render_evidence,
         vlm_judge=judge,
-        metric_applicability=_relevant(*SCENE_QUALITY_INTERFACE_METRICS),
+        metric_applicability=applicability,
     )
     assert report["status"] == "evaluated"
-    assert report["score"] == pytest.approx(2.0 / 3.0)
-    assert report["resolved_score"] == pytest.approx(2.0 / 3.0)
-    assert report["resolved_metrics"] == list(SCENE_QUALITY_INTERFACE_METRICS)
+    assert report["score"] == pytest.approx((0.07 + 0.09) / 0.20)
+    assert report["resolved_score"] == pytest.approx(
+        (0.07 + 0.09) / 0.20
+    )
+    assert report["resolved_metrics"] == [
+        "style_consistency",
+        "scale_consistency",
+        "object_pairing_consistency",
+    ]
+
+    strict = evaluate_scene_quality_interfaces(
+        _scene(),
+        config=config,
+        object_grouping_report=_grouping_report(),
+        render_evidence=render_evidence,
+        vlm_judge=judge,
+        metric_applicability=applicability,
+        strict_metric_inventory=True,
+    )
+    assert strict["status"] == "failed"
+    assert strict["score"] is None
+    assert strict["resolved_score"] == pytest.approx(
+        (0.07 + 0.09) / 0.20
+    )
+    assert strict["coverage"] == {
+        "eligible_count": 5,
+        "resolved_count": 3,
+        "fraction": pytest.approx(0.20),
+        "complete": False,
+        "score_grounding_complete": False,
+        "grounded_score_weight": pytest.approx(0.20),
+        "required_score_weight": pytest.approx(1.0),
+        "grounded_score_fraction": pytest.approx(0.20),
+        "observed_score": pytest.approx((0.07 + 0.09) / 0.20),
+        "earned_score_mass": pytest.approx(0.16),
+        "minimum_publishable_coverage": 0.8,
+        "coverage_threshold_passed": False,
+    }
 
 
 def test_retired_namespaces_and_metric_aliases_are_rejected() -> None:
@@ -1836,6 +5661,20 @@ def test_invalid_canonical_configs_are_explicit() -> None:
         )
     with pytest.raises(SceneQualityInterfaceConfigError, match="must remain true"):
         resolve_scene_quality_config({"implemented": False})
+    with pytest.raises(
+        SceneQualityInterfaceConfigError,
+        match="shared_group_bank requires",
+    ):
+        resolve_scene_quality_config(
+            {
+                "metrics": {
+                    "functional_consistency": {
+                        "group_local_check_granularity": "batched",
+                        "group_local_evidence_policy": "shared_group_bank",
+                    }
+                }
+            }
+        )
     with pytest.raises(AuthorizedDeviationError, match="target-specific"):
         validate_authorized_deviations(
             [
@@ -1848,3 +5687,643 @@ def test_invalid_canonical_configs_are_explicit() -> None:
             ],
             allowed_metrics=SCENE_QUALITY_INTERFACE_METRICS,
         )
+
+    with pytest.raises(
+        SceneQualityInterfaceConfigError,
+        match="placement_weight",
+    ):
+        resolve_scene_quality_config(
+            {
+                "metrics": {
+                    "semantic_placement_consistency": {
+                        "residual_global_review": {
+                            "enabled": True,
+                            "placement_weight": 1.0,
+                            "image_budget": 3,
+                            "allowed_check_types": [
+                                "scene_zone",
+                                "contextual_anchor",
+                            ],
+                        }
+                    }
+                }
+            }
+        )
+
+
+def test_residual_global_placement_runs_after_typed_scopes_and_scores_twenty_percent(
+    tmp_path,
+) -> None:
+    images = _images(
+        tmp_path,
+        "standardized_perspective",
+        "standardized_top",
+        "standardized_top_secondary",
+        "standardized_identity_map",
+        "group_local",
+    )
+    calls: list[dict] = []
+
+    def judge(request: dict) -> dict:
+        calls.append(deepcopy(request))
+        if request.get("evidence_phase") != (
+            "residual_global_placement_review"
+        ):
+            return _valid(request)
+        return {
+            "evidence_status": "sufficient",
+            "verdict": "invalid",
+            "confidence": 0.86,
+            "reason": "The chair is stranded outside an interpretable zone.",
+            "missing_evidence": [],
+            "evidence_request": None,
+            "group_global_observations": [
+                {
+                    "group_id": "group_001",
+                    "object_ids": ["chair_01", "desk_01"],
+                    "global_position_observation": (
+                        "The group sits apart from an interpretable activity "
+                        "zone in the global layout."
+                    ),
+                    "related_group_ids": [],
+                    "inter_group_observation": (
+                        "No other group is available for comparison."
+                    ),
+                    "evidence_sufficiency": "sufficient",
+                    "residual_issue_candidate": "scene_zone",
+                }
+            ],
+            "judge_originated_placement_results": [
+                {
+                    "proposal_id": "residual_chair_zone",
+                    "subject_id": "chair_01",
+                    "context_ids": [],
+                    "check_type": "scene_zone",
+                    "observation_goal": (
+                        "Verify the chair's scene-scale semantic zone."
+                    ),
+                    "observation_status": "observed",
+                    "conclusion": "invalid",
+                    "reason": (
+                        "The chair remains a disconnected scene-scale island."
+                    ),
+                    "severity": "implausible",
+                }
+            ],
+            "defects": [
+                {
+                    "scope": "semantically_inappropriate_scene_zone",
+                    "target_ids": ["chair_01"],
+                    "relation": "scene_zone",
+                    "reason": (
+                        "Relocation alone reconnects the chair to an ordinary "
+                        "activity zone."
+                    ),
+                    "category": "zone_placement_mismatch",
+                    "severity": "implausible",
+                    "attribution_mode": "unary",
+                    "check_id": "residual_chair_zone",
+                    "check_type": "scene_zone",
+                }
+            ],
+        }
+
+    config = _only("semantic_placement_consistency")
+    config["metrics"]["semantic_placement_consistency"][
+        "residual_global_review"
+    ] = {
+        "enabled": True,
+        "placement_weight": 0.20,
+        # Deliberately exceed the fixed residual packet size: a second
+        # top-view candidate must not displace identity evidence or leak in.
+        "image_budget": 4,
+        "allowed_check_types": [
+            "scene_zone",
+            "contextual_anchor",
+        ],
+    }
+    metric = evaluate_scene_quality_interfaces(
+        _scene(),
+        config=config,
+        object_grouping_report={
+            "object_groups": [
+                {
+                    "group_id": "group_001",
+                    "object_ids": ["chair_01", "desk_01"],
+                    "group_source": "spatial_cluster",
+                    "edge_reasons": ["proximity"],
+                    "formation_edges": [
+                        {
+                            "source": "chair_01",
+                            "target": "desk_01",
+                            "reason": "proximity",
+                        }
+                    ],
+                }
+            ]
+        },
+        render_evidence={
+            "global": [
+                images["standardized_perspective"],
+                images["standardized_top"],
+                images["standardized_top_secondary"],
+            ]
+        },
+        camera_evidence_provider=lambda request: [
+            {
+                "path": images["group_local"],
+                "role": "group_local",
+            }
+        ],
+        discovery_identity_image_path=images[
+            "standardized_identity_map"
+        ],
+        vlm_judge=judge,
+        metric_applicability=_relevant(
+            "semantic_placement_consistency"
+        ),
+    )["metrics"]["semantic_placement_consistency"]
+
+    assert [call["evidence_phase"] for call in calls] == [
+        "global_discovery",
+        "group_local_review",
+        "residual_global_placement_review",
+    ]
+    assert calls[-1]["render_evidence"] == [
+        images["standardized_perspective"],
+        images["standardized_top"],
+        images["standardized_identity_map"],
+    ]
+    assert calls[-1]["object_groups"] == [
+        {
+            "group_id": "group_001",
+            "object_ids": ["chair_01", "desk_01"],
+        }
+    ]
+    assert calls[-1]["placement_residual_context"][
+        "allowed_check_types"
+    ] == ["scene_zone", "contextual_anchor"]
+    placement_contract = calls[-1]["response_contract"][
+        "placement_check_results"
+    ]
+    assert "excluded_function_owned" in placement_contract["conclusion"]
+    assert placement_contract[
+        "conditional_excluded_function_owned_fields"
+    ] == ["function_event_ref", "same_physical_event"]
+    group_contract = calls[-1]["response_contract"][
+        "group_global_observations"
+    ]
+    assert group_contract["exact_group_ids"] == ["group_001"]
+    assert group_contract["decision_authority"] == "none"
+    assert calls[-1]["placement_check_policy"][
+        "exact_function_event_deduplication_enabled"
+    ] is True
+    assert calls[-1]["placement_check_policy"][
+        "object_overlap_alone_suppresses"
+    ] is False
+    residual_context = calls[-1]["placement_residual_context"]
+    assert residual_context["schema_version"] == (
+        "placement_residual_context_v3"
+    )
+    assert residual_context["scene_program"] == {
+        "scene_type": "bedroom",
+        "interpretation": "broad_room_program_only",
+        "aesthetic_theme_in_scope": False,
+        "generation_prompt_in_scope": False,
+        "stereotypical_contents_required": False,
+    }
+    assert residual_context["scene_distribution_descriptors"][
+        "status"
+    ] == "available"
+    assert residual_context["scene_distribution_descriptors"][
+        "decision_authority"
+    ] == "none"
+    assert residual_context["collective_scene_zone_contract"][
+        "maximum_scored_findings"
+    ] == 1
+    assert residual_context["collective_scene_zone_contract"][
+        "accounting_subject_ids"
+    ] == ["desk_01"]
+    assert residual_context["object_inventory"] == [
+        {
+            "object_id": "chair_01",
+            "category": "chair",
+            "group_ids": ["group_001"],
+        },
+        {
+            "object_id": "desk_01",
+            "category": "desk",
+            "group_ids": ["group_001"],
+        },
+    ]
+    assert metric["residual_global_placement_context"] == residual_context
+    assert metric["residual_global_placement_phase"]["scene_type"] == (
+        "bedroom"
+    )
+    assert metric["residual_global_placement_phase"][
+        "object_inventory_count"
+    ] == 2
+    assert metric["residual_global_placement_phase"]["status"] == "complete"
+    assert metric["residual_global_placement_review"][
+        "group_global_observation_coverage"
+    ]["complete"] is True
+    assert metric["residual_global_placement_phase"][
+        "group_observation_coverage"
+    ]["fraction"] == 1.0
+    assert metric["placement_check_coverage"]["complete"] is True
+    assert metric["placement_check_ledger"]["checks"][-1][
+        "placement_component"
+    ] == "residual_global_review"
+    assert metric["judgement"]["defects"][0][
+        "placement_component"
+    ] == "residual_global_review"
+    assert metric["scoring"]["placement_component_weights"] == {
+        "typed": 0.8,
+        "residual_global_review": 0.2,
+    }
+    # Two scene objects make the residual component itself saturate; the
+    # 20% mixture limits the final Placement deduction to 0.20.
+    assert metric["score"] == pytest.approx(0.80)
+
+
+def test_residual_global_placement_cannot_repeat_a_typed_subject() -> None:
+    with pytest.raises(
+        ValueError,
+        match="already has a typed Placement defect",
+    ):
+        _validate_and_tag_residual_placement_result(
+            {
+                "verdict": "invalid",
+                "defects": [
+                    {
+                        "check_type": "scene_zone",
+                        "target_ids": ["chair_01"],
+                    }
+                ],
+            },
+            residual_context={
+                "typed_defect_subject_ids": ["chair_01"]
+            },
+        )
+
+
+def test_residual_can_reuse_subject_for_a_distinct_typed_claim() -> None:
+    result = _validate_and_tag_residual_placement_result(
+        {
+            "verdict": "invalid",
+            "defects": [
+                {
+                    "scope": "collective_scene_zone_distribution",
+                    "check_type": "scene_zone",
+                    "target_ids": ["chair_01"],
+                    "context_ids": ["desk_01"],
+                }
+            ],
+            "group_global_observations": [],
+        },
+        residual_context={
+            "typed_defect_subject_ids": ["chair_01"],
+            "typed_defects": [
+                {
+                    "check_type": "support_and_height",
+                    "target_ids": ["chair_01"],
+                    "context_ids": [],
+                }
+            ],
+            "groups": [],
+        },
+    )
+
+    assert result["defects"][0]["collective_scene_zone"] is True
+    assert result["defects"][0]["placement_component"] == (
+        "residual_global_review"
+    )
+
+
+def test_collective_residual_requires_a_routed_major_anchor() -> None:
+    with pytest.raises(ValueError, match="major anchor"):
+        _validate_and_tag_residual_placement_result(
+            {
+                "verdict": "invalid",
+                "defects": [
+                    {
+                        "scope": "collective_scene_zone_distribution",
+                        "check_type": "scene_zone",
+                        "target_ids": ["alarm_clock"],
+                    }
+                ],
+                "group_global_observations": [],
+            },
+            residual_context={
+                "typed_defect_subject_ids": [],
+                "typed_defects": [],
+                "groups": [],
+                "collective_scene_zone_contract": {
+                    "accounting_subject_ids": ["bed", "desk"]
+                },
+            },
+        )
+
+
+def test_functional_grounding_counts_final_checks_once() -> None:
+    coverage = _score_grounding_coverage(
+        global_scope={"status": "evaluated", "score": 1.0},
+        relation_results=[
+            {"relation_id": "r1", "status": "evaluated", "score": 1.0}
+        ],
+        group_results=[],
+        target_results=[],
+        functional_discovery={
+            "coverage": {"eligible_count": 20, "grounded_count": 20}
+        },
+        functional_probe={
+            "acquisition_coverage": {
+                "eligible_count": 6,
+                "grounded_count": 3,
+            }
+        },
+        placement_discovery=None,
+        functional_check_coverage={
+            "required_check_count": 6,
+            "grounded_check_count": 3,
+        },
+        placement_check_coverage=None,
+    )
+
+    assert coverage["eligible_count"] == 7
+    assert coverage["grounded_count"] == 4
+    assert coverage["fraction"] == pytest.approx(4 / 7)
+    component_by_id = {
+        item["component_id"]: item
+        for item in coverage["component_units"]
+    }
+    assert component_by_id["functional_discovery"][
+        "included_in_fraction"
+    ] is False
+    assert component_by_id["functional_probe_acquisition"][
+        "included_in_fraction"
+    ] is False
+    assert component_by_id["functional_check_obligations"][
+        "included_in_fraction"
+    ] is True
+
+
+def test_residual_group_observation_gap_degrades_without_infrastructure(
+    tmp_path,
+) -> None:
+    images = _images(
+        tmp_path,
+        "standardized_perspective",
+        "standardized_top",
+        "standardized_identity_map",
+        "group_local",
+    )
+
+    def judge(request: dict) -> dict:
+        if request.get("evidence_phase") != (
+            "residual_global_placement_review"
+        ):
+            return _valid(request)
+        return {
+            "evidence_status": "sufficient",
+            "verdict": "valid",
+            "confidence": 0.55,
+            "reason": "No significant residual issue is established.",
+            "missing_evidence": [],
+            "defects": [],
+            "evidence_request": None,
+            "group_global_observations": [
+                {
+                    "group_id": "group_001",
+                    "object_ids": ["chair_01", "desk_01"],
+                    "global_position_observation": (
+                        "The group is visible, but its exact zone remains "
+                        "weakly grounded."
+                    ),
+                    "related_group_ids": [],
+                    "inter_group_observation": (
+                        "No other group is available for comparison."
+                    ),
+                    "evidence_sufficiency": "insufficient",
+                    "residual_issue_candidate": "none",
+                }
+            ],
+        }
+
+    config = _only("semantic_placement_consistency")
+    config["metrics"]["semantic_placement_consistency"][
+        "residual_global_review"
+    ] = {
+        "enabled": True,
+        "placement_weight": 0.20,
+        "image_budget": 3,
+        "allowed_check_types": ["scene_zone", "contextual_anchor"],
+    }
+    metric = evaluate_scene_quality_interfaces(
+        _scene(),
+        config=config,
+        object_grouping_report=_grouping_report(),
+        render_evidence={
+            "global": [
+                images["standardized_perspective"],
+                images["standardized_top"],
+            ]
+        },
+        camera_evidence_provider=lambda _request: [
+            {"path": images["group_local"], "role": "group_local"}
+        ],
+        discovery_identity_image_path=images[
+            "standardized_identity_map"
+        ],
+        vlm_judge=judge,
+        metric_applicability=_relevant(
+            "semantic_placement_consistency"
+        ),
+    )["metrics"]["semantic_placement_consistency"]
+
+    residual = metric["residual_global_placement_review"]
+    assert residual["terminal_state"] == "evaluated_degraded"
+    assert residual.get("infrastructure_failure") is None
+    assert residual["group_global_observation_coverage"]["complete"] is False
+    assert metric["residual_global_placement_phase"]["status"] == "complete"
+    assert metric["score"] is not None
+
+
+def test_functional_ownership_is_exposed_only_after_metric_resolution() -> None:
+    ledger = {
+        "schema_version": "functional_ownership_ledger_v2",
+        "source_metric": "functional_consistency",
+        "events": [
+            {
+                "event_id": "functional_event:chair-blocker",
+                "affected_object_ids": ["desk_01"],
+                "cause_kind": "external_object",
+                "causal_object_ids": ["chair_01"],
+                "scoring_target_ids": ["chair_01"],
+                "counterpart_object_ids": ["desk_01"],
+                "owning_metric": "functional_consistency",
+                "decision_ref": "judge:function:1",
+                "lifecycle_status": "final",
+                "decision_authority": "none",
+            }
+        ],
+        "event_count": 1,
+        "decision_authority": "none",
+        "projection_mode": "posthoc_read_only",
+    }
+    unresolved = {
+        "functional_consistency": {
+            "status": "unresolved",
+            "functional_ownership_ledger": deepcopy(ledger),
+        }
+    }
+    evaluated = {
+        "functional_consistency": {
+            "status": "evaluated",
+            "functional_ownership_ledger": deepcopy(ledger),
+        }
+    }
+
+    assert _resolved_functional_ownership_for_placement(
+        unresolved,
+        object_ids=["chair_01", "desk_01"],
+    ) is None
+    assert _resolved_functional_ownership_for_placement(
+        evaluated,
+        object_ids=["chair_01", "desk_01"],
+    ) == ledger
+    malformed = deepcopy(evaluated)
+    malformed["functional_consistency"]["functional_ownership_ledger"][
+        "events"
+    ][0]["lifecycle_status"] = "pending"
+    with pytest.raises(ValueError, match="must be final"):
+        _resolved_functional_ownership_for_placement(
+            malformed,
+            object_ids=["chair_01", "desk_01"],
+        )
+
+
+def test_controller_audit_projects_deferred_local_placement_check() -> None:
+    check = {
+        "check_id": "placement_check:deferred",
+        "check_type": "support_and_height",
+        "subject_id": "chair_01",
+        "context_ids": [],
+        "owner_stage": "group_local",
+    }
+    audit_records = [
+        {
+            "audit": {
+                "judge_request": {
+                    "context": {
+                        "required_placement_checks": [],
+                        "deferred_placement_checks": [check],
+                    }
+                }
+            }
+        }
+    ]
+
+    assert _registered_placement_checks_from_controller_audit(
+        audit_records,
+        audit_start=0,
+    ) == [check]
+
+
+def test_global_scope_does_not_require_deferred_local_check_result() -> None:
+    deferred = {
+        "check_id": "placement_check:deferred-support",
+        "check_type": "support_and_height",
+        "subject_id": "chair_01",
+        "context_ids": [],
+        "target_ids": ["chair_01"],
+        "owner_stage": "group_local",
+        "owning_group_id": "group_001",
+        "group_ids": ["group_001"],
+        "required_observations": [
+            "target_visible",
+            "contact_surface_visible",
+            "group_context_visible",
+        ],
+        "observation_goals": ["Inspect support and height."],
+        "source_check_types": ["support_and_height"],
+        "source_discovery_refs": ["global-miss"],
+        "origin": "judge_originated_evidence_request",
+        "lifecycle_status": "evidence_requested",
+        "acquisition_status": "pending",
+        "observation_complete": False,
+        "judge_status": "pending",
+        "judge_result_ref": None,
+        "decision_authority": "none",
+        "handoff_status": "deferred_to_group_local",
+        "handoff_from_stage": "scene_global",
+    }
+
+    class Judge:
+        audit_records: list[dict] = []
+
+    judge = Judge()
+
+    def call_judge(_judge, _request):
+        judge.audit_records.append(
+            {
+                "audit": {
+                    "judge_request": {
+                        "context": {
+                            "required_placement_checks": [],
+                            "deferred_placement_checks": [deferred],
+                        }
+                    }
+                }
+            }
+        )
+        return {
+            "evidence_status": "sufficient",
+            "verdict": "valid",
+            "confidence": 0.9,
+            "reason": "No scene-global placement defect.",
+            "missing_evidence": [],
+            "defects": [],
+            "placement_check_results": [],
+        }
+
+    base = {
+        "evidence_request": {},
+        "placement_check_ledger": {
+            "schema_version": "placement_check_ledger_v1",
+            "checks": [],
+            "accepted_check_count": 0,
+            "decision_authority": "none",
+        },
+    }
+    record, outcome, _ = _evaluate_global_scope(
+        base=base,
+        metric_name="semantic_placement_consistency",
+        scene=_scene(),
+        object_ids=["chair_01", "desk_01"],
+        groups=_grouping_report()["object_groups"],
+        global_evidence=["global.png"],
+        functional_probe_packet=None,
+        vlm_judge=judge,
+        prompt=None,
+        visual_style_spec=None,
+        authorized_deviations=[],
+        build_judge_request=lambda **kwargs: deepcopy(kwargs),
+        call_judge=call_judge,
+        apply_prompt_exemptions=lambda value, **_: deepcopy(value),
+        normalize_judgement=lambda value, **_: {
+            "status": "evaluated",
+            "score": 1.0,
+            "reason": None,
+        },
+        camera_acquisition_ledger={},
+        forbidden_cross_group_target_sets=[],
+        required_placement_checks=[],
+        functional_ownership_ledger=None,
+    )
+
+    assert outcome["status"] == "evaluated"
+    assert record["global_status"] == "clear"
+    check = base["placement_check_ledger"]["checks"][0]
+    assert check["check_id"] == deferred["check_id"]
+    assert check["judge_status"] == "pending"

@@ -1,21 +1,26 @@
 from __future__ import annotations
 
 import base64
-import hashlib
 from copy import deepcopy
 from io import BytesIO
 import json
-import math
 from pathlib import Path
 from typing import Any
 
 from benchmark.models import OpenAICompatibleModel, parse_json_object
-from benchmark.visual_judge.active_policy import selector_safe_proposals
+from benchmark.visual_judge.adapters.legacy_openai_camera import (
+    CAMERA_SELECTION_SYSTEM_PROMPT,
+    LegacyOpenAICameraSelectionAdapter,
+    _selector_candidate_order_key,
+)
 from benchmark.visual_judge.contracts import (
     validate_binary_judge_response,
-    validate_camera_selection_response,
     validate_canonical_metric_response,
     validate_generic_visual_response,
+)
+from benchmark.visual_judge.response_repair import (
+    repair_binary_response_schema_once,
+    repair_canonical_response_schema_once,
 )
 from benchmark.visual_judge.roles import (
     DecisionContract,
@@ -23,6 +28,10 @@ from benchmark.visual_judge.roles import (
     vlm_audit_metadata,
 )
 from benchmark.visual_judge.interfaces import JudgeResult
+from benchmark.visual_judge.l3_prompts import (
+    L3_METRIC_PHASE_PROMPTS,
+    L3_METRIC_RUBRICS,
+)
 from benchmark.visual_judge.camera_dsl import (
     CAMERA_OBSERVATIONS,
     METRIC_CAMERA_REQUIREMENTS,
@@ -38,9 +47,39 @@ objects or relations. Return exactly one JSON object with:
 score and confidence must be between 0 and 1. If the supplied views cannot support this category,
 return applicable=false, score=null, and explain why in summary."""
 
-CANONICAL_METRIC_SYSTEM_PROMPT = """You judge one narrowly scoped canonical metric for a
-3D scene benchmark. Use the original prompt, prompt-authorized deviations, structured context,
-and supplied images. Do not judge neighboring metrics. Evidence insufficiency is not validity.
+CANONICAL_METRIC_SYSTEM_PROMPT = """You judge exactly one narrowly scoped
+metric for a frozen 3D scene.
+
+Use the original request, authorized deviations, structured context, metric
+rubric, metric-boundary rules, and supplied images. Do not judge neighboring
+metrics.
+
+Follow this decision order:
+
+1. Establish the observable facts supported by the current evidence.
+2. Decide whether a missing observable fact prevents application of the metric
+   rubric.
+3. If another visual observation could materially resolve that missing fact,
+   return insufficient evidence with a structured evidence_request.
+4. Otherwise apply the metric rubric and ownership rules to the established
+   facts.
+5. Return invalid only when an explicit observed fact meets the rubric's
+   significant in-scope defect threshold.
+6. Do not excuse an observed defect by imagining that scene objects are moved,
+   rotated, resized, replaced, or removed, except when the metric rubric
+   explicitly requires a counterfactual.
+7. Ordinary articulation or handling intrinsic to using an object may be
+   considered; rearranging the authored layout to repair the scene may not.
+8. Semantic uncertainty is not evidence insufficiency. If the observable facts
+   are adequate but the case remains a normative borderline below the stated
+   invalid threshold, return valid and express uncertainty through confidence
+   and reason.
+
+Additional visual evidence can be acquired only through evidence_request.
+Request evidence only for a missing observable fact, not to resolve subjective
+preference or an undefined semantic threshold. Apply any supplied
+metric_boundary_rules as authoritative metric-ownership rules.
+
 Return exactly one JSON object:
 {"evidence_status":"sufficient","verdict":"valid","confidence":0.0,"reason":"...",
 "missing_evidence":[],"defects":[],"evidence_request":null}.
@@ -50,12 +89,90 @@ evidence_request must be:
 {"target_ids":["object_id"],"missing_observations":["exact_token"],
 "view_goal":"concrete visual goal","metadata":{}}.
 Use only target IDs in allowed_evidence_request_target_ids and exact observation tokens in
-allowed_missing_observations from the user context. missing_evidence may repeat those exact tokens
-for legacy compatibility or remain empty when evidence_request is present. Do not place prose in
+allowed_missing_observations from the user context. evidence_request is authoritative;
+missing_evidence may be [] or an exact duplicate of its missing_observations. Do not place prose in
 missing_evidence or missing_observations. Do not define camera constraints, poses, repair plans,
 metric scope, or rubric in evidence_request. Invalid requires one or more explicit significant
-defects in defects; otherwise return valid when evidence is sufficient. Each defect should contain
-scope, target_ids, relation, and reason when available. confidence must be between 0 and 1."""
+defects in defects; otherwise return valid when evidence is sufficient. Each defect must contain
+scope, target_ids, relation, and reason. Each defect must identify only the
+objects whose own state fails this metric. If response_contract.defects lists
+additional required fields or exact allowed values, include them without
+renaming or free-form alternatives. confidence must be between 0 and 1.
+
+When response_contract requires functional_check_results, resolve every listed
+required functional check exactly once. Include check_id, exact target_ids,
+observation_status, conclusion, and a brief evidence-grounded reason. A valid
+verdict requires every listed check to resolve valid. Missing observation must
+be marked missing/unresolved and must not be silently treated as normal. For
+an evidence-complete response, every invalid required check must include its
+exact check_id in exactly one defect.check_refs list. If any required check is
+still missing/unresolved, the outer response remains evidence_status=insufficient
+and verdict=ambiguous, defects must be empty, and already-observed invalid rows
+remain only in functional_check_results until the requested coverage completes.
+One physical defect may reference multiple invalid
+checks only when defect.target_ids is a non-empty subset of every referenced
+check's target_ids. If invalid checks have different target scopes, emit one
+atomic defect per check instead of combining their target unions.
+Baseline defects that did not originate from a required check may omit
+check_refs. For an invalid clearance check, also return affected_object_ids,
+cause_kind (external_object or self_layout), and causal_object_ids. Identify
+the actual external blocker in causal_object_ids; for self_layout,
+causal_object_ids must equal the affected clearance target IDs and must never
+be empty. scoring_target_ids is deterministic bookkeeping derived from the
+validated causal_object_ids, so do not make a second ownership decision with
+that field.
+Nearby causal candidates are routing priors, not a whitelist; use any legal
+scene object supported by the evidence. The defect target_ids must equal the
+deterministically derived scoring_target_ids in the validated result.
+
+For semantic placement, resolve every required placement check exactly once.
+Use only support_and_height, scene_zone, or contextual_anchor. A placement
+defect must reference its check_id and may target only that check's subject_id;
+context_ids are never defect owners. First resolve the static-location claim
+independently. Only after finding that same Placement claim invalid may you
+deduplicate its burden against one supplied final Functional event by returning
+conclusion=excluded_function_owned, that exact function_event_ref, and
+same_physical_event=true. Shared object identity, a similar reason, or mere
+role overlap is never sufficient. If baseline review finds a missed placement
+issue, emit a strictly
+typed judge_originated_placement_results item with exactly proposal_id,
+subject_id, context_ids, check_type, observation_goal, observation_status,
+conclusion, reason, and severity. Its defect.check_id must equal proposal_id;
+the Controller derives the stable check ID. Resolve it in the same call only
+when current evidence is sufficient; otherwise request evidence and place a
+proposal containing exactly proposal_id, subject_id, context_ids, check_type,
+and observation_goal in evidence_request.metadata.placement_check_proposal.
+Never emit observation_kind or placement_check_type."""
+
+# Appended separately so the generic canonical response envelope remains
+# stable while Residual Placement can require an auditable two-stage synthesis.
+CANONICAL_METRIC_SYSTEM_PROMPT += """
+
+When response_contract requires group_global_observations, inspect every exact
+group once before the final verdict. Return one row per exact group_id with its
+unchanged object_ids, a concise global_position_observation, related_group_ids,
+an inter_group_observation, evidence_sufficiency, and residual_issue_candidate.
+These rows organize visual reasoning and have no independent scoring authority.
+Use only group membership; never infer truth from grouping labels, reasons, or
+formation edges. After all rows are complete, synthesize the final verdict and
+emit only novel scene_zone or contextual_anchor Placement results.
+"""
+
+_BUDGET_EXHAUSTION_FORCED_CHOICE_INSTRUCTION = """This is the terminal
+budget-exhaustion adjudication. No additional visual evidence can be acquired.
+The supplied images are all available views that fit the configured visual
+context limit. You must choose the more defensible binary conclusion now.
+Return evidence_status="sufficient" and verdict exactly "valid" or "invalid".
+"ambiguous", "insufficient", and evidence_request are forbidden. If no clear,
+significant in-scope defect is established, choose valid. Choose invalid only
+with one or more explicit in-scope defects. Express residual uncertainty only
+through confidence and reason. For this terminal call, "sufficient" means
+sufficient to make the required binary choice under the remaining uncertainty;
+it does not claim that every possible camera view was observed. When required
+functional or placement checks are present, return every exact check row and use
+observation_status="inferred_under_budget" for a check that must be resolved
+from the bounded available context; missing/unresolved is not allowed in this
+terminal call."""
 
 P0B_SYSTEM_PROMPT = """You adjudicate one ambiguous geometry event in a 3D scene benchmark.
 Use the natural-language prompt and extracted relationships only to understand intended semantics.
@@ -81,16 +198,18 @@ _EVIDENCE_AWARE_BINARY_OUTPUT_CONTRACT = """Return exactly one JSON object:
 {"status":"valid","confidence":0.0,"reason":"...","defects":[],
 "evidence_request":null}.
 status must be valid, invalid, or need_more_evidence. valid and invalid must use
-evidence_request=null. If the supplied views cannot support a safe binary conclusion, do not guess:
-return need_more_evidence with defects=[] and a structured evidence_request:
+evidence_request=null. defects must always be exactly the empty JSON list []; put every semantic
+explanation in reason and never return strings or objects inside defects. If the supplied views
+cannot support a safe binary conclusion, do not guess: return need_more_evidence with defects=[]
+and a structured evidence_request:
 {"target_ids":["object_id"],"missing_observations":["..."],"view_goal":"...","metadata":{}}.
 The request must identify the targets, missing technical observation, and a concrete evidence view
 goal. missing_observations must contain only exact Camera DSL tokens from the
 allowed_missing_observations supplied in the user context. The finite vocabulary is:
 target_visible, joint_visibility, contact_surface_visible, support_chain_visible,
 architecture_plane_visible, front_back_disambiguated, depth_baseline_available,
-group_context_visible, interaction_side_visible, limited_local_context,
-global_context_preserved, occluder_avoided.
+group_context_visible, interaction_side_visible, approach_zone_visible,
+limited_local_context, global_context_preserved, occluder_avoided.
 Do not put prose in missing_observations. confidence must be between 0 and 1."""
 
 P0B_CONTROL_SYSTEM_PROMPT = (
@@ -112,27 +231,6 @@ measurements and statistical packet together with the rendered views. Return exa
 {"verdict":"valid","confidence":0.0,"reason":"..."}.
 verdict must be exactly valid or invalid. No abstention, not-applicable, insufficient-evidence,
 continuous score, or third verdict is allowed. confidence must be between 0 and 1."""
-
-CAMERA_SELECTION_SYSTEM_PROMPT = """You select camera evidence for a 3D scene benchmark.
-Do not judge whether the metric event is valid or invalid. Select the candidate views that make the
-specified event easiest to inspect. Prefer views where all target objects and the relevant contact,
-gap, overlap, or room plane are visible and well framed. In highlighted previews, use the supplied
-color legend and treat gray geometry as non-target context. A preview_warning_class means only
-that deterministic highlight-pixel coverage was incomplete; do not infer target absence from it.
-When selection_phase is active_fallback, evidence_deficiency states why the deterministic packet was
-not sufficient and corrective_proposals lists the only permitted metric-specific repairs. Use it only
-to choose views or one proposal that repairs the named evidence gap. Never invent pose coordinates or
-an unlisted action.
-Candidates marked render_status=blank are unusable camera evidence. Do not select them when any
-render_status=ok candidate exists.
-You may request at most one listed discrete
-camera action when adjustment is allowed. Return exactly one JSON object:
-{"selected_view_ids":["candidate_id"],"action":null,"reason":"..."}.
-selected_view_ids must contain between one and max_views candidate IDs in evidence-priority order,
-best view first. action must be null when
-allow_adjustment is false. In active_fallback it may be null or
-{"proposal_id":"one listed proposal ID"}; otherwise it may be null or
-{"view_id":"candidate_id","type":"one allowed action"}. Do not return a metric verdict or score."""
 
 CATEGORY_RUBRICS = {
     "visual_quality": (
@@ -160,34 +258,11 @@ CATEGORY_RUBRICS = {
         "local functionality. Invalid requires at least one explicit significant unmet requirement; "
         "otherwise return valid when evidence is sufficient."
     ),
-    "scale_consistency": (
-        "Judge generic visible relative scale coherence only. Apply exact prompt-authorized "
-        "surreal or unusual scale deviations before judging. Do not judge object pairing, layout, "
-        "orientation, function, style, or physical plausibility. Invalid requires an explicit "
-        "significant scale defect; otherwise return valid when evidence is sufficient."
-    ),
-    "object_pairing_consistency": (
-        "Judge only whether members of each supplied object group have broadly compatible object "
-        "categories and roles. Do not judge position, distance, direction, angle, orientation, "
-        "access, local functional arrangement, style, scale, or whether the prompt was followed. "
-        "Apply exact prompt-authorized pair deviations. Invalid requires an explicit significant "
-        "category/role incompatibility; otherwise return valid when evidence is sufficient."
-    ),
-    "style_consistency": (
-        "Judge visible style consistency only, after applying prompt-authorized style deviations. "
-        "Do not judge scale, pairing, layout, orientation, function, prompt fidelity, or physical "
-        "plausibility. Invalid requires one or more explicit significant style inconsistencies; "
-        "otherwise return valid when evidence is sufficient."
-    ),
-    "functional_consistency": (
-        "Judge whether each supplied local group is visibly usable in a "
-        "real-world sense. Check interaction-side access, opening clearance, "
-        "orientation for use, and ensemble operability. Do not judge prompt "
-        "fidelity, object-category pairing, style, scale, or unrelated exact "
-        "relations. Invalid requires an explicit significant visible "
-        "functional defect; otherwise return valid when evidence is sufficient."
-    ),
+    **L3_METRIC_RUBRICS,
 }
+
+
+DEFAULT_JUDGE_COMPLETION_MAX_TOKENS = 8192
 
 
 class OpenAICompatibleVLMJudge:
@@ -197,7 +272,7 @@ class OpenAICompatibleVLMJudge:
         self,
         model: OpenAICompatibleModel,
         *,
-        max_images: int = 6,
+        max_images: int = 8,
         max_context_chars: int = 30000,
         response_format_json: bool | None = None,
     ) -> None:
@@ -335,6 +410,23 @@ class OpenAICompatibleVLMJudge:
             request,
         )
 
+    def screen_scene_quality(self, request: dict) -> dict:
+        """Run an explicit non-rendering L3 routing screen.
+
+        Screening is owned by the metric evaluator.  It deliberately bypasses
+        the camera Controller because an invalid/insufficient screen is a route
+        to visual confirmation rather than a final metric verdict.
+        """
+
+        if (
+            str(request.get("decision_mode") or "").strip().lower()
+            != "screen"
+        ):
+            raise ValueError(
+                "screen_scene_quality requires decision_mode='screen'"
+            )
+        return self._adjudicate_scene_quality_raw(request)
+
     def _adjudicate_scene_quality_raw(self, request: dict) -> dict:
         return self._adjudicate_canonical_metric(
             request,
@@ -391,6 +483,7 @@ class OpenAICompatibleVLMJudge:
             "object_pairing_consistency",
             "style_consistency",
             "functional_consistency",
+            "semantic_placement_consistency",
         }:
             raise ValueError(f"unsupported canonical metric {metric!r}")
         allowed_missing_observations = (
@@ -399,17 +492,34 @@ class OpenAICompatibleVLMJudge:
         allowed_evidence_request_target_ids = (
             _canonical_evidence_request_target_ids(request)
         )
-        paths = [
+        allowed_defect_target_ids = _canonical_defect_target_ids(request)
+        available_paths = [
             Path(str(value)).expanduser()
             for value in request.get("render_evidence", [])
         ]
-        selected = paths[: self.max_images]
+        forced_choice = _budget_exhaustion_finalization(request)
+        selected, forced_choice_evidence = _select_judge_visual_paths(
+            available_paths,
+            max_images=self.max_images,
+            forced_choice=forced_choice is not None,
+        )
         missing_paths = [str(path) for path in selected if not path.is_file()]
         if missing_paths:
             raise FileNotFoundError(
                 f"canonical metric render evidence does not exist: {missing_paths}"
             )
-        if not selected:
+        text_only_screen = bool(
+            metric
+            in {"scale_consistency", "object_pairing_consistency"}
+            and request.get("evidence_phase") == "json_screen"
+            and request.get("decision_mode") == "screen"
+        )
+        if not selected and not text_only_screen:
+            if forced_choice is not None:
+                raise ValueError(
+                    "terminal budget-exhaustion adjudication requires at "
+                    "least one rendered visual"
+                )
             return self._audit_result(
                 {
                     "evidence_status": "insufficient",
@@ -442,20 +552,173 @@ class OpenAICompatibleVLMJudge:
             decision_contract=DecisionContract.CANONICAL_METRIC,
             judge_method=judge_method,
         )
+        required_functional_checks = (
+            _required_functional_checks_from_request(request)
+        )
+        required_functional_checks_context = (
+            _judge_facing_required_functional_checks(
+                required_functional_checks
+            )
+        )
+        functional_preflight = _functional_preflight_response(
+            request,
+            selected_paths=selected,
+            required_checks=required_functional_checks,
+            allowed_missing_observations=allowed_missing_observations,
+            allowed_target_ids=allowed_evidence_request_target_ids,
+            forced_choice=forced_choice is not None,
+        )
+        if functional_preflight is not None:
+            return self._audit_result(
+                functional_preflight,
+                role=VLMRole.JUDGE,
+                decision_contract=DecisionContract.CANONICAL_METRIC,
+                judge_method=judge_method,
+                images_used=[
+                    str(path.resolve()) for path in selected
+                ],
+                request_metadata={
+                    "functional_evidence_preflight": {
+                        "applied": True,
+                        "model_call_skipped": True,
+                    }
+                },
+            )
+        required_placement_checks = (
+            _required_placement_checks_from_request(request)
+        )
+        required_placement_checks_context = (
+            _judge_facing_required_placement_checks(
+                required_placement_checks
+            )
+        )
+        deferred_placement_checks_context = (
+            _judge_facing_required_placement_checks(
+                request.get("deferred_placement_checks")
+            )
+        )
+        functional_ownership_ledger = request.get(
+            "functional_ownership_ledger"
+        )
+        if (
+            metric == "semantic_placement_consistency"
+            and isinstance(functional_ownership_ledger, dict)
+        ):
+            from benchmark.evaluator.scene_quality.functional_ownership import (
+                validate_functional_ownership_ledger,
+            )
+
+            functional_ownership_ledger = (
+                validate_functional_ownership_ledger(
+                    functional_ownership_ledger,
+                    known_object_ids=_scene_known_ids_for_request(request),
+                )
+            )
+        raw_functional_probe_context = request.get(
+            "functional_probe_evidence"
+        )
+        raw_functional_measurements_context = (
+            deepcopy(
+                raw_functional_probe_context.get(
+                    "functional_measurements"
+                )
+            )
+            if isinstance(raw_functional_probe_context, dict)
+            and isinstance(
+                raw_functional_probe_context.get(
+                    "functional_measurements"
+                ),
+                dict,
+            )
+            else None
+        )
+        (
+            functional_measurements_context,
+            functional_measurement_scope_audit,
+        ) = _scope_soft_functional_measurements(
+            raw_functional_measurements_context,
+            required_checks=required_functional_checks_context,
+        )
+        functional_probe_context = _judge_facing_functional_probe_context(
+            raw_functional_probe_context,
+            required_checks_supplied=bool(
+                required_functional_checks_context
+            ),
+        )
+        residual_placement_phase = bool(
+            metric == "semantic_placement_consistency"
+            and str(request.get("evidence_phase") or "")
+            == "residual_global_placement_review"
+        )
+        canonical_scene_context = request.get("scene_summary")
+        natural_language_request = request.get("prompt")
+        if residual_placement_phase:
+            canonical_scene_context = (
+                _residual_placement_canonical_scene(
+                    request.get("scene_summary")
+                )
+            )
+            natural_language_request = None
         context = {
             **audit,
             "family": family,
             "metric": metric,
-            "rubric": CATEGORY_RUBRICS[metric],
+            "metric_prompt_version": request.get("metric_prompt_version"),
+            "metric_boundary_rules": request.get("metric_boundary_rules"),
+            "rubric": request.get("metric_rubric") or CATEGORY_RUBRICS[metric],
             "metric_rubric": request.get("metric_rubric"),
-            "natural_language_request": request.get("prompt"),
+            "natural_language_request": natural_language_request,
             "authorized_deviations": request.get("authorized_deviations"),
             "metric_scope": request.get("judgment_scope"),
+            "response_contract": request.get("response_contract"),
             "claims": request.get("claims"),
             "components": request.get("components"),
             "object_groups": request.get("object_groups"),
+            "target_scope": request.get("target_scope"),
+            "context_object_ids": request.get("context_object_ids"),
+            "defect_attribution": request.get("defect_attribution"),
+            "structured_context_policy": request.get(
+                "structured_context_policy"
+            ),
+            "functional_probe_evidence": functional_probe_context,
+            "functional_measurements": functional_measurements_context,
+            "required_functional_checks": (
+                required_functional_checks_context
+            ),
+            "required_placement_checks": (
+                required_placement_checks_context
+            ),
+            "deferred_placement_checks": (
+                deferred_placement_checks_context
+            ),
+            "functional_relation_scope": request.get(
+                "functional_relation_scope"
+            ),
+            "placement_discovery": request.get(
+                "placement_discovery"
+            ),
+            "placement_residual_context": request.get(
+                "placement_residual_context"
+            ),
+            "functional_ownership_ledger": (
+                _judge_facing_functional_ownership_ledger(
+                    functional_ownership_ledger
+                )
+            ),
+            "placement_check_policy": request.get(
+                "placement_check_policy"
+            ),
+            "causal_object_catalog": request.get(
+                "causal_object_catalog"
+            ),
+            "placement_severity_policy": request.get(
+                "placement_severity_policy"
+            ),
+            "routed_screen_claims": request.get(
+                "routed_screen_claims"
+            ),
             "visual_style_spec": request.get("visual_style_spec"),
-            "canonical_scene": request.get("scene_summary"),
+            "canonical_scene": canonical_scene_context,
             "deterministic_evidence": request.get("deterministic_evidence"),
             "allowed_missing_observations": list(
                 allowed_missing_observations
@@ -463,26 +726,46 @@ class OpenAICompatibleVLMJudge:
             "allowed_evidence_request_target_ids": list(
                 allowed_evidence_request_target_ids
             ),
+            "allowed_defect_target_ids": list(
+                allowed_defect_target_ids
+            ),
             "evidence_phase": request.get("evidence_phase"),
             "decision_mode": request.get("decision_mode"),
-            "phase_instruction": (
-                "This is the global screening pass. Return valid when the global "
-                "views are sufficient and show no significant in-scope style "
-                "defect. Return invalid only with explicit target IDs for a "
-                "significant visible defect. Return ambiguous/insufficient when "
-                "closer local evidence is needed; do not guess."
-                if metric == "style_consistency"
-                and request.get("evidence_phase") == "global_screen"
-                else
-                "This is the final local-confirmation pass. Use the local views "
-                "first and the global views as context; independently confirm or "
-                "reject the suspected style defect."
-                if metric == "style_consistency"
-                and request.get("evidence_phase") == "local_confirmation"
-                else None
+            "phase_instruction": _canonical_phase_instruction(
+                metric=metric,
+                evidence_phase=request.get("evidence_phase"),
+                decision_mode=request.get("decision_mode"),
             ),
             "view_names": _generic_view_names(selected),
         }
+        if required_functional_checks_context:
+            context["functional_measurement_policy"] = {
+                "evidence_role": "soft_supporting_evidence",
+                "decision_authority": "none",
+                "missing_or_unavailable_policy": (
+                    "Continue the visual judgement and make the most "
+                    "educated binary choice permitted by the evidence. "
+                    "Do not treat a missing deterministic measurement "
+                    "alone as a reason to refuse judgement."
+                ),
+            }
+        if deferred_placement_checks_context:
+            context["phase_instruction"] = (
+                str(context["phase_instruction"]).rstrip()
+                + " Checks in deferred_placement_checks belong to a later "
+                "group-local stage. Do not adjudicate them and do not emit "
+                "their defects or result rows in this global call."
+            )
+        if forced_choice is not None:
+            context["budget_exhaustion_finalization"] = {
+                **forced_choice,
+                **forced_choice_evidence,
+            }
+            context["phase_instruction"] = (
+                str(context["phase_instruction"]).rstrip()
+                + " "
+                + _BUDGET_EXHAUSTION_FORCED_CHOICE_INSTRUCTION
+            )
         context_text = _budgeted_context_json(
             context,
             self.max_context_chars,
@@ -491,6 +774,16 @@ class OpenAICompatibleVLMJudge:
                 "decision_contract",
                 "judge_method",
                 "metric",
+                "placement_residual_context",
+                "required_functional_checks",
+                "required_placement_checks",
+                "deferred_placement_checks",
+                "response_contract",
+                "functional_measurement_policy",
+                "functional_measurements",
+                "functional_probe_evidence",
+                "metric_prompt_version",
+                "metric_boundary_rules",
                 "rubric",
                 "metric_rubric",
                 "natural_language_request",
@@ -499,15 +792,56 @@ class OpenAICompatibleVLMJudge:
                 "claims",
                 "components",
                 "object_groups",
+                "target_scope",
+                "context_object_ids",
+                "defect_attribution",
+                "structured_context_policy",
+                "functional_relation_scope",
+                "placement_discovery",
+                "functional_ownership_ledger",
+                "placement_check_policy",
+                "causal_object_catalog",
+                "placement_severity_policy",
+                "routed_screen_claims",
                 "visual_style_spec",
                 "deterministic_evidence",
                 "allowed_missing_observations",
                 "allowed_evidence_request_target_ids",
+                "allowed_defect_target_ids",
                 "evidence_phase",
                 "decision_mode",
                 "phase_instruction",
+                "budget_exhaustion_finalization",
                 "view_names",
             ),
+        )
+        _require_functional_checks_in_model_context(
+            context_text,
+            required_checks=required_functional_checks_context,
+        )
+        functional_measurement_delivery_audit = (
+            _functional_measurement_delivery_audit(
+                context_text,
+                required_checks=required_functional_checks_context,
+                measurements=functional_measurements_context,
+                source_scope_audit=functional_measurement_scope_audit,
+            )
+        )
+        _require_placement_checks_in_model_context(
+            context_text,
+            required_checks=required_placement_checks_context,
+        )
+        placement_residual_context_delivery = (
+            _require_placement_residual_context_in_model_context(
+                context_text,
+                source_context=request.get(
+                    "placement_residual_context"
+                ),
+            )
+        )
+        _require_functional_ownership_in_model_context(
+            context_text,
+            ledger=context.get("functional_ownership_ledger"),
         )
         content: list[dict[str, Any]] = [
             {
@@ -519,15 +853,28 @@ class OpenAICompatibleVLMJudge:
             {"type": "image_url", "image_url": {"url": _image_data_url(path)}}
             for path in selected
         )
-        raw = self.model.chat_messages(
-            [
-                {"role": "system", "content": CANONICAL_METRIC_SYSTEM_PROMPT},
-                {"role": "user", "content": content},
-            ],
-            response_format_json=self.response_format_json,
-            call_type=f"vlm_judge.canonical.{metric}",
+        call_type = (
+            f"vlm_judge.screen.{metric}"
+            if request.get("decision_mode") == "screen"
+            else f"vlm_judge.canonical.{metric}"
         )
-        result = parse_json_object(raw)
+        if forced_choice is not None:
+            call_type += ".forced_choice"
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    CANONICAL_METRIC_SYSTEM_PROMPT
+                    + (
+                        "\n\n"
+                        + _BUDGET_EXHAUSTION_FORCED_CHOICE_INSTRUCTION
+                        if forced_choice is not None
+                        else ""
+                    )
+                ),
+            },
+            {"role": "user", "content": content},
+        ]
         allowed_scopes = (
             (
                 request.get("judgment_scope")
@@ -536,22 +883,374 @@ class OpenAICompatibleVLMJudge:
             ).get("included")
             or []
         )
-        validate_canonical_metric_response(
-            result,
-            allowed_scopes=allowed_scopes,
-            allowed_missing_observations=(
-                allowed_missing_observations
-            ),
-            allowed_target_ids=(
-                allowed_evidence_request_target_ids
-            ),
+        response_contract = (
+            request.get("response_contract")
+            if isinstance(request.get("response_contract"), dict)
+            else {}
         )
+        defect_contract = (
+            response_contract.get("defects")
+            if isinstance(response_contract.get("defects"), dict)
+            else {}
+        )
+        required_defect_fields = tuple(
+            str(item)
+            for item in defect_contract.get("fields") or ()
+            if isinstance(item, str) and item.strip()
+        )
+        allowed_defect_field_values = (
+            defect_contract.get("allowed_field_values")
+            if isinstance(
+                defect_contract.get("allowed_field_values"),
+                dict,
+            )
+            else {}
+        )
+
+        def validate_response(result: dict[str, Any]) -> dict[str, Any]:
+            judge_originated_placement_checks: list[
+                dict[str, Any]
+            ] = []
+            if metric == "semantic_placement_consistency":
+                from benchmark.evaluator.scene_quality.placement_checks import (
+                    canonicalize_placement_defect_linkage,
+                    normalize_judge_originated_placement_results,
+                )
+
+                (
+                    result,
+                    judge_originated_placement_checks,
+                ) = normalize_judge_originated_placement_results(
+                    result,
+                    known_ids=_placement_known_ids_for_request(
+                        request
+                    ),
+                    groups=_placement_groups_for_request(request),
+                    existing_checks=deepcopy(
+                        required_placement_checks
+                    ),
+                    expected_owner_stage=(
+                        _expected_placement_owner_stage(request)
+                    ),
+                )
+                result = canonicalize_placement_defect_linkage(
+                    result,
+                    required_checks=[
+                        *deepcopy(required_placement_checks),
+                        *judge_originated_placement_checks,
+                    ],
+                )
+            if (
+                metric
+                in {
+                    "functional_consistency",
+                    "semantic_placement_consistency",
+                }
+                and (
+                    required_functional_checks
+                    or required_placement_checks
+                    or judge_originated_placement_checks
+                )
+            ):
+                from benchmark.evaluator.scene_quality.functional_checks import (
+                    canonicalize_typed_invalid_envelope,
+                )
+
+                result = canonicalize_typed_invalid_envelope(result)
+            if (
+                metric == "functional_consistency"
+                and required_functional_checks
+            ):
+                from benchmark.evaluator.scene_quality.functional_checks import (
+                    canonicalize_clearance_causal_attribution,
+                    canonicalize_functional_defect_check_linkage,
+                )
+
+                result = canonicalize_clearance_causal_attribution(
+                    result,
+                    required_checks=deepcopy(required_functional_checks),
+                )
+                result = canonicalize_functional_defect_check_linkage(
+                    result,
+                    required_checks=deepcopy(required_functional_checks),
+                )
+            result = _project_group_local_defects_to_scope(
+                result,
+                request=request,
+                required_functional_checks=required_functional_checks,
+            )
+            if metric == "semantic_placement_consistency":
+                _validate_pending_placement_proposal(
+                    result,
+                    request=request,
+                )
+            normalized = validate_canonical_metric_response(
+                result,
+                allowed_scopes=allowed_scopes,
+                allowed_missing_observations=(
+                    allowed_missing_observations
+                ),
+                allowed_defect_target_ids=allowed_defect_target_ids,
+                allowed_evidence_request_target_ids=(
+                    allowed_evidence_request_target_ids
+                ),
+                required_defect_fields=required_defect_fields,
+                allowed_defect_field_values=(
+                    allowed_defect_field_values
+                ),
+            )
+            if (
+                metric == "functional_consistency"
+                and required_functional_checks
+            ):
+                # Keep the low-level OpenAI-compatible transport importable
+                # without eagerly initializing the evaluator package.
+                from benchmark.evaluator.scene_quality.functional_checks import (
+                    validate_functional_check_results,
+                )
+                validate_functional_check_results(
+                    normalized,
+                    required_checks=deepcopy(
+                        required_functional_checks
+                    ),
+                    invalid_verdict_requires_invalid_check=(
+                        str(request.get("evidence_phase") or "")
+                        == "cross_group_relation_review"
+                    ),
+                )
+            if metric == "semantic_placement_consistency":
+                from benchmark.evaluator.scene_quality.placement_checks import (
+                    validate_placement_check_results,
+                    validate_residual_group_global_observations,
+                )
+
+                ownership = request.get(
+                    "functional_ownership_ledger"
+                )
+                validate_placement_check_results(
+                    normalized,
+                    required_checks=[
+                        *deepcopy(required_placement_checks),
+                        *judge_originated_placement_checks,
+                    ],
+                    function_events=list(
+                        (
+                            ownership
+                            if isinstance(ownership, dict)
+                            else {}
+                        ).get("events")
+                        or []
+                    ),
+                )
+                if residual_placement_phase:
+                    validated_group_coverage = (
+                        validate_residual_group_global_observations(
+                        normalized,
+                        groups=_placement_groups_for_request(request),
+                        )
+                    )
+                    supplied_group_coverage = normalized.get(
+                        "group_global_observation_coverage"
+                    )
+                    if isinstance(supplied_group_coverage, dict) and isinstance(
+                        supplied_group_coverage.get("source_by_group"),
+                        dict,
+                    ):
+                        ungrounded = set(
+                            validated_group_coverage.get(
+                                "ungrounded_group_ids"
+                            )
+                            or []
+                        )
+                        source_by_group = deepcopy(
+                            supplied_group_coverage["source_by_group"]
+                        )
+                        validated_group_coverage[
+                            "source_by_group"
+                        ] = source_by_group
+                        validated_group_coverage[
+                            "defaulted_group_ids"
+                        ] = [
+                            group_id
+                            for group_id, source in source_by_group.items()
+                            if source == "defaulted"
+                            and group_id in ungrounded
+                        ]
+                    normalized[
+                        "group_global_observation_coverage"
+                    ] = validated_group_coverage
+                    if normalized[
+                        "group_global_observation_coverage"
+                    ].get("complete") is not True:
+                        normalized["evidence_ambiguous"] = True
+            if forced_choice is not None:
+                if normalized.get("evidence_status") != "sufficient":
+                    raise ValueError(
+                        "terminal budget-exhaustion adjudication requires "
+                        "evidence_status=sufficient"
+                    )
+                if normalized.get("verdict") not in {"valid", "invalid"}:
+                    raise ValueError(
+                        "terminal budget-exhaustion adjudication forbids "
+                        "ambiguous verdicts"
+                    )
+                if normalized.get("evidence_request") is not None:
+                    raise ValueError(
+                        "terminal budget-exhaustion adjudication cannot "
+                        "request more evidence"
+                    )
+            return normalized
+
+        fail_soft_fallback = None
+        if metric == "functional_consistency" and required_functional_checks:
+            from benchmark.evaluator.scene_quality.functional_checks import (
+                salvage_functional_judge_response,
+            )
+
+            def fail_soft_fallback(
+                value: dict[str, Any],
+                initial_value: dict[str, Any],
+            ) -> dict[str, Any]:
+                candidate = salvage_functional_judge_response(
+                    value,
+                    required_checks=deepcopy(required_functional_checks),
+                    fallback_value=initial_value,
+                    retain_invalid=True,
+                )
+                try:
+                    validate_response(candidate)
+                except (TypeError, ValueError, KeyError):
+                    return salvage_functional_judge_response(
+                        value,
+                        required_checks=deepcopy(
+                            required_functional_checks
+                        ),
+                        fallback_value=initial_value,
+                        retain_invalid=False,
+                    )
+                return candidate
+        elif metric == "semantic_placement_consistency":
+            from benchmark.evaluator.scene_quality.placement_checks import (
+                salvage_residual_group_global_observations,
+                salvage_placement_judge_response,
+            )
+
+            ownership = request.get("functional_ownership_ledger")
+            function_events = list(
+                (
+                    ownership if isinstance(ownership, dict) else {}
+                ).get("events")
+                or []
+            )
+
+            def fail_soft_fallback(
+                value: dict[str, Any],
+                initial_value: dict[str, Any],
+            ) -> dict[str, Any]:
+                candidate = salvage_placement_judge_response(
+                    value,
+                    required_checks=deepcopy(required_placement_checks),
+                    function_events=function_events,
+                    retain_invalid=True,
+                    fallback_value=initial_value,
+                    known_ids=_placement_known_ids_for_request(request),
+                    groups=_placement_groups_for_request(request),
+                    expected_owner_stage=(
+                        _expected_placement_owner_stage(request)
+                    ),
+                )
+                if residual_placement_phase:
+                    candidate = salvage_residual_group_global_observations(
+                        candidate,
+                        groups=_placement_groups_for_request(request),
+                        fallback_value=initial_value,
+                    )
+                try:
+                    validate_response(candidate)
+                except (TypeError, ValueError, KeyError):
+                    candidate = salvage_placement_judge_response(
+                        value,
+                        required_checks=deepcopy(
+                            required_placement_checks
+                        ),
+                        function_events=function_events,
+                        retain_invalid=False,
+                        fallback_value=initial_value,
+                        known_ids=_placement_known_ids_for_request(request),
+                        groups=_placement_groups_for_request(request),
+                        expected_owner_stage=(
+                            _expected_placement_owner_stage(request)
+                        ),
+                    )
+                    if residual_placement_phase:
+                        candidate = (
+                            salvage_residual_group_global_observations(
+                                candidate,
+                                groups=_placement_groups_for_request(
+                                    request
+                                ),
+                                fallback_value=initial_value,
+                            )
+                        )
+                    return candidate
+                # Return the raw atomically salvaged shape.  The generic
+                # repair wrapper validates it exactly once; returning the
+                # already-normalized Placement value here would normalize
+                # judge-originated checks a second time and lose their
+                # derived registration ledger.
+                return candidate
+
+        result, schema_audit = repair_canonical_response_schema_once(
+            model=self.model,
+            messages=messages,
+            response_format_json=self.response_format_json,
+            call_type=call_type,
+            judge_label=f"canonical {metric} Judge",
+            validator=validate_response,
+            force_binary_choice=forced_choice is not None,
+            allowed_scopes=tuple(str(item) for item in allowed_scopes),
+            allowed_target_ids=tuple(
+                str(item)
+                for item in allowed_defect_target_ids
+            ),
+            allowed_missing_observations=tuple(
+                str(item) for item in allowed_missing_observations
+            ),
+            fail_soft_fallback=fail_soft_fallback,
+        )
+        request_metadata = dict(self.model.last_request_metadata)
+        request_metadata["response_schema_validation"] = schema_audit
+        if required_functional_checks_context:
+            request_metadata["functional_measurement_delivery"] = deepcopy(
+                functional_measurement_delivery_audit
+            )
+            if functional_measurement_delivery_audit.get(
+                "evidence_ambiguous"
+            ):
+                result["evidence_ambiguous"] = True
+                result["functional_measurement_delivery_audit"] = deepcopy(
+                    functional_measurement_delivery_audit
+                )
+        if placement_residual_context_delivery is not None:
+            request_metadata[
+                "placement_residual_context_delivery"
+            ] = deepcopy(placement_residual_context_delivery)
+        if forced_choice is not None:
+            request_metadata["budget_exhaustion_finalization"] = {
+                **forced_choice,
+                **forced_choice_evidence,
+            }
+        if request.get("metric_prompt_version") is not None:
+            request_metadata["metric_prompt_version"] = str(
+                request["metric_prompt_version"]
+            )
         return self._audit_result(
             result,
             role=VLMRole.JUDGE,
             decision_contract=DecisionContract.CANONICAL_METRIC,
             judge_method=judge_method,
             images_used=[str(path.resolve()) for path in selected],
+            request_metadata=request_metadata,
         )
 
     def adjudicate_p0b(self, request: dict) -> dict:
@@ -571,8 +1270,19 @@ class OpenAICompatibleVLMJudge:
     ) -> dict:
         if not isinstance(request, dict):
             raise TypeError("P0b judge request must be a JSON object")
-        paths = [Path(str(value)).expanduser() for value in request.get("render_evidence", [])]
-        selected = paths[: self.max_images]
+        paths = [
+            Path(str(value)).expanduser()
+            for value in request.get("render_evidence", [])
+        ]
+        forced_choice = _budget_exhaustion_finalization(request)
+        selected, forced_choice_evidence = _select_judge_visual_paths(
+            paths,
+            max_images=self.max_images,
+            forced_choice=forced_choice is not None,
+        )
+        allow_need_more_evidence = (
+            _allow_need_more_evidence and forced_choice is None
+        )
         missing = [str(path) for path in selected if not path.is_file()]
         if missing:
             raise FileNotFoundError(f"P0b render evidence does not exist: {missing}")
@@ -604,6 +1314,11 @@ class OpenAICompatibleVLMJudge:
                 )
             ),
         }
+        if forced_choice is not None:
+            context["budget_exhaustion_finalization"] = {
+                **forced_choice,
+                **forced_choice_evidence,
+            }
         context_text = _budgeted_context_json(
             context,
             self.max_context_chars,
@@ -622,6 +1337,7 @@ class OpenAICompatibleVLMJudge:
                 "view_names",
                 "view_evidence",
                 "allowed_missing_observations",
+                "budget_exhaustion_finalization",
             ),
         )
         content: list[dict[str, Any]] = [
@@ -634,39 +1350,81 @@ class OpenAICompatibleVLMJudge:
             {"type": "image_url", "image_url": {"url": _image_data_url(path)}}
             for path in selected
         )
-        raw = self.model.chat_messages(
-            [
-                {
-                    "role": "system",
-                    "content": (
-                        P0B_CONTROL_SYSTEM_PROMPT
-                        if _allow_need_more_evidence
-                        else P0B_SYSTEM_PROMPT
-                    ),
-                },
-                {"role": "user", "content": content},
-            ],
-            response_format_json=self.response_format_json,
-            call_type=f"vlm_judge.p0b.{request.get('metric') or 'event'}",
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    P0B_CONTROL_SYSTEM_PROMPT
+                    if allow_need_more_evidence
+                    else P0B_SYSTEM_PROMPT
+                ),
+            },
+            {"role": "user", "content": content},
+        ]
+        call_type = f"vlm_judge.p0b.{request.get('metric') or 'event'}"
+        if forced_choice is not None:
+            call_type += ".forced_choice"
+        schema_audit = None
+        nonrect_forced_binary = bool(
+            forced_choice is not None
+            and isinstance(request.get("nonrect_evidence_continuity"), dict)
         )
-        result = parse_json_object(raw)
-        if _allow_need_more_evidence:
-            result = _normalize_evidence_aware_binary_response(
-                result,
-                judge_label="P0b judge",
+        if allow_need_more_evidence:
+            result, schema_audit = (
+                repair_binary_response_schema_once(
+                    model=self.model,
+                    messages=messages,
+                    response_format_json=self.response_format_json,
+                    call_type=call_type,
+                    judge_label="P0b judge",
+                    validator=lambda value: (
+                        _normalize_evidence_aware_binary_response(
+                            value,
+                            judge_label="P0b judge",
+                        )
+                    ),
+                )
+            )
+        elif nonrect_forced_binary:
+            result, schema_audit = repair_binary_response_schema_once(
+                model=self.model,
+                messages=messages,
+                response_format_json=self.response_format_json,
+                call_type=call_type,
+                judge_label="P0b forced-binary judge",
+                validator=lambda value: validate_binary_judge_response(
+                    value,
+                    judge_label="P0b forced-binary judge",
+                    confidence_label="VLM judge",
+                ),
             )
         else:
+            raw = self.model.chat_messages(
+                messages,
+                response_format_json=self.response_format_json,
+                call_type=call_type,
+            )
+            result = parse_json_object(raw)
             validate_binary_judge_response(
                 result,
                 judge_label="P0b judge",
                 confidence_label="VLM judge",
             )
+        request_metadata = dict(self.model.last_request_metadata)
+        if schema_audit is not None:
+            request_metadata["response_schema_validation"] = schema_audit
+        if forced_choice is not None:
+            request_metadata["budget_exhaustion_finalization"] = {
+                **forced_choice,
+                **forced_choice_evidence,
+            }
         return self._audit_result(
             result,
             role=VLMRole.JUDGE,
             decision_contract=DecisionContract.P0B_BINARY,
             judge_method="adjudicate_p0b",
             images_used=[str(path.resolve()) for path in selected],
+            request_metadata=request_metadata,
         )
 
     def adjudicate_relation(self, request: dict) -> dict:
@@ -689,8 +1447,19 @@ class OpenAICompatibleVLMJudge:
     ) -> dict:
         if not isinstance(request, dict):
             raise TypeError("relationship judge request must be a JSON object")
-        paths = [Path(str(value)).expanduser() for value in request.get("render_evidence", [])]
-        selected = paths[: self.max_images]
+        paths = [
+            Path(str(value)).expanduser()
+            for value in request.get("render_evidence", [])
+        ]
+        forced_choice = _budget_exhaustion_finalization(request)
+        selected, forced_choice_evidence = _select_judge_visual_paths(
+            paths,
+            max_images=self.max_images,
+            forced_choice=forced_choice is not None,
+        )
+        allow_need_more_evidence = (
+            _allow_need_more_evidence and forced_choice is None
+        )
         missing = [str(path) for path in selected if not path.is_file()]
         if missing:
             raise FileNotFoundError(f"relationship render evidence does not exist: {missing}")
@@ -717,6 +1486,11 @@ class OpenAICompatibleVLMJudge:
                 )
             ),
         }
+        if forced_choice is not None:
+            context["budget_exhaustion_finalization"] = {
+                **forced_choice,
+                **forced_choice_evidence,
+            }
         context_text = _budgeted_context_json(
             context,
             self.max_context_chars,
@@ -731,6 +1505,7 @@ class OpenAICompatibleVLMJudge:
                 "involved_objects",
                 "view_names",
                 "allowed_missing_observations",
+                "budget_exhaustion_finalization",
             ),
         )
         content: list[dict[str, Any]] = [
@@ -743,39 +1518,67 @@ class OpenAICompatibleVLMJudge:
             {"type": "image_url", "image_url": {"url": _image_data_url(path)}}
             for path in selected
         )
-        raw = self.model.chat_messages(
-            [
-                {
-                    "role": "system",
-                    "content": (
-                        RELATION_CONTROL_SYSTEM_PROMPT
-                        if _allow_need_more_evidence
-                        else RELATION_SYSTEM_PROMPT
-                    ),
-                },
-                {"role": "user", "content": content},
-            ],
-            response_format_json=self.response_format_json,
-            call_type=f"vlm_judge.relationship.{request.get('family') or 'unknown'}",
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    RELATION_CONTROL_SYSTEM_PROMPT
+                    if allow_need_more_evidence
+                    else RELATION_SYSTEM_PROMPT
+                ),
+            },
+            {"role": "user", "content": content},
+        ]
+        call_type = (
+            "vlm_judge.relationship."
+            f"{request.get('family') or 'unknown'}"
         )
-        result = parse_json_object(raw)
-        if _allow_need_more_evidence:
-            result = _normalize_evidence_aware_binary_response(
-                result,
-                judge_label="relationship judge",
+        if forced_choice is not None:
+            call_type += ".forced_choice"
+        schema_audit = None
+        if allow_need_more_evidence:
+            result, schema_audit = (
+                repair_binary_response_schema_once(
+                    model=self.model,
+                    messages=messages,
+                    response_format_json=self.response_format_json,
+                    call_type=call_type,
+                    judge_label="relationship judge",
+                    validator=lambda value: (
+                        _normalize_evidence_aware_binary_response(
+                            value,
+                            judge_label="relationship judge",
+                        )
+                    ),
+                )
             )
         else:
+            raw = self.model.chat_messages(
+                messages,
+                response_format_json=self.response_format_json,
+                call_type=call_type,
+            )
+            result = parse_json_object(raw)
             validate_binary_judge_response(
                 result,
                 judge_label="relationship judge",
                 confidence_label="VLM judge",
             )
+        request_metadata = dict(self.model.last_request_metadata)
+        if schema_audit is not None:
+            request_metadata["response_schema_validation"] = schema_audit
+        if forced_choice is not None:
+            request_metadata["budget_exhaustion_finalization"] = {
+                **forced_choice,
+                **forced_choice_evidence,
+            }
         return self._audit_result(
             result,
             role=VLMRole.JUDGE,
             decision_contract=DecisionContract.RELATION_BINARY,
             judge_method="adjudicate_relation",
             images_used=[str(path.resolve()) for path in selected],
+            request_metadata=request_metadata,
         )
 
     def adjudicate_spatial_fidelity(self, request: dict) -> dict:
@@ -790,8 +1593,16 @@ class OpenAICompatibleVLMJudge:
     ) -> dict:
         if not isinstance(request, dict):
             raise TypeError("Spatial Fidelity judge request must be a JSON object")
-        paths = [Path(str(value)).expanduser() for value in request.get("render_evidence", [])]
-        selected = paths[: self.max_images]
+        paths = [
+            Path(str(value)).expanduser()
+            for value in request.get("render_evidence", [])
+        ]
+        forced_choice = _budget_exhaustion_finalization(request)
+        selected, forced_choice_evidence = _select_judge_visual_paths(
+            paths,
+            max_images=self.max_images,
+            forced_choice=forced_choice is not None,
+        )
         missing = [str(path) for path in selected if not path.is_file()]
         if missing:
             raise FileNotFoundError(f"Spatial Fidelity render evidence does not exist: {missing}")
@@ -812,6 +1623,11 @@ class OpenAICompatibleVLMJudge:
             "natural_language_prompt": request.get("natural_language_prompt"),
             "view_names": _generic_view_names(selected),
         }
+        if forced_choice is not None:
+            context["budget_exhaustion_finalization"] = {
+                **forced_choice,
+                **forced_choice_evidence,
+            }
         context_text = _budgeted_context_json(
             context,
             self.max_context_chars,
@@ -825,6 +1641,7 @@ class OpenAICompatibleVLMJudge:
                 "involved_objects",
                 "natural_language_prompt",
                 "view_names",
+                "budget_exhaustion_finalization",
             ),
         )
         content: list[dict[str, Any]] = [
@@ -837,13 +1654,19 @@ class OpenAICompatibleVLMJudge:
             {"type": "image_url", "image_url": {"url": _image_data_url(path)}}
             for path in selected
         )
+        call_type = (
+            "vlm_judge.spatial_fidelity."
+            f"{request.get('metric') or 'event'}"
+        )
+        if forced_choice is not None:
+            call_type += ".forced_choice"
         raw = self.model.chat_messages(
             [
                 {"role": "system", "content": SPATIAL_FIDELITY_SYSTEM_PROMPT},
                 {"role": "user", "content": content},
             ],
             response_format_json=self.response_format_json,
-            call_type=f"vlm_judge.spatial_fidelity.{request.get('metric') or 'event'}",
+            call_type=call_type,
         )
         result = parse_json_object(raw)
         validate_binary_judge_response(
@@ -851,12 +1674,19 @@ class OpenAICompatibleVLMJudge:
             judge_label="Spatial Fidelity judge",
             confidence_label="VLM judge",
         )
+        request_metadata = dict(self.model.last_request_metadata)
+        if forced_choice is not None:
+            request_metadata["budget_exhaustion_finalization"] = {
+                **forced_choice,
+                **forced_choice_evidence,
+            }
         return self._audit_result(
             result,
             role=VLMRole.JUDGE,
             decision_contract=DecisionContract.SPATIAL_FIDELITY_BINARY,
             judge_method="adjudicate_spatial_fidelity",
             images_used=[str(path.resolve()) for path in selected],
+            request_metadata=request_metadata,
         )
 
     def _controlled_adjudicate(
@@ -887,201 +1717,33 @@ class OpenAICompatibleVLMJudge:
         return call(request)
 
     def select_camera_views(self, request: dict) -> dict:
-        if not isinstance(request, dict):
-            raise TypeError("camera selector request must be a JSON object")
-        candidates = [item for item in request.get("candidates", []) if isinstance(item, dict)]
-        if not candidates:
-            raise ValueError("camera selector requires at least one candidate")
-        usable_candidates = [
-            item
-            for item in candidates
-            if str(item.get("render_status") or "ok") != "blank"
-        ]
-        if not usable_candidates:
-            raise ValueError("camera selector received no non-blank candidate previews")
-        if len(usable_candidates) > self.max_images:
-            raise ValueError(
-                "camera selector candidate bank exceeds max_images; implicit "
-                f"truncation is forbidden ({len(usable_candidates)} > "
-                f"{self.max_images})"
-            )
-        internal_ids = [str(item.get("id") or "") for item in usable_candidates]
-        if any(not value for value in internal_ids) or len(set(internal_ids)) != len(internal_ids):
-            raise ValueError("camera selector candidates require unique non-empty internal IDs")
-        candidate_paths = [Path(str(item.get("image_path"))).expanduser() for item in usable_candidates]
-        missing = [str(path) for path in candidate_paths if not path.is_file()]
-        if missing:
-            raise FileNotFoundError(f"camera selector preview evidence does not exist: {missing}")
-        selected_candidates = sorted(
-            usable_candidates,
-            key=_selector_candidate_order_key,
-        )
-        paths = [Path(str(item.get("image_path"))).expanduser() for item in selected_candidates]
-        max_views = max(1, min(int(request.get("max_views") or 1), len(selected_candidates)))
-        alias_to_internal = {
-            f"candidate_{index:02d}": str(item.get("id"))
-            for index, item in enumerate(selected_candidates)
-        }
-        internal_to_alias = {
-            internal: alias
-            for alias, internal in alias_to_internal.items()
-        }
-        aliases = list(alias_to_internal)
-        allowed_actions = _selector_allowed_actions(request.get("allowed_actions"))
-        selection_phase = str(request.get("selection_phase") or "").strip().lower()
-        corrective_proposals: list[dict[str, Any]] = []
-        proposal_lookup: dict[str, dict[str, Any]] = {}
-        if selection_phase == "active_fallback":
-            corrective_proposals, proposal_lookup = selector_safe_proposals(
-                [
-                    item
-                    for item in request.get("corrective_proposals", [])
-                    if isinstance(item, dict)
-                ],
-                internal_to_alias=internal_to_alias,
-            )
-        allow_adjustment = bool(request.get("allow_adjustment")) and bool(
-            corrective_proposals
-            if selection_phase == "active_fallback"
-            else allowed_actions
-        )
-        audit = vlm_audit_metadata(
-            VLMRole.VLM_CAMERA_SELECTOR,
-            decision_contract=DecisionContract.CAMERA_SELECTION,
-            judge_method="select_camera_views",
-        )
-        context = {
-            **audit,
-            "candidates": [
-                {
-                    "id": alias,
-                    "pose": _minimal_selector_pose(item.get("pose")),
-                }
-                for alias, item in zip(aliases, selected_candidates)
-            ],
-            "max_views": max_views,
-            "allow_adjustment": allow_adjustment,
-            "allowed_actions": allowed_actions if allow_adjustment else [],
-            "metric_family": _selector_metric_family(request.get("metric")),
-            "preview_role": _selector_preview_role(request.get("preview_role")),
-            "preview_warning_class": _selector_preview_warning_class(
-                request.get("preview_visibility_warning")
-                if request.get("preview_visibility_warning") is not None
-                else request.get("preview_degradation")
-            ),
-            "color_legend": _sanitize_selector_legend(request.get("color_legend")),
-        }
-        if selection_phase == "active_fallback":
-            context["selection_phase"] = "active_fallback"
-            context["evidence_deficiency"] = _sanitize_selector_deficiency(
-                request.get("evidence_deficiency")
-            )
-            context["corrective_proposals"] = (
-                corrective_proposals if allow_adjustment else []
-            )
-        context_text = _budgeted_context_json(
-            context,
-            self.max_context_chars,
-            priority_keys=(
-                "vlm_role",
-                "decision_contract",
-                "judge_method",
-                "metric_family",
-                "preview_role",
-                "preview_warning_class",
-                "color_legend",
-                "candidates",
-                "max_views",
-                "allow_adjustment",
-                "allowed_actions",
-                "selection_phase",
-                "evidence_deficiency",
-                "corrective_proposals",
-            ),
-        )
-        content: list[dict[str, Any]] = [
-            {
-                "type": "text",
-                "text": "Select camera evidence only; do not adjudicate the event.\n" + context_text,
-            }
-        ]
-        content.extend(
-            {
-                "type": "image_url",
-                "image_url": {"url": _selector_image_data_url(path, alias=alias)},
-            }
-            for alias, path in zip(aliases, paths)
-        )
-        raw = self.model.chat_messages(
-            [
-                {"role": "system", "content": CAMERA_SELECTION_SYSTEM_PROMPT},
-                {"role": "user", "content": content},
-            ],
+        return select_openai_compatible_camera_views(
+            model=self.model,
+            request=request,
+            max_images=self.max_images,
+            max_context_chars=self.max_context_chars,
             response_format_json=self.response_format_json,
-            call_type=(
-                "vlm_camera_pose.active_fallback"
-                if selection_phase == "active_fallback"
-                else "vlm_camera_pose.query_cov"
-            ),
         )
-        parsed = parse_json_object(raw)
-        available = set(alias_to_internal)
-        resolved_aliases = validate_camera_selection_response(
-            parsed,
-            available_view_ids=available,
-            max_views=max_views,
-        )
-        action = parsed.get("action")
-        resolved_action = None
-        if action is not None:
-            if not allow_adjustment or not isinstance(action, dict):
-                raise ValueError("camera selector returned an action outside the adjustment contract")
-            if selection_phase == "active_fallback":
-                proposal_alias = str(action.get("proposal_id") or "")
-                proposal = proposal_lookup.get(proposal_alias)
-                if proposal is None:
-                    raise ValueError(
-                        "active camera selector action references an unknown "
-                        "corrective proposal"
-                    )
-                resolved_action = {
-                    "proposal_id": str(proposal.get("proposal_id") or ""),
-                    "view_id": str(proposal.get("parent_view_id") or ""),
-                    "type": str(proposal.get("action_primitive") or ""),
-                    "family": str(proposal.get("family") or ""),
-                }
-            else:
-                if str(action.get("view_id") or "") not in available:
-                    raise ValueError("camera selector action references an unknown candidate")
-                if str(action.get("type") or "") not in set(allowed_actions):
-                    raise ValueError("camera selector requested an unsupported action")
-                resolved_action = {
-                    "view_id": alias_to_internal[str(action["view_id"])],
-                    "type": str(action["type"]),
-                }
-        reason = parsed.get("reason")
-        request_metadata = dict(self.model.last_request_metadata)
-        request_metadata.update(
-            {
-                "selector_candidate_order_policy": "stable_pose_image_digest_v1",
-                "selector_candidate_alias_policy": "per_request_sequential_alias_v1",
-            }
-        )
-        return self._audit_result(
-            {
-                "selected_view_ids": [
-                    alias_to_internal[value] for value in resolved_aliases
-                ],
-                "action": resolved_action,
-                "reason": str(reason)[:1000] if reason is not None else "",
-            },
-            role=VLMRole.VLM_CAMERA_SELECTOR,
-            decision_contract=DecisionContract.CAMERA_SELECTION,
-            judge_method="select_camera_views",
-            # Preserve an auditable image count without exposing local names or paths.
-            images_used=aliases,
-            request_metadata=request_metadata,
-        )
+
+
+def select_openai_compatible_camera_views(
+    *,
+    model: OpenAICompatibleModel,
+    request: dict[str, Any],
+    max_images: int = 6,
+    max_context_chars: int = 30000,
+    response_format_json: bool | None = None,
+) -> dict[str, Any]:
+    """Execute the frozen query-cov/active camera contract without a Judge."""
+
+    return LegacyOpenAICameraSelectionAdapter(
+        model,
+        context_serializer=_budgeted_context_json,
+        image_encoder=_normalized_rgb_png_data_url,
+        max_images=max_images,
+        max_context_chars=max_context_chars,
+        response_format_json=response_format_json,
+    ).select(request)
 
 
 def _normalize_evidence_aware_binary_response(
@@ -1090,7 +1752,12 @@ def _normalize_evidence_aware_binary_response(
     judge_label: str,
 ) -> dict[str, Any]:
     if value.get("status") is not None:
-        return JudgeResult.from_value(value).to_dict()
+        result = JudgeResult.from_value(value)
+        if result.defects:
+            raise ValueError(
+                f"{judge_label} defects must be exactly an empty JSON list"
+            )
+        return result.to_dict()
     validate_binary_judge_response(
         value,
         judge_label=judge_label,
@@ -1106,10 +1773,304 @@ def _normalize_evidence_aware_binary_response(
     ).to_dict()
 
 
+def _budget_exhaustion_finalization(
+    request: dict[str, Any],
+) -> dict[str, Any] | None:
+    value = request.get("budget_exhaustion_finalization")
+    if not isinstance(value, dict) or value.get("required") is not True:
+        return None
+    stop_reason = str(value.get("trigger_stop_reason") or "").strip()
+    if not stop_reason:
+        raise ValueError(
+            "budget_exhaustion_finalization requires trigger_stop_reason"
+        )
+    return {
+        "required": True,
+        "trigger": "camera_or_evidence_budget_exhausted",
+        "trigger_stop_reason": stop_reason,
+        "termination_kind": (
+            "budget_exhausted"
+            if "exhausted" in stop_reason
+            else "acquisition_unavailable"
+        ),
+        "ambiguity_before_forcing": bool(
+            value.get("ambiguity_before_forcing")
+        ),
+        "allowed_verdicts": ["valid", "invalid"],
+        "previous_missing_observations": [
+            str(item)
+            for item in value.get("previous_missing_observations") or []
+            if str(item).strip()
+        ],
+        "previous_evidence_request": deepcopy(
+            value.get("previous_evidence_request")
+        ),
+    }
+
+
+def _select_judge_visual_paths(
+    paths: list[Path],
+    *,
+    max_images: int,
+    forced_choice: bool,
+) -> tuple[list[Path], dict[str, Any]]:
+    limit = max(1, int(max_images))
+    if len(paths) <= limit:
+        selected = list(paths)
+        policy = "all_available_within_visual_context"
+    elif limit == 1:
+        # Once the global context cannot coexist with a repair view, the most
+        # recent targeted observation is the strongest available evidence.
+        selected = [paths[-1]]
+        policy = "most_recent_targeted_only"
+    else:
+        # Packet order is global/context first and newly acquired evidence
+        # last. Preserve the anchor, then spend the remaining visual context
+        # on the most recent repair observations. This applies before terminal
+        # forcing too: otherwise a successful late repair could be acquired
+        # but omitted from the next ordinary Judge call.
+        selected = [paths[0], *paths[-(limit - 1) :]]
+        policy = "global_anchor_plus_most_recent"
+    return selected, {
+        "available_visual_count": len(paths),
+        "selected_visual_count": len(selected),
+        "dropped_visual_count": max(0, len(paths) - len(selected)),
+        "configured_visual_context_limit": limit,
+        "visual_selection_policy": policy,
+    }
+
+
 def _generic_view_names(paths: list[Path]) -> list[str]:
     """Return request-local aliases instead of exposing local filenames."""
 
     return [f"image_{index:02d}" for index, _ in enumerate(paths)]
+
+
+def _canonical_phase_instruction(
+    *,
+    metric: str,
+    evidence_phase: Any,
+    decision_mode: Any,
+) -> str:
+    phase = str(evidence_phase or "final").strip().lower()
+    mode = str(decision_mode or "final").strip().lower()
+    acquire_more = "Additional visual evidence can be acquired."
+    if (
+        phase == "json_screen"
+        and mode == "screen"
+        and metric == "scale_consistency"
+    ):
+        return (
+            "This is a structured-data routing screen, not a final scale "
+            "decision. Use category, physical dimensions, authorized "
+            "deviations, and nearby structured size references. Route a "
+            "target to visual confirmation only when its physical dimensions "
+            "remain materially suspicious after allowing plausible subtype "
+            "and product variation. Do not use image-space appearance, "
+            "placement, orientation, style, or functionality. In this "
+            "screening contract, invalid means visual confirmation required, "
+            "not a final scale defect. A weak, uncertain, or metadata-dependent "
+            "discrepancy is review_required rather than a defect. Return "
+            "insufficient/ambiguous when structured identity or dimensions "
+            "cannot safely complete the screen. "
+            + acquire_more
+        )
+    if (
+        phase == "json_screen"
+        and mode == "screen"
+        and metric == "object_pairing_consistency"
+    ):
+        return (
+            "This is a structured-data routing screen, not a final "
+            "object-pairing decision. Apply the relocation test using object "
+            "identity, semantic role, scene type, and local ensemble "
+            "membership. Route a target only when its identity or role may "
+            "remain inappropriate even after reasonable relocation within "
+            "the same scene. Do not route merely because of current support "
+            "surface, zone, height, orientation, distance, access, clearance, "
+            "scale, style, or collision. In this screening contract, invalid "
+            "means visual confirmation required, not a final pairing defect. "
+            "Return insufficient/ambiguous only when the structured data "
+            "cannot safely complete the screen. "
+            + acquire_more
+        )
+    if metric == "style_consistency" and phase == "global_screen":
+        return (
+            "Compatibility phase name: treat this as the required style "
+            "scene-global pass. Return a final verdict for what the global "
+            "view establishes, localized to exact object IDs. This verdict "
+            "does not short-circuit the mandatory eligible group-local pass. "
+            + acquire_more
+        )
+    if metric == "style_consistency" and phase == "local_confirmation":
+        return (
+            "Compatibility phase name: treat this as a mandatory independent "
+            "style group-local pass. Use the global view as scene context and "
+            "the local view for the supplied group; its presence carries no "
+            "invalidity prior. "
+            + acquire_more
+        )
+    if metric == "scale_consistency" and phase == "visual_confirmation":
+        return (
+            "This is visual confirmation of a structured-data scale "
+            "candidate. Use the global view for scene context and the "
+            "group-local view to verify target identity, relative-scale "
+            "context, and perspective. The prior screen carries no invalidity "
+            "prior. Confirm a final defect only when the physical-size "
+            "mismatch remains material after the rubric's permitted "
+            "variation. Do not count the routed candidate and its "
+            "confirmation as two defects. "
+            + acquire_more
+        )
+    if (
+        metric == "object_pairing_consistency"
+        and phase == "visual_confirmation"
+    ):
+        return (
+            "This is visual confirmation of a structured-data object-pairing "
+            "candidate. Use the global view for scene context and the "
+            "group-local view to verify visible object identity and semantic "
+            "role. The prior screen carries no invalidity prior. Apply the "
+            "relocation test again; current support surface, zone, "
+            "orientation, access, or clearance cannot confirm an "
+            "object-pairing defect. Do not count the routed candidate and its "
+            "confirmation as two defects. "
+            + acquire_more
+        )
+    if metric == "functional_consistency" and phase == "global_discovery":
+        stage_emphasis = L3_METRIC_PHASE_PROMPTS[metric][phase]
+        return (
+            "This is the required overall scene-level functional pass. "
+            "Judge only holistic scene-level functional organization. "
+            "Functional Discovery relations are owned by later isolated "
+            "cross-group episodes, while usable frontage, local clearance, "
+            "and within-group correspondence are owned by group-local "
+            "episodes. Do not report those claims here. "
+            + stage_emphasis
+            + " Localize any genuinely scene-level defect to exact target "
+            "IDs. Later phases still run and carry no validity prior. "
+            + acquire_more
+        )
+    if (
+        metric == "functional_consistency"
+        and phase == "cross_group_relation_review"
+    ):
+        stage_emphasis = L3_METRIC_PHASE_PROMPTS[metric][phase]
+        return (
+            "This is one isolated cross-group functional-relation episode. "
+            "Use the global image only as context and the pair-specific image "
+            "for the supplied relation. "
+            + stage_emphasis
+            + " Return valid or invalid only for this relation. If a named "
+            "observation is still unavailable, request that exact evidence "
+            "through the normal camera loop. "
+            + acquire_more
+        )
+    if (
+        metric == "semantic_placement_consistency"
+        and phase == "global_discovery"
+    ):
+        stage_emphasis = L3_METRIC_PHASE_PROMPTS[metric][phase]
+        return (
+            "This is the required scene-global placement pass. Groups are "
+            "evidence partitions, not reasoning boundaries; scene-zone and "
+            "cross-group contextual anchors remain in scope. "
+            + stage_emphasis
+            + " A newly noticed support-and-height or within-group anchor "
+            "check belongs to the later group-local stage: request evidence "
+            "with a typed placement_check_proposal so it can be handed off; "
+            "do not resolve or score that local check here. Localize every "
+            "scene-global defect to exact target IDs. "
+            + acquire_more
+        )
+    if (
+        metric == "semantic_placement_consistency"
+        and phase == "residual_global_placement_review"
+    ):
+        stage_emphasis = L3_METRIC_PHASE_PROMPTS[metric][phase]
+        return (
+            "This is the final residual scene-global Placement pass. The "
+            "typed global, group-local, and target-local passes have already "
+            "run; their results are neutral suppression context, not a "
+            "validity prior. Use the angled overview for appearance and the "
+            "top/identity views for scene-scale organization and object "
+            "grounding. scene_program gives only the broad room program; "
+            "do not turn it into a style or inventory stereotype. Treat the "
+            "complete object_inventory as an identity roster, not as proof "
+            "that any two objects form a relation. Visual layout remains the "
+            "primary decision evidence. placement_residual_context."
+            "scene_distribution_descriptors are "
+            "neutral measurements only: use them to focus inspection and "
+            "confirm any claimed distribution failure in the images. Complete "
+            "one concise "
+            "group_global_observations row for every exact group before "
+            "synthesizing the final verdict; those rows are audit-only, not "
+            "independent votes or defects. "
+            + stage_emphasis
+            + " Return a judge-originated typed result only for a concrete "
+            "new scene_zone or contextual_anchor failure. At most one "
+            "collective scene-zone distribution finding may be emitted, with "
+            "one accounting subject and other materially involved objects as "
+            "non-owning context. If the current "
+            "global packet is missing a necessary observable fact, use the "
+            "normal evidence-request loop; otherwise make a binary choice. "
+            + acquire_more
+        )
+    if metric == "style_consistency" and phase == "global_discovery":
+        stage_emphasis = L3_METRIC_PHASE_PROMPTS[metric][phase]
+        return (
+            "This is the required scene-global pass. Groups are evidence "
+            "partitions, not reasoning boundaries; cross-group facts remain "
+            "in scope. Follow any supplied image_order, and treat every "
+            "discovery or probe record as a neutral observation aid. "
+            + stage_emphasis
+            + " Decide only facts established at scene scope and localize "
+            "every defect to exact target IDs. A later local pass still runs; "
+            "do not summarize unseen local detail or short-circuit it. "
+            + acquire_more
+        )
+    if (
+        metric
+        in {
+            "style_consistency",
+            "functional_consistency",
+            "semantic_placement_consistency",
+        }
+        and phase == "group_local_review"
+    ):
+        stage_emphasis = L3_METRIC_PHASE_PROMPTS[metric][phase]
+        return (
+            "This is the group-local pass. Use global images only as anchors "
+            "and local images for the supplied group. Review carries no "
+            "validity prior. Defect target IDs must belong to this group; do "
+            "not restate cross-group claims with missing participants. "
+            + stage_emphasis
+            + " "
+            + acquire_more
+        )
+    if phase == "target_local_confirmation":
+        return (
+            "This is an independent target-centred confirmation episode, "
+            "not a group judgement. The target object is the only default "
+            "defect owner; nearby context objects are included only to make "
+            "the local scene relationship legible. Do not infer group "
+            "membership from the framing. "
+            + acquire_more
+        )
+    if (
+        metric
+        in {
+            "functional_consistency",
+            "semantic_placement_consistency",
+        }
+        and phase == "initial_visual"
+    ):
+        return (
+            "This is the initial global-plus-local visual pass. Judge only "
+            "what the current scene context and target-local view establish. "
+            + acquire_more
+        )
+    return acquire_more
 
 
 def _sanitize_outbound_view_evidence(value: Any) -> Any:
@@ -1218,12 +2179,20 @@ def build_openai_compatible_vlm_judge(config: dict[str, Any]) -> OpenAICompatibl
         model_id=str(model_id),
         api_key_env=str(config["api_key_env"]) if config.get("api_key_env") else None,
         temperature=float(config.get("temperature", 0.0)),
-        max_tokens=int(config.get("max_tokens", 2048)),
+        max_tokens=int(
+            config.get(
+                "max_tokens",
+                DEFAULT_JUDGE_COMPLETION_MAX_TOKENS,
+            )
+        ),
         context_length=int(config["context_length"]) if config.get("context_length") is not None else None,
         timeout_seconds=int(config.get("timeout_seconds", 300)),
         response_format_json=bool(config.get("response_format_json", True)),
         max_retries=int(config.get("max_retries", 1)),
         retry_backoff_seconds=float(config.get("retry_backoff_seconds", 1.0)),
+        min_request_interval_seconds=float(
+            config.get("min_request_interval_seconds", 0.0)
+        ),
         max_tokens_field=str(config.get("max_tokens_field", "max_tokens")),
         send_temperature=bool(config.get("send_temperature", True)),
         require_api_key=(
@@ -1234,7 +2203,7 @@ def build_openai_compatible_vlm_judge(config: dict[str, Any]) -> OpenAICompatibl
     )
     return OpenAICompatibleVLMJudge(
         model,
-        max_images=int(config.get("max_images", 6)),
+        max_images=int(config.get("max_images", 8)),
         max_context_chars=int(config.get("max_context_chars", 30000)),
         response_format_json=bool(config.get("response_format_json", True)),
     )
@@ -1277,12 +2246,6 @@ def _image_data_url(path: Path) -> str:
     return _normalized_rgb_png_data_url(path, label="judge_evidence")
 
 
-def _selector_image_data_url(path: Path, *, alias: str) -> str:
-    """Return a metadata-free RGB PNG for the external camera selector."""
-
-    return _normalized_rgb_png_data_url(path, label=alias)
-
-
 def _normalized_rgb_png_data_url(path: Path, *, label: str) -> str:
     """Decode and re-encode one outbound image without file metadata or alpha."""
 
@@ -1309,126 +2272,6 @@ def _normalized_rgb_png_data_url(path: Path, *, label: str) -> str:
     return f"data:image/png;base64,{encoded}"
 
 
-def _selector_candidate_order_key(candidate: dict[str, Any]) -> str:
-    digest = hashlib.sha256()
-    digest.update(
-        json.dumps(
-            _minimal_selector_pose(candidate.get("pose")),
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode("utf-8")
-    )
-    path = Path(str(candidate.get("image_path"))).expanduser()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def _selector_metric_family(value: Any) -> str:
-    metric = str(value or "").strip().lower()
-    allowed = {
-        "collision",
-        "oob",
-        "support",
-        "object_architecture_penetration",
-    }
-    if metric not in allowed:
-        raise ValueError(f"camera selector does not support metric family {metric!r}")
-    return metric
-
-
-def _selector_preview_role(value: Any) -> str:
-    role = str(value or "").strip().lower()
-    return role if role in {"highlighted_focus", "rgb_fallback"} else "unspecified"
-
-
-def _selector_preview_warning_class(value: Any) -> str | None:
-    if value is None or not str(value).strip():
-        return None
-    warning = str(value).lower()
-    if "blank" in warning:
-        return "blank_preview"
-    if "visib" in warning or "highlight" in warning or "coverage" in warning:
-        return "incomplete_target_visibility"
-    return "preview_warning"
-
-
-def _selector_allowed_actions(value: Any) -> list[str]:
-    allowed = {
-        "orbit_left",
-        "orbit_right",
-        "elevate",
-        "lower",
-        "dolly_in",
-        "dolly_out",
-    }
-    if not isinstance(value, list):
-        return []
-    return list(dict.fromkeys(str(item) for item in value if str(item) in allowed))
-
-
-def _sanitize_selector_deficiency(value: Any) -> dict[str, Any]:
-    """Allow only non-identifying, routing-level evidence deficits outbound."""
-
-    source = value if isinstance(value, dict) else {}
-    reason_allowlist = {
-        "measured_local_visibility_insufficient",
-        "required_local_view_count_missing",
-        "required_entities_not_jointly_visible",
-        "focus_region_out_of_frame",
-        "target_occluded_or_too_small",
-        "focus_region_too_small",
-        "architecture_plane_not_visible",
-        "redundant_local_views",
-    }
-    deficiencies = source.get("deficiencies")
-    structured_reasons = (
-        [
-            str(item.get("code"))
-            for item in deficiencies
-            if isinstance(item, dict)
-            and item.get("repairability") == "camera"
-            and str(item.get("code") or "") in reason_allowlist
-        ]
-        if isinstance(deficiencies, list)
-        else []
-    )
-    reasons = source.get("reason_codes")
-    sanitized_reasons = (
-        [
-            str(reason)
-            for reason in reasons
-            if str(reason) in reason_allowlist
-        ]
-        if isinstance(reasons, list)
-        else []
-    )
-    sanitized_reasons = list(
-        dict.fromkeys(structured_reasons + sanitized_reasons)
-    )
-    result: dict[str, Any] = {
-        "status": "insufficient",
-        "reason_codes": sanitized_reasons,
-    }
-    for key in (
-        "required_local_view_count",
-        "measured_local_view_count",
-        "usable_local_view_count",
-    ):
-        raw = source.get(key)
-        if isinstance(raw, int) and not isinstance(raw, bool) and 0 <= raw <= 8:
-            result[key] = raw
-    utility = source.get("evidence_utility")
-    if (
-        isinstance(utility, (int, float))
-        and not isinstance(utility, bool)
-        and 0.0 <= float(utility) <= 1.0
-    ):
-        result["evidence_utility"] = round(float(utility), 6)
-    return result
-
-
 def _allowed_canonical_camera_observations(metric: Any) -> list[str]:
     return _allowed_binary_camera_observations(metric)
 
@@ -1436,6 +2279,18 @@ def _allowed_canonical_camera_observations(metric: Any) -> list[str]:
 def _canonical_evidence_request_target_ids(
     request: dict[str, Any],
 ) -> tuple[str, ...]:
+    raw_external = request.get(
+        "allowed_external_evidence_target_ids"
+    )
+    external_ids = (
+        [
+            str(value)
+            for value in raw_external
+            if isinstance(value, (str, int)) and str(value).strip()
+        ]
+        if isinstance(raw_external, list)
+        else []
+    )
     group_scope = request.get("group_scope")
     if isinstance(group_scope, dict):
         members = group_scope.get("member_ids")
@@ -1449,7 +2304,9 @@ def _canonical_evidence_request_target_ids(
                 )
             )
             if values:
-                return values
+                return tuple(
+                    dict.fromkeys((*values, *external_ids))
+                )
 
     values: list[str] = []
     for key in ("target_object_ids", "object_ids"):
@@ -1469,7 +2326,197 @@ def _canonical_evidence_request_target_ids(
             object_id = item.get("id") or item.get("object_id")
             if object_id is not None and str(object_id).strip():
                 values.append(str(object_id))
+    return tuple(
+        dict.fromkeys((*values, *external_ids, "scene"))
+    )
+
+
+def _canonical_defect_target_ids(
+    request: dict[str, Any],
+) -> tuple[str, ...]:
+    contract = request.get("response_contract")
+    contract = contract if isinstance(contract, dict) else {}
+    defects = contract.get("defects")
+    defects = defects if isinstance(defects, dict) else {}
+    raw = defects.get("allowed_target_ids")
+    if not isinstance(raw, list):
+        group_scope = request.get("group_scope")
+        raw = (
+            group_scope.get("member_ids")
+            if isinstance(group_scope, dict)
+            and isinstance(group_scope.get("member_ids"), list)
+            else request.get("target_object_ids")
+        )
+    if not isinstance(raw, list) or not raw:
+        scene = request.get("scene_summary")
+        raw = [
+            item.get("id") or item.get("object_id")
+            for item in (
+                scene.get("objects")
+                if isinstance(scene, dict)
+                else []
+            )
+            or []
+            if isinstance(item, dict)
+        ]
+    values = tuple(
+        dict.fromkeys(
+            str(item)
+            for item in raw
+            if isinstance(item, (str, int)) and str(item).strip()
+        )
+    )
     return tuple(dict.fromkeys((*values, "scene")))
+
+
+def _project_group_local_defects_to_scope(
+    result: dict[str, Any],
+    *,
+    request: dict[str, Any],
+    required_functional_checks: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Discard visual findings that do not belong to this group episode.
+
+    Global context is evidence, not decision scope.  The sole exception is an
+    external Functional clearance owner explicitly linked to its typed check
+    and exact ``scoring_target_ids``.  This projection is deterministic scope
+    enforcement, not response-schema compatibility repair.
+    """
+
+    if request.get("evidence_phase") != "group_local_review":
+        return result
+    group_scope = request.get("group_scope")
+    members = {
+        str(item)
+        for item in (
+            group_scope.get("member_ids")
+            if isinstance(group_scope, dict)
+            else []
+        )
+        or []
+        if str(item).strip()
+    }
+    defects = result.get("defects")
+    if not members or not isinstance(defects, list):
+        return result
+    checks = {
+        str(item.get("check_id") or ""): item
+        for item in required_functional_checks
+        if isinstance(item, dict) and item.get("check_id")
+    }
+    rows = {
+        str(item.get("check_id") or ""): item
+        for item in result.get("functional_check_results") or []
+        if isinstance(item, dict) and item.get("check_id")
+    }
+
+    def in_scope(defect: Any) -> bool:
+        if not isinstance(defect, dict):
+            return True
+        targets = {
+            str(item)
+            for item in defect.get("target_ids") or []
+            if str(item).strip()
+        }
+        if targets and targets <= members:
+            return True
+        refs = defect.get("check_refs")
+        if not isinstance(refs, list) or len(refs) != 1:
+            return False
+        check_id = str(refs[0])
+        check = checks.get(check_id)
+        row = rows.get(check_id)
+        return bool(
+            isinstance(check, dict)
+            and check.get("check_type") == "clearance"
+            and isinstance(row, dict)
+            and row.get("conclusion") == "invalid"
+            and targets
+            == {
+                str(item)
+                for item in row.get("scoring_target_ids") or []
+                if str(item).strip()
+            }
+        )
+
+    retained = [deepcopy(item) for item in defects if in_scope(item)]
+    if len(retained) == len(defects):
+        return result
+    projected = deepcopy(result)
+    projected["defects"] = retained
+    projected["group_scope_projection"] = {
+        "policy": "group_members_or_linked_clearance_owner_v1",
+        "discarded_defect_count": len(defects) - len(retained),
+    }
+    typed_invalid = any(
+        isinstance(row, dict) and row.get("conclusion") == "invalid"
+        for row in [
+            *(projected.get("functional_check_results") or []),
+            *(projected.get("placement_check_results") or []),
+        ]
+    )
+    if projected.get("verdict") == "invalid" and not retained:
+        if typed_invalid:
+            # A typed invalid without its exact authorized defect is a real
+            # contract failure and must proceed to schema repair or the
+            # metric-specific atomic-row fallback.
+            return projected
+        projected["verdict"] = "valid"
+        projected["reason"] = (
+            "The model described only defects outside the immutable group-local "
+            "decision scope; no in-scope defect remains."
+        )
+    return projected
+
+
+def _validate_pending_placement_proposal(
+    result: dict[str, Any],
+    *,
+    request: dict[str, Any],
+) -> None:
+    evidence_request = result.get("evidence_request")
+    if not isinstance(evidence_request, dict):
+        return
+    metadata = evidence_request.get("metadata")
+    if not isinstance(metadata, dict):
+        return
+    proposal = metadata.get("placement_check_proposal")
+    if proposal is None:
+        return
+    from benchmark.evaluator.scene_quality.placement_checks import (
+        build_pending_placement_check,
+        canonicalize_placement_proposal_transport,
+    )
+
+    known_ids = _placement_known_ids_for_request(request)
+    proposal, warnings = canonicalize_placement_proposal_transport(
+        proposal,
+        known_ids=known_ids,
+    )
+    metadata["placement_check_proposal"] = proposal
+    if warnings:
+        metadata["placement_transport_normalization"] = {
+            "policy": "narrow_transport_only_v1",
+            "warnings": warnings,
+        }
+
+    pending = build_pending_placement_check(
+        proposal,
+        known_ids=known_ids,
+        groups=_placement_groups_for_request(request),
+        source_ref=str(proposal["proposal_id"]),
+    )
+    expected_stage = (
+        "group_local"
+        if request.get("evidence_phase") == "group_local_review"
+        else "scene_global"
+    )
+    if pending.get("owner_stage") != expected_stage:
+        raise ValueError(
+            "placement_check_proposal belongs to "
+            f"{pending.get('owner_stage')!r}, not active stage "
+            f"{expected_stage!r}"
+        )
 
 
 def _allowed_binary_camera_observations(
@@ -1515,68 +2562,870 @@ def _relation_type_from_request(request: dict[str, Any]) -> str | None:
     return None
 
 
-def _minimal_selector_pose(value: Any) -> dict[str, Any]:
-    pose = value if isinstance(value, dict) else {}
-    result: dict[str, Any] = {}
-    projection = str(pose.get("camera_type") or "PERSP").strip().upper()
-    result["projection"] = "orthographic" if projection == "ORTHO" else "perspective"
-    for source, target in (
-        ("azimuth_degrees", "azimuth_degrees"),
-        ("elevation_degrees", "elevation_degrees"),
-        ("lens_mm", "lens_mm"),
-        ("ortho_scale", "ortho_scale"),
-    ):
-        raw = pose.get(source)
-        if isinstance(raw, (int, float)) and not isinstance(raw, bool) and math.isfinite(float(raw)):
-            result[target] = round(float(raw), 3)
-    return result
+def _required_functional_checks_from_request(
+    request: dict[str, Any],
+) -> list[Any]:
+    value = request.get("required_functional_checks")
+    if not isinstance(value, list):
+        packet = request.get("functional_probe_evidence")
+        value = (
+            packet.get("required_checks")
+            if isinstance(packet, dict)
+            else None
+        )
+    return deepcopy(value) if isinstance(value, list) else []
 
 
-def _sanitize_selector_legend(value: Any) -> list[dict[str, Any]]:
+def _judge_facing_required_functional_checks(
+    value: Any,
+) -> list[dict[str, Any]]:
     if not isinstance(value, list):
         return []
     result: list[dict[str, Any]] = []
-    for item in value[:12]:
-        if not isinstance(item, dict):
-            continue
-        role = str(item.get("role") or "").strip().lower()
-        if role.startswith("related_target_"):
-            role = "related_target"
-        if role not in {
-            "object_a",
-            "object_b",
-            "primary_target",
-            "related_target",
-            "architecture_plane",
-            "measured_support_gap",
-        }:
-            role = "annotation"
-        entry: dict[str, Any] = {"role": role}
-        color = item.get("color")
-        if isinstance(color, (list, tuple)) and len(color) >= 3:
-            channels: list[float] = []
-            for channel in color[:3]:
-                if not isinstance(channel, (int, float)) or isinstance(channel, bool):
-                    channels = []
-                    break
-                numeric = float(channel)
-                if not math.isfinite(numeric):
-                    channels = []
-                    break
-                channels.append(round(min(1.0, max(0.0, numeric)), 4))
-            if channels:
-                entry["rgb"] = channels
-        representation = str(item.get("representation") or "").lower()
-        if "mesh" in representation:
-            entry["representation"] = "mesh"
-        elif any(token in representation for token in ("obb", "bbox", "proxy")):
-            entry["representation"] = "proxy"
-        elif any(token in representation for token in ("plane", "boundary")):
-            entry["representation"] = "architecture"
-        elif representation:
-            entry["representation"] = "annotation"
-        result.append(entry)
+    seen_ids: set[str] = set()
+    for check in value:
+        if not isinstance(check, dict):
+            raise TypeError(
+                "required_functional_checks must contain JSON objects"
+            )
+        check_id = str(check.get("check_id") or "").strip()
+        target_ids = check.get("target_ids")
+        if (
+            not check_id
+            or check_id in seen_ids
+            or not isinstance(target_ids, list)
+            or not target_ids
+        ):
+            raise ValueError(
+                "required_functional_checks require unique IDs and "
+                "non-empty target lists"
+            )
+        seen_ids.add(check_id)
+        compact = {
+            key: deepcopy(check[key])
+            for key in (
+                "check_id",
+                "check_type",
+                "predicate",
+                "owner_stage",
+                "target_ids",
+                "group_ids",
+                "owning_group_id",
+                "relation",
+                "required_observations",
+                "observation_goals",
+                "observation_kinds",
+                "surface_roles",
+                "need_clearance",
+                "causal_candidate_ids",
+                "causal_candidates",
+                "causal_candidates_are_routing_prior",
+                "allowed_causal_object_ids",
+                "acquisition_status",
+                "artifact_rendered",
+                "machine_view_coverage_status",
+                "machine_view_coverage_usable",
+            )
+            if key in check
+        }
+        affordances = []
+        for affordance in check.get("target_affordances") or []:
+            if not isinstance(affordance, dict):
+                continue
+            affordances.append(
+                {
+                    key: deepcopy(affordance[key])
+                    for key in (
+                        "target_id",
+                        "directionality",
+                        "surface_roles",
+                        "need_clearance",
+                    )
+                    if key in affordance
+                }
+            )
+        if affordances:
+            compact["target_affordances"] = affordances
+        result.append(compact)
     return result
+
+
+def _required_placement_checks_from_request(
+    request: dict[str, Any],
+) -> list[Any]:
+    value = request.get("required_placement_checks")
+    return deepcopy(value) if isinstance(value, list) else []
+
+
+def _judge_facing_required_placement_checks(
+    value: Any,
+) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    result: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    for check in value:
+        if not isinstance(check, dict):
+            raise TypeError(
+                "required_placement_checks must contain JSON objects"
+            )
+        check_id = str(check.get("check_id") or "").strip()
+        subject_id = str(check.get("subject_id") or "").strip()
+        context_ids = check.get("context_ids")
+        if (
+            not check_id
+            or check_id in seen_ids
+            or not subject_id
+            or not isinstance(context_ids, list)
+        ):
+            raise ValueError(
+                "required_placement_checks require unique IDs, a subject, "
+                "and a context list"
+            )
+        seen_ids.add(check_id)
+        result.append(
+            {
+                key: deepcopy(check[key])
+                for key in (
+                    "check_id",
+                    "check_type",
+                    "subject_id",
+                    "context_ids",
+                    "owner_stage",
+                    "owning_group_id",
+                    "group_ids",
+                    "required_observations",
+                    "observation_goals",
+                    "origin",
+                    "acquisition_status",
+                )
+                if key in check
+            }
+        )
+    return result
+
+
+def _judge_facing_functional_ownership_ledger(
+    value: Any,
+) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    events = []
+    for event in value.get("events") or []:
+        if not isinstance(event, dict):
+            raise TypeError(
+                "functional ownership events must contain JSON objects"
+            )
+        events.append(
+            {
+                key: deepcopy(event[key])
+                for key in (
+                    "event_id",
+                    "owning_metric",
+                    "affected_object_ids",
+                    "cause_kind",
+                    "causal_object_ids",
+                    "scoring_target_ids",
+                    "counterpart_object_ids",
+                    "scope",
+                    "relation",
+                    "reason",
+                    "check_refs",
+                    "decision_ref",
+                )
+                if key in event
+            }
+        )
+    return {
+        "schema_version": value.get("schema_version"),
+        "events": events,
+        "event_count": len(events),
+        "decision_authority": "none",
+    }
+
+
+def _expected_placement_owner_stage(
+    request: dict[str, Any],
+) -> str | None:
+    if isinstance(request.get("target_scope"), dict):
+        return "target_local"
+    if isinstance(request.get("group_scope"), dict):
+        return "group_local"
+    phase = str(request.get("evidence_phase") or "")
+    if phase in {
+        "global_discovery",
+        "scene_global",
+        "residual_global_placement_review",
+    }:
+        return "scene_global"
+    # Direct adapter callers may use the group-local phase without supplying
+    # a trusted group.  In that case owner assignment is derived from the
+    # available group map and may legitimately become target-local.
+    return None
+
+
+def _placement_known_ids_for_request(
+    request: dict[str, Any],
+) -> set[str]:
+    group_scope = request.get("group_scope")
+    if isinstance(group_scope, dict) and isinstance(
+        group_scope.get("member_ids"),
+        list,
+    ):
+        members = {
+            str(item)
+            for item in group_scope["member_ids"]
+            if isinstance(item, (str, int)) and str(item).strip()
+        }
+        if members:
+            return members
+    for key in ("camera_scene_context", "scene_summary"):
+        scene = request.get(key)
+        if not isinstance(scene, dict):
+            continue
+        result = {
+            str(item.get("id") or item.get("object_id"))
+            for item in scene.get("objects") or []
+            if isinstance(item, dict)
+            and (item.get("id") or item.get("object_id"))
+        }
+        if result:
+            return result
+    raise ValueError(
+        "semantic placement request has no trusted object identities"
+    )
+
+
+def _scene_known_ids_for_request(
+    request: dict[str, Any],
+) -> set[str]:
+    for key in ("camera_scene_context", "scene_summary"):
+        scene = request.get(key)
+        if not isinstance(scene, dict):
+            continue
+        result = {
+            str(item.get("id") or item.get("object_id"))
+            for item in scene.get("objects") or []
+            if isinstance(item, dict)
+            and (item.get("id") or item.get("object_id"))
+        }
+        if result:
+            return result
+    raise ValueError(
+        "semantic placement ownership has no trusted scene identities"
+    )
+
+
+def _placement_groups_for_request(
+    request: dict[str, Any],
+) -> list[dict[str, Any]]:
+    groups = request.get("object_groups")
+    return [
+        {
+            "group_id": str(item.get("group_id") or ""),
+            "object_ids": [
+                str(object_id)
+                for object_id in item.get("object_ids") or []
+            ],
+        }
+        for item in groups or []
+        if isinstance(item, dict)
+    ]
+
+
+def _judge_facing_functional_probe_context(
+    value: Any,
+    *,
+    required_checks_supplied: bool,
+) -> Any:
+    if not isinstance(value, dict):
+        return deepcopy(value)
+    result = deepcopy(value)
+    if isinstance(result.pop("functional_measurements", None), dict):
+        # The compact bank is a separately budget-protected top-level field.
+        # Keeping a second copy inside this potentially large packet can force
+        # both copies through lossy JSON-prefix compaction.
+        result["functional_measurements_reference"] = (
+            "functional_measurements"
+        )
+    if required_checks_supplied:
+        result.pop("required_checks", None)
+        result["required_checks_reference"] = (
+            "required_functional_checks"
+        )
+    return result
+
+
+def _functional_preflight_response(
+    request: dict[str, Any],
+    *,
+    selected_paths: list[Path],
+    required_checks: list[dict[str, Any]],
+    allowed_missing_observations: tuple[str, ...],
+    allowed_target_ids: tuple[str, ...],
+    forced_choice: bool,
+) -> dict[str, Any] | None:
+    """Emit one controller-visible evidence request before binary judging.
+
+    A failed usable-side decode is machine-observable.  Letting the semantic
+    Judge immediately return a confident binary answer in that state defeats
+    the evidence loop.  The preflight therefore requests one replacement view
+    without consuming a model call.  Once the active packet contains an
+    artifact not present in the initial packet, ordinary Judge authority
+    resumes.  Terminal forced choice also bypasses this guard by design.
+    """
+
+    value = request.get("functional_evidence_preflight")
+    if (
+        forced_choice
+        or not isinstance(value, dict)
+        or value.get("active") is not True
+        or not required_checks
+    ):
+        return None
+
+    def artifact_key(raw: Any) -> str:
+        try:
+            return str(Path(str(raw)).expanduser().resolve())
+        except (OSError, RuntimeError, ValueError):
+            return str(raw)
+
+    initial = {
+        artifact_key(item)
+        for item in value.get("initial_evidence_refs") or []
+        if str(item).strip()
+    }
+    current = {artifact_key(path) for path in selected_paths}
+    if current - initial:
+        return None
+
+    allowed_missing = set(allowed_missing_observations)
+    missing = list(
+        dict.fromkeys(
+            str(item)
+            for item in value.get("missing_observations") or []
+            if str(item) in allowed_missing
+        )
+    )
+    if not missing:
+        missing = [
+            item
+            for item in (
+                "interaction_side_visible",
+                "front_back_disambiguated",
+                "target_visible",
+            )
+            if item in allowed_missing
+        ][:1]
+    allowed_targets = set(allowed_target_ids)
+    targets = list(
+        dict.fromkeys(
+            str(item)
+            for item in value.get("target_ids") or []
+            if str(item) in allowed_targets
+        )
+    )
+    if not targets:
+        targets = list(allowed_target_ids[:1]) or ["scene"]
+    rows = [
+        {
+            "check_id": str(check.get("check_id") or ""),
+            "target_ids": [
+                str(item) for item in check.get("target_ids") or []
+            ],
+            "observation_status": "missing",
+            "conclusion": "unresolved",
+            "reason": (
+                "The deterministic visual preflight could not bind the "
+                "required directed-side observation; acquire a replacement "
+                "view before binary judgement."
+            ),
+        }
+        for check in required_checks
+    ]
+    return {
+        "evidence_status": "insufficient",
+        "verdict": "ambiguous",
+        "confidence": 0.0,
+        "reason": (
+            "Required directed-side evidence was not machine-resolved in "
+            "the initial packet."
+        ),
+        "missing_evidence": missing,
+        "defects": [],
+        "evidence_request": {
+            "target_ids": targets,
+            "missing_observations": missing,
+            "view_goal": (
+                "show the directed usable or interaction side with enough "
+                "front/back context to resolve the requested check"
+            ),
+            "metadata": {
+                "source": "functional_evidence_preflight_v1",
+                "check_id": value.get("check_id"),
+                "reason_codes": deepcopy(value.get("reason_codes") or []),
+            },
+        },
+        "functional_check_results": rows,
+        "functional_evidence_preflight": {
+            "applied": True,
+            "reason_codes": deepcopy(value.get("reason_codes") or []),
+        },
+    }
+
+
+def _require_functional_checks_in_model_context(
+    context_text: str,
+    *,
+    required_checks: list[dict[str, Any]],
+) -> None:
+    if not required_checks:
+        return
+    parsed = json.loads(context_text)
+    delivered = parsed.get("required_functional_checks")
+    expected_signature = [
+        (
+            str(check.get("check_id") or ""),
+            tuple(
+                sorted(
+                    str(target_id)
+                    for target_id in check.get("target_ids") or []
+                )
+            ),
+        )
+        for check in required_checks
+    ]
+    delivered_signature = (
+        [
+            (
+                str(check.get("check_id") or ""),
+                tuple(
+                    sorted(
+                        str(target_id)
+                        for target_id in check.get("target_ids") or []
+                    )
+                ),
+            )
+            for check in delivered
+            if isinstance(check, dict)
+        ]
+        if isinstance(delivered, list)
+        else []
+    )
+    if delivered_signature != expected_signature:
+        raise ValueError(
+            "required functional checks exceed the model context budget; "
+            "partial check delivery is forbidden"
+        )
+
+
+def _scope_soft_functional_measurements(
+    measurements: dict[str, Any] | None,
+    *,
+    required_checks: list[dict[str, Any]],
+) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+    """Project non-authoritative measurements onto the exact Judge scope."""
+
+    expected_ids = list(
+        dict.fromkeys(
+            str(check.get("check_id") or "")
+            for check in required_checks
+            if str(check.get("check_id") or "").strip()
+        )
+    )
+    if not expected_ids:
+        return None, {
+            "schema_version": "functional_measurement_scope_audit_v1",
+            "status": "not_applicable",
+            "expected_check_ids": [],
+            "source_check_ids": [],
+            "source_unexpected_check_ids": [],
+            "source_duplicate_check_ids": [],
+            "missing_check_ids": [],
+            "evidence_role": "soft_supporting_evidence",
+            "decision_authority": "none",
+        }
+
+    source = deepcopy(measurements) if isinstance(measurements, dict) else {}
+    rows = [
+        deepcopy(item)
+        for item in source.get("check_measurements") or []
+        if isinstance(item, dict)
+        and str(item.get("check_id") or "").strip()
+    ]
+    source_ids = [str(item.get("check_id")) for item in rows]
+    expected = set(expected_ids)
+    source_unexpected = list(
+        dict.fromkeys(item for item in source_ids if item not in expected)
+    )
+    source_duplicates = sorted(
+        {
+            item
+            for item in source_ids
+            if source_ids.count(item) > 1
+        }
+    )
+    by_id: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        check_id = str(row["check_id"])
+        if check_id in expected and check_id not in by_id:
+            by_id[check_id] = row
+    scoped_rows = [
+        by_id[check_id]
+        for check_id in expected_ids
+        if check_id in by_id
+    ]
+    missing = [
+        check_id for check_id in expected_ids if check_id not in by_id
+    ]
+    scoped = source
+    scoped.pop("_truncated", None)
+    scoped["status"] = (
+        "complete"
+        if not missing
+        else "partial"
+        if scoped_rows
+        else "unavailable"
+    )
+    scoped["measurement_role"] = (
+        "deterministic_spatial_evidence_not_verdict"
+    )
+    scoped["decision_authority"] = "none"
+    scoped["requested_check_ids"] = list(expected_ids)
+    scoped["check_measurements"] = scoped_rows
+    audit = {
+        "schema_version": "functional_measurement_scope_audit_v1",
+        "status": scoped["status"],
+        "expected_check_ids": list(expected_ids),
+        "source_check_ids": source_ids,
+        "source_unexpected_check_ids": source_unexpected,
+        "source_duplicate_check_ids": source_duplicates,
+        "missing_check_ids": missing,
+        "evidence_role": "soft_supporting_evidence",
+        "decision_authority": "none",
+    }
+    return scoped, audit
+
+
+def _functional_measurement_delivery_audit(
+    context_text: str,
+    *,
+    required_checks: list[dict[str, Any]],
+    measurements: dict[str, Any] | None,
+    source_scope_audit: dict[str, Any],
+) -> dict[str, Any]:
+    """Audit soft-evidence delivery without blocking a visual verdict."""
+
+    expected_ids = list(
+        dict.fromkeys(
+            str(check.get("check_id") or "")
+            for check in required_checks
+            if str(check.get("check_id") or "").strip()
+        )
+    )
+    if not expected_ids:
+        return {
+            "schema_version": "functional_measurement_delivery_audit_v1",
+            "status": "not_applicable",
+            "expected_check_ids": [],
+            "delivered_check_ids": [],
+            "missing_check_ids": [],
+            "unexpected_check_ids": [],
+            "truncated": False,
+            "evidence_ambiguous": False,
+            "blocks_judge": False,
+            "evidence_role": "soft_supporting_evidence",
+            "decision_authority": "none",
+        }
+    parsed = json.loads(context_text)
+    delivered = parsed.get("functional_measurements")
+    truncated = bool(
+        isinstance(delivered, dict)
+        and delivered.get("_truncated") is True
+    )
+    delivered_ids = (
+        [
+            str(item.get("check_id") or "")
+            for item in delivered.get("check_measurements") or []
+            if isinstance(item, dict)
+            and str(item.get("check_id") or "").strip()
+        ]
+        if isinstance(delivered, dict) and not truncated
+        else []
+    )
+    expected = set(expected_ids)
+    missing = [
+        check_id for check_id in expected_ids if check_id not in delivered_ids
+    ]
+    unexpected = list(
+        dict.fromkeys(
+            check_id
+            for check_id in delivered_ids
+            if check_id not in expected
+        )
+    )
+    source_duplicates = list(
+        source_scope_audit.get("source_duplicate_check_ids") or []
+    )
+    ambiguous = bool(
+        missing or unexpected or truncated or source_duplicates
+    )
+    status = (
+        "complete"
+        if not ambiguous
+        else "partial"
+        if delivered_ids
+        else "unavailable"
+    )
+    return {
+        "schema_version": "functional_measurement_delivery_audit_v1",
+        "status": status,
+        "expected_check_ids": expected_ids,
+        "delivered_check_ids": delivered_ids,
+        "missing_check_ids": missing,
+        "unexpected_check_ids": unexpected,
+        "truncated": truncated,
+        "source_measurements_present": isinstance(measurements, dict),
+        "source_scope_audit": deepcopy(source_scope_audit),
+        "evidence_ambiguous": ambiguous,
+        "blocks_judge": False,
+        "evidence_role": "soft_supporting_evidence",
+        "decision_authority": "none",
+    }
+
+
+def _require_placement_checks_in_model_context(
+    context_text: str,
+    *,
+    required_checks: list[dict[str, Any]],
+) -> None:
+    if not required_checks:
+        return
+    parsed = json.loads(context_text)
+    delivered = parsed.get("required_placement_checks")
+    expected_signature = [
+        (
+            str(check.get("check_id") or ""),
+            str(check.get("subject_id") or ""),
+            tuple(
+                sorted(
+                    str(item)
+                    for item in check.get("context_ids") or []
+                )
+            ),
+        )
+        for check in required_checks
+    ]
+    delivered_signature = (
+        [
+            (
+                str(check.get("check_id") or ""),
+                str(check.get("subject_id") or ""),
+                tuple(
+                    sorted(
+                        str(item)
+                        for item in check.get("context_ids") or []
+                    )
+                ),
+            )
+            for check in delivered
+            if isinstance(check, dict)
+        ]
+        if isinstance(delivered, list)
+        else []
+    )
+    if delivered_signature != expected_signature:
+        raise ValueError(
+            "required placement checks exceed the model context budget; "
+            "partial check delivery is forbidden"
+        )
+
+
+def _require_placement_residual_context_in_model_context(
+    context_text: str,
+    *,
+    source_context: Any,
+) -> dict[str, Any] | None:
+    if not isinstance(source_context, dict):
+        return None
+    parsed = json.loads(context_text)
+    delivered = parsed.get("placement_residual_context")
+    if not isinstance(delivered, dict):
+        raise ValueError(
+            "residual Placement context exceeds the model context budget"
+        )
+    source_program = source_context.get("scene_program")
+    delivered_program = delivered.get("scene_program")
+    source_program = (
+        source_program if isinstance(source_program, dict) else {}
+    )
+    delivered_program = (
+        delivered_program if isinstance(delivered_program, dict) else {}
+    )
+    source_inventory = source_context.get("object_inventory")
+    delivered_inventory = delivered.get("object_inventory")
+    source_inventory = (
+        source_inventory if isinstance(source_inventory, list) else []
+    )
+    delivered_inventory = (
+        delivered_inventory
+        if isinstance(delivered_inventory, list)
+        else []
+    )
+    expected_ids = [
+        str(item.get("object_id") or "")
+        for item in source_inventory
+        if isinstance(item, dict)
+    ]
+    delivered_ids = [
+        str(item.get("object_id") or "")
+        for item in delivered_inventory
+        if isinstance(item, dict)
+    ]
+    expected_scene_type = str(source_program.get("scene_type") or "")
+    delivered_scene_type = str(
+        delivered_program.get("scene_type") or ""
+    )
+    source_groups = source_context.get("groups")
+    delivered_groups = delivered.get("groups")
+    top_level_groups = parsed.get("object_groups")
+    source_groups = source_groups if isinstance(source_groups, list) else []
+    delivered_groups = (
+        delivered_groups if isinstance(delivered_groups, list) else []
+    )
+    top_level_groups = (
+        top_level_groups if isinstance(top_level_groups, list) else []
+    )
+
+    def group_roster(value: list[Any]) -> list[dict[str, Any]]:
+        return [
+            {
+                "group_id": str(item.get("group_id") or ""),
+                "object_ids": list(item.get("object_ids") or []),
+            }
+            for item in value
+            if isinstance(item, dict)
+        ]
+
+    expected_groups = group_roster(source_groups)
+    delivered_group_roster = group_roster(delivered_groups)
+    top_level_group_roster = group_roster(top_level_groups)
+    leaked_group_semantics = any(
+        isinstance(item, dict)
+        and set(item) - {"group_id", "object_ids"}
+        for item in top_level_groups
+    )
+    canonical_scene = parsed.get("canonical_scene")
+    canonical_objects = (
+        canonical_scene.get("objects")
+        if isinstance(canonical_scene, dict)
+        and isinstance(canonical_scene.get("objects"), list)
+        else []
+    )
+    leaked_description = any(
+        isinstance(item, dict)
+        and any(key in item for key in ("description", "desc"))
+        for item in canonical_objects
+    )
+    if (
+        delivered_scene_type != expected_scene_type
+        or delivered_ids != expected_ids
+        or delivered.get("object_inventory_complete") is not True
+        or parsed.get("natural_language_request") not in (None, "")
+        or parsed.get("visual_style_spec") is not None
+        or leaked_description
+        or delivered_group_roster != expected_groups
+        or top_level_group_roster != expected_groups
+        or leaked_group_semantics
+    ):
+        raise ValueError(
+            "residual Placement scene program or complete object inventory "
+            "was not delivered intact, or excluded theme/prompt context "
+            "leaked into the model input"
+        )
+    return {
+        "schema_version": "placement_residual_context_delivery_audit_v2",
+        "scene_type": delivered_scene_type,
+        "expected_object_count": len(expected_ids),
+        "delivered_object_count": len(delivered_ids),
+        "object_ids_complete": True,
+        "group_ids": [item["group_id"] for item in expected_groups],
+        "group_roster_complete": True,
+        "group_semantic_metadata_delivered": False,
+        "aesthetic_theme_delivered": False,
+        "generation_prompt_delivered": False,
+    }
+
+
+def _residual_placement_canonical_scene(value: Any) -> dict[str, Any]:
+    """Retain raw spatial facts while removing style/prompt descriptions."""
+
+    source = value if isinstance(value, dict) else {}
+    objects = [
+        {
+            key: deepcopy(item.get(key))
+            for key in (
+                "id",
+                "category",
+                "center",
+                "size",
+                "rotation",
+            )
+            if key in item
+        }
+        for item in source.get("objects") or []
+        if isinstance(item, dict)
+    ]
+    return {
+        key: deepcopy(source.get(key))
+        for key in (
+            "scene_id",
+            "scene_type",
+            "boundary",
+            "scene_height",
+            "architecture",
+            "object_count",
+        )
+        if key in source
+    } | {"objects": objects}
+
+
+def _require_functional_ownership_in_model_context(
+    context_text: str,
+    *,
+    ledger: dict[str, Any] | None,
+) -> None:
+    events = (
+        ledger.get("events")
+        if isinstance(ledger, dict)
+        and isinstance(ledger.get("events"), list)
+        else []
+    )
+    if not events:
+        return
+    parsed = json.loads(context_text)
+    delivered_ledger = parsed.get("functional_ownership_ledger")
+    delivered_events = (
+        delivered_ledger.get("events")
+        if isinstance(delivered_ledger, dict)
+        and isinstance(delivered_ledger.get("events"), list)
+        else []
+    )
+    expected_ids = [
+        str(item.get("event_id") or "")
+        for item in events
+        if isinstance(item, dict)
+    ]
+    delivered_ids = [
+        str(item.get("event_id") or "")
+        for item in delivered_events
+        if isinstance(item, dict)
+    ]
+    if delivered_ids != expected_ids:
+        raise ValueError(
+            "functional ownership events exceed the model context budget; "
+            "partial cross-metric exclusion context is forbidden"
+        )
 
 
 def _budgeted_context_json(

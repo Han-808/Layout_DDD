@@ -1,0 +1,72 @@
+{
+  "conversion": {
+    "density_reference_path": "configs/generation_extensions/non_rectangular_multi_room_v1/density_references/multi_room_sceneboard_v1.json",
+    "density_reference_sha256": "0d0263b9702daa0a199ecf1bdd1987f4e603643d1fcc3d6bffed28f9579fef66",
+    "integer_rounding_policy": "floor_x_plus_0.5_v1",
+    "minimum_clamped_to_room_count": false,
+    "objects_per_m2_target": {
+      "max": 0.5766731643924626,
+      "min": 0.464993502274204
+    },
+    "policy": "exact_source_room_type_multiset_without_room_binding_v1",
+    "program_order_corresponds_to_room_order": false,
+    "program_order_policy": "room_type_lexicographic_then_occurrence_v1",
+    "raw_target_total_instances": {
+      "max": 65.33559246418116,
+      "min": 52.68257279682212
+    },
+    "source_room_id_to_type_mapping_emitted": false,
+    "source_room_type_multiplicity_preserved": true,
+    "source_room_type_spelling_preserved": true,
+    "target_total_instances_policy": "multi_room_sceneboard_area_density_v1",
+    "total_floor_area_m2": 113.29743865056315
+  },
+  "layout_id": "scene_011388",
+  "linked_layout": {
+    "path": "configs/generation_extensions/non_rectangular_multi_room_v1/layouts/spatiallm_selected10_v1/scene_011388/room_layout.json",
+    "room_layout_sha256": "54418899637a3f7c46349c4c6da83bb06fe9c6bdbf8cb580fa61e3df48e2b6dc"
+  },
+  "output": {
+    "room_program_sha256": "5fccc1dd77667221b63c62eb53d76e7a7f96fdeca083674f89e3596869419b31"
+  },
+  "schema_version": "spatiallm_room_program_provenance_v1",
+  "source": {
+    "dataset_id": "manycore-research/SpatialLM-Dataset",
+    "dataset_revision": "ab8de0983f48490a0a8850baa32308982d6fbacc",
+    "dataset_url": "https://huggingface.co/datasets/manycore-research/SpatialLM-Dataset",
+    "license": "cc-by-nc-4.0",
+    "source_room_count": 7,
+    "source_room_type_multiset": [
+      {
+        "count": 1,
+        "room_type": "bathroom"
+      },
+      {
+        "count": 1,
+        "room_type": "bedroom"
+      },
+      {
+        "count": 1,
+        "room_type": "bedroom with home office"
+      },
+      {
+        "count": 1,
+        "room_type": "foyer"
+      },
+      {
+        "count": 1,
+        "room_type": "living room"
+      },
+      {
+        "count": 1,
+        "room_type": "master bedroom"
+      },
+      {
+        "count": 1,
+        "room_type": "primary bathroom"
+      }
+    ],
+    "split_path": "split.csv",
+    "split_sha256": "1f66ade1ac14825a8b1f3468baa43e75a5ed929c8ed26f8965b4f030e5203aa7"
+  }
+}

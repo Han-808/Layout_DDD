@@ -27,6 +27,8 @@ from benchmark.visual_judge.camera_targets import (
 from benchmark.visual_judge.interfaces.camera import (
     CameraSelectionRequest,
     CameraSelectionResult,
+    EvidenceReadinessRequest,
+    EvidenceReadinessResult,
 )
 
 
@@ -107,6 +109,9 @@ class ActiveVLMCameraSelector:
         max_repair_plans_source: str | None = None,
     ) -> None:
         self._call, self.method_name = _selector_call(selector)
+        self._readiness_call = getattr(
+            selector, "review_evidence_readiness", None
+        )
         self.selector = selector
         self.selection_mode = validate_vlm_selection_mode(
             selection_mode,
@@ -136,6 +141,9 @@ class ActiveVLMCameraSelector:
         self.last_call_usage: dict[str, int] = {
             "vlm_call_count": 0
         }
+        self.requires_candidate_previews = bool(
+            getattr(selector, "requires_candidate_previews", False)
+        )
         if self.selection_mode == "repair_plan" and not callable(
             getattr(repair_solver, "realize", None)
         ):
@@ -148,6 +156,46 @@ class ActiveVLMCameraSelector:
             raise TypeError(
                 "freeform_pose mode requires CameraPoseValidator.validate"
             )
+
+    @property
+    def supports_evidence_readiness(self) -> bool:
+        return callable(self._readiness_call)
+
+    def review_evidence_readiness(
+        self,
+        request: EvidenceReadinessRequest,
+    ) -> EvidenceReadinessResult:
+        """Delegate one camera-only packet review to the VLM transport."""
+
+        self.last_call_usage = {"vlm_call_count": 0}
+        if not isinstance(request, EvidenceReadinessRequest):
+            raise TypeError(
+                "ActiveVLMCameraSelector requires "
+                "EvidenceReadinessRequest"
+            )
+        if not callable(self._readiness_call):
+            raise TypeError(
+                "configured VLM camera selector does not support evidence "
+                "readiness review"
+            )
+        self.last_call_usage = {"vlm_call_count": 1}
+        raw = self._readiness_call(request.to_dict())
+        result = EvidenceReadinessResult.from_value(
+            raw,
+            request=request,
+            backend=self.backend,
+        )
+        provenance = {
+            **deepcopy(result.provenance),
+            "adapter_version": ACTIVE_VLM_CAMERA_SELECTOR_VERSION,
+            "selection_mode": "evidence_readiness",
+            "transport": _qualified_name(self.selector),
+        }
+        return replace(
+            result,
+            backend=self.backend,
+            provenance=provenance,
+        )
 
     def select(
         self, request: CameraSelectionRequest
@@ -171,10 +219,23 @@ class ActiveVLMCameraSelector:
             raise ValueError(
                 "Camera DSL targets conflict with selector request"
             )
-        if self.selection_mode == "candidate_only":
+        effective_mode = _effective_selection_mode(
+            request,
+            configured=self.selection_mode,
+            allow_freeform_pose=self.allow_freeform_pose,
+        )
+        if effective_mode == "candidate_only":
             return self._select_candidate(request, constraints)
-        if self.selection_mode == "repair_plan":
+        if effective_mode == "repair_plan":
+            if not callable(getattr(self.repair_solver, "realize", None)):
+                raise ValueError(
+                    "repair_plan call requires CameraRepairSolver.realize"
+                )
             return self._select_plan(request, constraints)
+        if not callable(getattr(self.pose_validator, "validate", None)):
+            raise ValueError(
+                "freeform_pose call requires CameraPoseValidator.validate"
+            )
         return self._select_pose(request, constraints)
 
     def _select_candidate(
@@ -377,7 +438,7 @@ class ActiveVLMCameraSelector:
         request: CameraSelectionRequest,
     ) -> tuple[CameraRepairPlan, ...]:
         controller_plans = request.context.get("camera_repair_plans")
-        if controller_plans:
+        if "camera_repair_plans" in request.context:
             if not isinstance(controller_plans, (list, tuple)):
                 raise ValueError(
                     "controller camera_repair_plans must be a JSON list"
@@ -464,11 +525,14 @@ def _base_payload(
     # target scope again from the full scene.
     for field in (
         "group_scope",
+        "target_scope",
         "member_ids",
         "target_bounds",
         "focus_center",
         "target_extent",
         "grouping_role",
+        "functional_probe",
+        "functional_repair",
     ):
         if field in request.context:
             payload[field] = deepcopy(request.context[field])
@@ -618,6 +682,17 @@ def _vlm_provenance(
         "adapter_version": ACTIVE_VLM_CAMERA_SELECTOR_VERSION,
         "selection_mode": selection_mode,
         "selector_method": adapter.method_name,
+        "selector_backend": str(
+            getattr(
+                adapter.selector,
+                "backend",
+                adapter.backend,
+            )
+        ),
+        "selector_adapter": (
+            f"{type(adapter.selector).__module__}."
+            f"{type(adapter.selector).__qualname__}"
+        ),
         "vlm_call_count": int(
             adapter.last_call_usage.get("vlm_call_count", 1)
         ),
@@ -697,6 +772,21 @@ def _request_metric(
         relation_type=(
             str(relation_type) if relation_type is not None else None
         ),
+    )
+
+
+def _effective_selection_mode(
+    request: CameraSelectionRequest,
+    *,
+    configured: str,
+    allow_freeform_pose: bool,
+) -> str:
+    requested = str(
+        request.context.get("vlm_selection_mode") or configured
+    ).strip()
+    return validate_vlm_selection_mode(
+        requested,
+        allow_freeform_pose=allow_freeform_pose,
     )
 
 

@@ -1,0 +1,44 @@
+{
+  "schema_version": "canonical_asset_catalog_v1",
+  "catalog_id": "synthetic_furniture_pilot_v1",
+  "catalog_version": "1",
+  "linear_unit": "meter",
+  "assets": [
+    {
+      "asset_id": "pilot.chair.001",
+      "source_db": "synthetic_pilot",
+      "category": "chair",
+      "description": "wood dining chair",
+      "mesh_uri": "/ABSOLUTE/PATH/TO/pilot.chair.001.glb",
+      "bbox_size_local": [0.8, 0.7, 1.0],
+      "bbox_center_local": [0.0, 0.0, 0.5],
+      "canonical_front": [0.0, -1.0, 0.0],
+      "native_scale": [1.0, 1.0, 1.0],
+      "content": {
+        "mesh_sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+      },
+      "metadata": {
+        "example_only": true
+      }
+    },
+    {
+      "asset_id": "pilot.table.001",
+      "source_db": "synthetic_pilot",
+      "category": "table",
+      "description": "small dining table",
+      "mesh_uri": "/ABSOLUTE/PATH/TO/pilot.table.001.glb",
+      "bbox_size_local": [1.2, 0.8, 0.75],
+      "bbox_center_local": [0.0, 0.0, 0.375],
+      "native_scale": [1.0, 1.0, 1.0],
+      "content": {
+        "mesh_sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+      },
+      "metadata": {
+        "example_only": true
+      }
+    }
+  ],
+  "metadata": {
+    "purpose": "small checked-in protocol example; replace paths and hashes before a real run"
+  }
+}

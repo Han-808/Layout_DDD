@@ -5,6 +5,7 @@ import shutil
 
 import numpy as np
 import pytest
+from PIL import Image
 
 from benchmark.game_scene.mode import (
     GAME_ACTIVE_METRICS,
@@ -74,7 +75,9 @@ class _Page:
 
     def screenshot(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(b"frozen game frame")
+        image = Image.new("RGB", (2, 2), (30, 50, 70))
+        image.putpixel((0, 0), (160, 100, 40))
+        image.save(path)
 
     def probe(self, script: str, options: dict) -> dict:
         self.probe_count += 1
@@ -100,7 +103,9 @@ class _Page:
         views = []
         for pose in poses:
             path = destination / f"global_{pose['id']}.png"
-            path.write_bytes(b"controlled global frame")
+            image = Image.new("RGB", (2, 2), (45, 65, 85))
+            image.putpixel((0, 0), (185, 125, 65))
+            image.save(path)
             views.append(
                 {
                     "id": pose["id"],
@@ -122,6 +127,18 @@ class _Page:
 
 
 class _Judge:
+    def chat_messages(
+        self,
+        messages: list[dict],
+        **kwargs: object,
+    ) -> str:
+        return (
+            '{"object_groups":[{"object_ids":["cube_0000","cube_0001"],'
+            '"label":"arena ensemble","anchor_object_id":null,'
+            '"reason":"Both visible objects share one local evidence scope."}],'
+            '"reason":"Complete two-object partition."}'
+        )
+
     def adjudicate_p0b(self, request: dict) -> dict:
         return {"verdict": "valid", "confidence": 1.0, "reason": "test"}
 
@@ -136,7 +153,7 @@ class _Judge:
         }
 
 
-class _TwoStageStyleJudge(_Judge):
+class _TrackingStyleJudge(_Judge):
     def __init__(self) -> None:
         self.style_requests: list[dict] = []
 
@@ -144,21 +161,22 @@ class _TwoStageStyleJudge(_Judge):
         self.style_requests.append(request)
         if len(self.style_requests) == 1:
             return {
-                "evidence_status": "sufficient",
-                "verdict": "invalid",
-                "confidence": 0.8,
-                "reason": "One crate may use an inconsistent rendering style.",
-                "missing_evidence": [],
-                "defects": [
-                    {
-                        "scope": "significant_visible_style_incompatibility",
-                        "target_ids": ["cube_0000"],
-                        "relation": "rendering_style_outlier",
-                        "reason": (
-                            "One crate may use an inconsistent rendering style."
-                        ),
-                    }
-                ],
+                "evidence_status": "insufficient",
+                "verdict": "ambiguous",
+                "confidence": 0.5,
+                "reason": "local style confirmation is required",
+                "missing_evidence": ["group_context_visible"],
+                "defects": [],
+                "evidence_request": {
+                    "target_ids": ["cube_0000"],
+                    "missing_observations": [
+                        "group_context_visible"
+                    ],
+                    "view_goal": (
+                        "show the possible style outlier in its ensemble"
+                    ),
+                    "metadata": {},
+                },
             }
         return super().adjudicate_scene_quality(request)
 
@@ -275,7 +293,7 @@ def test_game_mode_captures_once_then_runs_the_canonical_evaluator(
     )
 
 
-def test_game_mode_style_suspicion_consumes_frozen_local_bank(
+def test_game_mode_conditional_style_review_consumes_frozen_local_bank(
     tmp_path: Path,
 ) -> None:
     game_root = tmp_path / "game"
@@ -293,7 +311,7 @@ def test_game_mode_style_suspicion_consumes_frozen_local_bank(
         page_factory=lambda renderer: page,
         controlled_camera=mode.renderer_kwargs["controlled_camera"],
     )
-    judge = _TwoStageStyleJudge()
+    judge = _TrackingStyleJudge()
 
     result = run_game_mode(
         game_mode_config=MODE_PATH,
@@ -309,10 +327,10 @@ def test_game_mode_style_suspicion_consumes_frozen_local_bank(
         "l3_scene_quality"
     ]["metrics"]["style_consistency"]
     assert style["status"] == "evaluated"
-    assert style["route"] == "global_screen_then_local"
+    assert style["route"] == "global_screen_then_group_local"
     assert style["judge_call_count"] == 2
     assert style["evidence_request"]["provider_invoked"] is True
-    assert len(style["local_evidence_paths"]) == 4
+    assert len(style["local_evidence_paths"]) == 1
     assert [request["evidence_phase"] for request in judge.style_requests] == [
         "global_screen",
         "local_confirmation",

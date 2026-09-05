@@ -12,11 +12,15 @@ import argparse
 import hashlib
 import json
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
 from benchmark.api.evaluation import run_evaluate
+from benchmark.architecture_policy import (
+    resolve_architecture_activation,
+    validate_architecture_contract,
+)
 from benchmark.evaluator.profile import (
     L1,
     L3,
@@ -36,6 +40,31 @@ from benchmark.evaluator.specification_fidelity import (
     validate_specification_contract,
 )
 from benchmark.io_contracts import O1_OBJECT_STATE, O3_SCENE_PACKAGE
+from benchmark.materialization import (
+    MaterializationResult,
+    NativeRegistryAuthority,
+    export_materialized_representations,
+    load_public_native_instance_mapping,
+    prepare_catalog_submission,
+    rebuild_materialization_plan_from_source,
+    verify_prepared_submission,
+)
+from benchmark.materialization.blender import (
+    inspect_sanitized_blend,
+    materialize_catalog_scene,
+)
+from benchmark.materialization.catalog import (
+    FrozenCatalog,
+    sha256_file,
+    sha256_json,
+)
+from benchmark.materialization.consistency import run_consistency_gate
+from benchmark.materialization.contracts import (
+    CATALOG_PLACEMENT_CONTRACT_REVISION,
+    INSTANCE_REGISTRY_VERSION,
+    MATERIALIZATION_REVISION,
+)
+from benchmark.grouping import grouping_evidence_from_render_manifest
 from benchmark.reference_annotation import annotation_scoring_gate, validate_reference_annotation
 from benchmark.rendering import BlenderRenderer
 from benchmark.rendering.camera_pose import validate_camera_pose_mode, validate_metric_camera_modes
@@ -52,13 +81,14 @@ from benchmark.visual_judge import (
     CameraEvidenceProvider,
     VLMEvaluationControl,
     build_conditional_active_camera_evidence_provider,
+    build_openai_compatible_camera_selector,
     build_openai_compatible_vlm_judge,
     resolve_vlm_evaluation_control,
 )
 
 
 CASE_BUNDLE_VERSION = "benchmark_case_bundle_v1"
-SUBMISSION_RUNNER_VERSION = "trusted_submission_runner_v3"
+SUBMISSION_RUNNER_VERSION = "trusted_submission_runner_v4"
 
 # Render input policies. O1 normally renders as a benchmark-owned bbox proxy, so
 # its appearance carries no generator signal. An O1 scene whose objects all
@@ -373,6 +403,400 @@ def load_case_bundle(path: str | Path) -> TrustedCaseBundle:
     )
 
 
+def prepare_submission(
+    *,
+    artifact: dict[str, Any] | str | Path,
+    case_bundle: TrustedCaseBundle | str | Path,
+    out_dir: str | Path,
+    asset_root: str | Path,
+    asset_csv: str | Path,
+    blender_bin: str | Path,
+    generation_input: dict[str, Any] | None = None,
+    public_slot_ids: set[str] | list[str] | tuple[str, ...] | None = None,
+    native_registry_path: str | Path | None = None,
+    native_registry_authority: NativeRegistryAuthority | None = None,
+    native_instance_mapping_path: str | Path | None = None,
+    timeout_seconds: int = 900,
+) -> MaterializationResult:
+    """Sanitize a generator-native artifact and run technical readiness gates."""
+
+    bundle = (
+        case_bundle
+        if isinstance(case_bundle, TrustedCaseBundle)
+        else load_case_bundle(case_bundle)
+    )
+    if bundle.evaluator_output_type != O3_SCENE_PACKAGE:
+        raise SubmissionEvaluationError(
+            "catalog_placement_v1 preparation requires an o3_scene_package case"
+        )
+    return prepare_catalog_submission(
+        artifact=artifact,
+        case_bundle=bundle,
+        out_dir=out_dir,
+        asset_root=asset_root,
+        asset_csv=asset_csv,
+        blender_bin=blender_bin,
+        generation_input=generation_input,
+        public_slot_ids=public_slot_ids,
+        native_registry_path=native_registry_path,
+        native_registry_authority=native_registry_authority,
+        native_instance_mapping_path=native_instance_mapping_path,
+        timeout_seconds=timeout_seconds,
+    )
+
+
+def evaluate_prepared_submission(
+    *,
+    prepared_submission: MaterializationResult,
+    case_bundle: TrustedCaseBundle | str | Path,
+    out_dir: str | Path,
+    renderer: Any | None = None,
+    vlm_judge: Any | None = None,
+    camera_selector: Any | None = None,
+    asset_root: str | Path | None = None,
+    asset_csv: str | Path | None = None,
+    blender_bin: str | Path | None = None,
+    generation_input: dict[str, Any] | None = None,
+    native_registry_path: str | Path | None = None,
+    native_registry_authority: NativeRegistryAuthority | None = None,
+    native_instance_mapping_path: str | Path | None = None,
+    official_mode: bool = True,
+    vlm_evaluation_control: dict[str, Any]
+    | VLMEvaluationControl
+    | None = None,
+) -> dict[str, Any]:
+    """Evaluate only after re-verifying every prepared artifact and hash."""
+
+    bundle = (
+        case_bundle
+        if isinstance(case_bundle, TrustedCaseBundle)
+        else load_case_bundle(case_bundle)
+    )
+    destination = Path(out_dir).expanduser().resolve()
+    destination.mkdir(parents=True, exist_ok=True)
+    readiness = verify_prepared_submission(
+        prepared_submission,
+        case_bundle=bundle,
+    )
+    resolved_asset_root: Path | None = None
+    resolved_asset_csv: Path | None = None
+    if readiness.get("status") == "ready":
+        (
+            readiness,
+            resolved_asset_root,
+            resolved_asset_csv,
+        ) = _audit_prepared_submission_for_evaluation(
+            prepared=prepared_submission,
+            bundle=bundle,
+            destination=destination,
+            readiness=readiness,
+            renderer=renderer,
+            asset_root=asset_root,
+            asset_csv=asset_csv,
+            blender_bin=blender_bin,
+            generation_input=generation_input,
+            native_registry_path=native_registry_path,
+            native_registry_authority=native_registry_authority,
+            native_instance_mapping_path=native_instance_mapping_path,
+            official_mode=official_mode,
+        )
+    readiness_path = write_json(
+        destination / "evaluation_readiness_report.json",
+        readiness,
+    )
+    if readiness.get("status") != "ready":
+        from benchmark.materialization.readiness import (
+            build_not_evaluable_evaluation_report,
+        )
+
+        scene_id = None
+        request_id = bundle.scene_request.get("request_id")
+        if prepared_submission.normalized_scene_path.is_file():
+            try:
+                prepared_scene = read_json(prepared_submission.normalized_scene_path)
+            except Exception:
+                prepared_scene = {}
+            if isinstance(prepared_scene, dict):
+                scene_id = prepared_scene.get("scene_id")
+                request_id = prepared_scene.get("request_id") or request_id
+        report = build_not_evaluable_evaluation_report(
+            readiness=readiness,
+            bundle=bundle,
+            scene_id=scene_id,
+            request_id=request_id,
+            prompt_granularity=str(
+                bundle.scene_request.get("prompt_granularity") or "fine_grained"
+            ),
+            evaluation_profile=bundle.evaluation_profile,
+        )
+        report.update(
+            {
+                "protocol_scope": (
+                    "official_submission"
+                    if official_mode
+                    else "trusted_case_diagnostic"
+                ),
+                "official_submission": False,
+                "case_bundle": _prepared_case_bundle_record(bundle),
+                "evidence_provenance": {
+                    "render_evidence": "not_generated",
+                    "collision_geometry": "not_available",
+                    "render_input_policy": "blocked_by_submission_readiness",
+                    "submitted_evidence_accepted": False,
+                    "trusted_render_source": "not_used",
+                    "specification_contract": (
+                        "benchmark_hash_verified"
+                        if bundle.artifact_records.get("specification_contract")
+                        else "compiled_from_hash_verified_reference_annotation"
+                        if bundle.specification_contract is not None
+                        else "not_applicable"
+                    ),
+                    "visual_style_spec": (
+                        "benchmark_hash_verified"
+                        if bundle.visual_style_spec is not None
+                        else "not_applicable"
+                    ),
+                },
+            }
+        )
+        report_path = write_json(destination / "evaluation_report.json", report)
+        write_json(
+            destination / "submission_run_manifest.json",
+            {
+                "runner_version": SUBMISSION_RUNNER_VERSION,
+                "status": "not_evaluable",
+                "official_mode": bool(official_mode),
+                "case_id": bundle.case_id,
+                "generator": {
+                    "invoked": False,
+                    "stage": "skipped_by_submission_protocol",
+                },
+                "preparation": {
+                    **prepared_submission.as_dict(),
+                    "verification_readiness_path": readiness_path.as_posix(),
+                },
+                "rendering": {
+                    "performed": False,
+                    "input_policy": "blocked_by_submission_readiness",
+                },
+                "evaluation_report": report_path.as_posix(),
+                "benchmark_score": None,
+                "benchmark_score_100": None,
+                "benchmark_score_status": "not_evaluable",
+                "scoring_profile": deepcopy(report.get("scoring_profile")),
+                "canonical_object_denominator": deepcopy(
+                    report.get("canonical_object_denominator")
+                ),
+                "scoring_reliability": deepcopy(
+                    report.get("scoring_reliability")
+                ),
+            },
+        )
+        if official_mode:
+            raise SubmissionEvaluationError(
+                "official submission is not evaluable; "
+                f"inspect {report_path}"
+            )
+        return report
+
+    if renderer is None:
+        raise SubmissionEvaluationError(
+            "ready prepared evaluation requires a trusted renderer"
+        )
+    if not callable(getattr(renderer, "render_prepared_scene", None)):
+        raise SubmissionEvaluationError(
+            "prepared evaluation renderer must implement render_prepared_scene()"
+        )
+    readiness_provenance = (
+        readiness.get("provenance")
+        if isinstance(readiness.get("provenance"), dict)
+        else {}
+    )
+    evaluation_audit = readiness_provenance.get(
+        "evaluation_time_trust_audit"
+    )
+    evaluation_audit = (
+        evaluation_audit if isinstance(evaluation_audit, dict) else {}
+    )
+    authority_path_value = str(
+        evaluation_audit.get("frozen_authority_blend_path") or ""
+    ).strip()
+    authority_hash = str(
+        evaluation_audit.get("frozen_authority_blend_sha256") or ""
+    ).lower()
+    if not authority_path_value or not authority_hash:
+        raise SubmissionEvaluationError(
+            "ready prepared evaluation has no fresh frozen render authority"
+        )
+    evaluation_authority_path = Path(
+        authority_path_value
+    ).expanduser().resolve()
+    if (
+        not evaluation_authority_path.is_file()
+        or sha256_file(evaluation_authority_path).lower() != authority_hash
+    ):
+        raise SubmissionEvaluationError(
+            "fresh frozen render authority changed after readiness audit"
+        )
+    evaluation_prepared = replace(
+        prepared_submission,
+        trusted_render_source_path=evaluation_authority_path,
+        hashes={
+            **prepared_submission.hashes,
+            "trusted_render_source_sha256": authority_hash,
+        },
+    )
+    prepared_renderer = _PreparedRendererAdapter(
+        renderer=renderer,
+        prepared=evaluation_prepared,
+    )
+    outcome = _evaluate_submission_impl(
+        scene=prepared_submission.normalized_scene_path,
+        case_bundle=bundle,
+        out_dir=destination,
+        renderer=prepared_renderer,
+        vlm_judge=vlm_judge,
+        camera_selector=camera_selector,
+        asset_root=resolved_asset_root,
+        asset_csv=resolved_asset_csv,
+        official_mode=official_mode,
+        vlm_evaluation_control=vlm_evaluation_control,
+        preserve_prepared_metadata=True,
+        defer_incomplete_error=True,
+    )
+    report = outcome["evaluation_report"]
+    _attach_readiness_to_success_report(report, readiness)
+    evidence_provenance = (
+        report.get("evidence_provenance")
+        if isinstance(report.get("evidence_provenance"), dict)
+        else {}
+    )
+    evidence_provenance.update(
+        {
+            "render_input_policy": "benchmark_owned_sanitized_blend",
+            "trusted_render_source": evaluation_authority_path.as_posix(),
+            "trusted_render_source_sha256": authority_hash,
+            "prepared_trusted_render_source": (
+                prepared_submission.trusted_render_source_path.as_posix()
+            ),
+            "prepared_trusted_render_source_sha256": (
+                prepared_submission.hashes.get(
+                    "trusted_render_source_sha256"
+                )
+            ),
+            "trusted_render_source_rederived_at_evaluation": True,
+            "submitted_native_blend_rendered_directly": False,
+        }
+    )
+    report["evidence_provenance"] = evidence_provenance
+    report_path = write_json(destination / "evaluation_report.json", report)
+    manifest_path = destination / "submission_run_manifest.json"
+    manifest = read_json(manifest_path)
+    manifest["status"] = (
+        "complete"
+        if report.get("benchmark_score_status") == "complete"
+        else "incomplete"
+    )
+    manifest["preparation"] = {
+        **prepared_submission.as_dict(),
+        "verification_readiness_path": readiness_path.as_posix(),
+    }
+    manifest["evaluation_render_authority"] = {
+        "source": "fresh_frozen_catalog_rematerialization",
+        "path": evaluation_authority_path.as_posix(),
+        "sha256": authority_hash,
+    }
+    manifest["rendering"]["input_policy"] = "benchmark_owned_sanitized_blend"
+    manifest["rendering"]["input_path"] = (
+        evaluation_authority_path.as_posix()
+    )
+    manifest["evaluation_report"] = report_path.as_posix()
+    manifest["benchmark_score"] = report.get("benchmark_score")
+    manifest["benchmark_score_100"] = report.get("benchmark_score_100")
+    manifest["benchmark_score_status"] = report.get(
+        "benchmark_score_status"
+    )
+    manifest["score_coverage"] = deepcopy(report.get("coverage"))
+    manifest["scoring_profile"] = deepcopy(report.get("scoring_profile"))
+    manifest["canonical_object_denominator"] = deepcopy(
+        report.get("canonical_object_denominator")
+    )
+    manifest["scoring_reliability"] = deepcopy(
+        report.get("scoring_reliability")
+    )
+    write_json(manifest_path, manifest)
+    if (
+        official_mode
+        and report.get("benchmark_score_status") != "complete"
+    ):
+        raise SubmissionEvaluationError(
+            "official submission did not produce complete metric coverage; "
+            f"inspect {report_path}"
+        )
+    return report
+
+
+def evaluate_artifact_submission(
+    *,
+    artifact: dict[str, Any] | str | Path,
+    case_bundle: TrustedCaseBundle | str | Path,
+    out_dir: str | Path,
+    asset_root: str | Path,
+    asset_csv: str | Path,
+    blender_bin: str | Path,
+    renderer: Any | None = None,
+    vlm_judge: Any | None = None,
+    camera_selector: Any | None = None,
+    generation_input: dict[str, Any] | None = None,
+    public_slot_ids: set[str] | list[str] | tuple[str, ...] | None = None,
+    native_registry_path: str | Path | None = None,
+    native_registry_authority: NativeRegistryAuthority | None = None,
+    native_instance_mapping_path: str | Path | None = None,
+    official_mode: bool = True,
+    vlm_evaluation_control: dict[str, Any]
+    | VLMEvaluationControl
+    | None = None,
+    timeout_seconds: int = 900,
+) -> dict[str, Any]:
+    """Prepare then evaluate one generator-native fixed-catalog artifact."""
+
+    destination = Path(out_dir).expanduser().resolve()
+    prepared = prepare_submission(
+        artifact=artifact,
+        case_bundle=case_bundle,
+        out_dir=destination / "preparation",
+        asset_root=asset_root,
+        asset_csv=asset_csv,
+        blender_bin=blender_bin,
+        generation_input=generation_input,
+        public_slot_ids=public_slot_ids,
+        native_registry_path=native_registry_path,
+        native_registry_authority=native_registry_authority,
+        native_instance_mapping_path=native_instance_mapping_path,
+        timeout_seconds=timeout_seconds,
+    )
+    return evaluate_prepared_submission(
+        prepared_submission=prepared,
+        case_bundle=case_bundle,
+        out_dir=destination,
+        renderer=renderer,
+        vlm_judge=vlm_judge,
+        camera_selector=camera_selector,
+        asset_root=asset_root,
+        asset_csv=asset_csv,
+        blender_bin=blender_bin,
+        generation_input=generation_input,
+        native_registry_path=native_registry_path,
+        native_registry_authority=native_registry_authority,
+        # Preparation preserves the unsigned mapping inside the prepared
+        # artifact and binds it by hash. Evaluation must use that authoritative
+        # copy rather than depend on the submitter's original path.
+        native_instance_mapping_path=None,
+        official_mode=official_mode,
+        vlm_evaluation_control=vlm_evaluation_control,
+    )
+
+
 def evaluate_submission(
     *,
     scene: dict[str, Any] | str | Path,
@@ -387,6 +811,40 @@ def evaluate_submission(
     vlm_evaluation_control: dict[str, Any]
     | VLMEvaluationControl
     | None = None,
+) -> dict[str, Any]:
+    """Evaluate an already prepared canonical submission."""
+
+    return _evaluate_submission_impl(
+        scene=scene,
+        case_bundle=case_bundle,
+        out_dir=out_dir,
+        renderer=renderer,
+        vlm_judge=vlm_judge,
+        camera_selector=camera_selector,
+        asset_root=asset_root,
+        asset_csv=asset_csv,
+        official_mode=official_mode,
+        vlm_evaluation_control=vlm_evaluation_control,
+        preserve_prepared_metadata=False,
+    )
+
+
+def _evaluate_submission_impl(
+    *,
+    scene: dict[str, Any] | str | Path,
+    case_bundle: TrustedCaseBundle | str | Path,
+    out_dir: str | Path,
+    renderer: Any | None = None,
+    vlm_judge: Any | None = None,
+    camera_selector: Any | None = None,
+    asset_root: str | Path | None = None,
+    asset_csv: str | Path | None = None,
+    official_mode: bool = True,
+    vlm_evaluation_control: dict[str, Any]
+    | VLMEvaluationControl
+    | None = None,
+    preserve_prepared_metadata: bool,
+    defer_incomplete_error: bool = False,
 ) -> dict[str, Any]:
     """Evaluate canonical output without running or importing a generator.
 
@@ -428,6 +886,7 @@ def evaluate_submission(
         normalization_input = _o3_fixed_catalog_scene(
             submitted_scene,
             catalog_rows=catalog_rows,
+            preserve_prepared_metadata=preserve_prepared_metadata,
         )
     elif official_mode and bundle.evaluator_output_type == O1_OBJECT_STATE:
         normalization_input = (
@@ -484,15 +943,22 @@ def evaluate_submission(
         raise SubmissionEvaluationError("official evaluation requires p0b_official_mode=true in the case bundle")
 
     render_manifest: dict[str, Any] | None = None
+    render_manifest_artifact: Path | None = None
+    render_manifest_sha256: str | None = None
     render_paths: list[str] = []
     collision_geometry: dict[str, Any] | None = None
+    grouping_visual_evidence: list[dict[str, Any]] | None = None
     local_view_provider = None
     if renderer is not None:
         render_dir = destination / "renders"
         if bundle.evaluator_output_type == O1_OBJECT_STATE:
             render_input = normalized if generator_authored_geometry else _o1_proxy_render_scene(normalized)
         elif official_mode:
-            render_input = _o3_fixed_catalog_scene(normalized, catalog_rows=catalog_rows)
+            render_input = _o3_fixed_catalog_scene(
+                normalized,
+                catalog_rows=catalog_rows,
+                preserve_prepared_metadata=preserve_prepared_metadata,
+            )
         else:
             render_input = normalized
         render_input_path = write_json(destination / "render_input_scene.json", render_input)
@@ -501,7 +967,20 @@ def evaluate_submission(
             out_dir=render_dir,
             asset_root=asset_root,
         )
+        render_manifest_artifact = _trusted_render_manifest_artifact(
+            render_manifest,
+            render_dir,
+        )
+        if preserve_prepared_metadata and render_manifest_artifact is None:
+            raise SubmissionEvaluationError(
+                "prepared renderer did not persist its trusted render manifest"
+            )
+        if render_manifest_artifact is not None:
+            render_manifest_sha256 = sha256_file(render_manifest_artifact)
         render_paths = _trusted_render_paths(render_manifest, render_dir)
+        grouping_visual_evidence = (
+            grouping_evidence_from_render_manifest(render_manifest)
+        )
         collision_geometry = (
             render_manifest.get("collision_geometry")
             if isinstance(render_manifest.get("collision_geometry"), dict)
@@ -594,6 +1073,7 @@ def evaluate_submission(
         reference_annotation=bundle.reference_annotation,
         collision_geometry=collision_geometry,
         render_evidence=render_paths,
+        grouping_visual_evidence=grouping_visual_evidence,
         vlm_judge=vlm_judge,
         evaluation_profile=bundle.evaluation_profile,
         support_enabled=None,
@@ -702,10 +1182,11 @@ def evaluate_submission(
                 else None
             ),
             "manifest_path": (
-                (destination / "renders" / "render_manifest.json").as_posix()
-                if render_manifest is not None
+                render_manifest_artifact.as_posix()
+                if render_manifest_artifact is not None
                 else None
             ),
+            "manifest_sha256": render_manifest_sha256,
             "overview_views": render_paths,
             "camera_evidence_policy": (
                 deepcopy(getattr(local_view_provider, "policy_config", None))
@@ -715,7 +1196,16 @@ def evaluate_submission(
         },
         "evaluation_report": report_path.as_posix(),
         "benchmark_score": report.get("benchmark_score"),
+        "benchmark_score_100": report.get("benchmark_score_100"),
         "benchmark_score_status": report.get("benchmark_score_status"),
+        "score_coverage": deepcopy(report.get("coverage")),
+        "scoring_profile": deepcopy(report.get("scoring_profile")),
+        "canonical_object_denominator": deepcopy(
+            report.get("canonical_object_denominator")
+        ),
+        "scoring_reliability": deepcopy(
+            report.get("scoring_reliability")
+        ),
         "vlm_evaluation_control": deepcopy(
             report.get("evaluation_config", {}).get(
                 "vlm_evaluation_control"
@@ -728,7 +1218,7 @@ def evaluate_submission(
         )
     manifest_path = write_json(destination / "submission_run_manifest.json", manifest)
     manifest["manifest_path"] = manifest_path.as_posix()
-    if official_mode and not complete:
+    if official_mode and not complete and not defer_incomplete_error:
         raise SubmissionEvaluationError(
             "official submission did not produce complete metric coverage; "
             f"inspect {report_path}"
@@ -795,7 +1285,7 @@ def main() -> None:
     _reject_literal_api_key(selector_config, "camera selector config")
     judge = build_openai_compatible_vlm_judge(judge_config) if judge_config else None
     selector = (
-        build_openai_compatible_vlm_judge(selector_config)
+        build_openai_compatible_camera_selector(selector_config)
         if selector_config
         else None
     )
@@ -1099,6 +1589,7 @@ def _o3_fixed_catalog_scene(
     scene: dict[str, Any],
     *,
     catalog_rows: dict[str, dict[str, Any]] | None,
+    preserve_prepared_metadata: bool = False,
 ) -> dict[str, Any]:
     """Bind official O3 identity and semantics to the frozen asset catalog."""
 
@@ -1123,9 +1614,27 @@ def _o3_fixed_catalog_scene(
         obj["geometry_provenance"] = "asset_mesh"
         obj.pop("asset_proxy", None)
         obj.pop("asset_resolution", None)
-        obj["metadata"] = {"interactive": False}
+        source_metadata = (
+            obj.get("metadata")
+            if isinstance(obj.get("metadata"), dict)
+            else {}
+        )
+        trusted_prepared_metadata = {}
+        if preserve_prepared_metadata:
+            for key in ("appearance_provenance", "materialization"):
+                value = source_metadata.get(key)
+                if isinstance(value, dict):
+                    trusted_prepared_metadata[key] = deepcopy(value)
+        obj["metadata"] = {
+            "interactive": False,
+            **trusted_prepared_metadata,
+        }
         if isinstance(row, dict):
-            category = _first_catalog_text(row.get("class_en"), row.get("retrieval_class_en"))
+            category = _first_catalog_text(
+                row.get("category"),
+                row.get("class_en"),
+                row.get("retrieval_class_en"),
+            )
             retrieval_category = _first_catalog_text(row.get("retrieval_class_en"), category)
             description = _first_catalog_text(row.get("caption_en"), row.get("short_desc"), category)
             short_desc = _first_catalog_text(row.get("short_desc"), description)
@@ -1139,6 +1648,1575 @@ def _o3_fixed_catalog_scene(
             obj["desc"] = description
             obj["short_desc"] = short_desc or description
     return projected
+
+
+def _audit_prepared_submission_for_evaluation(
+    *,
+    prepared: MaterializationResult,
+    bundle: TrustedCaseBundle,
+    destination: Path,
+    readiness: dict[str, Any],
+    renderer: Any | None,
+    asset_root: str | Path | None,
+    asset_csv: str | Path | None,
+    blender_bin: str | Path | None,
+    generation_input: dict[str, Any] | None = None,
+    native_registry_path: str | Path | None = None,
+    native_registry_authority: NativeRegistryAuthority | None = None,
+    native_instance_mapping_path: str | Path | None = None,
+    official_mode: bool,
+) -> tuple[dict[str, Any], Path | None, Path | None]:
+    """Bind preparation inputs and freshly inspect the render source.
+
+    This audit is deliberately complete before ``evaluate_submission`` creates
+    render evidence, EvidenceGate, judges, or metric evaluators.
+    """
+
+    failures: list[dict[str, Any]] = []
+    audit_provenance: dict[str, Any] = {}
+    try:
+        provenance = read_json(prepared.provenance_path)
+    except Exception as exc:
+        provenance = {}
+        failures.append(
+            {
+                "code": "invalid_preparation_provenance",
+                "path": prepared.provenance_path.as_posix(),
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+        )
+    if not isinstance(provenance, dict):
+        provenance = {}
+        failures.append(
+            {
+                "code": "invalid_preparation_provenance",
+                "path": prepared.provenance_path.as_posix(),
+            }
+        )
+
+    artifacts = provenance.get("artifacts")
+    artifacts = artifacts if isinstance(artifacts, dict) else {}
+    raw_core_path = str(artifacts.get("provenance_core") or "").strip()
+    provenance_core: dict[str, Any] = {}
+    if not raw_core_path:
+        failures.append(
+            {
+                "code": "missing_prepared_provenance_core",
+                "path": "provenance.artifacts.provenance_core",
+            }
+        )
+    else:
+        core_path = Path(raw_core_path).expanduser().resolve()
+        audit_provenance["provenance_core_path"] = core_path.as_posix()
+        if not core_path.is_file():
+            failures.append(
+                {
+                    "code": "missing_prepared_provenance_core",
+                    "path": core_path.as_posix(),
+                }
+            )
+        else:
+            actual_core_hash = sha256_file(core_path)
+            expected_core_hash = str(
+                prepared.hashes.get("provenance_core_sha256") or ""
+            )
+            audit_provenance["provenance_core_sha256"] = actual_core_hash
+            if not expected_core_hash or actual_core_hash != expected_core_hash:
+                failures.append(
+                    {
+                        "code": "prepared_provenance_core_hash_mismatch",
+                        "path": core_path.as_posix(),
+                        "expected_sha256": expected_core_hash or None,
+                        "actual_sha256": actual_core_hash,
+                    }
+                )
+            try:
+                loaded_core = read_json(core_path)
+                if not isinstance(loaded_core, dict):
+                    raise TypeError("provenance core must be a JSON object")
+                provenance_core = loaded_core
+            except Exception as exc:
+                failures.append(
+                    {
+                        "code": "invalid_prepared_provenance_core",
+                        "path": core_path.as_posix(),
+                        "error": f"{type(exc).__name__}: {exc}",
+                    }
+                )
+    representation_hashes = provenance_core.get("representation_hashes")
+    representation_hashes = (
+        representation_hashes
+        if isinstance(representation_hashes, dict)
+        else {}
+    )
+    for path, actual, expected in (
+        (
+            "provenance_core.provenance_core_version",
+            provenance_core.get("provenance_core_version"),
+            "catalog_materialization_provenance_core_v1",
+        ),
+        (
+            "provenance_core.adapter_contract_revision",
+            provenance_core.get("adapter_contract_revision"),
+            CATALOG_PLACEMENT_CONTRACT_REVISION,
+        ),
+        (
+            "provenance_core.materialization_revision",
+            provenance_core.get("materialization_revision"),
+            MATERIALIZATION_REVISION,
+        ),
+        (
+            "provenance_core.case_id",
+            provenance_core.get("case_id"),
+            bundle.case_id,
+        ),
+        (
+            "provenance_core.case_bundle_manifest_sha256",
+            provenance_core.get("case_bundle_manifest_sha256"),
+            bundle.manifest_sha256,
+        ),
+        (
+            "provenance_core.catalog_snapshot_id",
+            provenance_core.get("catalog_snapshot_id"),
+            bundle.catalog_snapshot_id,
+        ),
+    ):
+        if actual != expected:
+            failures.append(
+                {
+                    "code": "prepared_provenance_core_semantic_mismatch",
+                    "path": path,
+                    "expected": expected,
+                    "actual": actual,
+                }
+            )
+    source_record = provenance_core.get("source")
+    source_record = source_record if isinstance(source_record, dict) else {}
+    source_kind = str(source_record.get("kind") or "")
+    raw_source_path = str(source_record.get("preserved_path") or "").strip()
+    source_path = (
+        Path(raw_source_path).expanduser().resolve()
+        if raw_source_path
+        else None
+    )
+    if source_path is None:
+        failures.append(
+            {
+                "code": "missing_preserved_generator_source",
+                "path": "provenance_core.source.preserved_path",
+            }
+        )
+
+    expected_generation_input_hash = str(
+        representation_hashes.get("generator_visible_input_sha256") or ""
+    ).lower()
+    core_generation_input = provenance_core.get("generator_visible_input")
+    core_generation_input = (
+        core_generation_input
+        if isinstance(core_generation_input, dict)
+        else {}
+    )
+    if (
+        source_kind in {"in_memory_json", "json_file", "raw_text"}
+        and not expected_generation_input_hash
+    ):
+        failures.append(
+            {
+                "code": "generator_visible_input_binding_missing",
+                "path": (
+                    "provenance_core.representation_hashes."
+                    "generator_visible_input_sha256"
+                ),
+            }
+        )
+    if expected_generation_input_hash:
+        if generation_input is None:
+            failures.append(
+                {
+                    "code": "trusted_generator_visible_input_required",
+                    "path": "generation_input",
+                }
+            )
+        else:
+            try:
+                actual_generation_input_hash = sha256_json(
+                    generation_input
+                ).lower()
+            except Exception as exc:
+                failures.append(
+                    {
+                        "code": "invalid_trusted_generator_visible_input",
+                        "path": "generation_input",
+                        "error": f"{type(exc).__name__}: {exc}",
+                    }
+                )
+            else:
+                audit_provenance["generator_visible_input_sha256"] = (
+                    actual_generation_input_hash
+                )
+                if (
+                    actual_generation_input_hash
+                    != expected_generation_input_hash
+                ):
+                    failures.append(
+                        {
+                            "code": "generator_visible_input_binding_mismatch",
+                            "path": "generation_input",
+                            "expected_sha256": expected_generation_input_hash,
+                            "actual_sha256": actual_generation_input_hash,
+                        }
+                    )
+        if str(core_generation_input.get("sha256") or "").lower() != (
+            expected_generation_input_hash
+        ):
+            failures.append(
+                {
+                    "code": "generator_visible_input_provenance_mismatch",
+                    "path": "provenance_core.generator_visible_input.sha256",
+                }
+            )
+    elif generation_input is not None:
+        failures.append(
+            {
+                "code": "unexpected_generator_visible_input",
+                "path": "generation_input",
+            }
+        )
+
+    expected_native_mapping_hash = str(
+        representation_hashes.get(
+            "native_instance_mapping_sha256"
+        )
+        or ""
+    ).lower()
+    core_public_mapping = provenance_core.get("public_native_mapping")
+    core_public_mapping = (
+        core_public_mapping
+        if isinstance(core_public_mapping, dict)
+        else {}
+    )
+    if expected_native_mapping_hash:
+        raw_prepared_mapping_path = str(
+            core_public_mapping.get("path") or ""
+        ).strip()
+        prepared_mapping_path = (
+            Path(raw_prepared_mapping_path).expanduser().resolve()
+            if raw_prepared_mapping_path
+            else None
+        )
+        if prepared_mapping_path is None:
+            failures.append(
+                {
+                    "code": "missing_prepared_native_mapping_binding",
+                    "path": "provenance_core.public_native_mapping.path",
+                }
+            )
+        else:
+            if not prepared_mapping_path.is_file():
+                failures.append(
+                    {
+                        "code": "native_instance_mapping_missing",
+                        "path": prepared_mapping_path.as_posix(),
+                    }
+                )
+            else:
+                actual_mapping_hash = sha256_file(
+                    prepared_mapping_path
+                ).lower()
+                audit_provenance[
+                    "native_instance_mapping_sha256"
+                ] = actual_mapping_hash
+                try:
+                    load_public_native_instance_mapping(
+                        prepared_mapping_path
+                    )
+                except Exception as exc:
+                    failures.append(
+                        {
+                            "code": "invalid_prepared_native_mapping",
+                            "path": prepared_mapping_path.as_posix(),
+                            "error": f"{type(exc).__name__}: {exc}",
+                        }
+                    )
+                if (
+                    actual_mapping_hash != expected_native_mapping_hash
+                    or str(core_public_mapping.get("sha256") or "").lower()
+                    != expected_native_mapping_hash
+                ):
+                    failures.append(
+                        {
+                            "code": (
+                                "native_instance_mapping_hash_binding_mismatch"
+                            ),
+                            "path": prepared_mapping_path.as_posix(),
+                            "expected_sha256": expected_native_mapping_hash,
+                            "actual_sha256": actual_mapping_hash,
+                        }
+                    )
+        if native_instance_mapping_path is not None:
+            supplied_mapping_path = Path(
+                native_instance_mapping_path
+            ).expanduser().resolve()
+            audit_provenance[
+                "supplied_native_instance_mapping_path"
+            ] = supplied_mapping_path.as_posix()
+            if supplied_mapping_path.is_file():
+                supplied_mapping_hash = sha256_file(
+                    supplied_mapping_path
+                ).lower()
+                audit_provenance[
+                    "supplied_native_instance_mapping_sha256"
+                ] = supplied_mapping_hash
+                if supplied_mapping_hash != expected_native_mapping_hash:
+                    failures.append(
+                        {
+                            "code": (
+                                "supplied_native_instance_mapping_hash_mismatch"
+                            ),
+                            "path": supplied_mapping_path.as_posix(),
+                            "expected_sha256": expected_native_mapping_hash,
+                            "actual_sha256": supplied_mapping_hash,
+                        }
+                    )
+            else:
+                audit_provenance[
+                    "supplied_native_instance_mapping_available"
+                ] = False
+    elif native_instance_mapping_path is not None:
+        failures.append(
+            {
+                "code": "unexpected_native_instance_mapping_binding",
+                "path": "native_instance_mapping_path",
+            }
+        )
+
+    resolved_native_registry: Path | None = None
+    core_native_registry = provenance_core.get("native_registry")
+    core_native_registry = (
+        core_native_registry
+        if isinstance(core_native_registry, dict)
+        else {}
+    )
+    expected_native_registry_hash = str(
+        representation_hashes.get("native_registry_sha256") or ""
+    ).lower()
+    if source_kind == "native_blend":
+        if native_registry_authority is None:
+            failures.append(
+                {
+                    "code": "benchmark_native_registry_authority_required",
+                    "path": "native_registry_authority",
+                }
+            )
+        elif str(
+            core_native_registry.get("authority_key_id") or ""
+        ) != native_registry_authority.key_id:
+            failures.append(
+                {
+                    "code": "native_registry_authority_binding_mismatch",
+                    "path": (
+                        "provenance_core.native_registry.authority_key_id"
+                    ),
+                    "expected": native_registry_authority.key_id,
+                    "actual": core_native_registry.get("authority_key_id"),
+                }
+            )
+        raw_prepared_registry_path = str(
+            core_native_registry.get("path") or ""
+        ).strip()
+        prepared_registry_path = (
+            Path(raw_prepared_registry_path).expanduser().resolve()
+            if raw_prepared_registry_path
+            else None
+        )
+        registry_was_derived = (
+            core_native_registry.get("origin")
+            == "benchmark_derived_from_public_native_mapping"
+        )
+        if (
+            native_registry_path is None
+            and official_mode
+            and not registry_was_derived
+        ):
+            failures.append(
+                {
+                    "code": "official_native_registry_required",
+                    "path": "native_registry_path",
+                }
+            )
+        supplied_registry_path = (
+            Path(native_registry_path).expanduser().resolve()
+            if native_registry_path is not None
+            else prepared_registry_path
+        )
+        if prepared_registry_path is None:
+            failures.append(
+                {
+                    "code": "missing_prepared_native_registry_binding",
+                    "path": "provenance_core.native_registry.path",
+                }
+            )
+        elif (
+            supplied_registry_path is not None
+            and supplied_registry_path != prepared_registry_path
+        ):
+            failures.append(
+                {
+                    "code": "native_registry_path_binding_mismatch",
+                    "path": "native_registry_path",
+                    "prepared_path": prepared_registry_path.as_posix(),
+                    "supplied_path": supplied_registry_path.as_posix(),
+                }
+            )
+        elif supplied_registry_path is not None:
+            resolved_native_registry = supplied_registry_path
+            if not resolved_native_registry.is_file():
+                failures.append(
+                    {
+                        "code": "native_registry_missing",
+                        "path": resolved_native_registry.as_posix(),
+                    }
+                )
+            else:
+                actual_registry_hash = sha256_file(
+                    resolved_native_registry
+                ).lower()
+                audit_provenance["native_registry_sha256"] = (
+                    actual_registry_hash
+                )
+                if (
+                    not expected_native_registry_hash
+                    or actual_registry_hash != expected_native_registry_hash
+                    or str(core_native_registry.get("sha256") or "").lower()
+                    != expected_native_registry_hash
+                ):
+                    failures.append(
+                        {
+                            "code": "native_registry_hash_binding_mismatch",
+                            "path": resolved_native_registry.as_posix(),
+                            "expected_sha256": (
+                                expected_native_registry_hash or None
+                            ),
+                            "actual_sha256": actual_registry_hash,
+                        }
+                    )
+    elif expected_native_registry_hash or native_registry_path is not None:
+        failures.append(
+            {
+                "code": "unexpected_native_registry_binding",
+                "path": "native_registry_path",
+            }
+        )
+
+    catalog_record = {
+        "snapshot_id": provenance_core.get("catalog_snapshot_id"),
+        "asset_csv_path": provenance_core.get("catalog_csv_path"),
+        "asset_root_path": provenance_core.get("asset_root_path"),
+        "catalog_csv_sha256": representation_hashes.get(
+            "catalog_csv_sha256"
+        ),
+    }
+    wrapper_catalog = provenance.get("catalog")
+    if isinstance(wrapper_catalog, dict):
+        for key in (
+            "snapshot_id",
+            "asset_csv_path",
+            "asset_root_path",
+            "catalog_csv_sha256",
+        ):
+            if wrapper_catalog.get(key) != catalog_record.get(key):
+                failures.append(
+                    {
+                        "code": "prepared_catalog_provenance_mismatch",
+                        "path": f"provenance.catalog.{key}",
+                        "expected": catalog_record.get(key),
+                        "actual": wrapper_catalog.get(key),
+                    }
+                )
+    prepared_asset_root = _prepared_catalog_path(
+        catalog_record,
+        key="asset_root_path",
+        failures=failures,
+    )
+    prepared_asset_csv = _prepared_catalog_path(
+        catalog_record,
+        key="asset_csv_path",
+        failures=failures,
+    )
+    resolved_asset_root = _bind_prepared_catalog_path(
+        prepared_path=prepared_asset_root,
+        supplied_path=asset_root,
+        require_supplied=official_mode,
+        missing_code="official_catalog_asset_root_required",
+        mismatch_code="catalog_asset_root_binding_mismatch",
+        path="asset_root",
+        failures=failures,
+    )
+    resolved_asset_csv = _bind_prepared_catalog_path(
+        prepared_path=prepared_asset_csv,
+        supplied_path=asset_csv,
+        require_supplied=official_mode,
+        missing_code="official_catalog_asset_csv_required",
+        mismatch_code="catalog_asset_csv_binding_mismatch",
+        path="asset_csv",
+        failures=failures,
+    )
+    audit_provenance.update(
+        {
+            "asset_root_path": (
+                resolved_asset_root.as_posix()
+                if resolved_asset_root is not None
+                else None
+            ),
+            "asset_csv_path": (
+                resolved_asset_csv.as_posix()
+                if resolved_asset_csv is not None
+                else None
+            ),
+        }
+    )
+    if failures:
+        return (
+            _prepared_evaluation_readiness(
+                readiness,
+                failures=failures,
+                provenance=audit_provenance,
+            ),
+            None,
+            None,
+        )
+
+    assert resolved_asset_root is not None
+    assert resolved_asset_csv is not None
+    if not resolved_asset_root.is_dir():
+        failures.append(
+            {
+                "code": "prepared_catalog_asset_root_missing",
+                "path": resolved_asset_root.as_posix(),
+            }
+        )
+    if not resolved_asset_csv.is_file():
+        failures.append(
+            {
+                "code": "prepared_catalog_asset_csv_missing",
+                "path": resolved_asset_csv.as_posix(),
+            }
+        )
+    recorded_catalog_hash = str(
+        catalog_record.get("catalog_csv_sha256") or ""
+    ).lower()
+    expected_catalog_hash = str(
+        prepared.hashes.get("catalog_csv_sha256") or ""
+    ).lower()
+    if not recorded_catalog_hash or recorded_catalog_hash != expected_catalog_hash:
+        failures.append(
+            {
+                "code": "prepared_catalog_hash_binding_mismatch",
+                "path": "provenance.catalog.catalog_csv_sha256",
+                "recorded_sha256": recorded_catalog_hash or None,
+                "expected_sha256": expected_catalog_hash or None,
+            }
+        )
+    if resolved_asset_csv.is_file():
+        actual_catalog_hash = sha256_file(resolved_asset_csv).lower()
+        audit_provenance["catalog_csv_sha256"] = actual_catalog_hash
+        if actual_catalog_hash != recorded_catalog_hash:
+            failures.append(
+                {
+                    "code": "prepared_catalog_csv_hash_mismatch",
+                    "path": resolved_asset_csv.as_posix(),
+                    "expected_sha256": recorded_catalog_hash or None,
+                    "actual_sha256": actual_catalog_hash,
+                }
+            )
+    if str(catalog_record.get("snapshot_id") or "") != str(
+        bundle.catalog_snapshot_id or ""
+    ):
+        failures.append(
+            {
+                "code": "prepared_catalog_snapshot_mismatch",
+                "path": "provenance.catalog.snapshot_id",
+                "expected": bundle.catalog_snapshot_id,
+                "actual": catalog_record.get("snapshot_id"),
+            }
+        )
+    if failures:
+        return (
+            _prepared_evaluation_readiness(
+                readiness,
+                failures=failures,
+                provenance=audit_provenance,
+            ),
+            None,
+            None,
+        )
+
+    try:
+        catalog = FrozenCatalog(
+            asset_csv=resolved_asset_csv,
+            asset_root=resolved_asset_root,
+            allowed_asset_ids=bundle.allowed_asset_ids,
+            snapshot_id=str(bundle.catalog_snapshot_id or ""),
+        )
+        raw_plan_path = str(artifacts.get("materialization_plan") or "").strip()
+        if not raw_plan_path:
+            raise ValueError(
+                "preparation provenance has no materialization_plan path"
+            )
+        plan_path = Path(raw_plan_path).expanduser().resolve()
+        plan = read_json(plan_path)
+        normalized_scene = read_json(prepared.normalized_scene_path)
+        instance_registry = read_json(prepared.instance_registry_path)
+        if not all(
+            isinstance(value, dict)
+            for value in (plan, normalized_scene, instance_registry)
+        ):
+            raise TypeError("prepared plan, scene, and registry must be JSON objects")
+        failures.extend(
+            _prepared_semantic_failures(
+                plan=plan,
+                normalized_scene=normalized_scene,
+                instance_registry=instance_registry,
+                catalog=catalog,
+                bundle=bundle,
+            )
+        )
+    except Exception as exc:
+        failures.append(
+            {
+                "code": "prepared_catalog_or_plan_validation_error",
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+        )
+        plan_path = None
+        plan = {}
+        normalized_scene = {}
+        instance_registry = {}
+    if failures:
+        return (
+            _prepared_evaluation_readiness(
+                readiness,
+                failures=failures,
+                provenance=audit_provenance,
+            ),
+            None,
+            None,
+        )
+
+    resolved_blender_bin = blender_bin
+    if resolved_blender_bin is None and renderer is not None:
+        resolved_blender_bin = getattr(renderer, "blender_bin", None)
+    if resolved_blender_bin is None:
+        failures.append(
+            {
+                "code": "evaluation_blender_bin_missing",
+                "path": "blender_bin",
+            }
+        )
+    else:
+        resolved_blender_bin = Path(resolved_blender_bin).expanduser().resolve()
+        audit_provenance["blender_bin"] = resolved_blender_bin.as_posix()
+    if failures:
+        return (
+            _prepared_evaluation_readiness(
+                readiness,
+                failures=failures,
+                provenance=audit_provenance,
+            ),
+            None,
+            None,
+        )
+
+    assert plan_path is not None
+    assert isinstance(resolved_blender_bin, Path)
+    assert source_path is not None
+    source_reinspection_dir = destination / "evaluation_source_reinspection"
+    rederived_plan_path = (
+        destination / "evaluation_rederived_materialization_plan.json"
+    )
+    try:
+        rederived_plan = rebuild_materialization_plan_from_source(
+            source_path=source_path,
+            source_kind=source_kind,
+            case_bundle=bundle,
+            catalog=catalog,
+            audit_dir=source_reinspection_dir,
+            blender_bin=resolved_blender_bin,
+            generation_input=generation_input,
+            native_registry_path=resolved_native_registry,
+            native_registry_authority=native_registry_authority,
+            timeout_seconds=max(
+                1,
+                int(getattr(renderer, "timeout_seconds", 900) or 900),
+            ),
+        )
+        write_json(rederived_plan_path, rederived_plan)
+        expected_plan_digest = sha256_json(rederived_plan)
+        actual_plan_digest = sha256_json(plan)
+        audit_provenance.update(
+            {
+                "rederived_materialization_plan_path": (
+                    rederived_plan_path.as_posix()
+                ),
+                "rederived_materialization_plan_sha256": sha256_file(
+                    rederived_plan_path
+                ),
+                "rederived_plan_semantic_sha256": expected_plan_digest,
+                "prepared_plan_semantic_sha256": actual_plan_digest,
+            }
+        )
+        if actual_plan_digest != expected_plan_digest:
+            failures.append(
+                {
+                    "code": "generator_source_plan_binding_mismatch",
+                    "path": plan_path.as_posix(),
+                    "source_kind": source_kind,
+                    "expected_semantic_sha256": expected_plan_digest,
+                    "actual_semantic_sha256": actual_plan_digest,
+                }
+            )
+    except Exception as exc:
+        failures.append(
+            {
+                "code": "generator_source_reinspection_error",
+                "path": source_path.as_posix(),
+                "source_kind": source_kind,
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+        )
+    if failures:
+        return (
+            _prepared_evaluation_readiness(
+                readiness,
+                failures=failures,
+                provenance=audit_provenance,
+            ),
+            None,
+            None,
+        )
+
+    inspection_path = destination / "evaluation_trusted_blend_inspection.json"
+    consistency_path = destination / "evaluation_materialization_consistency.json"
+    try:
+        fresh_inspection = inspect_sanitized_blend(
+            blend_path=prepared.trusted_render_source_path,
+            expected_registry_path=plan_path,
+            out_path=inspection_path,
+            blender_bin=resolved_blender_bin,
+            timeout_seconds=max(
+                1,
+                int(getattr(renderer, "timeout_seconds", 900) or 900),
+            ),
+        )
+        if fresh_inspection.get("status") != "passed":
+            failures.append(
+                {
+                    "code": "evaluation_blend_inspection_failed",
+                    "path": inspection_path.as_posix(),
+                    "reason_codes": fresh_inspection.get("reason_codes"),
+                }
+            )
+        source_integrity = fresh_inspection.get("source_integrity")
+        source_integrity = (
+            source_integrity if isinstance(source_integrity, dict) else {}
+        )
+        trusted_hash = str(
+            prepared.hashes.get("trusted_render_source_sha256") or ""
+        ).lower()
+        for field in (
+            "source_blend_sha256_before",
+            "source_blend_sha256_after",
+        ):
+            if str(source_integrity.get(field) or "").lower() != trusted_hash:
+                failures.append(
+                    {
+                        "code": "evaluation_trusted_blend_hash_mismatch",
+                        "path": f"fresh_inspection.source_integrity.{field}",
+                        "expected_sha256": trusted_hash or None,
+                        "actual_sha256": source_integrity.get(field),
+                    }
+                )
+        if source_integrity.get("source_blend_modified") is not False:
+            failures.append(
+                {
+                    "code": "evaluation_trusted_blend_modified",
+                    "path": "fresh_inspection.source_integrity.source_blend_modified",
+                }
+            )
+        frozen_authority_dir = (
+            destination / "evaluation_frozen_rematerialization"
+        )
+        frozen_authority_blend = frozen_authority_dir / "evaluation.blend"
+        frozen_authority_inspection_path = (
+            frozen_authority_dir / "trusted_blend_inspection.json"
+        )
+        frozen_authority_inspection = materialize_catalog_scene(
+            plan_path=rederived_plan_path,
+            out_blend_path=frozen_authority_blend,
+            inspection_path=frozen_authority_inspection_path,
+            blender_bin=resolved_blender_bin,
+            timeout_seconds=max(
+                1,
+                int(getattr(renderer, "timeout_seconds", 900) or 900),
+            ),
+        )
+        if frozen_authority_inspection.get("status") != "passed":
+            failures.append(
+                {
+                    "code": "evaluation_frozen_rematerialization_failed",
+                    "path": frozen_authority_inspection_path.as_posix(),
+                    "reason_codes": frozen_authority_inspection.get(
+                        "reason_codes"
+                    ),
+                }
+            )
+        failures.extend(
+            _frozen_materialization_fingerprint_failures(
+                observed=fresh_inspection,
+                authority=frozen_authority_inspection,
+            )
+        )
+        audit_provenance.update(
+            {
+                "frozen_authority_blend_path": (
+                    frozen_authority_blend.as_posix()
+                ),
+                "frozen_authority_blend_sha256": sha256_file(
+                    frozen_authority_blend
+                ),
+                "frozen_authority_inspection_path": (
+                    frozen_authority_inspection_path.as_posix()
+                ),
+                "frozen_authority_inspection_sha256": sha256_file(
+                    frozen_authority_inspection_path
+                ),
+            }
+        )
+        expected_scene, expected_registry = (
+            export_materialized_representations(
+                rederived_plan,
+                frozen_authority_inspection,
+            )
+        )
+        expected_scene_digest = sha256_json(expected_scene)
+        actual_scene_digest = sha256_json(normalized_scene)
+        expected_registry_digest = sha256_json(expected_registry)
+        actual_registry_digest = sha256_json(instance_registry)
+        audit_provenance.update(
+            {
+                "deterministic_scene_semantic_sha256": expected_scene_digest,
+                "prepared_scene_semantic_sha256": actual_scene_digest,
+                "deterministic_registry_semantic_sha256": (
+                    expected_registry_digest
+                ),
+                "prepared_registry_semantic_sha256": actual_registry_digest,
+            }
+        )
+        if actual_scene_digest != expected_scene_digest:
+            failures.append(
+                {
+                    "code": "deterministic_normalized_scene_mismatch",
+                    "path": prepared.normalized_scene_path.as_posix(),
+                    "expected_semantic_sha256": expected_scene_digest,
+                    "actual_semantic_sha256": actual_scene_digest,
+                }
+            )
+        if actual_registry_digest != expected_registry_digest:
+            failures.append(
+                {
+                    "code": "deterministic_instance_registry_mismatch",
+                    "path": prepared.instance_registry_path.as_posix(),
+                    "expected_semantic_sha256": expected_registry_digest,
+                    "actual_semantic_sha256": actual_registry_digest,
+                }
+            )
+        fresh_hashes = dict(prepared.hashes)
+        fresh_hashes["trusted_blend_inspection_sha256"] = sha256_file(
+            inspection_path
+        )
+        fresh_consistency = run_consistency_gate(
+            plan=plan,
+            normalized_scene=normalized_scene,
+            instance_registry=instance_registry,
+            blend_inspection=fresh_inspection,
+            hashes=fresh_hashes,
+        )
+        write_json(consistency_path, fresh_consistency)
+        if fresh_consistency.get("status") != "passed":
+            mismatches = fresh_consistency.get("mismatches")
+            if isinstance(mismatches, list) and mismatches:
+                failures.extend(
+                    {
+                        **deepcopy(item),
+                        "code": str(
+                            item.get("code")
+                            or "evaluation_materialization_consistency_failed"
+                        ),
+                    }
+                    for item in mismatches
+                    if isinstance(item, dict)
+                )
+            else:
+                failures.append(
+                    {
+                        "code": "evaluation_materialization_consistency_failed",
+                        "path": consistency_path.as_posix(),
+                    }
+                )
+        audit_provenance.update(
+            {
+                "fresh_blend_inspection_path": inspection_path.as_posix(),
+                "fresh_blend_inspection_sha256": sha256_file(inspection_path),
+                "fresh_consistency_path": consistency_path.as_posix(),
+                "fresh_consistency_sha256": sha256_file(consistency_path),
+            }
+        )
+    except Exception as exc:
+        failures.append(
+            {
+                "code": "evaluation_blend_reinspection_error",
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+        )
+
+    return (
+        _prepared_evaluation_readiness(
+            readiness,
+            failures=failures,
+            provenance=audit_provenance,
+        ),
+        resolved_asset_root if not failures else None,
+        resolved_asset_csv if not failures else None,
+    )
+
+
+def _prepared_catalog_path(
+    catalog_record: dict[str, Any],
+    *,
+    key: str,
+    failures: list[dict[str, Any]],
+) -> Path | None:
+    raw = str(catalog_record.get(key) or "").strip()
+    if not raw:
+        failures.append(
+            {
+                "code": "missing_prepared_catalog_binding",
+                "path": f"provenance.catalog.{key}",
+            }
+        )
+        return None
+    return Path(raw).expanduser().resolve()
+
+
+def _bind_prepared_catalog_path(
+    *,
+    prepared_path: Path | None,
+    supplied_path: str | Path | None,
+    require_supplied: bool,
+    missing_code: str,
+    mismatch_code: str,
+    path: str,
+    failures: list[dict[str, Any]],
+) -> Path | None:
+    if prepared_path is None:
+        return None
+    if supplied_path is None:
+        if require_supplied:
+            failures.append(
+                {
+                    "code": missing_code,
+                    "path": path,
+                }
+            )
+            return None
+        return prepared_path
+    supplied = Path(supplied_path).expanduser().resolve()
+    if supplied != prepared_path:
+        failures.append(
+            {
+                "code": mismatch_code,
+                "path": path,
+                "prepared_path": prepared_path.as_posix(),
+                "supplied_path": supplied.as_posix(),
+            }
+        )
+        return None
+    return supplied
+
+
+def _prepared_semantic_failures(
+    *,
+    plan: dict[str, Any],
+    normalized_scene: dict[str, Any],
+    instance_registry: dict[str, Any],
+    catalog: FrozenCatalog,
+    bundle: TrustedCaseBundle,
+) -> list[dict[str, Any]]:
+    failures: list[dict[str, Any]] = []
+
+    def expect(path: str, actual: Any, expected: Any) -> None:
+        if actual != expected:
+            failures.append(
+                {
+                    "code": "prepared_case_semantic_mismatch",
+                    "path": path,
+                    "expected": deepcopy(expected),
+                    "actual": deepcopy(actual),
+                }
+            )
+
+    expect(
+        "plan.schema_version",
+        plan.get("schema_version"),
+        "catalog_materialization_plan_v1",
+    )
+    expect(
+        "plan.materialization_revision",
+        plan.get("materialization_revision"),
+        MATERIALIZATION_REVISION,
+    )
+    expect(
+        "plan.adapter_contract_revision",
+        plan.get("adapter_contract_revision"),
+        CATALOG_PLACEMENT_CONTRACT_REVISION,
+    )
+    expect(
+        "plan.catalog_snapshot_id",
+        plan.get("catalog_snapshot_id"),
+        bundle.catalog_snapshot_id,
+    )
+
+    case_request = bundle.scene_request
+    room = case_request.get("room")
+    room = room if isinstance(room, dict) else {}
+    expected_height = room.get("height")
+    if (
+        expected_height is None
+        and isinstance(room.get("size"), list)
+        and len(room["size"]) >= 3
+    ):
+        expected_height = room["size"][2]
+    supplied_architecture = case_request.get("architecture_contract")
+    expected_architecture = (
+        validate_architecture_contract(supplied_architecture)
+        if isinstance(supplied_architecture, dict)
+        else resolve_architecture_activation(
+            room,
+            instruction=str(case_request.get("instruction") or ""),
+            specification_contract=bundle.specification_contract,
+            reference_annotation=bundle.reference_annotation,
+            visual_style_spec=bundle.visual_style_spec,
+        )
+    )
+    plan_request = plan.get("request")
+    plan_request = plan_request if isinstance(plan_request, dict) else {}
+    expected_request = {
+        "request_id": str(case_request.get("request_id") or ""),
+        "scene_type": str(case_request.get("scene_type") or "room"),
+        "boundary": deepcopy(room.get("boundary")),
+        "scene_height": (
+            float(expected_height) if expected_height is not None else None
+        ),
+        "architecture": expected_architecture,
+    }
+    for key, value in expected_request.items():
+        expect(f"plan.request.{key}", plan_request.get(key), value)
+
+    try:
+        validate_scene_package(
+            normalized_scene,
+            allowed_asset_ids=bundle.allowed_asset_ids,
+            require_fixed_catalog=True,
+        )
+    except Exception as exc:
+        failures.append(
+            {
+                "code": "prepared_scene_validation_failed",
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+        )
+    expect(
+        "normalized_scene.request_id",
+        normalized_scene.get("request_id"),
+        expected_request["request_id"],
+    )
+    expect(
+        "normalized_scene.scene_type",
+        normalized_scene.get("scene_type"),
+        expected_request["scene_type"],
+    )
+    expect(
+        "normalized_scene.boundary",
+        normalized_scene.get("boundary"),
+        expected_request["boundary"],
+    )
+    expect(
+        "normalized_scene.scene_height",
+        normalized_scene.get("scene_height"),
+        expected_request["scene_height"],
+    )
+    scene_metadata = normalized_scene.get("metadata")
+    scene_metadata = scene_metadata if isinstance(scene_metadata, dict) else {}
+    expect(
+        "normalized_scene.metadata.architecture_contract",
+        scene_metadata.get("architecture_contract"),
+        expected_architecture,
+    )
+    scene_materialization = scene_metadata.get("materialization")
+    scene_materialization = (
+        scene_materialization
+        if isinstance(scene_materialization, dict)
+        else {}
+    )
+    expect(
+        "normalized_scene.metadata.materialization.catalog_snapshot_id",
+        scene_materialization.get("catalog_snapshot_id"),
+        bundle.catalog_snapshot_id,
+    )
+    expect(
+        "instance_registry.schema_version",
+        instance_registry.get("schema_version"),
+        INSTANCE_REGISTRY_VERSION,
+    )
+    expect(
+        "instance_registry.adapter_contract_revision",
+        instance_registry.get("adapter_contract_revision"),
+        CATALOG_PLACEMENT_CONTRACT_REVISION,
+    )
+    expect(
+        "instance_registry.materialization_revision",
+        instance_registry.get("materialization_revision"),
+        MATERIALIZATION_REVISION,
+    )
+    expect(
+        "instance_registry.catalog_snapshot_id",
+        instance_registry.get("catalog_snapshot_id"),
+        bundle.catalog_snapshot_id,
+    )
+
+    instances = plan.get("instances")
+    if not isinstance(instances, list) or not instances:
+        failures.append(
+            {
+                "code": "prepared_plan_instances_invalid",
+                "path": "plan.instances",
+            }
+        )
+        return failures
+    for index, item in enumerate(instances):
+        if not isinstance(item, dict):
+            failures.append(
+                {
+                    "code": "prepared_plan_instance_invalid",
+                    "path": f"plan.instances[{index}]",
+                }
+            )
+            continue
+        try:
+            asset = catalog.resolve(str(item.get("asset_id") or ""))
+        except Exception as exc:
+            failures.append(
+                {
+                    "code": "prepared_catalog_asset_resolution_failed",
+                    "path": f"plan.instances[{index}].asset_id",
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+            )
+            continue
+        expected_asset_fields = {
+            "category": asset.category,
+            "retrieval_category": asset.retrieval_category,
+            "description": asset.description,
+            "short_description": asset.short_description,
+            "appearance_metadata": asset.appearance_metadata,
+            "catalog_bbox_center_m": list(asset.canonical_bbox_center_m),
+            "catalog_bbox_size_m": list(asset.canonical_bbox_size_m),
+            "mesh_path": asset.mesh_path.as_posix(),
+            "asset_hashes": asset.hashes,
+        }
+        for key, value in expected_asset_fields.items():
+            expect(f"plan.instances[{index}].{key}", item.get(key), value)
+    return failures
+
+
+def _frozen_materialization_fingerprint_failures(
+    *,
+    observed: dict[str, Any],
+    authority: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Bind the evaluated blend to an independent frozen-catalog import."""
+
+    failures: list[dict[str, Any]] = []
+
+    def index(
+        inspection: dict[str, Any],
+        label: str,
+    ) -> dict[str, dict[str, Any]]:
+        rows = inspection.get("instances")
+        if not isinstance(rows, list):
+            failures.append(
+                {
+                    "code": "frozen_materialization_instances_missing",
+                    "path": f"{label}.instances",
+                }
+            )
+            return {}
+        indexed: dict[str, dict[str, Any]] = {}
+        for item in rows:
+            if not isinstance(item, dict):
+                failures.append(
+                    {
+                        "code": "frozen_materialization_instance_invalid",
+                        "path": f"{label}.instances",
+                    }
+                )
+                continue
+            instance_id = str(item.get("instance_id") or "")
+            if not instance_id or instance_id in indexed:
+                failures.append(
+                    {
+                        "code": "frozen_materialization_identity_invalid",
+                        "path": f"{label}.instances",
+                        "instance_id": instance_id or None,
+                    }
+                )
+                continue
+            indexed[instance_id] = item
+        return indexed
+
+    observed_rows = index(observed, "evaluated_blend")
+    authority_rows = index(authority, "fresh_frozen_materialization")
+    if set(observed_rows) != set(authority_rows):
+        failures.append(
+            {
+                "code": "frozen_materialization_identity_set_mismatch",
+                "expected": sorted(authority_rows),
+                "actual": sorted(observed_rows),
+            }
+        )
+        return failures
+    for instance_id in sorted(authority_rows):
+        expected = authority_rows[instance_id]
+        actual = observed_rows[instance_id]
+        for field in ("asset_id", "asset_assembly_sha256"):
+            expected_value = str(expected.get(field) or "").lower()
+            actual_value = str(actual.get(field) or "").lower()
+            if (
+                not expected_value
+                or not actual_value
+                or actual_value != expected_value
+            ):
+                failures.append(
+                    {
+                        "code": "frozen_materialization_fingerprint_mismatch",
+                        "instance_id": instance_id,
+                        "field": field,
+                        "expected": expected_value or None,
+                        "actual": actual_value or None,
+                    }
+                )
+    return failures
+
+
+def _prepared_evaluation_readiness(
+    readiness: dict[str, Any],
+    *,
+    failures: list[dict[str, Any]],
+    provenance: dict[str, Any],
+) -> dict[str, Any]:
+    from benchmark.materialization.readiness import build_readiness_report
+
+    checks = (
+        deepcopy(readiness.get("checks"))
+        if isinstance(readiness.get("checks"), list)
+        else []
+    )
+    reason_codes = sorted(
+        {
+            str(item.get("code") or "prepared_evaluation_audit_failed")
+            for item in failures
+        }
+    )
+    failure_owner = (
+        "benchmark"
+        if any(
+            code.startswith(
+                (
+                    "evaluation_blender",
+                    "evaluation_blend_reinspection",
+                )
+            )
+            for code in reason_codes
+        )
+        else "submission"
+    )
+    audit_check: dict[str, Any] = {
+        "id": "evaluation_time_trust_audit",
+        "passed": not failures,
+        "detail": deepcopy(provenance),
+    }
+    if failures:
+        audit_check.update(
+            {
+                "reason_codes": reason_codes,
+                "failure_stage": "evaluation_time_trust_audit",
+                "failure_owner": failure_owner,
+                "failures": deepcopy(failures),
+            }
+        )
+    checks.append(audit_check)
+    readiness_provenance = (
+        deepcopy(readiness.get("provenance"))
+        if isinstance(readiness.get("provenance"), dict)
+        else {}
+    )
+    readiness_provenance["evaluation_time_trust_audit"] = deepcopy(provenance)
+    return build_readiness_report(
+        status="not_evaluable" if failures else "ready",
+        reason_codes=reason_codes,
+        failure_stage=(
+            "evaluation_time_trust_audit" if failures else None
+        ),
+        failure_owner=failure_owner if failures else None,
+        checks=checks,
+        provenance=readiness_provenance,
+    )
+
+
+class _PreparedRendererAdapter:
+    """Force the official overview pass to use one verified sanitized blend."""
+
+    _TRUSTED_BLEND_METHODS = frozenset(
+        {
+            "render_camera_views",
+            "render_collision_overlay_views",
+            "render_target_id_masks",
+            "render_focus_evidence_bundle",
+            "render_focus_overlay_views",
+        }
+    )
+
+    def __init__(
+        self,
+        *,
+        renderer: Any,
+        prepared: MaterializationResult,
+    ) -> None:
+        self._renderer = renderer
+        self._prepared = prepared
+
+    def render_scene(
+        self,
+        *,
+        scene_path: str | Path,
+        out_dir: str | Path,
+        asset_root: str | Path | None = None,
+    ) -> dict[str, Any]:
+        del scene_path, asset_root
+        manifest = self._renderer.render_prepared_scene(
+            blend_file=self._prepared.trusted_render_source_path,
+            normalized_scene_path=self._prepared.normalized_scene_path,
+            out_dir=out_dir,
+        )
+        if not isinstance(manifest, dict):
+            raise SubmissionEvaluationError(
+                "prepared renderer must return a JSON manifest"
+            )
+        rendered_source = Path(
+            str(manifest.get("blend_file") or "")
+        ).expanduser().resolve()
+        if rendered_source != self._prepared.trusted_render_source_path.resolve():
+            raise SubmissionEvaluationError(
+                "prepared renderer did not use trusted_render_source_path"
+            )
+        expected_hash = self._prepared.hashes.get("trusted_render_source_sha256")
+        if not expected_hash:
+            raise SubmissionEvaluationError(
+                "prepared submission has no trusted render source hash"
+            )
+        observed_before = manifest.get("source_blend_sha256_before")
+        observed_after = manifest.get("source_blend_sha256_after")
+        if (
+            observed_before != expected_hash
+            or observed_after != expected_hash
+            or manifest.get("source_blend_modified") is not False
+        ):
+            raise SubmissionEvaluationError(
+                "prepared renderer observed a different trusted blend hash"
+            )
+        rendered_normalized = Path(
+            str(manifest.get("normalized_scene_path") or "")
+        ).expanduser().resolve()
+        if (
+            rendered_normalized
+            != self._prepared.normalized_scene_path.resolve()
+        ):
+            raise SubmissionEvaluationError(
+                "prepared renderer did not use normalized_scene_path"
+            )
+        expected_normalized_hash = self._prepared.hashes.get(
+            "normalized_scene_sha256"
+        )
+        if not expected_normalized_hash:
+            raise SubmissionEvaluationError(
+                "prepared submission has no normalized scene hash"
+            )
+        if (
+            manifest.get("normalized_scene_sha256_before")
+            != expected_normalized_hash
+            or manifest.get("normalized_scene_sha256_after")
+            != expected_normalized_hash
+            or manifest.get("normalized_scene_modified") is not False
+        ):
+            raise SubmissionEvaluationError(
+                "prepared renderer observed a different normalized scene hash"
+            )
+        return manifest
+
+    def __getattr__(self, name: str) -> Any:
+        if name in self._TRUSTED_BLEND_METHODS:
+            method = getattr(self._renderer, name)
+
+            def trusted_blend_call(*args: Any, **kwargs: Any) -> Any:
+                if args:
+                    raise SubmissionEvaluationError(
+                        f"{name} must use keyword-only trusted blend arguments"
+                    )
+                kwargs["blend_file"] = (
+                    self._prepared.trusted_render_source_path
+                )
+                result = method(**kwargs)
+                self._verify_trusted_blend_result(name, result)
+                return result
+
+            return trusted_blend_call
+        if name.startswith("render_"):
+            raise AttributeError(
+                f"prepared evaluation does not authorize renderer method {name!r}"
+            )
+        return getattr(self._renderer, name)
+
+    def _verify_trusted_blend_result(
+        self,
+        method_name: str,
+        manifest: Any,
+    ) -> None:
+        if not isinstance(manifest, dict):
+            raise SubmissionEvaluationError(
+                f"{method_name} must return a JSON manifest"
+            )
+        expected_hash = self._prepared.hashes.get(
+            "trusted_render_source_sha256"
+        )
+        if not expected_hash:
+            raise SubmissionEvaluationError(
+                "prepared submission has no trusted render source hash"
+            )
+        if "camera_evidence" in manifest:
+            evidence = manifest.get("camera_evidence")
+            if not isinstance(evidence, dict):
+                raise SubmissionEvaluationError(
+                    f"{method_name} camera_evidence must be a JSON object"
+                )
+            self._verify_trusted_blend_evidence(
+                method_name,
+                evidence,
+                expected_hash=expected_hash,
+                evidence_path="camera_evidence",
+            )
+            # Nested evidence is authoritative for current Blender auxiliary
+            # renderers. If a compatibility manifest also duplicates integrity
+            # fields at the root, validate those too so matching root fields
+            # can never mask a nested mismatch (or vice versa).
+            if any(
+                key in manifest
+                for key in (
+                    "source_blend_sha256_before",
+                    "source_blend_sha256_after",
+                    "source_blend_modified",
+                )
+            ):
+                self._verify_trusted_blend_evidence(
+                    method_name,
+                    manifest,
+                    expected_hash=expected_hash,
+                    evidence_path="<root>",
+                )
+            return
+
+        # Explicit compatibility for older auxiliary-renderer manifests that
+        # put the same complete trust evidence at the root.
+        self._verify_trusted_blend_evidence(
+            method_name,
+            manifest,
+            expected_hash=expected_hash,
+            evidence_path="<root>",
+        )
+
+    def _verify_trusted_blend_evidence(
+        self,
+        method_name: str,
+        evidence: dict[str, Any],
+        *,
+        expected_hash: str,
+        evidence_path: str,
+    ) -> None:
+        if (
+            evidence.get("source_blend_sha256_before") != expected_hash
+            or evidence.get("source_blend_sha256_after") != expected_hash
+            or evidence.get("source_blend_modified") is not False
+        ):
+            raise SubmissionEvaluationError(
+                f"{method_name} observed a different trusted blend hash "
+                f"at {evidence_path}"
+            )
+        source_value = evidence.get("source_blend") or evidence.get(
+            "blend_file"
+        )
+        if source_value is None:
+            raise SubmissionEvaluationError(
+                f"{method_name} did not report its trusted blend source "
+                f"at {evidence_path}"
+            )
+        if Path(str(source_value)).expanduser().resolve() != (
+            self._prepared.trusted_render_source_path.resolve()
+        ):
+            raise SubmissionEvaluationError(
+                f"{method_name} used a non-trusted blend source "
+                f"at {evidence_path}"
+            )
+
+
+def _attach_readiness_to_success_report(
+    report: dict[str, Any],
+    readiness: dict[str, Any],
+) -> None:
+    for map_name in ("layer_reports", "category_reports"):
+        layer_map = report.get(map_name)
+        if not isinstance(layer_map, dict):
+            continue
+        l0 = layer_map.get("l0_structural_validity")
+        if not isinstance(l0, dict):
+            continue
+        l0["status"] = "passed"
+        l0["score"] = None
+        l0["affects_score"] = False
+        l0["readiness"] = deepcopy(readiness)
+
+
+def _prepared_case_bundle_record(bundle: TrustedCaseBundle) -> dict[str, Any]:
+    return {
+        "case_id": bundle.case_id,
+        "bundle_version": CASE_BUNDLE_VERSION,
+        "manifest_sha256": bundle.manifest_sha256,
+        "artifact_records": bundle.artifact_records,
+        "evaluator_output_type": bundle.evaluator_output_type,
+        "asset_catalog_snapshot_id": bundle.catalog_snapshot_id,
+        "workflow": bundle.workflow,
+        "specification_contract_sha256": (
+            bundle.artifact_records.get("specification_contract", {}).get("sha256")
+        ),
+    }
 
 
 def _first_catalog_text(*values: Any) -> str | None:
@@ -1158,6 +3236,11 @@ def _trusted_render_paths(manifest: dict[str, Any], render_dir: Path) -> list[st
     for index, item in enumerate(views):
         if not isinstance(item, dict):
             raise SubmissionEvaluationError(f"renderer view {index} is not a JSON object")
+        if str(item.get("name") or "") == "identity_map":
+            # Identity passes are grouping input, never ordinary Judge
+            # evidence. Preserve every legacy renderer's existing RGB view
+            # names and ordering.
+            continue
         path = Path(str(item.get("path") or "")).expanduser().resolve()
         try:
             path.relative_to(trusted_root)
@@ -1166,7 +3249,50 @@ def _trusted_render_paths(manifest: dict[str, Any], render_dir: Path) -> list[st
         if not path.is_file():
             raise SubmissionEvaluationError(f"renderer evidence does not exist: {path}")
         paths.append(path.as_posix())
+    if not paths:
+        raise SubmissionEvaluationError(
+            "trusted renderer returned no RGB overview views"
+        )
     return paths
+
+
+def _trusted_render_manifest_artifact(
+    manifest: dict[str, Any],
+    render_dir: Path,
+) -> Path | None:
+    """Resolve only a persisted render manifest beneath the trusted output root."""
+
+    trusted_root = render_dir.expanduser().resolve()
+    candidates: list[Path] = []
+    reported = str(manifest.get("manifest_path") or "").strip()
+    if reported:
+        reported_path = Path(reported).expanduser()
+        candidates.append(
+            (
+                reported_path
+                if reported_path.is_absolute()
+                else trusted_root / reported_path
+            ).resolve()
+        )
+    backend = str(manifest.get("backend") or "")
+    filenames = (
+        ("prepared_render_manifest.json", "render_manifest.json")
+        if backend == "blender_prepared_scene_read_only_v1"
+        else ("render_manifest.json", "prepared_render_manifest.json")
+    )
+    candidates.extend((trusted_root / name).resolve() for name in filenames)
+    seen: set[Path] = set()
+    for candidate in candidates:
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        try:
+            candidate.relative_to(trusted_root)
+        except ValueError:
+            continue
+        if candidate.is_file():
+            return candidate
+    return None
 
 
 def _sha256(path: Path) -> str:
@@ -1182,6 +3308,17 @@ def _non_empty_string(value: Any, path: str) -> str:
     if not text:
         raise CaseBundleError(f"{path} must be a non-empty string")
     return text
+
+
+def _reject_literal_api_key(
+    config: dict[str, Any] | None,
+    label: str,
+) -> None:
+    if isinstance(config, dict) and "api_key" in config:
+        raise ValueError(
+            f"{label} must not contain literal api_key; "
+            "use api_key_env instead"
+        )
 
 
 if __name__ == "__main__":

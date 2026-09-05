@@ -23,6 +23,20 @@ import sys
 import time
 from pathlib import Path
 
+try:
+    from .saved_blend_view import (
+        configure_textured_inspection_view,
+        embed_available_shader_images,
+    )
+except ImportError:  # Blender launches this file as a top-level script module.
+    worker_dir = str(Path(__file__).resolve().parent)
+    if worker_dir not in sys.path:
+        sys.path.insert(0, worker_dir)
+    from saved_blend_view import (  # type: ignore[no-redef]
+        configure_textured_inspection_view,
+        embed_available_shader_images,
+    )
+
 try:  # pragma: no cover - bpy/mathutils only exist inside Blender
     import bpy
     from mathutils import Euler, Vector
@@ -42,6 +56,13 @@ VERTICAL_ANCHOR_TOP = "top"
 # ``.blend`` files that only carry ``asset_<id>`` / ``proxy_<id>`` names still
 # resolve by name.
 CANONICAL_ID_PROPERTY = "benchmark_object_id"
+ARCHITECTURE_CONTRACT_PROPERTY = "benchmark_architecture_contract"
+CANONICAL_WALL_IDS = (
+    "north_wall",
+    "south_wall",
+    "east_wall",
+    "west_wall",
+)
 DEFAULT_COLLISION_MAX_VERTICES_PER_OBJECT = 50_000
 DEFAULT_COLLISION_MAX_FACES_PER_OBJECT = 100_000
 DEFAULT_COLLISION_MAX_TOTAL_VERTICES = 200_000
@@ -59,6 +80,11 @@ def main() -> None:
     progress_path.unlink(missing_ok=True)
     _record_progress(progress_path, "worker_started")
     scene_data = json.loads(scene_path.read_text(encoding="utf-8"))
+    architecture = json.loads(
+        Path(args.architecture_contract).resolve().read_text(encoding="utf-8")
+    )
+    active_wall_ids = _active_wall_ids(architecture)
+    canonical_object_ids = _canonical_object_ids(scene_data)
 
     _clear_scene()
     render_config = _configure_render(
@@ -72,8 +98,22 @@ def main() -> None:
     _record_progress(progress_path, "render_configured", render_config=render_config)
     boundary = _boundary(scene_data)
     room_height = float(scene_data.get("scene_height") or 2.8)
-    _build_room(boundary, room_height)
-    _record_progress(progress_path, "room_built")
+    rendered_wall_ids = _build_room(
+        boundary,
+        room_height,
+        active_wall_ids=active_wall_ids,
+    )
+    bpy.context.scene[ARCHITECTURE_CONTRACT_PROPERTY] = json.dumps(
+        architecture,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    _record_progress(
+        progress_path,
+        "room_built",
+        active_wall_ids=active_wall_ids,
+        rendered_wall_ids=rendered_wall_ids,
+    )
     object_results = []
     for item in scene_data.get("objects", []):
         if not isinstance(item, dict):
@@ -95,8 +135,40 @@ def main() -> None:
     _add_lighting(boundary, room_height)
     _record_progress(progress_path, "render_started")
     views = _render_views(boundary, room_height, out_dir, progress_path=progress_path)
+    identity_legend: dict[str, str] = {}
+    identity_palette: dict[str, str] = {}
+    identity_render = {
+        "status": "not_applicable",
+        "reason": "scene_has_no_renderable_objects",
+        "camera_source": "standardized_perspective",
+        "architecture_identity": "neutral_background",
+        "canonical_object_count": 0,
+        "scene_mutated": False,
+    }
+    if canonical_object_ids:
+        identity_view, identity_legend, identity_palette = _render_identity_map(
+            canonical_object_ids,
+            out_dir,
+            progress_path=progress_path,
+        )
+        views.append(identity_view)
+        identity_render = {
+            "status": "available",
+            "camera_source": "standardized_perspective",
+            "architecture_identity": "neutral_background",
+            "canonical_object_count": len(canonical_object_ids),
+            "scene_mutated": False,
+            "color_encoding": "raw_linear_rgb_8bit",
+        }
     _record_progress(progress_path, "render_completed", view_count=len(views))
     blend_path = out_dir / "scene.blend"
+    shader_images = embed_available_shader_images(bpy)
+    inspection_view = configure_textured_inspection_view(bpy)
+    bpy.context.scene["benchmark_saved_inspection_view"] = json.dumps(
+        inspection_view,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
     bpy.ops.wm.save_as_mainfile(filepath=str(blend_path))
     _record_progress(progress_path, "blend_saved", path=str(blend_path))
 
@@ -109,13 +181,33 @@ def main() -> None:
         "render_engine": args.render_engine,
         "render_config": render_config,
         "blend_file": str(blend_path),
+        "saved_inspection_view": inspection_view,
+        "shader_image_embedding": shader_images,
         "views": views,
+        "identity_legend": identity_legend,
+        "identity_palette": identity_palette,
+        "identity_render": identity_render,
         "objects": object_results,
         "collision_geometry_manifest": None,
         "collision_geometry_export": {
             "status": "pending",
             "limits": _collision_geometry_limits(args),
         },
+        "architecture": architecture,
+        "architecture_policy_version": architecture.get(
+            "architecture_policy_version"
+        ),
+        "wall_policy": architecture["physical_walls"]["policy"],
+        "logical_boundary_present": bool(
+            architecture["logical_boundary"]["enabled"]
+        ),
+        "physical_walls_enabled": bool(active_wall_ids),
+        "active_wall_ids": active_wall_ids,
+        "activation_sources": list(
+            architecture["physical_walls"].get("activation_sources") or []
+        ),
+        "rendered_wall_ids": rendered_wall_ids,
+        "floor_rendered": True,
     }
     render_manifest_path = out_dir / "render_manifest.json"
     render_manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
@@ -146,6 +238,7 @@ def _parse_args() -> argparse.Namespace:
     values = sys.argv[sys.argv.index("--") + 1 :] if "--" in sys.argv else []
     parser = argparse.ArgumentParser()
     parser.add_argument("--scene-json", required=True)
+    parser.add_argument("--architecture-contract", required=True)
     parser.add_argument("--out-dir", required=True)
     parser.add_argument("--asset-root", default=None)
     parser.add_argument("--width", type=int, default=768)
@@ -236,7 +329,17 @@ def _configure_render(
     cycles_denoising: bool,
 ) -> dict:
     scene = bpy.context.scene
-    scene.render.engine = render_engine
+    requested_render_engine = render_engine
+    try:
+        scene.render.engine = render_engine
+    except TypeError:
+        # Blender 5.2 renamed the Eevee enum from BLENDER_EEVEE_NEXT to
+        # BLENDER_EEVEE. Keep the public renderer contract stable while
+        # recording the runtime enum below.
+        if render_engine != "BLENDER_EEVEE_NEXT":
+            raise
+        scene.render.engine = "BLENDER_EEVEE"
+    active_render_engine = str(scene.render.engine)
     scene.render.resolution_x = max(64, int(width))
     scene.render.resolution_y = max(64, int(height))
     scene.render.resolution_percentage = 100
@@ -266,6 +369,8 @@ def _configure_render(
             "cycles_samples": int(scene.cycles.samples),
             "cycles_denoising": bool(scene.cycles.use_denoising),
             "persistent_data": bool(scene.render.use_persistent_data),
+            "render_engine_requested": requested_render_engine,
+            "render_engine_active": active_render_engine,
             **device_config,
         }
     return {
@@ -278,6 +383,8 @@ def _configure_render(
         "cycles_device_active": None,
         "cycles_devices_enabled": [],
         "cycles_device_errors": [],
+        "render_engine_requested": requested_render_engine,
+        "render_engine_active": active_render_engine,
     }
 
 
@@ -337,7 +444,52 @@ def _boundary(scene_data: dict) -> list[list[float]]:
     return [[float(point[0]), float(point[1])] for point in boundary]
 
 
-def _build_room(boundary: list[list[float]], height: float) -> None:
+def _canonical_object_ids(scene_data: dict) -> list[str]:
+    raw_objects = scene_data.get("objects")
+    if not isinstance(raw_objects, list):
+        raise ValueError("canonical scene objects must be a JSON list")
+    result: list[str] = []
+    for index, item in enumerate(raw_objects):
+        if not isinstance(item, dict):
+            raise ValueError(
+                f"canonical scene object {index} must be a JSON object"
+            )
+        object_id = str(item.get("id") or "").strip()
+        if not object_id:
+            raise ValueError(
+                f"canonical scene object {index} is missing id"
+            )
+        if object_id in result:
+            raise ValueError(
+                f"duplicate canonical object id: {object_id}"
+            )
+        result.append(object_id)
+    return result
+
+
+def _source_architecture_contract() -> dict | None:
+    raw = bpy.context.scene.get(ARCHITECTURE_CONTRACT_PROPERTY)
+    if raw is None:
+        return None
+    try:
+        value = json.loads(str(raw))
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            "source blend contains invalid benchmark architecture provenance"
+        ) from exc
+    if not isinstance(value, dict):
+        raise ValueError(
+            "source blend benchmark architecture provenance must be a JSON object"
+        )
+    return value
+
+
+def _build_room(
+    boundary: list[list[float]],
+    height: float,
+    *,
+    active_wall_ids: list[str] | tuple[str, ...],
+) -> list[str]:
     floor_vertices = [(x, y, 0.0) for x, y in boundary]
     floor_mesh = bpy.data.meshes.new("benchmark_floor_mesh")
     floor_mesh.from_pydata(floor_vertices, [], [list(range(len(floor_vertices)))])
@@ -345,21 +497,86 @@ def _build_room(boundary: list[list[float]], height: float) -> None:
     bpy.context.collection.objects.link(floor)
     floor.data.materials.append(_material("floor", (0.34, 0.36, 0.39, 1.0)))
 
+    active = set(_active_wall_ids({"physical_walls": {"active_wall_ids": active_wall_ids}}))
     thickness = 0.08
+    rendered: list[str] = []
     for index, start in enumerate(boundary):
         end = boundary[(index + 1) % len(boundary)]
+        wall_id = _wall_id_for_edge(boundary, index)
+        if wall_id not in active:
+            continue
         dx, dy = end[0] - start[0], end[1] - start[1]
         length = math.hypot(dx, dy)
         bpy.ops.mesh.primitive_cube_add(
             location=((start[0] + end[0]) / 2.0, (start[1] + end[1]) / 2.0, height / 2.0)
         )
         wall = bpy.context.object
-        wall.name = f"benchmark_wall_{index:02d}"
+        wall.name = f"benchmark_{wall_id}"
+        wall["benchmark_architecture_id"] = wall_id
         wall.dimensions = (length, thickness, height)
         wall.rotation_euler[2] = math.atan2(dy, dx)
-        wall.data.materials.append(_material(f"wall_{index}", (0.60, 0.62, 0.66, 1.0)))
+        wall.data.materials.append(_material(wall_id, (0.60, 0.62, 0.66, 1.0)))
         bpy.context.view_layer.objects.active = wall
         bpy.ops.object.transform_apply(location=False, rotation=False, scale=True)
+        rendered.append(wall_id)
+    return [
+        wall_id for wall_id in CANONICAL_WALL_IDS if wall_id in rendered
+    ]
+
+
+def _active_wall_ids(architecture: dict) -> list[str]:
+    physical = (
+        architecture.get("physical_walls")
+        if isinstance(architecture, dict)
+        else None
+    )
+    values = (
+        physical.get("active_wall_ids")
+        if isinstance(physical, dict)
+        else None
+    )
+    if not isinstance(values, (list, tuple)):
+        raise ValueError(
+            "architecture.physical_walls.active_wall_ids must be a list"
+        )
+    result = []
+    for value in values:
+        wall_id = str(value)
+        if wall_id not in CANONICAL_WALL_IDS:
+            raise ValueError(f"unknown physical wall ID {wall_id!r}")
+        if wall_id not in result:
+            result.append(wall_id)
+    return [
+        wall_id for wall_id in CANONICAL_WALL_IDS if wall_id in result
+    ]
+
+
+def _wall_id_for_edge(
+    boundary: list[list[float]],
+    index: int,
+) -> str:
+    midpoints = [
+        (
+            (point[0] + boundary[(offset + 1) % len(boundary)][0]) / 2.0,
+            (point[1] + boundary[(offset + 1) % len(boundary)][1]) / 2.0,
+        )
+        for offset, point in enumerate(boundary)
+    ]
+    east_index = max(range(len(midpoints)), key=lambda item: midpoints[item][0])
+    west_index = min(range(len(midpoints)), key=lambda item: midpoints[item][0])
+    north_index = max(range(len(midpoints)), key=lambda item: midpoints[item][1])
+    south_index = min(range(len(midpoints)), key=lambda item: midpoints[item][1])
+    by_index = {
+        north_index: "north_wall",
+        south_index: "south_wall",
+        east_index: "east_wall",
+        west_index: "west_wall",
+    }
+    if index not in by_index:
+        raise ValueError(
+            "physical wall activation requires an axis-aligned rectangular boundary"
+        )
+    return by_index[index]
 
 
 def _build_object(
@@ -759,6 +976,147 @@ def _add_lighting(boundary: list[list[float]], room_height: float) -> None:
     bpy.context.collection.objects.link(sun)
 
 
+def _ensure_camera_evidence_lighting(camera_views: list[dict] | None = None) -> dict:
+    """Provide the same ephemeral benchmark lighting used by global renders.
+
+    Trusted prepared blends intentionally contain no persistent cameras or
+    lights. Read-only camera workers therefore need to recreate the benchmark
+    lighting in memory before rendering; otherwise Eevee/Cycles evidence is
+    illuminated only by the sanitized world and is severely underexposed.
+    Existing render-enabled lights are preserved to avoid double-lighting
+    legacy/non-prepared scenes.
+    """
+
+    existing = sorted(
+        obj.name
+        for obj in bpy.data.objects
+        if obj.type == "LIGHT" and not obj.hide_render
+    )
+    if existing:
+        return {
+            "policy": "preserve_existing_scene_lighting_v1",
+            "geometry_source": "existing_scene_lights",
+            "existing_light_names": existing,
+            "added_light_names": [],
+            "ephemeral": False,
+        }
+
+    boundary, room_height, geometry_source = _camera_evidence_lighting_geometry(
+        camera_views or []
+    )
+    before = {obj.name for obj in bpy.data.objects if obj.type == "LIGHT"}
+    _add_lighting(boundary, room_height)
+    added = sorted(
+        obj.name
+        for obj in bpy.data.objects
+        if obj.type == "LIGHT" and obj.name not in before
+    )
+    return {
+        "policy": "ephemeral_benchmark_lighting_v1",
+        "geometry_source": geometry_source,
+        "existing_light_names": [],
+        "added_light_names": added,
+        "ephemeral": True,
+        "boundary": boundary,
+        "room_height": room_height,
+    }
+
+
+def _camera_evidence_lighting_geometry(
+    camera_views: list[dict],
+) -> tuple[list[list[float]], float, str]:
+    scene = bpy.context.scene
+    raw_boundary = scene.get("benchmark_request_boundary")
+    raw_height = scene.get("benchmark_scene_height")
+    try:
+        boundary = json.loads(str(raw_boundary))
+        room_height = float(raw_height)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        boundary = None
+        room_height = 0.0
+    if (
+        isinstance(boundary, list)
+        and len(boundary) >= 3
+        and all(
+            isinstance(point, list)
+            and len(point) == 2
+            and all(
+                isinstance(component, (int, float))
+                and math.isfinite(float(component))
+                for component in point
+            )
+            for point in boundary
+        )
+        and math.isfinite(room_height)
+        and room_height > 0.0
+    ):
+        return (
+            [[float(component) for component in point] for point in boundary],
+            room_height,
+            "scene_provenance",
+        )
+
+    for pose in camera_views:
+        if not isinstance(pose, dict):
+            continue
+        room_bounds = pose.get("room_bounds")
+        if (
+            not isinstance(room_bounds, list)
+            or len(room_bounds) != 6
+        ):
+            continue
+        try:
+            xmin, xmax, ymin, ymax, zmin, zmax = (
+                float(value) for value in room_bounds
+            )
+        except (TypeError, ValueError):
+            continue
+        if not all(
+            math.isfinite(value)
+            for value in (xmin, xmax, ymin, ymax, zmin, zmax)
+        ):
+            continue
+        if xmax <= xmin or ymax <= ymin or zmax <= zmin:
+            continue
+        return (
+            [
+                [xmin, ymin],
+                [xmax, ymin],
+                [xmax, ymax],
+                [xmin, ymax],
+            ],
+            zmax,
+            "camera_room_bounds",
+        )
+
+    meshes = [
+        obj
+        for obj in bpy.context.scene.objects
+        if obj.type == "MESH" and not obj.hide_render
+    ]
+    if meshes:
+        minimum, maximum = _world_bounds(meshes)
+        xmin, ymin = float(minimum.x), float(minimum.y)
+        xmax, ymax = float(maximum.x), float(maximum.y)
+        if xmax > xmin and ymax > ymin:
+            return (
+                [
+                    [xmin, ymin],
+                    [xmax, ymin],
+                    [xmax, ymax],
+                    [xmin, ymax],
+                ],
+                max(2.8, float(maximum.z)),
+                "renderable_mesh_bounds_fallback",
+            )
+
+    return (
+        [[0.0, 0.0], [5.0, 0.0], [5.0, 5.0], [0.0, 5.0]],
+        2.8,
+        "default_room_fallback",
+    )
+
+
 def _render_views(
     boundary: list[list[float]],
     room_height: float,
@@ -840,6 +1198,214 @@ def _render_views(
             }
         )
     return results
+
+
+def _render_identity_map(
+    canonical_object_ids: list[str],
+    out_dir: Path,
+    *,
+    progress_path: Path | None = None,
+) -> tuple[dict, dict[str, str], dict[str, str]]:
+    """Render a read-only multiclass object-identity pass.
+
+    WORKBENCH object colors are temporary display state.  They are restored
+    before the canonical ``scene.blend`` is saved.
+    """
+
+    scene = bpy.context.scene
+    camera = bpy.data.objects.get("camera_perspective")
+    if camera is None or camera.type != "CAMERA":
+        raise RuntimeError(
+            "identity render requires standardized perspective camera"
+        )
+    expected = set(canonical_object_ids)
+    meshes_by_id: dict[str, list] = {
+        object_id: [] for object_id in canonical_object_ids
+    }
+    for obj in bpy.context.scene.objects:
+        if obj.type != "MESH":
+            continue
+        raw_id = obj.get(CANONICAL_ID_PROPERTY)
+        if raw_id is None:
+            continue
+        object_id = str(raw_id).strip()
+        if object_id not in expected:
+            raise ValueError(
+                "renderable mesh references unknown canonical object id: "
+                f"{object_id}"
+            )
+        meshes_by_id[object_id].append(obj)
+    missing = [
+        object_id
+        for object_id, meshes in meshes_by_id.items()
+        if not meshes
+    ]
+    if missing:
+        raise ValueError(
+            "identity render has no renderable mesh for canonical IDs: "
+            + ", ".join(missing)
+        )
+
+    colors = _identity_colors(canonical_object_ids)
+    legend = {
+        _rgba_hex(colors[object_id]): object_id
+        for object_id in canonical_object_ids
+    }
+    palette = {
+        object_id: _rgba_hex(colors[object_id])
+        for object_id in canonical_object_ids
+    }
+    if len(legend) != len(canonical_object_ids):
+        raise ValueError("identity colors must be unique")
+
+    previous_camera = scene.camera
+    previous_filepath = scene.render.filepath
+    previous_engine = scene.render.engine
+    previous_film_transparent = scene.render.film_transparent
+    previous_colors = {
+        obj.name: tuple(obj.color)
+        for obj in scene.objects
+        if hasattr(obj, "color")
+    }
+    view_settings = {
+        "view_transform": scene.view_settings.view_transform,
+        "look": scene.view_settings.look,
+        "exposure": scene.view_settings.exposure,
+        "gamma": scene.view_settings.gamma,
+    }
+    display = scene.display.shading
+    display_settings = {
+        "light": display.light,
+        "color_type": display.color_type,
+        "show_shadows": display.show_shadows,
+        "show_cavity": display.show_cavity,
+        "show_specular_highlight": display.show_specular_highlight,
+        "background_type": display.background_type,
+        "background_color": tuple(display.background_color),
+    }
+    render_path = out_dir / "standardized_identity_map.png"
+    started_at = time.monotonic()
+    try:
+        for obj in scene.objects:
+            if obj.type != "MESH":
+                continue
+            raw_id = obj.get(CANONICAL_ID_PROPERTY)
+            if raw_id is None:
+                obj.color = (0.16, 0.16, 0.16, 1.0)
+            else:
+                obj.color = colors[str(raw_id)]
+        scene.render.engine = "BLENDER_WORKBENCH"
+        scene.render.film_transparent = False
+        # Raw/no-look preserves the assigned identity values in the saved PNG.
+        # Standard/AgX display transforms alter the bytes and would make a
+        # hex-color legend factually incorrect.
+        scene.view_settings.view_transform = "Raw"
+        scene.view_settings.look = "None"
+        scene.view_settings.exposure = 0.0
+        scene.view_settings.gamma = 1.0
+        display.light = "FLAT"
+        display.color_type = "OBJECT"
+        display.show_shadows = False
+        display.show_cavity = False
+        display.show_specular_highlight = False
+        display.background_type = "VIEWPORT"
+        display.background_color = (0.05, 0.05, 0.05)
+        scene.camera = camera
+        scene.render.filepath = str(render_path)
+        if progress_path is not None:
+            _record_progress(
+                progress_path,
+                "view_render_started",
+                view="identity_map",
+                path=str(render_path),
+            )
+        bpy.ops.render.render(write_still=True)
+        pixel_stats = _render_pixel_stats(render_path)
+    finally:
+        for obj in scene.objects:
+            if obj.name in previous_colors:
+                obj.color = previous_colors[obj.name]
+        scene.camera = previous_camera
+        scene.render.filepath = previous_filepath
+        scene.render.engine = previous_engine
+        scene.render.film_transparent = previous_film_transparent
+        scene.view_settings.view_transform = view_settings[
+            "view_transform"
+        ]
+        scene.view_settings.look = view_settings["look"]
+        scene.view_settings.exposure = view_settings["exposure"]
+        scene.view_settings.gamma = view_settings["gamma"]
+        for key, value in display_settings.items():
+            setattr(display, key, value)
+    elapsed_seconds = time.monotonic() - started_at
+    if progress_path is not None:
+        _record_progress(
+            progress_path,
+            "view_render_completed",
+            view="identity_map",
+            path=str(render_path),
+            elapsed_seconds=elapsed_seconds,
+        )
+    return (
+        {
+            "name": "identity_map",
+            "path": str(render_path),
+            "camera_location": list(camera.location),
+            "camera_target": list(
+                bpy.data.objects["camera_perspective"].location
+                + bpy.data.objects["camera_perspective"].matrix_world.to_quaternion()
+                @ Vector((0.0, 0.0, -1.0))
+            ),
+            "elapsed_seconds": elapsed_seconds,
+            "pixel_stats": pixel_stats,
+            "role": "global_identity_overlay",
+            "representation": "identity_map",
+            "color_encoding": "raw_linear_rgb_8bit",
+            "identity_legend": legend,
+        },
+        legend,
+        palette,
+    )
+
+
+def _identity_colors(
+    canonical_object_ids: list[str],
+) -> dict[str, tuple[float, float, float, float]]:
+    result: dict[str, tuple[float, float, float, float]] = {}
+    count = max(1, len(canonical_object_ids))
+    for index, object_id in enumerate(canonical_object_ids):
+        hue = (index * 0.6180339887498949) % 1.0
+        result[object_id] = (*_hsv_to_rgb(hue, 0.72, 0.92), 1.0)
+    return result
+
+
+def _hsv_to_rgb(
+    hue: float,
+    saturation: float,
+    value: float,
+) -> tuple[float, float, float]:
+    sector = int(hue * 6.0)
+    fraction = hue * 6.0 - sector
+    low = value * (1.0 - saturation)
+    descending = value * (1.0 - fraction * saturation)
+    ascending = value * (1.0 - (1.0 - fraction) * saturation)
+    return (
+        (
+            (value, ascending, low),
+            (descending, value, low),
+            (low, value, ascending),
+            (low, descending, value),
+            (ascending, low, value),
+            (value, low, descending),
+        )[sector % 6]
+    )
+
+
+def _rgba_hex(value: tuple[float, float, float, float]) -> str:
+    return "#" + "".join(
+        f"{max(0, min(255, round(component * 255.0))):02X}"
+        for component in value[:3]
+    )
 
 
 def _render_pixel_stats(render_path: Path) -> dict:

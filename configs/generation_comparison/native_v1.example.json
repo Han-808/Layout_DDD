@@ -1,0 +1,26 @@
+{
+  "protocol_id": "generation_comparison_v1",
+  "protocol_version": 1,
+  "mode": "native",
+  "case_id": "pilot_rectangular_room_native",
+  "architecture": {
+    "room_model": "single_room",
+    "boundary_model": "axis_aligned_rectangle",
+    "room": {
+      "boundary": [[0.0, 0.0], [4.0, 0.0], [4.0, 5.0], [0.0, 5.0]],
+      "height": 3.0,
+      "unit": "meter"
+    }
+  },
+  "object_inventory_policy": "method_native",
+  "objects": [],
+  "asset_policy": "native",
+  "scale_policy": "method_native",
+  "retrieval_policy": "method_native",
+  "generation": {
+    "budget_policy": "method_native_recorded"
+  },
+  "evaluator": {
+    "policy": "same_canonical_run_evaluate"
+  }
+}

@@ -33,7 +33,10 @@ WORKER_DIR = Path(__file__).resolve().parent
 if str(WORKER_DIR) not in sys.path:
     sys.path.insert(0, str(WORKER_DIR))
 
-from blender_worker import _configure_render  # noqa: E402
+from blender_worker import (  # noqa: E402
+    _configure_render,
+    _source_architecture_contract,
+)
 from blender_collision_overlay_worker import _CanonicalResolver, _overlay_targets, _vector3  # noqa: E402
 
 _FOREGROUND = 0.5
@@ -77,6 +80,7 @@ def main() -> None:
         )
         for index, pose in enumerate(poses)
     ]
+    architecture = _source_architecture_contract()
     manifest = {
         "backend": "blender_read_only_target_id_mask_v1",
         "source_blend": str(Path(bpy.data.filepath).resolve()) if bpy.data.filepath else None,
@@ -91,6 +95,22 @@ def main() -> None:
         ),
         "target_ids": target_ids,
         "views": views,
+        "architecture": architecture,
+        "architecture_policy_version": (
+            architecture.get("architecture_policy_version")
+            if isinstance(architecture, dict)
+            else None
+        ),
+        "active_wall_ids": (
+            list(
+                (architecture.get("physical_walls") or {}).get(
+                    "active_wall_ids"
+                )
+                or []
+            )
+            if isinstance(architecture, dict)
+            else []
+        ),
     }
     (out_dir / "target_id_mask_manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 

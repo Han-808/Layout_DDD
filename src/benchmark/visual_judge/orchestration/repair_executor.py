@@ -153,6 +153,35 @@ class CameraRepairExecutor:
                 stop_reason="max_camera_actions_exhausted",
                 reason="camera action budget exhausted before rendering",
             )
+        reserved_full_artifacts = (
+            len(selection.selected_view_ids)
+            * int(
+                reservation[
+                    "full_artifacts_per_selected_view"
+                ]
+            )
+        )
+        remaining_images = selection_request.budget.get(
+            "remaining_images"
+        )
+        if (
+            isinstance(remaining_images, int)
+            and not isinstance(remaining_images, bool)
+            and reserved_full_artifacts > remaining_images
+        ):
+            return RenderExecution(
+                rendered=None,
+                render_request=None,
+                selector_calls=0,
+                camera_actions=0,
+                failure_kind="budget_exhausted",
+                stop_reason="max_total_images_exhausted",
+                reason=(
+                    "selected camera backend requires "
+                    f"{reserved_full_artifacts} full artifacts but only "
+                    f"{remaining_images} image-budget slots remain"
+                ),
+            )
 
         render_request = EvidenceRenderRequest(
             judge_request=judge_request.with_visual_evidence(
@@ -305,6 +334,19 @@ class CameraRepairExecutor:
 def _validate_failure_render_costs(
     provenance: dict[str, Any],
 ) -> None:
+    acquired = provenance.get("acquired_artifact_paths")
+    if acquired is not None and (
+        not isinstance(acquired, list)
+        or not all(
+            isinstance(item, str) and item.strip()
+            for item in acquired
+        )
+        or len(acquired) != len(set(acquired))
+    ):
+        raise ValueError(
+            "failed renderer acquired_artifact_paths must be a unique "
+            "list of non-empty strings"
+        )
     for key in ("preview_render_count", "full_render_count"):
         if key not in provenance:
             continue

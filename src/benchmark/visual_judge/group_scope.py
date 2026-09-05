@@ -42,6 +42,12 @@ _METRIC_GROUP_OBSERVATIONS: dict[str, tuple[str, ...]] = {
         "interaction_side_visible",
         "limited_local_context",
     ),
+    "semantic_placement_consistency": (
+        "target_visible",
+        "group_context_visible",
+        "limited_local_context",
+        "global_context_preserved",
+    ),
     "functional_semantic_fidelity": (
         "joint_visibility",
         "group_context_visible",

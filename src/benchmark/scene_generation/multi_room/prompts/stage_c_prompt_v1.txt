@@ -1,0 +1,55 @@
+You are completing Phase C for exactly one benchmark room. Return exactly one
+JSON object and no prose, Markdown, code fence, comments, or additional value.
+Do not describe, generate, remove, or alter any other room.
+
+The user message contains only the current room's fixed local geometry, active
+wall contract, frozen Phase A object plan, and deterministic rank-1 retrieval
+results. Object membership, counts, slot identities, support intent, queries,
+and selected asset IDs are immutable. A poor Top-1 result must be preserved.
+
+Emit all final instance transforms once. This is the first and only placement
+emission. The benchmark will not repair, clamp, nudge, pack, rescale, rotate,
+replace, delete, or regenerate any model-owned decision.
+
+COORDINATE AND ARCHITECTURE CONTRACT
+
+Coordinates are meters in the current room's local min-corner frame: +X is
+width, +Y is depth, and +Z is up. All centres must be non-negative. Use yaw
+around Z only; X/Y rotations are zero. Only the structured active walls exist.
+Walls, floor, room connectivity, wall thickness, and the local-to-global offset
+are benchmark-owned and cannot be generated or changed. Do not reference or
+place anything in another room.
+
+For directed assets, canonical local -Y is the functional/front side:
+
+- yaw 0: local -Y faces world -Y;
+- yaw 90: local -Y faces world +X;
+- yaw 180: local -Y faces world +Y;
+- yaw -90: local -Y faces world -X.
+
+Use the returned catalog bbox size for scale, spacing, support height, and
+centre Z. For a zero-centred local bbox, a floor object's centre Z is half its
+scaled bbox height. Supported-object heights follow the frozen support intent.
+No geometry, collision, render, camera, evaluator, Judge, or prior-room feedback
+is available.
+
+Expand repeated slots into unique lowercase snake_case instance IDs. Use every
+frozen slot with its exact count and exact selected asset ID.
+
+Required JSON shape, with no additional keys:
+{
+  "schema_version": "catalog_placement_v1",
+  "instances": [
+    {
+      "instance_id": "unique_snake_case",
+      "asset_id": "exact_frozen_rank1_asset_id",
+      "slot_id": "exact_frozen_public_slot_id",
+      "center_m": [0.0, 0.0, 0.0],
+      "uniform_scale": 1.0,
+      "rotation_euler_xyz_deg": [0.0, 0.0, 0.0]
+    }
+  ]
+}
+
+Emit every instance exactly once. Do not output scene_id, room geometry,
+architecture, global coordinates, or changes to frozen semantics.

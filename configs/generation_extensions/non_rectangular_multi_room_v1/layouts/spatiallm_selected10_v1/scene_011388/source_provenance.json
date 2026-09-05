@@ -1,0 +1,367 @@
+{
+  "conversion": {
+    "all_sample_wall_geometry_must_match": true,
+    "coordinates_rounded": false,
+    "coordinates_transformed": false,
+    "excluded_entities": [
+      "door",
+      "window",
+      "bbox",
+      "point_cloud"
+    ],
+    "excluded_entity_counts_selected_samples": {
+      "bbox": 42,
+      "door": 12,
+      "other": 0,
+      "window": 3
+    },
+    "floor_z_m": 0.0,
+    "floor_z_policy": "require_source_wall_endpoints_at_zero",
+    "geometry_repair_applied": false,
+    "policy": "spatiallm_wall_loops_to_nonrect_room_layout_v1",
+    "polygon_winding_normalized_to_ccw": true,
+    "selected_sample_policy": "lowest_sample_index_per_room",
+    "source_room_type_labels_in_output": false,
+    "source_room_type_labels_read_for_output": false,
+    "wall_height_preserved": true,
+    "wall_thickness_preserved": true,
+    "winding_reversed_room_ids": []
+  },
+  "layout_id": "scene_011388",
+  "output": {
+    "room_layout_sha256": "54418899637a3f7c46349c4c6da83bb06fe9c6bdbf8cb580fa61e3df48e2b6dc"
+  },
+  "schema_version": "spatiallm_room_layout_provenance_v1",
+  "source": {
+    "archives": [
+      {
+        "filename": "chunk_099.zip",
+        "sha256": "53901c838b5221f035a7101c6dc4269692d577237c87948b96b70dcef6436acd"
+      },
+      {
+        "filename": "chunk_106.zip",
+        "sha256": "a6c608f639e8021d79cfd6e5614b5ec950e440957ea998aab3a8b79ac5400d03"
+      },
+      {
+        "filename": "chunk_108.zip",
+        "sha256": "d4d96f7b493f87449ab0288b4673330d3e830ca77d20bc98c2a6bae63d20605d"
+      }
+    ],
+    "dataset_id": "manycore-research/SpatialLM-Dataset",
+    "dataset_revision": "ab8de0983f48490a0a8850baa32308982d6fbacc",
+    "dataset_url": "https://huggingface.co/datasets/manycore-research/SpatialLM-Dataset",
+    "layout_path": "layout",
+    "license": "cc-by-nc-4.0",
+    "rooms": [
+      {
+        "excluded_entity_counts_selected_sample": {
+          "bbox": 14,
+          "door": 5,
+          "other": 0,
+          "window": 0
+        },
+        "polygon_winding_reversed": false,
+        "room_id": "room_000",
+        "selected_member": "scene_011388_00_0.txt",
+        "selected_member_sha256": "9bd105bbf1a7be7f0027ddfc69544ee4acb849a08978e7c949846f75b2de5a1d",
+        "selected_sample": 0,
+        "source_room_id": 0,
+        "source_sample_count": 4,
+        "source_samples": [
+          {
+            "archive": "chunk_099.zip",
+            "member": "scene_011388_00_0.txt",
+            "member_sha256": "9bd105bbf1a7be7f0027ddfc69544ee4acb849a08978e7c949846f75b2de5a1d",
+            "sample": 0
+          },
+          {
+            "archive": "chunk_099.zip",
+            "member": "scene_011388_00_1.txt",
+            "member_sha256": "9bd105bbf1a7be7f0027ddfc69544ee4acb849a08978e7c949846f75b2de5a1d",
+            "sample": 1
+          },
+          {
+            "archive": "chunk_099.zip",
+            "member": "scene_011388_00_2.txt",
+            "member_sha256": "9bd105bbf1a7be7f0027ddfc69544ee4acb849a08978e7c949846f75b2de5a1d",
+            "sample": 2
+          },
+          {
+            "archive": "chunk_106.zip",
+            "member": "scene_011388_00_3.txt",
+            "member_sha256": "9bd105bbf1a7be7f0027ddfc69544ee4acb849a08978e7c949846f75b2de5a1d",
+            "sample": 3
+          }
+        ],
+        "source_wall_count": 10,
+        "wall_geometry_identical_across_samples": true
+      },
+      {
+        "excluded_entity_counts_selected_sample": {
+          "bbox": 4,
+          "door": 1,
+          "other": 0,
+          "window": 0
+        },
+        "polygon_winding_reversed": false,
+        "room_id": "room_001",
+        "selected_member": "scene_011388_01_0.txt",
+        "selected_member_sha256": "00066a73aba7e0d2cfbd00fea0aa164cd00d5791b6fd246e2628fc37cf78fc89",
+        "selected_sample": 0,
+        "source_room_id": 1,
+        "source_sample_count": 4,
+        "source_samples": [
+          {
+            "archive": "chunk_099.zip",
+            "member": "scene_011388_01_0.txt",
+            "member_sha256": "00066a73aba7e0d2cfbd00fea0aa164cd00d5791b6fd246e2628fc37cf78fc89",
+            "sample": 0
+          },
+          {
+            "archive": "chunk_099.zip",
+            "member": "scene_011388_01_1.txt",
+            "member_sha256": "00066a73aba7e0d2cfbd00fea0aa164cd00d5791b6fd246e2628fc37cf78fc89",
+            "sample": 1
+          },
+          {
+            "archive": "chunk_099.zip",
+            "member": "scene_011388_01_2.txt",
+            "member_sha256": "00066a73aba7e0d2cfbd00fea0aa164cd00d5791b6fd246e2628fc37cf78fc89",
+            "sample": 2
+          },
+          {
+            "archive": "chunk_106.zip",
+            "member": "scene_011388_01_3.txt",
+            "member_sha256": "00066a73aba7e0d2cfbd00fea0aa164cd00d5791b6fd246e2628fc37cf78fc89",
+            "sample": 3
+          }
+        ],
+        "source_wall_count": 4,
+        "wall_geometry_identical_across_samples": true
+      },
+      {
+        "excluded_entity_counts_selected_sample": {
+          "bbox": 4,
+          "door": 1,
+          "other": 0,
+          "window": 0
+        },
+        "polygon_winding_reversed": false,
+        "room_id": "room_002",
+        "selected_member": "scene_011388_02_0.txt",
+        "selected_member_sha256": "29d8766038d65cd7ad8130fa8d05f9b43631e43ceb183b36d31ed07a8f9ec0e1",
+        "selected_sample": 0,
+        "source_room_id": 2,
+        "source_sample_count": 4,
+        "source_samples": [
+          {
+            "archive": "chunk_099.zip",
+            "member": "scene_011388_02_0.txt",
+            "member_sha256": "29d8766038d65cd7ad8130fa8d05f9b43631e43ceb183b36d31ed07a8f9ec0e1",
+            "sample": 0
+          },
+          {
+            "archive": "chunk_099.zip",
+            "member": "scene_011388_02_1.txt",
+            "member_sha256": "29d8766038d65cd7ad8130fa8d05f9b43631e43ceb183b36d31ed07a8f9ec0e1",
+            "sample": 1
+          },
+          {
+            "archive": "chunk_099.zip",
+            "member": "scene_011388_02_2.txt",
+            "member_sha256": "29d8766038d65cd7ad8130fa8d05f9b43631e43ceb183b36d31ed07a8f9ec0e1",
+            "sample": 2
+          },
+          {
+            "archive": "chunk_106.zip",
+            "member": "scene_011388_02_3.txt",
+            "member_sha256": "29d8766038d65cd7ad8130fa8d05f9b43631e43ceb183b36d31ed07a8f9ec0e1",
+            "sample": 3
+          }
+        ],
+        "source_wall_count": 4,
+        "wall_geometry_identical_across_samples": true
+      },
+      {
+        "excluded_entity_counts_selected_sample": {
+          "bbox": 6,
+          "door": 2,
+          "other": 0,
+          "window": 1
+        },
+        "polygon_winding_reversed": false,
+        "room_id": "room_003",
+        "selected_member": "scene_011388_03_0.txt",
+        "selected_member_sha256": "23d815c92b7a7eaec74dc581cc779017bd649474f53761e0afca28a0b2f10c59",
+        "selected_sample": 0,
+        "source_room_id": 3,
+        "source_sample_count": 4,
+        "source_samples": [
+          {
+            "archive": "chunk_099.zip",
+            "member": "scene_011388_03_0.txt",
+            "member_sha256": "23d815c92b7a7eaec74dc581cc779017bd649474f53761e0afca28a0b2f10c59",
+            "sample": 0
+          },
+          {
+            "archive": "chunk_099.zip",
+            "member": "scene_011388_03_1.txt",
+            "member_sha256": "23d815c92b7a7eaec74dc581cc779017bd649474f53761e0afca28a0b2f10c59",
+            "sample": 1
+          },
+          {
+            "archive": "chunk_099.zip",
+            "member": "scene_011388_03_2.txt",
+            "member_sha256": "23d815c92b7a7eaec74dc581cc779017bd649474f53761e0afca28a0b2f10c59",
+            "sample": 2
+          },
+          {
+            "archive": "chunk_106.zip",
+            "member": "scene_011388_03_3.txt",
+            "member_sha256": "23d815c92b7a7eaec74dc581cc779017bd649474f53761e0afca28a0b2f10c59",
+            "sample": 3
+          }
+        ],
+        "source_wall_count": 6,
+        "wall_geometry_identical_across_samples": true
+      },
+      {
+        "excluded_entity_counts_selected_sample": {
+          "bbox": 2,
+          "door": 0,
+          "other": 0,
+          "window": 1
+        },
+        "polygon_winding_reversed": false,
+        "room_id": "room_004",
+        "selected_member": "scene_011388_04_0.txt",
+        "selected_member_sha256": "6d4c5301b65a89b52128849943d7a20c11150badf31e33b135c1f231ae3dcc08",
+        "selected_sample": 0,
+        "source_room_id": 4,
+        "source_sample_count": 4,
+        "source_samples": [
+          {
+            "archive": "chunk_099.zip",
+            "member": "scene_011388_04_0.txt",
+            "member_sha256": "6d4c5301b65a89b52128849943d7a20c11150badf31e33b135c1f231ae3dcc08",
+            "sample": 0
+          },
+          {
+            "archive": "chunk_099.zip",
+            "member": "scene_011388_04_1.txt",
+            "member_sha256": "6d4c5301b65a89b52128849943d7a20c11150badf31e33b135c1f231ae3dcc08",
+            "sample": 1
+          },
+          {
+            "archive": "chunk_099.zip",
+            "member": "scene_011388_04_2.txt",
+            "member_sha256": "6d4c5301b65a89b52128849943d7a20c11150badf31e33b135c1f231ae3dcc08",
+            "sample": 2
+          },
+          {
+            "archive": "chunk_106.zip",
+            "member": "scene_011388_04_3.txt",
+            "member_sha256": "6d4c5301b65a89b52128849943d7a20c11150badf31e33b135c1f231ae3dcc08",
+            "sample": 3
+          }
+        ],
+        "source_wall_count": 4,
+        "wall_geometry_identical_across_samples": true
+      },
+      {
+        "excluded_entity_counts_selected_sample": {
+          "bbox": 7,
+          "door": 1,
+          "other": 0,
+          "window": 0
+        },
+        "polygon_winding_reversed": false,
+        "room_id": "room_005",
+        "selected_member": "scene_011388_05_0.txt",
+        "selected_member_sha256": "24cd5a9e2368be154710eaf00f04f031b53e107165f772790daeec2a7979d5f1",
+        "selected_sample": 0,
+        "source_room_id": 5,
+        "source_sample_count": 4,
+        "source_samples": [
+          {
+            "archive": "chunk_099.zip",
+            "member": "scene_011388_05_0.txt",
+            "member_sha256": "24cd5a9e2368be154710eaf00f04f031b53e107165f772790daeec2a7979d5f1",
+            "sample": 0
+          },
+          {
+            "archive": "chunk_099.zip",
+            "member": "scene_011388_05_1.txt",
+            "member_sha256": "24cd5a9e2368be154710eaf00f04f031b53e107165f772790daeec2a7979d5f1",
+            "sample": 1
+          },
+          {
+            "archive": "chunk_106.zip",
+            "member": "scene_011388_05_2.txt",
+            "member_sha256": "24cd5a9e2368be154710eaf00f04f031b53e107165f772790daeec2a7979d5f1",
+            "sample": 2
+          },
+          {
+            "archive": "chunk_108.zip",
+            "member": "scene_011388_05_3.txt",
+            "member_sha256": "24cd5a9e2368be154710eaf00f04f031b53e107165f772790daeec2a7979d5f1",
+            "sample": 3
+          }
+        ],
+        "source_wall_count": 4,
+        "wall_geometry_identical_across_samples": true
+      },
+      {
+        "excluded_entity_counts_selected_sample": {
+          "bbox": 5,
+          "door": 2,
+          "other": 0,
+          "window": 1
+        },
+        "polygon_winding_reversed": false,
+        "room_id": "room_006",
+        "selected_member": "scene_011388_06_0.txt",
+        "selected_member_sha256": "7f2a00d65ba5d53f14cf50cb6a307e201682036ece9223fa5eec3e97bbe05ec4",
+        "selected_sample": 0,
+        "source_room_id": 6,
+        "source_sample_count": 4,
+        "source_samples": [
+          {
+            "archive": "chunk_099.zip",
+            "member": "scene_011388_06_0.txt",
+            "member_sha256": "7f2a00d65ba5d53f14cf50cb6a307e201682036ece9223fa5eec3e97bbe05ec4",
+            "sample": 0
+          },
+          {
+            "archive": "chunk_099.zip",
+            "member": "scene_011388_06_1.txt",
+            "member_sha256": "7f2a00d65ba5d53f14cf50cb6a307e201682036ece9223fa5eec3e97bbe05ec4",
+            "sample": 1
+          },
+          {
+            "archive": "chunk_106.zip",
+            "member": "scene_011388_06_2.txt",
+            "member_sha256": "7f2a00d65ba5d53f14cf50cb6a307e201682036ece9223fa5eec3e97bbe05ec4",
+            "sample": 2
+          },
+          {
+            "archive": "chunk_108.zip",
+            "member": "scene_011388_06_3.txt",
+            "member_sha256": "7f2a00d65ba5d53f14cf50cb6a307e201682036ece9223fa5eec3e97bbe05ec4",
+            "sample": 3
+          }
+        ],
+        "source_wall_count": 10,
+        "wall_geometry_identical_across_samples": true
+      }
+    ],
+    "scene_id": "scene_011388",
+    "split_labels": [
+      "reserved",
+      "test",
+      "val"
+    ],
+    "split_path": "split.csv",
+    "split_sha256": "1f66ade1ac14825a8b1f3468baa43e75a5ed929c8ed26f8965b4f030e5203aa7"
+  }
+}

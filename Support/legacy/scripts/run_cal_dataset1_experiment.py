@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run model-backed cal_dataset1 experiments from frozen canonical scenes.
+"""Archived runner for the pre-canonical cal_dataset1 experiment.
 
 This entry point never runs generation, conversion, retrieval, or asset binding.
 It consumes the reviewed fixtures directly and keeps the three calibration
@@ -22,10 +22,9 @@ from pathlib import Path
 from typing import Any
 
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
-from benchmark.api.evaluation import run_evaluate  # noqa: E402
 from benchmark.evaluator.generic_validity import evaluate_generic_validity  # noqa: E402
 from benchmark.evaluator.generic_validity.mesh_geometry import (  # noqa: E402
     validate_collision_geometry_manifest,
@@ -38,7 +37,6 @@ from benchmark.evaluator.spatial_fidelity import (  # noqa: E402
     load_ontology,
 )
 from benchmark.reference_annotation import annotation_scoring_gate  # noqa: E402
-from benchmark.utils.io import load_yaml  # noqa: E402
 from benchmark.visual_judge import build_openai_compatible_vlm_judge  # noqa: E402
 
 
@@ -279,34 +277,11 @@ def _run_case(
         return report, _score_spatial_gt(_read_json(fixture / "event_gt.json"), report)
 
     if track == "fine_fidelity":
-        profile = load_yaml(REPO_ROOT / "configs/evaluation/metric_profile_draft_v1.yaml", default={})
-        profile["weights"] = {
-            "prompt_fidelity": 1.0,
-            "spatial_fidelity": 1.0,
-            "structural_validity": 0.0,
-            "visual_quality": 0.0,
-        }
-        report = run_evaluate(
-            scene=scene,
-            out=out,
-            eval_oor=True,
-            eval_oar=True,
-            eval_generic_validity=False,
-            scene_request=request,
-            object_plan=_read_json(fixture / "object_plan.json"),
-            reference_annotation=_read_json(fixture / "reference_annotation.json"),
-            collision_geometry=_collision_geometry(root, case_id) if arm == "mesh" else None,
-            render_evidence=[str(path) for path in renders],
-            vlm_judge=judge,
-            evaluation_profile=profile,
+        raise RuntimeError(
+            "the historical fine_fidelity track was retired with the legacy "
+            "non-game profile; use the canonical specification-contract "
+            "evaluation workflow instead"
         )
-        category = report.get("category_reports", {}).get("prompt_fidelity", {})
-        return report, {
-            "score": category.get("score"),
-            "score_status": category.get("status"),
-            "model_call_count": _fine_model_calls(report),
-            "official_scoreable_reference": True,
-        }
     raise ValueError(f"unknown track {track!r}")
 
 

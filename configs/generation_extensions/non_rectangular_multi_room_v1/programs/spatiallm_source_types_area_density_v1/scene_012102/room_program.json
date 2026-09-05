@@ -1,0 +1,27 @@
+{
+  "layout_id": "scene_012102",
+  "program_order": [
+    "kitchen_01",
+    "living_and_dining_room_01",
+    "master_bedroom_01"
+  ],
+  "programs": [
+    {
+      "program_id": "kitchen_01",
+      "room_type": "kitchen"
+    },
+    {
+      "program_id": "living_and_dining_room_01",
+      "room_type": "living and dining room"
+    },
+    {
+      "program_id": "master_bedroom_01",
+      "room_type": "master bedroom"
+    }
+  ],
+  "schema_version": "non_rectangular_room_program_v1",
+  "target_total_instances": {
+    "max": 28,
+    "min": 23
+  }
+}

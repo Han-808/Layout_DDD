@@ -91,6 +91,19 @@ def _render_result_with_audit(
 def _validate_render_cost_provenance(
     provenance: dict[str, Any],
 ) -> None:
+    acquired = provenance.get("acquired_artifact_paths")
+    if acquired is not None and (
+        not isinstance(acquired, list)
+        or not all(
+            isinstance(item, str) and item.strip()
+            for item in acquired
+        )
+        or len(acquired) != len(set(acquired))
+    ):
+        raise ValueError(
+            "evidence renderer provenance acquired_artifact_paths must be "
+            "a unique list of non-empty strings"
+        )
     for key in ("preview_render_count", "full_render_count"):
         if key not in provenance:
             continue
@@ -171,6 +184,64 @@ def _evidence_refs(items: list[Any]) -> list[str]:
     return refs
 
 
+def _evidence_artifact_refs(items: list[Any]) -> list[str]:
+    """Return one stable identity per physical evidence representation.
+
+    ``view_id`` intentionally collapses RGB/overlay/contour artifacts when
+    counting camera poses.  The image budget has different semantics: every
+    real image counts, while a reused artifact must not be charged twice.
+    """
+
+    refs: list[str] = []
+    for index, item in enumerate(items):
+        if isinstance(item, dict):
+            raw_path = item.get("path") or item.get("image_path")
+            if raw_path is not None and str(raw_path).strip():
+                value = f"path:{Path(str(raw_path)).expanduser()}"
+            else:
+                digest = next(
+                    (
+                        str(item[key]).strip().lower()
+                        for key in (
+                            "image_sha256",
+                            "content_hash",
+                            "sha256",
+                        )
+                        if isinstance(item.get(key), str)
+                        and str(item[key]).strip()
+                    ),
+                    None,
+                )
+                if digest is not None:
+                    value = f"digest:{digest}"
+                else:
+                    view_id = str(
+                        item.get("view_id")
+                        or item.get("id")
+                        or f"evidence_{index:02d}"
+                    )
+                    representation = str(
+                        item.get("representation")
+                        or item.get("representation_type")
+                        or item.get("role")
+                        or f"artifact_{index:02d}"
+                    )
+                    value = f"view:{view_id}:representation:{representation}"
+        elif isinstance(item, (str, Path)):
+            value = f"path:{Path(str(item)).expanduser()}"
+        else:
+            value = (
+                "value:"
+                + json.dumps(
+                    _jsonable(item),
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+            )
+        refs.append(value)
+    return refs
+
+
 def _rendered_view_count(
     items: tuple[Any, ...],
     *,
@@ -186,15 +257,16 @@ def _rendered_view_count(
             role = str(item.get("role") or "")
             pair_id = item.get("pair_id")
             view_id = str(item.get("view_id") or "").strip()
-            if isinstance(pose, dict) and pose:
-                value = "pose:" + json.dumps(
-                    _jsonable(pose),
-                    sort_keys=True,
-                    separators=(",", ":"),
-                )
-            elif view_id and view_id in trusted_ids:
-                value = f"trusted_view:{view_id}"
-            elif (
+            if (
+                role == "metric_highlighted_global"
+                and view_id not in trusted_ids
+            ):
+                # P0b composite renderers retain one fixed global context
+                # image beside the newly selected local views.  The per-round
+                # camera budget constrains those selected views, not this
+                # unchanged packet anchor.
+                continue
+            if (
                 pair_id is not None
                 and role
                 in {
@@ -203,7 +275,18 @@ def _rendered_view_count(
                     "metric_local_contour",
                 }
             ):
+                # RGB and contour artifacts from one verified collision pose
+                # are one independent camera view even when only the contour
+                # carries the complete pose record.
                 value = f"verified_pair:{pair_id}"
+            elif isinstance(pose, dict) and pose:
+                value = "pose:" + json.dumps(
+                    _jsonable(pose),
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+            elif view_id and view_id in trusted_ids:
+                value = f"trusted_view:{view_id}"
             else:
                 # A renderer-provided view_id alone is not proof that two
                 # independent files share a camera pose.
@@ -255,6 +338,36 @@ def _jsonable(value: Any) -> Any:
     return str(value)
 
 
+def _latest_focus_target_ids(
+    trace: list[dict[str, Any]],
+    *,
+    fallback: Any,
+) -> list[str]:
+    for event in reversed(trace):
+        if (
+            not isinstance(event, dict)
+            or event.get("stage") != "acquisition_planner"
+        ):
+            continue
+        evidence_request = event.get("evidence_request")
+        if not isinstance(evidence_request, dict):
+            continue
+        target_ids = evidence_request.get("target_ids")
+        if isinstance(target_ids, list) and target_ids:
+            return [
+                str(value)
+                for value in target_ids
+                if str(value).strip()
+            ]
+    if not isinstance(fallback, (list, tuple)):
+        return []
+    return [
+        str(value)
+        for value in fallback
+        if str(value).strip()
+    ]
+
+
 def build_evaluation_audit(
     *,
     schema_version: str,
@@ -281,6 +394,7 @@ def build_evaluation_audit(
     actions_used: int,
     rounds_used: int,
     total_images_acquired: int,
+    acquisition_ledger: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     judge_provenance = (
         deepcopy(judge_result.provenance)
@@ -290,6 +404,67 @@ def build_evaluation_audit(
     recovery_outcome = _evidence_recovery_outcome(
         trace,
         final_status=final_status,
+    )
+    telemetry_value = telemetry.to_dict(stop_reason=stop_reason)
+    selection_events = [
+        item
+        for item in telemetry_value.get("events", [])
+        if isinstance(item, dict)
+        and item.get("kind") == "camera_selection"
+    ]
+    vlm_selection_events = [
+        item
+        for item in selection_events
+        if item.get("stage") == "vlm"
+    ]
+    bank_events = [
+        item
+        for item in trace
+        if isinstance(item, dict)
+        and item.get("stage") == "trusted_candidate_bank"
+        and item.get("status") == "completed"
+    ]
+    forced_choice_events = [
+        item
+        for item in trace
+        if isinstance(item, dict)
+        and item.get("stage") == "judge"
+        and item.get("terminal_forced_choice") is True
+    ]
+    forced_choice = (
+        forced_choice_events[-1]
+        if forced_choice_events
+        else None
+    )
+    degraded_choice_events = [
+        item
+        for item in trace
+        if isinstance(item, dict)
+        and item.get("stage") == "terminal_choice_policy"
+        and item.get("outcome") == "forced_with_retained_evidence"
+    ]
+    degraded_choice = (
+        degraded_choice_events[-1]
+        if degraded_choice_events
+        else None
+    )
+    group_scope = judge_request.context.get("group_scope")
+    group_scope = (
+        group_scope if isinstance(group_scope, dict) else {}
+    )
+    focus_target_ids = _latest_focus_target_ids(
+        trace,
+        fallback=(
+            judge_request.context.get("target_object_ids")
+            or group_scope.get("member_ids")
+            or []
+        ),
+    )
+    evidence_sufficiency_loop = _evidence_sufficiency_loop_summary(
+        trace,
+        final_status=final_status,
+        stop_reason=stop_reason,
+        rounds_used=rounds_used,
     )
     return _jsonable(
         {
@@ -310,6 +485,11 @@ def build_evaluation_audit(
                     else None
                 ),
             },
+            # Immutable source snapshot for optional post-hoc audit graph
+            # projection.  It is descriptive only: the controller has already
+            # completed this request, and no consumer of this field can alter
+            # the Judge result or scoring path.
+            "judge_request": judge_request.to_dict(),
             "control": control.manifest(),
             "camera_acquisition": {
                 "requested_policy": control.camera_acquisition_policy,
@@ -329,9 +509,45 @@ def build_evaluation_audit(
                     rounds_used=rounds_used,
                     total_images_acquired=total_images_acquired,
                 ),
+                "ledger": deepcopy(acquisition_ledger),
             },
-            "experiment_telemetry": telemetry.to_dict(
-                stop_reason=stop_reason
+            "experiment_telemetry": telemetry_value,
+            "preview_renderer_invoked": (
+                int(telemetry_value.get("preview_render_count") or 0)
+                > 0
+            ),
+            "preview_render_count": int(
+                telemetry_value.get("preview_render_count") or 0
+            ),
+            "final_render_count": int(
+                telemetry_value.get("full_render_count") or 0
+            ),
+            "production_camera_selector_backend": (
+                vlm_selection_events[-1].get("selector_backend")
+                if vlm_selection_events
+                else None
+            ),
+            "effective_vlm_selection_mode": (
+                vlm_selection_events[-1].get("selection_mode")
+                if vlm_selection_events
+                else None
+            ),
+            "semantic_selection_triggered": any(
+                item.get("reason")
+                == "semantic_selection_required"
+                for item in telemetry_value.get("events", [])
+                if isinstance(item, dict)
+                and item.get("kind") == "camera_escalation"
+            ),
+            "trusted_candidate_count": (
+                int(bank_events[-1].get("candidate_count") or 0)
+                if bank_events
+                else 0
+            ),
+            "group_id": group_scope.get("group_id"),
+            "focus_target_ids": focus_target_ids,
+            "authoritative_group_member_ids": list(
+                group_scope.get("member_ids") or []
             ),
             "selector_backend": str(
                 getattr(
@@ -369,6 +585,7 @@ def build_evaluation_audit(
             "model": judge_provenance.get("model"),
             "endpoint": judge_provenance.get("endpoint"),
             "judge_provenance": judge_provenance,
+            "evidence_sufficiency_loop": evidence_sufficiency_loop,
             "rounds_used": rounds_used,
             "selector_calls_used": selector_calls,
             "camera_actions_used": actions_used,
@@ -394,9 +611,168 @@ def build_evaluation_audit(
                 control,
                 stop_reason,
             ),
+            "terminal_forced_choice": (
+                {
+                    "applied": True,
+                    "ambiguity_before_forcing": bool(
+                        forced_choice.get(
+                            "ambiguity_before_forcing"
+                        )
+                    ),
+                    "trigger_stop_reason": forced_choice.get(
+                        "budget_trigger_stop_reason"
+                    ),
+                    "original_evidence_request": deepcopy(
+                        forced_choice.get(
+                            "original_evidence_request"
+                        )
+                    ),
+                    "final_status": final_status,
+                }
+                if forced_choice is not None
+                else {"applied": False}
+            ),
+            "degraded_terminal_choice": (
+                {
+                    "applied": True,
+                    "trigger_stop_reason": degraded_choice.get(
+                        "trigger_stop_reason"
+                    ),
+                    "failure_kind": degraded_choice.get("failure_kind"),
+                    "selection_stage": degraded_choice.get(
+                        "selection_stage"
+                    ),
+                    "retained_prior_evidence": True,
+                    "retained_evidence": deepcopy(
+                        degraded_choice.get("retained_evidence") or []
+                    ),
+                    "final_status": final_status,
+                }
+                if degraded_choice is not None
+                else {"applied": False}
+            ),
+            "budget_exhaustion_forced_choice": (
+                {
+                    "applied": True,
+                    "trigger": forced_choice.get(
+                        "budget_trigger_stop_reason"
+                    ),
+                    "ambiguity_before_forcing": bool(
+                        forced_choice.get(
+                            "ambiguity_before_forcing"
+                        )
+                    ),
+                    "pre_force_judge_status": forced_choice.get(
+                        "pre_force_judge_status"
+                    ),
+                    "pre_force_evidence_request": deepcopy(
+                        forced_choice.get(
+                            "pre_force_evidence_request"
+                        )
+                    ),
+                    "pre_force_reason": forced_choice.get(
+                        "pre_force_reason"
+                    ),
+                    "available_image_count": int(
+                        forced_choice.get(
+                            "available_image_count"
+                        )
+                        or 0
+                    ),
+                    "final_verdict": forced_choice.get(
+                        "final_forced_verdict",
+                        final_status,
+                    ),
+                    "final_confidence": forced_choice.get(
+                        "final_forced_confidence",
+                        final_confidence,
+                    ),
+                    "evidence_artifacts": deepcopy(
+                        forced_choice.get(
+                            "evidence_artifacts_at_forcing"
+                        )
+                        or []
+                    ),
+                }
+                if forced_choice is not None
+                else {"applied": False}
+            ),
             "trace": deepcopy(trace),
         }
     )
+
+
+def _evidence_sufficiency_loop_summary(
+    trace: list[dict[str, Any]],
+    *,
+    final_status: str,
+    stop_reason: str,
+    rounds_used: int,
+) -> dict[str, Any]:
+    """Project the controller-wide Judge/evidence loop for audit only."""
+
+    judge_events = [
+        item
+        for item in trace
+        if isinstance(item, dict)
+        and item.get("stage") == "judge"
+        and isinstance(item.get("result"), dict)
+    ]
+    judge_statuses = [
+        str(item["result"].get("status") or "")
+        for item in judge_events
+    ]
+    planner_events = [
+        item
+        for item in trace
+        if isinstance(item, dict)
+        and item.get("stage") == "acquisition_planner"
+    ]
+    render_events = [
+        item
+        for item in trace
+        if isinstance(item, dict)
+        and item.get("stage") == "render"
+        and item.get("status") == "completed"
+    ]
+    selector_stages = list(
+        dict.fromkeys(
+            str(item.get("selection_stage") or "")
+            for item in trace
+            if isinstance(item, dict)
+            and item.get("stage") == "camera_selector"
+            and str(item.get("selection_stage") or "").strip()
+        )
+    )
+    need_more_count = sum(
+        status == "need_more_evidence" for status in judge_statuses
+    )
+    return {
+        "schema_version": "evidence_sufficiency_loop_v1",
+        "scope": "all_controller_mediated_judge_stages",
+        "state": (
+            "not_required"
+            if need_more_count == 0
+            else "resolved"
+            if final_status in {"valid", "invalid"}
+            else "pending"
+        ),
+        "judge_status_sequence": judge_statuses,
+        "judge_call_count": len(judge_events),
+        "need_more_evidence_count": need_more_count,
+        "acquisition_episode_count": len(planner_events),
+        "completed_render_round_count": len(render_events),
+        "rounds_used": int(rounds_used),
+        "selector_stages_used": selector_stages,
+        "fallback_order": [
+            "deterministic_camera_selection",
+            "vlm_semantic_camera_selection",
+            "all_available_context_bounded_visuals_forced_choice",
+        ],
+        "final_status": final_status,
+        "stop_reason": stop_reason,
+        "decision_authority": "judge_only",
+    }
 
 
 def record_selector_failure(
@@ -429,7 +805,14 @@ def record_selector_failure(
         selected_plan_id=None,
         selector_backend=str(getattr(selector, "backend", stage)),
         selection_mode=(
-            control.vlm_selection_mode if stage == "vlm" else None
+            str(
+                selection_request.context.get(
+                    "vlm_selection_mode",
+                    control.vlm_selection_mode,
+                )
+            )
+            if stage == "vlm"
+            else None
         ),
         vlm_call_count=(
             provenance_count(
@@ -506,9 +889,19 @@ def record_camera_selection(
         selected_view_ids=selection.selected_view_ids,
         attempted_plan_ids=selection.attempted_plan_ids,
         selected_plan_id=selection.selected_plan_id,
-        selector_backend=selection.backend,
+        selector_backend=str(
+            selection.provenance.get("selector_backend")
+            or selection.backend
+        ),
         selection_mode=(
-            control.vlm_selection_mode if stage == "vlm" else None
+            str(
+                selection_request.context.get(
+                    "vlm_selection_mode",
+                    control.vlm_selection_mode,
+                )
+            )
+            if stage == "vlm"
+            else None
         ),
         vlm_call_count=(
             provenance_count(
@@ -590,6 +983,7 @@ def _evidence_recovery_outcome(
 render_result_with_audit = _render_result_with_audit
 evidence_content_identity = _evidence_content_identity
 evidence_fingerprint = _evidence_fingerprint
+evidence_artifact_refs = _evidence_artifact_refs
 evidence_refs = _evidence_refs
 jsonable = _jsonable
 rendered_evidence_refs = _rendered_evidence_refs

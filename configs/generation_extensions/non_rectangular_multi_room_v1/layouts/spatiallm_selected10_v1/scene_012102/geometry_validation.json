@@ -1,0 +1,63 @@
+{
+  "adjacency": {
+    "component_count": 1,
+    "components": [
+      [
+        "room_000",
+        "room_001",
+        "room_002"
+      ]
+    ],
+    "connected": true,
+    "edges": [
+      {
+        "polygon_distance_m": 0.23999999999999977,
+        "room_a": "room_000",
+        "room_b": "room_001"
+      },
+      {
+        "polygon_distance_m": 0.23999999999999977,
+        "room_a": "room_000",
+        "room_b": "room_002"
+      }
+    ],
+    "policy": "polygon_distance_leq_0.35m_v1",
+    "threshold_m": 0.35
+  },
+  "angled_wall_segment_count": 0,
+  "architecture_check": {
+    "compiled": true,
+    "exact_shared_wall_count": 0,
+    "logical_wall_count": 18,
+    "near_or_partial_wall_pairing_applied": false,
+    "physical_wall_count": 18
+  },
+  "concave_room_count": 1,
+  "coordinates_rounded": false,
+  "coordinates_transformed": false,
+  "excluded_from_layout": [
+    "door",
+    "window",
+    "bbox",
+    "point_cloud",
+    "room_type"
+  ],
+  "geometry_repair_applied": false,
+  "layout_id": "scene_012102",
+  "minimum_edge_length_m": 0.2400000000000002,
+  "room_count": 3,
+  "room_layout_sha256": "8372d249f155840848af822fe68dc23c549a55fee5bebd1658a0992542c5fc1f",
+  "schema_version": "spatiallm_room_layout_conversion_report_v1",
+  "strong_concave_room_count": 0,
+  "total_floor_area_m2": 49.26592870617676,
+  "valid": true,
+  "wall_height_m": {
+    "max": 2.796969939787285,
+    "min": 2.499975480184574
+  },
+  "wall_segment_count": 18,
+  "wall_thickness_m": {
+    "max": 0.0,
+    "min": 0.0
+  }
+}

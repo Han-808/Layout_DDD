@@ -14,14 +14,24 @@ JUDGE_MODEL="${JUDGE_MODEL:-gpt-5.6-sol}"
 JUDGE_API_KEY_ENV="${JUDGE_API_KEY_ENV:-LITELLM_MASTER_KEY}"
 PHASE="${PHASE:-all}"
 RESUME="${RESUME:-1}"
+ALLOW_DEPRECATED_GROUPING_COMPARISON="${ALLOW_DEPRECATED_GROUPING_COMPARISON:-0}"
 
 case "$PHASE" in
-  all|prepare|render|group|review) ;;
+  all|prepare|render|group|review|score) ;;
   *)
-    echo "PHASE must be all, prepare, render, group, or review" >&2
+    echo "PHASE must be all, prepare, render, group, review, or score" >&2
     exit 2
     ;;
 esac
+
+if [[ "$PHASE" == "all" || "$PHASE" == "group" ]]; then
+  if [[ "$ALLOW_DEPRECATED_GROUPING_COMPARISON" != "1" ]]; then
+    echo "The topology/anchor/VLM blind comparison is deprecated." >&2
+    echo "Canonical grouping uses only the VLM visual-evidence-scope backend." >&2
+    echo "Set ALLOW_DEPRECATED_GROUPING_COMPARISON=1 only for historical replay." >&2
+    exit 2
+  fi
+fi
 
 if [[ ! -x "$PYTHON" ]]; then
   echo "Python is not executable: $PYTHON" >&2
@@ -31,7 +41,7 @@ if [[ ! -f "$CONFIG" ]]; then
   echo "Experiment config is missing: $CONFIG" >&2
   exit 2
 fi
-if [[ "$PHASE" != "prepare" && "$PHASE" != "review" ]]; then
+if [[ "$PHASE" != "prepare" && "$PHASE" != "review" && "$PHASE" != "score" ]]; then
   if [[ ! -x "$BLENDER" ]]; then
     echo "Blender is not executable: $BLENDER" >&2
     exit 2
@@ -63,6 +73,13 @@ fi
   "${resume_args[@]}"
 
 if [[ "$PHASE" == "prepare" ]]; then
+  exit 0
+fi
+
+if [[ "$PHASE" == "score" ]]; then
+  "$PYTHON" scripts/score_grouping_blind30_review.py \
+    --config "$CONFIG" \
+    --output-root "$OUT_ROOT"
   exit 0
 fi
 

@@ -130,6 +130,7 @@ def test_four_camera_ablation_configs_share_the_same_total_budget():
         ),
     }
     totals = []
+    initial_cameras = []
 
     for policy, name in names.items():
         patch = json.loads(
@@ -140,11 +141,44 @@ def test_four_camera_ablation_configs_share_the_same_total_budget():
         resolved = resolve_vlm_evaluation_control(patch)
         assert resolved.camera_acquisition_policy == policy
         assert resolved.vlm_selection_mode == "repair_plan"
+        initial_cameras.append(
+            resolved.to_dict()["initial_group_camera"]
+        )
+        assert resolved.sources[
+            "initial_group_camera.mode"
+        ] == "config"
+        assert resolved.sources[
+            "initial_group_camera.selector"
+        ] == "config"
         totals.append(
             resolved.to_dict()["camera_acquisition"]["total"]
         )
 
     assert totals == [totals[0]] * len(totals)
+    assert initial_cameras == [
+        {
+            "mode": "visibility_ranked",
+            "selector": "deterministic",
+        }
+    ] * len(initial_cameras)
+
+
+@pytest.mark.parametrize(
+    "initial_camera",
+    [
+        {"mode": "query_cov"},
+        {"selector": "vlm"},
+    ],
+)
+def test_official_initial_group_camera_rejects_active_selection(
+    initial_camera: dict,
+) -> None:
+    value = {"initial_group_camera": initial_camera}
+
+    with pytest.raises(Exception):
+        _validate(value)
+    with pytest.raises(ValueError, match="initial_group_camera"):
+        resolve_vlm_evaluation_control(value)
 
 
 def test_additive_partial_config_overrides_only_explicit_fields() -> None:
@@ -158,7 +192,7 @@ def test_additive_partial_config_overrides_only_explicit_fields() -> None:
             "max_evidence_rounds": 1,
             "max_total_images": 4,
         },
-        "on_selector_failure": "unresolved",
+        "on_selector_failure": "keep_previous_evidence",
     }
     _validate(patch)
 
@@ -174,10 +208,18 @@ def test_additive_partial_config_overrides_only_explicit_fields() -> None:
     assert resolved.max_evidence_rounds == 1
     assert resolved.max_total_images == 4
     assert resolved.max_views_per_round == 2
-    assert resolved.on_selector_failure == "unresolved"
+    assert resolved.on_budget_exhausted == "force_choice"
+    assert resolved.on_selector_failure == "keep_previous_evidence"
     assert resolved.sources["camera_selector.backend"] == "config"
     assert resolved.sources["budgets.max_total_images"] == "config"
     assert resolved.sources["budgets.max_views_per_round"] == "default"
+
+
+def test_selector_failure_policy_cannot_reopen_scientific_unresolved() -> None:
+    with pytest.raises(ValueError, match="on_selector_failure"):
+        resolve_vlm_evaluation_control(
+            {"on_selector_failure": "unresolved"}
+        )
 
 
 def test_old_or_empty_config_missing_new_fields_remains_valid() -> None:
@@ -185,9 +227,9 @@ def test_old_or_empty_config_missing_new_fields_remains_valid() -> None:
         _validate(patch)
         resolved = resolve_vlm_evaluation_control(patch)
         assert resolved.schema_version == VLM_EVALUATION_CONTROL_VERSION
-        assert resolved.max_evidence_rounds == 2
+        assert resolved.max_evidence_rounds == 3
         assert resolved.max_views_per_round == 2
-        assert resolved.max_total_images == 6
+        assert resolved.max_total_images == 8
         assert resolved.evidence_gate_allow_path_only_compatibility is False
 
 
@@ -310,11 +352,11 @@ def test_existing_backend_inherits_provider_view_and_action_limits() -> None:
         == "existing_camera_provider"
     )
     assert resolved.requested["budgets"] == {
-        "max_evidence_rounds": 2,
+        "max_evidence_rounds": 3,
         "max_views_per_round": 2,
-        "max_total_images": 6,
-        "max_camera_actions": 2,
-        "max_selector_calls": 3,
+        "max_total_images": 8,
+        "max_camera_actions": 3,
+        "max_selector_calls": 4,
     }
 
 
@@ -326,8 +368,8 @@ def test_non_existing_backend_does_not_inherit_provider_limits() -> None:
     )
 
     assert resolved.max_views_per_round == 2
-    assert resolved.max_camera_actions == 2
-    assert resolved.max_selector_calls == 3
+    assert resolved.max_camera_actions == 3
+    assert resolved.max_selector_calls == 4
 
 
 def test_explicit_budget_overrides_take_precedence_over_existing_provider() -> None:
@@ -369,15 +411,15 @@ def test_existing_backend_falls_back_to_deterministic_without_selector() -> None
     assert resolved.requested["camera_selector"]["backend"] == "existing"
 
 
-def test_judge_max_images_caps_effective_total_without_rewriting_request() -> None:
+def test_judge_packet_limit_does_not_rewrite_acquisition_total() -> None:
     resolved = resolve_vlm_evaluation_control(
         {"budgets": {"max_total_images": 6}},
         judge_max_images=4,
     )
 
-    assert resolved.max_total_images == 4
+    assert resolved.max_total_images == 6
     assert resolved.requested["budgets"]["max_total_images"] == 6
-    assert resolved.sources["budgets.max_total_images"] == "judge_capacity"
+    assert resolved.sources["budgets.max_total_images"] == "config"
 
 
 def test_manifest_records_requested_effective_and_sources() -> None:
@@ -408,7 +450,7 @@ def test_manifest_records_requested_effective_and_sources() -> None:
     assert manifest["effective"]["budgets"] == {
         "max_evidence_rounds": 1,
         "max_views_per_round": 3,
-        "max_total_images": 5,
+        "max_total_images": 6,
         "max_camera_actions": 2,
         "max_selector_calls": 3,
     }
@@ -418,7 +460,7 @@ def test_manifest_records_requested_effective_and_sources() -> None:
         manifest["sources"]["budgets.max_views_per_round"]
         == "existing_camera_provider"
     )
-    assert manifest["sources"]["budgets.max_total_images"] == "judge_capacity"
+    assert manifest["sources"]["budgets.max_total_images"] == "config"
     assert (
         manifest["sources"]["judge.allow_need_more_evidence"]
         == "dependency_injection"
@@ -438,6 +480,7 @@ def test_manifest_records_requested_effective_and_sources() -> None:
         {"budgets": {"max_views_per_round": 0}},
         {"budgets": {"max_total_images": True}},
         {"on_budget_exhausted": "raise"},
+        {"on_budget_exhausted": "unresolved"},
     ],
 )
 def test_schema_rejects_values_the_resolver_does_not_support(

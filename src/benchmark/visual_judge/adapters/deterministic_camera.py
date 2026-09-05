@@ -29,6 +29,7 @@ from benchmark.visual_judge.camera_targets import (
 from benchmark.visual_judge.interfaces.camera import (
     CameraSelectionRequest,
     CameraSelectionResult,
+    TrustedCameraCandidateBank,
 )
 
 
@@ -41,10 +42,235 @@ DETERMINISTIC_SUPPORTED_OBSERVATIONS = frozenset(
         "joint_visibility",
     }
 )
+SEMANTIC_SELECTION_OBSERVATIONS = frozenset(
+    {
+        "group_context_visible",
+        "interaction_side_visible",
+        "limited_local_context",
+        "front_back_disambiguated",
+    }
+)
 
 
 class NoFeasibleCameraCandidates(ValueError):
     """Normal geometry-search exhaustion from an injected candidate generator."""
+
+
+class TrustedTechnicalCameraCandidateBankBuilder:
+    """Generate and validate the reusable technical bank for one repair episode."""
+
+    backend = "deterministic_technical_candidate_bank"
+
+    def __init__(
+        self,
+        *,
+        candidate_generator: Callable[..., list[dict[str, Any]]] = (
+            generate_camera_pose_candidates
+        ),
+        candidate_policy: str = DEFAULT_CAMERA_CANDIDATE_POLICY,
+        feature_enricher: (
+            Callable[
+                [dict[str, Any], CameraSelectionRequest],
+                dict[str, Any],
+            ]
+            | None
+        ) = None,
+        ranking_config: (
+            DeterministicCameraRankingConfig
+            | Mapping[str, Any]
+            | None
+        ) = None,
+    ) -> None:
+        if not callable(candidate_generator):
+            raise TypeError(
+                "trusted candidate_generator must be callable"
+            )
+        self.candidate_generator = candidate_generator
+        self.candidate_policy = normalize_camera_candidate_policy(
+            candidate_policy
+        )
+        self.feature_enricher = feature_enricher
+        self.ranking_config = DeterministicCameraRankingConfig.from_value(
+            ranking_config
+        )
+
+    def build(
+        self,
+        request: CameraSelectionRequest,
+        *,
+        constraints: CameraConstraintSet | None = None,
+    ) -> TrustedCameraCandidateBank:
+        if not isinstance(request, CameraSelectionRequest):
+            raise TypeError(
+                "trusted candidate bank requires CameraSelectionRequest"
+            )
+        resolved_constraints = constraints or CameraConstraintSet.from_value(
+            request.constraints,
+            known_target_ids=_known_target_ids(request),
+        )
+        started = perf_counter()
+        if request.candidate_views:
+            raw_candidates = list(deepcopy(request.candidate_views))
+            source = "controller_candidate_bank"
+            generation_outcome = "provided"
+            generation_error = None
+        else:
+            generation_error: str | None = None
+            try:
+                raw_candidates = self.candidate_generator(
+                    _candidate_generation_request(
+                        request,
+                        constraints=resolved_constraints,
+                    ),
+                    max_candidates=_positive_int(
+                        request.budget.get("candidate_budget", 8),
+                        "trusted candidate_budget",
+                    ),
+                    policy=self.candidate_policy,
+                )
+            except NoFeasibleCameraCandidates as exc:
+                raw_candidates = []
+                generation_error = f"{type(exc).__name__}: {exc}"
+            except ValueError as exc:
+                if not _is_explicit_geometry_exhaustion(exc):
+                    raise
+                raw_candidates = []
+                generation_error = f"{type(exc).__name__}: {exc}"
+            if not isinstance(raw_candidates, list) or not all(
+                isinstance(candidate, dict)
+                for candidate in raw_candidates
+            ):
+                raise TypeError(
+                    "trusted candidate_generator must return a list of "
+                    "candidate mappings"
+                )
+            source = (
+                f"{self.candidate_generator.__module__}."
+                f"{self.candidate_generator.__qualname__}"
+            )
+            generation_outcome = (
+                "generated"
+                if raw_candidates
+                else "no_feasible_candidate"
+                if generation_error is not None
+                else "empty_candidate_bank"
+            )
+        raw_candidates = raw_candidates[
+            : _positive_int(
+                request.budget.get("candidate_budget", 8),
+                "trusted candidate_budget",
+            )
+        ]
+
+        technical_constraints = _technical_bank_constraints(
+            resolved_constraints
+        )
+        attempted_before = {
+            str(value)
+            for value in request.context.get("attempted_view_ids", [])
+            if str(value).strip()
+        }
+        rejected: list[dict[str, Any]] = []
+        ranked: list[
+            tuple[float, str, dict[str, Any], dict[str, Any]]
+        ] = []
+        seen: set[str] = set()
+        validation_request = replace(
+            request,
+            constraints=technical_constraints.to_dict(),
+        )
+        for raw_candidate in raw_candidates:
+            candidate_id = str(
+                raw_candidate.get("id") or ""
+            ).strip()
+            if not candidate_id or candidate_id in seen:
+                raise ValueError(
+                    "trusted candidate IDs must be unique and non-empty"
+                )
+            seen.add(candidate_id)
+            features = _candidate_features(
+                raw_candidate,
+                request=validation_request,
+                constraints=technical_constraints,
+            )
+            if self.feature_enricher is not None:
+                enriched = self.feature_enricher(
+                    deepcopy(raw_candidate),
+                    validation_request,
+                )
+                if not isinstance(enriched, dict):
+                    raise ValueError(
+                        "trusted feature_enricher must return a mapping"
+                    )
+                features.update(deepcopy(enriched))
+            reasons = _candidate_bank_rejection_reasons(
+                raw_candidate,
+                constraints=technical_constraints,
+                attempted_before=attempted_before,
+                features=features,
+            )
+            if reasons:
+                rejected.append(
+                    {
+                        "candidate_id": candidate_id,
+                        "reason_codes": reasons,
+                        "failed_constraints": _failed_constraints(
+                            reasons,
+                            constraints=technical_constraints,
+                        ),
+                        "features": features,
+                    }
+                )
+                continue
+            candidate = _trusted_candidate_record(
+                raw_candidate,
+                request=request,
+                constraints=resolved_constraints,
+                features=features,
+            )
+            score = _candidate_score(
+                features,
+                constraints=technical_constraints,
+                ranking=self.ranking_config,
+            )
+            ranked.append(
+                (
+                    -score,
+                    candidate_id,
+                    candidate,
+                    {**features, "ranking_score": score},
+                )
+            )
+        ranked.sort(key=lambda item: (item[0], item[1]))
+        candidates = tuple(item[2] for item in ranked)
+        return TrustedCameraCandidateBank(
+            candidates=candidates,
+            rejected_candidates=tuple(rejected),
+            backend=self.backend,
+            provenance={
+                "strategy": "existing_local_geometry_validation_v1",
+                "candidate_generation_source": source,
+                "candidate_policy": self.candidate_policy,
+                "generation_outcome": generation_outcome,
+                "generation_error": generation_error,
+                "candidate_count": len(raw_candidates),
+                "filtered_candidate_count": len(candidates),
+                "candidate_generation_time_seconds": max(
+                    0.0, perf_counter() - started
+                ),
+                "candidate_features": {
+                    candidate_id: features
+                    for _, candidate_id, _, features in ranked
+                },
+                "technical_constraints": (
+                    technical_constraints.to_dict()
+                ),
+                "semantic_constraints_preserved": (
+                    resolved_constraints.to_dict()
+                ),
+                "group_id": _group_id(request),
+            },
+        )
 
 
 class DeterministicLocalCameraSelector:
@@ -118,6 +344,25 @@ class DeterministicLocalCameraSelector:
             key: str(source_values.get(key) or "default")
             for key in self.ranking_config.to_dict()
         }
+        self.candidate_bank_builder = (
+            TrustedTechnicalCameraCandidateBankBuilder(
+                candidate_generator=self.candidate_generator,
+                candidate_policy=self.candidate_policy,
+                feature_enricher=self.feature_enricher,
+                ranking_config=self.ranking_config,
+            )
+        )
+
+    def build_candidate_bank(
+        self,
+        request: CameraSelectionRequest,
+        *,
+        constraints: CameraConstraintSet | None = None,
+    ) -> TrustedCameraCandidateBank:
+        return self.candidate_bank_builder.build(
+            request,
+            constraints=constraints,
+        )
 
     def select(
         self,
@@ -135,6 +380,20 @@ class DeterministicLocalCameraSelector:
             - DETERMINISTIC_SUPPORTED_OBSERVATIONS
         )
         if unsupported_observations:
+            bank: TrustedCameraCandidateBank | None = None
+            if not request.candidate_views:
+                bank = self.build_candidate_bank(
+                    request,
+                    constraints=constraints,
+                )
+                request = replace(
+                    request,
+                    candidate_views=bank.candidates,
+                    context={
+                        **deepcopy(request.context),
+                        "trusted_candidate_bank": bank.to_dict(),
+                    },
+                )
             candidate_ids = [
                 str(candidate.get("id") or "").strip()
                 for candidate in request.candidate_views
@@ -149,7 +408,7 @@ class DeterministicLocalCameraSelector:
                         {
                             "candidate_id": candidate_id,
                             "reason_codes": [
-                                "observation_not_supported_by_deterministic_selector"
+                                "semantic_selection_required"
                             ],
                             "failed_constraints": unsupported_observations,
                             "features": {
@@ -159,7 +418,7 @@ class DeterministicLocalCameraSelector:
                         for candidate_id in candidate_ids
                     ],
                     "reason_codes": [
-                        "observation_not_supported_by_deterministic_selector"
+                        "semantic_selection_required"
                     ],
                     "reason": (
                         "the deterministic selector cannot verify required "
@@ -172,7 +431,21 @@ class DeterministicLocalCameraSelector:
                             DETERMINISTIC_SUPPORTED_OBSERVATIONS
                         ),
                         "unsupported_observations": unsupported_observations,
-                        "candidate_generation_skipped": True,
+                        "candidate_generation_skipped": (
+                            not bool(request.candidate_views)
+                        ),
+                        "trusted_candidate_count": len(
+                            request.candidate_views
+                        ),
+                        "trusted_candidate_bank": (
+                            bank.to_dict()
+                            if bank is not None
+                            else deepcopy(
+                                request.context.get(
+                                    "trusted_candidate_bank"
+                                )
+                            )
+                        ),
                     },
                 },
                 request=request,
@@ -503,6 +776,7 @@ def _candidate_generation_request(
     except ValueError:
         resolved_mode = "visibility_ranked"
     group_scope = request.context.get("group_scope")
+    target_scope = request.context.get("target_scope")
     event = deepcopy(request.context.get("event") or {})
     if isinstance(group_scope, dict):
         event.setdefault("group_id", group_scope.get("group_id"))
@@ -514,6 +788,17 @@ def _candidate_generation_request(
             "object_ids",
             list(group_scope.get("member_ids") or constraints.target_ids),
         )
+    elif isinstance(target_scope, dict):
+        event.setdefault("target_id", target_scope.get("target_id"))
+        event.setdefault(
+            "focus_region",
+            deepcopy(target_scope.get("target_bounds")),
+        )
+        event.setdefault(
+            "object_ids",
+            list(target_scope.get("framing_ids") or constraints.target_ids),
+        )
+    functional_repair = request.context.get("functional_repair")
     return {
         "metric": request.metric,
         "scene": deepcopy(request.scene),
@@ -522,6 +807,11 @@ def _candidate_generation_request(
         "group_scope": (
             deepcopy(group_scope)
             if isinstance(group_scope, dict)
+            else None
+        ),
+        "target_scope": (
+            deepcopy(target_scope)
+            if isinstance(target_scope, dict)
             else None
         ),
         "target_bounds": deepcopy(
@@ -537,11 +827,115 @@ def _candidate_generation_request(
             request.context.get("detector_evidence") or {}
         ),
         "event": event,
+        **(
+            {"functional_repair": deepcopy(functional_repair)}
+            if isinstance(functional_repair, dict)
+            else {}
+        ),
         "_resolved_camera_pose_mode": resolved_mode,
         "_camera_render": deepcopy(
             request.context.get("camera_render") or {}
         ),
     }
+
+
+def _technical_bank_constraints(
+    constraints: CameraConstraintSet,
+) -> CameraConstraintSet:
+    """Return only measurements backed by the current local geometry contract."""
+
+    required = ["target_visible"]
+    if (
+        "joint_visibility" in constraints.required_observations
+        or "joint_visibility" in constraints.preserved_observations
+        or constraints.require_joint_visibility
+    ):
+        required.append("joint_visibility")
+    preserved = tuple(
+        value
+        for value in constraints.preserved_observations
+        if value in DETERMINISTIC_SUPPORTED_OBSERVATIONS
+        and value not in required
+    )
+    return CameraConstraintSet(
+        target_ids=constraints.target_ids,
+        required_observations=tuple(required),
+        preserved_observations=preserved,
+        preferred_view_families=constraints.preferred_view_families,
+        forbidden_view_families=constraints.forbidden_view_families,
+        min_projected_coverage=constraints.min_projected_coverage,
+        require_joint_visibility=("joint_visibility" in required),
+        require_global_anchor=False,
+        relaxable_constraints=tuple(
+            value
+            for value in constraints.relaxable_constraints
+            if value
+            in {
+                "target_visible",
+                "joint_visibility",
+                "min_projected_coverage",
+                "require_joint_visibility",
+            }
+        ),
+        metric=constraints.metric,
+        view_goal=constraints.view_goal,
+        metadata={
+            "source": "trusted_technical_candidate_bank",
+            "original_required_observations": list(
+                constraints.required_observations
+            ),
+        },
+    )
+
+
+def _trusted_candidate_record(
+    candidate: dict[str, Any],
+    *,
+    request: CameraSelectionRequest,
+    constraints: CameraConstraintSet,
+    features: dict[str, Any],
+) -> dict[str, Any]:
+    """Add the stable bank schema without removing legacy pose fields."""
+
+    result = deepcopy(candidate)
+    pose = {
+        "location": list(candidate["location"]),
+        "target": list(candidate["target"]),
+        "lens_mm": float(candidate["lens_mm"]),
+        "camera_type": str(
+            candidate.get("camera_type") or "PERSP"
+        ),
+    }
+    if candidate.get("up") is not None:
+        pose["up"] = list(candidate["up"])
+    result.update(
+        {
+            "pose": pose,
+            "target_ids": list(constraints.target_ids),
+            "group_id": _group_id(request),
+            "technical_feasibility": True,
+            "target_visibility_estimate": features.get(
+                "target_visibility_estimate"
+            ),
+            "joint_visibility_estimate": features.get(
+                "joint_visibility_estimate"
+            ),
+            "projected_coverage_estimate": features.get(
+                "projected_coverage_estimate"
+            ),
+            "view_family": features.get("view_family"),
+            "technical_features": deepcopy(features),
+        }
+    )
+    return result
+
+
+def _group_id(request: CameraSelectionRequest) -> str | None:
+    scope = request.context.get("group_scope")
+    if not isinstance(scope, dict):
+        return None
+    value = str(scope.get("group_id") or "").strip()
+    return value or None
 
 
 def _candidate_rejection_reasons(
@@ -600,6 +994,47 @@ def _candidate_rejection_reasons(
             reasons.append("joint_visibility_unverified")
         elif joint_visibility is False:
             reasons.append("joint_visibility_unavailable")
+    return list(dict.fromkeys(reasons))
+
+
+def _candidate_bank_rejection_reasons(
+    candidate: dict[str, Any],
+    *,
+    constraints: CameraConstraintSet,
+    attempted_before: set[str],
+    features: dict[str, Any],
+) -> list[str]:
+    """Reject only poses that cannot enter the trusted technical bank.
+
+    This boundary validates camera geometry, not evidence sufficiency. Proxy
+    framing, visibility, joint visibility, and coverage remain audited
+    features for the deterministic/VLM selectors and the post-render Judge.
+    Treating an unresolved proxy as an invalid pose used to empty the bank
+    before the Controller could execute its deterministic-to-VLM cascade.
+    """
+
+    candidate_id = str(candidate.get("id") or "")
+    reasons: list[str] = []
+    if candidate_id in attempted_before:
+        reasons.append("candidate_already_attempted")
+    if features.get("camera_pose_verifiable") is not True:
+        reasons.append("camera_pose_unverifiable")
+    if features.get("geometry_feasibility_verified") is not True:
+        reasons.append("geometry_feasibility_unverified")
+    elif features.get("geometry_feasibility") is False:
+        reasons.append("geometry_infeasible")
+    family = _view_family(candidate)
+    if (
+        constraints.forbidden_view_families
+        and family in constraints.forbidden_view_families
+    ):
+        reasons.append("forbidden_view_family")
+    if (
+        constraints.preferred_view_families
+        and candidate.get("strict_view_family") is True
+        and family not in constraints.preferred_view_families
+    ):
+        reasons.append("required_view_family_missing")
     return list(dict.fromkeys(reasons))
 
 

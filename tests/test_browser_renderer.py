@@ -275,6 +275,17 @@ def test_controlled_style_local_bank_is_frozen_and_provider_only_returns_evidenc
     )
     assert len(result["render_evidence_items"]) == 2
 
+    group_result = frozen.provide_scene_quality_evidence(
+        {
+            "metric": "style_consistency",
+            "evidence_scope": "group_local",
+            "object_ids": ["cube_0000", "cube_0001"],
+            "evidence_policy": {"image_budget": 1},
+        }
+    )
+    assert group_result["status"] == "available"
+    assert group_result["render_evidence_items"][0]["role"] == "group_local"
+
 
 def test_visual_focus_uses_rotated_world_bounds_and_ignores_flat_ground() -> None:
     scene = {

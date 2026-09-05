@@ -1,0 +1,1397 @@
+from __future__ import annotations
+
+import base64
+from copy import deepcopy
+from io import BytesIO
+import json
+from pathlib import Path
+from typing import Any, Mapping
+
+from benchmark.models import OpenAICompatibleModel, parse_json_object
+from benchmark.visual_judge.functional_discovery import (
+    discover_openai_compatible_functional_evidence,
+)
+from benchmark.visual_judge.functional_evidence import (
+    plan_openai_compatible_functional_evidence,
+)
+from benchmark.visual_judge.placement_discovery import (
+    discover_openai_compatible_placement_evidence,
+)
+from benchmark.visual_judge.roles import (
+    DecisionContract,
+    VLMRole,
+    vlm_audit_metadata,
+)
+from benchmark.visual_judge.interfaces.camera import (
+    EvidenceReadinessRequest,
+    EvidenceReadinessResult,
+)
+from benchmark.visual_judge.usable_surface import (
+    decode_openai_compatible_usable_surface,
+)
+
+
+CAMERA_SELECTOR_PROMPT_VERSION = "camera_selector_compact_context_v8"
+CAMERA_SELECTOR_CONTEXT_COMPACTION_VERSION = (
+    "camera_selector_context_compaction_v1"
+)
+
+CAMERA_SELECTOR_SYSTEM_PROMPT = """You select visual evidence. You do not judge
+the benchmark metric.
+
+Follow selection_mode exactly. Never output a verdict, validity assessment,
+quality assessment, defect, score, confidence, group membership, scene edit,
+or untrusted camera action.
+
+Use camera_constraints.required_observations as the complete selection goal.
+Do not add new observation requirements and do not infer that a target is
+defective because a view was requested.
+
+For candidate_only:
+
+1. Consider only the supplied trusted candidate views.
+2. Evaluate candidates in this priority order:
+   a. visibility of every target required by target_ids;
+   b. required joint visibility;
+   c. visibility and disambiguation of the specifically requested operational
+      connection, support, architecture, functional frontage, interaction side, approach
+      zone, depth, or group-context observation;
+   d. sufficient target framing and projected coverage;
+   e. preservation of required context or global anchor;
+   f. non-redundancy with existing visual evidence.
+3. Select the smallest number of views that jointly covers the required
+   observations, never exceeding the supplied per-round view budget.
+4. If one candidate satisfies all required observations, select only that
+   candidate.
+5. Select multiple candidates only when they provide complementary required
+   observations that no single candidate provides.
+6. Metadata values marked null, unknown, or unavailable are not negative
+   evidence; inspect the preview instead.
+7. If candidates are indistinguishable under these rules, select the earliest
+   candidate in the supplied candidate_views order.
+8. Return selected IDs in evidence-priority order.
+
+For functional evidence, select views that expose the usable or interaction
+side and the outward space that side faces. A close view that hides the outward
+space is inferior to a slightly wider view that makes orientation and approach
+clear. When functional_probe.observation_goals contains multiple neutral
+goals, treat all of them as one joint framing requirement; do not ignore a
+secondary goal or treat any goal as evidence of a defect. When
+usable_surface_hypotheses are supplied, use their trusted local
+side IDs only as surface-observation hypotheses; do not reinterpret them as a
+metric conclusion. An ambiguous hypothesis requires complementary visibility
+rather than guessing one side. When functional_repair.usable_side_fallback is
+true, candidate views are deterministic object-centric side comparisons. Pick
+the smallest complementary set that disambiguates the unresolved target sides;
+for multiple endpoints, cover a previously unseen endpoint before repeating an
+already exposed side. For functional_correspondence, all relevant
+participants must be jointly interpretable. When relation_predicates includes
+directional_correspondence, expose the relevant functional sides and their
+relative directions. When it contains only relative_use_geometry, expose the
+    relative position, reach, coordinated-operation, or operational-connection
+    region without inventing a usable-side requirement. Static support/contact
+    alone belongs to L1 or semantic placement, not this relation. When
+architecture_plane_visible is required for a functional request, jointly show
+the decoded usable or control side, the nearest authoritative logical boundary
+or visible floor extent, and the interior-side user approach and operating
+region. Physical wall geometry may be absent by policy; do not require or
+invent a wall, and do not treat background outside the room footprint as usable
+floor space.
+
+For repair_plan:
+
+1. Select only a supplied trusted_plan_id.
+2. Prefer a plan that satisfies all non-relaxable constraints.
+3. Then prefer fewer relaxed constraints, preservation of more required
+   observations, lower estimated cost, and finally earlier supplied plan order.
+4. Never modify the selected plan.
+
+For freeform_pose, return a proposal only when this mode is explicitly enabled.
+The proposal is unvalidated and must not be described as feasible or
+sufficient.
+
+candidate_only response:
+{"selected_view_ids":["trusted_candidate_id"],"reason":"...",
+"provenance":{}}
+
+repair_plan response:
+{"selected_plan_id":"trusted_plan_id","reason":"...","provenance":{}}
+
+freeform_pose response:
+{"camera_proposal":{"location":[0,0,0],"target":[0,0,0],
+"lens_mm":50,"camera_type":"PERSP"},"reason":"...","provenance":{}}
+
+Return exactly one JSON object and no other fields."""
+
+EVIDENCE_READINESS_PROMPT_VERSION = (
+    "camera_evidence_readiness_soft_contract_v1"
+)
+EVIDENCE_READINESS_SYSTEM_PROMPT = """You are the visual-evidence reviewer
+inside a CameraSelector. You do not judge the benchmark metric.
+
+Review only whether the supplied images give a reasonable visual basis for the
+single typed check and its declared required_observations. Never output a
+validity judgement, defect, score, confidence, causal attribution, new check,
+or scene edit. Do not use object JSON as a substitute for visible geometry.
+
+Return outcome=pass when the current images make every declared observation
+materially interpretable. Perfect geometric proof is not required: this is a
+soft evidence contract, not a deterministic visibility certificate. Cite the
+image aliases that support the pass and name the visible observations.
+
+Return outcome=acquire only when a material observation remains visually
+unclear. missing_observations must be a non-empty subset of the supplied
+required_observations, and view_goal must describe the smallest useful new
+view. Do not request generic scene coverage when the current packet already
+contains it.
+
+For a usable-side fallback, compare the supplied object-centric opposing views
+and ask for another side-conditioned view only if front/back or interaction-side
+interpretation is still materially unclear. For a directional relation, each
+directed endpoint must be visually interpretable, but the same image may support
+multiple endpoints. For clearance, inspect the approach/opening/operation
+region; do not demand exact collision geometry.
+
+Pass response:
+{"outcome":"pass","supporting_evidence_refs":["image_00"],
+"visible_observations":["declared_observation"],
+"missing_observations":[],"view_goal":"","reason":"...",
+"provenance":{}}
+
+Acquire response:
+{"outcome":"acquire","supporting_evidence_refs":["image_00"],
+"visible_observations":[],
+"missing_observations":["declared_observation"],
+"view_goal":"...","reason":"...","provenance":{}}
+
+Return exactly one JSON object and no other fields."""
+
+_MODE_FIELDS = {
+    "candidate_only": frozenset(
+        {"selected_view_ids", "reason", "provenance"}
+    ),
+    "repair_plan": frozenset(
+        {"selected_plan_id", "reason", "provenance"}
+    ),
+    "freeform_pose": frozenset(
+        {"camera_proposal", "reason", "provenance"}
+    ),
+}
+_FORBIDDEN_DECISION_OR_MUTATION_KEYS = frozenset(
+    {
+        "verdict",
+        "score",
+        "metric_verdict",
+        "metric_score",
+        "scene_mutation",
+        "mutated_scene",
+        "scene_patch",
+    }
+)
+_FORBIDDEN_RESPONSE_KEYS = (
+    _FORBIDDEN_DECISION_OR_MUTATION_KEYS
+    | frozenset(
+        {
+            "status",
+            "group_members",
+            "member_ids",
+        }
+    )
+)
+_EVIDENCE_READINESS_RESPONSE_FIELDS = frozenset(
+    {
+        "outcome",
+        "reason",
+        "supporting_evidence_refs",
+        "visible_observations",
+        "missing_observations",
+        "view_goal",
+        "provenance",
+    }
+)
+
+
+class OpenAICompatibleCameraSelector:
+    """Production transport for one ActiveVLMCameraSelector policy call."""
+
+    backend = "openai_compatible_camera_selector"
+    production_camera_selector_transport = True
+    requires_candidate_previews = True
+
+    def __init__(
+        self,
+        model: OpenAICompatibleModel,
+        *,
+        max_preview_images: int = 8,
+        max_context_chars: int = 30000,
+        response_format_json: bool | None = None,
+    ) -> None:
+        self.model = model
+        self.max_preview_images = _positive_int(
+            max_preview_images,
+            "max_preview_images",
+        )
+        # Legacy P0b providers inspect ``max_images`` and call
+        # ``select_camera_views``.  Keep that public compatibility surface on
+        # the dedicated selector transport so the CLI does not have to build a
+        # metric Judge merely to select camera evidence.
+        self.max_images = self.max_preview_images
+        self.max_context_chars = _positive_int(
+            max_context_chars,
+            "max_context_chars",
+        )
+        self.response_format_json = (
+            bool(getattr(model, "response_format_json", True))
+            if response_format_json is None
+            else bool(response_format_json)
+        )
+        self.last_request_metadata: dict[str, Any] = {}
+
+    def select(self, payload: dict[str, Any]) -> dict[str, Any]:
+        if not isinstance(payload, dict):
+            raise TypeError(
+                "OpenAICompatibleCameraSelector requires a payload mapping"
+            )
+        mode = str(payload.get("selection_mode") or "").strip()
+        if mode not in _MODE_FIELDS:
+            raise ValueError(
+                "camera selector selection_mode must be candidate_only, "
+                "repair_plan, or freeform_pose"
+            )
+        structured = _validated_payload(payload, mode=mode)
+        audit = vlm_audit_metadata(
+            VLMRole.VLM_CAMERA_SELECTOR,
+            decision_contract=DecisionContract.CAMERA_SELECTION,
+            judge_method="select",
+        )
+        structured.update(audit)
+        prompt_payload = _compact_camera_selector_prompt_payload(
+            structured
+        )
+        prompt_context_text = _bounded_json(
+            prompt_payload,
+            limit=self.max_context_chars,
+        )
+        content: list[dict[str, Any]] = [
+            {
+                "type": "text",
+                "text": (
+                    "Select camera evidence from this trusted request.\n"
+                    + prompt_context_text
+                ),
+            }
+        ]
+        preview_aliases: list[str] = []
+        if mode == "candidate_only":
+            candidates = structured["candidate_views"]
+            if len(candidates) > self.max_preview_images:
+                raise ValueError(
+                    "trusted candidate bank exceeds configured preview-image "
+                    "capacity; refusing to silently truncate it"
+                )
+            for candidate in candidates:
+                alias = str(candidate["id"])
+                preview_aliases.append(alias)
+                content.extend(
+                    [
+                        {
+                            "type": "text",
+                            "text": f"Trusted candidate preview: {alias}",
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": _normalized_image_data_url(
+                                    Path(candidate["image_path"]),
+                                    alias=alias,
+                                )
+                            },
+                        },
+                    ]
+                )
+        raw_text = self.model.chat_messages(
+            [
+                {
+                    "role": "system",
+                    "content": CAMERA_SELECTOR_SYSTEM_PROMPT,
+                },
+                {"role": "user", "content": content},
+            ],
+            response_format_json=self.response_format_json,
+            call_type=f"camera_selector_{mode}",
+            case={
+                "case_id": str(
+                    structured.get("group_scope", {}).get("group_id")
+                    if isinstance(
+                        structured.get("group_scope"), dict
+                    )
+                    else structured.get("metric") or "camera_selection"
+                ),
+                "scene_id": str(
+                    structured.get("scene_context", {}).get("scene_id")
+                    if isinstance(structured.get("scene_context"), dict)
+                    else ""
+                ),
+                "objects": (
+                    prompt_payload.get("scene_context", {}).get(
+                        "objects", []
+                    )
+                    if isinstance(
+                        prompt_payload.get("scene_context"), dict
+                    )
+                    else []
+                ),
+            },
+        )
+        response = _validated_response(
+            parse_json_object(raw_text),
+            mode=mode,
+            payload=structured,
+        )
+        response["provenance"] = {
+            **deepcopy(response.get("provenance") or {}),
+            **audit,
+        }
+        self.last_request_metadata = {
+            **audit,
+            "selection_mode": mode,
+            "prompt_version": CAMERA_SELECTOR_PROMPT_VERSION,
+            "context_compaction_version": (
+                CAMERA_SELECTOR_CONTEXT_COMPACTION_VERSION
+            ),
+            "structured_context_chars": len(prompt_context_text),
+            "structured_context_limit": self.max_context_chars,
+            "prompt_scene_object_count": len(
+                (prompt_payload.get("scene_context") or {}).get(
+                    "objects", []
+                )
+            ),
+            "candidate_ids": [
+                str(candidate["id"])
+                for candidate in structured.get("candidate_views", [])
+            ],
+            "preview_aliases": preview_aliases,
+            "trusted_plan_ids": [
+                str(plan["plan_id"])
+                for plan in structured.get(
+                    "trusted_repair_plans", []
+                )
+            ],
+            "model": getattr(self.model, "model_id", None),
+            "endpoint": getattr(self.model, "endpoint", None),
+            "transport": (
+                f"{type(self).__module__}.{type(self).__qualname__}"
+            ),
+        }
+        return response
+
+    def review_evidence_readiness(
+        self,
+        request: EvidenceReadinessRequest | dict[str, Any],
+    ) -> dict[str, Any]:
+        """Review one atomic check's active packet without metric authority."""
+
+        structured_request = _evidence_readiness_request(request)
+        audit = vlm_audit_metadata(
+            VLMRole.VLM_CAMERA_SELECTOR,
+            decision_contract=(
+                DecisionContract.CAMERA_EVIDENCE_READINESS
+            ),
+            judge_method="review_evidence_readiness",
+        )
+        prompt_payload = _compact_evidence_readiness_prompt_payload(
+            structured_request,
+            audit=audit,
+        )
+        prompt_context_text = _bounded_json(
+            prompt_payload,
+            limit=self.max_context_chars,
+        )
+        evidence = list(structured_request.current_visual_evidence)
+        if len(evidence) > self.max_preview_images:
+            raise ValueError(
+                "evidence readiness packet exceeds configured image capacity"
+            )
+        content: list[dict[str, Any]] = [
+            {
+                "type": "text",
+                "text": (
+                    "Review the current visual-evidence packet.\n"
+                    + prompt_context_text
+                ),
+            }
+        ]
+        aliases: list[str] = []
+        for index, item in enumerate(evidence):
+            alias = f"image_{index:02d}"
+            aliases.append(alias)
+            path = _visual_evidence_path(item, alias=alias)
+            content.extend(
+                [
+                    {
+                        "type": "text",
+                        "text": f"Current visual evidence: {alias}",
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": _normalized_image_data_url(
+                                path,
+                                alias=alias,
+                            )
+                        },
+                    },
+                ]
+            )
+        raw_text = self.model.chat_messages(
+            [
+                {
+                    "role": "system",
+                    "content": EVIDENCE_READINESS_SYSTEM_PROMPT,
+                },
+                {"role": "user", "content": content},
+            ],
+            response_format_json=self.response_format_json,
+            call_type="camera_selector_evidence_readiness",
+            case={
+                "case_id": structured_request.check_id,
+                "scene_id": str(
+                    structured_request.scene.get("scene_id") or ""
+                ),
+                "objects": (
+                    prompt_payload.get("scene_context", {}).get(
+                        "objects", []
+                    )
+                    if isinstance(
+                        prompt_payload.get("scene_context"), dict
+                    )
+                    else []
+                ),
+            },
+        )
+        parsed_readiness = _validated_evidence_readiness_response(
+            parse_json_object(raw_text)
+        )
+        result = EvidenceReadinessResult.from_value(
+            parsed_readiness,
+            request=structured_request,
+            backend=self.backend,
+        )
+        response = result.to_dict()
+        response["provenance"] = {
+            **deepcopy(response.get("provenance") or {}),
+            **audit,
+            "prompt_version": EVIDENCE_READINESS_PROMPT_VERSION,
+        }
+        self.last_request_metadata = {
+            **audit,
+            "selection_mode": "evidence_readiness",
+            "prompt_version": EVIDENCE_READINESS_PROMPT_VERSION,
+            "context_compaction_version": (
+                CAMERA_SELECTOR_CONTEXT_COMPACTION_VERSION
+            ),
+            "structured_context_chars": len(prompt_context_text),
+            "structured_context_limit": self.max_context_chars,
+            "check_id": structured_request.check_id,
+            "check_type": structured_request.check_type,
+            "target_ids": list(structured_request.target_ids),
+            "required_observations": list(
+                structured_request.required_observations
+            ),
+            "evidence_aliases": aliases,
+            "model": getattr(self.model, "model_id", None),
+            "endpoint": getattr(self.model, "endpoint", None),
+            "transport": (
+                f"{type(self).__module__}.{type(self).__qualname__}"
+            ),
+        }
+        return response
+
+    def select_camera_views(
+        self,
+        request: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Serve the frozen P0b selector contract through this transport.
+
+        The compatibility implementation remains the established,
+        camera-only prompt and validator; only its construction boundary moves
+        from the metric-Judge builder to the dedicated camera-selector
+        builder.
+        """
+
+        from benchmark.visual_judge.openai_compatible import (
+            select_openai_compatible_camera_views,
+        )
+
+        result = select_openai_compatible_camera_views(
+            model=self.model,
+            request=request,
+            max_images=self.max_preview_images,
+            max_context_chars=self.max_context_chars,
+            response_format_json=self.response_format_json,
+        )
+        self.last_request_metadata = {
+            **dict(result.get("request_metadata") or {}),
+            "selection_mode": "legacy_query_cov",
+            "transport": (
+                f"{type(self).__module__}.{type(self).__qualname__}"
+            ),
+        }
+        return result
+
+    def plan_functional_evidence(
+        self,
+        request: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Plan bounded, pre-judgement functional probe units.
+
+        This shares the camera-selector model transport, but has its own
+        explicit VLM role and a strict contract that cannot emit a verdict or
+        pose.
+        """
+
+        result = plan_openai_compatible_functional_evidence(
+            model=self.model,
+            request=request,
+            max_context_chars=self.max_context_chars,
+            response_format_json=self.response_format_json,
+        )
+        self.last_request_metadata = {
+            **dict(result.get("request_metadata") or {}),
+            "selection_mode": "functional_probe_plan",
+            "transport": (
+                f"{type(self).__module__}.{type(self).__qualname__}"
+            ),
+        }
+        return result
+
+    def discover_functional_evidence(
+        self,
+        request: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Discover functional evidence targets without judging the metric."""
+
+        result = discover_openai_compatible_functional_evidence(
+            model=self.model,
+            request=request,
+            max_context_chars=self.max_context_chars,
+            response_format_json=self.response_format_json,
+        )
+        self.last_request_metadata = {
+            **dict(
+                result.get("provenance", {}).get(
+                    "request_metadata", {}
+                )
+            ),
+            "selection_mode": "functional_discovery",
+            "transport": (
+                f"{type(self).__module__}.{type(self).__qualname__}"
+            ),
+        }
+        return result
+
+    def decode_usable_surface(
+        self,
+        request: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Select trusted object-local side IDs, never a free-form pose."""
+
+        result = decode_openai_compatible_usable_surface(
+            model=self.model,
+            request=request,
+            max_context_chars=min(self.max_context_chars, 12000),
+            response_format_json=self.response_format_json,
+        )
+        self.last_request_metadata = {
+            **dict(
+                result.get("provenance", {}).get(
+                    "request_metadata", {}
+                )
+            ),
+            "selection_mode": "usable_surface_decode",
+            "transport": (
+                f"{type(self).__module__}.{type(self).__qualname__}"
+            ),
+        }
+        return result
+
+    def discover_placement_evidence(
+        self,
+        request: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Discover semantic-location observations without judging them."""
+
+        result = discover_openai_compatible_placement_evidence(
+            model=self.model,
+            request=request,
+            max_context_chars=self.max_context_chars,
+            response_format_json=self.response_format_json,
+        )
+        self.last_request_metadata = {
+            **dict(
+                result.get("provenance", {}).get(
+                    "request_metadata", {}
+                )
+            ),
+            "selection_mode": "placement_discovery",
+            "transport": (
+                f"{type(self).__module__}.{type(self).__qualname__}"
+            ),
+        }
+        return result
+
+
+def build_openai_compatible_camera_selector(
+    config: dict[str, Any],
+) -> OpenAICompatibleCameraSelector:
+    if not isinstance(config, dict):
+        raise TypeError("VLM camera selector config must be a JSON object")
+    if "api_key" in config:
+        raise ValueError(
+            "VLM camera selector config must not contain literal api_key; "
+            "use api_key_env instead"
+        )
+    endpoint = config.get("endpoint") or config.get("base_url")
+    model_id = config.get("model") or config.get("model_id")
+    if not endpoint or not model_id:
+        raise ValueError(
+            "VLM camera selector config requires endpoint and model"
+        )
+    model = OpenAICompatibleModel(
+        name=str(
+            config.get("name")
+            or "openai-compatible-camera-selector"
+        ),
+        endpoint=str(endpoint),
+        model_id=str(model_id),
+        api_key_env=(
+            str(config["api_key_env"])
+            if config.get("api_key_env")
+            else None
+        ),
+        temperature=float(config.get("temperature", 0.0)),
+        max_tokens=int(config.get("max_tokens", 1024)),
+        context_length=(
+            int(config["context_length"])
+            if config.get("context_length") is not None
+            else None
+        ),
+        timeout_seconds=int(config.get("timeout_seconds", 300)),
+        response_format_json=bool(
+            config.get("response_format_json", True)
+        ),
+        max_retries=int(config.get("max_retries", 1)),
+        retry_backoff_seconds=float(
+            config.get("retry_backoff_seconds", 1.0)
+        ),
+        min_request_interval_seconds=float(
+            config.get("min_request_interval_seconds", 0.0)
+        ),
+        max_tokens_field=str(
+            config.get("max_tokens_field", "max_tokens")
+        ),
+        send_temperature=bool(
+            config.get("send_temperature", True)
+        ),
+        require_api_key=(
+            bool(config["require_api_key"])
+            if config.get("require_api_key") is not None
+            else None
+        ),
+    )
+    return OpenAICompatibleCameraSelector(
+        model,
+        max_preview_images=int(
+            config.get(
+                "max_preview_images",
+                config.get("max_images", 8),
+            )
+        ),
+        max_context_chars=int(
+            config.get("max_context_chars", 30000)
+        ),
+        response_format_json=bool(
+            config.get("response_format_json", True)
+        ),
+    )
+
+
+def _validated_payload(
+    payload: dict[str, Any],
+    *,
+    mode: str,
+) -> dict[str, Any]:
+    result = deepcopy(payload)
+    if _contains_forbidden_key(
+        result,
+        forbidden=_FORBIDDEN_DECISION_OR_MUTATION_KEYS,
+    ):
+        raise ValueError(
+            "camera selector request contains metric-decision, mutation, "
+            "or group-membership authority"
+        )
+    constraints = result.get("camera_constraints")
+    if not isinstance(constraints, dict):
+        raise ValueError(
+            "camera selector requires structured camera_constraints"
+        )
+    targets = result.get("target_ids")
+    if (
+        not isinstance(targets, list)
+        or not targets
+        or any(not str(value).strip() for value in targets)
+    ):
+        raise ValueError(
+            "camera selector requires non-empty target_ids"
+        )
+    if mode == "candidate_only":
+        candidates = result.get("candidate_views")
+        if (
+            not isinstance(candidates, list)
+            or not candidates
+            or any(not isinstance(item, dict) for item in candidates)
+        ):
+            raise ValueError(
+                "candidate_only requires trusted candidate_views"
+            )
+        seen: set[str] = set()
+        for candidate in candidates:
+            candidate_id = str(candidate.get("id") or "").strip()
+            if not candidate_id or candidate_id in seen:
+                raise ValueError(
+                    "candidate_only requires unique candidate IDs"
+                )
+            seen.add(candidate_id)
+            if candidate.get("technical_feasibility") is not True:
+                raise ValueError(
+                    "candidate_only accepts only technically feasible views"
+                )
+            if not isinstance(candidate.get("pose"), dict):
+                raise ValueError(
+                    "candidate_only candidate requires a trusted pose"
+                )
+            if candidate.get("render_status") != "ok":
+                raise ValueError(
+                    "candidate_only requires successful candidate previews"
+                )
+            path = str(candidate.get("image_path") or "").strip()
+            if not path:
+                raise ValueError(
+                    "candidate_only candidate requires image_path"
+                )
+    elif mode == "repair_plan":
+        plans = result.get("trusted_repair_plans")
+        if (
+            not isinstance(plans, list)
+            or not plans
+            or any(not isinstance(item, dict) for item in plans)
+        ):
+            raise ValueError(
+                "repair_plan requires trusted_repair_plans"
+            )
+        plan_ids = [
+            str(item.get("plan_id") or "").strip() for item in plans
+        ]
+        if any(not value for value in plan_ids) or len(plan_ids) != len(
+            set(plan_ids)
+        ):
+            raise ValueError(
+                "repair_plan requires unique trusted plan IDs"
+            )
+    return result
+
+
+def _validated_response(
+    value: Any,
+    *,
+    mode: str,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        raise ValueError("camera selector response must be a JSON object")
+    result = deepcopy(dict(value))
+    unknown = set(result) - _MODE_FIELDS[mode]
+    if unknown or _contains_forbidden_key(
+        result,
+        forbidden=_FORBIDDEN_RESPONSE_KEYS,
+    ):
+        raise ValueError(
+            "camera selector response contains forbidden or unknown fields: "
+            f"{sorted(unknown)}"
+        )
+    reason = result.get("reason")
+    if not isinstance(reason, str) or not reason.strip():
+        raise ValueError("camera selector response requires reason")
+    provenance = result.get("provenance")
+    if provenance is not None and not isinstance(provenance, dict):
+        raise ValueError(
+            "camera selector response provenance must be an object"
+        )
+    if mode == "candidate_only":
+        selected = result.get("selected_view_ids")
+        if (
+            not isinstance(selected, list)
+            or not selected
+            or any(not isinstance(item, str) or not item for item in selected)
+            or len(selected) != len(set(selected))
+        ):
+            raise ValueError(
+                "candidate_only response requires unique selected_view_ids"
+            )
+        trusted = {
+            str(item["id"]) for item in payload["candidate_views"]
+        }
+        unknown_ids = set(selected) - trusted
+        if unknown_ids:
+            raise ValueError(
+                "camera selector selected an untrusted candidate ID"
+            )
+    elif mode == "repair_plan":
+        selected = result.get("selected_plan_id")
+        trusted = {
+            str(item["plan_id"])
+            for item in payload["trusted_repair_plans"]
+        }
+        if not isinstance(selected, str) or selected not in trusted:
+            raise ValueError(
+                "camera selector selected an untrusted repair-plan ID"
+            )
+    elif not isinstance(result.get("camera_proposal"), dict):
+        raise ValueError(
+            "freeform_pose response requires camera_proposal"
+        )
+    return result
+
+
+def _validated_evidence_readiness_response(
+    value: Any,
+) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        raise ValueError(
+            "evidence readiness response must be a JSON object"
+        )
+    result = deepcopy(dict(value))
+    unknown = set(result) - _EVIDENCE_READINESS_RESPONSE_FIELDS
+    if unknown or _contains_forbidden_key(
+        result,
+        forbidden=_FORBIDDEN_RESPONSE_KEYS,
+    ):
+        raise ValueError(
+            "evidence readiness response contains forbidden or unknown "
+            f"fields: {sorted(unknown)}"
+        )
+    return result
+
+
+def _compact_camera_selector_prompt_payload(
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    """Project validated controller state into bounded camera-only context.
+
+    Full canonical scenes and preview diagnostics remain available internally
+    for validation and rendering.  The VLM receives only scoped geometry and
+    routing facts, avoiding accidental prompt growth from asset provenance.
+    """
+
+    result: dict[str, Any] = {
+        "context_compaction_version": (
+            CAMERA_SELECTOR_CONTEXT_COMPACTION_VERSION
+        )
+    }
+    for field in (
+        "vlm_role",
+        "decision_contract",
+        "judge_method",
+        "selection_mode",
+        "task",
+        "metric",
+        "target_ids",
+        "camera_constraints",
+        "attempted_candidate_ids",
+        "previous_evidence_summary",
+        "evidence_budget",
+        "evidence_round",
+        "scene_access",
+        "group_scope",
+        "member_ids",
+        "target_bounds",
+        "focus_center",
+        "target_extent",
+        "grouping_role",
+    ):
+        if field in payload:
+            result[field] = deepcopy(payload[field])
+
+    result["evidence_goal"] = _compact_evidence_goal(
+        payload.get("evidence_goal")
+    )
+    scoped_ids = {
+        str(item)
+        for item in payload.get("target_ids") or []
+        if str(item).strip()
+    }
+    group_scope = payload.get("group_scope")
+    if isinstance(group_scope, dict):
+        scoped_ids.update(
+            str(item)
+            for item in group_scope.get("member_ids") or []
+            if str(item).strip()
+        )
+    scoped_ids.update(
+        str(item)
+        for item in payload.get("member_ids") or []
+        if str(item).strip()
+    )
+    for field in ("functional_probe", "functional_repair"):
+        compact = _compact_functional_routing(payload.get(field))
+        if compact is not None:
+            result[field] = compact
+            scoped_ids.update(
+                str(item)
+                for item in [
+                    *(compact.get("target_ids") or []),
+                    *(compact.get("related_target_ids") or []),
+                    *(compact.get("group_member_ids") or []),
+                ]
+                if str(item).strip()
+            )
+
+    scene = payload.get("scene_context")
+    if isinstance(scene, dict):
+        objects = [
+            _compact_scene_object(item)
+            for item in scene.get("objects") or []
+            if isinstance(item, dict)
+            and (
+                not scoped_ids
+                or str(item.get("id") or "") in scoped_ids
+            )
+        ]
+        result["scene_context"] = {
+            field: deepcopy(scene[field])
+            for field in (
+                "schema_version",
+                "scene_id",
+                "request_id",
+                "scene_type",
+                "boundary",
+                "scene_height",
+            )
+            if field in scene
+        }
+        result["scene_context"]["objects"] = objects
+
+    result["candidate_views"] = [
+        _compact_candidate_view(item)
+        for item in payload.get("candidate_views") or []
+        if isinstance(item, dict)
+    ]
+    result["deterministic_rejected_candidates"] = [
+        _compact_rejected_candidate(item)
+        for item in payload.get("deterministic_rejected_candidates") or []
+        if isinstance(item, dict)
+    ]
+    if "trusted_repair_plans" in payload:
+        result["trusted_repair_plans"] = [
+            {
+                field: deepcopy(item[field])
+                for field in (
+                    "plan_id",
+                    "camera_action",
+                    "relaxed_constraints",
+                    "preserved_observations",
+                    "estimated_cost",
+                    "reason",
+                )
+                if field in item
+            }
+            for item in payload.get("trusted_repair_plans") or []
+            if isinstance(item, dict)
+        ]
+    return result
+
+
+def _compact_scene_object(value: dict[str, Any]) -> dict[str, Any]:
+    return {
+        field: deepcopy(value[field])
+        for field in (
+            "id",
+            "category",
+            "retrieval_category",
+            "center",
+            "size",
+            "rotation",
+            "geometry_provenance",
+        )
+        if field in value
+    }
+
+
+def _compact_candidate_view(value: dict[str, Any]) -> dict[str, Any]:
+    return {
+        field: deepcopy(value[field])
+        for field in (
+            "id",
+            "pose",
+            "target_ids",
+            "target_object_ids",
+            "group_id",
+            "technical_feasibility",
+            "target_visibility_estimate",
+            "joint_visibility_estimate",
+            "projected_coverage_estimate",
+            "view_family",
+            "focus_kind",
+            "context_scope",
+            "local_side_id",
+            "usable_surface_informed",
+            "usable_surface_side_ids",
+            "usable_side_fallback",
+            "fallback_target_id",
+            "fallback_local_side_id",
+            "fallback_opposing_side_id",
+            "fallback_policy",
+            "policy_source",
+            "render_status",
+            "fallback_reason",
+        )
+        if field in value
+    }
+
+
+def _compact_rejected_candidate(value: dict[str, Any]) -> dict[str, Any]:
+    return {
+        field: deepcopy(value[field])
+        for field in (
+            "id",
+            "candidate_id",
+            "reason",
+            "reason_code",
+            "reason_codes",
+            "constraint_conflicts",
+            "view_family",
+        )
+        if field in value
+    }
+
+
+def _compact_functional_routing(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    return {
+        field: deepcopy(value[field])
+        for field in (
+            "schema_version",
+            "source",
+            "probe_id",
+            "kind",
+            "target_ids",
+            "related_target_ids",
+            "route_scope",
+            "group_id",
+            "owning_group_id",
+            "group_member_ids",
+            "required_observations",
+            "view_goal",
+            "observation_goals",
+            "source_check_ids",
+            "check_types",
+            "check_relations",
+            "relation_predicates",
+            "surface_targets",
+            "usable_surface_hypotheses",
+            "usable_side_fallback",
+            "unresolved_usable_side_target_ids",
+            "fallback_policy",
+            "decision_authority",
+        )
+        if field in value
+    }
+
+
+def _compact_evidence_goal(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    result = {
+        field: deepcopy(value[field])
+        for field in (
+            "view_goal",
+            "missing_observations",
+            "required_observations",
+            "target_ids",
+            "evidence_phase",
+            "evidence_role",
+        )
+        if field in value
+    }
+    request = value.get("judge_evidence_request")
+    if isinstance(request, dict):
+        compact_request = {
+            field: deepcopy(request[field])
+            for field in (
+                "target_ids",
+                "missing_observations",
+                "required_observations",
+                "view_goal",
+            )
+            if field in request
+        }
+        metadata = request.get("metadata")
+        if isinstance(metadata, dict):
+            compact_request["metadata"] = {
+                field: deepcopy(metadata[field])
+                for field in (
+                    "check_ids",
+                    "unresolved_check_ids",
+                    "check_types",
+                )
+                if field in metadata
+            }
+        result["judge_evidence_request"] = compact_request
+    return result
+
+
+def _evidence_readiness_request(
+    value: EvidenceReadinessRequest | dict[str, Any],
+) -> EvidenceReadinessRequest:
+    if isinstance(value, EvidenceReadinessRequest):
+        return value
+    if not isinstance(value, dict):
+        raise TypeError(
+            "evidence readiness request must be a JSON object"
+        )
+    if _contains_forbidden_key(
+        value,
+        forbidden=_FORBIDDEN_DECISION_OR_MUTATION_KEYS,
+    ):
+        raise ValueError(
+            "evidence readiness request cannot contain metric decisions or "
+            "scene mutation authority"
+        )
+    scene = value.get("scene_context")
+    if not isinstance(scene, dict):
+        raise ValueError(
+            "evidence readiness requires canonical scene_context"
+        )
+    evidence = value.get("current_visual_evidence")
+    if not isinstance(evidence, (list, tuple)):
+        raise ValueError(
+            "evidence readiness current_visual_evidence must be a list"
+        )
+    budget = value.get("evidence_budget") or value.get("budget") or {}
+    if not isinstance(budget, dict):
+        raise ValueError(
+            "evidence readiness evidence_budget must be an object"
+        )
+    context = value.get("context") or {}
+    if not isinstance(context, dict):
+        raise ValueError("evidence readiness context must be an object")
+    return EvidenceReadinessRequest(
+        task=str(value.get("task") or "scene_quality"),
+        metric=str(value.get("metric") or "").strip(),
+        check_id=str(value.get("check_id") or "").strip(),
+        check_type=str(value.get("check_type") or "").strip(),
+        target_ids=_unique_text_tuple(value.get("target_ids")),
+        scene=deepcopy(scene),
+        required_observations=_unique_text_tuple(
+            value.get("required_observations")
+        ),
+        current_visual_evidence=tuple(deepcopy(evidence)),
+        budget={
+            str(key): int(item)
+            for key, item in budget.items()
+            if isinstance(item, int) and not isinstance(item, bool)
+        },
+        context=deepcopy(context),
+        allow_scene_mutation=bool(
+            value.get("allow_scene_mutation", False)
+        ),
+    )
+
+
+def _compact_evidence_readiness_prompt_payload(
+    request: EvidenceReadinessRequest,
+    *,
+    audit: dict[str, Any],
+) -> dict[str, Any]:
+    context = request.context
+    group_scope = context.get("group_scope")
+    group_scope = group_scope if isinstance(group_scope, dict) else {}
+    scoped_ids = {
+        *request.target_ids,
+        *(
+            str(item)
+            for item in group_scope.get("member_ids") or []
+            if str(item).strip()
+        ),
+    }
+    result: dict[str, Any] = {
+        **deepcopy(audit),
+        "context_compaction_version": (
+            CAMERA_SELECTOR_CONTEXT_COMPACTION_VERSION
+        ),
+        "task": request.task,
+        "metric": request.metric,
+        "check_id": request.check_id,
+        "check_type": request.check_type,
+        "target_ids": list(request.target_ids),
+        "required_observations": list(
+            request.required_observations
+        ),
+        "evidence_aliases": [
+            f"image_{index:02d}"
+            for index in range(len(request.current_visual_evidence))
+        ],
+        "evidence_budget": deepcopy(request.budget),
+        "scene_access": "read_only",
+    }
+    for field in (
+        "evidence_phase",
+        "route_scope",
+        "group_scope",
+        "functional_check",
+        "functional_evidence_preflight",
+        "usable_surface_hypotheses",
+        "evidence_window_summary",
+    ):
+        if field in context:
+            result[field] = deepcopy(context[field])
+    scene = request.scene
+    result["scene_context"] = {
+        field: deepcopy(scene[field])
+        for field in (
+            "schema_version",
+            "scene_id",
+            "request_id",
+            "scene_type",
+            "boundary",
+            "scene_height",
+        )
+        if field in scene
+    }
+    result["scene_context"]["objects"] = [
+        _compact_scene_object(item)
+        for item in scene.get("objects") or []
+        if isinstance(item, dict)
+        and (
+            not scoped_ids
+            or str(item.get("id") or "") in scoped_ids
+        )
+    ]
+    return result
+
+
+def _visual_evidence_path(value: Any, *, alias: str) -> Path:
+    if isinstance(value, Path):
+        path = value
+    elif isinstance(value, str):
+        path = Path(value)
+    elif isinstance(value, Mapping):
+        raw = next(
+            (
+                value.get(key)
+                for key in (
+                    "path",
+                    "image_path",
+                    "artifact_path",
+                    "file_path",
+                    "ref",
+                )
+                if value.get(key) is not None
+            ),
+            None,
+        )
+        if raw is None:
+            raise ValueError(
+                f"visual evidence {alias!r} does not contain an image path"
+            )
+        path = Path(str(raw))
+    else:
+        raise ValueError(
+            f"visual evidence {alias!r} does not contain an image path"
+        )
+    path = path.expanduser()
+    if not path.is_file():
+        raise FileNotFoundError(
+            f"visual evidence {alias!r} does not exist: {path}"
+        )
+    return path
+
+
+def _unique_text_tuple(value: Any) -> tuple[str, ...]:
+    if not isinstance(value, (list, tuple)):
+        raise ValueError("expected a JSON list of strings")
+    result = tuple(str(item).strip() for item in value)
+    if any(not item for item in result) or len(result) != len(set(result)):
+        raise ValueError("strings must be unique and non-empty")
+    return result
+
+
+def _bounded_json(value: Any, *, limit: int) -> str:
+    encoded = json.dumps(
+        value,
+        sort_keys=True,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        default=str,
+    )
+    if len(encoded) > limit:
+        raise ValueError(
+            "camera selector structured context exceeds max_context_chars"
+        )
+    return encoded
+
+
+def _normalized_image_data_url(path: Path, *, alias: str) -> str:
+    try:
+        from PIL import Image, ImageOps, UnidentifiedImageError
+    except ImportError as exc:  # pragma: no cover - dependency guard
+        raise RuntimeError(
+            "Pillow is required for camera selector previews"
+        ) from exc
+    try:
+        with Image.open(path.expanduser()) as source:
+            source.load()
+            normalized = ImageOps.exif_transpose(source).convert("RGBA")
+            flattened = Image.new(
+                "RGB", normalized.size, (255, 255, 255)
+            )
+            flattened.paste(
+                normalized, mask=normalized.getchannel("A")
+            )
+            output = BytesIO()
+            flattened.save(output, format="PNG")
+    except (UnidentifiedImageError, OSError, ValueError) as exc:
+        raise ValueError(
+            f"candidate preview {alias!r} is not a decodable image"
+        ) from exc
+    encoded = base64.b64encode(output.getvalue()).decode("ascii")
+    return f"data:image/png;base64,{encoded}"
+
+
+def _contains_forbidden_key(
+    value: Any,
+    *,
+    forbidden: frozenset[str],
+) -> bool:
+    if isinstance(value, Mapping):
+        for key, nested in value.items():
+            if str(key).strip().lower() in forbidden:
+                return True
+            if _contains_forbidden_key(
+                nested,
+                forbidden=forbidden,
+            ):
+                return True
+    elif isinstance(value, (list, tuple)):
+        return any(
+            _contains_forbidden_key(item, forbidden=forbidden)
+            for item in value
+        )
+    return False
+
+
+def _positive_int(value: Any, label: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ValueError(f"{label} must be a positive integer")
+    return value

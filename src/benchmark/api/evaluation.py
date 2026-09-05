@@ -18,15 +18,18 @@ Output:
 Function:
     Runs one canonical L0--L4 workflow. Prompt granularity is reporting metadata,
     L2 activation comes only from the frozen specification contract, and L3
-    contains Scale, Object Pairing, and Style Consistency. Unresolved evidence
-    keeps ``score=None`` rather than silently passing. The checked-in Game
-    profile is the only isolated compatibility adapter.
+    contains Scale, Style, Object Pairing, Functional, and Semantic Placement
+    Consistency. Scientific evidence ambiguity is forced to a binary Judge
+    result at terminal budget; infrastructure or incomplete coverage keeps
+    ``score=None`` rather than silently passing. The checked-in Game profile is
+    the only isolated compatibility adapter.
 """
 
 from __future__ import annotations
 
 import argparse
 from copy import deepcopy
+import math
 from pathlib import Path
 from typing import Any
 
@@ -53,6 +56,9 @@ from benchmark.evaluator import (
     visual_style_spec_summary,
 )
 from benchmark.evaluator.profile import weighted_benchmark_score
+from benchmark.evaluator.context_projection import (
+    project_scene_for_evaluator_context,
+)
 from benchmark.evaluator.profile import (
     CANONICAL_PROFILE_VERSION,
     L0,
@@ -67,9 +73,34 @@ from benchmark.evaluator.profile import (
     is_legacy_game_profile,
     resolve_evaluation_profile,
 )
+from benchmark.evaluator.scoring import (
+    DEFAULT_DEDUCTION_MULTIPLIER,
+    DEDUCTION_MULTIPLIER_METRICS,
+    INTRINSIC_VALIDITY_PROFILE_ID,
+    LEGACY_SCORING_SPEC_VERSION,
+    PROMPT_CONDITIONED_QUALITY_PROFILE_ID,
+    SCORING_SPEC_VERSION,
+    L3_METRIC_WEIGHTS,
+    MIN_PUBLISHABLE_SCORE_COVERAGE,
+    apply_projection,
+    canonical_scene_object_ids,
+    resolve_scoring_profile,
+    score_collision_report,
+    score_oob_report,
+    score_support_report,
+    scoring_reliability_summary,
+    scoring_profile_for_run,
+)
+from benchmark.resources import runtime_resource_path
+from benchmark.scoring_profiles import (
+    PREVIOUS_INTRINSIC_VALIDITY_PROFILE_ID,
+    PREVIOUS_PROMPT_CONDITIONED_QUALITY_PROFILE_ID,
+)
 from benchmark.evaluator.generic_validity.mesh_geometry import load_collision_geometry_manifest
 from benchmark.grouping import (
+    TOPOLOGY_GROUPING_POLICY_ID,
     VLM_GROUPING_POLICY_ID,
+    grouping_fallback_route,
     group_scene,
     prepare_grouping_evidence,
 )
@@ -94,6 +125,7 @@ from benchmark.scene_io.validate import validate_object_plan
 from benchmark.task_contract import require_scene_matches_architecture
 from benchmark.utils.io import load_yaml, read_json, write_json
 from benchmark.visual_judge import (
+    CameraCandidatePreviewRenderer,
     CameraViewEvidenceRenderer,
     CameraEvidenceProvider,
     DeterministicLocalCameraSelector,
@@ -101,15 +133,22 @@ from benchmark.visual_judge import (
     build_conditional_active_camera_evidence_provider,
     build_controlled_vlm_judge,
     build_openai_compatible_vlm_judge,
+    build_openai_compatible_camera_selector,
     evaluate_vlm_category,
     resolve_vlm_evaluation_control,
 )
 
 
 def run_evaluate(
+    *,
+    evaluation_mode: str | None = None,
     **kwargs: Any,
 ) -> dict:
     """Evaluate through the single canonical scene workflow.
+
+    ``evaluation_mode`` is an additive interface reserved for explicitly
+    selected workflows. Omitting it (or passing ``None``) preserves the
+    pre-existing evaluator dispatch without forwarding a new keyword.
 
     The checked-in Game profile is the sole compatibility exception. Its
     profile shape and historical report remain isolated in the legacy adapter;
@@ -117,10 +156,112 @@ def run_evaluate(
     granularity or asset strategy.
     """
 
+    if evaluation_mode is not None:
+        from benchmark.non_rectangular.contracts import (
+            NON_RECTANGULAR_EVALUATION_MODE,
+        )
+
+        if evaluation_mode == NON_RECTANGULAR_EVALUATION_MODE:
+            return _run_selected_non_rectangular_evaluate(**kwargs)
+        raise ValueError(f"unknown evaluation_mode {evaluation_mode!r}")
+
     profile = kwargs.get("evaluation_profile")
     if is_legacy_game_profile(profile):
+        kwargs.pop("scoring_profile_id", None)
+        kwargs.pop("deduction_multiplier", None)
+        kwargs.pop("scene_quality_prompt_context", None)
         return _run_legacy_game_evaluate(**kwargs)
     return _run_canonical_evaluate(**kwargs)
+
+
+def _run_selected_non_rectangular_evaluate(**kwargs: Any) -> dict[str, Any]:
+    """Dispatch only the explicit additive non-rectangular input contract."""
+
+    from benchmark.non_rectangular.preflight import (
+        NonRectangularEvaluationInput,
+    )
+    from benchmark.non_rectangular.runner import (
+        run_non_rectangular_evaluation,
+    )
+
+    values = dict(kwargs)
+    evaluation_input = values.pop("evaluation_input", None)
+    if evaluation_input is None:
+        generated_scene = values.pop(
+            "generated_scene",
+            values.pop("scene", None),
+        )
+        required = {
+            "room_layout": values.pop("room_layout", None),
+            "room_program": values.pop("room_program", None),
+            "object_plan": values.pop("object_plan", None),
+            "generated_scene": generated_scene,
+        }
+        missing = [name for name, value in required.items() if value is None]
+        if missing:
+            raise TypeError(
+                "non-rectangular evaluation requires "
+                f"{', '.join(missing)}"
+            )
+        evaluation_input = NonRectangularEvaluationInput.from_artifacts(
+            **required,
+        )
+    if not isinstance(evaluation_input, NonRectangularEvaluationInput):
+        raise TypeError(
+            "evaluation_input must be NonRectangularEvaluationInput"
+        )
+    out = values.pop("out", None)
+    if out is None:
+        raise TypeError("non-rectangular evaluation requires out")
+    room_evaluator = values.pop("room_evaluator", None)
+    scoring_profile = values.pop("scoring_profile", None)
+    supplied_evaluator_kwargs = values.pop("evaluator_kwargs", None)
+    if supplied_evaluator_kwargs is not None and not isinstance(
+        supplied_evaluator_kwargs,
+        dict,
+    ):
+        raise TypeError("evaluator_kwargs must be a JSON object")
+    evaluator_kwargs = deepcopy(supplied_evaluator_kwargs or {})
+    aliases = {
+        "p0b_local_view_provider": "local_view_provider",
+        "l3_initial_evidence_provider": "l3_camera_evidence_provider",
+    }
+    accepted = {
+        "vlm_judge",
+        "grouping_model",
+        "local_view_provider",
+        "l3_camera_evidence_provider",
+        "render_evidence",
+        "runtime_by_room",
+        "l1_config",
+        "scene_quality_config",
+        "evaluation_profile",
+        "functional_evidence_planner",
+        "functional_probe_evidence_provider",
+        "functional_prejudgement_evidence_source",
+        "scene_quality_evaluator",
+    }
+    for key in list(values):
+        target = aliases.get(key, key)
+        if target not in accepted:
+            continue
+        if target in evaluator_kwargs:
+            raise TypeError(
+                f"non-rectangular evaluator option {target!r} was supplied twice"
+            )
+        evaluator_kwargs[target] = values.pop(key)
+    if values:
+        raise TypeError(
+            "unsupported non-rectangular evaluation options: "
+            f"{sorted(values)}"
+        )
+    return run_non_rectangular_evaluation(
+        evaluation_input,
+        out=out,
+        room_evaluator=room_evaluator,
+        scoring_profile=scoring_profile,
+        evaluator_kwargs=evaluator_kwargs,
+    )
 
 
 def _run_canonical_evaluate(
@@ -144,18 +285,25 @@ def _run_canonical_evaluate(
     vlm_judge: object | None = None,
     grouping_model: object | None = None,
     evaluation_profile: dict | None = None,
+    scoring_profile_id: str | None = None,
+    deduction_multiplier: float = DEFAULT_DEDUCTION_MULTIPLIER,
     support_enabled: bool | None = None,
     p0b_official_mode: bool = False,
     p0b_local_view_provider: object | None = None,
     l3_initial_evidence_provider: object | None = None,
+    functional_evidence_planner: object | None = None,
+    functional_probe_evidence_provider: object | None = None,
+    functional_prejudgement_evidence_source: object | None = None,
     camera_selector: object | None = None,
     deterministic_camera_selector: object | None = None,
     vlm_camera_selector: object | None = None,
     evidence_renderer: object | None = None,
+    candidate_preview_renderer: object | None = None,
     metric_applicability: dict[str, bool] | None = None,
     spatial_fidelity_ontology: dict | str | Path | None = None,
     visual_style_spec: dict | str | Path | None = None,
     scene_quality_config: dict | None = None,
+    scene_quality_prompt_context: dict | None = None,
     functional_semantic_config: dict | None = None,
     object_grouping_report: dict | list | None = None,
     authorized_deviations: list | None = None,
@@ -168,8 +316,9 @@ def _run_canonical_evaluate(
     """Run the canonical L0--L4 evaluator.
 
     Fine/coarse granularity and asset policy are orthogonal metadata. L2 is
-    activated only by frozen claims; L3 always uses its three canonical metric
-    boundaries. Legacy Category-2 and holistic Visual Quality code is not called.
+    activated only by frozen claims; L3 uses the five frozen scene-quality
+    metric boundaries. Legacy Category-2 and holistic Visual Quality code is
+    not called.
     """
 
     if spatial_fidelity_ontology is not None:
@@ -179,11 +328,13 @@ def _run_canonical_evaluate(
         )
     del eval_oor, eval_oar, eval_generic_validity
 
-    normalized_scene = normalize_scene(
-        scene,
-        asset_csv=asset_csv,
-        asset_root=asset_root,
-        enrich_assets=enrich_assets,
+    normalized_scene = project_scene_for_evaluator_context(
+        normalize_scene(
+            scene,
+            asset_csv=asset_csv,
+            asset_root=asset_root,
+            enrich_assets=enrich_assets,
+        )
     )
     request = scene_request if isinstance(scene_request, dict) else {}
     _require_matching_request_id(request, normalized_scene, artifact_name="scene_request")
@@ -228,6 +379,38 @@ def _run_canonical_evaluate(
             )
     active_l2_metrics = _active_specification_families(resolved_contract)
     resolved_profile = resolve_evaluation_profile(evaluation_profile)
+    scoring_profile = _resolve_run_scoring_profile(
+        scoring_profile_id=scoring_profile_id,
+        active_l2_metrics=active_l2_metrics,
+        resolved_profile=resolved_profile,
+    )
+    resolved_deduction_multiplier = _validate_deduction_multiplier(
+        deduction_multiplier
+    )
+    if scoring_profile is not None:
+        scoring_profile = deepcopy(scoring_profile)
+        scoring_profile["deduction_multiplier"] = (
+            resolved_deduction_multiplier
+        )
+        scoring_profile["deduction_multiplier_metrics"] = list(
+            DEDUCTION_MULTIPLIER_METRICS
+        )
+        resolved_profile = deepcopy(resolved_profile)
+        resolved_profile["layer_weights"] = deepcopy(
+            scoring_profile["layer_weights"]
+        )
+        for metric_name, metric_weight in scoring_profile[
+            "l3_metric_weights"
+        ].items():
+            resolved_profile[L3]["metrics"][metric_name]["weight"] = (
+                metric_weight
+            )
+    canonical_l3_metric_weights = (
+        deepcopy(scoring_profile["l3_metric_weights"])
+        if scoring_profile is not None
+        else deepcopy(L3_METRIC_WEIGHTS)
+    )
+    frozen_object_ids = canonical_scene_object_ids(normalized_scene)
     l3_render_evidence = _normalize_canonical_render_evidence(render_evidence)
     grouping_evidence = prepare_grouping_evidence(
         (
@@ -240,8 +423,15 @@ def _run_canonical_evaluate(
             if grouping_identity_legend is not None
             else request.get("identity_overlay_legend")
         ),
+        expected_object_ids=tuple(
+            str(item.get("id"))
+            for item in normalized_scene.get("objects", [])
+            if isinstance(item, dict)
+            and str(item.get("id") or "").strip()
+        ),
     )
     overview_render_evidence = _overview_render_evidence(l3_render_evidence)
+    discovery_identity_overlay = grouping_evidence.identity_overlay()
     evaluation_plan = build_evaluation_plan(
         prompt_granularity=prompt_granularity,
         render_evidence_count=_render_evidence_count(l3_render_evidence),
@@ -249,6 +439,16 @@ def _run_canonical_evaluate(
         active_l2_metrics=active_l2_metrics,
     )
     evaluation_plan["prompt_granularity_resolution_source"] = granularity_source
+    evaluation_plan["scoring_profile"] = (
+        deepcopy(scoring_profile)
+        if scoring_profile is not None
+        else {
+            "scoring_profile_id": "custom_evaluation_profile_compat",
+            "scoring_spec_version": LEGACY_SCORING_SPEC_VERSION,
+            "layer_weights": deepcopy(resolved_profile["layer_weights"]),
+            "l3_metric_weights": deepcopy(canonical_l3_metric_weights),
+        }
+    )
 
     renders = overview_render_evidence
     resolved_vlm_control = _resolve_runtime_vlm_control(
@@ -264,6 +464,7 @@ def _run_canonical_evaluate(
         deterministic_camera_selector=deterministic_camera_selector,
         vlm_camera_selector=vlm_camera_selector,
         evidence_renderer=evidence_renderer,
+        candidate_preview_renderer=candidate_preview_renderer,
         strict=_explicit_non_vlm_strict_override(vlm_judge),
     )
     resolved_asset_policy = resolve_asset_policy(
@@ -335,6 +536,12 @@ def _run_canonical_evaluate(
         p0b_official_mode=p0b_official_mode,
         metric_applicability=l1_applicability,
     )
+    if scoring_profile is not None:
+        _apply_canonical_l1_scoring(
+            reports["generic_validity"],
+            ordered_object_ids=frozen_object_ids,
+            deduction_multiplier=resolved_deduction_multiplier,
+        )
     l1_report = _canonical_l1_report(reports["generic_validity"])
 
     if "oor" in active_l2_metrics:
@@ -415,9 +622,31 @@ def _run_canonical_evaluate(
             if l3_initial_evidence_provider is not None
             else p0b_local_view_provider
         ),
+        functional_evidence_planner=functional_evidence_planner,
+        functional_probe_evidence_provider=(
+            functional_probe_evidence_provider
+        ),
+        functional_prejudgement_evidence_source=(
+            functional_prejudgement_evidence_source
+        ),
+        discovery_identity_image_path=(
+            str(discovery_identity_overlay["path"])
+            if isinstance(discovery_identity_overlay, dict)
+            else None
+        ),
+        discovery_identity_legend=(
+            deepcopy(grouping_evidence.identity_legend)
+            if isinstance(discovery_identity_overlay, dict)
+            else None
+        ),
         authorized_deviations=resolved_authorized_deviations,
         metric_applicability=scene_quality_applicability(resolved_asset_policy),
         visual_style_spec=resolved_visual_style_spec,
+        scene_quality_prompt_context=scene_quality_prompt_context,
+        apply_burden_scoring=scoring_profile is not None,
+        strict_metric_inventory=scoring_profile is not None,
+        canonical_metric_weights=canonical_l3_metric_weights,
+        deduction_multiplier=resolved_deduction_multiplier,
     )
     reports["scene_quality"] = scene_quality_report
 
@@ -446,11 +675,74 @@ def _run_canonical_evaluate(
     }
     scoring_reports = {name: layer_reports[name] for name in (L1, L2, L3, L4)}
     layer_weights = resolved_profile["layer_weights"]
-    benchmark_score = weighted_benchmark_score(scoring_reports, layer_weights)
+    resolved_scoring_profile_id = (
+        str(scoring_profile["scoring_profile_id"])
+        if scoring_profile is not None
+        else "custom_evaluation_profile_compat"
+    )
+    resolved_scoring_spec_version = (
+        str(scoring_profile["scoring_spec_version"])
+        if scoring_profile is not None
+        else LEGACY_SCORING_SPEC_VERSION
+    )
+    benchmark_score = (
+        _strict_scoring_profile_score(scoring_reports, layer_weights)
+        if scoring_profile is not None
+        else weighted_benchmark_score(scoring_reports, layer_weights)
+    )
+    benchmark_score_100 = (
+        None if benchmark_score is None else 100.0 * float(benchmark_score)
+    )
     coverage = canonical_score_coverage(
         scoring_reports,
         layer_weights,
         profile_version=CANONICAL_PROFILE_VERSION,
+        scoring_profile_id=resolved_scoring_profile_id,
+        scoring_spec_version=resolved_scoring_spec_version,
+        l3_metric_weights=canonical_l3_metric_weights,
+        deduction_multiplier=(
+            resolved_deduction_multiplier
+            if scoring_profile is not None
+            else None
+        ),
+    )
+    if scoring_profile is not None:
+        coverage = _strict_scoring_profile_coverage(
+            coverage,
+            scoring_reports=scoring_reports,
+            layer_weights=layer_weights,
+        )
+    vlm_control_manifest = _runtime_vlm_control_manifest(
+        resolved_vlm_control,
+        runtime_judge=runtime_vlm_judge,
+    )
+    runtime_control = (
+        vlm_control_manifest.get("integration", {}).get("runtime", {})
+        if isinstance(vlm_control_manifest, dict)
+        else {}
+    )
+    controlled_calls = (
+        runtime_control.get("controlled_calls")
+        if isinstance(runtime_control, dict)
+        and isinstance(runtime_control.get("controlled_calls"), list)
+        else []
+    )
+    required_reliability_metrics = (
+        {
+            L1: ["collision", "support", "oob"],
+            L2: list(active_l2_metrics),
+            L3: list(canonical_l3_metric_weights),
+        }
+        if scoring_profile is not None
+        else None
+    )
+    scoring_reliability = scoring_reliability_summary(
+        l1_metrics=(reports["generic_validity"].get("metrics") or {}),
+        l2_metrics=(l2_report.get("claim_family_reports") or {}),
+        l3_metrics=(scene_quality_report.get("metrics") or {}),
+        judge_episodes=controlled_calls,
+        required_metrics_by_layer=required_reliability_metrics,
+        scoring_coverage=coverage,
     )
 
     report = {
@@ -468,10 +760,35 @@ def _run_canonical_evaluate(
             "complete" if coverage["complete"] else "incomplete"
         ),
         "benchmark_score": benchmark_score,
+        "benchmark_score_100": benchmark_score_100,
         "benchmark_score_status": (
-            "complete" if benchmark_score is not None else "insufficient_metric_coverage"
+            "complete"
+            if benchmark_score is not None and coverage.get("complete") is True
+            else "partial_coverage"
+            if benchmark_score is not None
+            else "failed_coverage_threshold"
+            if float(coverage.get("grounded_score_fraction") or 0.0)
+            < MIN_PUBLISHABLE_SCORE_COVERAGE
+            else "insufficient_metric_coverage"
         ),
         "evaluation_plan": evaluation_plan,
+        "scoring_profile": (
+            deepcopy(scoring_profile)
+            if scoring_profile is not None
+            else {
+                "scoring_profile_id": resolved_scoring_profile_id,
+                "scoring_spec_version": resolved_scoring_spec_version,
+                "layer_weights": deepcopy(layer_weights),
+                "l3_metric_weights": deepcopy(
+                    canonical_l3_metric_weights
+                ),
+            }
+        ),
+        "canonical_object_denominator": {
+            "ordered_object_ids": list(frozen_object_ids),
+            "n_scene": len(frozen_object_ids),
+        },
+        "scoring_reliability": scoring_reliability,
         "layer_reports": layer_reports,
         # Alias retained at the wire boundary, but contains canonical layers
         # only. Legacy category names never appear in a canonical report.
@@ -482,6 +799,9 @@ def _run_canonical_evaluate(
             "prompt_granularity_resolution_source": granularity_source,
             "asset_policy": resolved_asset_policy,
             "authorized_deviations": resolved_authorized_deviations,
+            "scene_quality_prompt_context": deepcopy(
+                scene_quality_report.get("metric_prompt_context")
+            ),
             "metric_applicability": {
                 L1: l1_applicability,
                 L2: {name: name in active_l2_metrics for name in resolved_profile[L2]["metrics"]},
@@ -519,10 +839,7 @@ def _run_canonical_evaluate(
                 ),
             },
             "visual_config_unchanged": True,
-            "vlm_evaluation_control": _runtime_vlm_control_manifest(
-                resolved_vlm_control,
-                runtime_judge=runtime_vlm_judge,
-            ),
+            "vlm_evaluation_control": vlm_control_manifest,
             "deprecated_runtime_inputs": {
                 "eval_oor": "ignored; contract claims activate OOR",
                 "eval_oar": "ignored; contract claims activate OAR",
@@ -536,7 +853,7 @@ def _run_canonical_evaluate(
             "L0 is a non-scoring structural gate.",
             "L1 contains five frozen metrics; navigability and accessibility are disabled by default.",
             "L2 contains only OOR, OAR, and functional semantic fidelity.",
-            "L3 contains only scale, object pairing, and style consistency.",
+            "L3 contains scale, object pairing, style, functional consistency, and semantic placement consistency.",
             "L4 is deferred until downstream task types are frozen.",
         ],
     }
@@ -568,10 +885,14 @@ def _run_legacy_game_evaluate(
     support_enabled: bool | None = None,
     p0b_official_mode: bool = False,
     p0b_local_view_provider: object | None = None,
+    functional_evidence_planner: object | None = None,
+    functional_probe_evidence_provider: object | None = None,
+    functional_prejudgement_evidence_source: object | None = None,
     camera_selector: object | None = None,
     deterministic_camera_selector: object | None = None,
     vlm_camera_selector: object | None = None,
     evidence_renderer: object | None = None,
+    candidate_preview_renderer: object | None = None,
     metric_applicability: dict[str, bool] | None = None,
     spatial_fidelity_ontology: dict | str | Path | None = None,
     visual_style_spec: dict | str | Path | None = None,
@@ -586,7 +907,12 @@ def _run_legacy_game_evaluate(
     | VLMEvaluationControl
     | None = None,
 ) -> dict:
-    del grouping_model
+    del (
+        grouping_model,
+        functional_evidence_planner,
+        functional_probe_evidence_provider,
+        functional_prejudgement_evidence_source,
+    )
     if not eval_oor and not eval_oar and not eval_generic_validity:
         eval_generic_validity = True
     normalized_scene = normalize_scene(scene, asset_csv=asset_csv, asset_root=asset_root, enrich_assets=enrich_assets)
@@ -627,6 +953,7 @@ def _run_legacy_game_evaluate(
         deterministic_camera_selector=deterministic_camera_selector,
         vlm_camera_selector=vlm_camera_selector,
         evidence_renderer=evidence_renderer,
+        candidate_preview_renderer=candidate_preview_renderer,
         strict=_explicit_non_vlm_strict_override(vlm_judge),
     )
     resolved_visual_style_spec = _resolve_visual_style_spec(visual_style_spec)
@@ -692,6 +1019,9 @@ def _run_legacy_game_evaluate(
             support_enabled=support_enabled,
             p0b_official_mode=p0b_official_mode,
             metric_applicability=frozen_metric_applicability,
+        )
+        _strip_canonical_scoring_audit_for_legacy_game(
+            reports["generic_validity"]
         )
     # Finish both shared categories before executing either mode-specific
     # Category 2 branch. This keeps their VLM call order, inputs, and reports
@@ -805,6 +1135,7 @@ def _run_legacy_game_evaluate(
             authorized_deviations=resolved_authorized_deviations,
             metric_applicability=scene_quality_applicability(resolved_asset_policy),
             profile=None,
+            apply_burden_scoring=False,
         )
         if scene_quality_interfaces.get("enabled"):
             reports["scene_quality_interfaces"] = scene_quality_interfaces
@@ -1108,12 +1439,21 @@ def main() -> None:
         help="Optional canonical L3 Scene Quality config override (JSON or YAML).",
     )
     parser.add_argument(
+        "--scene-quality-prompt-context",
+        default=None,
+        help=(
+            "Optional l3_metric_prompt_context_v1 JSON. It selects short "
+            "public task-context fields independently for each L3 metric."
+        ),
+    )
+    parser.add_argument(
         "--object-grouping-report",
         default=None,
         help=(
             "Optional frozen object-grouping report. When omitted, the canonical "
-            "VLM visual-evidence grouping backend runs; if no grouping model is "
-            "available, grouping-dependent metrics remain unresolved."
+            "VLM visual-evidence grouping backend runs first; a validated "
+            "deterministic topology fallback is used only when that primary "
+            "backend is unavailable or fails."
         ),
     )
     parser.add_argument(
@@ -1177,10 +1517,33 @@ def main() -> None:
     parser.add_argument(
         "--evaluation-profile",
         default=str(
-            PROJECT_ROOT
-            / "configs"
-            / "evaluation"
-            / "metric_profile_canonical_v1.yaml"
+            runtime_resource_path(
+                "configs/evaluation/metric_profile_canonical_v2.yaml"
+            )
+        ),
+    )
+    parser.add_argument(
+        "--scoring-profile-id",
+        choices=[
+            INTRINSIC_VALIDITY_PROFILE_ID,
+            PROMPT_CONDITIONED_QUALITY_PROFILE_ID,
+            PREVIOUS_INTRINSIC_VALIDITY_PROFILE_ID,
+            PREVIOUS_PROMPT_CONDITIONED_QUALITY_PROFILE_ID,
+        ],
+        default=None,
+        help=(
+            "Explicit leaderboard scoring profile. When omitted, the default "
+            "canonical profile selects it from L2 task activation."
+        ),
+    )
+    parser.add_argument(
+        "--deduction-multiplier",
+        type=float,
+        default=DEFAULT_DEDUCTION_MULTIPLIER,
+        help=(
+            "Multiply the final metric deduction for Collision, Support, "
+            "OOB, Scale, Style, and Object Pairing (default: 2.0). "
+            "Use 1.0 to reproduce the unscaled deduction."
         ),
     )
     args = parser.parse_args()
@@ -1231,24 +1594,69 @@ def main() -> None:
     )
     if not isinstance(camera_selector_config, dict):
         parser.error("--camera-selector-config must point to a JSON object")
-    camera_selector = (
-        build_openai_compatible_vlm_judge(camera_selector_config)
+    production_camera_selector = (
+        build_openai_compatible_camera_selector(
+            camera_selector_config
+        )
         if camera_selector_config
         else None
     )
+    # One camera-only transport serves both the legacy P0b provider contract
+    # and the Controller's L3 selector adapter.  A selector config must never
+    # be materialized as a metric Judge.
+    camera_selector = production_camera_selector
+    l3_vlm_camera_selector = production_camera_selector
     collision_geometry = _load_collision_geometry_arg(args.collision_geometry)
     local_view_provider = None
     l3_initial_evidence_provider = None
     deterministic_camera_selector = None
     vlm_camera_selector = None
     evidence_renderer = None
+    candidate_preview_renderer = None
     evaluation_profile = load_yaml(
         _path_arg(args.evaluation_profile),
         default={},
     )
-    if resolved_camera_pose_mode is not None:
+    l3_camera_runtime_requested = (
+        not is_legacy_game_profile(evaluation_profile)
+        and (
+            resolved_camera_pose_mode is not None
+            or vlm_control_config is not None
+            or l3_vlm_camera_selector is not None
+        )
+    )
+    camera_runtime_requested = (
+        resolved_camera_pose_mode is not None
+        or l3_camera_runtime_requested
+    )
+    renderer = None
+    evidence_dir = None
+    if camera_runtime_requested:
         if not args.camera_blend_file or not args.blender_bin:
-            parser.error("--camera-pose-mode requires --camera-blend-file and --blender-bin")
+            parser.error(
+                "camera acquisition requires --camera-blend-file and "
+                "--blender-bin"
+            )
+        renderer = BlenderRenderer(
+            blender_bin=_path_arg(args.blender_bin),
+            timeout_seconds=args.blender_timeout_seconds,
+            width=args.camera_render_width,
+            height=args.camera_render_height,
+            render_engine=args.camera_render_engine,
+            cycles_device=args.camera_cycles_device,
+            cycles_samples=args.camera_cycles_samples,
+            cycles_denoising=args.camera_cycles_denoising,
+            preview_render_engine=args.camera_preview_render_engine,
+            preview_width=args.camera_preview_width,
+            preview_height=args.camera_preview_height,
+            preview_cycles_samples=args.camera_preview_cycles_samples,
+        )
+        evidence_dir = (
+            _path_arg(args.camera_evidence_dir)
+            if args.camera_evidence_dir
+            else _path_arg(args.out).parent / "camera_evidence"
+        )
+    if resolved_camera_pose_mode is not None:
         if vlm_judge is None:
             parser.error(
                 "camera pose mode requires a configured VLM judge; bbox_track avoids only "
@@ -1279,25 +1687,8 @@ def main() -> None:
                 "camera active candidate count must be between camera pose max "
                 "views and 8"
             )
-        renderer = BlenderRenderer(
-            blender_bin=_path_arg(args.blender_bin),
-            timeout_seconds=args.blender_timeout_seconds,
-            width=args.camera_render_width,
-            height=args.camera_render_height,
-            render_engine=args.camera_render_engine,
-            cycles_device=args.camera_cycles_device,
-            cycles_samples=args.camera_cycles_samples,
-            cycles_denoising=args.camera_cycles_denoising,
-            preview_render_engine=args.camera_preview_render_engine,
-            preview_width=args.camera_preview_width,
-            preview_height=args.camera_preview_height,
-            preview_cycles_samples=args.camera_preview_cycles_samples,
-        )
-        evidence_dir = (
-            _path_arg(args.camera_evidence_dir)
-            if args.camera_evidence_dir
-            else _path_arg(args.out).parent / "camera_evidence"
-        )
+        assert renderer is not None
+        assert evidence_dir is not None
         if args.camera_active_fallback:
             local_view_provider = build_conditional_active_camera_evidence_provider(
                 renderer=renderer,
@@ -1329,39 +1720,46 @@ def main() -> None:
                 collision_contour=True,
                 collision_geometry=collision_geometry,
             )
-        if not is_legacy_game_profile(evaluation_profile):
-            l3_initial_evidence_provider = CameraEvidenceProvider(
-                renderer=renderer,
-                blend_file=_path_arg(args.camera_blend_file),
-                out_dir=evidence_dir / "l3_initial",
-                mode=resolved_camera_pose_mode,
-                metric_modes=camera_pose_metric_modes,
-                selector=camera_selector,
-                max_views=args.camera_pose_max_views,
-                max_steps=args.camera_pose_max_steps,
-                candidate_count=(
-                    args.camera_active_candidate_count
-                    if args.camera_active_fallback
-                    else max(args.camera_pose_max_views, 6)
-                ),
-                collision_overlay=False,
-                collision_contour=False,
-                collision_geometry=collision_geometry,
-                active_repair=False,
-            )
-            deterministic_camera_selector = (
-                DeterministicLocalCameraSelector(
-                    candidate_policy=(
-                        l3_initial_evidence_provider.candidate_policy
-                    )
+    if l3_camera_runtime_requested:
+        assert renderer is not None
+        assert evidence_dir is not None
+        l3_initial_evidence_provider = CameraEvidenceProvider(
+            renderer=renderer,
+            blend_file=_path_arg(args.camera_blend_file),
+            out_dir=evidence_dir / "l3_initial",
+            mode="visibility_ranked",
+            metric_modes={},
+            selector=None,
+            max_views=args.camera_pose_max_views,
+            max_steps=args.camera_pose_max_steps,
+            candidate_count=(
+                args.camera_active_candidate_count
+                if args.camera_active_fallback
+                else max(args.camera_pose_max_views, 6)
+            ),
+            collision_overlay=False,
+            collision_contour=False,
+            collision_geometry=collision_geometry,
+            active_repair=False,
+        )
+        deterministic_camera_selector = (
+            DeterministicLocalCameraSelector(
+                candidate_policy=(
+                    l3_initial_evidence_provider.candidate_policy
                 )
             )
-            vlm_camera_selector = camera_selector
-            evidence_renderer = CameraViewEvidenceRenderer(
-                renderer=renderer,
-                blend_file=_path_arg(args.camera_blend_file),
-                out_dir=evidence_dir / "l3_controller",
-            )
+        )
+        vlm_camera_selector = l3_vlm_camera_selector
+        evidence_renderer = CameraViewEvidenceRenderer(
+            renderer=renderer,
+            blend_file=_path_arg(args.camera_blend_file),
+            out_dir=evidence_dir / "l3_controller",
+        )
+        candidate_preview_renderer = CameraCandidatePreviewRenderer(
+            renderer=renderer,
+            blend_file=_path_arg(args.camera_blend_file),
+            out_dir=evidence_dir / "l3_controller",
+        )
 
     report = run_evaluate(
         scene=read_json(_path_arg(args.scene)),
@@ -1384,6 +1782,8 @@ def main() -> None:
         render_evidence=[str(_path_arg(path)) for path in args.render_evidence],
         vlm_judge=vlm_judge,
         evaluation_profile=evaluation_profile,
+        scoring_profile_id=args.scoring_profile_id,
+        deduction_multiplier=args.deduction_multiplier,
         support_enabled=args.support_enabled,
         p0b_official_mode=args.p0b_official_mode,
         p0b_local_view_provider=local_view_provider,
@@ -1398,6 +1798,9 @@ def main() -> None:
                 ),
                 "vlm_camera_selector": vlm_camera_selector,
                 "evidence_renderer": evidence_renderer,
+                "candidate_preview_renderer": (
+                    candidate_preview_renderer
+                ),
             }
             if not is_legacy_game_profile(evaluation_profile)
             else {}
@@ -1418,6 +1821,11 @@ def main() -> None:
         scene_quality_config=(
             load_yaml(_path_arg(args.scene_quality_config), default={})
             if args.scene_quality_config
+            else None
+        ),
+        scene_quality_prompt_context=(
+            read_json(_path_arg(args.scene_quality_prompt_context))
+            if args.scene_quality_prompt_context
             else None
         ),
         object_grouping_report=(
@@ -2106,11 +2514,27 @@ def _resolve_object_grouping_report(
         if problems and (
             not allow_non_canonical_input or structural_problem
         ):
+            reported_backend = (
+                str(value.get("grouping_backend") or "unknown")
+                if isinstance(value, dict)
+                else "unspecified_list_contract"
+            )
+            reported_policy = (
+                str(value.get("grouping_policy_id") or "unknown")
+                if isinstance(value, dict)
+                else "unspecified_list_contract"
+            )
             return {
                 "status": "unavailable",
                 "source": "caller_supplied_frozen_grouping",
-                "grouping_backend": "vlm",
-                "grouping_policy_id": VLM_GROUPING_POLICY_ID,
+                "grouping_backend": reported_backend,
+                "grouping_policy_id": reported_policy,
+                "reported_grouping_backend": reported_backend,
+                "reported_grouping_policy_id": reported_policy,
+                "expected_grouping_backend": "vlm",
+                "expected_grouping_policy_id": (
+                    VLM_GROUPING_POLICY_ID
+                ),
                 "reason": "non_canonical_grouping_input_rejected",
                 "non_canonical_grouping_input": True,
                 "validation_errors": problems,
@@ -2134,31 +2558,14 @@ def _resolve_object_grouping_report(
         else:
             result["non_canonical_grouping_input"] = False
         return result
-    grouping_config_path = (
-        PROJECT_ROOT
-        / "configs"
-        / "grouping"
-        / "vlm_visual_evidence_scope_v2.yaml"
+    grouping_config_path = runtime_resource_path(
+        "configs/grouping/vlm_visual_evidence_scope_v2.yaml"
     )
     grouping_config = (
         load_yaml(grouping_config_path, default={})
         if grouping_config_path.exists()
         else {}
     )
-    if model is None:
-        return {
-            "status": "unavailable",
-            "source": "canonical_runtime_default",
-            "grouping_backend": "vlm",
-            "grouping_policy_id": VLM_GROUPING_POLICY_ID,
-            "reason": "vlm_grouping_model_not_configured",
-            "fallback_used": False,
-            "provenance": {
-                "grouping_input_protocol": deepcopy(
-                    grouping_input_protocol or {}
-                )
-            },
-        }
     grouping_case = deepcopy(request)
     if "room" not in grouping_case and isinstance(scene.get("room"), dict):
         grouping_case["room"] = deepcopy(scene["room"])
@@ -2187,7 +2594,7 @@ def _resolve_object_grouping_report(
             "source": "canonical_runtime_default",
             "grouping_backend": "vlm",
             "grouping_policy_id": VLM_GROUPING_POLICY_ID,
-            "reason": "vlm_grouping_failed",
+            "reason": "grouping_primary_and_fallback_failed",
             "error": f"{type(exc).__name__}: {exc}",
             "fallback_used": False,
             "provenance": {
@@ -2198,13 +2605,16 @@ def _resolve_object_grouping_report(
         }
     result["status"] = "complete"
     result["source"] = "canonical_runtime_default"
-    result["fallback_used"] = False
     provenance = result.get("provenance")
     if not isinstance(provenance, dict):
         provenance = {}
         result["provenance"] = provenance
     provenance["grouping_input_protocol"] = deepcopy(
         grouping_input_protocol or {}
+    )
+    fallback_route = grouping_fallback_route(result)
+    result["fallback_used"] = (
+        fallback_route.get("fallback_used") is True
     )
     return result
 
@@ -2249,13 +2659,18 @@ def _validate_caller_grouping_report(
         }
     )
     problems: list[str] = []
+    validated_fallback = _is_valid_grouping_fallback_report(result)
     if result.get("status") != "complete":
         problems.append("status_must_be_complete")
-    if result.get("grouping_backend") != "vlm":
+    if (
+        result.get("grouping_backend") != "vlm"
+        and not validated_fallback
+    ):
         problems.append("grouping_backend_must_be_vlm")
     if (
         result.get("grouping_policy_id")
         != VLM_GROUPING_POLICY_ID
+        and not validated_fallback
     ):
         problems.append(
             "grouping_policy_id_must_be_"
@@ -2329,8 +2744,35 @@ def _validate_caller_grouping_report(
     return result, problems
 
 
+def _is_valid_grouping_fallback_report(
+    result: dict[str, Any],
+) -> bool:
+    if result.get("fallback_used") is not True:
+        return False
+    if result.get("grouping_backend") != "topology":
+        return False
+    if (
+        result.get("grouping_policy_id")
+        != TOPOLOGY_GROUPING_POLICY_ID
+    ):
+        return False
+    route = grouping_fallback_route(result)
+    return (
+        route.get("primary_backend") == "vlm"
+        and route.get("primary_policy_id")
+        == VLM_GROUPING_POLICY_ID
+        and route.get("primary_outcome") == "failed"
+        and route.get("fallback_enabled") is True
+        and route.get("fallback_used") is True
+        and route.get("fallback_backend") == "topology"
+        and route.get("fallback_policy_id")
+        == TOPOLOGY_GROUPING_POLICY_ID
+        and isinstance(route.get("primary_failure"), dict)
+    )
+
+
 def _grouping_chat_model(value: object | None) -> object | None:
-    """Resolve the chat client without treating a deterministic path as fallback."""
+    """Resolve the VLM primary client; fallback policy is handled separately."""
 
     candidates = [value]
     if value is not None:
@@ -2357,11 +2799,353 @@ def _is_canonical_score(value: Any) -> bool:
     )
 
 
+def _resolve_run_scoring_profile(
+    *,
+    scoring_profile_id: str | None,
+    active_l2_metrics: list[str],
+    resolved_profile: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Select a leaderboard profile without rewriting custom experiments."""
+
+    profile_version = str(resolved_profile.get("profile_version") or "")
+    if scoring_profile_id is not None:
+        if profile_version != CANONICAL_PROFILE_VERSION:
+            raise ValueError(
+                "versioned object-equivalent scoring profiles require "
+                f"{CANONICAL_PROFILE_VERSION!r}, got {profile_version!r}"
+            )
+        selected = resolve_scoring_profile(scoring_profile_id)
+        requires_l2 = bool(selected["requires_l2_task"])
+        if requires_l2 != bool(active_l2_metrics):
+            raise ValueError(
+                f"scoring profile {scoring_profile_id!r} requires_l2_task="
+                f"{requires_l2}, but active L2 metrics are {active_l2_metrics}"
+            )
+        return selected
+    if profile_version != CANONICAL_PROFILE_VERSION:
+        return None
+    if _evaluation_scoring_signature(resolved_profile) == (
+        _evaluation_scoring_signature(resolve_evaluation_profile())
+    ):
+        return scoring_profile_for_run(has_l2_task=bool(active_l2_metrics))
+    # Explicit custom diagnostic profiles keep their declared layer weights.
+    # They are not one of the two leaderboard profiles in metrics.md.
+    return None
+
+
+def _evaluation_scoring_signature(
+    profile: dict[str, Any],
+) -> dict[str, Any]:
+    """Extract only fields that intentionally define diagnostic scoring.
+
+    Detector thresholds, evidence policies, rubrics, and other execution
+    settings must not silently opt a run out of the versioned leaderboard
+    profile.  Custom layer/metric activation or weights remain an explicit
+    diagnostic compatibility path.
+    """
+
+    signature: dict[str, Any] = {
+        "layer_weights": deepcopy(profile.get("layer_weights")),
+        "layers": {},
+    }
+    for layer_name in (L1, L2, L3, L4):
+        layer = profile.get(layer_name)
+        if not isinstance(layer, dict):
+            signature["layers"][layer_name] = None
+            continue
+        metrics = layer.get("metrics")
+        metric_signature = (
+            {
+                str(name): {
+                    "enabled": value.get("enabled"),
+                    "weight": value.get("weight"),
+                }
+                for name, value in sorted(metrics.items())
+                if isinstance(value, dict)
+            }
+            if isinstance(metrics, dict)
+            else None
+        )
+        signature["layers"][layer_name] = {
+            "enabled": layer.get("enabled"),
+            "metrics": metric_signature,
+        }
+    return signature
+
+
+def _strict_scoring_profile_score(
+    reports: dict[str, dict[str, Any]],
+    layer_weights: dict[str, float],
+) -> float | None:
+    """Aggregate scores over grounded layer weight only.
+
+    Coverage is reported separately. Missing layer weight is not interpreted
+    as either zero or full credit.
+    """
+
+    required = [
+        name
+        for name, weight in layer_weights.items()
+        if float(weight) > 0.0
+    ]
+    if not required:
+        return None
+    numerator = 0.0
+    denominator = 0.0
+    required_weight = sum(float(layer_weights[name]) for name in required)
+    for name in required:
+        report = reports.get(name) or {}
+        if report.get("status") in {"not_applicable", "not_implemented"}:
+            # A profile-required layer cannot be silently removed by runtime
+            # applicability. Coverage conditioning is only for attempted
+            # evaluation with partially grounded evidence.
+            return None
+        score = _layer_observed_score_for_aggregate(report)
+        if score is None:
+            continue
+        fraction = _layer_grounding_fraction_for_aggregate(report)
+        grounded_weight = float(layer_weights[name]) * fraction
+        if grounded_weight <= 0.0:
+            continue
+        numerator += float(score) * grounded_weight
+        denominator += grounded_weight
+    coverage = denominator / required_weight if required_weight > 0.0 else 0.0
+    return (
+        numerator / denominator
+        if denominator > 0.0
+        and coverage >= MIN_PUBLISHABLE_SCORE_COVERAGE
+        else None
+    )
+
+
+def _layer_observed_score_for_aggregate(
+    report: dict[str, Any],
+) -> float | None:
+    raw = report.get("score")
+    if _is_canonical_score(raw):
+        return float(raw)
+    coverage = report.get("coverage")
+    coverage = coverage if isinstance(coverage, dict) else {}
+    raw = coverage.get("observed_score")
+    return float(raw) if _is_canonical_score(raw) else None
+
+
+def _layer_grounding_fraction_for_aggregate(report: dict[str, Any]) -> float:
+    coverage = report.get("coverage")
+    coverage = coverage if isinstance(coverage, dict) else {}
+    grounding = coverage.get("score_grounding")
+    grounding = grounding if isinstance(grounding, dict) else {}
+    raw = coverage.get("grounded_score_fraction")
+    if not isinstance(raw, (int, float)) or isinstance(raw, bool):
+        raw = grounding.get("fraction")
+    if not isinstance(raw, (int, float)) or isinstance(raw, bool):
+        raw = coverage.get("fraction")
+    if not isinstance(raw, (int, float)) or isinstance(raw, bool):
+        return 1.0
+    if not math.isfinite(float(raw)):
+        return 0.0
+    return min(1.0, max(0.0, float(raw)))
+
+
+def _strict_scoring_profile_coverage(
+    coverage: dict[str, Any],
+    *,
+    scoring_reports: dict[str, dict[str, Any]],
+    layer_weights: dict[str, float],
+) -> dict[str, Any]:
+    """Make every positive-weight leaderboard layer part of coverage."""
+
+    result = deepcopy(coverage)
+    required = [
+        name
+        for name, weight in layer_weights.items()
+        if float(weight) > 0.0
+    ]
+    covered = [
+        name
+        for name in required
+        if _layer_observed_score_for_aggregate(
+            scoring_reports.get(name) or {}
+        )
+        is not None
+    ]
+    required_weight = sum(float(layer_weights[name]) for name in required)
+    covered_weight = sum(float(layer_weights[name]) for name in covered)
+    score_resolution_complete = bool(required and len(covered) == len(required))
+    layer_grounding_fractions: dict[str, float] = {}
+    for name in required:
+        if name not in covered:
+            layer_grounding_fractions[name] = 0.0
+        else:
+            layer_grounding_fractions[name] = (
+                _layer_grounding_fraction_for_aggregate(
+                    scoring_reports.get(name) or {}
+                )
+            )
+    grounded_score_weight = min(
+        required_weight,
+        max(
+            0.0,
+            sum(
+                float(layer_weights[name])
+                * layer_grounding_fractions[name]
+                for name in required
+            ),
+        ),
+    )
+    grounded_score_fraction = (
+        min(1.0, max(0.0, grounded_score_weight / required_weight))
+        if required_weight > 0.0
+        else 0.0
+    )
+    result.update(
+        {
+            "active_layers": required,
+            "covered_layers": covered,
+            "active_layer_signature": (
+                "+".join(required) if required else "none"
+            ),
+            "covered_weight": covered_weight,
+            "required_weight": required_weight,
+            "complete": bool(
+                score_resolution_complete
+                and math.isclose(
+                    grounded_score_weight,
+                    required_weight,
+                    abs_tol=1.0e-9,
+                )
+            ),
+            "score_resolution_complete": score_resolution_complete,
+            "score_grounding_complete": bool(
+                score_resolution_complete
+                and math.isclose(
+                    grounded_score_weight,
+                    required_weight,
+                    abs_tol=1.0e-9,
+                )
+            ),
+            "grounded_score_weight": grounded_score_weight,
+            "grounded_score_fraction": grounded_score_fraction,
+            "minimum_publishable_coverage": MIN_PUBLISHABLE_SCORE_COVERAGE,
+            "coverage_threshold_passed": (
+                grounded_score_fraction >= MIN_PUBLISHABLE_SCORE_COVERAGE
+            ),
+            "layer_grounding_fractions": layer_grounding_fractions,
+            "aggregation_denominator": required_weight,
+        }
+    )
+    return result
+
+
+def _apply_canonical_l1_scoring(
+    validity: dict[str, Any],
+    *,
+    ordered_object_ids: tuple[str, ...],
+    deduction_multiplier: float = DEFAULT_DEDUCTION_MULTIPLIER,
+) -> None:
+    metrics = validity.get("metrics")
+    if not isinstance(metrics, dict):
+        return
+    scorers = {
+        "collision": score_collision_report,
+        "oob": score_oob_report,
+        "support": score_support_report,
+    }
+    for metric_name, scorer in scorers.items():
+        metric_report = metrics.get(metric_name)
+        if not isinstance(metric_report, dict) or metric_report.get("status") != "checked":
+            continue
+        apply_projection(
+            metric_report,
+            scorer(
+                metric_report,
+                ordered_object_ids=ordered_object_ids,
+                deduction_multiplier=deduction_multiplier,
+            ),
+        )
+    canonical_reports = [metrics.get(name) for name in ("collision", "support", "oob")]
+    resolved = [
+        item
+        for item in canonical_reports
+        if isinstance(item, dict) and _is_canonical_score(item.get("score"))
+    ]
+    partial = (
+        None
+        if not resolved
+        else sum(float(item["score"]) for item in resolved) / len(resolved)
+    )
+    complete = len(resolved) == 3
+    coverage_fraction = len(resolved) / 3.0
+    validity["partial_score"] = partial
+    validity["score"] = (
+        partial
+        if partial is not None
+        and coverage_fraction >= MIN_PUBLISHABLE_SCORE_COVERAGE
+        else None
+    )
+    validity["status"] = "ok" if complete else "incomplete"
+    validity["metric_scores"] = {
+        name: (
+            float(metrics[name]["score"])
+            if isinstance(metrics.get(name), dict)
+            and _is_canonical_score(metrics[name].get("score"))
+            else None
+        )
+        for name in metrics
+    }
+    validity["scoring"] = {
+        "schema_version": SCORING_SPEC_VERSION,
+        "ordered_canonical_object_ids": list(ordered_object_ids),
+        "n_scene": len(ordered_object_ids),
+        "metric_weights": {
+            "collision": 1.0 / 3.0,
+            "support": 1.0 / 3.0,
+            "oob": 1.0 / 3.0,
+        },
+        "denominator_policy": "shared_canonical_scene_objects",
+        "deduction_multiplier": deduction_multiplier,
+        "deduction_multiplier_metrics": [
+            name
+            for name in DEDUCTION_MULTIPLIER_METRICS
+            if name in {"collision", "support", "oob"}
+        ],
+    }
+
+
+def _validate_deduction_multiplier(value: Any) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise TypeError("deduction_multiplier must be numeric")
+    result = float(value)
+    if not math.isfinite(result) or result <= 0.0:
+        raise ValueError(
+            "deduction_multiplier must be finite and greater than zero"
+        )
+    return result
+
+
+def _strip_canonical_scoring_audit_for_legacy_game(
+    validity: dict[str, Any],
+) -> None:
+    """Keep the frozen Game wire report free of new scoring-only fields."""
+
+    metrics = validity.get("metrics")
+    collision = metrics.get("collision") if isinstance(metrics, dict) else None
+    pairs = collision.get("pairs") if isinstance(collision, dict) else None
+    if not isinstance(pairs, list):
+        return
+    for pair in pairs:
+        if isinstance(pair, dict):
+            pair.pop("scoring_geometry", None)
+
+
 def _canonical_l1_report(validity: dict[str, Any]) -> dict[str, Any]:
     score = validity.get("score")
+    numeric_score = isinstance(score, (int, float)) and not isinstance(score, bool)
     status = (
-        "evaluated"
-        if isinstance(score, (int, float)) and not isinstance(score, bool)
+        "partial"
+        if numeric_score and validity.get("status") == "incomplete"
+        else "evaluated"
+        if numeric_score
         else "incomplete"
         if validity.get("status") == "incomplete"
         else "not_applicable"
@@ -2378,11 +3162,23 @@ def _canonical_l1_report(validity: dict[str, Any]) -> dict[str, Any]:
         for name in active_metrics
         if _is_canonical_score(metric_reports[name].get("score"))
     ]
+    coverage_fraction = (
+        len(resolved_metrics) / len(active_metrics)
+        if active_metrics
+        else 0.0
+    )
+    observed_score = validity.get("partial_score")
+    observed_score = (
+        float(observed_score)
+        if isinstance(observed_score, (int, float))
+        and not isinstance(observed_score, bool)
+        else None
+    )
     return {
         "layer": L1,
         "category": "physical_plausibility",
         "status": status,
-        "score": float(score) if status == "evaluated" else None,
+        "score": float(score) if numeric_score else None,
         "partial_score": validity.get("partial_score"),
         "affects_score": status != "not_applicable",
         "metrics": deepcopy(metric_reports),
@@ -2392,10 +3188,25 @@ def _canonical_l1_report(validity: dict[str, Any]) -> dict[str, Any]:
             "+".join(active_metrics) if active_metrics else "none"
         ),
         "coverage": {
-            "active_metric_count": int(validity.get("active_metric_count") or 0),
+            "active_metric_count": len(active_metrics),
+            "eligible_count": len(active_metrics),
+            "resolved_count": len(resolved_metrics),
+            "fraction": coverage_fraction,
+            "grounded_score_fraction": coverage_fraction,
+            "observed_score": observed_score,
+            "earned_score_mass": (
+                observed_score * coverage_fraction
+                if observed_score is not None
+                else None
+            ),
+            "minimum_publishable_coverage": MIN_PUBLISHABLE_SCORE_COVERAGE,
+            "coverage_threshold_passed": (
+                coverage_fraction >= MIN_PUBLISHABLE_SCORE_COVERAGE
+            ),
             "unresolved_metrics": list(validity.get("unresolved_metrics") or []),
             "disabled_metrics": list(validity.get("disabled_metrics") or []),
-            "complete": status == "evaluated",
+            "complete": bool(active_metrics)
+            and len(resolved_metrics) == len(active_metrics),
         },
         "backend_report": validity,
     }
@@ -2403,9 +3214,6 @@ def _canonical_l1_report(validity: dict[str, Any]) -> dict[str, Any]:
 
 def _canonical_layer_envelope(layer: str, report: dict[str, Any]) -> dict[str, Any]:
     score = report.get("score") if isinstance(report, dict) else None
-    partial_score = report.get("partial_score") if isinstance(report, dict) else None
-    if partial_score is None and isinstance(report, dict):
-        partial_score = report.get("resolved_score")
     raw_status = str(report.get("status") or "") if isinstance(report, dict) else ""
     if raw_status in {"not_applicable", "disabled"}:
         status = "not_applicable"
@@ -2446,7 +3254,7 @@ def _canonical_layer_envelope(layer: str, report: dict[str, Any]) -> dict[str, A
         ),
         "status": status,
         "score": float(score) if status == "evaluated" else None,
-        "partial_score": partial_score,
+        "partial_score": None,
         "affects_score": status != "not_applicable",
         "metrics": deepcopy(metric_reports),
         "active_metrics": active_metrics,

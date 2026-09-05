@@ -1184,6 +1184,12 @@ def _minimum_angular_diversity(candidate: dict[str, Any], selected: list[dict[st
 
 
 def _architecture_plane_overlays(scene: dict[str, Any], detector_evidence: dict[str, Any]) -> list[dict[str, Any]]:
+    polygon_planes = _nonrect_architecture_plane_overlays(
+        scene,
+        detector_evidence,
+    )
+    if polygon_planes:
+        return polygon_planes
     flags = detector_evidence.get("plane_flags") if isinstance(detector_evidence, dict) else None
     if not isinstance(flags, dict):
         return []
@@ -1217,6 +1223,107 @@ def _architecture_plane_overlays(scene: dict[str, Any], detector_evidence: dict[
                 "color": list(COLLISION_OVERLAY_COLORS["architecture"]),
             }
         )
+    return result
+
+
+def _nonrect_architecture_plane_overlays(
+    scene: dict[str, Any],
+    detector_evidence: dict[str, Any],
+) -> list[dict[str, Any]]:
+    metadata = scene.get("metadata")
+    geometry = (
+        metadata.get("non_rectangular_room_geometry")
+        if isinstance(metadata, dict)
+        and metadata.get("evaluation_mode")
+        == "non_rectangular_multi_room"
+        else None
+    )
+    violated = detector_evidence.get("violated_edges")
+    if not isinstance(geometry, dict) or not isinstance(violated, list):
+        return []
+    floor_z = geometry.get("floor_z_m")
+    if (
+        isinstance(floor_z, bool)
+        or not isinstance(floor_z, (int, float))
+        or not np.isfinite(float(floor_z))
+    ):
+        return []
+    walls = {
+        str(item.get("wall_id") or ""): item
+        for item in geometry.get("wall_segments") or []
+        if isinstance(item, dict) and item.get("wall_id")
+    }
+    result: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for edge in violated:
+        if not isinstance(edge, dict):
+            continue
+        wall_id = str(edge.get("wall_id") or "")
+        if not wall_id or wall_id in seen:
+            continue
+        wall = walls.get(wall_id, {})
+        start = edge.get("start_xy") or wall.get("start_xy")
+        end = edge.get("end_xy") or wall.get("end_xy")
+        normal = (
+            edge.get("inward_normal_xy")
+            or (
+                edge.get("edge_local_frame")
+                if isinstance(edge.get("edge_local_frame"), dict)
+                else {}
+            ).get("inward_normal_xy")
+            or wall.get("inward_normal_xy")
+        )
+        height = edge.get("height_m", wall.get("height_m"))
+        try:
+            start_xy = np.asarray(start, dtype=float)
+            end_xy = np.asarray(end, dtype=float)
+            inward = np.asarray(normal, dtype=float)
+            height_m = float(height)
+        except (TypeError, ValueError):
+            continue
+        if (
+            start_xy.shape != (2,)
+            or end_xy.shape != (2,)
+            or inward.shape != (2,)
+            or not np.all(np.isfinite(start_xy))
+            or not np.all(np.isfinite(end_xy))
+            or not np.all(np.isfinite(inward))
+            or not np.isfinite(height_m)
+            or height_m <= 0.0
+        ):
+            continue
+        normal_norm = float(np.linalg.norm(inward))
+        if normal_norm <= 1.0e-9:
+            continue
+        inward /= normal_norm
+        bottom = float(floor_z)
+        top = bottom + height_m
+        corners = [
+            [float(start_xy[0]), float(start_xy[1]), bottom],
+            [float(end_xy[0]), float(end_xy[1]), bottom],
+            [float(end_xy[0]), float(end_xy[1]), top],
+            [float(start_xy[0]), float(start_xy[1]), top],
+        ]
+        center = np.mean(np.asarray(corners, dtype=float), axis=0)
+        normal_end = center + np.asarray(
+            [float(inward[0]), float(inward[1]), 0.0],
+            dtype=float,
+        ) * 0.5
+        result.append(
+            {
+                "id": f"room_polygon_{wall_id}_plane",
+                "flag": "polygon_wall_oob",
+                "wall_id": wall_id,
+                "name": wall_id,
+                "corners": corners,
+                "edges": [[0, 1], [1, 2], [2, 3], [3, 0]],
+                "normal_from": [float(value) for value in center],
+                "normal_to": [float(value) for value in normal_end],
+                "color": list(COLLISION_OVERLAY_COLORS["architecture"]),
+                "geometry_source": "ordered_nonrect_wall_segment",
+            }
+        )
+        seen.add(wall_id)
     return result
 
 

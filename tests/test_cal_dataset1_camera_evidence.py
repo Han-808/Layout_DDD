@@ -36,6 +36,29 @@ def test_distorted_evidence_plan_is_balanced_by_metric_and_severity() -> None:
     }
 
 
+def test_fine_edge_plan_selects_only_human_reviewed_ambiguous_routes() -> None:
+    cases = MODULE._selected_events(
+        ROOT / "Support" / "datasets" / "cal_dataset1",
+        splits={"fine_edge"},
+        metrics=set(MODULE.METRICS),
+    )
+    events = [event for case in cases for event in case["events"]]
+
+    assert len(cases) == 5
+    assert len(events) == 15
+    assert {
+        metric: sum(event["metric"] == metric for event in events)
+        for metric in MODULE.METRICS
+    } == {
+        "collision": 4,
+        "oob": 5,
+        "support": 6,
+    }
+    assert {event["semantic_label"] for event in events} == {"ambiguous"}
+    assert {event["severity_class"] for event in events} == {"edge"}
+    assert {event["route_requirement"] for event in events} == {"must_route"}
+
+
 def test_event_context_preserves_metric_specific_detector_fields() -> None:
     collision_gt = {
         "metric": "collision",

@@ -20,12 +20,15 @@ def _policy_for_stop_reason(
             "field": "on_non_camera_repairable_evidence",
             "value": control.on_non_camera_repairable_evidence,
         }
-    if stop_reason.startswith("max_"):
+    if (
+        stop_reason.startswith("max_")
+        or "_stage_rounds_exhausted" in stop_reason
+    ):
         return {
             "field": "on_budget_exhausted",
             "value": control.on_budget_exhausted,
         }
-    if stop_reason == "camera_selector_failed":
+    if stop_reason.startswith("camera_selector_failed"):
         return {
             "field": "on_selector_failure",
             "value": control.on_selector_failure,
@@ -61,6 +64,7 @@ def _trusted_composite_reservation(
             "trusted": False,
             "selector_calls": 0,
             "camera_actions": 0,
+            "full_artifacts_per_selected_view": 1,
         }
     provenance = result.provenance
     selector_calls = _nonnegative_int(
@@ -71,10 +75,19 @@ def _trusted_composite_reservation(
         provenance.get("max_internal_camera_actions", 0),
         "max_internal_camera_actions",
     )
+    full_artifacts = _nonnegative_int(
+        provenance.get("full_artifacts_per_selected_view", 1),
+        "full_artifacts_per_selected_view",
+    )
+    if full_artifacts < 1:
+        raise ValueError(
+            "full_artifacts_per_selected_view must be positive"
+        )
     return {
         "trusted": True,
         "selector_calls": selector_calls,
         "camera_actions": camera_actions,
+        "full_artifacts_per_selected_view": full_artifacts,
     }
 
 
@@ -109,6 +122,117 @@ def _normalize_camera_usage(
     )
     result["observed"] = True
     return result
+
+
+def _normalize_acquisition_ledger(
+    value: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Validate additive usage for the caller-defined budget scope."""
+
+    if value is None:
+        return {
+            "observed": False,
+            "schema_version": "metric_camera_acquisition_ledger_v1",
+            "artifact_ids": [],
+            "total_images_acquired": 0,
+            "evidence_rounds": 0,
+            "selector_calls": 0,
+            "camera_actions": 0,
+            "deterministic_rounds": 0,
+            "vlm_rounds": 0,
+        }
+    if not isinstance(value, dict):
+        raise TypeError("initial_acquisition_ledger must be a JSON object")
+    artifact_ids = value.get("artifact_ids")
+    if artifact_ids is None:
+        artifact_ids = []
+    if not isinstance(artifact_ids, list) or any(
+        not isinstance(item, str) or not item.strip()
+        for item in artifact_ids
+    ):
+        raise ValueError(
+            "initial_acquisition_ledger.artifact_ids must be a list of "
+            "non-empty strings"
+        )
+    normalized = {
+        "observed": True,
+        "schema_version": "metric_camera_acquisition_ledger_v1",
+        "artifact_ids": list(dict.fromkeys(artifact_ids)),
+    }
+    for key in (
+        "total_images_acquired",
+        "evidence_rounds",
+        "selector_calls",
+        "camera_actions",
+        "deterministic_rounds",
+        "vlm_rounds",
+    ):
+        normalized[key] = _nonnegative_int(
+            value.get(key, 0),
+            f"initial_acquisition_ledger.{key}",
+        )
+    if normalized["total_images_acquired"] < len(
+        normalized["artifact_ids"]
+    ):
+        raise ValueError(
+            "initial_acquisition_ledger.total_images_acquired cannot be "
+            "smaller than its unique artifact count"
+        )
+    return normalized
+
+
+def _extend_acquisition_ledger(
+    value: dict[str, Any] | None,
+    *,
+    artifact_ids: list[str] | tuple[str, ...],
+) -> dict[str, Any]:
+    """Register already-created images without resetting scope counters."""
+
+    normalized = _normalize_acquisition_ledger(value)
+    result = {
+        key: deepcopy(item)
+        for key, item in normalized.items()
+        if key != "observed"
+    }
+    existing = set(result["artifact_ids"])
+    added = 0
+    for raw in artifact_ids:
+        artifact_id = str(raw).strip()
+        if not artifact_id or artifact_id in existing:
+            continue
+        result["artifact_ids"].append(artifact_id)
+        existing.add(artifact_id)
+        added += 1
+    result["total_images_acquired"] = (
+        int(result["total_images_acquired"]) + added
+    )
+    return result
+
+
+def _merge_acquisition_ledger_delta(
+    aggregate: dict[str, Any] | None,
+    *,
+    episode_before: dict[str, Any] | None,
+    episode_after: dict[str, Any],
+) -> dict[str, Any]:
+    """Merge one independently budgeted Judge episode into audit totals."""
+
+    before = _normalize_acquisition_ledger(episode_before)
+    after = _normalize_acquisition_ledger(episode_after)
+    merged = _extend_acquisition_ledger(
+        aggregate,
+        artifact_ids=after["artifact_ids"],
+    )
+    for key in (
+        "evidence_rounds",
+        "selector_calls",
+        "camera_actions",
+        "deterministic_rounds",
+        "vlm_rounds",
+    ):
+        delta = max(0, int(after[key]) - int(before[key]))
+        merged[key] = int(merged.get(key) or 0) + delta
+    return merged
 
 
 def _usage_overrun_stop_reason(
@@ -151,5 +275,8 @@ policy_for_stop_reason = _policy_for_stop_reason
 trusted_composite_reservation = _trusted_composite_reservation
 rendered_internal_selector_calls = _rendered_internal_selector_calls
 normalize_camera_usage = _normalize_camera_usage
+normalize_acquisition_ledger = _normalize_acquisition_ledger
+extend_acquisition_ledger = _extend_acquisition_ledger
+merge_acquisition_ledger_delta = _merge_acquisition_ledger_delta
 usage_overrun_stop_reason = _usage_overrun_stop_reason
 budget_stop_reason = _budget_stop_reason

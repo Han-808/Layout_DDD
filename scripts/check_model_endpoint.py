@@ -39,6 +39,12 @@ def main() -> None:
     parser.add_argument("--timeout-seconds", type=int, default=60)
     parser.add_argument("--max-tokens", type=int, default=None)
     parser.add_argument(
+        "--min-request-interval-seconds",
+        type=float,
+        default=0.0,
+        help="Minimum start-to-start interval shared by requests from this model client.",
+    )
+    parser.add_argument(
         "--max-tokens-field",
         choices=["max_tokens", "max_completion_tokens"],
         default="max_tokens",
@@ -78,6 +84,7 @@ def main() -> None:
         send_temperature=args.send_temperature,
         timeout_seconds=args.timeout_seconds,
         response_format_json=bool(args.response_format_json),
+        min_request_interval_seconds=args.min_request_interval_seconds,
     )
     try:
         result = model.health_check(

@@ -10,7 +10,7 @@ from benchmark.visual_judge.camera_ranking import (
 )
 
 
-VLM_EVALUATION_CONTROL_VERSION = "vlm_evaluation_control_v1"
+VLM_EVALUATION_CONTROL_VERSION = "vlm_evaluation_control_v2"
 
 DEFAULT_VLM_EVALUATION_CONTROL: dict[str, Any] = {
     "schema_version": VLM_EVALUATION_CONTROL_VERSION,
@@ -18,6 +18,10 @@ DEFAULT_VLM_EVALUATION_CONTROL: dict[str, Any] = {
         "backend": "existing",
         "allow_freeform_pose": False,
         "allow_scene_mutation": False,
+    },
+    "initial_group_camera": {
+        "mode": "visibility_ranked",
+        "selector": "deterministic",
     },
     "camera_acquisition": {
         "policy": "deterministic_then_vlm",
@@ -36,10 +40,10 @@ DEFAULT_VLM_EVALUATION_CONTROL: dict[str, Any] = {
         # These mirror the existing budgets. The resolver keeps both paths
         # synchronized so old configuration patches remain authoritative.
         "total": {
-            "max_evidence_rounds": 2,
-            "max_total_images": 6,
-            "max_selector_calls": 3,
-            "max_camera_actions": 2,
+            "max_evidence_rounds": 3,
+            "max_total_images": 8,
+            "max_selector_calls": 4,
+            "max_camera_actions": 3,
         },
         "escalation": {
             "on_no_feasible_candidate": True,
@@ -59,23 +63,28 @@ DEFAULT_VLM_EVALUATION_CONTROL: dict[str, Any] = {
         "allow_need_more_evidence": True,
     },
     "budgets": {
-        "max_evidence_rounds": 2,
+        "max_evidence_rounds": 3,
         "max_views_per_round": 2,
-        "max_total_images": 6,
-        "max_camera_actions": 2,
-        "max_selector_calls": 3,
+        "max_total_images": 8,
+        "max_camera_actions": 3,
+        "max_selector_calls": 4,
     },
     "require_evidence_gate_after_render": True,
     "on_non_camera_repairable_evidence": "unresolved",
-    "on_budget_exhausted": "unresolved",
+    "on_budget_exhausted": "force_choice",
     "on_selector_failure": "keep_previous_evidence",
     "on_render_failure": "unresolved",
 }
 
 _POLICY_VALUES = {
     "on_non_camera_repairable_evidence": {"unresolved"},
-    "on_budget_exhausted": {"unresolved"},
-    "on_selector_failure": {"keep_previous_evidence", "unresolved"},
+    "on_budget_exhausted": {"force_choice"},
+    # A selector failure after a gate-ready packet uses that retained packet
+    # for one final bounded Judge choice.  ``unresolved`` used to be accepted
+    # here even though the Controller could no longer honor it, making the
+    # resolved manifest contradict runtime behavior.  Freeze the only
+    # supported policy until a genuinely different terminal contract exists.
+    "on_selector_failure": {"keep_previous_evidence"},
     "on_render_failure": {"unresolved"},
 }
 
@@ -86,6 +95,8 @@ class VLMEvaluationControl:
     camera_selector_backend: str
     allow_freeform_pose: bool
     allow_scene_mutation: bool
+    initial_group_camera_mode: str
+    initial_group_camera_selector: str
     camera_acquisition_policy: str
     deterministic_max_rounds: int
     deterministic_candidate_budget: int
@@ -123,6 +134,10 @@ class VLMEvaluationControl:
                 "backend": self.camera_selector_backend,
                 "allow_freeform_pose": self.allow_freeform_pose,
                 "allow_scene_mutation": self.allow_scene_mutation,
+            },
+            "initial_group_camera": {
+                "mode": self.initial_group_camera_mode,
+                "selector": self.initial_group_camera_selector,
             },
             "camera_acquisition": {
                 "policy": self.camera_acquisition_policy,
@@ -218,6 +233,8 @@ def resolve_vlm_evaluation_control(
             "camera_selector.backend",
             "camera_selector.allow_freeform_pose",
             "camera_selector.allow_scene_mutation",
+            "initial_group_camera.mode",
+            "initial_group_camera.selector",
             "camera_acquisition.policy",
             "camera_acquisition.deterministic.max_rounds",
             "camera_acquisition.deterministic.candidate_budget",
@@ -313,18 +330,11 @@ def resolve_vlm_evaluation_control(
                 sources["budgets.max_selector_calls"] = (
                     "existing_camera_provider"
                 )
+    # Judge packet capacity and acquisition capacity are independent. The
+    # former constrains one request; it must not silently shrink the shared
+    # Controller image ledger across groups or repair episodes.
     if judge_max_images is not None:
-        capacity = _positive_int(judge_max_images, "judge max_images")
-        requested_total = _positive_int(
-            effective["budgets"]["max_total_images"],
-            "max_total_images",
-        )
-        effective["budgets"]["max_total_images"] = min(
-            requested_total,
-            capacity,
-        )
-        if capacity < requested_total:
-            sources["budgets.max_total_images"] = "judge_capacity"
+        _positive_int(judge_max_images, "judge max_images")
     _mirror_effective_budgets_to_acquisition(effective, sources)
 
     _validate_resolved(effective)
@@ -342,6 +352,7 @@ def _from_mapping(
     sources: dict[str, str],
 ) -> VLMEvaluationControl:
     selector = value["camera_selector"]
+    initial_group_camera = value["initial_group_camera"]
     acquisition = value["camera_acquisition"]
     deterministic = acquisition["deterministic"]
     vlm = acquisition["vlm"]
@@ -354,6 +365,12 @@ def _from_mapping(
         camera_selector_backend=str(selector["backend"]),
         allow_freeform_pose=bool(selector["allow_freeform_pose"]),
         allow_scene_mutation=bool(selector["allow_scene_mutation"]),
+        initial_group_camera_mode=str(
+            initial_group_camera["mode"]
+        ),
+        initial_group_camera_selector=str(
+            initial_group_camera["selector"]
+        ),
         camera_acquisition_policy=str(acquisition["policy"]),
         deterministic_max_rounds=int(deterministic["max_rounds"]),
         deterministic_candidate_budget=int(
@@ -422,6 +439,9 @@ def _validate_patch(value: dict[str, Any]) -> None:
     nested_allowed = {
         "camera_selector": set(
             DEFAULT_VLM_EVALUATION_CONTROL["camera_selector"]
+        ),
+        "initial_group_camera": set(
+            DEFAULT_VLM_EVALUATION_CONTROL["initial_group_camera"]
         ),
         "camera_acquisition": set(
             DEFAULT_VLM_EVALUATION_CONTROL["camera_acquisition"]
@@ -500,6 +520,17 @@ def _validate_resolved(value: dict[str, Any]) -> None:
         raise ValueError(
             "camera_selector.allow_scene_mutation cannot be enabled; "
             "CameraSelector and evidence renderer scene access is read-only"
+        )
+    initial = value["initial_group_camera"]
+    if str(initial["mode"]) != "visibility_ranked":
+        raise ValueError(
+            "official camera-policy evaluation requires "
+            "initial_group_camera.mode=visibility_ranked"
+        )
+    if str(initial["selector"]) != "deterministic":
+        raise ValueError(
+            "official camera-policy evaluation requires "
+            "initial_group_camera.selector=deterministic"
         )
     acquisition = value["camera_acquisition"]
     if str(acquisition["policy"]) not in {

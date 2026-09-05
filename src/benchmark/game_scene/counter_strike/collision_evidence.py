@@ -5,10 +5,10 @@ its regional bank to the Scene Quality evaluator, but it is intentionally not a
 P0b local-view provider.  Counter-Strike collision candidates therefore need a
 small adapter:
 
-* choose one already-frozen original-runtime regional view;
-* keep that raw image unchanged;
+* choose two complementary already-frozen original-runtime regional views;
+* deterministically repair display brightness when a selected view is too dark;
 * draw the two canonical object OBBs as a deterministic 2D annotation;
-* return the same-pose raw/overlay pair to the existing collision judge.
+* return a same-pose raw/overlay pair for each selected angle.
 
 The overlay is not described as a segmentation contour.  It is a projected OBB
 wireframe and carries that limitation explicitly.  Pixels, scene geometry, and
@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageEnhance, ImageOps
 
 from benchmark.evaluator.generic_validity.geometry import (
     get_obb_corners,
@@ -38,7 +38,7 @@ from .loader import CounterStrikeBenchmarkConfig
 
 
 COUNTER_STRIKE_COLLISION_EVIDENCE_VERSION = (
-    "counter_strike_frozen_collision_evidence_v1"
+    "counter_strike_frozen_collision_evidence_v2"
 )
 _OBB_EDGES = (
     (0, 1),
@@ -92,6 +92,7 @@ class CounterStrikeFrozenCaptureRenderer:
                 "load_counter_strike_benchmark_config"
             )
         self._renderer = FrozenBrowserCaptureRenderer(capture_dir=capture_dir)
+        self._benchmark_config = benchmark_config
         # This validates every capture artifact and the exact frozen view bank.
         self._evidence = load_counter_strike_frozen_evidence(
             capture_dir,
@@ -119,6 +120,9 @@ class CounterStrikeFrozenCaptureRenderer:
             "capture_manifest_sha256": self._evidence.manifest_sha256,
             "collision_view_source": "frozen_original_runtime_regional_bank",
             "collision_annotation": "canonical_obb_projection",
+            "local_view_count": 2,
+            "view_diversity": "post_projection_angular_diversity",
+            "brightness_repair": "deterministic_luminance_gate",
             "segmentation_contour_claimed": False,
             "same_capture_required": True,
         }
@@ -143,7 +147,7 @@ class CounterStrikeFrozenCaptureRenderer:
         return self._renderer.provide_scene_quality_evidence(request)
 
     def __call__(self, request: dict[str, Any]) -> list[dict[str, Any]]:
-        """Return one same-pose raw/OBB-overlay pair for Collision only."""
+        """Return two same-pose raw/OBB-overlay pairs for Collision only."""
 
         if not isinstance(request, dict):
             raise CounterStrikeCollisionEvidenceError(
@@ -177,73 +181,102 @@ class CounterStrikeFrozenCaptureRenderer:
             request,
             objects=[self._objects_by_id[object_id] for object_id in object_ids],
         )
-        chosen, projections = self._choose_view(object_ids, focus=focus)
-        overlay_path = self._render_overlay(
-            chosen,
-            object_ids=object_ids,
-            projections=projections,
-            focus=focus,
-        )
-        pair_id = hashlib.sha256(
-            (
-                self._evidence.manifest_sha256
-                + "\0"
-                + chosen.view_id
-                + "\0"
-                + "\0".join(sorted(object_ids))
-            ).encode("utf-8")
-        ).hexdigest()[:16]
-        shared = {
-            "metric": "collision",
-            "view_id": chosen.view_id,
-            "pair_id": pair_id,
-            "target_object_ids": list(object_ids),
-            "pose": {
-                "id": chosen.view_id,
-                "camera_type": chosen.pose["camera_type"],
-                "location": list(chosen.pose["location"]),
-                "target": list(chosen.pose["target"]),
-                "vertical_fov_degrees": chosen.pose["vertical_fov_degrees"],
-            },
-            "selection_source": "deterministic_projected_target_coverage",
-            "appearance_fidelity": "original_runtime_direct_webgl",
-            "focus_point_canonical": [float(value) for value in focus],
-        }
-        return [
-            {
-                **shared,
-                "path": chosen.path.as_posix(),
-                "role": "collision_rgb",
-                "presentation": "raw",
-                "representation": "original_runtime_rgb",
-            },
-            {
-                **shared,
-                "path": overlay_path.as_posix(),
-                "role": "collision_pair_overlay",
-                "presentation": "highlight",
-                "representation": "same_pose_projected_canonical_obb_wireframe",
-                "color_legend": [
-                    {
-                        "object_id": object_ids[index],
-                        "role": f"object_{'a' if index == 0 else 'b'}",
-                        "rgb": list(_PAIR_COLORS[index]),
-                    }
-                    for index in range(2)
-                ],
-                "annotation_limit": (
-                    "projected canonical OBB, not an occlusion-aware "
-                    "segmentation contour"
+        choices = self._choose_views(object_ids, focus=focus, maximum=2)
+        result: list[dict[str, Any]] = []
+        for chosen, projections in choices:
+            effective, luminance = self._brightness_repaired_view(chosen)
+            overlay_path = self._render_overlay(
+                effective,
+                object_ids=object_ids,
+                projections=projections,
+                focus=focus,
+            )
+            pair_id = hashlib.sha256(
+                (
+                    self._evidence.manifest_sha256
+                    + "\0"
+                    + chosen.view_id
+                    + "\0"
+                    + "\0".join(sorted(object_ids))
+                ).encode("utf-8")
+            ).hexdigest()[:16]
+            shared = {
+                "metric": "collision",
+                "view_id": chosen.view_id,
+                "pair_id": pair_id,
+                "target_object_ids": list(object_ids),
+                "pose": {
+                    "id": chosen.view_id,
+                    "camera_type": chosen.pose["camera_type"],
+                    "location": list(chosen.pose["location"]),
+                    "target": list(chosen.pose["target"]),
+                    "vertical_fov_degrees": chosen.pose[
+                        "vertical_fov_degrees"
+                    ],
+                },
+                "selection_source": (
+                    "deterministic_projected_target_coverage_plus_"
+                    "angular_diversity"
                 ),
-            },
-        ]
+                "appearance_fidelity": "original_runtime_direct_webgl",
+                "focus_point_canonical": [float(value) for value in focus],
+                "source_view_id": chosen.view_id,
+                "source_sha256": _sha256(chosen.path),
+                "luminance": luminance,
+            }
+            result.extend(
+                [
+                    {
+                        **shared,
+                        "path": effective.path.as_posix(),
+                        "role": "collision_rgb",
+                        "presentation": (
+                            "brightness_repair"
+                            if effective.path != chosen.path
+                            else "raw"
+                        ),
+                        "representation": "original_runtime_rgb",
+                    },
+                    {
+                        **shared,
+                        "path": overlay_path.as_posix(),
+                        "role": "collision_pair_overlay",
+                        "presentation": "highlight",
+                        "representation": (
+                            "same_pose_projected_canonical_obb_wireframe"
+                        ),
+                        "color_legend": [
+                            {
+                                "object_id": object_ids[index],
+                                "role": (
+                                    f"object_{'a' if index == 0 else 'b'}"
+                                ),
+                                "rgb": list(_PAIR_COLORS[index]),
+                            }
+                            for index in range(2)
+                        ],
+                        "annotation_limit": (
+                            "projected canonical OBB, not an occlusion-aware "
+                            "segmentation contour"
+                        ),
+                    },
+                ]
+            )
+        return result
 
-    def _choose_view(
+    def _choose_views(
         self,
         object_ids: tuple[str, str],
         *,
         focus: np.ndarray,
-    ) -> tuple[_ViewProjection, dict[str, tuple[np.ndarray, np.ndarray]]]:
+        maximum: int,
+    ) -> tuple[
+        tuple[
+            _ViewProjection,
+            dict[str, tuple[np.ndarray, np.ndarray]],
+        ],
+        ...,
+    ]:
         ranked: list[
             tuple[
                 tuple[float, float, float, float, float, float, float, str],
@@ -354,14 +387,101 @@ class CounterStrikeFrozenCaptureRenderer:
                 item[0][7],
             )
         )
-        rank, view, projected = ranked[0]
-        if rank[0] <= 0.0 and rank[3] <= 0.0 and rank[6] <= 0.0:
+        best_rank, best_view, best_projected = ranked[0]
+        if (
+            best_rank[0] <= 0.0
+            and best_rank[3] <= 0.0
+            and best_rank[6] <= 0.0
+        ):
             raise CounterStrikeCollisionEvidenceError(
                 "target_pair_not_visible",
                 "no frozen view projects either collision target "
                 "inside the image",
             )
-        return view, projected
+        selected = [(best_view, best_projected)]
+        if maximum <= 1:
+            return tuple(selected)
+        remaining = ranked[1:]
+        if remaining:
+            # Prefer a genuinely different bearing while retaining the frozen
+            # visibility ranking. A 30-degree floor avoids selecting two nearly
+            # identical screenshots when a complementary frozen angle exists.
+            diverse = [
+                item
+                for item in remaining
+                if _angular_separation_degrees(
+                    best_view,
+                    item[1],
+                    focus=focus,
+                )
+                >= 30.0
+            ]
+            _, second_view, second_projected = (
+                diverse[0] if diverse else remaining[0]
+            )
+            selected.append((second_view, second_projected))
+        return tuple(selected[:maximum])
+
+    def _brightness_repaired_view(
+        self,
+        view: _ViewProjection,
+    ) -> tuple[_ViewProjection, dict[str, Any]]:
+        config = self._benchmark_config.raw["visual_evidence"][
+            "active_fallback"
+        ]["brightness_repair"]
+        before = _image_luminance_diagnostics(view.path)
+        if not config["enabled"] or not _is_dark_evidence(
+            before,
+            config=config,
+        ):
+            return view, {
+                "input": before,
+                "output": before,
+                "gain": 1.0,
+                "repaired": False,
+            }
+        target = float(config["target_median_luminance"])
+        gain = min(
+            float(config["max_gain"]),
+            max(
+                1.0,
+                target / max(before["median_luminance"], 1.0 / 255.0),
+            ),
+        )
+        digest = hashlib.sha256(
+            (
+                COUNTER_STRIKE_COLLISION_EVIDENCE_VERSION
+                + "\0"
+                + _sha256(view.path)
+                + "\0"
+                + f"{gain:.8f}"
+            ).encode("utf-8")
+        ).hexdigest()[:20]
+        destination = (
+            self.evidence_out_dir
+            / f"collision_{digest}_{view.view_id}_brightness.png"
+        )
+        if not destination.is_file():
+            with Image.open(view.path) as source:
+                ImageEnhance.Brightness(source.convert("RGB")).enhance(
+                    gain
+                ).save(destination, format="PNG")
+        after = _image_luminance_diagnostics(destination)
+        return (
+            _ViewProjection(
+                view_id=view.view_id,
+                path=destination,
+                pose=view.pose,
+                declared_target_ids=view.declared_target_ids,
+                scope=view.scope,
+            ),
+            {
+                "input": before,
+                "output": after,
+                "gain": float(gain),
+                "repaired": True,
+            },
+        )
 
     def _render_overlay(
         self,
@@ -628,3 +748,63 @@ def _event_focus_point(
         np.asarray([item.center for item in objects], dtype=float),
         axis=0,
     )
+
+
+def _angular_separation_degrees(
+    first: _ViewProjection,
+    second: _ViewProjection,
+    *,
+    focus: np.ndarray,
+) -> float:
+    first_direction = np.asarray(first.pose["location"], dtype=float) - focus
+    second_direction = np.asarray(second.pose["location"], dtype=float) - focus
+    first_norm = float(np.linalg.norm(first_direction))
+    second_norm = float(np.linalg.norm(second_direction))
+    if first_norm <= 1.0e-9 or second_norm <= 1.0e-9:
+        return 0.0
+    cosine = float(
+        np.dot(first_direction, second_direction)
+        / (first_norm * second_norm)
+    )
+    return math.degrees(math.acos(max(-1.0, min(1.0, cosine))))
+
+
+def _image_luminance_diagnostics(path: Path) -> dict[str, float]:
+    with Image.open(path) as source:
+        histogram = ImageOps.grayscale(source.convert("RGB")).histogram()
+    pixel_count = max(1, sum(histogram))
+
+    def percentile(fraction: float) -> float:
+        target = max(1, int(math.ceil(pixel_count * fraction)))
+        cumulative = 0
+        for value, count in enumerate(histogram):
+            cumulative += int(count)
+            if cumulative >= target:
+                return float(value) / 255.0
+        return 1.0
+
+    return {
+        "median_luminance": percentile(0.50),
+        "p90_luminance": percentile(0.90),
+    }
+
+
+def _is_dark_evidence(
+    diagnostics: dict[str, float],
+    *,
+    config: dict[str, Any],
+) -> bool:
+    return (
+        float(diagnostics["median_luminance"])
+        < float(config["median_luminance_threshold"])
+        and float(diagnostics["p90_luminance"])
+        < float(config["p90_luminance_threshold"])
+    )
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()

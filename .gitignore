@@ -51,9 +51,23 @@ downloads/
 
 # Local documentation and operational notes
 *.md
+!/COMPATIBILITY_STATUS.md
+!/metrics.md
+!/experiment_agenda.md
 !/Support/README.md
 !/docs/
 !/docs/grouping.md
 !/docs/grouping_blind30_experiment.md
+!/docs/multi_room_evaluation_compatibility_v1.md
+!/docs/multi_room_generation_v1.md
+!/docs/GENERATION_COMPARABILITY_PROTOCOL.md
+!/docs/CONTROLLED_PILOT_V1.md
 !/docs/game/
 !/docs/game/counter_strike_benchmark.md
+
+# Active frozen generation bundles are versioned for clean-checkout
+# reproducibility. Keep broad local-data/document ignores everywhere else.
+!/tools/sceneeval_hy4_runner_v050/README.md
+!/tools/sceneeval_hy4_runner_v050/data/
+!/tools/sceneeval_hy4_runner_v050/data/**
+!/tools/api3_anthropic_runner_v2/README.md

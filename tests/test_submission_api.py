@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 from jsonschema import Draft202012Validator
+from PIL import Image
 
 from benchmark.api.submission import (
     CaseBundleError,
@@ -208,7 +209,9 @@ class _FakeTrustedRenderer:
         views = []
         for name in ("top", "perspective"):
             path = destination / f"standardized_{name}.png"
-            path.write_bytes(f"trusted {name} evidence".encode())
+            image = Image.new("RGB", (2, 2), (40, 60, 80))
+            image.putpixel((0, 0), (180, 120, 60))
+            image.save(path)
             views.append({"name": name, "path": path.as_posix()})
         blend = destination / "scene.blend"
         blend.write_bytes(b"trusted blend")
@@ -384,6 +387,28 @@ def test_official_proxy_case_uses_one_canonical_report(tmp_path: Path) -> None:
         "trusted_bbox_proxy_projection"
     )
     assert result["manifest"]["generator"]["invoked"] is False
+    assert report["scoring_profile"] == {
+        "scoring_profile_id": "custom_evaluation_profile_compat",
+        "scoring_spec_version": "legacy_metric_scoring_compat",
+        "layer_weights": {
+            L1: 1.0,
+            L2: 0.0,
+            L3: 0.0,
+            L4: 0.0,
+        },
+        "l3_metric_weights": {
+            "scale_consistency": 0.04,
+            "style_consistency": 0.07,
+            "object_pairing_consistency": 0.09,
+            "functional_consistency": 0.52,
+            "semantic_placement_consistency": 0.28,
+        },
+    }
+    assert "scoring" not in report["reports"]["generic_validity"]
+    assert report["reports"]["scene_quality"]["scoring"]["enabled"] is False
+    assert result["manifest"]["scoring_reliability"] == report[
+        "scoring_reliability"
+    ]
     schema = read_json(ROOT / "schemas" / "evaluation_report.schema.json")
     Draft202012Validator(schema).validate(report)
 
@@ -403,7 +428,9 @@ def test_official_proxy_case_rejects_active_l3(tmp_path: Path) -> None:
         )
 
 
-def test_official_proxy_case_allows_no_applicable_l3(tmp_path: Path) -> None:
+def test_official_proxy_case_without_specialized_l3_targets_defaults_with_coverage(
+    tmp_path: Path,
+) -> None:
     root = _write_bundle(tmp_path)
     _add_artifact(
         root,
@@ -418,16 +445,42 @@ def test_official_proxy_case_allows_no_applicable_l3(tmp_path: Path) -> None:
         },
     )
     bundle = load_case_bundle(root)
-    result = evaluate_submission(
-        scene=_scene(),
-        case_bundle=bundle,
-        out_dir=tmp_path / "proxy_no_applicable_l3",
-        renderer=_FakeTrustedRenderer(),
-        vlm_judge=_FakeJudge(),
-        official_mode=True,
+    out_dir = tmp_path / "proxy_no_applicable_l3"
+    with pytest.raises(
+        SubmissionEvaluationError,
+        match="did not produce complete metric coverage",
+    ):
+        evaluate_submission(
+            scene=_scene(),
+            case_bundle=bundle,
+            out_dir=out_dir,
+            renderer=_FakeTrustedRenderer(),
+            vlm_judge=_FakeJudge(),
+            official_mode=True,
+        )
+    report = json.loads(
+        (out_dir / "evaluation_report.json").read_text(encoding="utf-8")
     )
-    assert result["evaluation_report"]["layer_reports"][L3]["status"] == (
-        "not_applicable"
+    manifest = json.loads(
+        (out_dir / "submission_run_manifest.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert report["layer_reports"][L3]["status"] == "incomplete"
+    assert report["benchmark_score"] is None
+    assert report["benchmark_score_status"] == (
+        "failed_coverage_threshold"
+    )
+    assert report["coverage"]["coverage_threshold_passed"] is False
+    assert report["coverage"]["score_resolution_complete"] is False
+    assert report["coverage"]["score_grounding_complete"] is False
+    assert report["coverage"]["grounded_score_fraction"] < 1.0
+    assert manifest["score_coverage"] == report["coverage"]
+    assert all(
+        metric["coverage"]["score_grounding"]["fraction"] == 0.0
+        and metric["terminal_state"] == "evaluated_degraded"
+        and metric["score"] is None
+        for metric in report["layer_reports"][L3]["metrics"].values()
     )
 
 

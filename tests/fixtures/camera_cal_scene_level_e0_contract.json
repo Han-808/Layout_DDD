@@ -1,0 +1,140 @@
+{
+  "contract_version": "camera_cal_scene_level_e0_v1",
+  "runner": {
+    "path": "scripts/run_camera_cal_scene_level.py",
+    "git_commit_sha": "5052cdbd804f0ee99a95bda2d2fb602dfc4975d9",
+    "git_blob_sha": "2da2a22b84a1e87664e0d14f85c2208b25a2c66b",
+    "sha256": "cb6cf447e52dd07d72f129cb2fe5d54c250c916b382a5ebe471a839c9b48e8bf"
+  },
+  "public_top_level": {
+    "classes": [
+      "ProgressReporter",
+      "ModelRouteAbortSignal",
+      "APICallTracker"
+    ],
+    "functions": [
+      "run_cases_parallel",
+      "main",
+      "parse_args",
+      "positive_int",
+      "positive_float",
+      "effective_model_route",
+      "normalize_metric_selection",
+      "discover_cases",
+      "case_paths",
+      "renderer_config_from_args",
+      "resolved_control",
+      "build_experiment_plan",
+      "run_case",
+      "model_config",
+      "build_grouping_model",
+      "promptless_scene_request",
+      "promptless_l1_l3_profile",
+      "promptless_l3_only_profile",
+      "scene_quality_config",
+      "camera_cal_asset_policy",
+      "identity_legend_from_manifest",
+      "grouping_evidence_packet",
+      "case_input_fingerprint",
+      "resumable_case",
+      "build_scene_comparison",
+      "metric_prediction",
+      "collect_l1_engineering_failures",
+      "binary_schema_validation_summary",
+      "record_case_cancellation",
+      "record_case_failure",
+      "l3_resolution_audit",
+      "build_summary",
+      "empty_metric_summary",
+      "telemetry_by_metric",
+      "initial_image_count",
+      "metric_failure_counts",
+      "read_api_call_records",
+      "api_usage_summary",
+      "safe_route_manifest",
+      "read_json",
+      "read_yaml_object",
+      "atomic_write_json",
+      "file_sha256",
+      "json_sha256",
+      "utc_now"
+    ]
+  },
+  "cli": {
+    "command": [
+      "python3",
+      "scripts/run_camera_cal_scene_level.py",
+      "--help"
+    ],
+    "help_exit_code": 0,
+    "required_help_tokens": [
+      "usage:",
+      "--help",
+      "--output-root",
+      "--metric",
+      "--l3-only"
+    ]
+  },
+  "schema_versions": {
+    "API_CALL_SCHEMA_VERSION": "camera_cal_api_call_v1",
+    "API_USAGE_SCHEMA_VERSION": "camera_cal_api_usage_v1",
+    "AUDIT_GRAPH_EXPORT_VERSION": "evaluation_audit_graph_export_v1",
+    "CASE_SCHEMA_VERSION": "camera_cal_scene_level_case_v5",
+    "COMPARISON_SCHEMA_VERSION": "camera_cal_scene_comparison_v1",
+    "CROSS_METRIC_OWNERSHIP_AUDIT_VERSION": "cross_metric_ownership_audit_v2",
+    "FUNCTIONAL_AFFORDANCE_SCHEMA_VERSION": "functional_affordance_ledger_v4",
+    "FUNCTIONAL_DISCOVERY_SCHEMA_VERSION": "functional_discovery_v6",
+    "FUNCTIONAL_OWNERSHIP_LEDGER_VERSION": "functional_ownership_ledger_v2",
+    "FUNCTIONAL_RELATION_SCHEMA_VERSION": "functional_relation_audit_v4",
+    "L3_METRIC_PROMPT_VERSION": "l3_burden_categories_v30",
+    "PLACEMENT_CHECK_LEDGER_VERSION": "placement_check_ledger_v1",
+    "PLACEMENT_CHECK_RESULT_VERSION": "placement_check_results_v2",
+    "PLACEMENT_DISCOVERY_SCHEMA_VERSION": "placement_discovery_v2",
+    "PLAN_SCHEMA_VERSION": "camera_cal_scene_level_plan_v2",
+    "PROGRESS_SCHEMA_VERSION": "camera_cal_scene_level_progress_v1",
+    "RUNNER_SCHEMA_VERSION": "camera_cal_scene_level_runner_v9",
+    "SUMMARY_SCHEMA_VERSION": "camera_cal_scene_level_summary_v2"
+  },
+  "source_sha256": {
+    "prompt": {
+      "src/benchmark/visual_judge/l3_prompts.py": "2bfc82e1bb0ce137cff4e7fc0ba246b42ff42bb3d5b1ed4ce4199b9cadbce2ff",
+      "src/benchmark/evaluator/scene_quality/prompt_context.py": "097d59030af0088ece70748df2d7fe4d6ed11172c19e400a620e8351cdfb3049"
+    },
+    "camera": {
+      "src/benchmark/rendering/camera_pose.py": "0d05c56806f8b4ff364690e6f261dacca646dd1229a6306ddb181c46c4256f2c",
+      "src/benchmark/visual_judge/openai_camera_selector.py": "ac873bf37cceda0fff66bf21682597da44b8516116ab4803e0998c7472a40e36"
+    },
+    "metric": {
+      "src/benchmark/evaluator/scoring.py": "94d8d7fa60fd86b8e36df8b3065c7f50f36e2645941d103482b7b6a44cf7911f",
+      "src/benchmark/scoring_profiles.py": "2a37bff192b55087a2b322f92db32e5bff7ffd4e9864ccc6c13cbab891947a75"
+    },
+    "functional_probe": {
+      "src/benchmark/evaluator/scene_quality/functional_acquisition.py": "a756d218d55b0e767f2c1f8766af1ef2fa4f154836ec76f39776df7cdfd4a9c3",
+      "src/benchmark/evaluator/scene_quality/functional_boundary_evidence.py": "f97798eed64e5ccc857e5bad9fad10d1ccdbf01b203ba95d9e42923723e7708f",
+      "src/benchmark/evaluator/scene_quality/cross_group_relations.py": "c97a62dcb640414d3cd07fcd41dcbfd5429e4b04df6d31cef17b3c2775e94e54",
+      "src/benchmark/evaluator/scene_quality/functional_geometry.py": "6d6ef3796570ad6b7f0fcb24c2b6e5680e5fd1bf9d640b7ba60bfe9d6cf16be6",
+      "src/benchmark/evaluator/scene_quality/functional_checks.py": "729e88bb26c5319a12ff92f53447dfc83fc13772e31d7fe9f0db7eb58c34adba",
+      "src/benchmark/evaluator/scene_quality/functional_ownership.py": "e70419d026ba56c56ac4298d49de33a1b1942b9f420f82242e94fd828ec71614",
+      "src/benchmark/evaluator/scene_quality/functional_probe.py": "af4624b79d5cb2627477b741e968a426b9dfda099a23bd97c658d7e3895fb3a4",
+      "src/benchmark/evaluator/scene_quality/global_group_first.py": "b651f9c2bf970c0310d956e9e4d12daecf792174a8437ac3d821d6bd61eb61bf",
+      "src/benchmark/evaluator/scene_quality/group_scoped.py": "c7a0ca044465fb4e6ab4c7d6c8a4ce7c0f6ea5d12e469fd76c780a1a57858331",
+      "src/benchmark/evaluator/scene_quality/interfaces.py": "569528e101cb5a58d5f78172f4acfccd6ea0f7be177ee7dfba2abf8ec906a670",
+      "src/benchmark/evaluator/scene_quality/placement_checks.py": "7e32d3129840e99563f239128c675a208be893ce07c68c9232948bfca22a0ed5",
+      "src/benchmark/rendering/camera_pose.py": "0d05c56806f8b4ff364690e6f261dacca646dd1229a6306ddb181c46c4256f2c",
+      "src/benchmark/visual_judge/functional_discovery.py": "5dfb2d5ab083f5e36f5746d92338bcd6fc8c942f50d85d39f1fc8556464f580f",
+      "src/benchmark/visual_judge/functional_discovery_contract.py": "4fa79397394b0e70969c4afecd1f5195c5b93ab1d68d55132b02ca6eadaf20c4",
+      "src/benchmark/visual_judge/functional_discovery_validation.py": "984435c787f7db3c4c4dba6d90ba1a71bb6ea57fcd741994e4f3b4b5860687e1",
+      "src/benchmark/visual_judge/functional_evidence.py": "3c97ca3554dbbee1555c7c8e78f4d3804318ee984bd3ad300deae8391dcc3469",
+      "src/benchmark/visual_judge/openai_camera_selector.py": "ac873bf37cceda0fff66bf21682597da44b8516116ab4803e0998c7472a40e36",
+      "src/benchmark/visual_judge/openai_compatible.py": "52a08b259444a0fc2f23c57c493791481e5ba4645311316bad9a349df8261d97",
+      "src/benchmark/visual_judge/orchestration/controller.py": "ac0d9bd4a09df7426f7d635d32e53c40e5bd3f9619990dfd200f476db79aa01b",
+      "src/benchmark/visual_judge/placement_discovery.py": "66c5a7f26680b0ff1adbbcda7ca9fa1cdd785981a9fd342f65bc8c42fec9e6c2",
+      "src/benchmark/visual_judge/graphs/evaluation.py": "9617a088811ba5b9480577180fe9e9de4920204ede8bef34df2d3f58b4ebbb37",
+      "src/benchmark/visual_judge/graphs/evaluation_projection.py": "5631e17286d410a22cb841915db022910da7320d3a38cb914a304bb997de52df",
+      "src/benchmark/visual_judge/graphs/exporter.py": "e2825e8d092dc30145bc49283987a82d10b556b734bfaadd471894adb9eb721b",
+      "src/benchmark/visual_judge/render_views.py": "4e8eda2b84d5a702847d2a88e6bb7ab844eeaf67403265bc79e89e9c53b331e9",
+      "src/benchmark/visual_judge/response_repair.py": "0e812267c4072f668741a98fc16c2201f85d3cd868399b9de64a72ba7e37e200",
+      "src/benchmark/visual_judge/usable_surface.py": "305aa6a0eaa63fb17f8737443d05af2635bd5303fd070526fa9e281d1df7136d"
+    }
+  }
+}

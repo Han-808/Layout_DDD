@@ -182,6 +182,7 @@ while IFS=$'\t' read -r case_id difficulty; do
     --render-evidence "$top_view"
     --render-evidence "$perspective_view"
     --vlm-judge-config "$JUDGE_CONFIG"
+    --camera-selector-config "$JUDGE_CONFIG"
     --camera-pose-mode query_cov
     --camera-blend-file "$blend_file"
     --camera-evidence-dir "$query_case/camera_evidence"

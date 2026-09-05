@@ -267,7 +267,13 @@ def _validate_legacy_judge_contract(
             allowed_missing_observations=(
                 _canonical_allowed_missing_observations(request)
             ),
-            allowed_target_ids=_canonical_allowed_target_ids(request),
+            allowed_defect_target_ids=(
+                _canonical_allowed_defect_target_ids(request)
+            ),
+            allowed_evidence_request_target_ids=(
+                _canonical_allowed_evidence_request_target_ids(request)
+            ),
+            **_canonical_defect_field_contract(request),
         )
         return normalized
     binary_labels = {
@@ -318,11 +324,21 @@ def _normalize_legacy_canonical_missing_observations(
             "metadata": {},
         },
         metric=request.metric,
-        known_target_ids=_canonical_allowed_target_ids(request),
+        known_target_ids=(
+            _canonical_allowed_evidence_request_target_ids(request)
+        ),
     )
     value["missing_evidence"] = list(
         constraints.required_observations
     )
+    value["evidence_request"] = {
+        "target_ids": list(constraints.target_ids),
+        "missing_observations": list(
+            constraints.required_observations
+        ),
+        "view_goal": "legacy_metric_scoped_visual_confirmation",
+        "metadata": {"source": "legacy_judge_adapter"},
+    }
 
 
 def _validate_native_judge_contract(
@@ -408,7 +424,13 @@ def _validate_native_judge_contract(
             allowed_missing_observations=(
                 _canonical_allowed_missing_observations(request)
             ),
-            allowed_target_ids=_canonical_allowed_target_ids(request),
+            allowed_defect_target_ids=(
+                _canonical_allowed_defect_target_ids(request)
+            ),
+            allowed_evidence_request_target_ids=(
+                _canonical_allowed_evidence_request_target_ids(request)
+            ),
+            **_canonical_defect_field_contract(request),
         )
         return normalized
     if decision_contract in {
@@ -443,6 +465,31 @@ def _canonical_allowed_scopes(request: JudgeRequest) -> tuple[str, ...]:
     return ()
 
 
+def _canonical_defect_field_contract(
+    request: JudgeRequest,
+) -> dict[str, Any]:
+    response_contract = request.context.get("response_contract")
+    if not isinstance(response_contract, dict):
+        return {}
+    defects = response_contract.get("defects")
+    if not isinstance(defects, dict):
+        return {}
+    fields = tuple(
+        str(value)
+        for value in defects.get("fields") or ()
+        if isinstance(value, str) and value.strip()
+    )
+    allowed_values = defects.get("allowed_field_values")
+    return {
+        "required_defect_fields": fields,
+        "allowed_defect_field_values": (
+            deepcopy(allowed_values)
+            if isinstance(allowed_values, dict)
+            else {}
+        ),
+    }
+
+
 def _canonical_allowed_missing_observations(
     request: JudgeRequest,
 ) -> tuple[str, ...]:
@@ -462,9 +509,27 @@ def _canonical_allowed_missing_observations(
     )
 
 
-def _canonical_allowed_target_ids(
+def _canonical_allowed_defect_target_ids(
     request: JudgeRequest,
 ) -> tuple[str, ...]:
+    response_contract = request.context.get("response_contract")
+    response_contract = (
+        response_contract
+        if isinstance(response_contract, dict)
+        else {}
+    )
+    defects = response_contract.get("defects")
+    defects = defects if isinstance(defects, dict) else {}
+    allowed = defects.get("allowed_target_ids")
+    if isinstance(allowed, list) and allowed:
+        return tuple(
+            dict.fromkeys(
+                str(value)
+                for value in allowed
+                if isinstance(value, (str, int))
+                and str(value).strip()
+            )
+        )
     scope = request.context.get("group_scope")
     if isinstance(scope, dict):
         members = scope.get("member_ids")
@@ -487,6 +552,36 @@ def _canonical_allowed_target_ids(
         if object_id is not None and str(object_id).strip():
             values.append(str(object_id))
     return tuple(dict.fromkeys((*values, "scene")))
+
+
+def _canonical_allowed_evidence_request_target_ids(
+    request: JudgeRequest,
+) -> tuple[str, ...]:
+    """Return objects the active episode may request additional views for."""
+
+    values = _request_target_ids(request)
+    external = request.context.get(
+        "allowed_external_evidence_target_ids"
+    )
+    if isinstance(external, list):
+        values.extend(external)
+    if not isinstance(request.context.get("group_scope"), dict):
+        for item in request.scene_context.get("objects") or []:
+            if not isinstance(item, dict):
+                continue
+            object_id = item.get("id") or item.get("object_id")
+            if object_id is not None and str(object_id).strip():
+                values.append(str(object_id))
+    return tuple(
+        dict.fromkeys(
+            (
+                str(value)
+                for value in (*values, "scene")
+                if isinstance(value, (str, int))
+                and str(value).strip()
+            )
+        )
+    )
 
 
 def _set_authoritative_provenance(
@@ -672,6 +767,7 @@ class ControlledVLMJudge:
         deterministic_camera_selector: Any | None = None,
         vlm_camera_selector: Any | None = None,
         evidence_renderer: Any | None = None,
+        candidate_preview_renderer: Any | None = None,
         strict: bool | None = None,
     ) -> None:
         if judge is None:
@@ -685,6 +781,7 @@ class ControlledVLMJudge:
         )
         self.vlm_camera_selector = vlm_camera_selector
         self.evidence_renderer = evidence_renderer
+        self.candidate_preview_renderer = candidate_preview_renderer
         # A Judge is controlled by default regardless of implementation
         # details.  Compatibility callers that are provably non-VLM may opt
         # out explicitly with strict=False; absence of `.model` must never
@@ -791,6 +888,11 @@ class ControlledVLMJudge:
                 if provider_available
                 else self.vlm_camera_selector
             ),
+            candidate_preview_renderer=(
+                None
+                if provider_available
+                else self.candidate_preview_renderer
+            ),
             control=self.control,
         )
         core_request = _judge_request(request)
@@ -807,6 +909,9 @@ class ControlledVLMJudge:
             selector_context=_selector_context(request),
             gate_manifest_path=_request_manifest_path(request),
             initial_camera_usage=initial_camera_usage,
+            initial_acquisition_ledger=_request_acquisition_ledger(
+                request
+            ),
         )
         self.audit_records.append(
             {
@@ -1022,6 +1127,11 @@ class ControlledVLMJudge:
                 if provider_available
                 else self.vlm_camera_selector
             ),
+            candidate_preview_renderer=(
+                None
+                if provider_available
+                else self.candidate_preview_renderer
+            ),
             control=self.control,
         )
         core_request = _judge_request(request)
@@ -1038,6 +1148,9 @@ class ControlledVLMJudge:
             selector_context=_selector_context(request),
             gate_manifest_path=_request_manifest_path(request),
             initial_camera_usage=initial_camera_usage,
+            initial_acquisition_ledger=_request_acquisition_ledger(
+                request
+            ),
         )
         self.audit_records.append(
             {
@@ -1045,25 +1158,43 @@ class ControlledVLMJudge:
                 "metric": core_request.metric,
                 "status": result.status,
                 "stop_reason": result.stop_reason,
+                "budget_exhaustion_forced_choice": deepcopy(
+                    result.audit.get(
+                        "budget_exhaustion_forced_choice",
+                        {"applied": False},
+                    )
+                ),
                 "audit": deepcopy(result.audit),
             }
         )
         if result.status in {"valid", "invalid"} and responses:
             if decision_contract.value in _BINARY_CONTRACTS:
-                return _binary_compatibility_response(
-                    responses[-1],
-                    method_name=method_name,
-                    decision_contract=decision_contract,
+                return _with_forced_choice_audit(
+                    _binary_compatibility_response(
+                        responses[-1],
+                        method_name=method_name,
+                        decision_contract=decision_contract,
+                    ),
+                    result,
                 )
-            return deepcopy(responses[-1])
+            return _with_forced_choice_audit(
+                deepcopy(responses[-1]),
+                result,
+            )
         if responses and decision_contract.value not in _BINARY_CONTRACTS:
-            return deepcopy(responses[-1])
+            return _with_forced_choice_audit(
+                deepcopy(responses[-1]),
+                result,
+            )
         if decision_contract.value in _BINARY_CONTRACTS:
             raise EvidenceControlUnresolvedError(result)
-        return _canonical_unresolved_response(
-            request,
-            method_name=method_name,
-            result=result,
+        return _with_forced_choice_audit(
+            _canonical_unresolved_response(
+                request,
+                method_name=method_name,
+                result=result,
+            ),
+            result,
         )
 
     def _consume_provider_usage(
@@ -1111,6 +1242,7 @@ def build_controlled_vlm_judge(
     deterministic_camera_selector: Any | None = None,
     vlm_camera_selector: Any | None = None,
     evidence_renderer: Any | None = None,
+    candidate_preview_renderer: Any | None = None,
     strict: bool | None = None,
 ) -> Any | None:
     if judge is None or isinstance(judge, ControlledVLMJudge):
@@ -1123,6 +1255,7 @@ def build_controlled_vlm_judge(
         deterministic_camera_selector=deterministic_camera_selector,
         vlm_camera_selector=vlm_camera_selector,
         evidence_renderer=evidence_renderer,
+        candidate_preview_renderer=candidate_preview_renderer,
         strict=strict,
     )
 
@@ -1274,6 +1407,20 @@ def _evidence_goal(
     return result
 
 
+def _with_forced_choice_audit(
+    response: dict[str, Any],
+    result: VLMEvaluationResult,
+) -> dict[str, Any]:
+    value = deepcopy(response)
+    value["budget_exhaustion_forced_choice"] = deepcopy(
+        result.audit.get(
+            "budget_exhaustion_forced_choice",
+            {"applied": False},
+        )
+    )
+    return value
+
+
 def _binary_compatibility_response(
     raw: dict[str, Any],
     *,
@@ -1393,6 +1540,7 @@ def _selector_context(request: dict[str, Any]) -> dict[str, Any]:
         "preview_visibility_warning",
         "selection_phase",
         "group_scope",
+        "target_scope",
         "grouping_role",
         "member_ids",
         "target_bounds",
@@ -1410,6 +1558,19 @@ def _request_manifest_path(request: dict[str, Any]) -> str | None:
         if isinstance(value, str) and value.strip():
             return value
     return None
+
+
+def _request_acquisition_ledger(
+    request: dict[str, Any],
+) -> dict[str, Any] | None:
+    value = request.get("camera_acquisition_ledger")
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise TypeError(
+            "camera_acquisition_ledger must be a JSON object"
+        )
+    return deepcopy(value)
 
 
 def _compatibility_screen_request(request: dict[str, Any]) -> bool:
