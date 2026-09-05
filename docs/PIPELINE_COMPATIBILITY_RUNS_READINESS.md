@@ -55,7 +55,8 @@ policies and converters are not redesigned.
 - [x] F6: every planned unit has a terminal status; blocked/partial/cancelled
       are distinct from complete; zero attempts cannot exit successfully.
 - [x] Current focused compatibility/execution and new regression tests run.
-      Latest geometry-focused: 64 passed. Extended: 526 passed, one baseline-existing failure;
+      Latest exporter-focused: 64 passed; input-factory contract: 15 passed.
+      Extended: 541 passed, one baseline-existing failure;
       this is not an all-green full-suite certification (see evidence below).
 - [x] Fresh wheel installation: 11 entrypoints imported/`--help` passed, 12
       selected schemas/prompts/render workers checked, new ICL module imported,
@@ -427,3 +428,60 @@ Still open: actual frozen GLB factory/initializer and every native loop operatio
 Linux/CUDA host qualification, production model identity/render/optimizer smoke,
 and the evaluator applicability decision. Export-only evidence does not certify
 any of those. Old prepared inputs and sidecars are not upgraded in place.
+
+## Exact-GLB factory component (not a complete plugin)
+
+`scripts/external_harness_bridges/scene_weaver_frozen_assets.py` now implements
+the generation-input portion of the pending plugin. It verifies exact bytes,
+local bbox/center, native physical scale and available cardinal front; imports
+every static mesh/instance with hierarchy transforms; preserves loose geometry
+and materials; and bakes only the declared scale, basis and bottom-center rebase.
+No mesh is fitted to a target bbox. Its factory builder accepts the released
+AssetFactory base and overrides only `create_asset` / `create_placeholder`,
+leaving native spawn/pose bookkeeping to that base. Different slots can bind the
+same exact mesh independently.
+
+This component is **not wired into a complete executable plugin**. Readiness
+remains blocked on that plugin. Native factory registration, slot mapping,
+initialization prompts, mutation guards, observations, model routing and full
+loop qualification are still required. The future plugin must pin this helper
+and its imported bridge/common helpers; an entrypoint-only hash cannot cover
+that bundle. These checks are not reported as real upstream generation.
+
+No-call bpy 4.3 evidence: `/private/tmp/pipeline-sceneweaver-factory.a6VsAm/`.
+Attempt 1 tested three approved GLBs (dresser, near-square office chair,
+refrigerator with loose geometry), all passed. Attempt 2 added a synthetic
+two-instance hierarchy with nonzero center, loose geometry and non-unit declared
+scale: **4/4 passed**. Maximum symmetric vertex distance was
+`2.235174177411814e-7` metres. Vertex counts and source hashes remained unchanged;
+placeholders matched baked local dimensions. Wrong bbox-center input failed
+without deleting pre-existing scene objects. The diagnostic invokes only the
+new creation hooks, not native AssetFactory spawn or solver registration. A
+direct native-base import in the candidate environment fails on missing `gin`;
+no native runtime certification is inferred from these checks.
+
+Exact successful component command (exit 0):
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 /Users/han_mohan/Desktop/Layout_DDD/Support/pipeline_compatibility_runs/api_ready_v1/environments/layout-vlm-cp311/bin/python /private/tmp/pipeline-sceneweaver-factory.a6VsAm/probe_factory.py --checkout /private/tmp/layout-ddd-pipeline-compatibility-runs --catalog /Users/han_mohan/Desktop/Layout_DDD/Support/pipeline_compatibility_runs/api_ready_v1/verified_glb_preflight/catalog_manifest.json --out /private/tmp/pipeline-sceneweaver-factory.a6VsAm/attempt2
+```
+
+Component SHA-256:
+`891d79755a132a84df62c5b648360eb340ae9d3f6971f54f85327a9b49612d3e`.
+Both diagnostic script versions are retained and match report hashes. Selected
+evidence is archived in the owned ignored `api_ready_v1/sceneweaver_factory_probe_v1/`
+prefix, never Git.
+
+New CI contract tests: **15 passed**, no bpy/upstream/dataset/API dependency:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src /Users/han_mohan/Desktop/Layout_DDD/.venv/bin/python -m pytest -q -o addopts='' tests/test_sceneweaver_frozen_assets.py --tb=short --basetemp=/private/tmp/pipeline-sceneweaver-export.vEWGAL/pytest_factory_contract --junitxml=/private/tmp/pipeline-sceneweaver-export.vEWGAL/factory_contract_tests.xml
+```
+
+The preceding 19-file extended command was rerun with
+`tests/test_sceneweaver_frozen_assets.py` immediately after the native-export
+test, basetemp `/private/tmp/pipeline-sceneweaver-factory.a6VsAm/pytest_extended`,
+and JUnit `/private/tmp/pipeline-sceneweaver-factory.a6VsAm/extended_tests.xml`:
+**541 passed / 1 failed**, 11.89s. Only the same baseline-existing camera test
+failed. Core package source is unchanged from the verified exporter wheel;
+this helper is an external source-checkout script, not a new packaged entrypoint.
