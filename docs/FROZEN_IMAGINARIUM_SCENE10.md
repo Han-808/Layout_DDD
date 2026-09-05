@@ -308,7 +308,7 @@ PYTHONPATH=src python scripts/build_frozen_imaginarium_scene10_spec.py \
   --curation configs/generation_comparison/frozen_imaginarium_scene10_curation_v1.json \
   --repo-root /ABSOLUTE/PATH/TO/Layout_DDD \
   --asset-root /ABSOLUTE/PATH/TO/imaginarium_assets \
-  --output configs/generation_comparison/frozen_imaginarium_scene10_v1.json
+  --output /ABSOLUTE/PATH/TO/FRESH/curation_rebuild.json
 ```
 
 For a reproducibility check, write to a temporary path and byte-compare or
@@ -329,8 +329,8 @@ layout-ddd-controlled-pilot prepare \
   --out-dir outputs/frozen_imaginarium_scene10_v1
 ```
 
-After human approval, use a fresh prepared directory and run the first case as
-the mandatory dry run:
+Only after the runtime/model gates pass and real API execution is authorized,
+use a fresh prepared directory and run the first case as the mandatory smoke:
 
 ```bash
 layout-ddd-controlled-pilot run \
@@ -341,6 +341,90 @@ layout-ddd-controlled-pilot run \
 
 Then prepare another fresh directory for the full ten-case run. Pilot outputs
 and native method/case directories are never overwritten.
+
+## Actual-asset public brief revision v2
+
+The approved bindings contain legacy slot names and inherited functional briefs
+that do not always describe the fixed catalog asset. For example, S109's
+`treadmill_1` binds `a_Ladder`, and S106's `bath_mat_1` binds `e_SM_BATHUB_01`.
+The user explicitly approved revising the public descriptions against the actual
+frozen catalog **without changing any asset or slot**. Do not interpret this as
+permission to retrieve replacements or rescale a mesh.
+
+`frozen_imaginarium_scene10_public_brief_v2.json` is a source-hash-pinned input
+revision recipe. It projects the approved slot category/description into the
+public plan, synchronizes duplicate requested-text metadata, and explicitly
+corrects obsolete counts, roles, zones and universal `-Y` front assumptions.
+Source IDs, exact asset bindings, geometry, physical scale, support relations,
+seeds, model/budget policy and evaluator configuration remain unchanged.
+
+```bash
+PYTHONPATH=src python -m benchmark.generation_comparison.public_brief \
+  --spec configs/generation_comparison/frozen_imaginarium_scene10_v1.json \
+  --recipe configs/generation_comparison/frozen_imaginarium_scene10_public_brief_v2.json \
+  --out-dir /ABSOLUTE/PATH/TO/FRESH/public_brief_v2
+```
+
+This preparation-only command writes `spec.json` and `public_brief_audit.json`
+with every before/after change. It refuses an existing output directory, does
+not call models, and never rewrites the source spec. All five methods receive
+the revised plan through the existing public projection; the unchanged evaluator
+uses that same revised plan. The audit with obsolete text is **not** model input.
+Catalog text is not a new visual certification, and difficult geometric/support
+requirements are not automatically relaxed or repaired.
+
+This is a **new input treatment**. In particular, S109 is now described as a
+recreation/recovery/hobby room using the supplied objects. Do not describe results
+as evaluations against byte-identical original SceneBoard prompts, or pool scores
+across public-brief versions without identifying that difference.
+
+## Predeclared smoke, dense pilot, and repetitions
+
+`prepare --case-id` now selects existing cases from a fully validated source
+spec. Repeat the flag for a shared subset. Source case order is retained; the
+whole logical catalog is retained; the selected case definitions are unchanged.
+The selected/source case IDs and full source-spec hash are recorded in the
+byte-pinned root protocol. There is no run-time `--case-id` or implicit resume.
+
+| Stage | Existing cases | Repetitions | Planned units with all five methods |
+| --- | --- | --- | --- |
+| Smoke | S100 | 1 | 5 |
+| Dense pilot | S101 | 1 | 5 |
+| Formal | S100--S109 | 3, separate fresh prepares | 150 |
+
+S100 is the first source case, not a score-selected case. S101 has 32 slots in
+56 m², the highest slot count and slot/area density in the approved ten-case
+input. This is a pre-run complexity criterion, not a quality-score criterion.
+Do not advance to formal generation until every included method passes its
+real native-workflow, identity, frozen-input and full-evaluation qualification.
+Blocked methods are not silently dropped; changing the comparison cohort needs
+an explicit amended protocol. Catalog Placement remains separately reported.
+
+For the smoke prepare, use the new public spec and include:
+
+```bash
+layout-ddd-controlled-pilot prepare \
+  --spec /ABSOLUTE/PATH/TO/public_brief_v2/spec.json \
+  --asset-root /ABSOLUTE/PATH/TO/imaginarium_assets \
+  --asset-bundle-root /ABSOLUTE/PATH/TO/frozen_imaginarium_scene10_glb \
+  --method-configs /ABSOLUTE/PATH/TO/private_method_configs.json \
+  --evaluation-runtime-config /ABSOLUTE/PATH/TO/trusted_evaluation_runtime.json \
+  --case-id S100 --out-dir /ABSOLUTE/PATH/TO/FRESH/smoke
+
+layout-ddd-controlled-pilot preflight \
+  --prepared-dir /ABSOLUTE/PATH/TO/FRESH/smoke \
+  --method-configs /ABSOLUTE/PATH/TO/private_method_configs.json
+```
+
+Use `--case-id S101` and a different directory for the dense pilot. Omit
+`--case-id` for each of the three formal prepares. The preflight command is
+no-call; **`run --dry-run-only` is not**. The above remains blocked until audited
+ICL/runtime/model bindings and all readiness requirements are resolved.
+Repetitions mean separate native invocations, not best-of selection or reuse of
+cached outputs. Native seed enforcement is not guaranteed unless reported by
+the runner; record effective native parameters, calls, tokens and time rather
+than claiming equal or randomized seed treatment. Evaluator failure does not
+authorize regenerating; use append-only offline reevaluation when possible.
 
 ## What has and has not been executed
 

@@ -128,11 +128,40 @@ def prepare_controlled_pilot(
     repo_root: str | Path | None = None,
     asset_bundle_root: str | Path | None = None,
     evaluation_runtime_config: Mapping[str, Any] | str | Path | None = None,
+    case_ids: Sequence[str] | None = None,
 ) -> dict[str, Any]:
-    """Freeze catalog/cases and persist pre-run eligibility without generation."""
+    """Freeze inputs without generation, optionally selecting existing cases.
+
+    A subset is selected from the fully validated source spec in source order.
+    It does not change any case, shrink the catalog, or select different cases
+    for different methods. Each stage/repetition still needs a fresh directory.
+    """
 
     pilot = _load_mapping(spec, "pilot spec")
     _validate_pilot_spec(pilot)
+    source_case_ids = [str(case["case_id"]) for case in pilot["cases"]]
+    if case_ids is not None:
+        if (
+            isinstance(case_ids, (str, bytes)) or not case_ids
+            or any(not isinstance(value, str) for value in case_ids)
+            or len(set(case_ids)) != len(case_ids)
+            or not set(case_ids).issubset(source_case_ids)
+        ):
+            raise ArtifactValidationError(
+                "case_ids must be a non-empty unique subset of the source case IDs"
+            )
+    selected_cases = [
+        case for case in pilot["cases"]
+        if case_ids is None or case["case_id"] in case_ids
+    ]
+    case_selection = {
+        "policy": "all_source_cases" if case_ids is None else "explicit_subset_source_order",
+        "source_case_ids": source_case_ids,
+        "selected_case_ids": [str(case["case_id"]) for case in selected_cases],
+        "source_spec_sha256": canonical_json_sha256(pilot),
+        "case_definitions_modified": False,
+        "catalog_subsetted": False,
+    }
     output_root = Path(out_dir).expanduser().resolve()
     if output_root.exists() and any(output_root.iterdir()):
         raise FileExistsError(
@@ -189,7 +218,7 @@ def prepare_controlled_pilot(
     )
     case_rows = []
     case_protocols: dict[str, str] = {}
-    for case in pilot["cases"]:
+    for case in selected_cases:
         case_id = str(case["case_id"])
         case_dir = output_root / "cases" / case_id
         protocol = _case_protocol(
@@ -258,7 +287,7 @@ def prepare_controlled_pilot(
 
     configs = _method_configs(method_configs)
     first_protocol = ComparisonProtocol.from_mapping(
-        read_json(output_root / "cases" / pilot["cases"][0]["case_id"] / "protocol.json")
+        read_json(output_root / "cases" / selected_cases[0]["case_id"] / "protocol.json")
     )
     compatibility = _compatibility_report(
         methods=pilot["methods"],
@@ -279,6 +308,7 @@ def prepare_controlled_pilot(
         "catalog": catalog.identity,
         "evaluator_config_sha256": evaluator_config_hash,
         "case_protocol_sha256": case_protocols,
+        "case_selection": case_selection,
     }
     protocol_path = write_json(output_root / "protocol.json", root_protocol)
     manifest = {
@@ -1968,6 +1998,10 @@ def main() -> None:
     prepare.add_argument("--out-dir", required=True)
     prepare.add_argument("--method-configs")
     prepare.add_argument("--evaluation-runtime-config", help="trusted Judge/Blender runtime JSON; required before real generation")
+    prepare.add_argument(
+        "--case-id", action="append", dest="case_ids",
+        help="select an existing case; repeat for a shared subset (source order, fresh output)",
+    )
     run = subparsers.add_parser("run")
     run.add_argument("--prepared-dir", required=True)
     run.add_argument("--method-configs", required=True)
@@ -1989,6 +2023,7 @@ def main() -> None:
             method_configs=args.method_configs,
             asset_bundle_root=args.asset_bundle_root,
             evaluation_runtime_config=args.evaluation_runtime_config,
+            case_ids=args.case_ids,
         )
     elif args.command == "preflight":
         result = preflight_prepared_pilot(prepared_dir=args.prepared_dir,

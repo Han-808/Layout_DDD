@@ -273,6 +273,106 @@ def test_prepare_pilot_preflights_assets_cases_hashes_and_readiness(
     assert len({row["protocol_sha256"] for row in result["cases"]}) == 5
 
 
+def test_case_subset_preserves_source_case_and_catalog_identities(tmp_path: Path) -> None:
+    from benchmark.generation_comparison.prepared import verify_prepared_artifacts
+
+    spec = _pilot_spec()
+    before = json.dumps(spec, sort_keys=True)
+    assets = _asset_root(tmp_path / "assets")
+    full = prepare_controlled_pilot(spec=spec, asset_root=assets, out_dir=tmp_path / "full")
+    subset = prepare_controlled_pilot(
+        spec=spec, asset_root=assets, out_dir=tmp_path / "subset",
+        case_ids=["case_005", "case_002"],
+    )
+    assert [row["case_id"] for row in subset["cases"]] == ["case_002", "case_005"]
+    assert subset["source_spec_sha256"] == full["source_spec_sha256"]
+    assert read_json(subset["catalog"]) == read_json(full["catalog"])
+    assert subset["evaluator_config_sha256"] == full["evaluator_config_sha256"]
+    source_rows = {row["case_id"]: row for row in full["cases"]}
+    for row in subset["cases"]:
+        source = source_rows[row["case_id"]]
+        for key in (
+            "case_sha256", "protocol_sha256", "architecture_sha256",
+            "object_inventory_sha256", "asset_binding_sha256",
+            "generation_input_sha256", "public_object_plan_sha256",
+        ):
+            assert row[key] == source[key]
+        for key in ("generation_input", "evaluation_object_plan", "protocol"):
+            assert Path(row[key]).read_bytes() == Path(source[key]).read_bytes()
+    assert json.dumps(spec, sort_keys=True) == before
+    verified = verify_prepared_artifacts(tmp_path / "subset", subset)
+    assert set(verified["cases"]) == {"case_002", "case_005"}
+    selection = read_json(subset["protocol"])["case_selection"]
+    assert selection["selected_case_ids"] == ["case_002", "case_005"]
+    assert selection["source_case_ids"] == [row["case_id"] for row in spec["cases"]]
+    assert not selection["case_definitions_modified"]
+    assert not selection["catalog_subsetted"]
+
+
+@pytest.mark.parametrize("case_ids", [[], ["missing"], ["case_001", "case_001"], "case_001", [1]])
+def test_invalid_case_subset_rejected_before_output(tmp_path: Path, case_ids) -> None:
+    with pytest.raises(ValueError, match="case_ids must be"):
+        prepare_controlled_pilot(
+            spec=_pilot_spec(), asset_root=tmp_path / "not_read",
+            out_dir=tmp_path / "not_created", case_ids=case_ids,
+        )
+    assert not (tmp_path / "not_created").exists()
+
+
+def test_subset_does_not_hide_an_invalid_unselected_source_case(tmp_path: Path) -> None:
+    spec = _pilot_spec()
+    spec["cases"][-1]["objects"][0]["asset_id"] = "unapproved_asset"
+    with pytest.raises(ValueError, match="unknown asset"):
+        prepare_controlled_pilot(
+            spec=spec, asset_root=tmp_path / "not_read", out_dir=tmp_path / "not_created",
+            case_ids=["case_001"],
+        )
+    assert not (tmp_path / "not_created").exists()
+
+
+def test_single_nonfirst_case_can_be_prepared_and_uses_existing_offline_path(tmp_path: Path) -> None:
+    prepared = prepare_controlled_pilot(
+        spec=_pilot_spec(methods=["catalog_placement"]),
+        asset_root=_asset_root(tmp_path / "assets"), out_dir=tmp_path / "pilot",
+        case_ids=["case_002"],
+    )
+    native = write_json(tmp_path / "native.json", {
+        "schema_version": "catalog_placement_v1",
+        "instances": [{
+            "instance_id": f"chair_instance_{index}", "slot_id": f"chair_{index}",
+            "asset_id": "chair_asset", "center_m": [1.0 + 2.0 * index, 2.0, 0.5],
+            "uniform_scale": 1.0, "rotation_euler_xyz_deg": [0.0, 0.0, 0.0],
+        } for index in range(2)],
+    })
+    result = run_prepared_pilot(
+        prepared_dir=tmp_path / "pilot", allow_offline_artifacts=True,
+        method_outputs={"catalog_placement": {"case_002": native}},
+    )
+    assert result["case_count"] == result["planned_runs"] == result["attempted_runs"] == 1
+    assert result["valid_runs"] == 1
+    # Subsetting must not relax the full evaluator gate or claim an API run.
+    assert not result["experiment_complete"]
+    assert not result["real_upstream_execution_performed"]
+    rows = [json.loads(line) for line in (tmp_path / "pilot/results.jsonl").read_text().splitlines()]
+    assert [row["case_id"] for row in rows] == ["case_002"]
+    assert rows[0]["failure_class"] == "evaluator_infrastructure_failure"
+
+
+def test_prepare_cli_accepts_explicit_case_subset(tmp_path, monkeypatch, capsys) -> None:
+    from benchmark.generation_comparison.pilot import main
+
+    source = write_json(tmp_path / "spec.json", _pilot_spec())
+    assets = _asset_root(tmp_path / "assets")
+    monkeypatch.setattr(sys, "argv", [
+        "pilot", "prepare", "--spec", str(source), "--asset-root", str(assets),
+        "--out-dir", str(tmp_path / "pilot"), "--case-id", "case_002",
+    ])
+    main()
+    result = json.loads(capsys.readouterr().out)
+    assert result["status"] == "prepared"
+    assert [row["case_id"] for row in result["cases"]] == ["case_002"]
+
+
 def test_asset_category_mismatch_fails_before_generation(tmp_path: Path) -> None:
     asset_root = _asset_root(tmp_path / "assets")
     spec = _pilot_spec()

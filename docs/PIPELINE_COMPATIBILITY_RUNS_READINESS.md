@@ -62,8 +62,10 @@ policies and converters are not redesigned.
       and mesh-collision dependencies imported outside the source checkout.
 - [x] Approved spec/inventory/source audit: ten cases, 269 slots, 168 assets;
       source CSV, FBX and catalog metadata hashes verified. No selection changes.
-- [ ] Public brief versus approved inventory conflict audit recorded; only
-      necessary, versioned common-input corrections allowed.
+- [x] Public brief versus approved inventory conflict audit recorded. The user
+      additionally approved actual-asset functional-description corrections,
+      not just counts. Revision v2 retains all geometry, slots and asset bindings;
+      it is explicitly a new public-input treatment (details below).
 - [x] 168-asset GLB bundle built and source/hash/bbox/center/scale verified.
 - [x] Four upstream checkouts pinned/clean; bridge bundle hashes checked.
 - [ ] All upstream production dependencies qualified. LayoutGPT and DirectLayout
@@ -179,3 +181,63 @@ public-brief conflict audit and versioned smoke/three-repeat operator plans;
 resolve complete-score applicability without silently altering the evaluator.
 After combining with Complicated_Generation, certify a new shared commit/release
 identity rather than treating this checkpoint's wheel/tests as that merged build.
+
+### Public brief v2 and case-subset preparation checkpoint
+
+After being shown concrete catalog/brief mismatches (S109 treadmill→ladder,
+yoga blocks→inflatable chairs; S106 bath mat→bathtub), the user explicitly
+approved updating public descriptions to the actual frozen assets while keeping
+assets and slots unchanged. This is not a new asset-selection decision.
+
+- Added an exact source-hash-pinned revision recipe and preparation-only
+  `benchmark.generation_comparison.public_brief` command. It produces a fresh
+  spec and complete before/after audit, including duplicate metadata text.
+  All 269 slots / 168 assets / ten room geometries and the evaluator policy
+  remain identical. No hidden annotations, layout answers, retrieval or model
+  calls are used. The approved catalog descriptions are not newly certified
+  visual truth; unchanged geometric/support feasibility is still evaluated.
+- Revised spec canonical SHA-256:
+  `2d0328d8ef016c430e8655cda183898b578a6faf3fbde72a5072a678f52c9e2b`.
+  Files: ignored `api_ready_v1/public_brief_v2/{spec,public_brief_audit}.json`.
+  Old specs and prepared directories are unchanged. Do not claim identical
+  original SceneBoard prompts, especially for the revised S109 functional brief.
+- Added `prepare --case-id` to select an existing case/subset without modifying
+  the full source spec or its asset catalog. Selection is source-ordered and
+  byte-pinned before launch. The first selected case remains the full-evaluation
+  gate for subsequent selected cases; existing run/cancellation behavior stays.
+- Actual no-call preparations: `public_brief_v2_smoke_preflight` (S100, 31 slots)
+  and `public_brief_v2_dense_preflight` (S101, 32 slots), each retaining the same
+  168-asset catalog and all five method entries. S100 no-call preflight returned
+  exit 2 / ready=false as expected with example bindings and no runtime. Neither
+  directory is a real smoke result or a final published runtime release.
+- Predeclared schedule documented: S100 smoke, S101 dense pilot, then three
+  independent fresh ten-case formal prepares (150 formal units if qualified).
+  S101 selection uses slot count/density, not score. No automated promotion,
+  formal execution, seed-equivalence claim or resume workaround was introduced.
+- SceneWeaver audit additionally located automatic rescaling during
+  `populate_state_placeholders_mid`, collision-based deletion and unsupported
+  object deletion inside `compose_indoors`, beyond the named update tools.
+  No native physics/reflection code was removed to conceal those conflicts;
+  the full frozen plugin and Linux runtime remain unresolved prerequisites.
+
+Tests in `/private/tmp/pipeline-runs-brief-plan.A5m3SZ`, same source Python and
+command prefix as above, with unique `--basetemp` and JUnit paths:
+
+- `tests/test_controlled_generation_pilot.py tests/test_pipeline_evaluation_runtime.py`:
+  **50 passed** (`subset_tests.xml`).
+- Above plus `tests/test_frozen_public_brief.py`: **62 passed** (`brief_tests.xml`).
+- Pro's five focused files listed above: **224 passed** (`focused_tests.xml`).
+- The previous sixteen-file extended command plus `tests/test_frozen_public_brief.py`:
+  **484 passed, 1 failed** (`extended_tests.xml`), exactly the same baseline-existing
+  camera-selector failure. No test/evaluator weakening to make it disappear.
+
+Fresh wheel SHA-256 for this newer source:
+`7bba00911784d4d3c6dce393ceee199df18b721fa55f7c9a14e6f579cb6a6645`.
+Built/installed offline into a new `benchmark-wheel-brief-v2` environment.
+All 11 entrypoints and 12 selected resources passed the existing installed-wheel
+check from `/private/tmp` without checkout `PYTHONPATH`. The installed
+`prepare --help` includes `--case-id`; the installed public-brief module produced
+a byte-identical revised spec. Evidence: `wheel_verification.json`,
+`installed_public_brief_report.json` and `installed_public_brief/` under the
+current evidence directory. This is still no-call preparation certification,
+not a real upstream or production evaluator smoke result.

@@ -80,6 +80,25 @@ def verify_prepared_artifacts(
     cases = manifest["cases"]
     if len(cases) != manifest["case_count"] or len({row["case_id"] for row in cases}) != len(cases):
         raise ArtifactValidationError("prepared case inventory mismatch")
+    case_ids = [row["case_id"] for row in cases]
+    if set(root_protocol["case_protocol_sha256"]) != set(case_ids):
+        raise ArtifactValidationError("prepared root protocol case inventory mismatch")
+    # Older all-case prepares lack this optional, byte-pinned selection record.
+    # New subset prepares retain the full source spec identity and source order.
+    if "case_selection" in root_protocol:
+        selection = root_protocol["case_selection"]
+        source_ids = selection.get("source_case_ids", [])
+        if (
+            selection.get("selected_case_ids") != case_ids
+            or selection.get("source_spec_sha256") != manifest["source_spec_sha256"]
+            or selection.get("case_definitions_modified") is not False
+            or selection.get("catalog_subsetted") is not False
+            or selection.get("policy") not in {"all_source_cases", "explicit_subset_source_order"}
+            or len(source_ids) != len(set(source_ids))
+            or [value for value in source_ids if value in case_ids] != case_ids
+            or (selection.get("policy") == "all_source_cases" and source_ids != case_ids)
+        ):
+            raise ArtifactValidationError("prepared case selection identity mismatch")
     verified_cases = {}
     for row in cases:
         case_manifest = document(row["case_manifest"])

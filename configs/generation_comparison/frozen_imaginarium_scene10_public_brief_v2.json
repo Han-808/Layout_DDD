@@ -1,0 +1,183 @@
+{
+  "schema_version": "frozen_public_brief_revision_v1",
+  "revision_id": "scene10_actual_frozen_asset_public_brief_v2",
+  "source_spec_sha256": "4d6030a3da8f90d4afa877eb48adbc6ff107dd337a105e9b71b7989458402f1f",
+  "approval": "user_approved_actual_frozen_asset_descriptions",
+  "object_text_policy": "project_existing_frozen_slot_category_description",
+  "rationale": "The user approved aligning the common public brief with the already frozen asset catalog, including functional mismatches, without changing assets or slots. Object descriptions/categories are projected from existing approved slot metadata; inherited zones/roles below are revised only where they request absent or different objects. This is a new public-input treatment, not a claim of unchanged original SceneBoard prompts.",
+  "common_constraints": [
+    "Use exactly one instance of every supplied slot. Slot and zone IDs are stable identifiers, not extra object requests; the supplied asset descriptions and fixed geometry take precedence over any legacy identifier wording.",
+    "The supplied meshes, physical dimensions, materials and colors are fixed inputs. Do not add, remove, replace or resize objects to satisfy a legacy name or appearance preference.",
+    "Use supplied per-object orientation metadata where available for functional facing; do not assume that every asset has the same local front axis or invent a missing canonical front."
+  ],
+  "case_edits": {
+    "S100": {
+      "zones": {
+        "dining_zone": "Six-person dining area in the southeast with the supplied round table, six chairs, and accessible sideboard storage."
+      },
+      "constraints": {
+        "3": "Orient directed seating toward its intended visual or functional counterpart using the supplied per-object orientation metadata where available.",
+        "6": "Organize the supplied wood, upholstery and accent finishes into a visually coherent arrangement without changing the fixed materials or colors."
+      }
+    },
+    "S101": {
+      "zones": {
+        "dining_zone": "The eastern portion containing the supplied six-seat dining setting, rug and sideboard."
+      },
+      "constraints": {
+        "1": "Do not create physical wall objects. Use the logical room boundary for the approved mounted cabinet and shelf, without changing the architecture; keep floor-standing objects on suitable supports.",
+        "4": "Preserve usable operating clearance at the supplied refrigerator, stove, sinks, ovens, dryers and storage fronts.",
+        "7": "Arrange the supplied finishes coherently without changing their fixed materials or colors."
+      },
+      "roles": {
+        "dishwasher": "additional countertop oven",
+        "washing_machine": "additional laundry drying appliance",
+        "dining_fruit_basket_1": "dining-table fruit bowl"
+      }
+    },
+    "S102": {
+      "zones": {
+        "library_reading_zone": "A northwestern library area with accessible shelving and a compact reading nook using the supplied armchair.",
+        "meeting_zone": "A four-person meeting area with a presentation board and nearby shared equipment storage."
+      },
+      "constraints": {
+        "3": "Preserve chair pull-out space, seated legroom, and access to the fronts of desks, shelves, the supplied storage cabinets and the printer."
+      }
+    },
+    "S103": {
+      "zones": {
+        "sleeping_zone": "Primary sleeping suite with the supplied bed, bedside storage and lighting."
+      }
+    },
+    "S104": {
+      "zones": {
+        "arcade_zone": "Northwest arcade area with the supplied arcade cabinet and open standing space at its controls.",
+        "tabletop_zone": "Southwest social game area with the supplied round table, two player chairs, and nearby game storage.",
+        "music_zone": "East-side music area containing the supplied guitar, stands, speaker cabinets and bench, with usable access to the equipment."
+      },
+      "constraints": {
+        "3": "Provide approximately 0.9 m of approach clearance at cabinet, shelf, arcade and game-table access sides.",
+        "4": "Keep the guitar and supplied music equipment on stable supports, with an unobstructed user area near the music-zone bench and stands.",
+        "5": "Orient directed objects toward their functional counterparts using the supplied per-object orientation metadata where available."
+      },
+      "roles": {
+        "digital_piano": "music equipment stand",
+        "guitar_stand": "freestanding music-zone stand",
+        "music_stand": "guitar support stand",
+        "piano_bench": "music-zone seating",
+        "soundbar": "secondary media display",
+        "turntable": "music playback and display object"
+      }
+    },
+    "S105": {
+      "zones": {
+        "study_zone": "One study station with the supplied desk, study chair and task lamp, with nearby book storage along the northern side.",
+        "art_zone": "Collaborative art area with the supplied round table, two chairs, easel, tape dispenser and storage.",
+        "play_zone": "Floor play area with the supplied rug, storage, tent, rocking horse, xylophone and race track."
+      },
+      "constraints": {
+        "3": "Arrange the supplied fixed-size furniture for accessible seating and storage; do not resize assets or change their construction to simulate child-sized furniture.",
+        "5": "Orient directed study, storage, art, tent and reading assets toward intended users or counterparts using their supplied orientation metadata where available.",
+        "6": "Arrange the supplied desk, study chair and task lamp as one study station, and place the two art chairs for use of the art table."
+      },
+      "roles": {
+        "art_supply_caddy_1": "art tape dispenser",
+        "dollhouse_1": "play-area storage cabinet",
+        "storage_cubbies_1": "toy storage box",
+        "toy_crate_1": "additional toy storage box"
+      }
+    },
+    "S106": {
+      "zones": {
+        "laundry_work_zone": "Washer, dryer, utility sink, folding workbench, storage rack and utility seating in the south-east portion."
+      },
+      "constraints": {
+        "4": "Do not create physical wall objects. Use the logical room boundary for the approved toilet-paper holder without changing architecture, and use suitable stable supports for the other supplied assets.",
+        "5": "Orient directed objects toward their user aisle, access area or functional counterpart using the supplied per-object orientation metadata where available.",
+        "6": "Keep the supplied bathtubs, hampers, rolling utility shelf, storage rack and folding chair outside the main circulation spine."
+      },
+      "roles": {
+        "bath_mat_1": "additional bathing fixture",
+        "drying_rack_1": "laundry and utility storage rack",
+        "ironing_board_1": "folding utility seat",
+        "step_stool_1": "utility stool"
+      }
+    },
+    "S107": {
+      "zones": {
+        "repair_bench_zone": "North-central hand-repair station with the supplied workbenches, clamp, task lighting, hand tools and rolling storage.",
+        "machine_operation_zone": "East-side drill-press work area with west-facing operating access and separated material-handling space.",
+        "storage_zone": "West-side storage using the supplied boxes, bags, shelves, rack and carts.",
+        "utility_safety_zone": "South-side waste, fire extinguisher and portable air appliance area kept clear of central circulation."
+      },
+      "constraints": {
+        "2": "Preserve at least 1.0 meter of unobstructed operator clearance at the supplied workbenches, drill press, shelves, racks and accessible storage.",
+        "4": "Place the drill press in the east work area with its operator side facing the shared clear aisle.",
+        "5": "Keep the supplied portable air appliance and storage clear of the drill-press operating area.",
+        "8": "Park the supplied movable carts, ladder and storage bags outside the main circulation route when not in use."
+      },
+      "roles": {
+        "air_compressor": "portable air appliance",
+        "bench_grinder": "workbench hand tool",
+        "bench_vise": "workbench clamp",
+        "lumber_rack": "workshop storage rack",
+        "rolling_tool_chest": "mobile workshop storage",
+        "small_parts_organizer": "small workshop storage box",
+        "storage_bin_stack_1": "portable workshop storage bag",
+        "storage_bin_stack_2": "portable workshop storage bag",
+        "table_saw": "workbench cutting board",
+        "workbench_secondary": "secondary work surface for hand-tool tasks"
+      }
+    },
+    "S108": {
+      "zones": {
+        "conversation_zone": "Social seating group using the supplied sofa and lounge armchair around the coffee table and rug.",
+        "reading_zone": "Quiet reading area with the supplied armchairs, side table and floor lamp.",
+        "coworking_zone": "Shared table area with the four supplied task chairs and monitor, preserving seating and circulation access.",
+        "shared_resource_zone": "Accessible coffee preparation and storage point using the supplied espresso machine, refrigerator, tables and cabinets."
+      },
+      "constraints": {
+        "2": "Preserve at least 0.9 m of accessible approach space at the supplied storage, espresso machine and refrigerator.",
+        "3": "Allow approximately 0.75 m of chair pullback clearance around the supplied shared-table seating group.",
+        "6": "Organize the supplied finishes into a visually coherent arrangement without changing their fixed materials or colors."
+      },
+      "roles": {
+        "coffee_bar_counter_1": "coffee service table",
+        "coworking_table_1": "shared activity table",
+        "under_counter_refrigerator_1": "beverage and chilled-food storage",
+        "drawer_side_table_1": "lounge side surface"
+      }
+    },
+    "S109": {
+      "instruction": "Generate a coherent recreation, recovery and hobby room using the supplied fixed assets. Aim for usable seating and work areas, accessible equipment storage, sensible viewing relationships and clear circulation.",
+      "scene_type": "recreation_recovery_hobby_room",
+      "zones": {
+        "cardio_zone": "Northwest bicycle and equipment-storage area using the supplied fixed assets near the logical perimeter, with clear access.",
+        "strength_zone": "Southwest rack and utility-storage area using the supplied racks and stool, with accessible storage fronts.",
+        "yoga_zone": "Central relaxation area using the supplied inflatable lounge chairs while preserving the cross-room circulation route; no additional mats or yoga equipment are requested.",
+        "recovery_zone": "Northeast recovery area with the supplied lounge chair, padded table and drum-throne seat within usable reach.",
+        "hobby_zone": "Southeast hobby area with the supplied worktable, two stools, task lamp, notebook and accessible storage.",
+        "circulation_zone": "Unobstructed cross-room route connecting the south-center boundary, central relaxation area and perimeter activity zones."
+      },
+      "constraints": {
+        "2": "Keep the supplied folding ladder out of circulation and seating routes, with accessible approach space; it is not a treadmill.",
+        "3": "Preserve open approach and operating space at the supplied racks, storage cabinet, shelves and hobby table.",
+        "4": "Keep clear routes through the central relaxation area and around the supplied lounge chairs; do not introduce yoga mats or additional objects.",
+        "5": "Separate bicycle and utility storage from relaxation, recovery and hobby activity footprints.",
+        "8": "Keep recovery and hobby seating clear of the bicycle, ladder and rack access areas."
+      },
+      "roles": {
+        "dumbbell_rack_1": "open equipment-storage rack",
+        "exercise_bike_1": "stored balance bicycle",
+        "foam_roller_1": "additional recovery-area seat",
+        "full_length_mirror_1": "full-length room mirror",
+        "squat_rack_1": "industrial storage rack",
+        "television_1": "shared media display",
+        "treadmill_1": "stored folding ladder",
+        "weight_bench_1": "additional utility stool",
+        "yoga_block_1": "inflatable relaxation seat",
+        "yoga_block_2": "inflatable relaxation seat"
+      }
+    }
+  }
+}
