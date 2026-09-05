@@ -55,8 +55,9 @@ policies and converters are not redesigned.
 - [x] F6: every planned unit has a terminal status; blocked/partial/cancelled
       are distinct from complete; zero attempts cannot exit successfully.
 - [x] Current focused compatibility/execution and new regression tests run.
-      Latest SceneWeaver plugin/exporter/input/mutation-focused: 104 passed.
-      Final extended regression: 610 passed, one baseline-existing failure;
+      SceneWeaver plugin/exporter/input/mutation-focused: 104 passed.
+      Latest operator/runtime/pilot-focused: 80 passed. Latest extended
+      regression: 628 passed, one baseline-existing failure;
       this is not an all-green full-suite certification (see evidence below).
 - [x] Fresh wheel installation: 11 entrypoints imported/`--help` passed, 12
       selected schemas/prompts/render workers checked, new ICL module imported,
@@ -91,7 +92,77 @@ policies and converters are not redesigned.
       spec/method/model/ICL contracts; no second runner was added.
 - [ ] Actual production host/deployment bindings and native dependencies
       qualified. Template/compiler validation is not environment/API acceptance.
-- [ ] Final requirement-by-requirement evidence audit; per-method status accurate.
+- [x] Requirement-by-requirement evidence audit recorded below, including
+      incomplete requirements. This is not a completed production acceptance.
+- [ ] All required production acceptance evidence obtained; goal completion
+      remains unproven and full generation is not authorized by this checklist.
+
+## Pro requirement closure audit at code checkpoint `9cd034a`
+
+This maps every Pipeline checklist item in Pro's two attachments and the shared
+implementation guide. `PASS_LOCAL` is limited to the named local evidence;
+`PARTIAL` is not acceptance, and `NOT_RUN` is not a successful empty run.
+F1/F5/F7 and the other task's production API runs are outside this branch's scope.
+No other task's evidence is used to certify this experiment.
+
+Source audit: isolated `codex/pipeline-compatibility-runs`, full code commit
+`9cd034aa2eb2d283011772b654083d6b97f83c36`, clean before this documentation edit.
+No `src/` changes exist after the installed-wheel checkpoint `8bd0261`.
+Relative to Pro's `dfaba4e`, the evaluator, visual-judge and evaluation-profile
+source/config paths have no changes. Only demonstrated converter representation
+blockers were corrected in the earlier DirectLayout/SceneWeaver checkpoints.
+
+### Pipeline checklist
+
+| Pro item | Current result | Inspected evidence and remaining acceptance |
+| --- | --- | --- |
+| I.1 / F2: trusted complete evaluator runtime | PARTIAL | `evaluation_runtime.py`, `pilot._evaluation_readiness/_run_case`, `execution.runtime_evaluation_options`; actual `run_evaluate` in `test_frozen_runtime_exposes_existing_applicability_coverage_gap`, with mocked external render/model observations. Judge/grouping/camera wiring is exercised, but the report is `partial_coverage`, not a complete real-production report. |
+| I.2 / F3: actual prepared hashes before calls | PASS_LOCAL | `prepared.verify_prepared_artifacts` checks byte and semantic identities; `test_prepared_artifact_drift_rejects_before_any_generation` covers six artifacts, including the four requested classes and a later case. Calls remain zero on drift. |
+| I.3 / F4/F6: cancellation, cleanup, zero-unit status | PASS_LOCAL | Actual local SIGINT process-tree test preserves stdout/stderr and verifies workers terminal; pilot cancellation propagates and next-unit count stays zero. All 15 blocked fixture units are recorded and CLI exits 2. Tests and cleanup bodies inspected, not merely searched by name. |
+| II.1: current focused/new tests with exact commands | PASS_LOCAL_WITH_KNOWN_FAILURE | Archived final JUnit: 80/0 focused; 628/1 extended; exact commands above. The one L3 camera test failure was independently reproduced at untouched `dfaba4e`, not suppressed. This is not an all-green evaluator certification. |
+| II.2: approved source and immutable GLB bundle | PASS_LOCAL | Fresh read-only `_preflight_imaginarium_catalog` at `9cd034a`: 10 cases, 269 slots, 168 assets; source CSV/FBX/metadata and GLB bundle content/geometry validation passed. Catalog remains `7716a5e3...ead8`; source brief v2 remains `2d0328d8...c9e2b`. No conversion/rebuild or asset change performed in this audit. |
+| II.3: upstream/bridge/environment pins and actual paths | PARTIAL | All four local upstream HEADs re-read and clean, matching the table below. Bridge/plugin source pins remain unchanged. Config binding compiler refuses source-pin drift and placeholders, but actual production host bindings and qualified native dependency environments are still absent. |
+| II.4: approved ICL and substantive frozen plugin | PARTIAL | ICL snapshot/rebuild byte SHA rechecked: `1209a0b3...87386`, eight released training examples, no held-out/target/evaluator data per retained selection audit. SceneWeaver plugin is implemented with 16 pinned mutation targets and all-ten static inputs; real initializer/optimizer/render/reflection loop is NOT run. |
+| II.5: faithful geometry/identity round-trips | PARTIAL | Preserved DirectLayout/LayoutVLM native mesh captures: 24/24; SceneWeaver exporter on real synthetic bpy states: 16/16; exact GLB factory component: four cases, max vertex difference 2.2352e-7 m, source meshes unchanged. These are component/representation observations, not all-method native loop certification. SceneWeaver released dimensions are local object dimensions, not world AABBs; the initial Pro wording was corrected from actual source evidence. Thin-rug native anchor behavior and complete native state still require real-loop qualification. |
+| III.1: same production model/deployment/message/image route | NOT_RUN | Configured identity, deployment and endpoint hash gates exist; no response from a production model was obtained in this preparation task. Do not infer observed same-model identity from configuration. Requires supplied production bindings and separate execution authorization. |
+| IV.1: real S100 native -> canonical -> full evaluator smoke | NOT_RUN | Five-unit S100 command plan exists. No paid generation, real native loop or complete production evaluator report is available; native output existence/API success alone cannot pass this requirement. |
+| IV.2: native workflow authenticity and no evaluator feedback | PARTIAL | Bridge source, private-input regression, native artifact/iteration preservation and mocked worker/converter routing inspected. SceneWeaver uses native reflection, with the explicitly approved restricted mutation set. Real workflow/iteration evidence remains missing for all four harnesses. |
+| V.1: shared small pilot, engineering-based progression | CONFIGURED_NOT_RUN | User-approved S100 smoke + S101 dense pilot use existing cases, same catalog/inventory for all five. `prepare --case-id` implemented/tested; no runtime subset/resume invention. No score-based method/case selection. Pilot acceptance not run. |
+| VI.1: independent formal cohort | CONFIGURED_NOT_RUN | Three user-approved independent repeats, each 10 cases x 5 methods, 150 formal planned units; separate from smoke/pilot. This explicitly supersedes Pro's one-repeat 40+10 example. No formal unit executed or omitted as a passing shortcut. |
+| VII.1: monitoring, stopping, budgets and costs | PARTIAL | Timeout/cancellation/identity-drift fixture tests and native cost journals exist; no benchmark-side automatic generation retry. No production resource/cost/iteration observations or monitored native process trajectory exists yet. |
+| VII.2: safe append-only recovery, no fake resume | PASS_LOCAL / NOT_RUN_REAL | `reevaluation.py` verifies frozen native/canonical/evaluator inputs, rejects old output paths and never calls generator/converter. Failure/recovery tests inspect byte-unchanged original runs. The CLI preserves original final SceneWeaver selection; it is not whole-trajectory recovery. No production recovery was performed. |
+| VIII.1: coverage, publishability and failure separation | PARTIAL | Pilot/result tests distinguish complete/partial/blocked/cancelled/failed and reject complete-score claims for the known applicability gap. There are no publishable production results or production cost comparisons. |
+| VIII.2: immutable provenance/archive | PARTIAL | Source/asset/ICL/geometry/plugin/test artifacts are retained separately under the owned ignored data prefix. Latest archived JUnit hashes match originals. Runner/native/model/canonical/evaluation archival mechanisms are tested, but no production native/API/evaluation artifact chain exists to certify. |
+
+### Shared implementation guide
+
+| Requirement | Current result / evidence |
+| --- | --- |
+| Fixed complete code identity; separate tasks | PASS_LOCAL preparation: separate worktree, reviewed baseline and pushed commit recorded; no cross-task merge. Production must use the pinned checkout/environment, not the dirty shared desktop source. |
+| Installed-artifact checks | PASS_LOCAL selected scope: wheel `0dc85bf5...aa0d`, 11 entrypoints and 12 selected resources checked outside checkout; current `src/` matches that checkpoint. Checkout-only operator/bridge scripts are documented as such. Linux native environments are a separate unpassed gate. |
+| Separate test suites with actual outcomes | PASS_LOCAL_WITH_KNOWN_FAILURE: own compatibility/execution/evaluator results retained. Complicated_Generation and its arena acceptance are not inferred or reported as this task's results. |
+| Faithful native -> canonical mapping | PARTIAL at production scope: exact identities/slots/scale and frame/pose invariants tested; component geometry evidence above. Real complete upstream trajectory still missing. |
+| Fixed evaluation semantics | PASS_LOCAL source identity: no metric/profile/weight/hidden-reference/evidence semantics changes from reviewed baseline in the named evaluator paths; no ownership relabeling to hide frozen-asset inapplicability. |
+| Generator/evaluator isolation | PASS_LOCAL source/tests: public projection, no evaluator runtime in method config/payload, post-hoc per-state runtime. Production native execution evidence not yet available. |
+| Distinct terminal/result states | PASS_LOCAL F6/tests; production readiness, generated/canonicalized/evaluated/score-available/publishable are not interchangeable. |
+| Append-only archival/recovery | PASS_LOCAL mechanisms and preparation archive; no deletion/overwrite of old experiment outputs, no shared mutable release. Production full-chain archive remains NOT_RUN. |
+
+### Remaining external conditions (not implementation-completion claims)
+
+1. Supply the execution host/path for qualified LayoutVLM CUDA and SceneWeaver
+   native Linux environments. A Mac import or static patch compilation is not
+   that evidence; do not silently use a CPU solver ablation or skip a method.
+2. Decide how the experiment should report the unchanged evaluator's frozen-asset
+   applicability gap. The current complete-score gate correctly blocks it.
+   This task has no authority to change scoring/weights or falsely assign asset
+   selection/style ownership to the generator.
+3. Supply production model/evaluator bindings and separately authorize real
+   API/upstream smoke. This preparation task has not authorized paid calls.
+
+The goal is **NOT COMPLETE**. No final-scene/trajectory comparison, production
+score, native E2E acceptance, or universal FrozenAssets comparability is claimed.
+Further acceptance requires these external conditions; repeating component tests
+or adding another compatibility layer would not establish the missing evidence.
 
 ## Operator configuration checkpoint (2026-09-05)
 
