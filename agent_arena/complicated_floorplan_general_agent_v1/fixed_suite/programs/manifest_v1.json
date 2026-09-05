@@ -1,0 +1,481 @@
+{
+  "cohort_id": "complicated_floorplan_spatiallm_selected10_scale125_density140_v2",
+  "linked_layout_cohort": {
+    "manifest_file_sha256": "e6ab078764125adb62956504768ca34d7c54095d13f0cfbe18884f67b5bd4c9c",
+    "manifest_identity_sha256": "36097376a62265d02a3129093f1b40d3cbb48c9abf8b9ad2f7c7bf0f280bf930",
+    "manifest_path": "scaled_layouts/manifest_v1.json"
+  },
+  "manifest_sha256": "133ac4fa40d448c321f11fbf8572216557cfdc28b534a95564d758320aad660c",
+  "policy": {
+    "density_multiplier": 1.4,
+    "integer_rounding_policy": "floor_x_plus_0.5_v1",
+    "objects_per_m2_target": {
+      "max": 0.8073424301494476,
+      "min": 0.6509909031838855
+    },
+    "source_room_id_to_type_mapping_emitted": false,
+    "source_room_type_multiset_preserved": true
+  },
+  "scene_order": [
+    "scene_012121",
+    "scene_012173",
+    "scene_011923",
+    "scene_011687",
+    "scene_012246",
+    "scene_011838",
+    "scene_011634",
+    "scene_011809",
+    "scene_011888",
+    "scene_011760"
+  ],
+  "scenes": [
+    {
+      "layout_id": "scene_012121",
+      "objects_per_m2_range": {
+        "max": 0.8088677049848354,
+        "min": 0.6486203294689717
+      },
+      "program_count": 5,
+      "room_program_path": "scene_012121/room_program.json",
+      "room_program_sha256": "a5da11cf27105af81c388b534295cde52c1a2dab8989808c90a3c4762a51a672",
+      "room_type_multiset": [
+        {
+          "count": 1,
+          "room_type": "bedroom"
+        },
+        {
+          "count": 1,
+          "room_type": "children's bedroom"
+        },
+        {
+          "count": 1,
+          "room_type": "kitchen"
+        },
+        {
+          "count": 1,
+          "room_type": "living room"
+        },
+        {
+          "count": 1,
+          "room_type": "master bedroom"
+        }
+      ],
+      "scene_id": "scene_012121",
+      "source_provenance_path": "scene_012121/source_provenance.json",
+      "source_provenance_sha256": "e49529a7c4e8f82fe2a3f5b2d099133fb33e7c1f2fee2b5a75e6890db3c2014b",
+      "target_total_instances": {
+        "max": 106,
+        "min": 85
+      },
+      "total_floor_area_m2": 131.04738802989704,
+      "validation_path": "scene_012121/program_validation.json",
+      "validation_sha256": "cb393d0a46daa7dfb8d8b533665e1f78bfa6d3bb3b21e0198a7ec7c1b4b0deac"
+    },
+    {
+      "layout_id": "scene_012173",
+      "objects_per_m2_range": {
+        "max": 0.805547481490695,
+        "min": 0.6490742296903441
+      },
+      "program_count": 5,
+      "room_program_path": "scene_012173/room_program.json",
+      "room_program_sha256": "fcfa47791724ac98fbcc5a6573d5afd118b6c80b8b7fbb0acd2fc1aed09e643b",
+      "room_type_multiset": [
+        {
+          "count": 1,
+          "room_type": "foyer"
+        },
+        {
+          "count": 1,
+          "room_type": "kitchen with dining area"
+        },
+        {
+          "count": 1,
+          "room_type": "living room"
+        },
+        {
+          "count": 2,
+          "room_type": "master bedroom"
+        }
+      ],
+      "scene_id": "scene_012173",
+      "source_provenance_path": "scene_012173/source_provenance.json",
+      "source_provenance_sha256": "c4557effb748fb03fd2154e869bdb0e7220e768983726784a6112dd7aa30de50",
+      "target_total_instances": {
+        "max": 139,
+        "min": 112
+      },
+      "total_floor_area_m2": 172.5534536372399,
+      "validation_path": "scene_012173/program_validation.json",
+      "validation_sha256": "eb60c3f895aae86fb7848cd9316712d32ff8650ba56430983abcbeac91ff04f2"
+    },
+    {
+      "layout_id": "scene_011923",
+      "objects_per_m2_range": {
+        "max": 0.8073632896435304,
+        "min": 0.6495328721192313
+      },
+      "program_count": 5,
+      "room_program_path": "scene_011923/room_program.json",
+      "room_program_sha256": "77fff0f82c055d9d203df3c6388960fa127b641ae0f13ae40a940874e5901b22",
+      "room_type_multiset": [
+        {
+          "count": 1,
+          "room_type": "children's bedroom"
+        },
+        {
+          "count": 1,
+          "room_type": "kitchen"
+        },
+        {
+          "count": 1,
+          "room_type": "living room with dining area"
+        },
+        {
+          "count": 2,
+          "room_type": "master bedroom"
+        }
+      ],
+      "scene_id": "scene_011923",
+      "source_provenance_path": "scene_011923/source_provenance.json",
+      "source_provenance_sha256": "09714d6f08ede7af583fe4820033dca0ba7017d97068682650fe037ea655137e",
+      "target_total_instances": {
+        "max": 133,
+        "min": 107
+      },
+      "total_floor_area_m2": 164.7337719042472,
+      "validation_path": "scene_011923/program_validation.json",
+      "validation_sha256": "b4fb7eaa63e0dba1cb1bc36d4fefc794a57cc9876ae11abbbc5d433bca68e936"
+    },
+    {
+      "layout_id": "scene_011687",
+      "objects_per_m2_range": {
+        "max": 0.8097446879875707,
+        "min": 0.6504506510064093
+      },
+      "program_count": 5,
+      "room_program_path": "scene_011687/room_program.json",
+      "room_program_sha256": "91da239ece6b4323875e3cc965185248c80044a17bfdd3e180756057a090a5df",
+      "room_type_multiset": [
+        {
+          "count": 1,
+          "room_type": "bedroom"
+        },
+        {
+          "count": 1,
+          "room_type": "children's bedroom"
+        },
+        {
+          "count": 1,
+          "room_type": "kitchen"
+        },
+        {
+          "count": 1,
+          "room_type": "living room"
+        },
+        {
+          "count": 1,
+          "room_type": "master bedroom"
+        }
+      ],
+      "scene_id": "scene_011687",
+      "source_provenance_path": "scene_011687/source_provenance.json",
+      "source_provenance_sha256": "1e7ff40da93dd3b25fb08274f6d854114ead5478a022100d0c0a4cdd724ef52b",
+      "target_total_instances": {
+        "max": 122,
+        "min": 98
+      },
+      "total_floor_area_m2": 150.6647734895331,
+      "validation_path": "scene_011687/program_validation.json",
+      "validation_sha256": "8c466326fd6ea333ad5c4a0385c936ad42b518e003d35905829945c3c8b2e9cd"
+    },
+    {
+      "layout_id": "scene_012246",
+      "objects_per_m2_range": {
+        "max": 0.8051928740430175,
+        "min": 0.648082069351697
+      },
+      "program_count": 5,
+      "room_program_path": "scene_012246/room_program.json",
+      "room_program_sha256": "88f8b8412e61836817d818e0b21b1e5958985e04ee58c25f1d46600108f4bfc3",
+      "room_type_multiset": [
+        {
+          "count": 2,
+          "room_type": "bedroom"
+        },
+        {
+          "count": 1,
+          "room_type": "foyer"
+        },
+        {
+          "count": 1,
+          "room_type": "home office"
+        },
+        {
+          "count": 1,
+          "room_type": "living room"
+        }
+      ],
+      "scene_id": "scene_012246",
+      "source_provenance_path": "scene_012246/source_provenance.json",
+      "source_provenance_sha256": "96890e9792b7d22ebad388cd6a993334948090a30a8ac360cb5a07df34bbb01d",
+      "target_total_instances": {
+        "max": 123,
+        "min": 99
+      },
+      "total_floor_area_m2": 152.75843088674517,
+      "validation_path": "scene_012246/program_validation.json",
+      "validation_sha256": "aee84686a5a0546bf3a18f2aced785b43dc6fabdac9a3887b9213edabb5d16b2"
+    },
+    {
+      "layout_id": "scene_011838",
+      "objects_per_m2_range": {
+        "max": 0.8064289455675872,
+        "min": 0.6533840361897969
+      },
+      "program_count": 4,
+      "room_program_path": "scene_011838/room_program.json",
+      "room_program_sha256": "9c4cdbb53af7a10e835f68d3237ca004fd09288f0b02d50a3dedacb9a86124f9",
+      "room_type_multiset": [
+        {
+          "count": 1,
+          "room_type": "bathroom"
+        },
+        {
+          "count": 1,
+          "room_type": "dining room"
+        },
+        {
+          "count": 1,
+          "room_type": "kitchen"
+        },
+        {
+          "count": 1,
+          "room_type": "master bedroom"
+        }
+      ],
+      "scene_id": "scene_011838",
+      "source_provenance_path": "scene_011838/source_provenance.json",
+      "source_provenance_sha256": "4b73595a9da02e594ae6ad21b7e0c82c20e39be0fce217f354cfa41bc3869ac1",
+      "target_total_instances": {
+        "max": 137,
+        "min": 111
+      },
+      "total_floor_area_m2": 169.8847750356674,
+      "validation_path": "scene_011838/program_validation.json",
+      "validation_sha256": "41aa70269a973981a63efe3f5e8924226f1fe7989fedddfb542d927d4edbb358"
+    },
+    {
+      "layout_id": "scene_011634",
+      "objects_per_m2_range": {
+        "max": 0.8048384834685494,
+        "min": 0.651919171609525
+      },
+      "program_count": 4,
+      "room_program_path": "scene_011634/room_program.json",
+      "room_program_sha256": "2b4d20d18e34f783221b145a21e10b6bd26661ace318e4551d2d8dcf7f1aaf3c",
+      "room_type_multiset": [
+        {
+          "count": 1,
+          "room_type": "child room"
+        },
+        {
+          "count": 1,
+          "room_type": "home office"
+        },
+        {
+          "count": 1,
+          "room_type": "living room"
+        },
+        {
+          "count": 1,
+          "room_type": "primary bedroom"
+        }
+      ],
+      "scene_id": "scene_011634",
+      "source_provenance_path": "scene_011634/source_provenance.json",
+      "source_provenance_sha256": "fef9ad0a030e0035e7f33d165f114ae7ffdcab4818364d192d8671947819430a",
+      "target_total_instances": {
+        "max": 100,
+        "min": 81
+      },
+      "total_floor_area_m2": 124.24853191541965,
+      "validation_path": "scene_011634/program_validation.json",
+      "validation_sha256": "7990c11745dce08e51fa2cb45261e04321e0d7b832b29ec566880a03a5b37ed8"
+    },
+    {
+      "layout_id": "scene_011809",
+      "objects_per_m2_range": {
+        "max": 0.8028683536854379,
+        "min": 0.6495114771387812
+      },
+      "program_count": 3,
+      "room_program_path": "scene_011809/room_program.json",
+      "room_program_sha256": "f993d453388cac103f3aebb0a97eb2d2d72b958427dc2deeae481517ee9d6b26",
+      "room_type_multiset": [
+        {
+          "count": 1,
+          "room_type": "children's bedroom"
+        },
+        {
+          "count": 1,
+          "room_type": "family room"
+        },
+        {
+          "count": 1,
+          "room_type": "master bedroom"
+        }
+      ],
+      "scene_id": "scene_011809",
+      "source_provenance_path": "scene_011809/source_provenance.json",
+      "source_provenance_sha256": "0dedcc1055c3a77a560d48ac7923fe24f14d6fdb1a036e989bd32dace072f54f",
+      "target_total_instances": {
+        "max": 89,
+        "min": 72
+      },
+      "total_floor_area_m2": 110.85254461887784,
+      "validation_path": "scene_011809/program_validation.json",
+      "validation_sha256": "f09112aa07ddfe5961b48cb3c078a9ed75a5c4f947b12e58fd9c42c8b673a6cc"
+    },
+    {
+      "layout_id": "scene_011888",
+      "objects_per_m2_range": {
+        "max": 0.8038769212208055,
+        "min": 0.6557943304696044
+      },
+      "program_count": 3,
+      "room_program_path": "scene_011888/room_program.json",
+      "room_program_sha256": "e535a3163834f7e4398e79b6bf47fff8eaaab05225d89c01a4f252a79fab5d9b",
+      "room_type_multiset": [
+        {
+          "count": 1,
+          "room_type": "bathroom"
+        },
+        {
+          "count": 1,
+          "room_type": "living room"
+        },
+        {
+          "count": 1,
+          "room_type": "master bedroom"
+        }
+      ],
+      "scene_id": "scene_011888",
+      "source_provenance_path": "scene_011888/source_provenance.json",
+      "source_provenance_sha256": "6bd1e849b4dc85384d37ce66319a00ed68ea968b2dd41c008f651ee34b7feebb",
+      "target_total_instances": {
+        "max": 76,
+        "min": 62
+      },
+      "total_floor_area_m2": 94.5418359375,
+      "validation_path": "scene_011888/program_validation.json",
+      "validation_sha256": "e885bda56ef781dce0a2a2ad56e10cc5e9b050a21e641b10f353964b86ff8ae7"
+    },
+    {
+      "layout_id": "scene_011760",
+      "objects_per_m2_range": {
+        "max": 0.8058893482169711,
+        "min": 0.6491886416192267
+      },
+      "program_count": 3,
+      "room_program_path": "scene_011760/room_program.json",
+      "room_program_sha256": "3c4283fd8dd3b818ea6c6155191138f6f949138845ec206fc34f9f6891ebd4ee",
+      "room_type_multiset": [
+        {
+          "count": 1,
+          "room_type": "bedroom"
+        },
+        {
+          "count": 1,
+          "room_type": "home office"
+        },
+        {
+          "count": 1,
+          "room_type": "living room"
+        }
+      ],
+      "scene_id": "scene_011760",
+      "source_provenance_path": "scene_011760/source_provenance.json",
+      "source_provenance_sha256": "779c80446ffaebbae80c9e9c8a95469f0343235014578418473fb333e98d0d1b",
+      "target_total_instances": {
+        "max": 108,
+        "min": 87
+      },
+      "total_floor_area_m2": 134.01343526744685,
+      "validation_path": "scene_011760/program_validation.json",
+      "validation_sha256": "558452a93a151d599207e454280f4d690234006f4a3606b1fd57f41f645868ff"
+    }
+  ],
+  "schema_version": "complicated_floorplan_program_cohort_v1",
+  "source": {
+    "manifest_file_sha256": "6cf03542c026516261a06e7b00fd702b7ffff34add072db4d6ec9bddb777e612",
+    "manifest_identity_sha256": "9946be6ef3082440d3bdd27628402ca5cfd4a0abe63bde46fec3deca41cb985e",
+    "manifest_path": "source_programs/manifest_v1.json"
+  },
+  "totals": {
+    "program_count": 42,
+    "room_type_multiset": [
+      {
+        "count": 2,
+        "room_type": "bathroom"
+      },
+      {
+        "count": 5,
+        "room_type": "bedroom"
+      },
+      {
+        "count": 1,
+        "room_type": "child room"
+      },
+      {
+        "count": 4,
+        "room_type": "children's bedroom"
+      },
+      {
+        "count": 1,
+        "room_type": "dining room"
+      },
+      {
+        "count": 1,
+        "room_type": "family room"
+      },
+      {
+        "count": 2,
+        "room_type": "foyer"
+      },
+      {
+        "count": 3,
+        "room_type": "home office"
+      },
+      {
+        "count": 4,
+        "room_type": "kitchen"
+      },
+      {
+        "count": 1,
+        "room_type": "kitchen with dining area"
+      },
+      {
+        "count": 7,
+        "room_type": "living room"
+      },
+      {
+        "count": 1,
+        "room_type": "living room with dining area"
+      },
+      {
+        "count": 9,
+        "room_type": "master bedroom"
+      },
+      {
+        "count": 1,
+        "room_type": "primary bedroom"
+      }
+    ],
+    "scene_count": 10,
+    "target_total_instances": {
+      "max": 1133,
+      "min": 914
+    }
+  }
+}

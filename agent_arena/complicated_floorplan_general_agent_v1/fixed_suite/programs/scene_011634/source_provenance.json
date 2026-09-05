@@ -1,0 +1,23 @@
+{
+  "layout_id": "scene_011634",
+  "output": {
+    "room_program_sha256": "2b4d20d18e34f783221b145a21e10b6bd26661ace318e4551d2d8dcf7f1aaf3c"
+  },
+  "policy": {
+    "area_multiplier": 1.5625,
+    "density_multiplier": 1.4,
+    "integer_rounding_policy": "floor_x_plus_0.5_v1",
+    "linear_scale_xy": 1.25,
+    "objects_per_m2_target": {
+      "max": 0.8073424301494476,
+      "min": 0.6509909031838855
+    },
+    "source_room_id_to_type_mapping_emitted": false,
+    "source_room_type_multiset_preserved": true
+  },
+  "schema_version": "complicated_floorplan_program_provenance_v1",
+  "source": {
+    "room_program_path": "source_programs/scene_011634/room_program.json",
+    "room_program_sha256": "e3cfd04724d37ff57e258e91d4e1904442f13b42e8780cd64933270bb8f55c68"
+  }
+}

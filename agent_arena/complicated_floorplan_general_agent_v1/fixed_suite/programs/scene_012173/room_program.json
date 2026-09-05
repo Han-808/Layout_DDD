@@ -1,0 +1,37 @@
+{
+  "layout_id": "scene_012173",
+  "program_order": [
+    "foyer_01",
+    "kitchen_with_dining_area_01",
+    "living_room_01",
+    "master_bedroom_01",
+    "master_bedroom_02"
+  ],
+  "programs": [
+    {
+      "program_id": "foyer_01",
+      "room_type": "foyer"
+    },
+    {
+      "program_id": "kitchen_with_dining_area_01",
+      "room_type": "kitchen with dining area"
+    },
+    {
+      "program_id": "living_room_01",
+      "room_type": "living room"
+    },
+    {
+      "program_id": "master_bedroom_01",
+      "room_type": "master bedroom"
+    },
+    {
+      "program_id": "master_bedroom_02",
+      "room_type": "master bedroom"
+    }
+  ],
+  "schema_version": "non_rectangular_room_program_v1",
+  "target_total_instances": {
+    "max": 139,
+    "min": 112
+  }
+}

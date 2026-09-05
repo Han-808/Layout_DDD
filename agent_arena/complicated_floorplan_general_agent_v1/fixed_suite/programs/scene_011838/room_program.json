@@ -1,0 +1,32 @@
+{
+  "layout_id": "scene_011838",
+  "program_order": [
+    "bathroom_01",
+    "dining_room_01",
+    "kitchen_01",
+    "master_bedroom_01"
+  ],
+  "programs": [
+    {
+      "program_id": "bathroom_01",
+      "room_type": "bathroom"
+    },
+    {
+      "program_id": "dining_room_01",
+      "room_type": "dining room"
+    },
+    {
+      "program_id": "kitchen_01",
+      "room_type": "kitchen"
+    },
+    {
+      "program_id": "master_bedroom_01",
+      "room_type": "master bedroom"
+    }
+  ],
+  "schema_version": "non_rectangular_room_program_v1",
+  "target_total_instances": {
+    "max": 137,
+    "min": 111
+  }
+}

@@ -1,0 +1,79 @@
+{
+  "authentication": {
+    "credential": false,
+    "description": "The token is an ephemeral capability scoped to one episode and one tool socket.",
+    "socket_environment": "LAYOUT_DDD_AGENT_TOOL_SOCKET",
+    "token_environment": "LAYOUT_DDD_AGENT_TOOL_TOKEN"
+  },
+  "command": "./sieve-agent-tool",
+  "methods": {
+    "finalize-submission": {
+      "arguments": [
+        "WORKSPACE_RELATIVE_JSON_PATH"
+      ],
+      "effect": "Validate and immutably seal the final submission; repeated sealing must be identical.",
+      "writes": [
+        "final_submission.json",
+        "finalization.json"
+      ]
+    },
+    "get-task": {
+      "arguments": [],
+      "effect": "Return the public task, database identity, budgets, and evaluation scope."
+    },
+    "inspect-asset": {
+      "arguments": [
+        "ASSET_ID"
+      ],
+      "effect": "Resolve one returned asset ID to authoritative public metadata and bbox values."
+    },
+    "search-assets": {
+      "arguments": [
+        "--query",
+        "TEXT",
+        "--size",
+        "WIDTH",
+        "DEPTH",
+        "HEIGHT",
+        "--top-k",
+        "K"
+      ],
+      "effect": "Deterministically return at most the common Top-K bound from the frozen shared database."
+    },
+    "validate-submission": {
+      "arguments": [
+        "WORKSPACE_RELATIVE_JSON_PATH"
+      ],
+      "effect": "Validate the draft against the declared public schema, identity, total/per-room counts, asset/binding/placement cardinality, and unit-scale contract without exposing evaluator results or hidden labels."
+    }
+  },
+  "protocol": "non_rectangular_agent_tool_protocol_v1",
+  "response_envelope": {
+    "failure": {
+      "error_type": "public error class",
+      "message": "bounded public message",
+      "ok": false
+    },
+    "success": {
+      "ok": true,
+      "result": "method-specific JSON value"
+    }
+  },
+  "schema_version": "sieve_agent_database_interface_v1",
+  "security": {
+    "asset_resource_paths_exposed": false,
+    "external_asset_sources_allowed": false,
+    "final_submission_hash_sealed_host_side": true,
+    "raw_database_files_mounted": false,
+    "scores_or_hidden_labels_exposed": false,
+    "tool_audit_journal_visible_or_writable_by_agent": false
+  },
+  "transcript_policy": {
+    "event_schema": "non_rectangular_agent_tool_event_v3",
+    "hash_chained": true,
+    "result_payloads": "complete_public_tool_results_only",
+    "storage": "trusted_host_side",
+    "credentials_headers_endpoints_and_hidden_reasoning_recorded": false
+  },
+  "transport": "authenticated_unix_domain_socket_json_line_v1"
+}

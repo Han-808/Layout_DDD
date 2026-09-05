@@ -1,0 +1,36 @@
+{
+  "agent_id_prefix": "pi-api2",
+  "api_family_id": "api2",
+  "execution": {
+    "continue_after_episode_failure": true,
+    "require_tool_call_preflight": true,
+    "resume_policy": "sealed_hash_match_only_v1"
+  },
+  "experiment_id": "pi-api2-all-models-example-v1",
+  "harness_id": "sieve-pi-common-harness-v4",
+  "limits": {
+    "episode_attempts": 1,
+    "maximum_concurrent_episodes": 1,
+    "maximum_model_requests": 120,
+    "wall_clock_seconds": 14400
+  },
+  "model_profile_ids": [
+    "api2-gpt-5-6-sol-agent-v1",
+    "api2-kimi-k3-agent-v1",
+    "api2-glm-5-3-agent-v1",
+    "api2-hy4-preview-agent-v1"
+  ],
+  "scene_ids": [
+    "scene_012121",
+    "scene_012173",
+    "scene_011923",
+    "scene_011687",
+    "scene_012246",
+    "scene_011838",
+    "scene_011634",
+    "scene_011809",
+    "scene_011888",
+    "scene_011760"
+  ],
+  "schema_version": "sieve_pi_experiment_v1"
+}

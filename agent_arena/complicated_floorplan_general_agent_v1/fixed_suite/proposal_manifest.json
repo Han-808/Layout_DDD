@@ -1,0 +1,88 @@
+{
+  "artifacts": {
+    "contact_sheet": "review/complicated_floorplan_contact_sheet.png",
+    "room_table_csv": "review/rooms.csv",
+    "room_table_json": "review/rooms.json",
+    "scaled_layout_manifest": {
+      "path": "scaled_layouts/manifest_v1.json",
+      "sha256": "e6ab078764125adb62956504768ca34d7c54095d13f0cfbe18884f67b5bd4c9c"
+    },
+    "scaled_program_manifest": {
+      "path": "scaled_programs/manifest_v1.json",
+      "sha256": "d26bf6b0d3da8b369a5b73bc281ab647a9157172604b5df7244983db0413472b"
+    }
+  },
+  "evaluator_scope": {
+    "cross_room_connections_scored": false,
+    "unit": "single_room_projection"
+  },
+  "experimental_design": {
+    "asset_access": {
+      "database_snapshot_required_before_launch": true,
+      "database_snapshot_sha256": null,
+      "mode": "shared_database",
+      "per_scene_assets_prefrozen": false,
+      "uniform_access_contract_required": true
+    },
+    "comparison_unit": "agent_system",
+    "floorplan_policy": "customized_fixed_cohort",
+    "model_only_arm_in_this_suite": false,
+    "track_id": "complicated_floorplan_agent_track_v1",
+    "track_type": "agent_only"
+  },
+  "generation_authorized": true,
+  "geometry": {
+    "area_multiplier": 1.5625,
+    "linear_scale_xy": 1.25,
+    "minimum_scaled_room_area_m2": 15.724381032751758,
+    "minimum_scaled_short_span_m": 2.5875000000000004,
+    "per_room_manual_edits": false
+  },
+  "manifest_sha256": "d81f8dadbd431cf4f256dec956ca09d92e095b70c9750ae3474efd853cb75362",
+  "object_count": {
+    "aggregate_target_total_instances": {
+      "max": 1133,
+      "min": 914
+    },
+    "density_baseline": {
+      "id": "original_multi_room_floorplan_planned_envelope_v1",
+      "objects_per_m2": {
+        "max": 0.5766731643924626,
+        "min": 0.464993502274204
+      }
+    },
+    "density_multiplier": 1.4,
+    "objects_per_m2_target": {
+      "max": 0.8073424301494476,
+      "min": 0.6509909031838855
+    },
+    "per_room_range_policy": "area_proportional_largest_remainder_exact_total_v1"
+  },
+  "proposal_id": "complicated_floorplan_spatiallm_selected10_scale125_density140_v2",
+  "schema_version": "complicated_floorplan_proposal_manifest_v1",
+  "selection": {
+    "layout_count": 10,
+    "review_only_source_labels_in_visuals": true,
+    "room_count": 42,
+    "scene_order": [
+      "scene_012121",
+      "scene_012173",
+      "scene_011923",
+      "scene_011687",
+      "scene_012246",
+      "scene_011838",
+      "scene_011634",
+      "scene_011809",
+      "scene_011888",
+      "scene_011760"
+    ],
+    "source_room_label_binding_in_generator_input": false
+  },
+  "source": {
+    "dataset_revision": "ab8de0983f48490a0a8850baa32308982d6fbacc",
+    "dataset_url": "https://huggingface.co/datasets/manycore-research/SpatialLM-Dataset/tree/main/layout",
+    "source_layout_manifest_sha256": "947b61d121cf7f34245e99c3ab9171541956860708e0f86f2a6dadce3a1a34c1",
+    "source_program_manifest_sha256": "6cf03542c026516261a06e7b00fd702b7ffff34add072db4d6ec9bddb777e612"
+  },
+  "status": "human_approved"
+}

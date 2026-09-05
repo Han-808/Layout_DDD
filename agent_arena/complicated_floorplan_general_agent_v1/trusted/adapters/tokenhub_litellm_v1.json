@@ -1,0 +1,59 @@
+{
+  "adapter_id": "managed_tokenhub_litellm_v1",
+  "proxy": {
+    "ambiguous_request_recovery": "kill_process_tree_release_listener_restart_before_next_unit",
+    "allowed_openai_params": [
+      "thinking"
+    ],
+    "drop_params": true,
+    "fixed_thinking": {
+      "budget_tokens": 4096,
+      "type": "enabled"
+    },
+    "maximum_output_tokens": 65536,
+    "model_alias": "hy4-preview",
+    "num_retries": 0,
+    "request_timeout_seconds": 1860,
+    "telemetry": false,
+    "upstream_model": "anthropic/hy4-preview"
+  },
+  "provider_identity_guard": {
+    "accepted_response_models": [
+      "hy4-preview"
+    ],
+    "expected_request_model": "hy4-preview",
+    "maximum_identity_preface_bytes": 1048576,
+    "mismatch_policy": "fail_closed_before_litellm_success_stream",
+    "provider_credential_forwarded_to_litellm": false,
+    "raw_response_identity_field": "message_start.message.model",
+    "relay_contract": "host_loopback_before_litellm_v1"
+  },
+  "route_profile_id": "tokenhub-chat-reasoning-agent-v1",
+  "reasoning_replay_bridge": {
+    "anthropic_signed_thinking_required_for_tool_followup": true,
+    "credential_free_real_pi_litellm_gate_required": true,
+    "gateway_detail_format": "sieve-anthropic-thinking-v1",
+    "incoming_litellm_field": "delta.thinking_blocks",
+    "multiple_normal_thinking_blocks": "fail_closed",
+    "normal_thinking_block_policy": "aggregate_exactly_one_complete_signed_block",
+    "pi_replay_field": "assistant.reasoning_details",
+    "redacted_thinking_block_policy": "preserve_discrete_ordered_blocks",
+    "signature_fragment_policy": "concatenate_in_stream_order_before_pi_delivery",
+    "upstream_litellm_field": "assistant.thinking_blocks"
+  },
+  "runtime": {
+    "launcher_relative_path": ".venv/bin/litellm",
+    "launcher_sha256": "e9c8b5da9c46c39d918c2b5999f40ff65a49ec2e1ff692f1f16dfe3212c86464",
+    "litellm_version": "1.83.14",
+    "python_relative_path": ".venv/bin/python",
+    "python_bundle_tree_sha256": "07be0a9ab2d377b484deb14a7be9ceed4896ca4eacccdfbdfeb413b18ea8a041",
+    "python_resolved_sha256": "091704d2238fa5d3d95299894a24d02fa0cf0f874d7b1cd019f9a19b767628ab",
+    "source_git_commit": "41c4e79241e3a22b581ecd119274b6f247c5793c",
+    "source_tree_sha256": "2d08e57d81571160a4db7e1cedc4767975a31c51c7057952db9fdf45e589a3a8",
+    "tree_hash_policy": "sieve_runtime_tree_sha256_v1",
+    "uv_lock_relative_path": "uv.lock",
+    "uv_lock_sha256": "7ebadc3cb8e3a0216ede53639a96f64ce1152ac60973dbefde25235dd57f01a6",
+    "venv_tree_sha256": "31636e843dfc36ab4be0db65c11a4c12bda08d829e08a01f916873229de5bf95"
+  },
+  "schema_version": "sieve_managed_transport_adapter_v4"
+}

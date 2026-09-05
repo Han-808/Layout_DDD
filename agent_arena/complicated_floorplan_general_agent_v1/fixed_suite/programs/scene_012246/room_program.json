@@ -1,0 +1,37 @@
+{
+  "layout_id": "scene_012246",
+  "program_order": [
+    "bedroom_01",
+    "bedroom_02",
+    "foyer_01",
+    "home_office_01",
+    "living_room_01"
+  ],
+  "programs": [
+    {
+      "program_id": "bedroom_01",
+      "room_type": "bedroom"
+    },
+    {
+      "program_id": "bedroom_02",
+      "room_type": "bedroom"
+    },
+    {
+      "program_id": "foyer_01",
+      "room_type": "foyer"
+    },
+    {
+      "program_id": "home_office_01",
+      "room_type": "home office"
+    },
+    {
+      "program_id": "living_room_01",
+      "room_type": "living room"
+    }
+  ],
+  "schema_version": "non_rectangular_room_program_v1",
+  "target_total_instances": {
+    "max": 123,
+    "min": 99
+  }
+}

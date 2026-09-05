@@ -1,0 +1,86 @@
+{
+  "arena_id": "sieve-complicated-floorplan-general-agents-v2",
+  "database": {
+    "contract_path": "fixed_suite/shared_database_contract.json",
+    "expected_asset_count": 2043,
+    "external_asset_sources_allowed": false,
+    "selection_policy": "agent_selects_from_deterministic_bounded_topk_v1",
+    "snapshot_id": "imaginarium-shared-agent-db-v1-8ea5e21ef6c710f7",
+    "snapshot_sha256": "8ea5e21ef6c710f7117b873f32556cf88e7e45180346555114ad27cc3e98a7d3"
+  },
+  "entrant_selection": {
+    "registered_entrants": [],
+    "status": "deferred"
+  },
+  "evaluation": {
+    "connected_during_generation": false,
+    "cross_room_connections_scored": false,
+    "unit": "single_room_projection"
+  },
+  "integrity": {
+    "current_lock": "arena.lock.v5.json",
+    "predecessor_lock": "arena.lock.v4.json"
+  },
+  "isolation": {
+    "agent_can_see_host_credentials": false,
+    "agent_can_see_host_home": false,
+    "agent_can_see_other_episodes": false,
+    "agent_can_see_repository": false,
+    "backend": "macos_seatbelt_sandbox_exec_v1",
+    "fail_closed": true,
+    "model_access": "scoped_loopback_gateway_required",
+    "network_default": "deny",
+    "workspace_scope": "one_agent_one_scene_one_run"
+  },
+  "participant_class": "general_purpose_tool_using_agent",
+  "public_workspace_files": [
+    "TODO.md",
+    "database-interface.json",
+    "floorplan.json",
+    "room_program.json",
+    "sieve-agent-tool",
+    "submission.schema.json",
+    "task.json"
+  ],
+  "schema_version": "sieve_general_agent_arena_v1",
+  "suite": {
+    "aggregate_target_total_instances": {
+      "max": 1133,
+      "min": 914
+    },
+    "density_treatment": {
+      "baseline": "original_multi_room_floorplan_planned_envelope_v1",
+      "multiplier": 1.4,
+      "objects_per_m2_target": {
+        "max": 0.8073424301494476,
+        "min": 0.6509909031838855
+      },
+      "per_room_range_policy": "area_proportional_largest_remainder_exact_total_v1"
+    },
+    "layout_manifest_path": "fixed_suite/layouts/manifest_v1.json",
+    "program_manifest_path": "fixed_suite/programs/manifest_v1.json",
+    "room_count": 42,
+    "scene_count": 10,
+    "scene_order": [
+      "scene_012121",
+      "scene_012173",
+      "scene_011923",
+      "scene_011687",
+      "scene_012246",
+      "scene_011838",
+      "scene_011634",
+      "scene_011809",
+      "scene_011888",
+      "scene_011760"
+    ],
+    "wall_segment_count": 314
+  },
+  "tool_policy": {
+    "max_asset_inspections": 80,
+    "max_asset_searches": 80,
+    "max_submission_validations": 30,
+    "max_top_k": 12,
+    "max_total_calls": 160
+  },
+  "track_id": "complicated_floorplan_agent_track_v1"
+}

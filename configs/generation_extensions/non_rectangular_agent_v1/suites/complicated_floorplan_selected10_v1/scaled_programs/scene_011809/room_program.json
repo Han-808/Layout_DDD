@@ -1,0 +1,27 @@
+{
+  "layout_id": "scene_011809",
+  "program_order": [
+    "children_s_bedroom_01",
+    "family_room_01",
+    "master_bedroom_01"
+  ],
+  "programs": [
+    {
+      "program_id": "children_s_bedroom_01",
+      "room_type": "children's bedroom"
+    },
+    {
+      "program_id": "family_room_01",
+      "room_type": "family room"
+    },
+    {
+      "program_id": "master_bedroom_01",
+      "room_type": "master bedroom"
+    }
+  ],
+  "schema_version": "non_rectangular_room_program_v1",
+  "target_total_instances": {
+    "max": 70,
+    "min": 57
+  }
+}

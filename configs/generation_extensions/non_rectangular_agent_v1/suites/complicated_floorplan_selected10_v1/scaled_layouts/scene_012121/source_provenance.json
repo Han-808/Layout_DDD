@@ -1,0 +1,26 @@
+{
+  "layout_id": "scene_012121",
+  "output": {
+    "room_layout_sha256": "8bec0dbb4a00f6c17ae99a2a90c6fe877b1a99adff3770c7f5b11af6d488b3b9"
+  },
+  "schema_version": "complicated_floorplan_layout_provenance_v1",
+  "source": {
+    "dataset_id": "manycore-research/SpatialLM-Dataset",
+    "dataset_revision": "ab8de0983f48490a0a8850baa32308982d6fbacc",
+    "room_layout_path": "source_layouts/scene_012121/room_layout.json",
+    "room_layout_sha256": "db5306277eb6a106f6e6630e262c38dff25ccb37c170514576022b0bc8abd499"
+  },
+  "transformation": {
+    "area_multiplier": 1.5625,
+    "center_xy_m": [
+      0.0,
+      0.5372500000000002
+    ],
+    "linear_scale_xy": 1.25,
+    "per_room_manual_edits": false,
+    "policy": "uniform_xy_about_layout_bounds_center_v1",
+    "wall_height_scaled": false,
+    "wall_thickness_scaled": false,
+    "z_scale": 1.0
+  }
+}

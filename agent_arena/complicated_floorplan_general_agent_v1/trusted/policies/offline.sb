@@ -1,0 +1,51 @@
+(version 1)
+(deny default)
+(import "system.sb")
+
+;; The Agent may create subprocesses, but every descendant inherits this
+;; Seatbelt profile.
+(allow process-fork)
+(allow process-info* signal (target self))
+(allow dynamic-code-generation)
+
+;; System commands and the pinned Agent runtime may execute. Agent-created
+;; scripts/binaries may execute only from the episode workspace.
+(allow process-exec* file-map-executable
+  (subpath "/bin")
+  (subpath "/sbin")
+  (subpath "/usr/bin")
+  (subpath "/usr/sbin")
+  (subpath "/Library/Developer/CommandLineTools")
+  (subpath (param "RUNTIME_ROOT"))
+  (subpath (param "WORKSPACE"))
+  (literal (param "HARNESS_EXTENSION")))
+
+;; No user/repository path is readable unless it is the one episode workspace
+;; or the explicitly pinned Agent runtime.
+(allow file-read* file-test-existence
+  (subpath "/bin")
+  (subpath "/sbin")
+  (subpath "/usr/bin")
+  (subpath "/usr/sbin")
+  (subpath "/private/etc")
+  (subpath "/Library/Developer/CommandLineTools")
+  (subpath (param "RUNTIME_ROOT"))
+  (subpath (param "WORKSPACE"))
+  (literal (param "HARNESS_EXTENSION")))
+
+;; Path traversal needs metadata on the exact ancestor chain, not access to
+;; sibling directory contents or file data.
+(allow file-read-metadata file-test-existence
+  (path-ancestors (param "WORKSPACE"))
+  (path-ancestors (param "RUNTIME_ROOT"))
+  (path-ancestors (param "TOOL_SOCKET"))
+  (path-ancestors (param "HARNESS_EXTENSION")))
+
+;; All filesystem mutation is confined to the episode workspace.
+(allow file-write* file-ioctl
+  (subpath (param "WORKSPACE")))
+
+;; The shared database remains host-owned. This one capability socket is the
+;; only outbound connection available in offline mode.
+(allow network-outbound
+  (literal (param "TOOL_SOCKET")))

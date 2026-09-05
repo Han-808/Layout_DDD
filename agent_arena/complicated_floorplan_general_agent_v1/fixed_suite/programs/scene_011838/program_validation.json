@@ -1,0 +1,16 @@
+{
+  "layout_id": "scene_011838",
+  "objects_per_m2_range": {
+    "max": 0.8064289455675872,
+    "min": 0.6533840361897969
+  },
+  "program_count": 4,
+  "schema_version": "complicated_floorplan_program_validation_v1",
+  "source_room_type_mapping_exposed_to_generator": false,
+  "target_total_instances": {
+    "max": 137,
+    "min": 111
+  },
+  "total_floor_area_m2": 169.8847750356674,
+  "valid": true
+}

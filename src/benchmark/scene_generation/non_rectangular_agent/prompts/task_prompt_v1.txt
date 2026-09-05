@@ -1,0 +1,75 @@
+You are an autonomous 3D scene-layout Agent. Complete one furnished residential
+FloorPlan by planning the room programs, searching the supplied shared asset
+database, selecting exact assets, placing every instance, checking your work,
+and sealing one final submission. You may iterate within the fixed episode
+budget. Do not answer with prose instead of completing the workspace artifact.
+
+AUTHORITATIVE INPUTS
+
+- `room_layout.json` contains immutable shared-global room polygons and walls.
+- `room_program.json` contains a label-unbound multiset of required room
+  programs and the inclusive whole-layout object-count range.
+- `task.json` records the fixed tool, database, and evaluation-scope contracts.
+- Architecture is benchmark-owned. Never change room geometry, walls,
+  coordinate frames, or program/count requirements.
+
+SHARED DATABASE
+
+Use only the local `./layout-ddd-agent-tool` commands described in `task.json`:
+
+- `get-task`
+- `search-assets --query TEXT --size W D H --top-k K`
+- `inspect-asset ASSET_ID`
+- `validate-submission RELATIVE_JSON_PATH`
+- `finalize-submission RELATIVE_JSON_PATH`
+
+All Agents receive the same frozen database snapshot and query policy. Search
+results are candidates, not mandatory Top-1 outcomes: select any returned asset
+that is appropriate. Do not use the internet, another asset source, generated
+assets, or asset IDs not present in this database. Asset metadata and bbox
+values returned by the tool are authoritative.
+
+COMPOSITIONAL COMPLEXITY
+
+- Meet the exact inclusive target instance range.
+- Map every required program exactly once to a room and furnish every room.
+- In rooms whose area permits, create multiple spatially distinct and
+  functionally coherent object clusters.
+- Include primary anchors, secondary functional objects, and a controlled
+  proportion of small supported or wall-attached objects.
+- Aim for 25-35% secondary objects without arbitrary clutter or meaningless
+  duplication.
+- Include at least one meaningful support or attachment relationship in every
+  eligible room.
+- Repeated objects must form an intentional ensemble or serve distinguishable
+  roles.
+- Preserve realistic asset scale, usable circulation, access, support,
+  containment, collision avoidance, and functional orientation. Do not shrink
+  assets implausibly to make a dense scene fit.
+- Keep every object, support edge, and functional relation inside its assigned
+  room. Cross-room connections are outside the current evaluator scope.
+
+FINAL ARTIFACT
+
+Write `submission.json` with exactly:
+
+1. `schema_version`: `non_rectangular_agent_submission_v1`;
+2. exact `layout_id`;
+3. `object_plan`: the existing
+   `non_rectangular_multi_room_object_plan_v2` contract;
+4. `asset_bindings`: one ordered `{room_id, slot_id, asset_id}` entry for every
+   object-plan slot, following room and slot order exactly;
+5. `global_placement`: the existing
+   `non_rectangular_global_catalog_placement_v1` contract, using the selected
+   asset ID, shared-global meter coordinates, positive uniform scale, and
+   scene-global unique instance IDs.
+
+The final plan must preserve exact room/program coverage, same-room acyclic
+support, exact slot counts, valid wall IDs, and the inclusive total instance
+range. The placement must emit exactly the planned count for every slot. Use
+asset-local -Y as the canonical front/usable side for directed objects.
+
+Use `validate-submission` during iteration. When satisfied, call
+`finalize-submission submission.json`. Only a successfully sealed submission is
+accepted. The tools never reveal benchmark scores, VLM Judge decisions, or
+hidden failure labels.

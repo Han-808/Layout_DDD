@@ -1,0 +1,42 @@
+{
+  "api_families": {
+    "api2": {
+      "routes": {
+        "api2-chat-reasoning-agent-v1": {
+          "binding_profile_id": "operator-api2-chat-deployment-v1",
+          "allow_insecure_upstream": false,
+          "upstream_base_url": "https://replace-api2-chat.invalid/openapi/v2"
+        },
+        "api2-responses-reasoning-agent-v1": {
+          "binding_profile_id": "operator-api2-responses-deployment-v1",
+          "allow_insecure_upstream": false,
+          "upstream_base_url": "https://replace-api2-responses.invalid/openapi/v2"
+        },
+        "api2-standard-chat-agent-v1": {
+          "binding_profile_id": "operator-api2-standard-chat-deployment-v1",
+          "allow_insecure_upstream": false,
+          "upstream_base_url": "https://replace-api2-standard.invalid/v1"
+        }
+      }
+    },
+    "api3": {
+      "routes": {
+        "api3-chat-legacy-agent-v1": {
+          "binding_profile_id": "operator-api3-legacy-deployment-v1",
+          "allow_insecure_upstream": true,
+          "upstream_base_url": "http://replace-api3-on-trusted-network.invalid/v1"
+        }
+      }
+    },
+    "tokenhub": {
+      "routes": {
+        "tokenhub-chat-reasoning-agent-v1": {
+          "binding_profile_id": "operator-tokenhub-production-v1",
+          "allow_insecure_upstream": false,
+          "upstream_base_url": "https://replace-tokenhub.invalid"
+        }
+      }
+    }
+  },
+  "schema_version": "sieve_agent_runtime_bindings_v2"
+}

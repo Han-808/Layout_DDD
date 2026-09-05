@@ -1,0 +1,65 @@
+{
+  "routes": [
+    {
+      "api_family_id": "api2",
+      "auth_strategy": "standard_bearer_v1",
+      "transport_adapter_id": "direct_http_v1",
+      "physical_attempt_identity_strategy": "none",
+      "client_path": "/v1/chat/completions",
+      "option_style": "top_level_reasoning_v1",
+      "pi_api_protocol": "openai-completions",
+      "response_contract": "openai_chat_stream_tool_v1",
+      "route_profile_id": "api2-standard-chat-agent-v1",
+      "upstream_path": "/chat/completions"
+    },
+    {
+      "api_family_id": "api2",
+      "auth_strategy": "api2_bearer_query_v1",
+      "transport_adapter_id": "direct_http_v1",
+      "physical_attempt_identity_strategy": "fresh_api2_cache_task_id_per_physical_attempt_v1",
+      "client_path": "/v1/chat/completions",
+      "option_style": "top_level_reasoning_v1",
+      "pi_api_protocol": "openai-completions",
+      "response_contract": "openai_chat_stream_tool_v1",
+      "route_profile_id": "api2-chat-reasoning-agent-v1",
+      "upstream_path": "/chat/completions"
+    },
+    {
+      "api_family_id": "api2",
+      "auth_strategy": "api2_bearer_query_v1",
+      "transport_adapter_id": "direct_http_v1",
+      "physical_attempt_identity_strategy": "fresh_api2_cache_task_id_per_physical_attempt_v1",
+      "client_path": "/v1/responses",
+      "option_style": "responses_reasoning_v1",
+      "pi_api_protocol": "openai-responses",
+      "response_contract": "openai_responses_stream_tool_v1",
+      "route_profile_id": "api2-responses-reasoning-agent-v1",
+      "upstream_path": "/responses"
+    },
+    {
+      "api_family_id": "api3",
+      "auth_strategy": "api3_bearer_session_v1",
+      "transport_adapter_id": "direct_http_v1",
+      "physical_attempt_identity_strategy": "fresh_api3_uuid_session_id_per_physical_attempt_v1",
+      "client_path": "/v1/chat/completions",
+      "option_style": "legacy_core_v1",
+      "pi_api_protocol": "openai-completions",
+      "response_contract": "openai_chat_stream_tool_identity_v1",
+      "route_profile_id": "api3-chat-legacy-agent-v1",
+      "upstream_path": "/chat/completions"
+    },
+    {
+      "api_family_id": "tokenhub",
+      "auth_strategy": "standard_bearer_v1",
+      "transport_adapter_id": "managed_tokenhub_litellm_v1",
+      "physical_attempt_identity_strategy": "none",
+      "client_path": "/v1/chat/completions",
+      "option_style": "top_level_reasoning_v1",
+      "pi_api_protocol": "openai-completions",
+      "response_contract": "openai_chat_stream_tool_identity_v1",
+      "route_profile_id": "tokenhub-chat-reasoning-agent-v1",
+      "upstream_path": "/chat/completions"
+    }
+  ],
+  "schema_version": "sieve_agent_route_profiles_v1"
+}
