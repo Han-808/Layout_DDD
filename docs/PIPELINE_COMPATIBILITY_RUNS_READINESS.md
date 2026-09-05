@@ -55,8 +55,8 @@ policies and converters are not redesigned.
 - [x] F6: every planned unit has a terminal status; blocked/partial/cancelled
       are distinct from complete; zero attempts cannot exit successfully.
 - [x] Current focused compatibility/execution and new regression tests run.
-      Latest exporter-focused: 64 passed; input-factory contract: 15 passed.
-      Extended: 541 passed, one baseline-existing failure;
+      Latest SceneWeaver exporter/input/mutation-focused: 71 passed.
+      Extended: 577 passed, one baseline-existing failure;
       this is not an all-green full-suite certification (see evidence below).
 - [x] Fresh wheel installation: 11 entrypoints imported/`--help` passed, 12
       selected schemas/prompts/render workers checked, new ICL module imported,
@@ -108,7 +108,7 @@ bpy objects. No benchmark score was fed to a generator.
 | LayoutGPT | `fc31954962553e5b65bf267a904a6930d50b1f5e` | Eight public `rect_train` demonstrations prepared using the release's metric formatter; source hashes and disjoint train/test/val selection checked | Configure audited ICL identity in a new prepared protocol; production response identity and native-parser smoke |
 | DirectLayout | `4430535304124dbc8d48f6bb0ea5891e92267986` | Native pipeline imports; 12 actual mesh assemblies match the corrected clockwise-yaw converter, in CPython 3.11.15 / bpy 4.3.0 / NumPy 1.26.4 | Real rendering/refinement and model/API smoke |
 | LayoutVLM | `85d06b4cd2478551188a0b4a47cd658c85c41315` | Native solver imports; 12 actual mesh assemblies confirm the existing +90-degree basis; CPU fallback probe gives positive loss but both corner gradients are null | Build/verify native differentiable Rotated_IoU on compatible CUDA host; no silent CPU-fallback ablation |
-| SceneWeaver | `7ae54b2ec3fc66147704faa7daf7b017ba8b1bd9` | Native loop/factories inspected; exact exporter AST executed on real bpy objects in Blender 4.3/5.2; all 16 captured states match the corrected frozen conversion | Full frozen initialization/export plugin and Linux runtime; update_layout/update_rotation both invoke update_graph, which rescales and deletes, so disabling named resize/remove tools alone is insufficient |
+| SceneWeaver | `7ae54b2ec3fc66147704faa7daf7b017ba8b1bd9` | Exporter 16/16 states match conversion; exact GLB input factory verified separately; user-approved, source-pinned mutation guards match 14 targets and preserve three approved GLBs in an instrumented bpy function-path diagnostic | Full frozen initialization/export plugin, child-worker wiring and Linux runtime remain unqualified; component evidence is not full-loop smoke |
 | Catalog Placement | This benchmark checkout | Existing fixed-selection Stage-C baseline and offline same-evaluator tests retained | Production Stage-C/API and full evaluation smoke, separately reported |
 
 All four upstream checkouts were clean after these inspections/imports. Source
@@ -485,3 +485,90 @@ and JUnit `/private/tmp/pipeline-sceneweaver-factory.a6VsAm/extended_tests.xml`:
 **541 passed / 1 failed**, 11.89s. Only the same baseline-existing camera test
 failed. Core package source is unchanged from the verified exporter wheel;
 this helper is an external source-checkout script, not a new packaged entrypoint.
+
+## Approved internal FrozenAssets mutation controls
+
+The user explicitly approved narrowly changing SceneWeaver's internal update and
+population paths to prevent scaling and object deletion, preserving native
+planning, optimization and reflection. This experiment must be labeled
+**SceneWeaver–FrozenAssets (restricted mutation set)**, not the unmodified release.
+The scope and 269 approved slot/asset bindings are unchanged. The other task's
+independent `complicated_agent_run_v6` package is untouched; no cross-task merge
+or API launch is authorized by this approval.
+
+The original `Solver.update_graph` rescales even position-only updates and
+clamps height to at least 10 mm. A no-call bpy diagnostic of its exact size block
+confirmed that approved `45_Capet04` is enlarged **131.579x** in height and
+`36_ToolSet_11` **1.329x**, even when exact dimensions are supplied. A normal
+dresser also changes size when the released two-decimal dimensions are echoed.
+Disabling named resize/remove tools alone cannot enforce frozen scale/inventory.
+
+`scene_weaver_frozen_mutations.py` now provides an opt-in worker component:
+
+- Verifies six upstream source files against the pinned commit, checks loaded
+  callable identity, and compiles 14 enumerated function overlays. All checks
+  precede activation. Existing function references/gin wrappers remain intact;
+  upstream files are never edited. The full native/patched AST, hashes and each
+  intercepted operation are written to a fresh, non-overwritten worker journal.
+- Accepts an exact dimension echo or the release's rounded two-decimal echo,
+  including zero for very thin axes, **without applying it**. Different requested
+  dimensions, existing scale changes, swapped assets/slots or changed physical
+  dimensions fail; nothing is repaired. The asset and placeholder must already
+  match the exact frozen identity and physical size before population.
+- Validates the complete layout proposal before applying any pose. Position,
+  rotation and native relation processing remain in the original update body.
+  Explicit resize/removal and unexpected insertion/resampling paths fail before
+  writes. Native pose-move weights are retained; inventory-changing moves are
+  removed from the native move schedule.
+- Intercepts automatic no-relation/support/collision deletion and retains the
+  unresolved condition and objects. With no legal deletion available, the
+  deletion/re-optimize cleanup cycle terminates instead of looping indefinitely.
+  This is not a zero-collision verdict or termination of native reflection.
+  Native physics measurements and the benchmark evaluator are unchanged.
+
+The patched `infinigen_examples/steps/evaluate.py` function belongs to the
+**upstream generation system**, not the benchmark evaluator. Its measurements
+remain intact; only deletion/cleanup termination is constrained. This component
+does not yet install itself in the complete SceneWeaver launcher. Initial slot
+registration/planning, exact-only initialization binding (including disabling
+the release's unconditional retrieval subprocess), model routing, child-worker
+setup and iteration observations still need integration. No full-loop
+eligibility or API readiness is claimed.
+
+Evidence root: `/private/tmp/pipeline-sceneweaver-native-mutation.OVZNK7/`.
+`guarded_v3` exercised the source-pinned function overlays on real bpy 4.3 objects
+from the dresser, tool set and thin rug GLBs: **3/3 passed**. Local mesh vertices,
+asset source hashes, proposal JSON hash and scale `[1,1,1]` stayed unchanged.
+Maximum dimension float error after rotation was `2.384185791015625e-7` metres;
+pose-anchor error was at most `1.0013580320489268e-7` metres. All three native
+relation calls remained. Native pose-helper bodies were executed, but trimesh
+sync/relation implementations were instrumented callbacks. Neither native module
+imports, full initialization/optimizer, nor the reflection loop were qualified.
+
+The initial unguarded diagnostic selected the wrong AST loop; the first guarded
+attempt used the wrong catalog hash field, and the second demanded bit-exact
+`obj.dimensions` after rotation. These diagnostic setup errors were corrected
+without weakening the product contract: the final probe requires unchanged local
+vertices and scale, and measures float error against 1 micrometre. Prior attempt
+directories/logs remain. The source-pinned guard SHA-256 is
+`ad0b471b25d5f43c061abcb9f382b84e8b9232b2f6595cb203e0ff7e2aea10eb`.
+
+Exact successful native diagnostics (exit 0, no API or pixel-render calls):
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 /Users/han_mohan/Desktop/Layout_DDD/Support/pipeline_compatibility_runs/api_ready_v1/environments/layout-vlm-cp311/bin/python /private/tmp/pipeline-sceneweaver-native-mutation.OVZNK7/probe_resize_block.py --repo /Users/han_mohan/Desktop/Layout_DDD/Support/pipeline_compatibility_runs/api_ready_v1/upstream/SceneWeaver --catalog /Users/han_mohan/Desktop/Layout_DDD/Support/pipeline_compatibility_runs/api_ready_v1/verified_glb_preflight/catalog_manifest.json --out /private/tmp/pipeline-sceneweaver-native-mutation.OVZNK7/observed_v2
+PYTHONDONTWRITEBYTECODE=1 /Users/han_mohan/Desktop/Layout_DDD/Support/pipeline_compatibility_runs/api_ready_v1/environments/layout-vlm-cp311/bin/python /private/tmp/pipeline-sceneweaver-native-mutation.OVZNK7/probe_guarded_paths.py --checkout /private/tmp/layout-ddd-pipeline-compatibility-runs --repo /Users/han_mohan/Desktop/Layout_DDD/Support/pipeline_compatibility_runs/api_ready_v1/upstream/SceneWeaver --catalog /Users/han_mohan/Desktop/Layout_DDD/Support/pipeline_compatibility_runs/api_ready_v1/verified_glb_preflight/catalog_manifest.json --out /private/tmp/pipeline-sceneweaver-native-mutation.OVZNK7/guarded_v3
+```
+
+Exact CI commands (source Python 3.13.14, no real upstream/dataset/API dependency):
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src /Users/han_mohan/Desktop/Layout_DDD/.venv/bin/python -m pytest -q -o addopts='' tests/test_sceneweaver_frozen_mutations.py tests/test_sceneweaver_frozen_assets.py tests/test_sceneweaver_native_export.py --tb=short --basetemp=/private/tmp/pipeline-sceneweaver-native-mutation.OVZNK7/pytest_focused --junitxml=/private/tmp/pipeline-sceneweaver-native-mutation.OVZNK7/focused_tests.xml
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src /Users/han_mohan/Desktop/Layout_DDD/.venv/bin/python -m pytest -q -o addopts='' tests/test_external_harness_adapters.py tests/test_adapter_io_contracts.py tests/test_generation_comparison_protocol.py tests/test_controlled_generation_pilot.py tests/test_frozen_imaginarium_scene10.py tests/test_external_harness_execution.py tests/test_pipeline_evaluation_runtime.py tests/test_layoutgpt_frozen_icl.py tests/test_frozen_public_brief.py tests/test_native_mesh_frame_roundtrip.py tests/test_sceneweaver_native_export.py tests/test_sceneweaver_frozen_assets.py tests/test_sceneweaver_frozen_mutations.py tests/test_scene_harness.py tests/test_catalog_placement_adapter.py tests/test_external_converter_correctness.py tests/test_external_room_contracts.py tests/test_canonical_metric_scoring.py tests/test_canonical_l3_camera_integration.py tests/test_evaluation_mode_interface.py tests/test_submission_api.py --tb=short --basetemp=/private/tmp/pipeline-sceneweaver-native-mutation.OVZNK7/pytest_extended --junitxml=/private/tmp/pipeline-sceneweaver-native-mutation.OVZNK7/extended_tests.xml
+```
+
+Results: **71 passed** (0.35s) and **577 passed / 1 failed** (11.03s).
+The sole failure remains the independently baseline-reproduced camera test above;
+no legitimate strict test or evaluator code was weakened. This checkpoint adds
+only external source-checkout helper/tests/docs, so the previously verified core
+wheel remains unchanged. No experimental artifacts are committed to Git.

@@ -173,6 +173,18 @@ a near-square office chair and the refrigerator with loose geometry. These are
 geometry diagnostics, **not** model/render/optimization E2E smoke results; see
 `PIPELINE_COMPATIBILITY_RUNS_READINESS.md` for exact evidence and remaining gates.
 
+For SceneWeaver, the user additionally approved **internal** fixed-scale and
+no-deletion controls, not merely removal of named tools: the released position
+update also rescales objects, and native physics cleanup deletes them. The
+source-pinned `scene_weaver_frozen_mutations.py` worker component intercepts those
+operations before they mutate frozen geometry/inventory; native pose processing,
+physics measurements and reflection are retained. The deletion/re-optimize cycle
+stops if no legal deletion exists, leaving collisions visible, not scoring them
+as fixed. This must be reported as **SceneWeaver–FrozenAssets (restricted mutation
+set)**. Component tests do not certify the complete initializer/launcher/loop;
+the harness remains conditional until those integrations and host qualification
+are finished. Upstream files, frozen assets and benchmark scoring stay unchanged.
+
 Released SceneWeaver serializes the solver placeholder's `obj.dimensions` into
 `layout.size` to two decimals. These are scaled **local-axis object dimensions**,
 not a post-rotation world AABB. An input basis baked into the mesh changes them;
