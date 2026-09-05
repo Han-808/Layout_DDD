@@ -112,6 +112,7 @@ testpaths = [
   "tests/test_generation_comparison_protocol.py",
   "tests/test_controlled_generation_pilot.py",
   "tests/test_pipeline_evaluation_runtime.py",
+  "tests/test_pipeline_evaluation_acceptance.py",
   "tests/test_layoutgpt_frozen_icl.py",
   "tests/test_frozen_public_brief.py",
   "tests/test_native_mesh_frame_roundtrip.py",

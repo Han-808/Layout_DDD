@@ -17,6 +17,7 @@ import re
 from typing import Any
 
 from benchmark.generation_comparison.evaluation_runtime import CanonicalEvaluationRuntime
+from benchmark.generation_comparison.evaluation_acceptance import acceptance_policy_name
 from benchmark.generation_comparison.identity import canonical_json_sha256
 from benchmark.generation_comparison.model_policy import api_base_sha256, normalize_model_identity
 from benchmark.generation_comparison.pilot import _validate_pilot_spec, bridge_execution_hashes
@@ -86,11 +87,14 @@ def bind_operator_config(*, spec_path: Path, bindings_path: Path, out_dir: Path)
     original = deepcopy(spec)
     binding = read_json(bindings_path)
     _no_literals(binding)
+    # Optional for existing v1 bindings. The experiment example explicitly
+    # opts in; old prepared runs and callers retain the complete-score gate.
+    acceptance = binding.get("evaluation_acceptance_policy")
     _fields(binding, {
         "schema_version", "source_spec_sha256", "benchmark_python", "asset_root",
         "asset_bundle_root", "runs_root", "shared_model", "upstreams",
         "layoutgpt_icl", "catalog_placement", "evaluation_runtime_config",
-    }, "operator bindings")
+    } | ({"evaluation_acceptance_policy"} if "evaluation_acceptance_policy" in binding else set()), "operator bindings")
     if binding["schema_version"] != "pipeline_operator_bindings_v1":
         raise ArtifactValidationError("unsupported operator bindings schema")
     if binding["source_spec_sha256"] != canonical_json_sha256(spec):
@@ -179,6 +183,9 @@ def bind_operator_config(*, spec_path: Path, bindings_path: Path, out_dir: Path)
     )
     if generation["harness_inputs"]["layout_gpt"].get("hidden_evaluator_data_used") is not False:
         raise ArtifactValidationError("LayoutGPT ICL must retain the no-hidden-evaluator-data contract")
+    if "evaluation_acceptance_policy" in binding:
+        acceptance_policy_name({"acceptance_policy": acceptance}, mode=spec["mode"])
+        spec["evaluator"]["acceptance_policy"] = acceptance
     _validate_pilot_spec(spec)
 
     stages = []
@@ -228,10 +235,15 @@ def bind_operator_config(*, spec_path: Path, bindings_path: Path, out_dir: Path)
         "bindings_sha256": _hash(bindings_path), "compiler_sha256": _hash(Path(__file__)),
         "methods_template_sha256": _hash(methods_path), "source_icl_sha256": icl["sha256"],
         "changed_spec_fields": ["generation.model_policy.required_identity", "generation.model_policy.required_deployment_id",
-                                "generation.model_policy.required_api_base_sha256", "generation.harness_inputs.layout_gpt"],
+                                "generation.model_policy.required_api_base_sha256", "generation.harness_inputs.layout_gpt"]
+                               + (["evaluator.acceptance_policy"] if acceptance is not None else []),
         "cases_sha256": canonical_json_sha256(spec["cases"]), "catalog_sha256": canonical_json_sha256(spec["catalog"]),
-        "source_evaluator_policy_sha256": canonical_json_sha256(spec["evaluator"]),
-        "cases_assets_scoring_unchanged": all(spec[key] == original[key] for key in ("cases", "catalog", "evaluator", "methods")),
+        "source_evaluator_policy_sha256": canonical_json_sha256(original["evaluator"]),
+        "bound_evaluator_policy_sha256": canonical_json_sha256(spec["evaluator"]),
+        "evaluation_acceptance_policy": acceptance_policy_name(spec["evaluator"]),
+        "cases_assets_scoring_unchanged": all(spec[key] == original[key] for key in ("cases", "catalog", "methods"))
+            and {k: v for k, v in spec["evaluator"].items() if k != "acceptance_policy"}
+            == {k: v for k, v in original["evaluator"].items() if k != "acceptance_policy"},
         "files": {name: _hash(output / name) for name in (*artifacts, "layoutgpt_icl_messages.json")},
         "service_contacted": False, "generation_executed": False,
         "real_native_environment_qualified": False, "real_upstream_smoke_verified": False,

@@ -43,11 +43,13 @@ policies and converters are not redesigned.
 - [x] F2 wiring: production evaluator runtime constructed before generation
       readiness; per-scene render/Judge/grouping/camera wiring uses unchanged
       run_evaluate. Tested with the actual evaluator and mocked external I/O.
-- [ ] F2 production acceptance: a complete real evaluator report. Honest frozen
-      ownership currently makes pairing/style not relevant, while the unchanged
-      scoring denominator retains those terms: observed L3 coverage 0.84 and
-      `partial_coverage`. Preflight blocks paid generation on this known issue.
-      No ownership relabeling, metric removal, or score override was introduced.
+- [x] User-approved experiment acceptance gate: L3 coverage >= 0.8, only
+      pairing/style may be inapplicable; all other applicable metrics required.
+      Opt-in is versioned and hashed outside evaluator kwargs. The default
+      complete-score gate remains unchanged. See the current checkpoint below.
+- [ ] F2 production acceptance: a real evaluator report passing that gate.
+      Raw `partial_coverage`, scores and weights remain unchanged; no real
+      production evaluator report has been obtained by this preparation work.
 - [x] F3: prepared input, object plan, protocol, catalog and evaluator hashes
       revalidated before any generation, including later cases.
 - [x] F4: cancellation propagates, child process group reaped, logs retained,
@@ -55,9 +57,8 @@ policies and converters are not redesigned.
 - [x] F6: every planned unit has a terminal status; blocked/partial/cancelled
       are distinct from complete; zero attempts cannot exit successfully.
 - [x] Current focused compatibility/execution and new regression tests run.
-      SceneWeaver plugin/exporter/input/mutation-focused: 104 passed.
-      Latest operator/runtime/pilot-focused: 80 passed. Latest extended
-      regression: 628 passed, one baseline-existing failure;
+      Latest acceptance/operator/runtime/pilot/protocol-focused: 165 passed.
+      Latest extended regression: 687 passed, one baseline-existing failure;
       this is not an all-green full-suite certification (see evidence below).
 - [x] Fresh wheel installation: 11 entrypoints imported/`--help` passed, 12
       selected schemas/prompts/render workers checked, new ICL module imported,
@@ -70,9 +71,12 @@ policies and converters are not redesigned.
       it is explicitly a new public-input treatment (details below).
 - [x] 168-asset GLB bundle built and source/hash/bbox/center/scale verified.
 - [x] Four upstream checkouts pinned/clean; bridge bundle hashes checked.
-- [ ] All upstream production dependencies qualified. LayoutGPT and DirectLayout
-      local imports work; LayoutVLM imports but its CUDA overlap extension is
-      unavailable locally. SceneWeaver's Linux runtime/plugin are not qualified.
+- [x] Linux installation/import checkpoint: five isolated Python environments,
+      native LayoutGPT/DirectLayout/LayoutVLM/SceneWeaver imports, LayoutVLM
+      extension compilation and 176 CPU/mocked tests at `d0b5e4f`. No GPU kernel.
+- [ ] All upstream production dependencies qualified. bpy archive platform-tag
+      conflicts remain explicit; actual ABI/render/solver/loop qualification,
+      an allocated GPU and latest code deployment are not established.
 - [x] Released-derived LayoutGPT ICL snapshot with source/selection/leakage audit;
       eight training-only examples, byte-identical independent message rebuild.
 - [x] SceneWeaver frozen plugin implementation: native SceneDesigner entry,
@@ -98,6 +102,10 @@ policies and converters are not redesigned.
       remains unproven and full generation is not authorized by this checklist.
 
 ## Pro requirement closure audit at code checkpoint `9cd034a`
+
+This is a historical checkpoint. The current acceptance-policy and Linux
+installation evidence below supersede its applicability/installation status;
+its recorded test counts and missing real-production evidence are not rewritten.
 
 This maps every Pipeline checklist item in Pro's two attachments and the shared
 implementation guide. `PASS_LOCAL` is limited to the named local evidence;
@@ -771,3 +779,106 @@ real rendering, optimizer, model call or evaluator call ran in these checks.
 Fresh preparation with fully qualified runtime identities remains mandatory
 before any separately authorized real run. Diagnostic JSON/JUnit/source script
 evidence is stored outside Git under the owned ignored data prefix.
+
+## Current checkpoint: FrozenAssets acceptance and Linux installation (2026-09-05)
+
+Starting branch commit: `d0b5e4fd1e87a7c10fb5ad03e0af4aeba1c5ab85`, isolated
+`codex/pipeline-compatibility-runs`. The subsequent code changes are confined to
+generation-comparison acceptance, existing operator config compilation and
+tests/docs. No evaluator, visual-judge, converter or native bridge source changed.
+
+The user resolved the applicability decision: **minimum L3 coverage 0.8, and
+only pairing/style may be inapplicable**. The opt-in
+`frozen_assets_required_metrics_v1` validates the unchanged canonical report,
+factual frozen ownership, evaluator plan/metric inventories, complete required
+metric coverage, L0, reliability and absence of infrastructure/unresolved claims.
+It does not drop weights, repair reports or improve scores. The sample binding
+opts in outside `static_kwargs`; old bindings/default callers remain strict.
+The new policy is included in prepared hashes and cannot be retrofitted by
+editing historical artifacts. Source/bound evaluator identities are recorded.
+
+Pilot results and append-only reevaluation distinguish `evaluation_accepted`
+from raw complete-score `evaluation_success`. A qualifying partial report can
+advance this experiment without being included in old complete-score aggregates.
+SceneWeaver gets an independent, report-hashed acceptance decision for every
+state; one rejected state prevents final-only acceptance. All evaluation remains
+post-hoc, absent from generator inputs and native reflection.
+
+Current tests used the real canonical evaluator with synthetic native artifacts
+and mocks only for external observations/rendering. Two successive one-object
+cases advance under opt-in with raw `partial_coverage`; strict default still
+rejects it. Tests also cover renderer failure/recovery without regeneration or
+source mutation, metric/evidence omission despite sufficient coverage, active
+L2 obligations, prepared-policy drift and offline SceneWeaver iterations.
+
+Exact local commands, from the isolated checkout (Python 3.13.14):
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src /Users/han_mohan/Desktop/Layout_DDD/.venv/bin/python -m pytest -q -o addopts='' tests/test_pipeline_evaluation_acceptance.py tests/test_pipeline_evaluation_runtime.py tests/test_pipeline_operator_config.py tests/test_controlled_generation_pilot.py tests/test_generation_comparison_protocol.py --tb=short --basetemp=/private/tmp/pipeline-acceptance-current.Sq0Qei/focused_final --junitxml=/private/tmp/pipeline-acceptance-current.Sq0Qei/focused_final.xml
+# 165 passed, 0 failed, 0 skipped; 4.68 s
+
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src /Users/han_mohan/Desktop/Layout_DDD/.venv/bin/python -m pytest -q -o addopts='' tests/test_external_harness_adapters.py tests/test_adapter_io_contracts.py tests/test_generation_comparison_protocol.py tests/test_controlled_generation_pilot.py tests/test_frozen_imaginarium_scene10.py tests/test_external_harness_execution.py tests/test_pipeline_evaluation_runtime.py tests/test_pipeline_evaluation_acceptance.py tests/test_layoutgpt_frozen_icl.py tests/test_frozen_public_brief.py tests/test_native_mesh_frame_roundtrip.py tests/test_sceneweaver_native_export.py tests/test_sceneweaver_frozen_assets.py tests/test_sceneweaver_frozen_mutations.py tests/test_sceneweaver_frozen_plugin.py tests/test_scene_harness.py tests/test_catalog_placement_adapter.py tests/test_external_converter_correctness.py tests/test_external_room_contracts.py tests/test_canonical_metric_scoring.py tests/test_canonical_l3_camera_integration.py tests/test_evaluation_mode_interface.py tests/test_submission_api.py tests/test_pipeline_operator_config.py --tb=short --basetemp=/private/tmp/pipeline-acceptance-current.Sq0Qei/extended_verified --junitxml=/private/tmp/pipeline-acceptance-current.Sq0Qei/extended_verified.xml
+# 687 passed, 1 failed, 0 skipped; 14.23 s
+
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src /Users/han_mohan/Desktop/Layout_DDD/.venv/bin/python -m pytest -q -o addopts='' tests/test_external_harness_adapters.py --basetemp=/private/tmp/pipeline-acceptance-current.Sq0Qei/adapters --junitxml=/private/tmp/pipeline-acceptance-current.Sq0Qei/adapters.xml
+# 68 passed, 0 failed; 0.34 s
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src /Users/han_mohan/Desktop/Layout_DDD/.venv/bin/python -m pytest -q -o addopts='' tests/test_adapter_io_contracts.py --basetemp=/private/tmp/pipeline-acceptance-current.Sq0Qei/io --junitxml=/private/tmp/pipeline-acceptance-current.Sq0Qei/io.xml
+# 34 passed, 0 failed; 0.26 s
+```
+
+The extended suite required reviewed permission for `ps` to inspect its own
+cancelled test children. Its first sandboxed attempt was **686 passed / 2 failed**:
+one `ps` permission error and the same historical L3 camera failure. With that
+permission the cancellation test passed; the sole remaining failure is
+`test_canonical_l3_group_judge_repair_reaches_vlm_and_renders`, line 374, expected
+one VLM request and observed zero, already independently reproduced at the
+untouched Pro baseline (`/private/tmp/pipeline-runs-regression.FiYPaQ/baseline.xml`).
+No test/evaluator change or skip hides this failure. Earlier diagnostic attempts
+are retained, including an initially underspecified two-object external fixture;
+that fixture was restricted to the existing one-object observation contract,
+not fixed by weakening the acceptance gate.
+
+New wheel built with `python -m pip wheel . --no-deps --no-build-isolation`:
+SHA-256 `91407968695a38461cba6171c4a993f2465f05dcb7d9803f1972beb257d2c290`.
+Installed into a fresh target with `--no-index --no-deps`. Outside the checkout,
+Python isolated mode imported the acceptance module, existing evaluator, pilot
+and reevaluation; every loaded `benchmark` module resolved inside that target.
+This reused the dependency environment and is a wheel-content/import check,
+not a new native dependency or production qualification.
+
+### Separate Linux installation evidence
+
+User-authorized root: `/hcccao/pipeline_compatibility_runs/runtime_v1/`
+(`/hcccao` resolves to `/dockerdata/hcccao_tf3`). Five isolated Python 3.10.12
+environments and four pinned upstreams were installed there, approximately 18 GB
+including caches. System Python, driver and existing Blender were not modified.
+The benchmark installation is **still `d0b5e4f`**, not this later local acceptance
+checkpoint; no implicit deployment claim is made.
+
+Actual evidence: 176/0 CPU/mocked compatibility tests; released LayoutGPT parser;
+DirectLayout native pipeline/assembly imports; SceneWeaver executor and planner
+imports through the existing configuration overlay; LayoutVLM native overlap
+extension compiled for H20 `sm_90` and imported with GPUs hidden. Native source
+commits remained unchanged. No API request, GPU kernel, renderer smoke or native
+generation/reflection loop was executed. All eight observed GPUs were busy;
+no GPU allocation was claimed.
+
+Important caveat: the official bpy 3.6 archive wheel has a cp310 filename but a
+cp39 internal WHEEL tag. Both `pip check` and `uv pip check` return failure for
+the three bpy environments, despite successful Python 3.10 imports. The original
+bytes/tags were not relabeled. Full ABI/render qualification remains pending.
+LayoutVLM alone uses NumPy 1.23.5 for released `np.int` code and a `.pth` for native
+absolute imports; no upstream algorithm was edited to install it.
+
+Installation logs, exact five dependency freezes, repo pins, warning/failure
+records and test XML are retained remotely in `tools/INSTALLATION.md` and
+`logs/runtime_installation_manifest.json`, with a local backup under
+`Support/pipeline_compatibility_runs/api_ready_v1/linux_runtime_v1_installation/`.
+Those are environment evidence, not generated scene experiments, and are not
+pushed as code.
+
+Remaining: deploy the tested acceptance checkpoint with a new provenance record;
+synchronize/verify the approved assets and public inputs; bind production model
+and evaluator routes; qualify designated GPU/native rendering and loops; then
+obtain separate authorization for staged API smoke/pilot/formal runs. No asset
+reselection, scoring change or real experiment is part of this checkpoint.

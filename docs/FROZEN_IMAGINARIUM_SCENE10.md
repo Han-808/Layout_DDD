@@ -534,6 +534,7 @@ bytes; it does not substitute synthetic ICL or silently bless a changed file.
 | `runs_root` | Fresh root for smoke, dense pilot and three formal repetitions; separate from the config directory |
 | `catalog_placement` | Separately reported Stage-C model/endpoint/key environment name; not implicitly included in the four-method same-model claim |
 | `evaluation_runtime_config` | Trusted post-hoc Judge/camera/Blender configuration; never added to method input or generation environment |
+| `evaluation_acceptance_policy` | Optional experiment gate, outside scoring kwargs. This experiment explicitly uses `frozen_assets_required_metrics_v1`; omitted bindings retain `complete_score_v1`. |
 
 On the eventual execution host, from the pinned benchmark checkout:
 
@@ -548,8 +549,11 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python \
 This writes `spec.json`, `methods.json`, `evaluation_runtime.json`, the exact
 `layoutgpt_icl_messages.json`, `launch_plan.json` and `configuration_manifest.json`.
 The only source-spec changes are the configured model identity/deployment/API
-fingerprint and ICL identity/status/provenance. Cases, inventory, assets, native
-budgets and evaluator policy remain unchanged. Source, compiler, template and
+fingerprint, ICL identity/status/provenance, and explicitly selected experiment
+acceptance policy. Cases, inventory, assets, native budgets and evaluator scoring
+kwargs remain unchanged. Source and bound evaluator-policy identities are
+recorded separately; opting in requires a new preparation, never editing an old
+prepared run. Source, compiler, template and
 output hashes are recorded. A bridge/plugin pin mismatch fails rather than
 automatically accepting new code. Existing output directories are rejected.
 
@@ -580,7 +584,7 @@ and `environment`, and review stages sequentially:
    calls. The stage has one case, so the misleading `--dry-run-only` flag is
    unnecessary. API success alone is not full E2E success.
 3. Require all five planned units' real workflow, identity, frozen inputs and
-   complete evaluation acceptance, then separately prepare/preflight/run S101.
+   experiment evaluation acceptance, then separately prepare/preflight/run S101.
 4. After that acceptance, use `formal_r1`, `formal_r2`, `formal_r3`, in fresh
    directories, with the same bound config: 50 units each, 150 formal units.
    These are independent native invocations, not best-of/cached results.
@@ -590,12 +594,41 @@ automatic stage advancement or production API probe is implemented by the
 configuration compiler. Existing `preflight`/`run` return exit 2 when blocked;
 no-call preflight cannot certify the actual provider or native loop.
 
-The honest frozen-ownership applicability gate currently remains **blocked**:
-pairing/style are not relevant under the unchanged evaluator policy, but its
-default denominator prevents complete coverage. Binding an API cannot resolve
-that policy issue. Do not change ownership, remove metrics, override scores or
-skip the gate to make a run appear ready. Linux/CUDA qualification and an
-explicit applicability resolution are independent remaining requirements.
+### Approved FrozenAssets evaluation acceptance
+
+The user approved **L3 coverage >= 0.8**, with only
+`object_pairing_consistency` and `style_consistency` allowed to be inapplicable.
+The experiment example explicitly opts into `frozen_assets_required_metrics_v1`.
+This is an orchestration acceptance rule, not a new evaluator/scoring profile.
+
+The gate requires factual benchmark-owned frozen asset identity, category,
+appearance and scale, with generator-owned arrangement, in both the prepared
+policy and actual report. It verifies the evaluator's own metric plan against
+coverage, raw metric envelopes and reliability records. L0 must pass, every
+other applicable metric (including active L2 claims) must be complete, and
+missing API/render/evidence or unresolved claims cannot be exempted. A high
+score or overall coverage above 0.8 cannot waive a missing required metric.
+Quality scores themselves are not an engineering acceptance cutoff.
+
+The existing evaluator can report L3 coverage 0.84 and raw
+`benchmark_score_status=partial_coverage` when only these two metrics are
+inapplicable. That raw status, raw score, weights, denominator and report bytes
+are not modified. Each run separately records `evaluation_accepted`, the
+versioned acceptance decision and report hash. Existing `evaluation_success`
+continues to mean a complete raw benchmark score. Accepted partial reports can
+advance this experiment, but are excluded from the existing complete-score
+mean/median/paired aggregates and counted separately. There is no silent
+publishability or complete-score claim.
+
+SceneWeaver records the same gate for **every** preserved iteration, post-hoc.
+A qualifying final report cannot mask an unaccepted iteration. Neither the
+gate nor official evaluator reports are given to its native reflection loop.
+Append-only final-state reevaluation uses the original prepared acceptance
+policy and cannot retrofit an opt-in into a historical run.
+
+Without explicit opt-in, the previous complete-score requirement and its
+frozen-applicability preflight block remain unchanged. Native environment,
+model route and real render/loop qualification are still independent gates.
 
 ### Costs, stopping, and recovery
 
@@ -638,3 +671,14 @@ converter/evaluator regressions. Local Imaginarium source metadata and all 168
 materialized asset files were preflighted. No real LayoutGPT, DirectLayout,
 LayoutVLM, or SceneWeaver model run was executed as part of this implementation,
 and no quality score is claimed.
+
+Linux environments were installed under the user-authorized
+`/hcccao/pipeline_compatibility_runs/runtime_v1/`. Native imports and a CPU/mocked
+compatibility suite passed; LayoutVLM's CUDA extension compiled, but no GPU
+kernel, scene render or generation loop was run. The archived bpy wheel's
+internal platform tag causes explicit dependency-check failures; successful
+imports do not erase that caveat. See the current evidence section in
+`PIPELINE_COMPATIBILITY_RUNS_READINESS.md`. That installation is pinned to
+`d0b5e4f`; the later acceptance checkpoint is not implicitly deployed by these
+local code/tests. Approved asset synchronization and production bindings remain
+separate preparation steps.

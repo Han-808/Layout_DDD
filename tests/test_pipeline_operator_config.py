@@ -72,8 +72,11 @@ def test_bind_same_model_routes_icl_and_cases_without_calls_or_source_mutation(c
     assert manifest["status"] == "CONFIG_BOUND_NOT_PREFLIGHTED"
     assert manifest["cases_assets_scoring_unchanged"]
     original, revised = read_json(spec), read_json(output / "spec.json")
-    for key in original.keys() - {"generation"}:
+    for key in original.keys() - {"generation", "evaluator"}:
         assert revised[key] == original[key]
+    assert revised["evaluator"] == {**original["evaluator"], "acceptance_policy": "frozen_assets_required_metrics_v1"}
+    assert manifest["source_evaluator_policy_sha256"] == canonical_json_sha256(original["evaluator"])
+    assert manifest["bound_evaluator_policy_sha256"] == canonical_json_sha256(revised["evaluator"])
     expected_generation = deepcopy(original["generation"])
     expected_generation["model_policy"] = revised["generation"]["model_policy"]
     expected_generation["harness_inputs"]["layout_gpt"] = revised["generation"]["harness_inputs"]["layout_gpt"]
@@ -95,9 +98,32 @@ def test_bind_same_model_routes_icl_and_cases_without_calls_or_source_mutation(c
     assert revised["generation"]["harness_inputs"]["layout_gpt"]["hidden_evaluator_data_used"] is False
     assert "fixture-evaluator" not in json.dumps(methods)
     assert "evaluation_runtime" not in json.dumps(methods)
+    assert "acceptance_policy" not in json.dumps(methods)
     assert all(hashlib.sha256((output / name).read_bytes()).hexdigest() == digest for name, digest in manifest["files"].items())
     assert not manifest["service_contacted"] and not manifest["real_native_environment_qualified"]
     assert not Path(read_json(binding)["runs_root"]).exists()
+
+
+def test_legacy_bindings_preserve_strict_complete_score_default(compiler, inputs):
+    spec, binding, output = inputs
+    data = read_json(binding)
+    data.pop("evaluation_acceptance_policy")
+    write_json(binding, data)
+    manifest = compiler.bind_operator_config(spec_path=spec, bindings_path=binding, out_dir=output)
+    assert read_json(output / "spec.json")["evaluator"] == read_json(spec)["evaluator"]
+    assert manifest["evaluation_acceptance_policy"] == "complete_score_v1"
+    assert "evaluator.acceptance_policy" not in manifest["changed_spec_fields"]
+
+
+@pytest.mark.parametrize("value", [None, "allow_all_partial", 0.8])
+def test_invalid_acceptance_binding_cannot_create_output(compiler, inputs, value):
+    spec, binding, output = inputs
+    data = read_json(binding)
+    data["evaluation_acceptance_policy"] = value
+    write_json(binding, data)
+    with pytest.raises(ValueError, match="acceptance policy"):
+        compiler.bind_operator_config(spec_path=spec, bindings_path=binding, out_dir=output)
+    assert not output.exists()
 
 
 def test_launch_plan_routes_existing_cli_and_all_three_full_repetitions(compiler, inputs, monkeypatch, capsys):

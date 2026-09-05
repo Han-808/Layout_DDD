@@ -1,5 +1,6 @@
 {
   "schema_version": "pipeline_operator_bindings_v1",
+  "evaluation_acceptance_policy": "frozen_assets_required_metrics_v1",
   "source_spec_sha256": "2d0328d8ef016c430e8655cda183898b578a6faf3fbde72a5072a678f52c9e2b",
   "benchmark_python": "/ABSOLUTE/PATH/TO/benchmark/python",
   "asset_root": "/ABSOLUTE/PATH/TO/imaginarium_assets",

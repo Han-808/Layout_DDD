@@ -27,6 +27,9 @@ from benchmark.adapters.common.execution import (
 )
 from benchmark.generation_comparison.eligibility import check_method_eligibility
 from benchmark.generation_comparison.execution import run_controlled_generation
+from benchmark.generation_comparison.evaluation_acceptance import (
+    FROZEN_OWNERSHIP, acceptance_policy_name, evaluate_report_acceptance,
+)
 from benchmark.generation_comparison.evaluation_runtime import (
     CanonicalEvaluationRuntime,
     evaluator_policy_readiness,
@@ -92,6 +95,8 @@ RESULT_COLUMNS = (
     "generation_success",
     "valid_comparison_run",
     "evaluation_success",
+    "evaluation_accepted",
+    "evaluation_acceptance",
     "score_available",
     "benchmark_score",
     "benchmark_score_100",
@@ -139,6 +144,7 @@ def prepare_controlled_pilot(
 
     pilot = _load_mapping(spec, "pilot spec")
     _validate_pilot_spec(pilot)
+    acceptance_policy_name(pilot["evaluator"], mode=pilot.get("mode"))
     source_case_ids = [str(case["case_id"]) for case in pilot["cases"]]
     if case_ids is not None:
         if (
@@ -198,11 +204,7 @@ def prepare_controlled_pilot(
         from benchmark.evaluator.profile import resolve_evaluation_profile
         static = dict(evaluator_policy.get("static_kwargs") or {})
         static["evaluation_profile"] = resolve_evaluation_profile(static.get("evaluation_profile"))
-        frozen_ownership = {
-            "mode": "benchmark_provided", "identity_owner": "benchmark",
-            "category_selection_owner": "benchmark", "scale_owner": "benchmark",
-            "appearance_owner": "benchmark", "arrangement_owner": "generator",
-        }
+        frozen_ownership = dict(FROZEN_OWNERSHIP)
         if "asset_policy" in static and static["asset_policy"] != frozen_ownership:
             raise ArtifactValidationError("evaluator asset ownership contradicts fixed-assets input")
         # Factual ownership activates the existing applicability rules. We do
@@ -506,7 +508,7 @@ def run_prepared_pilot(
         if case["case_id"] != cases[0]["case_id"] and method not in passed_dry_run:
             rows.append(_unattempted_row(
                 case_manifest=case, method=method, status="skipped",
-                reason="first-case full evaluation did not pass; no further generation",
+                reason="first-case evaluation acceptance did not pass; no further generation",
             ))
             _write_results(root, rows)
             continue
@@ -547,7 +549,7 @@ def run_prepared_pilot(
             _finish_pilot(root, manifest, rows, passed_dry_run, dry_run_only, len(planned_cases))
             raise
         rows.append(row)
-        if row["valid_comparison_run"] and row["evaluation_success"]:
+        if row["valid_comparison_run"] and row["evaluation_accepted"]:
             if method not in passed_dry_run:
                 passed_dry_run.append(method)
         _write_results(root, rows)
@@ -587,6 +589,8 @@ def _finish_pilot(
             "attempted_runs": attempted,
             "unattempted_runs": len(rows) - attempted,
             "valid_runs": sum(bool(row["valid_comparison_run"]) for row in rows),
+            "complete_evaluations": sum(bool(row["evaluation_success"]) for row in rows),
+            "accepted_evaluations": sum(bool(row["evaluation_accepted"]) for row in rows),
             "summary": summary_path.resolve().as_posix(),
             "real_upstream_execution_performed": any(
                 row.get("upstream_process_started") is True
@@ -710,6 +714,7 @@ def _run_case(
             execution_mode=execution_mode,
             result=result,
             evaluation=evaluation,
+            evaluator_policy=evaluator_policy,
         )
     except Exception as exc:
         row = _failure_row(
@@ -744,6 +749,7 @@ def _success_row(
     execution_mode: str,
     result: Mapping[str, Any],
     evaluation: Mapping[str, Any],
+    evaluator_policy: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     complexity = case_manifest["complexity"]
     hard = _hard_metric_outcomes(evaluation)
@@ -755,17 +761,22 @@ def _success_row(
         isinstance(score, (int, float)) and not isinstance(score, bool) and math.isfinite(score)
     )
     evaluation_success = score_available and evaluation.get("benchmark_score_status") == "complete"
+    acceptance = evaluate_report_acceptance(evaluation, evaluator_policy or {})
+    evaluation_accepted = acceptance["accepted"]
+    trajectory_gate = result.get("sceneweaver_trajectory") or {}
+    if trajectory_gate.get("all_evaluations_accepted") is False:
+        evaluation_accepted = False
     evaluation_failure_reason = (
         None
-        if evaluation_success
-        else "canonical evaluator did not produce a complete benchmark score: "
-        f"{evaluation.get('benchmark_score_status')}"
+        if evaluation_accepted
+        else "canonical evaluation did not meet the experiment acceptance policy: "
+        f"{acceptance['reasons']}; trajectory_accepted={trajectory_gate.get('all_evaluations_accepted')}"
     )
     return {
         "schema_version": RESULT_SCHEMA_VERSION,
         "case_id": case_manifest["case_id"],
         "method": method,
-        "run_status": "completed" if evaluation_success and result["valid_comparison_run"] else "failed",
+        "run_status": "completed" if evaluation_accepted and result["valid_comparison_run"] else "failed",
         "attempted": True,
         "execution_mode": execution_mode,
         "protocol_id": result["protocol_id"],
@@ -780,6 +791,8 @@ def _success_row(
         "generation_success": True,
         "valid_comparison_run": bool(result["valid_comparison_run"]),
         "evaluation_success": evaluation_success,
+        "evaluation_accepted": evaluation_accepted,
+        "evaluation_acceptance": acceptance,
         "score_available": score_available,
         "benchmark_score": score,
         "benchmark_score_100": evaluation.get("benchmark_score_100"),
@@ -797,8 +810,8 @@ def _success_row(
         "generation_iterations": resources.get("iteration_count"),
         "tokens": resources.get("tokens"),
         "tool_calls": resources.get("tool_calls"),
-        "failure_class": None if evaluation_success else "evaluator_infrastructure_failure",
-        "failure_source": None if evaluation_success else "infrastructure",
+        "failure_class": None if evaluation_accepted else "evaluator_infrastructure_failure",
+        "failure_source": None if evaluation_accepted else "infrastructure",
         "failure_reason": evaluation_failure_reason,
         "run_manifest": result.get("manifest_path"),
         "evaluation_report": result["evaluator"]["report"],
@@ -837,6 +850,8 @@ def _failure_row(
         "generation_success": generation_success,
         "valid_comparison_run": False,
         "evaluation_success": False,
+        "evaluation_accepted": False,
+        "evaluation_acceptance": None,
         "score_available": False,
         "benchmark_score": None,
         "benchmark_score_100": None,
@@ -1680,6 +1695,7 @@ def _summarize_results(
         selected = [row for row in planned if row.get("attempted", True)]
         valid = [row for row in selected if row["valid_comparison_run"]]
         complete = [row for row in valid if row.get("evaluation_success")]
+        accepted = [row for row in valid if row.get("evaluation_accepted", row.get("evaluation_success"))]
         scores = [
             float(row["benchmark_score"])
             for row in complete
@@ -1703,6 +1719,8 @@ def _summarize_results(
             ],
             "valid_runs": len(valid),
             "complete_evaluations": len(complete),
+            "accepted_evaluations": len(accepted),
+            "accepted_partial_evaluations": sum(not row.get("evaluation_success") for row in accepted),
             "incomplete_evaluations": len(valid) - len(complete),
             "scored_runs": len(scores),
             "generation_success_rate": (
@@ -1759,6 +1777,7 @@ def _summarize_results(
         "schema_version": "controlled_generation_pilot_summary_v1",
         "label": "pilot / integration validation",
         "score_aggregation_policy": "valid_comparison_and_complete_evaluation_only",
+        "acceptance_note": "accepted partial coverage is not a complete score and is excluded from complete-score aggregates",
         "attempted_runs": sum(bool(row.get("attempted", True)) for row in rows),
         "valid_runs": sum(bool(row["valid_comparison_run"]) for row in rows),
         "methods": method_rows,

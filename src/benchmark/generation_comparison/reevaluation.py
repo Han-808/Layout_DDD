@@ -10,6 +10,7 @@ from typing import Any
 from benchmark.adapters.common.execution import artifact_sha256, redact_private_locators
 from benchmark.api.evaluation import run_evaluate
 from benchmark.generation_comparison.catalog import load_asset_catalog
+from benchmark.generation_comparison.evaluation_acceptance import evaluate_report_acceptance
 from benchmark.generation_comparison.evaluation_runtime import (
     CanonicalEvaluationRuntime, runtime_evaluation_options,
 )
@@ -98,8 +99,10 @@ def reevaluate_prepared_unit(
         # Also detect renderer-side asset mutation; the catalog contains exact
         # per-mesh byte hashes, not only category/size declarations.
         load_asset_catalog(verified["catalog"].as_dict(), hash_local_meshes=True)
+        acceptance = evaluate_report_acceptance(report, policy)
         result.update({
-            "status": "COMPLETED" if report.get("benchmark_score_status") == "complete" else "INCOMPLETE_EVALUATION",
+            "status": "COMPLETED" if acceptance["accepted"] else "INCOMPLETE_EVALUATION",
+            "evaluation_acceptance": acceptance,
             "evaluation_report": report_path.as_posix(),
             "evaluation_report_sha256": artifact_sha256(report_path)[0],
             "benchmark_score": report.get("benchmark_score"),

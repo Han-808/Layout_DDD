@@ -16,6 +16,9 @@ from typing import Any
 from urllib.parse import urlparse
 
 from benchmark.generation_comparison.identity import canonical_json_sha256
+from benchmark.generation_comparison.evaluation_acceptance import (
+    EXEMPT_METRICS, FROZEN_OWNERSHIP, FROZEN_REQUIRED_METRICS, acceptance_policy_name,
+)
 from benchmark.grouping import grouping_evidence_from_render_manifest
 from benchmark.rendering import BlenderRenderer
 from benchmark.scene_io.validate import ArtifactValidationError
@@ -44,8 +47,9 @@ def evaluator_policy_readiness(policy: Mapping[str, Any]) -> dict[str, Any]:
     This is a diagnostic of the unchanged evaluator, not a scoring override.
     Currently a not-relevant L3 metric remains a defaulted, ungrounded term in
     its denominator. Honest frozen ownership therefore cannot yield complete
-    coverage under the default profile. An operator decision is needed; never
-    relabel ownership or silently remove metrics to turn this gate green.
+    coverage under the default profile. An explicit experiment acceptance policy
+    may waive only the inapplicable pairing/style requirements; never relabel
+    ownership, silently remove metrics, or claim the raw score became complete.
     """
     from benchmark.evaluator.asset_policy import resolve_asset_policy, scene_quality_applicability
     from benchmark.evaluator.profile import L3, resolve_evaluation_profile
@@ -59,10 +63,22 @@ def evaluator_policy_readiness(policy: Mapping[str, Any]) -> dict[str, Any]:
         and metric["enabled"] and metric["weight"] > 0
         and applicability[name]["applicability"] != "relevant"
     ]
+    acceptance = acceptance_policy_name(policy)
+    exempt = []
+    reasons = []
+    if acceptance == FROZEN_REQUIRED_METRICS:
+        if static.get("asset_policy") != FROZEN_OWNERSHIP:
+            reasons.append("frozen_asset_ownership_required")
+        else:
+            exempt = [name for name in unresolved if name in EXEMPT_METRICS
+                      and applicability[name]["applicability"] == "not_relevant"]
+    if set(unresolved) - set(exempt):
+        reasons.append("canonical_applicability_prevents_complete_coverage")
     return {
-        "ready": not unresolved,
-        "required_score_status": "complete",
-        "reasons": ["canonical_applicability_prevents_complete_coverage"] if unresolved else [],
+        "ready": not reasons,
+        "required_score_status": "complete" if acceptance != FROZEN_REQUIRED_METRICS else "complete_or_only_inapplicable_pairing_style",
+        "acceptance_policy": acceptance, "exempt_applicability_metrics": exempt,
+        "reasons": reasons,
         "unresolved_applicability_metrics": unresolved,
         "applicability": applicability,
         "scoring_modified": False,

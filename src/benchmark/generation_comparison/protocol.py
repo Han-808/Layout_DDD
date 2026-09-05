@@ -253,6 +253,8 @@ def validate_comparison_protocol(value: Mapping[str, Any]) -> dict[str, Any]:
     if model_policy is not None:
         generation_policy["model_policy"] = model_policy
     evaluator_policy = dict(evaluator)
+    from benchmark.generation_comparison.evaluation_acceptance import acceptance_policy_name
+    acceptance_policy_name(evaluator_policy, mode=mode)
     evaluator_policy.setdefault("policy", "same_canonical_run_evaluate")
     if evaluator_policy.get("policy") != "same_canonical_run_evaluate":
         raise ArtifactValidationError(

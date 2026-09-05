@@ -240,15 +240,20 @@ def test_each_native_iteration_builds_its_own_runtime_evidence(tmp_path, monkeyp
     assert hashes[0] != hashes[1]
 
 
-def test_failed_evaluation_can_be_recovered_without_generation_or_source_overwrite(tmp_path, monkeypatch):
+@pytest.mark.parametrize("accept_partial", [False, True])
+def test_failed_evaluation_can_be_recovered_without_generation_or_source_overwrite(tmp_path, monkeypatch, accept_partial):
     from benchmark.generation_comparison.reevaluation import reevaluate_prepared_unit
+    from benchmark.generation_comparison.evaluation_acceptance import FROZEN_REQUIRED_METRICS
 
     state = {"renders": [], "judgements": [], "grouping_calls": 0,
              "functional_discovery": 0, "local_requests": []}
     _install_external_fixtures(monkeypatch, state)
     monkeypatch.setenv("PIPELINE_TEST_JUDGE_KEY", "test-only")
+    spec = _pilot_spec(methods=["catalog_placement"])
+    if accept_partial:
+        spec["evaluator"]["acceptance_policy"] = FROZEN_REQUIRED_METRICS
     prepared = prepare_controlled_pilot(
-        spec=_pilot_spec(methods=["catalog_placement"]), asset_root=_asset_root(tmp_path / "assets"),
+        spec=spec, asset_root=_asset_root(tmp_path / "assets"),
         out_dir=tmp_path / "pilot", evaluation_runtime_config=_runtime_config(),
     )
     native = write_json(tmp_path / "native.json", {
@@ -275,7 +280,9 @@ def test_failed_evaluation_can_be_recovered_without_generation_or_source_overwri
     replay = reevaluate_prepared_unit(prepared_dir=tmp_path / "pilot", case_id="case_001",
                                       method="catalog_placement", out_dir=tmp_path / "reevaluation")
     assert replay["source_artifacts_verified_unchanged"]
-    assert replay["status"] == "INCOMPLETE_EVALUATION"  # same honest applicability gap
+    assert replay["status"] == ("COMPLETED" if accept_partial else "INCOMPLETE_EVALUATION")
+    assert replay["benchmark_score_status"] == "partial_coverage"  # raw report never relabeled
+    assert replay["evaluation_acceptance"]["accepted"] is accept_partial
     assert not replay["generation_reexecuted"] and not replay["converter_reexecuted"]
     assert before == {p: p.read_bytes() for p in (tmp_path / "pilot").rglob("*") if p.is_file()}
     with pytest.raises(FileExistsError):

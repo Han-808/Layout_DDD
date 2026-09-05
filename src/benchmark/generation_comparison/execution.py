@@ -16,6 +16,7 @@ from benchmark.adapters.common.execution import artifact_sha256, redact_private_
 from benchmark.api.evaluation import run_evaluate
 from benchmark.api.generation import run_generate
 from benchmark.api.scene_weaver_iterations import evaluate_scene_weaver_iterations
+from benchmark.generation_comparison.evaluation_acceptance import evaluate_report_acceptance
 from benchmark.generation_comparison.catalog import (
     CanonicalAssetCatalog,
     load_asset_catalog,
@@ -814,6 +815,10 @@ def _evaluate_sceneweaver_comparison_trajectory(
                 "evaluation_report": row["evaluation_report"],
                 "evaluation_workflow": row["evaluation_workflow"],
                 "benchmark_score": row.get("benchmark_score"),
+                "benchmark_score_status": row.get("benchmark_score_status"),
+                "evaluation_acceptance": evaluate_report_acceptance(
+                    read_json(row["evaluation_report"]), protocol.as_dict()["evaluator"],
+                ),
             }
         )
         if not validation["valid_comparison_run"]:
@@ -824,6 +829,7 @@ def _evaluate_sceneweaver_comparison_trajectory(
         "benchmark_feedback_used_by_native_loop": False,
         "valid_comparison_trajectory": not invalid,
         "invalid_iterations": invalid,
+        "all_evaluations_accepted": bool(rows) and all(row["evaluation_acceptance"]["accepted"] for row in rows),
         "iterations": rows,
     }
     path = write_json(out_dir / "comparison_trajectory.json", result)
@@ -1051,6 +1057,7 @@ def _evaluator_metadata(
         "scoring_spec_version": report.get("scoring_spec_version"),
         "report": path.resolve().as_posix(),
         "report_sha256": _file_sha256(path),
+        "acceptance": evaluate_report_acceptance(report, actual_policy),
     }
 
 
