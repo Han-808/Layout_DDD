@@ -94,8 +94,8 @@
         "execution": {
           "repo_path": "/ABSOLUTE/PATH/TO/DirectLayout",
           "expected_upstream_commit": "4430535304124dbc8d48f6bb0ea5891e92267986",
-          "expected_entrypoint_sha256": "0f984699824a5849651e639610fd554f5f58e54640f3de8d48ecf6beb96288f1",
-          "expected_bridge_bundle_sha256": "8ad3007fdd4bcd80c4bf894b9a755e240d600d7a04d7e68d1d99db064f7d6db6",
+          "expected_entrypoint_sha256": "92825f6fa803a3773e45bede1748709fb3e797cb2d8505ae5484d019a0f168dc",
+          "expected_bridge_bundle_sha256": "33628c733e7c137fb50e8a6890a246afaa98a2744f9d7132aafd2894d8ca7730",
           "python_executable": "/ABSOLUTE/PATH/TO/directlayout/python",
           "template_variables": {
             "bridge_script": "/ABSOLUTE/PATH/TO/Layout_DDD/scripts/external_harness_bridges/direct_layout_frozen.py"

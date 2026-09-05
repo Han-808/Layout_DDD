@@ -1047,7 +1047,8 @@ def test_directlayout_exact_binding_sidecar_does_not_mutate_native_artifact(
         "preserved_asset_bindings_sidecar"
     )
     rotation_z = scene["objects"][0]["rotation"][2]
-    assert ((rotation_z - 200.0 + 180.0) % 360.0) - 180.0 == pytest.approx(0.0)
+    # Actual pinned native renderer rotates clockwise: 180 - 20, not 180 + 20.
+    assert ((rotation_z - 160.0 + 180.0) % 360.0) - 180.0 == pytest.approx(0.0)
 
 
 def test_layoutvlm_processed_bbox_and_front_are_restored_to_canonical_mesh_frame(

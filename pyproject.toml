@@ -113,6 +113,7 @@ testpaths = [
   "tests/test_pipeline_evaluation_runtime.py",
   "tests/test_layoutgpt_frozen_icl.py",
   "tests/test_frozen_public_brief.py",
+  "tests/test_native_mesh_frame_roundtrip.py",
   "tests/test_frozen_imaginarium_scene10.py",
   "tests/test_generation_legacy_forwarding_d1.py",
   "tests/test_multi_room_generation.py",

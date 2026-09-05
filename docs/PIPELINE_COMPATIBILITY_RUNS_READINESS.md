@@ -55,7 +55,7 @@ policies and converters are not redesigned.
 - [x] F6: every planned unit has a terminal status; blocked/partial/cancelled
       are distinct from complete; zero attempts cannot exit successfully.
 - [x] Current focused compatibility/execution and new regression tests run.
-      Focused: 215 passed. Extended: 463 passed, one baseline-existing failure;
+      Latest geometry-focused: 66 passed. Extended: 506 passed, one baseline-existing failure;
       this is not an all-green full-suite certification (see evidence below).
 - [x] Fresh wheel installation: 11 entrypoints imported/`--help` passed, 12
       selected schemas/prompts/render workers checked, new ICL module imported,
@@ -76,8 +76,10 @@ policies and converters are not redesigned.
 - [ ] Actual SceneWeaver frozen initializer/export plugin preserving native loop,
       or evidence-backed ineligibility (never substitute a fake implementation).
 - [ ] Method-native geometry invariants and real asymmetric/near-symmetric pose
-      round-trips. Catalog/GLB fidelity and converter golden tests pass; actual
-      method renderer/optimizer E2E acceptance remains separate.
+      round-trips. DirectLayout/LayoutVLM native mesh assembly: 24/24 captures
+      now match conversion, including asymmetric/offset/near-square meshes.
+      SceneWeaver full-precision export and actual renderer/optimizer E2E
+      acceptance remain separate, unresolved gates.
 - [ ] Private API templates, no-call readiness command, smoke/full launch plans,
       append-only offline reevaluation path and budget/failure policy documented.
 - [ ] Final requirement-by-requirement evidence audit; per-method status accurate.
@@ -94,14 +96,15 @@ policies and converters are not redesigned.
 The implementation and diagnostics in this checkpoint are **not** a claim that
 production generation is ready. No production model service or generation
 workflow has been executed. Real upstream code executed locally was limited to
-imports, LayoutGPT's released formatter/parser preparation, and a small
-LayoutVLM overlap-gradient diagnostic. No benchmark score was fed to a generator.
+imports, LayoutGPT's released formatter/parser preparation, a small LayoutVLM
+overlap-gradient diagnostic, and DirectLayout/LayoutVLM native mesh assembly
+stopped before pixel rendering. No benchmark score was fed to a generator.
 
 | Method | Pinned upstream commit | Local prerequisite evidence | Remaining gate |
 | --- | --- | --- | --- |
 | LayoutGPT | `fc31954962553e5b65bf267a904a6930d50b1f5e` | Eight public `rect_train` demonstrations prepared using the release's metric formatter; source hashes and disjoint train/test/val selection checked | Configure audited ICL identity in a new prepared protocol; production response identity and native-parser smoke |
-| DirectLayout | `4430535304124dbc8d48f6bb0ea5891e92267986` | Native pipeline imports in isolated CPython 3.11.15 / bpy 4.3.0 / NumPy 1.26.4 | Real rendering/refinement and model/API smoke |
-| LayoutVLM | `85d06b4cd2478551188a0b4a47cd658c85c41315` | Native solver imports; CPU fallback probe gives positive loss but both corner gradients are null | Build/verify native differentiable Rotated_IoU on compatible CUDA host; no silent CPU-fallback ablation |
+| DirectLayout | `4430535304124dbc8d48f6bb0ea5891e92267986` | Native pipeline imports; 12 actual mesh assemblies match the corrected clockwise-yaw converter, in CPython 3.11.15 / bpy 4.3.0 / NumPy 1.26.4 | Real rendering/refinement and model/API smoke |
+| LayoutVLM | `85d06b4cd2478551188a0b4a47cd658c85c41315` | Native solver imports; 12 actual mesh assemblies confirm the existing +90-degree basis; CPU fallback probe gives positive loss but both corner gradients are null | Build/verify native differentiable Rotated_IoU on compatible CUDA host; no silent CPU-fallback ablation |
 | SceneWeaver | `7ae54b2ec3fc66147704faa7daf7b017ba8b1bd9` | Native loop, factories, initializer/update/export paths inspected; clean sparse source checkout | Frozen initialization/export/plugin and Linux runtime; update_layout/update_rotation both invoke update_graph, which rescales and deletes, so disabling named resize/remove tools alone is insufficient |
 | Catalog Placement | This benchmark checkout | Existing fixed-selection Stage-C baseline and offline same-evaluator tests retained | Production Stage-C/API and full evaluation smoke, separately reported |
 
@@ -114,7 +117,7 @@ checkout, never in the code commit.
 
 - GLB `glb_bundle_attempt3`: Blender 5.2.0 LTS, 168/168 passed. The refrigerator
   source includes 48 loose vertices; `use_mesh_edges/use_mesh_vertices` preserves
-  them. The near-square conference table uses the existing 1e-4 metre tolerance
+  them. The near-square office chair uses the existing 1e-4 metre tolerance
   for axis-order classification. No source mesh, asset choice or scale changed.
   Failed attempt directories/logs remain intact.
 - `verified_glb_preflight`: catalog
@@ -176,8 +179,8 @@ generation/native/canonical/evaluator identities, creates a new output location,
 and does not regenerate or reconvert. It can spend Judge/camera calls and is not
 a no-call preflight. `layout-ddd-controlled-pilot preflight` is the no-call gate.
 
-Next: qualify SceneWeaver's thin frozen boundary, finish native geometry probes,
-public-brief conflict audit and versioned smoke/three-repeat operator plans;
+Next: qualify SceneWeaver's thin frozen boundary and its native geometry export,
+finish private runtime bindings and versioned smoke/three-repeat operator plans;
 resolve complete-score applicability without silently altering the evaluator.
 After combining with Complicated_Generation, certify a new shared commit/release
 identity rather than treating this checkpoint's wheel/tests as that merged build.
@@ -241,3 +244,93 @@ a byte-identical revised spec. Evidence: `wheel_verification.json`,
 `installed_public_brief_report.json` and `installed_public_brief/` under the
 current evidence directory. This is still no-call preparation certification,
 not a real upstream or production evaluator smoke result.
+
+### Actual native mesh-assembly checkpoint
+
+Starting commit: `39ff0dff8bfdbd8609e89cb4ab66a889a4f70fac`. No upstream
+checkout or evaluator source was edited. The concrete converter bug below was
+found by executable upstream geometry, not inferred from a formula/comment.
+
+- Actual `DirectLayout/utils/assemble.py::build_and_render_scene` and
+  `LayoutVLM/utils/blender_render.py::render_existing_scene` assembled three
+  approved GLBs (dresser `0_Chest_of_drawers`, near-square office chair
+  `e_conference_1_27`, refrigerator `a_SM_Kitchen_Refrigerator`) plus a separate
+  asymmetric diagnostic mesh with local bbox center `[0.31,-0.27,0.44]`.
+  All ran at native yaw 0, 90 and 37 degrees. No benchmark asset was edited.
+- DirectLayout was stopped when entering room construction, after furniture
+  transforms; LayoutVLM was stopped at rendering-settings setup and omitted its
+  hardcoded floor-material lookup. Asset import, centering, rotation, scaling
+  and placement operations were the actual unmodified upstream functions.
+  These hooks did not generate pixels, invoke a model, or run optimization.
+- Before the fix: 16/24 vertex-set comparisons passed; all eight failures were
+  DirectLayout at nonzero yaw. Its released operator yields `Rz(180 - yaw)`, not
+  the previous `Rz(180 + yaw)`. The fixed geometric basis is independent of
+  semantic front, so missing/changed front metadata must not alter mesh pose.
+- After the narrow converter correction: **24/24 passed**, maximum symmetric
+  vertex-set distance **7.397566738550413e-7 m** at the existing `1e-4 m`
+  geometry tolerance. Canonical origin shift was also applied. All raw GLBs and
+  native layouts remained unchanged. LayoutVLM conversion needed no change.
+- Added 22 CI tests, including a small synthetic vertex capture tied to the
+  exact upstream source hashes. No real asset/model dependency was added to CI.
+  The prior DirectLayout 20-degree expectation was demonstrably wrong and is
+  corrected from 200 to 160 degrees; strict asset/evaluator tests were not weakened.
+- Bridge input text/report records clockwise degrees. New DirectLayout entry
+  SHA `92825f6fa803a3773e45bede1748709fb3e797cb2d8505ae5484d019a0f168dc`,
+  bundle SHA `33628c733e7c137fb50e8a6890a246afaa98a2744f9d7132aafd2894d8ca7730`.
+  Example pins were updated. Old prepared artifacts retain their original pins.
+
+Evidence directory: `/private/tmp/pipeline-native-geometry.5syUFN`; diagnostic
+scripts, captured vertices/native layouts, before/after comparisons, logs and
+JUnit XML were also copied without modification to ignored
+`Support/pipeline_compatibility_runs/api_ready_v1/native_geometry_probe_v1/`.
+This archive is not committed. Small synthetic CI captures are code fixtures,
+not formal experimental data. Exact commands and converter hashes are in the
+archive's `audit_manifest.json`; abbreviated probe commands:
+
+```bash
+"$DIRECT_PYTHON" native_geometry_probe.py --method direct_layout --repo "$DIRECT_REPO" --catalog "$CATALOG" --out "$FRESH_DIRECT_DIAGNOSTIC"
+"$LAYOUTVLM_PYTHON" native_geometry_probe.py --method layout_vlm --repo "$LAYOUTVLM_REPO" --catalog "$CATALOG" --out "$FRESH_LAYOUTVLM_DIAGNOSTIC"
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python compare_canonical.py
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python compare_canonical_after_fix.py
+```
+
+The two comparison scripts preserve before/after vertex comparisons; the audit
+manifest pins converter identities and native reports pin upstream identities.
+They are one-off diagnostics, not generation launchers, and have fixed paths;
+the archive preserves those references rather than rewriting history.
+
+Latest exact source-test command uses source Python 3.13.14:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src /Users/han_mohan/Desktop/Layout_DDD/.venv/bin/python -m pytest -o addopts='' -q tests/test_external_harness_adapters.py tests/test_adapter_io_contracts.py tests/test_generation_comparison_protocol.py tests/test_controlled_generation_pilot.py tests/test_frozen_imaginarium_scene10.py tests/test_external_harness_execution.py tests/test_pipeline_evaluation_runtime.py tests/test_layoutgpt_frozen_icl.py tests/test_frozen_public_brief.py tests/test_native_mesh_frame_roundtrip.py tests/test_scene_harness.py tests/test_catalog_placement_adapter.py tests/test_external_converter_correctness.py tests/test_external_room_contracts.py tests/test_canonical_metric_scoring.py tests/test_canonical_l3_camera_integration.py tests/test_evaluation_mode_interface.py tests/test_submission_api.py --basetemp /private/tmp/pipeline-native-geometry.5syUFN/extended_tests --junitxml /private/tmp/pipeline-native-geometry.5syUFN/extended_tests.xml --tb=short
+```
+
+The Pro five-file focused command was also rerun independently with this source:
+**224 passed**, 2.18s (`pro_focused_tests.xml`); it uses the first five test paths
+of the extended command above and its own basetemp/XML.
+
+Extended result: **506 passed, 1 failed**, 10.29s; the only failure remains the separately
+reproduced baseline-existing camera-selector test. The focused command with
+`tests/test_native_mesh_frame_roundtrip.py tests/test_frozen_imaginarium_scene10.py`,
+`focused_tests_v2` basetemp/XML, passed **66 tests**. An earlier new-test attempt
+had 9 failures from a wrong test-only provenance lookup; correcting the lookup
+to existing `metadata.harness_compatibility.coordinate_conversion` resolved
+them. The initial XML remains archived; no implementation was changed for that
+test typo.
+
+This representation correction changes canonical DirectLayout poses. Historical
+native artifacts must not be overwritten or retrospectively assigned the new
+converter identity. Any authorized reconversion uses the existing offline
+`--method-output` route and a fresh output directory. The append-only
+reevaluation-only command does not reconvert scenes and cannot apply this fix.
+
+New installed wheel SHA-256:
+`5e9c783afe070c7b2aa8c00a68729a222037771ca8328659eb271a122e0a1533`.
+Built offline and installed into a new `benchmark-wheel-native-geometry-v1`
+environment. From `/private/tmp` with `PYTHONPATH` unset, all 11 entrypoints and
+12 selected resources passed the existing verification; runtime construction
+made zero service calls. The installed DirectLayout converter file hash equals
+the audited fixed source hash. `wheel_build.log`, `wheel_install.log` and
+`wheel_verification.json` are retained in the evidence directory. This package
+check does not close CUDA, SceneWeaver-plugin, production API or full evaluator
+acceptance gates.

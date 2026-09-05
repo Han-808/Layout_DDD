@@ -18,7 +18,6 @@ from benchmark.adapters.common.geometry import (
     build_scene,
     canonical_room,
     category_from_identifier,
-    compose_front_basis_rotation,
     finite_float,
     reject_unsupported_architecture,
     shift_boundary_to_origin,
@@ -167,37 +166,28 @@ def convert_direct_layout(
         )
         asset_local_size = record_asset_local_bbox_size(record)
         asset_local_center = record_bbox_center(record)
-        canonical_rotation = [0.0, 0.0, yaw]
-        front_basis_yaw = None
-        canonical_front = record.get("canonical_front")
-        if canonical_front is not None:
-            canonical_rotation, front_basis_yaw = compose_front_basis_rotation(
-                canonical_rotation,
-                canonical_front=canonical_front,
-                native_zero_front=[0.0, 1.0, 0.0],
-                path=f"DirectLayout output[{index}].front_basis",
-            )
+        # Released utils/assemble.py passes yaw + pi to bpy.ops.transform.rotate.
+        # That operator's Z convention is clockwise here (unlike assigning
+        # rotation_euler.z). Actual native mesh-vertex probes establish the
+        # active canonical rotation Rz(180 - yaw), not Rz(180 + yaw).
+        # The fixed mesh transform also applies when semantic front is unknown;
+        # front metadata must not rotate an otherwise unchanged source mesh.
+        canonical_rotation = [0.0, 0.0, ((180.0 - yaw + 180.0) % 360.0) - 180.0]
         geometry_audit: dict[str, Any] = {
             "evaluated_size_source": f"native.{size_field}",
             "native_size": size,
             "native_size_axes": "x_length_y_width_z_height",
             "native_size_semantics": "placed_bbox_after_directlayout_rescale",
+            "native_rotation_direction": "clockwise_viewed_from_positive_z",
+            "native_zero_mesh_basis_yaw_degrees": 180.0,
+            "orientation_basis_transform": "released_directlayout_rz_180_minus_yaw",
+            "orientation_basis_source": "released_renderer_mesh_transform",
         }
         if asset_local_size is not None:
             geometry_audit["asset_local_bbox_size"] = asset_local_size
             geometry_audit["asset_local_bbox_source"] = "asset_metadata"
         if asset_local_center is not None:
             geometry_audit["asset_local_bbox_center"] = asset_local_center
-        if front_basis_yaw is not None:
-            geometry_audit.update(
-                {
-                    "native_zero_front": [0.0, 1.0, 0.0],
-                    "canonical_front_basis_yaw_degrees": front_basis_yaw,
-                    "orientation_basis_transform": (
-                        "canonical_asset_front_to_directlayout_positive_y"
-                    ),
-                }
-            )
         fields = asset_fields(
             object_id=object_id,
             target_size=size,
@@ -222,7 +212,8 @@ def convert_direct_layout(
                     else "native_object_id"
                 ),
                 "native_rotation_degrees": yaw,
-                "native_zero_front": [0.0, 1.0, 0.0],
+                "native_rotation_direction": "clockwise_viewed_from_positive_z",
+                "native_zero_mesh_basis_yaw_degrees": 180.0,
             }
         )
         objects.append(
@@ -249,8 +240,10 @@ def convert_direct_layout(
             "source_unit": "meter",
             "source_rotation_encoding": "yaw_z",
             "source_rotation_unit": "degree",
-            "source_orientation_reference": "positive_y_at_zero_degrees",
-            "asset_front_basis_transform": "matrix_composition_when_available",
+            "source_rotation_direction": "clockwise_viewed_from_positive_z",
+            "source_orientation_reference": "released_mesh_basis_180_degrees_at_zero",
+            "canonical_rotation_formula": "Rz(180 - native_yaw_degrees)",
+            "asset_front_basis_transform": "none_semantic_front_does_not_modify_mesh_pose",
             "position_semantics": "bbox_center",
             "origin_shift": origin_shift,
         },

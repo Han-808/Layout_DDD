@@ -161,6 +161,18 @@ does not necessarily show those meshes to the model. An eligible SceneWeaver
 plugin operates on the exact GLBs. This difference is part of the harness and
 is recorded rather than hidden by postprocessing.
 
+No-model native mesh-assembly probes at the pinned DirectLayout/LayoutVLM
+commits established the actual frozen mesh frames (bpy 4.3.0). DirectLayout
+uses **clockwise** native degrees with canonical `Rz(180 - z_angle)`; LayoutVLM
+uses canonical `Rz(native_yaw + 90)`. The DirectLayout converter and bridge
+provenance now record that released convention. Canonical-front metadata is
+preserved independently; its absence must not erase the fixed mesh rotation.
+Captured asymmetric-vertex tests cover an offset local bbox, nonzero room origin
+and 0/90/37-degree poses. Real approved GLB probes additionally include a dresser,
+a near-square office chair and the refrigerator with loose geometry. These are
+geometry diagnostics, **not** model/render/optimization E2E smoke results; see
+`PIPELINE_COMPATIBILITY_RUNS_READINESS.md` for exact evidence and remaining gates.
+
 Released SceneWeaver serializes `layout.size` as a two-decimal, post-rotation
 world AABB and independently rounds its Euler pose to two decimals. It is not
 the asset-local bbox. The required plugin keeps those released fields for

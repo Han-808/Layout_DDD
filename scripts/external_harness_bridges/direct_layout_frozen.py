@@ -205,6 +205,12 @@ def main() -> None:
             "asset_bindings": args.asset_bindings_output.resolve().as_posix(),
             "stable_room_path_bridge": True,
             "semantic_prompt_preserved_in_feedback": True,
+            "source_rotation_convention": {
+                "unit": "degree",
+                "positive_direction": "clockwise_viewed_from_positive_z",
+                "zero_mesh_basis_yaw_degrees": 180.0,
+                "canonical_rotation_formula": "Rz(180 - native_yaw_degrees)",
+            },
             "optimization_tracking": optimization_tracking,
         },
     )
@@ -535,7 +541,8 @@ def _controlled_prompt(
             "DirectLayout CSS uses px with 1 px = 0.01 m. Copy each "
             "fixed_size_in_native_pixels length/width exactly into BEV CSS, then "
             "copy length/width/height exactly into 3D CSS.",
-            "Choose only center positions and orientation.",
+            "Choose only center positions and orientation. Native z_angle "
+            "increases clockwise when viewed from +Z.",
             "DirectLayout zero orientation faces rendered native +Y. For an "
             "Imaginarium asset with canonical functional front local -Y, that "
             "local -Y side is rendered as native +Y at zero by the released "
