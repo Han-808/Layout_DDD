@@ -1,0 +1,44 @@
+{
+  "schema_version": "pipeline_operator_bindings_v1",
+  "source_spec_sha256": "2d0328d8ef016c430e8655cda183898b578a6faf3fbde72a5072a678f52c9e2b",
+  "benchmark_python": "/ABSOLUTE/PATH/TO/benchmark/python",
+  "asset_root": "/ABSOLUTE/PATH/TO/imaginarium_assets",
+  "asset_bundle_root": "/ABSOLUTE/PATH/TO/glb_bundle_attempt3",
+  "runs_root": "/ABSOLUTE/PATH/TO/NEW/pipeline_experiment_v1",
+  "shared_model": {
+    "provider": "openai_compatible",
+    "model_id": "YOUR-EXACT-RESPONSE-MODEL-ID",
+    "deployment_id": "YOUR-AUTHORIZED-DEPLOYMENT-ID",
+    "api_base_url": "https://YOUR-AUTHORIZED-ENDPOINT/v1"
+  },
+  "upstreams": {
+    "layout_gpt": {
+      "repo_path": "/ABSOLUTE/PATH/TO/LayoutGPT",
+      "python_executable": "/ABSOLUTE/PATH/TO/layoutgpt/python"
+    },
+    "direct_layout": {
+      "repo_path": "/ABSOLUTE/PATH/TO/DirectLayout",
+      "python_executable": "/ABSOLUTE/PATH/TO/directlayout/python"
+    },
+    "layout_vlm": {
+      "repo_path": "/ABSOLUTE/PATH/TO/LayoutVLM",
+      "python_executable": "/ABSOLUTE/PATH/TO/layoutvlm/python"
+    },
+    "scene_weaver": {
+      "repo_path": "/ABSOLUTE/PATH/TO/SceneWeaver",
+      "python_executable": "/ABSOLUTE/PATH/TO/sceneweaver/python"
+    }
+  },
+  "layoutgpt_icl": {
+    "path": "/ABSOLUTE/PATH/TO/layoutgpt_icl_snapshot_v1/messages.json",
+    "sha256": "1209a0b3e5adfeaeb627cbd605d6d2c0d5e8c907d9ba9282fe3bb42e85787386",
+    "approval": "user_approved_released_training_snapshot",
+    "provenance": "layoutgpt_icl_snapshot_v1: eight released rect_train examples, four bedroom and four living room; source/selection hashes and disjoint train/test/val audit retained; independently rebuilt byte-identically; not human visual certification"
+  },
+  "catalog_placement": {
+    "endpoint": "https://YOUR-AUTHORIZED-ENDPOINT/v1/chat/completions",
+    "model": "YOUR-SEPARATELY-REPORTED-BASELINE-MODEL",
+    "api_key_env": "LAYOUT_DDD_BASELINE_API_KEY"
+  },
+  "evaluation_runtime_config": "/ABSOLUTE/PATH/TO/private_evaluation_runtime.json"
+}

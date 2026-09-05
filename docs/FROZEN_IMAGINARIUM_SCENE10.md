@@ -417,30 +417,12 @@ catalog CSV hash, all source canonical-scene hashes, every exact asset's FBX
 and metadata bytes, every removal/rebinding identity, room geometry, and all
 explicit object-support parents. It does not read source pose fields.
 
-Prepare immutable inputs and verify source/converted assets without launching a
-model:
-
-```bash
-layout-ddd-controlled-pilot prepare \
-  --spec configs/generation_comparison/frozen_imaginarium_scene10_v1.json \
-  --asset-root /ABSOLUTE/PATH/TO/imaginarium_assets \
-  --asset-bundle-root /ABSOLUTE/PATH/TO/frozen_imaginarium_scene10_glb \
-  --method-configs /ABSOLUTE/PATH/TO/private_method_configs.json \
-  --out-dir outputs/frozen_imaginarium_scene10_v1
-```
-
-Only after the runtime/model gates pass and real API execution is authorized,
-use a fresh prepared directory and run the first case as the mandatory smoke:
-
-```bash
-layout-ddd-controlled-pilot run \
-  --prepared-dir outputs/frozen_imaginarium_scene10_v1 \
-  --method-configs /ABSOLUTE/PATH/TO/private_method_configs.json \
-  --dry-run-only
-```
-
-Then prepare another fresh directory for the full ten-case run. Pilot outputs
-and native method/case directories are never overwritten.
+That rebuild is source/curation verification, not the current launch spec.
+For this experiment apply the approved public-brief v2 recipe below, then bind
+the actual host/deployment/ICL with the operator configuration step below.
+Use the resulting spec **and** methods **and** evaluator runtime together in
+fresh prepares. The original example has a pending ICL and no injected evaluator
+runtime; it cannot serve as the production launch configuration unchanged.
 
 ## Actual-asset public brief revision v2
 
@@ -504,7 +486,7 @@ For the smoke prepare, use the new public spec and include:
 
 ```bash
 layout-ddd-controlled-pilot prepare \
-  --spec /ABSOLUTE/PATH/TO/public_brief_v2/spec.json \
+  --spec /ABSOLUTE/PATH/TO/bound_operator_config/spec.json \
   --asset-root /ABSOLUTE/PATH/TO/imaginarium_assets \
   --asset-bundle-root /ABSOLUTE/PATH/TO/frozen_imaginarium_scene10_glb \
   --method-configs /ABSOLUTE/PATH/TO/private_method_configs.json \
@@ -525,6 +507,129 @@ cached outputs. Native seed enforcement is not guaranteed unless reported by
 the runner; record effective native parameters, calls, tokens and time rather
 than claiming equal or randomized seed treatment. Evaluator failure does not
 authorize regenerating; use append-only offline reevaluation when possible.
+
+## Bind one host and deployment, without executing it
+
+Use `configs/generation_comparison/pipeline_operator_bindings.example.json`
+as the private binding template, and
+`configs/generation_comparison/canonical_evaluation_runtime.example.json`
+as the private evaluator-runtime template. Keep edited files outside the source
+checkout and old prepared runs. Do not put API keys in either file.
+The compiler is a checkout script, not an additional installed-wheel entrypoint.
+Virtual-environment interpreter symlinks are preserved so the native dependency
+environment is not silently replaced by its base Python installation.
+
+Fill every placeholder explicitly. The binding compiler does not choose a
+model, discover private credentials, install environments or authorize a run.
+The example pins the approved public-brief v2 source and released-derived ICL
+bytes; it does not substitute synthetic ICL or silently bless a changed file.
+
+| Binding | Meaning and constraint |
+| --- | --- |
+| `benchmark_python` | Absolute interpreter for the pinned benchmark environment; generated commands use the current checkout's absolute `PYTHONPATH` |
+| `upstreams.<method>` | Actual pinned clean upstream checkout and its own Python environment, not the benchmark interpreter by default |
+| `shared_model` | One configured provider, exact expected response model ID, deployment ID and API **base** for the four harnesses; a deployment label alone is not production identity evidence |
+| `layoutgpt_icl` | Approved messages path, exact byte hash, approval and source/selection provenance; snapshot is copied byte-for-byte into the new config directory |
+| `asset_root`, `asset_bundle_root` | Original Imaginarium sources and verified 168-asset GLB bundle; no new asset selection or normalization |
+| `runs_root` | Fresh root for smoke, dense pilot and three formal repetitions; separate from the config directory |
+| `catalog_placement` | Separately reported Stage-C model/endpoint/key environment name; not implicitly included in the four-method same-model claim |
+| `evaluation_runtime_config` | Trusted post-hoc Judge/camera/Blender configuration; never added to method input or generation environment |
+
+On the eventual execution host, from the pinned benchmark checkout:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python \
+  scripts/prepare_pipeline_operator_config.py \
+  --spec /ABSOLUTE/PATH/TO/public_brief_v2/spec.json \
+  --bindings /ABSOLUTE/PATH/TO/private_operator_bindings.json \
+  --out-dir /ABSOLUTE/PATH/TO/FRESH/bound_operator_config
+```
+
+This writes `spec.json`, `methods.json`, `evaluation_runtime.json`, the exact
+`layoutgpt_icl_messages.json`, `launch_plan.json` and `configuration_manifest.json`.
+The only source-spec changes are the configured model identity/deployment/API
+fingerprint and ICL identity/status/provenance. Cases, inventory, assets, native
+budgets and evaluator policy remain unchanged. Source, compiler, template and
+output hashes are recorded. A bridge/plugin pin mismatch fails rather than
+automatically accepting new code. Existing output directories are rejected.
+
+`CONFIG_BOUND_NOT_PREFLIGHTED` means precisely that. In particular, an absolute
+Linux Python path is a binding, not proof that its CUDA/Blender/native imports
+work. The compiler constructs the existing evaluator client objects without
+credentials or service calls, but does **not** run native environment probes,
+generation, rendering, the evaluator, or the commands it emits.
+
+### Credentials and launch sequence
+
+The four external bridges consume `LAYOUT_DDD_API_KEY` from the authorized
+process environment. Catalog Placement uses its configured `api_key_env` and
+the evaluator uses its configured Judge/camera key environment names. Set values
+privately; never put them in command arguments, bindings, commits or chat.
+Do not export another experiment's complete environment or source upstream key
+files. Model/deployment identity is injected by the existing comparison runner
+from the bound protocol; endpoint conventions are derived consistently (full
+`/chat/completions` for LayoutGPT, API base for the other three).
+
+`launch_plan.json` contains argument arrays, not shell fragments. Use its `cwd`
+and `environment`, and review stages sequentially:
+
+1. Execute S100 `prepare_argv`, then `preflight_argv`. Both are no-call.
+   Missing keys produce a blocked preflight without contacting the service.
+2. Only with separate real-execution authorization and native prerequisites
+   qualified, execute S100 `run_argv`. This spends generation **and** evaluator
+   calls. The stage has one case, so the misleading `--dry-run-only` flag is
+   unnecessary. API success alone is not full E2E success.
+3. Require all five planned units' real workflow, identity, frozen inputs and
+   complete evaluation acceptance, then separately prepare/preflight/run S101.
+4. After that acceptance, use `formal_r1`, `formal_r2`, `formal_r3`, in fresh
+   directories, with the same bound config: 50 units each, 150 formal units.
+   These are independent native invocations, not best-of/cached results.
+
+Do not batch-execute all emitted commands as an unattended shell script. No
+automatic stage advancement or production API probe is implemented by the
+configuration compiler. Existing `preflight`/`run` return exit 2 when blocked;
+no-call preflight cannot certify the actual provider or native loop.
+
+The honest frozen-ownership applicability gate currently remains **blocked**:
+pairing/style are not relevant under the unchanged evaluator policy, but its
+default denominator prevents complete coverage. Binding an API cannot resolve
+that policy issue. Do not change ownership, remove metrics, override scores or
+skip the gate to make a run appear ready. Linux/CUDA qualification and an
+explicit applicability resolution are independent remaining requirements.
+
+### Costs, stopping, and recovery
+
+Keep the configured native workflow budgets. Record effective model parameters,
+observed response identity, tokens/calls, retries, tool/render calls where
+available, runtime and iteration counts. Outer timeouts in the pinned methods
+template are 900/3600/3600/14400 seconds for LayoutGPT/DirectLayout/LayoutVLM/
+SceneWeaver; these are execution ceilings, not equal-cost claims. Any monetary
+cap or per-call price remains an operator/provider input, not an inferred value.
+
+Stop on identity/input/asset drift, unreaped processes or infrastructure failure.
+Ctrl-C terminates the controlled process group, records cancellation and does not
+launch the next unit. Failed/missing/unattempted units remain in the ledger;
+they are not zero scores. Existing native retry behavior is retained and audited,
+but this plan adds no benchmark-side generation retry or `--resume` mechanism.
+Keep failed runs intact; regeneration needs a separately approved new attempt.
+
+For a valid preserved generation whose evaluation failed, use the existing
+append-only recovery, with a fresh directory **outside** the original run:
+
+```bash
+layout-ddd-reevaluate-controlled \
+  --prepared-dir /ABSOLUTE/PATH/TO/ORIGINAL/prepared_run \
+  --case-id S100 --method direct_layout \
+  --out-dir /ABSOLUTE/PATH/TO/FRESH/reevaluation_attempt1
+```
+
+This verifies preserved native/canonical/input hashes and retains the original
+frozen evaluator configuration. It spends only post-hoc render/Judge/camera work,
+never regenerates or reconverts, and cannot be used to retrofit a different
+evaluator policy into an old run. SceneWeaver here re-evaluates its originally
+selected final state; its original pilot trajectory remains separately recorded.
+Do not claim this recovery command re-evaluates the entire trajectory. No official
+report is ever fed back into the native reflection loop.
 
 ## What has and has not been executed
 

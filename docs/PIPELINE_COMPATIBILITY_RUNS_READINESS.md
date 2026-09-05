@@ -85,9 +85,58 @@ policies and converters are not redesigned.
       SceneWeaver exact exporter diagnostics now match all 16 captured bpy
       states; frozen initialization and actual renderer/optimizer/loop E2E
       acceptance remain separate, unresolved gates.
-- [ ] Private API templates, no-call readiness command, smoke/full launch plans,
-      append-only offline reevaluation path and budget/failure policy documented.
+- [x] Private binding/evaluator templates, no-call readiness command, explicit
+      smoke/dense/three-repeat launch plan, append-only offline reevaluation and
+      budget/failure policy documented. A no-call compiler synchronizes existing
+      spec/method/model/ICL contracts; no second runner was added.
+- [ ] Actual production host/deployment bindings and native dependencies
+      qualified. Template/compiler validation is not environment/API acceptance.
 - [ ] Final requirement-by-requirement evidence audit; per-method status accurate.
+
+## Operator configuration checkpoint (2026-09-05)
+
+Starting code commit: `f571cd32c069df611547391f7efa69376aa7804b` on isolated
+`codex/pipeline-compatibility-runs`. This checkpoint changes only the operator
+compiler, one binding example, its tests/default-test registration and these
+existing docs. No converter/evaluator or upstream bridge source changes.
+
+`scripts/prepare_pipeline_operator_config.py` reads the approved revised source
+and explicit non-secret host bindings. It freezes the same model/route in all
+four harness configs and their source protocol, copies exact approved ICL bytes,
+retains case/catalog/scoring/native budgets, verifies bridge/plugin pins and
+writes new immutable config files plus a command plan. It never executes that
+plan. The compiler refuses placeholders, literal credentials, altered source/ICL
+hashes, a changed method cohort and reused config/run roots.
+
+The command plan uses existing `benchmark.generation_comparison.pilot` CLI
+prepare/preflight/run: S100 smoke, S101 dense pilot, and three full repetitions
+(50 units each). Existing append-only reevaluation is explicitly separate, may
+spend Judge calls, and does not regenerate/reconvert. SceneWeaver recovery here
+selects the original final state, not a fresh trajectory. See the operator
+section of `FROZEN_IMAGINARIUM_SCENE10.md` for exact semantics and commands.
+
+Actual validation commands, in the isolated checkout:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src /Users/han_mohan/Desktop/Layout_DDD/.venv/bin/python -m pytest -q -o addopts='' tests/test_pipeline_operator_config.py tests/test_pipeline_evaluation_runtime.py tests/test_frozen_public_brief.py tests/test_controlled_generation_pilot.py --tb=short --basetemp=/private/tmp/pipeline-operator-config.z3ijj7/final_focused --junitxml=/private/tmp/pipeline-operator-config.z3ijj7/final_focused.xml
+# 80 passed, 0 failed, 0 skipped, 2.15 s
+
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src /Users/han_mohan/Desktop/Layout_DDD/.venv/bin/python -m pytest -q -o addopts='' tests/test_external_harness_adapters.py tests/test_adapter_io_contracts.py tests/test_generation_comparison_protocol.py tests/test_controlled_generation_pilot.py tests/test_frozen_imaginarium_scene10.py tests/test_external_harness_execution.py tests/test_pipeline_evaluation_runtime.py tests/test_layoutgpt_frozen_icl.py tests/test_frozen_public_brief.py tests/test_native_mesh_frame_roundtrip.py tests/test_sceneweaver_native_export.py tests/test_sceneweaver_frozen_assets.py tests/test_sceneweaver_frozen_mutations.py tests/test_sceneweaver_frozen_plugin.py tests/test_scene_harness.py tests/test_catalog_placement_adapter.py tests/test_external_converter_correctness.py tests/test_external_room_contracts.py tests/test_canonical_metric_scoring.py tests/test_canonical_l3_camera_integration.py tests/test_evaluation_mode_interface.py tests/test_submission_api.py tests/test_pipeline_operator_config.py --tb=short --basetemp=/private/tmp/pipeline-operator-config.z3ijj7/final_extended --junitxml=/private/tmp/pipeline-operator-config.z3ijj7/final_extended.xml
+# 628 passed, 1 failed, 0 skipped, 11.11 s
+```
+
+The single failure is the same independently baseline-reproduced
+`test_canonical_l3_group_judge_repair_reaches_vlm_and_renders` described below;
+it was not weakened or suppressed. The 18 new compiler tests forbid network,
+subprocess, generation and rendering during binding; verify unchanged source
+files and exact ICL; exercise the real CLI argument parsers; and reject malformed
+bindings without output writes. Native repos/models are not run by these tests.
+
+Remaining acceptance gates are unchanged: real Linux/CUDA/SceneWeaver runtime,
+production route binding and authorized API smoke, full native loop/geometry
+qualification, and complete evaluator applicability. No real service call or
+production operator binding is claimed by the mocked tests. The goal is not
+complete, and the existing applicability block remains active.
 
 ## Evidence log
 
@@ -185,9 +234,10 @@ generation/native/canonical/evaluator identities, creates a new output location,
 and does not regenerate or reconvert. It can spend Judge/camera calls and is not
 a no-call preflight. `layout-ddd-controlled-pilot preflight` is the no-call gate.
 
-Next: qualify SceneWeaver's thin frozen boundary and its native geometry export,
-finish private runtime bindings and versioned smoke/three-repeat operator plans;
-resolve complete-score applicability without silently altering the evaluator.
+Next: qualify the implemented SceneWeaver frozen boundary in its native Linux
+environment, bind the actual production host/deployment, and resolve complete-score
+applicability without silently altering the evaluator. The versioned no-call
+configuration compiler and smoke/three-repeat operator plan are now implemented.
 After combining with Complicated_Generation, certify a new shared commit/release
 identity rather than treating this checkpoint's wheel/tests as that merged build.
 
