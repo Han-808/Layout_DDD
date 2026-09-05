@@ -6,6 +6,7 @@ from copy import deepcopy
 from typing import Any
 
 from benchmark.evaluator.context_projection import (
+    EVALUATOR_CONTEXT_PROJECTION_VERSION,
     project_scene_for_evaluator_context,
 )
 from benchmark.evaluator.scene_quality.prompt_context import (
@@ -21,7 +22,7 @@ from benchmark.non_rectangular.geometry import (
 from benchmark.non_rectangular.room_unit import RoomEvaluationUnit
 
 
-ROOM_CANONICAL_PROJECTION_VERSION = "non_rectangular_room_canonical_projection_v1"
+ROOM_CANONICAL_PROJECTION_VERSION = "non_rectangular_room_canonical_projection_v2"
 
 
 def project_room_unit_to_canonical_scene(
@@ -48,6 +49,9 @@ def project_room_unit_to_canonical_scene(
         "metadata": {
             "evaluation_mode": NON_RECTANGULAR_EVALUATION_MODE,
             "projection_version": ROOM_CANONICAL_PROJECTION_VERSION,
+            "evaluator_context_projection_version": (
+                EVALUATOR_CONTEXT_PROJECTION_VERSION
+            ),
             "room_scope": "current_room_objects_and_walls_only",
             "room_id": unit.room_id,
             "coordinates_transformed": False,

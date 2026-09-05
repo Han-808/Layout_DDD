@@ -33,7 +33,7 @@ NONRECT_MATERIALIZATION_PLAN_VERSION = (
     "non_rectangular_catalog_materialization_plan_v1"
 )
 NONRECT_MATERIALIZATION_REVISION = (
-    "non_rectangular_fixed_catalog_materialization_v1"
+    "non_rectangular_fixed_catalog_materialization_v2"
 )
 NONRECT_MATERIALIZATION_MANIFEST_VERSION = (
     "non_rectangular_room_materialization_manifest_v1"
