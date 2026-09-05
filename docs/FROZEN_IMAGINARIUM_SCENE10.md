@@ -150,7 +150,7 @@ PYTHONPATH=src python scripts/prepare_imaginarium_glb_bundle.py \
 | LayoutGPT | Public plan plus a frozen released-style ICL message set and fixed row order/dimensions -> CSS-style numerical layout -> existing LayoutGPT converter. Exact IDs are preserved in the runner sidecar because the released CSS rows do not encode mesh IDs. | Controlled ICL bridge implemented; a frozen ICL file is required; not real-smoke-tested here. |
 | DirectLayout | Released two-list request plus per-slot exact GLB library -> released DirectLayout pipeline -> native numerical JSON -> existing converter. A path-only shim gives initial/refined artifacts one stable room token while preserving the full semantic prompt in every model call. Every native state is snapshotted and checked before rendering; terminal optimizer failure is no longer swallowed, and states from failed retries cannot become the selected result. | Thin released-pipeline bridge implemented; not real-smoke-tested here. |
 | LayoutVLM | Released scene config with exact frozen asset table -> released one-shot solver/optimizer -> native layout JSON -> existing converter. The bridge reproduces the released X/Y processed-bbox and fixed mesh-frame transform, preserves the prepared scene config, replaces only the released two-decimal size literal with the exact frozen value, and rejects randomized/unplaced fallback or model-mutated size. Model-authored Python is restricted to the released pose/constraint DSL before the upstream executor sees it. | Thin released-solver bridge implemented; not real-smoke-tested here. |
-| SceneWeaver | Exact initialized GLBs -> native reflect/modify loop -> every `layout_N.json` -> existing converter/evaluator per iteration. The plugin must report the exact public-plan hash and native room dimensions, then for each iteration report observed asset ID, mesh path/hash, full-precision canonical local bbox, catalog-bbox bottom-center rebase, and canonical-front-to-native-+X basis. A boolean attestation or benchmark-derived binding alone is insufficient. The converter audits the released rounded world AABB but reconstructs the canonical local OBB rather than rotating that AABB twice. | Conditional: the released initializer/exporter cannot enforce this contract. A versioned upstream-side frozen plugin is required to lock initialization/tools and emit the additional geometry/basis evidence without feeding benchmark scores into reflection. |
+| SceneWeaver | Exact initialized GLBs -> native reflect/modify loop -> every `layout_N.json` -> existing converter/evaluator per iteration. The plugin must report the exact public-plan hash and native room dimensions, then for each iteration report observed asset ID, mesh path/hash, full-precision canonical local bbox, native Euler, exported bottom-center position, `obj.dimensions`, catalog-bbox bottom-center rebase, and canonical-front-to-native-+X basis. A boolean attestation or benchmark-derived binding alone is insufficient. The converter audits rounded local-axis object dimensions, not a world AABB, against these observations. | Conditional: the released initializer/exporter cannot enforce this contract alone. A versioned upstream-side frozen plugin is required to lock initialization/tools and emit the additional geometry/basis evidence without feeding benchmark scores into reflection. |
 
 Frozen identity does not imply identical mesh observability inside each method.
 LayoutGPT is a numerical bbox planner and receives exact IDs, descriptions, and
@@ -173,15 +173,22 @@ a near-square office chair and the refrigerator with loose geometry. These are
 geometry diagnostics, **not** model/render/optimization E2E smoke results; see
 `PIPELINE_COMPATIBILITY_RUNS_READINESS.md` for exact evidence and remaining gates.
 
-Released SceneWeaver serializes `layout.size` as a two-decimal, post-rotation
-world AABB and independently rounds its Euler pose to two decimals. It is not
-the asset-local bbox. The required plugin keeps those released fields for
-native-loop fidelity, separately observes the full-precision Euler pose and GLB
-local bbox, and bakes a catalog-front-to-native-+X basis when a catalog front
-exists. Native AABB verification uses those full-precision observations before
-checking the released rounding; it does not recompute exact geometry from an
-already rounded angle. The observed GLB bbox may differ from catalog metadata
+Released SceneWeaver serializes the solver placeholder's `obj.dimensions` into
+`layout.size` to two decimals. These are scaled **local-axis object dimensions**,
+not a post-rotation world AABB. An input basis baked into the mesh changes them;
+runtime `rotation_euler` does not. This corrects the earlier world-AABB assumption
+using the pinned native exporter on actual bpy objects (Blender 4.3 and 5.2).
+The required plugin keeps native JSON unchanged and separately observes the
+full-precision Euler, exported bottom-center position, object dimensions, and
+canonical-frame local bbox for every iteration. The converter verifies all three
+native rounded fields against their observed full-precision counterparts, then
+uses the exact frozen asset dimensions and observed pose. The observed GLB bbox
+and basis-baked object dimensions may differ from catalog-derived dimensions
 only within the same frozen `1e-4` metre tolerance used by bundle preflight.
+The frozen contract is `released_object_dimensions_rounded_2dp`. The erroneous
+`released_world_aabb_rounded_2dp` contract is rejected, not silently reinterpreted.
+Old prepared inputs/sidecars remain unchanged; prepare a new version for this
+contract. Ordinary offline `scaled_object_local_bbox_dimensions` remains intact.
 For assets without a validated front, the basis is explicitly unavailable and
 is never invented. Because Imaginarium mesh origins are not guaranteed to match
 SceneWeaver's bbox-bottom-center convention, the plugin must deterministically

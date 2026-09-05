@@ -55,7 +55,7 @@ policies and converters are not redesigned.
 - [x] F6: every planned unit has a terminal status; blocked/partial/cancelled
       are distinct from complete; zero attempts cannot exit successfully.
 - [x] Current focused compatibility/execution and new regression tests run.
-      Latest geometry-focused: 66 passed. Extended: 506 passed, one baseline-existing failure;
+      Latest geometry-focused: 64 passed. Extended: 526 passed, one baseline-existing failure;
       this is not an all-green full-suite certification (see evidence below).
 - [x] Fresh wheel installation: 11 entrypoints imported/`--help` passed, 12
       selected schemas/prompts/render workers checked, new ICL module imported,
@@ -78,7 +78,8 @@ policies and converters are not redesigned.
 - [ ] Method-native geometry invariants and real asymmetric/near-symmetric pose
       round-trips. DirectLayout/LayoutVLM native mesh assembly: 24/24 captures
       now match conversion, including asymmetric/offset/near-square meshes.
-      SceneWeaver full-precision export and actual renderer/optimizer E2E
+      SceneWeaver exact exporter diagnostics now match all 16 captured bpy
+      states; frozen initialization and actual renderer/optimizer/loop E2E
       acceptance remain separate, unresolved gates.
 - [ ] Private API templates, no-call readiness command, smoke/full launch plans,
       append-only offline reevaluation path and budget/failure policy documented.
@@ -97,15 +98,16 @@ The implementation and diagnostics in this checkpoint are **not** a claim that
 production generation is ready. No production model service or generation
 workflow has been executed. Real upstream code executed locally was limited to
 imports, LayoutGPT's released formatter/parser preparation, a small LayoutVLM
-overlap-gradient diagnostic, and DirectLayout/LayoutVLM native mesh assembly
-stopped before pixel rendering. No benchmark score was fed to a generator.
+overlap-gradient diagnostic, DirectLayout/LayoutVLM native mesh assembly stopped
+before pixel rendering, and exact SceneWeaver exporter functions on synthetic
+bpy objects. No benchmark score was fed to a generator.
 
 | Method | Pinned upstream commit | Local prerequisite evidence | Remaining gate |
 | --- | --- | --- | --- |
 | LayoutGPT | `fc31954962553e5b65bf267a904a6930d50b1f5e` | Eight public `rect_train` demonstrations prepared using the release's metric formatter; source hashes and disjoint train/test/val selection checked | Configure audited ICL identity in a new prepared protocol; production response identity and native-parser smoke |
 | DirectLayout | `4430535304124dbc8d48f6bb0ea5891e92267986` | Native pipeline imports; 12 actual mesh assemblies match the corrected clockwise-yaw converter, in CPython 3.11.15 / bpy 4.3.0 / NumPy 1.26.4 | Real rendering/refinement and model/API smoke |
 | LayoutVLM | `85d06b4cd2478551188a0b4a47cd658c85c41315` | Native solver imports; 12 actual mesh assemblies confirm the existing +90-degree basis; CPU fallback probe gives positive loss but both corner gradients are null | Build/verify native differentiable Rotated_IoU on compatible CUDA host; no silent CPU-fallback ablation |
-| SceneWeaver | `7ae54b2ec3fc66147704faa7daf7b017ba8b1bd9` | Native loop, factories, initializer/update/export paths inspected; clean sparse source checkout | Frozen initialization/export/plugin and Linux runtime; update_layout/update_rotation both invoke update_graph, which rescales and deletes, so disabling named resize/remove tools alone is insufficient |
+| SceneWeaver | `7ae54b2ec3fc66147704faa7daf7b017ba8b1bd9` | Native loop/factories inspected; exact exporter AST executed on real bpy objects in Blender 4.3/5.2; all 16 captured states match the corrected frozen conversion | Full frozen initialization/export plugin and Linux runtime; update_layout/update_rotation both invoke update_graph, which rescales and deletes, so disabling named resize/remove tools alone is insufficient |
 | Catalog Placement | This benchmark checkout | Existing fixed-selection Stage-C baseline and offline same-evaluator tests retained | Production Stage-C/API and full evaluation smoke, separately reported |
 
 All four upstream checkouts were clean after these inspections/imports. Source
@@ -334,3 +336,94 @@ the audited fixed source hash. `wheel_build.log`, `wheel_install.log` and
 `wheel_verification.json` are retained in the evidence directory. This package
 check does not close CUDA, SceneWeaver-plugin, production API or full evaluator
 acceptance gates.
+
+## SceneWeaver native exporter correction (2026-09-05)
+
+Starting code checkpoint: `b29b129c8433002a56eed93f6bfee7c85e2d0176`.
+The pinned `infinigen_examples/steps/tools.py` source hash is
+`3cba7aed0f2e634663669e29bad8cd5918539b333aa62a50278acd848f0fd5ac`.
+Its exact `export_layout` and `calc_position_bias` function ASTs were executed
+without modification on real synthetic bpy placeholders. This avoids unrelated
+Linux/LLM imports: it is **not** a complete upstream import, GLB initializer,
+render, solver, or reflection-loop qualification.
+
+Native `size` comes from `obj.dimensions`, not a post-rotation world AABB.
+Blender 4.3.0 and 5.2.0 LTS each produced eight states: baked input basis 0/90
+degrees crossed with zero, 0.65-radian yaw, tilted XYZ, and 90-degree yaw.
+In each version all eight rounded sizes matched `obj.dimensions`, while only
+two matched the rounded world AABB. The earlier frozen world-AABB contract,
+including the corresponding statement in Pro's checklist, was incorrect.
+
+The narrow fix leaves native JSON and ordinary offline conversion unchanged.
+The frozen contract is now `released_object_dimensions_rounded_2dp` and requires
+per-iteration observed full-precision Euler, exported bottom-center position,
+object dimensions, and canonical-frame local bbox. It verifies native rounding
+against those observations; canonical rotation still composes the explicit
+input basis using matrices. Runtime rotation does not enter the local-dimension
+check. Missing observations, mismatched scale/position/rotation/dimensions, or
+the retired world-AABB contract fail closed. No retrieval, placement repair,
+asset selection, or evaluator change is introduced.
+
+Read-only conversion of the 16 **original native files** against captured bpy
+world vertices gave:
+
+- Before: 4 conversions accepted, 12 rejected; none met the `1e-6` metre vertex
+  threshold (even accepted states lost native position precision).
+- After: 16 accepted and 16 matched; maximum vertex distance
+  `1.46971082678919e-7` metres. All native file hashes remained unchanged.
+
+CI captures one runtime's eight small synthetic states in
+`tests/fixtures/external_harnesses/sceneweaver_native_export_v1.json` (SHA-256
+`567b069a45674ac9c815519d6a99ea5d0e8b847473122b6671044a57a83bd779`).
+Twenty new tests verify actual captured pose/vertices, missing and conflicting
+observations, retired-contract rejection, absent-front preservation, and bridge
+observation -> existing converter for each explicit iteration. They require no
+upstream checkout, real asset dataset, Blender, or API. Existing trajectory
+tests continue exercising the same canonical evaluator.
+
+Evidence root: `/private/tmp/pipeline-sceneweaver-export.vEWGAL`; selected files
+are archived append-only under the owned ignored prefix
+`Support/pipeline_compatibility_runs/api_ready_v1/sceneweaver_export_probe_v1/`.
+Scripts, original reports/layouts, before/after comparisons, test XML/logs,
+package verification, and an audit manifest are retained. No experimental data
+or wheel is committed to Git.
+
+Exact native diagnostics (no model or pixel-render calls):
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 /Users/han_mohan/Desktop/Layout_DDD/Support/pipeline_compatibility_runs/api_ready_v1/environments/direct-layout-cp311/bin/python /private/tmp/pipeline-sceneweaver-export.vEWGAL/probe_native_export.py --repo /Users/han_mohan/Desktop/Layout_DDD/Support/pipeline_compatibility_runs/api_ready_v1/upstream/SceneWeaver --out /private/tmp/pipeline-sceneweaver-export.vEWGAL/bpy43
+/Applications/Blender.app/Contents/MacOS/Blender --background --factory-startup --python /private/tmp/pipeline-sceneweaver-export.vEWGAL/probe_native_export.py -- --repo /Users/han_mohan/Desktop/Layout_DDD/Support/pipeline_compatibility_runs/api_ready_v1/upstream/SceneWeaver --out /private/tmp/pipeline-sceneweaver-export.vEWGAL/blender52
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src /Users/han_mohan/Desktop/Layout_DDD/.venv/bin/python /private/tmp/pipeline-sceneweaver-export.vEWGAL/compare_native_exports.py --checkout /private/tmp/layout-ddd-pipeline-compatibility-runs --evidence /private/tmp/pipeline-sceneweaver-export.vEWGAL --out /private/tmp/pipeline-sceneweaver-export.vEWGAL/converted_v1
+```
+
+All three exited 0. From the isolated source checkout, exact final regression
+commands (source Python 3.13.14):
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src /Users/han_mohan/Desktop/Layout_DDD/.venv/bin/python -m pytest -q -o addopts='' tests/test_sceneweaver_native_export.py tests/test_frozen_imaginarium_scene10.py --tb=short --basetemp=/private/tmp/pipeline-sceneweaver-export.vEWGAL/pytest_focused --junitxml=/private/tmp/pipeline-sceneweaver-export.vEWGAL/focused_tests.xml
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src /Users/han_mohan/Desktop/Layout_DDD/.venv/bin/python -m pytest -q -o addopts='' tests/test_external_harness_adapters.py tests/test_adapter_io_contracts.py tests/test_generation_comparison_protocol.py tests/test_controlled_generation_pilot.py tests/test_frozen_imaginarium_scene10.py --tb=short --basetemp=/private/tmp/pipeline-sceneweaver-export.vEWGAL/pytest_pro --junitxml=/private/tmp/pipeline-sceneweaver-export.vEWGAL/pro_tests.xml
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src /Users/han_mohan/Desktop/Layout_DDD/.venv/bin/python -m pytest -q -o addopts='' tests/test_external_harness_adapters.py tests/test_adapter_io_contracts.py tests/test_generation_comparison_protocol.py tests/test_controlled_generation_pilot.py tests/test_frozen_imaginarium_scene10.py tests/test_external_harness_execution.py tests/test_pipeline_evaluation_runtime.py tests/test_layoutgpt_frozen_icl.py tests/test_frozen_public_brief.py tests/test_native_mesh_frame_roundtrip.py tests/test_sceneweaver_native_export.py tests/test_scene_harness.py tests/test_catalog_placement_adapter.py tests/test_external_converter_correctness.py tests/test_external_room_contracts.py tests/test_canonical_metric_scoring.py tests/test_canonical_l3_camera_integration.py tests/test_evaluation_mode_interface.py tests/test_submission_api.py --tb=short --basetemp=/private/tmp/pipeline-sceneweaver-export.vEWGAL/pytest_extended_v2 --junitxml=/private/tmp/pipeline-sceneweaver-export.vEWGAL/extended_tests_v2.xml
+```
+
+Results: **64 passed** (0.75s), **224 passed** (2.30s), and **526 passed / 1
+failed** (11.31s), respectively. The remaining failure is the independently
+baseline-reproduced `test_canonical_l3_group_judge_repair_reaches_vlm_and_renders`
+at line 374. It is not suppressed or weakened. The initial extended run also
+encountered a sandbox denial of `ps` in the cancellation test and an accidentally
+changed legacy provenance label; local process inspection was permitted for
+the rerun and the ordinary offline label was restored. Initial new-test setup
+errors (conflicting selectors, missing required tolerance, wrong expected error
+text) were fixed in tests, not by weakening conversion. Earlier XML remains.
+
+Fresh installed wheel SHA-256:
+`0dc85bf5ae04f66a0b2a3cee16bb58771d20235d969e45cfeed455b41bb1aa0d`.
+Offline build/install used a new `benchmark-wheel-sceneweaver-export-v1`
+environment. All 11 entrypoints and 12 selected package resources verified from
+`/private/tmp` with `PYTHONPATH` unset; runtime construction made zero service
+calls. Installed and source SceneWeaver converter hashes both equal
+`895d54fc8065d099ec91bc20954e5b487694ddcaae82bc49af5c5b889bcd8c8b`.
+
+Still open: actual frozen GLB factory/initializer and every native loop operation,
+Linux/CUDA host qualification, production model identity/render/optimizer smoke,
+and the evaluator applicability decision. Export-only evidence does not certify
+any of those. Old prepared inputs and sidecars are not upgraded in place.

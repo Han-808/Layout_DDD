@@ -121,7 +121,7 @@ def convert_scene_weaver(
             native.get("size"),
             f"SceneWeaver objects.{object_id}.size",
         )
-        if size_semantics == "released_world_aabb_rounded_2dp":
+        if size_semantics == "released_object_dimensions_rounded_2dp":
             if any(value < 0.0 for value in native_size):
                 raise ArtifactValidationError(
                     f"SceneWeaver objects.{object_id}.size must be non-negative"
@@ -186,7 +186,7 @@ def convert_scene_weaver(
         asset_local_size = record_asset_local_bbox_size(record)
         asset_local_center = record_bbox_center(record)
         front_basis_yaw = None
-        if size_semantics == "released_world_aabb_rounded_2dp":
+        if size_semantics == "released_object_dimensions_rounded_2dp":
             if rotation_unit != "radian":
                 raise ArtifactValidationError(
                     "released SceneWeaver FrozenAssets rotation is fixed to radians"
@@ -241,17 +241,35 @@ def convert_scene_weaver(
                 round(value, 2) for value in precise_source_rotation
             ]
             tolerance = finite_float(
-                config.get("sceneweaver_world_aabb_tolerance", 1.0e-6),
-                "SceneWeaver world AABB tolerance",
+                config.get("sceneweaver_serialization_tolerance", 1.0e-6),
+                "SceneWeaver serialization tolerance",
             )
             if tolerance < 0.0:
                 raise ArtifactValidationError(
-                    "SceneWeaver world AABB tolerance must be non-negative"
+                    "SceneWeaver serialization tolerance must be non-negative"
                 )
             if not _vectors_close(source_rotation, serialized_expected, tolerance):
                 raise ArtifactValidationError(
                     f"SceneWeaver objects.{object_id}.rotation does not match the "
                     "released two-decimal serialization of the observed native pose"
+                )
+            serialized_bottom_center = list(bottom_center)
+            precise_positions = binding.get(
+                "full_precision_native_bottom_center_by_iteration"
+            )
+            precise_positions = (
+                precise_positions if isinstance(precise_positions, Mapping) else {}
+            )
+            bottom_center = vector3(
+                precise_positions.get(str(selected_iteration)),
+                f"SceneWeaver objects.{object_id}.full_precision_native_bottom_center",
+            )
+            if not _vectors_close(
+                serialized_bottom_center, [round(value, 2) for value in bottom_center], tolerance
+            ):
+                raise ArtifactValidationError(
+                    f"SceneWeaver objects.{object_id}.location does not match the "
+                    "released two-decimal serialization of the observed native bottom center"
                 )
             precise_local_bboxes = binding.get(
                 "full_precision_native_local_bbox_size_by_iteration"
@@ -298,15 +316,41 @@ def convert_scene_weaver(
                 f"SceneWeaver objects.{object_id}.canonical_rotation",
                 unit="degree",
             )
-            expected_world_aabb = _world_aabb_size(
-                rotation_matrix,
+            # export_layout reads the placeholder's obj.dimensions, not a
+            # world AABB. Runtime rotation_euler does not rotate these sizes.
+            # Only the fixed input mesh basis is baked into the local bbox.
+            basis_matrix = euler_xyz_to_matrix(
+                [0.0, 0.0, front_basis_yaw or 0.0],
+                f"SceneWeaver objects.{object_id}.baked_asset_basis",
+                unit="degree",
+            )
+            expected_object_dimensions = _world_aabb_size(
+                basis_matrix,
                 observed_local_size,
             )
-            expected_rounded = [round(value, 2) for value in expected_world_aabb]
+            precise_dimensions = binding.get(
+                "full_precision_native_object_dimensions_by_iteration"
+            )
+            precise_dimensions = (
+                precise_dimensions if isinstance(precise_dimensions, Mapping) else {}
+            )
+            observed_object_dimensions = vector3(
+                precise_dimensions.get(str(selected_iteration)),
+                f"SceneWeaver objects.{object_id}.full_precision_native_object_dimensions",
+                positive=True,
+            )
+            if not _vectors_close(
+                observed_object_dimensions, expected_object_dimensions, geometry_tolerance
+            ):
+                raise ArtifactValidationError(
+                    f"SceneWeaver objects.{object_id} observed object dimensions "
+                    "differ from the frozen local bbox after the fixed input basis"
+                )
+            expected_rounded = [round(value, 2) for value in observed_object_dimensions]
             if not _vectors_close(native_size, expected_rounded, tolerance):
                 raise ArtifactValidationError(
                     f"SceneWeaver objects.{object_id}.size is not the released "
-                    "two-decimal world AABB implied by the frozen local bbox and pose"
+                    "two-decimal serialization of observed local object dimensions"
                 )
         elif size_semantics == "scaled_object_local_bbox_dimensions":
             size = native_size
@@ -315,7 +359,7 @@ def convert_scene_weaver(
                 f"SceneWeaver objects.{object_id}.rotation",
                 unit=rotation_unit,
             )
-            expected_world_aabb = None
+            expected_object_dimensions = None
             expected_rounded = None
         else:
             raise ArtifactValidationError(
@@ -333,24 +377,33 @@ def convert_scene_weaver(
         geometry_audit: dict[str, Any] = {
             "evaluated_size_source": (
                 "exact_asset_physical_dimensions"
-                if size_semantics == "released_world_aabb_rounded_2dp"
+                if size_semantics == "released_object_dimensions_rounded_2dp"
                 else "native.size"
             ),
             "native_size": native_size,
             "native_size_axes": "x_width_y_depth_z_height",
             "native_size_semantics": size_semantics,
-            "native_location_semantics": "world_bbox_bottom_center",
+            "native_location_semantics": (
+                "world_transformed_local_bbox_bottom_center"
+                if size_semantics == "released_object_dimensions_rounded_2dp"
+                else "world_bbox_bottom_center"
+            ),
             "bottom_center_to_center_offset": center_offset,
         }
-        if expected_world_aabb is not None:
+        if expected_object_dimensions is not None:
             geometry_audit.update(
                 {
-                    "expected_world_aabb_before_rounding": expected_world_aabb,
-                    "expected_released_world_aabb": expected_rounded,
-                    "released_world_aabb_verified": True,
+                    "expected_object_dimensions_before_rounding": expected_object_dimensions,
+                    "expected_released_object_dimensions": expected_rounded,
+                    "released_object_dimensions_verified": True,
                     "native_serialized_rotation": source_rotation,
                     "full_precision_native_rotation": precise_source_rotation,
                     "released_rotation_quantization_verified": True,
+                    "native_serialized_bottom_center": serialized_bottom_center,
+                    "full_precision_native_bottom_center": bottom_center,
+                    "released_location_quantization_verified": True,
+                    "observed_native_object_dimensions": observed_object_dimensions,
+                    "native_dimensions_source": "solver_placeholder.obj.dimensions",
                     "observed_runtime_local_bbox_size": observed_local_size,
                     "asset_geometry_tolerance_m": geometry_tolerance,
                 }
@@ -383,7 +436,7 @@ def convert_scene_weaver(
             geometry_audit=geometry_audit,
         )
         metadata = dict(fields["metadata"])
-        if size_semantics != "released_world_aabb_rounded_2dp":
+        if size_semantics != "released_object_dimensions_rounded_2dp":
             metadata.setdefault("canonical_front", [1.0, 0.0, 0.0])
             metadata.setdefault(
                 "canonical_front_source",

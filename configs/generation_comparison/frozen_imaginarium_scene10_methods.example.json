@@ -205,8 +205,8 @@
         "execution": {
           "repo_path": "/ABSOLUTE/PATH/TO/SceneWeaver",
           "expected_upstream_commit": "7ae54b2ec3fc66147704faa7daf7b017ba8b1bd9",
-          "expected_entrypoint_sha256": "5431e9e8cb2f244b46f3d0419f6a446cabb3bebf71dfada0d974a27845ce2a0b",
-          "expected_bridge_bundle_sha256": "e9d0e7172268d45e03094d360729de9a14013249c4a154732fd6a77587cb40ef",
+          "expected_entrypoint_sha256": "9228f57d5720515b88836e3b370e0bf0188060e74894ad352b8b6f5c60f7f42e",
+          "expected_bridge_bundle_sha256": "a4149cd4bd6b5b7d6fe0b2c5cf7f33c3b278907be5fc40c34297ac199f15fe8b",
           "python_executable": "/ABSOLUTE/PATH/TO/sceneweaver/python",
           "template_variables": {
             "bridge_script": "/ABSOLUTE/PATH/TO/Layout_DDD/scripts/external_harness_bridges/scene_weaver_frozen.py",

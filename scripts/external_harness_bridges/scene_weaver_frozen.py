@@ -205,7 +205,9 @@ def _verify_plugin_report(
         "asset_replacement_disabled",
         "resize_disabled",
         "full_precision_local_bbox_observed",
-        "released_world_aabb_export_preserved",
+        "full_precision_native_pose_observed",
+        "native_object_dimensions_observed",
+        "released_object_dimensions_export_preserved",
         "catalog_resolution_outside_model_context",
         "bottom_center_origin_rebased",
     )
@@ -327,6 +329,12 @@ def _observe_trajectory(
     precise_local_bboxes: dict[str, dict[str, list[float]]] = {
         object_id: {} for object_id in expected_ids
     }
+    precise_positions: dict[str, dict[str, list[float]]] = {
+        object_id: {} for object_id in expected_ids
+    }
+    precise_dimensions: dict[str, dict[str, list[float]]] = {
+        object_id: {} for object_id in expected_ids
+    }
     for iteration, path in layouts:
         value = read_mapping(path, f"SceneWeaver layout_{iteration}")
         objects = value.get("objects")
@@ -396,6 +404,26 @@ def _observe_trajectory(
                 tolerance=tolerance,
             ):
                 current.append(f"anchor_basis_mismatch:{object_id}")
+            precise_position = _finite_vector3(
+                observed.get("full_precision_native_bottom_center")
+            )
+            if precise_position is None:
+                current.append(f"full_precision_position_missing:{object_id}")
+            else:
+                precise_positions[object_id][str(iteration)] = precise_position
+                if not _vector_close(
+                    objects[object_id].get("location"),
+                    [round(value, 2) for value in precise_position], tolerance,
+                ):
+                    current.append(f"released_location_quantization_mismatch:{object_id}")
+            observed_dimensions = _finite_vector3(
+                observed.get("full_precision_native_object_dimensions")
+            )
+            if observed_dimensions is None or any(value <= 0 for value in observed_dimensions):
+                current.append(f"native_object_dimensions_missing:{object_id}")
+                observed_dimensions = None
+            else:
+                precise_dimensions[object_id][str(iteration)] = observed_dimensions
             precise_rotation = _finite_vector3(
                 observed.get("full_precision_native_euler_xyz")
             )
@@ -409,18 +437,19 @@ def _observe_trajectory(
                     tolerance,
                 ):
                     current.append(f"released_rotation_quantization_mismatch:{object_id}")
-                if observed_local_bbox is not None:
-                    expected_world_size = _released_world_aabb_size(
+                if observed_local_bbox is not None and observed_dimensions is not None:
+                    expected_dimensions = _released_object_dimensions(
                         observed_local_bbox,
-                        precise_rotation,
                         expected_basis["basis_yaw_degrees"],
                     )
+                    if not _vector_close(observed_dimensions, expected_dimensions, geometry_tolerance):
+                        current.append(f"frozen_object_dimensions_mismatch:{object_id}")
                     if not _vector_close(
                         objects[object_id].get("size"),
-                        [round(value, 2) for value in expected_world_size],
+                        [round(value, 2) for value in observed_dimensions],
                         tolerance,
                     ):
-                        current.append(f"released_world_aabb_mismatch:{object_id}")
+                        current.append(f"released_object_dimensions_mismatch:{object_id}")
             iteration_bindings[object_id] = {
                 **asset,
                 "asset_key": observed_asset_id,
@@ -455,6 +484,12 @@ def _observe_trajectory(
         binding["full_precision_native_local_bbox_size_by_iteration"] = dict(
             precise_local_bboxes.get(object_id) or {}
         )
+        binding["full_precision_native_bottom_center_by_iteration"] = dict(
+            precise_positions.get(object_id) or {}
+        )
+        binding["full_precision_native_object_dimensions_by_iteration"] = dict(
+            precise_dimensions.get(object_id) or {}
+        )
     return (
         {
             "valid": not violations,
@@ -462,7 +497,7 @@ def _observe_trajectory(
             "iterations": rows,
             "benchmark_feedback_used_by_native_loop": False,
             "retrieval_calls": 0,
-            "native_size_semantics": "released_world_aabb_rounded_2dp",
+            "native_size_semantics": "released_object_dimensions_rounded_2dp",
             "asset_geometry_tolerance_m": geometry_tolerance,
             "orientation_basis_policy": (
                 "bake_catalog_front_to_sceneweaver_positive_x"
@@ -647,16 +682,13 @@ def _anchor_basis_matches(
     )
 
 
-def _released_world_aabb_size(
+def _released_object_dimensions(
     local_size: list[float],
-    native_rotation: Any,
     basis_yaw_degrees: float,
 ) -> list[float]:
-    if not isinstance(native_rotation, list) or len(native_rotation) != 3:
-        raise RuntimeError("SceneWeaver native rotation must be a 3-vector")
-    source = _euler_xyz_matrix([float(value) for value in native_rotation])
-    basis = _euler_xyz_matrix([0.0, 0.0, math.radians(basis_yaw_degrees)])
-    rotation = _matrix_multiply(source, basis)
+    # The native exporter uses obj.dimensions: scaled local-axis dimensions.
+    # The input basis is baked, but runtime rotation_euler is not.
+    rotation = _euler_xyz_matrix([0.0, 0.0, math.radians(basis_yaw_degrees)])
     return [
         sum(abs(rotation[row][column]) * local_size[column] for column in range(3))
         for row in range(3)
@@ -671,18 +703,6 @@ def _euler_xyz_matrix(angles: list[float]) -> list[list[float]]:
         [cz * cy, cz * sy * sx - sz * cx, cz * sy * cx + sz * sx],
         [sz * cy, sz * sy * sx + cz * cx, sz * sy * cx - cz * sx],
         [-sy, cy * sx, cy * cx],
-    ]
-
-
-def _matrix_multiply(
-    left: list[list[float]], right: list[list[float]]
-) -> list[list[float]]:
-    return [
-        [
-            sum(left[row][index] * right[index][column] for index in range(3))
-            for column in range(3)
-        ]
-        for row in range(3)
     ]
 
 

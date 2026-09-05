@@ -1083,7 +1083,7 @@ def _native_output(adapter_name: str, out_dir: Path, config: dict) -> Path:
                         "size": (
                             [0.7, 0.8, 1.0]
                             if config.get("sceneweaver_native_size_semantics")
-                            == "released_world_aabb_rounded_2dp"
+                            == "released_object_dimensions_rounded_2dp"
                             else [0.8, 0.7, 1.0]
                         ),
                         "parent": [],

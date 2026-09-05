@@ -709,9 +709,9 @@ def _configure_adapter(
             )
         configured["rotation_unit"] = "radian"
         configured["sceneweaver_native_size_semantics"] = (
-            "released_world_aabb_rounded_2dp"
+            "released_object_dimensions_rounded_2dp"
         )
-        configured["sceneweaver_world_aabb_tolerance"] = 1.0e-6
+        configured["sceneweaver_serialization_tolerance"] = 1.0e-6
         geometry_tolerance = contract.as_dict()["generation"].get(
             "asset_geometry_tolerance_m"
         )

@@ -1446,7 +1446,7 @@ def test_layoutvlm_constraint_guard_wraps_the_final_upstream_exec_boundary(
     assert tracking["rejected_program_count"] == 1
 
 
-def test_sceneweaver_released_world_aabb_restores_local_bbox_and_front_basis(
+def test_sceneweaver_released_object_dimensions_restore_local_bbox_and_front_basis(
     tmp_path: Path,
 ) -> None:
     native = write_json(
@@ -1469,9 +1469,9 @@ def test_sceneweaver_released_world_aabb_restores_local_bbox_and_front_basis(
         {
             "rotation_unit": "radian",
             "sceneweaver_native_size_semantics": (
-                "released_world_aabb_rounded_2dp"
+                "released_object_dimensions_rounded_2dp"
             ),
-            "sceneweaver_world_aabb_tolerance": 1.0e-6,
+            "sceneweaver_serialization_tolerance": 1.0e-6,
             "sceneweaver_orientation_basis": (
                 "bake_catalog_front_to_sceneweaver_positive_x"
             ),
@@ -1493,6 +1493,12 @@ def test_sceneweaver_released_world_aabb_restores_local_bbox_and_front_basis(
                     "full_precision_native_local_bbox_size_by_iteration": {
                         "0": [0.8, 0.7, 1.0]
                     },
+                    "full_precision_native_bottom_center_by_iteration": {
+                        "0": [2.0, 2.0, 0.0]
+                    },
+                    "full_precision_native_object_dimensions_by_iteration": {
+                        "0": [0.7, 0.8, 1.0]
+                    },
                     "anchor_basis": {
                         "policy": (
                             "rebase_catalog_bbox_bottom_center_to_sceneweaver_origin"
@@ -1512,7 +1518,7 @@ def test_sceneweaver_released_world_aabb_restores_local_bbox_and_front_basis(
     assert obj["center"] == pytest.approx([2.0, 2.0, 0.5])
     audit = obj["metadata"]["geometry_audit"]
     assert audit["native_size"] == [0.7, 0.8, 1.0]
-    assert audit["released_world_aabb_verified"] is True
+    assert audit["released_object_dimensions_verified"] is True
 
 
 def test_sceneweaver_uses_full_precision_pose_before_released_rounding(
@@ -1527,7 +1533,7 @@ def test_sceneweaver_uses_full_precision_pose_before_released_rounding(
                     "asset_id": "commode.asset",
                     "location": [3.0, 2.0, 0.0],
                     "rotation": [0.0, 0.0, 0.0],
-                    "size": [4.5, 1.19, 1.0],
+                    "size": [4.49, 1.17, 1.0],
                 }
             },
         },
@@ -1554,9 +1560,9 @@ def test_sceneweaver_uses_full_precision_pose_before_released_rounding(
         {
             "rotation_unit": "radian",
             "sceneweaver_native_size_semantics": (
-                "released_world_aabb_rounded_2dp"
+                "released_object_dimensions_rounded_2dp"
             ),
-            "sceneweaver_world_aabb_tolerance": 1.0e-6,
+            "sceneweaver_serialization_tolerance": 1.0e-6,
             "sceneweaver_asset_geometry_tolerance_m": 1.0e-4,
             "sceneweaver_orientation_basis": (
                 "bake_catalog_front_to_sceneweaver_positive_x"
@@ -1579,6 +1585,12 @@ def test_sceneweaver_uses_full_precision_pose_before_released_rounding(
                     "full_precision_native_local_bbox_size_by_iteration": {
                         "3": exact_size
                     },
+                    "full_precision_native_bottom_center_by_iteration": {
+                        "3": [3.0, 2.0, 0.0]
+                    },
+                    "full_precision_native_object_dimensions_by_iteration": {
+                        "3": exact_size
+                    },
                     "anchor_basis": {
                         "policy": (
                             "rebase_catalog_bbox_bottom_center_to_sceneweaver_origin"
@@ -1597,10 +1609,10 @@ def test_sceneweaver_uses_full_precision_pose_before_released_rounding(
     audit = obj["metadata"]["geometry_audit"]
     assert audit["native_serialized_rotation"] == [0.0, 0.0, 0.0]
     assert audit["full_precision_native_rotation"] == precise_rotation
-    assert audit["expected_released_world_aabb"] == [4.5, 1.19, 1.0]
+    assert audit["expected_released_object_dimensions"] == [4.49, 1.17, 1.0]
 
 
-def test_sceneweaver_released_zero_height_aabb_retains_positive_catalog_size(
+def test_sceneweaver_released_zero_height_dimension_retains_positive_catalog_size(
     tmp_path: Path,
 ) -> None:
     native = write_json(
@@ -1620,8 +1632,8 @@ def test_sceneweaver_released_zero_height_aabb_retains_positive_catalog_size(
     exact_size = [0.8, 0.7, 0.000076]
     config = {
         "rotation_unit": "radian",
-        "sceneweaver_native_size_semantics": "released_world_aabb_rounded_2dp",
-        "sceneweaver_world_aabb_tolerance": 1.0e-6,
+        "sceneweaver_native_size_semantics": "released_object_dimensions_rounded_2dp",
+        "sceneweaver_serialization_tolerance": 1.0e-6,
         "sceneweaver_asset_geometry_tolerance_m": 1.0e-4,
         "sceneweaver_orientation_basis": (
             "bake_catalog_front_to_sceneweaver_positive_x"
@@ -1644,6 +1656,12 @@ def test_sceneweaver_released_zero_height_aabb_retains_positive_catalog_size(
                 "full_precision_native_local_bbox_size_by_iteration": {
                     "0": exact_size
                 },
+                "full_precision_native_bottom_center_by_iteration": {
+                    "0": [2.0, 2.0, 0.0]
+                },
+                "full_precision_native_object_dimensions_by_iteration": {
+                    "0": exact_size
+                },
                 "anchor_basis": {
                     "policy": (
                         "rebase_catalog_bbox_bottom_center_to_sceneweaver_origin"
@@ -1664,7 +1682,7 @@ def test_sceneweaver_released_zero_height_aabb_retains_positive_catalog_size(
     assert obj["size"] == pytest.approx(exact_size)
     assert obj["center"][2] == pytest.approx(exact_size[2] / 2.0)
     assert obj["metadata"]["geometry_audit"][
-        "expected_released_world_aabb"
+        "expected_released_object_dimensions"
     ] == [0.8, 0.7, 0.0]
 
 
@@ -1782,6 +1800,14 @@ def test_sceneweaver_controlled_trajectory_reuses_preserved_binding_sidecar(
                             "1": [0.0, 0.0, 0.0],
                         },
                         "full_precision_native_local_bbox_size_by_iteration": {
+                            "0": [0.8, 0.7, 1.0],
+                            "1": [0.8, 0.7, 1.0],
+                        },
+                        "full_precision_native_bottom_center_by_iteration": {
+                            "0": [1.5, 2.0, 0.0],
+                            "1": [2.0, 2.0, 0.0],
+                        },
+                        "full_precision_native_object_dimensions_by_iteration": {
                             "0": [0.8, 0.7, 1.0],
                             "1": [0.8, 0.7, 1.0],
                         },
@@ -2478,6 +2504,12 @@ def test_sceneweaver_bridge_validates_every_frozen_iteration(
                                 0.0,
                                 0.0039 if iteration == 1 else 0.0,
                             ],
+                            "full_precision_native_bottom_center": [
+                                1.0 + iteration * 0.5, 2.0, 0.0
+                            ],
+                            "full_precision_native_object_dimensions": [
+                                0.80005 if iteration == 1 else 0.8, 0.7, 1.0
+                            ],
                         }
                     },
                 }
@@ -2495,6 +2527,12 @@ def test_sceneweaver_bridge_validates_every_frozen_iteration(
     ]["1"] == [0.0, 0.0, 0.0039]
     assert bindings["reading_chair_1"][
         "full_precision_native_local_bbox_size_by_iteration"
+    ]["1"] == [0.80005, 0.7, 1.0]
+    assert bindings["reading_chair_1"][
+        "full_precision_native_bottom_center_by_iteration"
+    ]["1"] == [1.5, 2.0, 0.0]
+    assert bindings["reading_chair_1"][
+        "full_precision_native_object_dimensions_by_iteration"
     ]["1"] == [0.80005, 0.7, 1.0]
     wrong_room_report = deepcopy(
         {
@@ -2515,6 +2553,10 @@ def test_sceneweaver_bridge_validates_every_frozen_iteration(
                             "orientation_basis": orientation_basis,
                             "anchor_basis": anchor_basis,
                             "full_precision_native_euler_xyz": [0.0, 0.0, 0.0],
+                            "full_precision_native_bottom_center": [
+                                1.0 + iteration * 0.5, 2.0, 0.0
+                            ],
+                            "full_precision_native_object_dimensions": [0.8, 0.7, 1.0],
                         }
                     },
                 }
@@ -2569,6 +2611,10 @@ def test_sceneweaver_bridge_validates_every_frozen_iteration(
                             "orientation_basis": orientation_basis,
                             "anchor_basis": anchor_basis,
                             "full_precision_native_euler_xyz": [0.0, 0.0, 0.0],
+                            "full_precision_native_bottom_center": [
+                                1.0 + iteration * 0.5, 2.0, 0.0
+                            ],
+                            "full_precision_native_object_dimensions": [0.8, 0.7, 1.0],
                         }
                     },
                 }
@@ -2613,6 +2659,10 @@ def test_sceneweaver_bridge_validates_every_frozen_iteration(
                         "orientation_basis": orientation_basis,
                         "anchor_basis": anchor_basis,
                         "full_precision_native_euler_xyz": [0.0, 0.0, 0.0],
+                        "full_precision_native_bottom_center": [
+                            1.0 + iteration * 0.5, 2.0, 0.0
+                        ],
+                        "full_precision_native_object_dimensions": [0.8, 0.7, 1.0],
                     }
                 },
             }
