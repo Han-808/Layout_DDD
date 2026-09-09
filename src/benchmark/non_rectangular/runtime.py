@@ -218,6 +218,9 @@ class DefaultNonRectangularRuntimeFactory:
             ) == "visibility_ranked"
             else None,
         )
+        collision_final_bundle = camera_config.pop(
+            "collision_final_bundle", collision_final_view_count == 1,
+        )
         if camera_config:
             raise ValueError(
                 f"unsupported nonrect camera options: {sorted(camera_config)}"
@@ -237,6 +240,7 @@ class DefaultNonRectangularRuntimeFactory:
                 collision_overlay=True,
                 collision_contour=True,
                 collision_final_view_count=collision_final_view_count,
+                collision_final_bundle=collision_final_bundle,
                 active_repair=active_repair,
             )
         )

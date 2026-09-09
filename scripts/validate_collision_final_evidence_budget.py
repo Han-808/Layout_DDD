@@ -91,7 +91,10 @@ def replay(args):
                 print(json.dumps({"arm": args.arm, **record}), flush=True)
         return call
 
-    for method in ["render_camera_views", "render_focus_overlay_views", "render_target_id_masks"]:
+    methods = ["render_camera_views", "render_focus_overlay_views", "render_target_id_masks"]
+    if hasattr(renderer, "render_collision_contour_evidence_bundle"):
+        methods.append("render_collision_contour_evidence_bundle")
+    for method in methods:
         setattr(renderer, method, timed(method, getattr(renderer, method)))
     options = {key: policy[key] for key in [
         "mode", "max_views", "max_steps", "candidate_count", "candidate_policy",
@@ -99,8 +102,10 @@ def replay(args):
         "frozen_view_ids", "highlighted_global_pose_policy", "architecture_contract",
     ]}
     options["metric_modes"] = policy["metric_mode_overrides"]
-    if args.arm == "candidate":
+    if args.arm == "candidate" or args.final_bundle:
         options["collision_final_view_count"] = 1
+    if args.final_bundle and args.arm == "candidate":
+        options["collision_final_bundle"] = True
     provider = CameraEvidenceProvider(
         renderer=renderer, blend_file=source_blend, out_dir=output / "evidence", **options
     )
@@ -146,7 +151,9 @@ def compare(baseline, candidate):
         "same_selection": am["selection"] == bm["selection"],
         "same_preview_visibility": without_paths(am["candidate_visibility"]) == without_paths(bm["candidate_visibility"]),
         "same_first_pose": am["selected_poses"][:1] == bm["selected_poses"],
-        "same_backup_selection": am["selected_poses"] == bm["final_evidence_budget"]["selected_poses_before_final_budget"],
+        "same_backup_selection": (am.get("final_evidence_budget") or {}).get(
+            "selected_poses_before_final_budget", am["selected_poses"]
+        ) == bm["final_evidence_budget"]["selected_poses_before_final_budget"],
         "same_visual_policy": a["visual_policy"] == b["visual_policy"],
         "same_consumer_metadata": without_paths(a["consumed_items"]) == without_paths(b["consumed_items"]),
         "same_two_decoded_images": len(pixels) == 2 and all(item["equal"] for item in pixels),
@@ -167,6 +174,7 @@ def main():
     parser.add_argument("--candidate-source")
     parser.add_argument("--source-root")
     parser.add_argument("--arm", choices=["baseline", "candidate"])
+    parser.add_argument("--final-bundle", action="store_true", help="Compare budget=1 on both arms, with the candidate's one-load bundle")
     args = parser.parse_args()
     if args.arm:
         replay(args)
@@ -180,6 +188,7 @@ def main():
         "manifests": args.manifest, "baseline_source": args.baseline_source,
         "candidate_source": args.candidate_source, "blender_bin": args.blender_bin,
         "judge_calls": 0, "production_gate": False, "results": [],
+        "final_bundle_comparison": args.final_bundle,
     }
     write(root / "validation.json", plan)
     for index, manifest in enumerate(args.manifest):
@@ -193,6 +202,7 @@ def main():
                 sys.executable, "-B", str(Path(__file__).resolve()), "--arm", arm,
                 "--source-root", source, "--manifest", manifest,
                 "--out-root", str(case / arm), "--blender-bin", args.blender_bin,
+                *(["--final-bundle"] if args.final_bundle else []),
             ], check=True)
         result = compare(case / "baseline", case / "candidate")
         write(case / "comparison.json", result)

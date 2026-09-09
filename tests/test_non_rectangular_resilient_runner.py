@@ -1128,6 +1128,8 @@ def test_runtime_identity_does_not_expose_endpoint_or_key_environment() -> None:
     ({"collision_final_view_count": None}, None),
     ({"mode": "bbox_track"}, None),
     ({"metric_modes": {"collision": "bbox_track"}}, None),
+    ({"collision_final_bundle": False}, 1),
+    ({"collision_final_view_count": 2}, 2),
 ])
 def test_nonrect_runtime_enables_collision_final_budget_only_on_l1(
     tmp_path, monkeypatch, camera, expected
@@ -1158,7 +1160,9 @@ def test_nonrect_runtime_enables_collision_final_budget_only_on_l1(
     ))
     local, l3 = providers
     assert local["collision_final_view_count"] == expected
+    assert local["collision_final_bundle"] is camera.get("collision_final_bundle", expected == 1)
     assert "collision_final_view_count" not in l3
+    assert "collision_final_bundle" not in l3
     assert local["max_views"] == l3["max_views"] == 4
     assert local["candidate_count"] == l3["candidate_count"] == 6
 

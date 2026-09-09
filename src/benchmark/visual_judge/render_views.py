@@ -7,8 +7,10 @@ import uuid
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
+from collections.abc import Callable
 
 from benchmark.architecture_policy import validate_architecture_contract
+from benchmark.rendering.blender import BlenderSourceSceneModifiedError
 from benchmark.rendering.camera_pose import (
     CAMERA_ACTIONS,
     DEFAULT_CAMERA_CANDIDATE_POLICY,
@@ -91,6 +93,7 @@ _CAMERA_EVIDENCE_IMPLEMENTATION_FILES = (
     "src/benchmark/rendering/blender.py",
     "src/benchmark/rendering/blender_camera_worker.py",
     "src/benchmark/rendering/blender_collision_mask_worker.py",
+    "src/benchmark/rendering/blender_collision_bundle_worker.py",
     "src/benchmark/rendering/blender_collision_overlay_worker.py",
     "src/benchmark/rendering/blender_focus_bundle_worker.py",
     "src/benchmark/rendering/camera_pose.py",
@@ -198,6 +201,7 @@ class CameraEvidenceProvider:
         collision_overlay: bool = False,
         collision_contour: bool = False,
         collision_final_view_count: int | None = None,
+        collision_final_bundle: bool = False,
         collision_geometry: dict[str, Any] | None = None,
         frozen_view_ids: list[str] | tuple[str, ...] | None = None,
         highlighted_global_pose_policy: str = "global_top",
@@ -294,6 +298,15 @@ class CameraEvidenceProvider:
                     "and visibility_ranked Collision cameras"
                 )
         self.collision_final_view_count = collision_final_view_count
+        if not isinstance(collision_final_bundle, bool):
+            raise ValueError("collision_final_bundle must be a boolean")
+        if collision_final_bundle and collision_final_view_count != 1:
+            raise ValueError("collision_final_bundle requires collision_final_view_count=1")
+        if collision_final_bundle and not callable(
+            getattr(renderer, "render_collision_contour_evidence_bundle", None)
+        ):
+            raise ValueError("renderer does not support the Collision final bundle")
+        self.collision_final_bundle = collision_final_bundle
         self.collision_geometry = collision_geometry if isinstance(collision_geometry, dict) else None
         self.collision_geometry_contract = _collision_geometry_contract(
             self.collision_geometry
@@ -468,6 +481,12 @@ class CameraEvidenceProvider:
                 else {}
             ),
             "focus_highlighting": "visibility_ranked_support_contact_plane_and_query_cov",
+            **({"collision_final_bundle": {
+                "schema_version": "collision_final_bundle_v1",
+                "passes": ["raw", "annotations_only", "visible_identity_masks"],
+                "scene_loads_per_final_attempt": 1,
+                "source_integrity": "full_sha256_before_and_after_each_pass",
+            }} if self.collision_final_bundle else {}),
             "global_context_source": "metric_highlighted_global_when_required",
             "highlighted_global_pose_policy": self.highlighted_global_pose_policy,
         }
@@ -1527,12 +1546,22 @@ class CameraEvidenceProvider:
 
         # Per-candidate final RGB with backfill: a failed selected pose is
         # replaced by the next ranked valid candidate rather than aborting.
+        final_bundle: dict[str, Any] | None = None
+
+        def render_bundled_raw(**kwargs: Any) -> dict[str, Any]:
+            nonlocal final_bundle
+            final_bundle = self.renderer.render_collision_contour_evidence_bundle(
+                **kwargs, overlay_spec=spec,
+            )
+            return final_bundle["rgb_manifest"]
+
         rgb_manifest, rendered_selected, backfill_log = self._render_final_rgb_with_backfill(
             event_dir=event_dir,
             selected=selected,
             candidates=candidates,
             ranking_log=ranking_log,
             final_view_count=self.collision_final_view_count,
+            render_camera_views=render_bundled_raw if self.collision_final_bundle else None,
         )
         if backfill_log.get("backfilled"):
             overlay_degradation = "; ".join(
@@ -1579,6 +1608,7 @@ class CameraEvidenceProvider:
                 selected=rendered_selected,
                 overlay_spec=spec,
                 raw_items=items,
+                pre_rendered_bundle=final_bundle,
             )
             items.extend(contour_items)
             contour_by_view = {
@@ -1652,6 +1682,8 @@ class CameraEvidenceProvider:
                 "rendered_view_count": len(rendered_selected),
                 "render_evidence_item_count": len(items),
             }
+        if final_bundle is not None:
+            manifest["final_bundle_audit_path"] = final_bundle.get("audit_path")
         _write_json(event_dir / "camera_evidence_manifest.json", manifest)
         return items
 
@@ -1662,28 +1694,35 @@ class CameraEvidenceProvider:
         selected: list[dict[str, Any]],
         overlay_spec: dict[str, Any],
         raw_items: list[dict[str, Any]],
+        pre_rendered_bundle: dict[str, Any] | None = None,
     ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         """Render the calibrated same-pose Collision contour presentation."""
 
         annotation_spec = deepcopy(overlay_spec)
         annotation_spec["object_presentation"] = "annotations_only"
         annotation_spec["role"] = "metric_contour_annotation_base"
-        annotation_manifest = self.renderer.render_focus_overlay_views(
-            blend_file=self.blend_file,
-            out_dir=event_dir / "final_contour_annotation",
-            camera_views=selected,
-            overlay_spec=annotation_spec,
-            preview=False,
-            allow_blank_views=True,
-        )
-        mask_manifest = self.renderer.render_target_id_masks(
-            blend_file=self.blend_file,
-            out_dir=event_dir / "final_contour_masks",
-            camera_views=selected,
-            overlay_spec=overlay_spec,
-            preview=False,
-            respect_occlusion=True,
-        )
+        if pre_rendered_bundle is not None:
+            if pre_rendered_bundle.get("post_raw_error"):
+                raise RuntimeError(pre_rendered_bundle["post_raw_error"])
+            annotation_manifest = pre_rendered_bundle["annotation_manifest"]
+            mask_manifest = pre_rendered_bundle["mask_manifest"]
+        else:
+            annotation_manifest = self.renderer.render_focus_overlay_views(
+                blend_file=self.blend_file,
+                out_dir=event_dir / "final_contour_annotation",
+                camera_views=selected,
+                overlay_spec=annotation_spec,
+                preview=False,
+                allow_blank_views=True,
+            )
+            mask_manifest = self.renderer.render_target_id_masks(
+                blend_file=self.blend_file,
+                out_dir=event_dir / "final_contour_masks",
+                camera_views=selected,
+                overlay_spec=overlay_spec,
+                preview=False,
+                respect_occlusion=True,
+            )
         composed = compose_segmentation_contour_manifest(
             rgb_manifest=annotation_manifest,
             mask_manifest=mask_manifest,
@@ -1939,6 +1978,7 @@ class CameraEvidenceProvider:
         candidates: list[dict[str, Any]],
         ranking_log: dict[str, Any] | None,
         final_view_count: int | None = None,
+        render_camera_views: Callable[..., dict[str, Any]] | None = None,
     ) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, Any]]:
         """Render selected raw views, backfilling failures from ranked candidates.
 
@@ -1952,8 +1992,9 @@ class CameraEvidenceProvider:
 
         target_count = self.max_views if final_view_count is None else final_view_count
         batch_selected = selected if final_view_count is None else selected[:target_count]
+        render = render_camera_views or self.renderer.render_camera_views
         try:
-            manifest = self.renderer.render_camera_views(
+            manifest = render(
                 blend_file=self.blend_file,
                 out_dir=event_dir / "final_rgb",
                 camera_views=batch_selected,
@@ -1962,6 +2003,8 @@ class CameraEvidenceProvider:
             rendered = _views_by_id(manifest)
             if batch_selected and all(str(pose.get("id")) in rendered for pose in batch_selected):
                 return manifest, list(batch_selected), {"backfilled": False, "rendered_view_ids": list(rendered)}
+        except BlenderSourceSceneModifiedError:
+            raise
         except Exception:
             pass
 
@@ -1992,12 +2035,14 @@ class CameraEvidenceProvider:
                 break
             pose = by_id[candidate_id]
             try:
-                manifest = self.renderer.render_camera_views(
+                manifest = render(
                     blend_file=self.blend_file,
                     out_dir=event_dir / "final_rgb" / _slug(candidate_id),
                     camera_views=[pose],
                     preview=False,
                 )
+            except BlenderSourceSceneModifiedError:
+                raise
             except Exception as exc:
                 backfill.append({"id": candidate_id, "reason": f"{type(exc).__name__}: {exc}"})
                 continue

@@ -4,6 +4,9 @@ import hashlib
 import json
 import os
 import subprocess
+import tempfile
+import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +36,61 @@ DEFAULT_COLLISION_MAX_TOTAL_FACES = 400_000
 
 class BlenderRenderError(RuntimeError):
     """Raised when the configured Blender process cannot produce evidence."""
+
+
+class BlenderSourceSceneModifiedError(BlenderRenderError):
+    """Source-integrity failure must never be retried as a camera failure."""
+
+
+class _CollisionBundleHashHandshake:
+    """Keep the four intermediate full-file checks in the original runtime.
+
+    The Blender worker waits at each pass boundary. Only the parent hashes the
+    fixed source path; neither data nor a stat-only digest cache is shared.
+    """
+
+    BOUNDARIES = ("raw_after", "annotation_before", "annotation_after", "mask_before")
+
+    def __init__(self, source: Path, destination: Path) -> None:
+        self.source = source
+        self.destination = destination
+        self.checks: list[dict[str, Any]] = []
+        self.error: str | None = None
+        self.stopped = threading.Event()
+        self.thread = threading.Thread(target=self._serve, daemon=True)
+
+    def __enter__(self):
+        self.thread.start()
+        return self
+
+    def __exit__(self, *args):
+        self.stopped.set()
+        # A started digest must finish before the final source check or return.
+        self.thread.join()
+
+    def _serve(self) -> None:
+        for boundary in self.BOUNDARIES:
+            request = self.destination / f"{boundary}.request"
+            while not request.exists():
+                if self.stopped.wait(0.01):
+                    return
+            started = time.monotonic()
+            try:
+                result = {"boundary": boundary, "sha256": _sha256_file(self.source),
+                          "location": "parent", "wall_seconds": time.monotonic() - started}
+                self.checks.append(result)
+            except Exception as exc:
+                self.error = f"{type(exc).__name__}: {exc}"
+                result = {"error": self.error}
+            try:
+                temporary = self.destination / f"{boundary}.tmp"
+                temporary.write_text(json.dumps(result), encoding="utf-8")
+                temporary.replace(self.destination / f"{boundary}.response.json")
+            except Exception as exc:
+                self.error = f"{type(exc).__name__}: {exc}"
+                return
+            if self.error:
+                return
 
 
 class BlenderRenderer:
@@ -849,6 +907,136 @@ class BlenderRenderer:
         }
         manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
         return manifest
+
+    def render_collision_contour_evidence_bundle(
+        self,
+        *,
+        blend_file: str | Path,
+        out_dir: str | Path,
+        camera_views: list[dict[str, Any]],
+        overlay_spec: dict[str, Any],
+        preview: bool = False,
+    ) -> dict[str, Any]:
+        """Run the unchanged final Collision passes in one scene load.
+
+        Raw failures raise and remain eligible for the caller's normal backfill.
+        Once raw succeeds, later failures return ``post_raw_error`` alongside
+        raw evidence so they cannot accidentally cause camera reselection.
+        """
+        if preview or not isinstance(camera_views, list) or len(camera_views) != 1:
+            raise ValueError("Collision final bundle requires exactly one non-preview pose")
+        if not isinstance(overlay_spec, dict) or not overlay_spec:
+            raise ValueError("overlay_spec must be a non-empty JSON object")
+        source = Path(blend_file).expanduser().resolve()
+        self._preflight_blend(source)
+        destination = Path(out_dir).expanduser().resolve()
+        destination.mkdir(parents=True, exist_ok=True)
+        # A failed prior attempt must never lend stale manifests to a retry.
+        destination = Path(tempfile.mkdtemp(prefix="collision_bundle_", dir=destination))
+        before_stat = _file_stat_signature(source)
+        before_hash = _sha256_file(source)
+        poses_path = destination / "camera_views.json"
+        poses_path.write_text(json.dumps(camera_views, indent=2), encoding="utf-8")
+        spec_path = destination / "mask_overlay_spec.json"
+        spec_path.write_text(json.dumps(overlay_spec, indent=2), encoding="utf-8")
+        annotation_path = destination / "annotation_spec.json"
+        annotation_path.write_text(json.dumps({**overlay_spec,
+            "object_presentation": "annotations_only", "role": "metric_contour_annotation_base",
+        }, indent=2), encoding="utf-8")
+        common = ["--camera-views-json", str(poses_path), "--width", str(self.width), "--height", str(self.height)]
+        rgb_config = ["--render-engine", self.render_engine, "--cycles-device", self.cycles_device,
+                      "--cycles-samples", str(self.cycles_samples)]
+        if self.cycles_denoising:
+            rgb_config.append("--cycles-denoising")
+        audit_path = destination / "bundle_audit.json"
+        request_path = destination / "bundle_request.json"
+        request_path.write_text(json.dumps({
+            "source_blend": str(source), "source_sha256": before_hash, "audit_path": str(audit_path),
+            "hash_handshake_dir": str(destination), "timeout_seconds": self.timeout_seconds,
+            "stages": {
+                "raw": common + rgb_config + ["--out-dir", str(destination / "raw")],
+                "annotation": common + rgb_config + ["--out-dir", str(destination / "annotation"),
+                    "--overlay-spec-json", str(annotation_path)],
+                "mask": common + ["--out-dir", str(destination / "mask"),
+                    "--overlay-spec-json", str(spec_path), "--respect-occlusion"],
+            },
+        }, indent=2), encoding="utf-8")
+        worker = Path(__file__).with_name("blender_collision_bundle_worker.py").resolve()
+        command = [str(self.blender_bin), "--background", "--factory-startup", "--disable-autoexec",
+                   str(source), "--python-exit-code", "1", "--python", str(worker),
+                   "--", "--request-json", str(request_path)]
+        process_error = None
+        with _CollisionBundleHashHandshake(source, destination) as handshake:
+            try:
+                completed = subprocess.run(command, check=False, capture_output=True, text=True,
+                                           timeout=self.timeout_seconds)
+                stdout, stderr = completed.stdout, completed.stderr
+                if completed.returncode != 0:
+                    process_error = f"Blender Collision bundle exited with code {completed.returncode}: {(stderr or stdout)[-2000:]}"
+            except subprocess.TimeoutExpired as exc:
+                stdout, stderr = _subprocess_stream_text(exc.stdout), _subprocess_stream_text(exc.stderr)
+                process_error = f"Blender Collision bundle timed out after {self.timeout_seconds}s"
+        process_error = process_error or handshake.error
+        (destination / "bundle_blender.stdout.log").write_text(stdout, encoding="utf-8")
+        (destination / "bundle_blender.stderr.log").write_text(stderr, encoding="utf-8")
+        after_stat = _file_stat_signature(source)
+        after_hash = _sha256_file(source)
+        try:
+            audit = _load_render_manifest(audit_path, label="Collision bundle audit")
+        except BlenderRenderError as exc:
+            audit = {}
+            process_error = process_error or str(exc)
+        checks = audit.get("hash_checks") or []
+        if after_hash != before_hash or audit.get("source_modified") or any(
+            item.get("sha256") != before_hash for item in checks + handshake.checks
+        ):
+            raise BlenderSourceSceneModifiedError("Read-only Collision bundle modified the source Blender scene")
+        audit["hash_checks"] = checks + [{"boundary": "mask_after", "sha256": after_hash, "location": "parent"}]
+        audit_path.write_text(json.dumps(audit, indent=2), encoding="utf-8")
+        if process_error and not audit.get("raw_complete"):
+            raise BlenderRenderError(process_error)
+        raw_path = destination / "raw" / "camera_render_manifest.json"
+        raw = _load_render_manifest(raw_path, label="Collision bundle raw")
+        blank = _validate_render_views(raw)
+        raw["camera_evidence"] = {
+            "preview": False, "blank_view_policy": "reject", "source_blend": str(source),
+            "source_blend_modified": False, "source_blend_sha256_before": before_hash,
+            "source_blend_sha256_after": before_hash,
+            "source_blend_stat_before": list(before_stat[1:]), "source_blend_stat_after": list(after_stat[1:]),
+            "render_engine": self.render_engine,
+            "cycles_samples": self.cycles_samples if self.render_engine == "CYCLES" else None,
+        }
+        raw_path.write_text(json.dumps(raw, indent=2), encoding="utf-8")
+        if blank:
+            raise BlenderRenderError(f"Blender produced blank or near-uniform camera evidence for views {blank}; engine={self.render_engine}")
+        result = {"rgb_manifest": raw, "audit_path": str(audit_path), "post_raw_error": process_error}
+        try:
+            if process_error:
+                raise BlenderRenderError(process_error)
+            if audit.get("status") != "complete" or [item["boundary"] for item in audit["hash_checks"]] != [
+                "raw_before", "raw_after", "annotation_before", "annotation_after", "mask_before", "mask_after",
+            ]:
+                raise BlenderRenderError("Incomplete Collision bundle pass/hash audit")
+            if checks[1:] != handshake.checks:
+                raise BlenderRenderError("Collision bundle worker/parent hash handshake differs")
+            annotation_manifest_path = destination / "annotation" / "collision_overlay_manifest.json"
+            annotation = _load_render_manifest(annotation_manifest_path, label="Collision bundle annotation")
+            _validate_render_views(annotation)  # Blank annotations are recorded, as before.
+            annotation["camera_evidence"] = {**raw["camera_evidence"],
+                "blank_view_policy": "record", "role": "collision_pair_overlay"}
+            annotation_manifest_path.write_text(json.dumps(annotation, indent=2), encoding="utf-8")
+            mask_path = destination / "mask" / "target_id_mask_manifest.json"
+            masks = _load_render_manifest(mask_path, label="Collision bundle mask")
+            masks["camera_evidence"] = {
+                "preview": False, "role": "target_id_masks", "occlusion_policy": "respect_scene_occlusion",
+                "source_blend": str(source), "source_blend_modified": False,
+                "source_blend_sha256_before": before_hash, "source_blend_sha256_after": after_hash,
+            }
+            mask_path.write_text(json.dumps(masks, indent=2), encoding="utf-8")
+            result.update(annotation_manifest=annotation, mask_manifest=masks)
+        except Exception as exc:
+            result["post_raw_error"] = f"{type(exc).__name__}: {exc}"
+        return result
 
     def render_focus_evidence_bundle(
         self,

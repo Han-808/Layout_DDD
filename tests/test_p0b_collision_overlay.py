@@ -1343,6 +1343,21 @@ class _BudgetContourRenderer(_FakeContourRenderer):
         return super().render_target_id_masks(**kwargs)
 
 
+class _BundleContourRenderer(_BudgetContourRenderer):
+    def render_collision_contour_evidence_bundle(self, **kwargs):
+        start = len(self.calls)
+        spec = kwargs.pop("overlay_spec")
+        raw = self.render_camera_views(**kwargs)
+        annotation = self.render_focus_overlay_views(**kwargs, overlay_spec={**spec,
+            "object_presentation": "annotations_only", "role": "metric_contour_annotation_base"},
+            allow_blank_views=True)
+        masks = self.render_target_id_masks(**kwargs, overlay_spec=spec, respect_occlusion=True)
+        self.calls[start:] = [{"pass": "bundle", "preview": False,
+                              "ids": [pose["id"] for pose in kwargs["camera_views"]]}]
+        return {"rgb_manifest": raw, "annotation_manifest": annotation,
+                "mask_manifest": masks, "post_raw_error": None, "audit_path": "fixture-audit.json"}
+
+
 def _budget_provider(tmp_path, *, final_count=None, renderer=None, **kwargs):
     blend = tmp_path / "scene.blend"
     blend.write_bytes(b"blend")
@@ -1536,3 +1551,93 @@ def test_collision_final_budget_does_not_reduce_other_metric_acquisition(tmp_pat
     monkeypatch.setattr(provider, "_focus_overlay_evidence", focus)
     assert provider(_camera_request(metric)) == []
     assert provider.renderer.calls[-1]["ids"] == ["v0", "v1", "v2", "v3"]
+
+
+def test_collision_final_bundle_preserves_consumer_and_selection(tmp_path):
+    old = _budget_provider(tmp_path, final_count=1)
+    before = old(_camera_request())
+    old_manifest = json.loads(Path(old.last_call_usage["manifest_path"]).read_text())
+    new = _budget_provider(tmp_path, final_count=1, collision_final_bundle=True,
+                           renderer=_BundleContourRenderer())
+    after = new(_camera_request())
+    new_manifest = json.loads(Path(new.last_call_usage["manifest_path"]).read_text())
+    assert _without_paths(before) == _without_paths(after)
+    for a, b in zip(before, after):
+        with Image.open(a["path"]) as ap, Image.open(b["path"]) as bp:
+            assert (ap.mode, ap.size, ap.tobytes()) == (bp.mode, bp.size, bp.tobytes())
+    assert old_manifest["selection"] == new_manifest["selection"]
+    assert old_manifest["final_evidence_budget"] == new_manifest["final_evidence_budget"]
+    assert _without_paths(old_manifest["candidate_visibility"]) == _without_paths(new_manifest["candidate_visibility"])
+    assert old.last_call_usage["manifest_path"] != new.last_call_usage["manifest_path"]
+    assert [call["pass"] for call in new.renderer.calls] == ["masks", "bundle"]
+    assert len(new.renderer.calls[0]["ids"]) == 6
+    assert len(new.renderer.calls[1]["ids"]) == 1
+    assert "collision_final_bundle" not in old.policy_config
+    assert new_manifest["final_bundle_audit_path"] == "fixture-audit.json"
+    count = len(new.renderer.calls)
+    assert new(_camera_request()) == after
+    assert len(new.renderer.calls) == count
+
+
+@pytest.mark.parametrize("value,count", [("true", 1), (1, 1), (True, None), (True, 2)])
+def test_collision_final_bundle_rejects_invalid_opt_in(tmp_path, value, count):
+    with pytest.raises(ValueError, match="collision_final_bundle"):
+        _budget_provider(tmp_path, final_count=count, collision_final_bundle=value,
+                         renderer=_BundleContourRenderer())
+
+
+def test_collision_final_bundle_requires_renderer_support(tmp_path):
+    with pytest.raises(ValueError, match="does not support"):
+        _budget_provider(tmp_path, final_count=1, collision_final_bundle=True)
+
+
+@pytest.mark.parametrize("broken", ["post_raw_error", "annotation_manifest", "mask_manifest"])
+def test_collision_bundle_post_raw_failure_never_backfills(tmp_path, broken):
+    class Broken(_BundleContourRenderer):
+        def render_collision_contour_evidence_bundle(self, **kwargs):
+            result = super().render_collision_contour_evidence_bundle(**kwargs)
+            if broken == "post_raw_error":
+                result[broken] = "fixture mask worker failed after raw"
+            else:
+                result[broken] = {"views": []}
+            return result
+
+    provider = _budget_provider(tmp_path, final_count=1, collision_final_bundle=True, renderer=Broken())
+    with pytest.raises((ValueError, RuntimeError)):
+        provider(_camera_request())
+    assert [call["pass"] for call in provider.renderer.calls] == ["masks", "bundle"]
+    assert not list(provider.out_dir.glob("*/camera_evidence_manifest.json"))
+
+
+def test_collision_bundle_raw_failure_uses_original_backfill_order(tmp_path):
+    calls = []
+
+    class BrokenFirst(_BundleContourRenderer):
+        def render_collision_contour_evidence_bundle(self, **kwargs):
+            calls.append(kwargs["camera_views"])
+            if len(calls) <= 2:  # failed batch and the same first selected pose
+                raise BlenderRenderError("fixture raw failed")
+            return super().render_collision_contour_evidence_bundle(**kwargs)
+
+    provider = _budget_provider(tmp_path, final_count=1, collision_final_bundle=True, renderer=BrokenFirst())
+    assert len(provider(_camera_request())) == 2
+    manifest = json.loads(Path(provider.last_call_usage["manifest_path"]).read_text())
+    original = manifest["final_evidence_budget"]["selected_poses_before_final_budget"]
+    assert calls == [original[:1], original[:1], original[1:2]]
+    assert manifest["selected_poses"] == original[1:2]
+    assert manifest["backfill"]["backfilled"] is True
+
+
+def test_collision_bundle_integrity_failure_never_backfills(tmp_path):
+    from benchmark.rendering.blender import BlenderSourceSceneModifiedError
+    calls = []
+
+    class Modified(_BundleContourRenderer):
+        def render_collision_contour_evidence_bundle(self, **kwargs):
+            calls.append(kwargs)
+            raise BlenderSourceSceneModifiedError("fixture modified source")
+
+    provider = _budget_provider(tmp_path, final_count=1, collision_final_bundle=True, renderer=Modified())
+    with pytest.raises(BlenderSourceSceneModifiedError):
+        provider(_camera_request())
+    assert len(calls) == 1
