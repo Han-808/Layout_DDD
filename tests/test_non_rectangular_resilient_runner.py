@@ -1123,6 +1123,46 @@ def test_runtime_identity_does_not_expose_endpoint_or_key_environment() -> None:
     assert "PRIVATE_TEST_KEY" not in serialized
 
 
+@pytest.mark.parametrize("camera, expected", [
+    ({}, 1),
+    ({"collision_final_view_count": None}, None),
+    ({"mode": "bbox_track"}, None),
+    ({"metric_modes": {"collision": "bbox_track"}}, None),
+])
+def test_nonrect_runtime_enables_collision_final_budget_only_on_l1(
+    tmp_path, monkeypatch, camera, expected
+):
+    from types import SimpleNamespace
+    import benchmark.non_rectangular.runtime as runtime
+
+    providers = []
+
+    def capture_provider(**kwargs):
+        providers.append(kwargs)
+        return SimpleNamespace(**kwargs)
+
+    monkeypatch.setattr(runtime, "_model_from_config", lambda *a, **kw: object())
+    monkeypatch.setattr(runtime, "OpenAICompatibleVLMJudge", lambda *a, **kw: object())
+    monkeypatch.setattr(runtime, "BlenderRenderer", lambda **kw: object())
+    monkeypatch.setattr(runtime, "CameraEvidenceProvider", capture_provider)
+    monkeypatch.setattr(runtime, "project_room_unit_to_canonical_scene", lambda unit: {})
+    monkeypatch.setattr(runtime, "_render_nonrect_global_evidence", lambda **kw: ([], {}))
+    monkeypatch.setattr(runtime, "CanonicalNonRectangularRoomEvaluator", lambda **kw: kw)
+    factory = DefaultNonRectangularRuntimeFactory({
+        "judge": {"model": "fixture-no-network"}, "camera": camera,
+    })
+    factory.build(SimpleNamespace(
+        attempt_root=tmp_path,
+        materialization=SimpleNamespace(blend_path=tmp_path / "scene.blend"),
+        unit=object(),
+    ))
+    local, l3 = providers
+    assert local["collision_final_view_count"] == expected
+    assert "collision_final_view_count" not in l3
+    assert local["max_views"] == l3["max_views"] == 4
+    assert local["candidate_count"] == l3["candidate_count"] == 6
+
+
 def test_runtime_uses_one_combined_exact_request_retry_budget(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

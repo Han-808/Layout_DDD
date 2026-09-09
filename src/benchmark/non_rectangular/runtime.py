@@ -26,12 +26,16 @@ from benchmark.non_rectangular.projection import (
 )
 from benchmark.non_rectangular.resilient import RoomRuntimeContext
 from benchmark.rendering.blender import BlenderRenderer
-from benchmark.rendering.camera_pose import generate_global_context_poses
+from benchmark.rendering.camera_pose import (
+    generate_global_context_poses,
+    resolve_camera_pose_mode,
+)
 from benchmark.visual_judge.openai_camera_selector import (
     OpenAICompatibleCameraSelector,
 )
 from benchmark.visual_judge.openai_compatible import OpenAICompatibleVLMJudge
 from benchmark.visual_judge.render_views import CameraEvidenceProvider
+from benchmark.visual_judge.visual_config import DEFAULT_P0B_VISUAL_CONFIGS
 from benchmark.materialization.catalog import sha256_json
 from benchmark.utils.io import write_json
 
@@ -203,6 +207,17 @@ class DefaultNonRectangularRuntimeFactory:
         candidate_count = int(camera_config.pop("candidate_count", 6))
         metric_modes = camera_config.pop("metric_modes", {})
         active_repair = bool(camera_config.pop("active_repair", selector is not None))
+        # The calibrated L1 Collision consumer takes one raw/contour pair.
+        # This is a final-render budget, not a candidate/selection budget.
+        # Explicit null restores legacy acquisition; other camera modes keep it.
+        collision_final_view_count = camera_config.pop(
+            "collision_final_view_count",
+            DEFAULT_P0B_VISUAL_CONFIGS["collision"]["local_view_count"]
+            if resolve_camera_pose_mode(
+                mode, "collision", metric_modes=metric_modes
+            ) == "visibility_ranked"
+            else None,
+        )
         if camera_config:
             raise ValueError(
                 f"unsupported nonrect camera options: {sorted(camera_config)}"
@@ -221,6 +236,7 @@ class DefaultNonRectangularRuntimeFactory:
                 metric_modes=metric_modes,
                 collision_overlay=True,
                 collision_contour=True,
+                collision_final_view_count=collision_final_view_count,
                 active_repair=active_repair,
             )
         )

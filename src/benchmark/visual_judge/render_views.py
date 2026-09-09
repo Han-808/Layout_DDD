@@ -85,6 +85,7 @@ from benchmark.visual_judge.visual_config import DEFAULT_P0B_VISUAL_CONFIGS
 FOCUS_CAMERA_MODES = {"visibility_ranked", "support_contact_plane", "query_cov"}
 HIGHLIGHTED_GLOBAL_POSE_POLICIES = {"global_top", "legacy_metric"}
 CAMERA_EVIDENCE_CACHE_CONTRACT_VERSION = "camera_evidence_cache_contract_v5"
+COLLISION_FINAL_EVIDENCE_BUDGET_VERSION = "collision_final_evidence_budget_v1"
 _CAMERA_EVIDENCE_IMPLEMENTATION_FILES = (
     "src/benchmark/assets/facing.py",
     "src/benchmark/rendering/blender.py",
@@ -196,6 +197,7 @@ class CameraEvidenceProvider:
         metric_modes: dict[str, str] | None = None,
         collision_overlay: bool = False,
         collision_contour: bool = False,
+        collision_final_view_count: int | None = None,
         collision_geometry: dict[str, Any] | None = None,
         frozen_view_ids: list[str] | tuple[str, ...] | None = None,
         highlighted_global_pose_policy: str = "global_top",
@@ -271,6 +273,27 @@ class CameraEvidenceProvider:
         self.collision_contour = bool(collision_contour)
         if self.collision_contour and not self.collision_overlay:
             raise ValueError("collision_contour requires collision_overlay")
+        # Acquisition-only opt-in: keep max_views for selection/diversity and
+        # retain that complete order for backfill, but render only the prefix
+        # consumed by the caller. Legacy/passthrough providers stay unchanged.
+        if collision_final_view_count is not None:
+            if (
+                isinstance(collision_final_view_count, bool)
+                or not isinstance(collision_final_view_count, int)
+                or not 1 <= collision_final_view_count <= self.max_views
+            ):
+                raise ValueError(
+                    "collision_final_view_count must be an integer between "
+                    "1 and max_views, or None"
+                )
+            if not self.collision_contour or resolve_camera_pose_mode(
+                self.mode, "collision", metric_modes=self.metric_modes
+            ) != "visibility_ranked":
+                raise ValueError(
+                    "collision_final_view_count requires collision_contour "
+                    "and visibility_ranked Collision cameras"
+                )
+        self.collision_final_view_count = collision_final_view_count
         self.collision_geometry = collision_geometry if isinstance(collision_geometry, dict) else None
         self.collision_geometry_contract = _collision_geometry_contract(
             self.collision_geometry
@@ -432,6 +455,18 @@ class CameraEvidenceProvider:
             ),
             "collision_overlay": self.collision_overlay,
             "collision_contour": self.collision_contour,
+            **(
+                {
+                    "collision_final_evidence": {
+                        "schema_version": COLLISION_FINAL_EVIDENCE_BUDGET_VERSION,
+                        "final_view_count": self.collision_final_view_count,
+                        "selection_max_views": self.max_views,
+                        "backfill_order": "all_selected_then_ranked_then_candidates",
+                    }
+                }
+                if self.collision_final_view_count is not None
+                else {}
+            ),
             "focus_highlighting": "visibility_ranked_support_contact_plane_and_query_cov",
             "global_context_source": "metric_highlighted_global_when_required",
             "highlighted_global_pose_policy": self.highlighted_global_pose_policy,
@@ -1497,6 +1532,7 @@ class CameraEvidenceProvider:
             selected=selected,
             candidates=candidates,
             ranking_log=ranking_log,
+            final_view_count=self.collision_final_view_count,
         )
         if backfill_log.get("backfilled"):
             overlay_degradation = "; ".join(
@@ -1606,6 +1642,16 @@ class CameraEvidenceProvider:
             "render_evidence_artifacts": _freeze_evidence_items(items),
             "render_evidence_items": items,
         }
+        if self.collision_final_view_count is not None:
+            # Execution audit only; never sent as a new metric/verdict policy.
+            manifest["final_evidence_budget"] = {
+                **self.policy_config["collision_final_evidence"],
+                "selected_poses_before_final_budget": deepcopy(selected),
+                "candidate_view_ids": [str(pose.get("id")) for pose in candidates],
+                "rendered_view_ids": [str(pose.get("id")) for pose in rendered_selected],
+                "rendered_view_count": len(rendered_selected),
+                "render_evidence_item_count": len(items),
+            }
         _write_json(event_dir / "camera_evidence_manifest.json", manifest)
         return items
 
@@ -1892,6 +1938,7 @@ class CameraEvidenceProvider:
         selected: list[dict[str, Any]],
         candidates: list[dict[str, Any]],
         ranking_log: dict[str, Any] | None,
+        final_view_count: int | None = None,
     ) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, Any]]:
         """Render selected raw views, backfilling failures from ranked candidates.
 
@@ -1899,18 +1946,22 @@ class CameraEvidenceProvider:
         selected pose, each remaining candidate (selected first, then ranked
         order) is rendered individually and failures are skipped and recorded so
         one bad candidate never drops the whole event to pose-order fallback.
+        An optional final budget limits only successful final renders, never
+        the original selected/backup bank or its exact (possibly repaired) poses.
         """
 
+        target_count = self.max_views if final_view_count is None else final_view_count
+        batch_selected = selected if final_view_count is None else selected[:target_count]
         try:
             manifest = self.renderer.render_camera_views(
                 blend_file=self.blend_file,
                 out_dir=event_dir / "final_rgb",
-                camera_views=selected,
+                camera_views=batch_selected,
                 preview=False,
             )
             rendered = _views_by_id(manifest)
-            if selected and all(str(pose.get("id")) in rendered for pose in selected):
-                return manifest, list(selected), {"backfilled": False, "rendered_view_ids": list(rendered)}
+            if batch_selected and all(str(pose.get("id")) in rendered for pose in batch_selected):
+                return manifest, list(batch_selected), {"backfilled": False, "rendered_view_ids": list(rendered)}
         except Exception:
             pass
 
@@ -1937,7 +1988,7 @@ class CameraEvidenceProvider:
         rendered_selected: list[dict[str, Any]] = []
         backfill: list[dict[str, Any]] = []
         for candidate_id in ordered_ids:
-            if len(rendered_selected) >= self.max_views:
+            if len(rendered_selected) >= target_count:
                 break
             pose = by_id[candidate_id]
             try:

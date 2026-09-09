@@ -1329,3 +1329,210 @@ def test_non_collision_metric_skips_overlay_and_returns_paths(tmp_path: Path) ->
 
     assert all(isinstance(path, Path) for path in paths)
     assert all(call["pass"] == "rgb" for call in renderer.calls)  # no overlay pass for oob
+
+
+# Collision final acquisition budget: selection and the consumer stay frozen.
+class _BudgetContourRenderer(_FakeContourRenderer):
+    def render_target_id_masks(self, **kwargs):
+        self.calls.append({
+            "pass": "masks",
+            "preview": kwargs.get("preview", True),
+            "ids": [pose["id"] for pose in kwargs["camera_views"]],
+            "respect_occlusion": kwargs.get("respect_occlusion", False),
+        })
+        return super().render_target_id_masks(**kwargs)
+
+
+def _budget_provider(tmp_path, *, final_count=None, renderer=None, **kwargs):
+    blend = tmp_path / "scene.blend"
+    blend.write_bytes(b"blend")
+    return CameraEvidenceProvider(
+        renderer=renderer or _BudgetContourRenderer(),
+        blend_file=blend,
+        out_dir=tmp_path / "evidence",
+        mode=kwargs.pop("mode", "visibility_ranked"),
+        max_views=4,
+        candidate_count=6,
+        collision_overlay=True,
+        collision_contour=kwargs.pop("collision_contour", True),
+        collision_final_view_count=final_count,
+        **kwargs,
+    )
+
+
+def _without_paths(value):
+    if isinstance(value, dict):
+        return {
+            key: _without_paths(item) for key, item in value.items()
+            if key != "path" and not key.endswith("_path")
+        }
+    if isinstance(value, list):
+        return [_without_paths(item) for item in value]
+    return value
+
+
+def test_collision_final_budget_preserves_selection_pixels_and_consumer(tmp_path):
+    from benchmark.visual_judge.visual_config import compose_default_p0b_visual_evidence
+
+    old = _budget_provider(tmp_path)
+    old_items = old(_camera_request())
+    old_manifest_path = Path(old.last_call_usage["manifest_path"])
+    old_manifest = json.loads(old_manifest_path.read_text())
+    old_selected, old_policy = compose_default_p0b_visual_evidence("collision", old_items)
+    new = _budget_provider(tmp_path, final_count=1)
+    new_items = new(_camera_request())
+    new_manifest_path = Path(new.last_call_usage["manifest_path"])
+    new_manifest = json.loads(new_manifest_path.read_text())
+    new_selected, new_policy = compose_default_p0b_visual_evidence("collision", new_items)
+
+    assert old.max_views == new.max_views == 4
+    assert old.candidate_count == new.candidate_count == 6
+    assert old_manifest_path != new_manifest_path  # budget participates in cache identity
+    assert old_manifest["selection"] == new_manifest["selection"]
+    assert _without_paths(old_manifest["candidate_visibility"]) == _without_paths(new_manifest["candidate_visibility"])
+    assert json.loads((old_manifest_path.parent / "pose_candidates.json").read_text()) == json.loads(
+        (new_manifest_path.parent / "pose_candidates.json").read_text()
+    )
+    assert len(old_manifest["selected_poses"]) == 4
+    assert new_manifest["selected_poses"] == old_manifest["selected_poses"][:1]
+    audit = new_manifest["final_evidence_budget"]
+    assert audit["selected_poses_before_final_budget"] == old_manifest["selected_poses"]
+    assert audit["final_view_count"] == audit["rendered_view_count"] == 1
+    assert audit["render_evidence_item_count"] == 2
+    assert "final_evidence_budget" not in old_manifest
+    assert "collision_final_evidence" not in old.policy_config
+    assert old_policy == new_policy
+    assert _without_paths(old_selected) == _without_paths(new_selected)
+    for before, after in zip(old_selected, new_selected):
+        with Image.open(before["path"]) as a, Image.open(after["path"]) as b:
+            assert (a.mode, a.size, a.tobytes()) == (b.mode, b.size, b.tobytes())
+    old_preview = [call for call in old.renderer.calls if call["preview"]]
+    new_preview = [call for call in new.renderer.calls if call["preview"]]
+    assert old_preview == new_preview
+    assert len(new_preview[0]["ids"]) == 6
+    for provider, count in [(old, 4), (new, 1)]:
+        final_calls = [call for call in provider.renderer.calls if not call["preview"]]
+        assert [call["pass"] for call in final_calls] == ["rgb", "overlay", "masks"]
+        assert all(len(call["ids"]) == count for call in final_calls)
+        assert final_calls[-1]["respect_occlusion"] is True
+    calls_before_cache_hit = len(new.renderer.calls)
+    assert new(_camera_request()) == new_items
+    assert new.last_call_usage["cache_hit"] is True
+    assert len(new.renderer.calls) == calls_before_cache_hit
+
+
+@pytest.mark.parametrize("count", [True, False, 0, -1, 5, 1.5, "1"])
+def test_collision_final_budget_rejects_invalid_count(tmp_path, count):
+    with pytest.raises(ValueError, match="collision_final_view_count must"):
+        _budget_provider(tmp_path, final_count=count)
+
+
+@pytest.mark.parametrize("options", [
+    {"collision_contour": False},
+    {"mode": "bbox_track"},
+    {"metric_modes": {"collision": "bbox_track"}},
+])
+def test_collision_final_budget_requires_opt_in_contour_visibility_mode(tmp_path, options):
+    with pytest.raises(ValueError, match="requires collision_contour"):
+        _budget_provider(tmp_path, final_count=1, **options)
+
+
+@pytest.mark.parametrize("fail_count", [1, 2, 4, 5, 6])
+@pytest.mark.parametrize("failure_kind", ["raise", "missing_view"])
+def test_collision_final_budget_backfill_keeps_full_selected_then_ranked_order(
+    tmp_path, fail_count, failure_kind
+):
+    candidates = [{"id": f"c{i}", "location": [float(i), 1.0, 1.0]} for i in range(6)]
+    # Diversity-selected order deliberately differs from the scalar rank order.
+    selected = [dict(candidates[i]) for i in [0, 3, 2, 1]]
+    selected[1]["location"] = [9.0, 2.0, 1.5]  # same-ID active modification
+    expected_order = ["c0", "c3", "c2", "c1", "c4", "c5"]
+    failing = set(expected_order[:fail_count])
+
+    class FailingRenderer(_FakeRenderer):
+        def render_camera_views(self, **kwargs):
+            ids = [pose["id"] for pose in kwargs["camera_views"]]
+            self.calls.append({"attempt": ids})
+            if any(cid in failing for cid in ids):
+                if failure_kind == "raise":
+                    raise BlenderRenderError("fixture raw failure")
+                return {"views": []}
+            return super().render_camera_views(**kwargs)
+
+    results = []
+    for limit in [None, 1]:
+        renderer = FailingRenderer()
+        provider = _budget_provider(tmp_path, renderer=renderer, final_count=limit)
+        _, poses, audit = provider._render_final_rgb_with_backfill(
+            event_dir=tmp_path / f"event_{limit}",
+            selected=selected,
+            candidates=candidates,
+            ranking_log={"ranked": [{"id": f"c{i}"} for i in range(6)]},
+            final_view_count=limit,
+        )
+        results.append(poses)
+        assert audit["backfilled"] is True
+        assert [item["id"] for item in audit["skipped_candidates"]] == expected_order[:fail_count]
+        attempts = [call["attempt"] for call in renderer.calls if "attempt" in call]
+        if limit == 1:
+            assert attempts == [["c0"]] + [[cid] for cid in expected_order[:min(fail_count + 1, 6)]]
+        if fail_count == 1:
+            assert poses[0] == selected[1]  # never replace its repaired coordinates
+    assert results[1] == results[0][:1]
+
+
+@pytest.mark.parametrize("broken_pass", ["raw", "annotation", "final_masks"])
+def test_collision_final_budget_required_evidence_failure_stays_error(tmp_path, broken_pass):
+    class BrokenRenderer(_BudgetContourRenderer):
+        def render_camera_views(self, **kwargs):
+            if broken_pass == "raw":
+                raise BlenderRenderError("fixture no raw")
+            return super().render_camera_views(**kwargs)
+
+        def render_focus_overlay_views(self, **kwargs):
+            if broken_pass == "annotation":
+                return {"views": []}
+            return super().render_focus_overlay_views(**kwargs)
+
+        def render_target_id_masks(self, **kwargs):
+            if broken_pass == "final_masks" and not kwargs.get("preview", True):
+                raise BlenderRenderError("fixture final mask failed")
+            return super().render_target_id_masks(**kwargs)
+
+    provider = _budget_provider(tmp_path, final_count=1, renderer=BrokenRenderer())
+    with pytest.raises((RuntimeError, BlenderRenderError, ValueError)):
+        provider(_camera_request())
+    assert not list(provider.out_dir.glob("*/camera_evidence_manifest.json"))
+
+
+def test_collision_final_budget_does_not_attempt_unused_final_pose(tmp_path):
+    class FailUnusedRenderer(_BudgetContourRenderer):
+        def render_camera_views(self, **kwargs):
+            if len(kwargs["camera_views"]) > 1:
+                raise AssertionError("unused final pose was attempted")
+            return super().render_camera_views(**kwargs)
+
+    provider = _budget_provider(tmp_path, final_count=1, renderer=FailUnusedRenderer())
+    assert len(provider(_camera_request())) == 2
+    manifest = json.loads(Path(provider.last_call_usage["manifest_path"]).read_text())
+    assert manifest["backfill"]["backfilled"] is False
+
+
+@pytest.mark.parametrize("metric", ["oob", "support", "scale_consistency"])
+def test_collision_final_budget_does_not_reduce_other_metric_acquisition(tmp_path, monkeypatch, metric):
+    provider = _budget_provider(tmp_path, final_count=1)
+    candidates = [{"id": f"v{i}"} for i in range(6)]
+    monkeypatch.setattr("benchmark.visual_judge.render_views.generate_camera_pose_candidates", lambda *a, **kw: candidates)
+
+    def focus(request, actual_candidates, event_dir, *, resolved_mode):
+        assert request["metric"] == metric
+        assert actual_candidates == candidates
+        _, rendered, _ = provider._render_final_rgb_with_backfill(
+            event_dir=event_dir, selected=candidates[:4], candidates=candidates, ranking_log=None
+        )
+        assert rendered == candidates[:4]
+        return []
+
+    monkeypatch.setattr(provider, "_focus_overlay_evidence", focus)
+    assert provider(_camera_request(metric)) == []
+    assert provider.renderer.calls[-1]["ids"] == ["v0", "v1", "v2", "v3"]
