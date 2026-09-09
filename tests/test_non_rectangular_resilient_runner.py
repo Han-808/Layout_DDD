@@ -28,6 +28,7 @@ from benchmark.non_rectangular.camera import NonRectangularCameraEvidenceExhaust
 from benchmark.non_rectangular.evaluator import NonRectangularRoomMetricIncomplete
 from benchmark.non_rectangular.materialization import (
     NONRECT_MATERIALIZATION_REVISION,
+    NonRectangularMaterializationContractError,
     NonRectangularMaterializationInfrastructureError,
     build_nonrect_room_materialization_plan,
 )
@@ -778,6 +779,31 @@ class _TransientMaterializer(NoAPIMockMaterializer):
                         "blender_process_crash", "transient"
                     )
         return super().materialize(**kwargs)
+
+
+def test_backend_contract_failure_is_not_wrapped_or_retried(tmp_path: Path) -> None:
+    class RejectOneRoom(NoAPIMockMaterializer):
+        def materialize(self, **kwargs):
+            plan = json.loads(Path(kwargs["plan_path"]).read_text())
+            if plan["request"]["room_id"] == "room_000":
+                raise NonRectangularMaterializationContractError("inspection rejected geometry")
+            return super().materialize(**kwargs)
+
+    model_root, csv_path, asset_root = _generation_root(tmp_path)
+    config = _config(tmp_path, model_root=model_root, csv_path=csv_path,
+                     asset_root=asset_root, output_name="contract-failure")
+    result = run_resilient_nonrect_campaign(
+        config, evaluator_factory=NoAPIMockEvaluatorFactory(),
+        materializer_backend=RejectOneRoom(),
+    )
+    assert result.complete_room_count == 1  # Other room still progresses.
+    room = config.output_root / "models/gpt-5.6-sol/scenes/scene_fixture/rooms/room_000"
+    attempts = list((room / "materialization_attempts").glob("attempt_*"))
+    assert len(attempts) == 1  # No global retry despite budget=3.
+    failure = json.loads((attempts[0] / "attempt_manifest.json").read_text())["failure"]
+    assert failure["category"] == "semantic_or_contract"
+    assert failure["error_type"] == "NonRectangularMaterializationContractError"
+    assert failure["retryable"] is False
 
 
 def test_materialization_infrastructure_failure_has_separate_retry_budget(

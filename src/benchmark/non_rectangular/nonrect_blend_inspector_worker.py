@@ -17,6 +17,15 @@ if str(MATERIALIZATION_DIR) not in sys.path:
 
 import blend_inspector_worker as base  # noqa: E402
 
+NONRECT_DIR = Path(__file__).resolve().parent
+if str(NONRECT_DIR) not in sys.path:
+    sys.path.insert(0, str(NONRECT_DIR))
+
+from nonrect_point_matching import (  # noqa: E402
+    POINT_MATCHING_REVISION,
+    point_multiset_close,
+)
+
 
 PLAN_VERSION = "non_rectangular_catalog_materialization_plan_v1"
 TOLERANCE = 1.0e-5
@@ -45,7 +54,12 @@ def main() -> None:
         expected_path=plan_path,
         catalog_path=plan_path,
     )
-    report["backend"] = "non_rectangular_blender_read_only_inspector_v1"
+    report["backend"] = "non_rectangular_blender_read_only_inspector_v2"
+    report["geometry_matching"] = {
+        "revision": POINT_MATCHING_REVISION,
+        "coordinate_tolerance_m": TOLERANCE,
+        "one_to_one": True,
+    }
     report["non_rectangular_room_scope"] = {
         "room_id": plan["request"]["room_id"],
         "global_coordinates_preserved": True,
@@ -267,10 +281,7 @@ def _ordered_close(left: list[tuple], right: list[tuple]) -> bool:
 
 
 def _point_multiset_close(left: list[tuple], right: list[tuple]) -> bool:
-    quantize = lambda point: tuple(round(float(value) / TOLERANCE) for value in point)
-    return sorted(quantize(item) for item in left) == sorted(
-        quantize(item) for item in right
-    )
+    return point_multiset_close(left, right, tolerance=TOLERANCE)
 
 
 def _close_json(left, right) -> bool:

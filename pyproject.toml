@@ -123,6 +123,7 @@ testpaths = [
   "tests/test_non_rectangular_density_reference.py",
   "tests/test_non_rectangular_spatiallm_program_cohort.py",
   "tests/test_non_rectangular_contracts.py",
+  "tests/test_nonrect_point_matching.py",
   "tests/test_non_rectangular_preflight.py",
   "tests/test_non_rectangular_report.py",
   "tests/test_non_rectangular_room_layout.py",

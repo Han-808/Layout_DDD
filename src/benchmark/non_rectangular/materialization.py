@@ -33,7 +33,7 @@ NONRECT_MATERIALIZATION_PLAN_VERSION = (
     "non_rectangular_catalog_materialization_plan_v1"
 )
 NONRECT_MATERIALIZATION_REVISION = (
-    "non_rectangular_fixed_catalog_materialization_v2"
+    "non_rectangular_fixed_catalog_materialization_v3"
 )
 NONRECT_MATERIALIZATION_MANIFEST_VERSION = (
     "non_rectangular_room_materialization_manifest_v1"
@@ -302,7 +302,8 @@ def materialize_nonrect_room(
             blender_bin=binary,
             timeout_seconds=timeout_seconds,
         )
-    except NonRectangularMaterializationInfrastructureError:
+    except (NonRectangularMaterializationInfrastructureError,
+            NonRectangularMaterializationContractError):
         raise
     except Exception as exc:
         raise NonRectangularMaterializationInfrastructureError(
