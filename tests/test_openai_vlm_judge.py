@@ -23,6 +23,7 @@ from benchmark.visual_judge.l3_prompts import (
     L3_METRIC_PROMPT_VERSION,
 )
 from benchmark.visual_judge.runtime import EvidenceControlUnresolvedError
+from benchmark.visual_judge.response_repair import _repair_response_schema_once
 
 
 class FakeMultimodalModel:
@@ -2402,8 +2403,10 @@ def test_scene_quality_adapter_keeps_semantic_placement_out_of_l1(
     )
 
 
+@pytest.mark.parametrize("repair_is_non_json", [False, True])
 def test_placement_schema_fallback_preserves_legal_initial_judge_candidate(
     tmp_path: Path,
+    repair_is_non_json: bool,
 ) -> None:
     image_path = tmp_path / "placement_salvage.png"
     _write_test_png(image_path)
@@ -2445,7 +2448,14 @@ def test_placement_schema_fallback_preserves_legal_initial_judge_candidate(
         "missing_evidence": [],
         "defects": [],
     }
-    model = FakeMultimodalModel([initial, repair])
+    class PlacementRepairModel(FakeMultimodalModel):
+        def chat_messages(self, messages, **kwargs) -> str:
+            response = super().chat_messages(messages, **kwargs)
+            if repair_is_non_json and len(self.calls) == 2:
+                return '{"verdict":'
+            return response
+
+    model = PlacementRepairModel([initial, repair])
 
     result = OpenAICompatibleVLMJudge(model).adjudicate_scene_quality(
         {
@@ -2486,6 +2496,65 @@ def test_placement_schema_fallback_preserves_legal_initial_judge_candidate(
     assert result["request_metadata"]["response_schema_validation"][
         "item_level_salvage"
     ] is True
+    assert len(model.calls) == 2
+
+
+@pytest.mark.parametrize("initial_raw", ['{"retained": true}', 'not JSON'])
+@pytest.mark.parametrize("fallback_error", [ValueError, RuntimeError])
+def test_malformed_schema_repair_preserves_failure_kind(
+    initial_raw: str,
+    fallback_error: type[Exception],
+) -> None:
+    class RawModel:
+        last_request_metadata = {}
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def chat_messages(self, *args, **kwargs) -> str:
+            self.calls += 1
+            return initial_raw if self.calls == 1 else '{"truncated":'
+
+    model = RawModel()
+    fallback_inputs = []
+
+    def reject(value):
+        raise ValueError("required typed check is missing")
+
+    def fallback(value, initial):
+        fallback_inputs.append((deepcopy(value), deepcopy(initial)))
+        raise fallback_error("fallback failed")
+
+    expected_error = (
+        ResponseSchemaRepairError if fallback_error is ValueError else RuntimeError
+    )
+    with pytest.raises(expected_error) as raised:
+        _repair_response_schema_once(
+            model=model,
+            messages=[],
+            response_format_json=True,
+            call_type="offline_placement_test",
+            judge_label="Placement",
+            validator=reject,
+            repair_prompt="repair",
+            policy="test",
+            semantic_signature=None,
+            semantic_restore=None,
+            fail_soft_fallback=fallback,
+        )
+
+    assert model.calls == 2
+    assert fallback_inputs == [
+        ({}, {"retained": True} if initial_raw.startswith("{") else {})
+    ]
+    if fallback_error is ValueError:
+        audit = raised.value.schema_audit
+        assert audit["attempt_count"] == 2
+        assert audit["recovered"] is False
+        assert audit["attempts"][1]["validation_error"]
+        assert isinstance(raised.value.__cause__, ValueError)
+    else:
+        assert str(raised.value) == "fallback failed"
 
 
 def test_global_placement_prompt_defers_group_local_discovery_miss(
