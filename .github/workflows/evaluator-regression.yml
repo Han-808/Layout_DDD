@@ -1,0 +1,56 @@
+name: Evaluator regression
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: evaluator-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  evaluator:
+    name: Evaluator / Python ${{ matrix.python }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.11', '3.13']
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install offline-test dependencies
+        run: python -m pip install -e '.[dev]'
+      - name: Verify evaluator and execution contracts without Blender or APIs
+        run: >-
+          python -m pytest -o addopts='' -q
+          -m 'not requires_blender and not requires_local_data'
+          tests/test_non_rectangular_polygon_evaluator.py
+          tests/test_non_rectangular_resilient_runner.py
+          tests/test_nonrect_point_matching.py
+          tests/test_openai_vlm_judge.py
+          tests/test_p0b_collision_overlay.py
+          tests/test_blender_renderer.py
+          tests/test_nonrect_execution_hardening.py
+          tests/test_nonrect_retry_recovery.py
+          --junitxml=test-results/evaluator.xml
+      - name: Build wheel
+        run: python -m pip wheel . --no-deps -w dist
+      - name: Preserve validation evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: evaluator-python-${{ matrix.python }}-${{ github.sha }}
+          path: test-results/
+          if-no-files-found: warn
+          retention-days: 14

@@ -21,6 +21,9 @@ import threading
 from typing import Any, Mapping, Protocol
 
 from benchmark.api.evaluation import run_evaluate
+from benchmark.evaluator.context_projection import (
+    EVALUATOR_CONTEXT_PROJECTION_VERSION,
+)
 from benchmark.materialization.catalog import FrozenCatalog, sha256_file, sha256_json
 from benchmark.models.openai_compatible_model import (
     EndpointConfigurationError,
@@ -42,6 +45,7 @@ from benchmark.non_rectangular.evaluator import (
 )
 from benchmark.non_rectangular.geometry import POLYGON_ROOM_METADATA_KEY
 from benchmark.non_rectangular.materialization import (
+    NONRECT_MATERIALIZATION_REVISION,
     NonRectangularMaterializationContractError,
     NonRectangularMaterializationInfrastructureError,
     RoomMaterializationBackend,
@@ -56,7 +60,10 @@ from benchmark.non_rectangular.preflight import (
     NonRectangularPreflightResult,
     prepare_non_rectangular_evaluation,
 )
-from benchmark.non_rectangular.projection import project_room_unit_to_canonical_scene
+from benchmark.non_rectangular.projection import (
+    ROOM_CANONICAL_PROJECTION_VERSION,
+    project_room_unit_to_canonical_scene,
+)
 from benchmark.non_rectangular.room_layout import RoomLayoutValidationError
 from benchmark.non_rectangular.room_unit import (
     RoomEvaluationUnit,
@@ -81,7 +88,7 @@ SCENE_SUMMARY_VERSION = "non_rectangular_resilient_scene_summary_v1"
 MODEL_SUMMARY_VERSION = "non_rectangular_resilient_model_summary_v1"
 TERMINAL_MANIFEST_VERSION = "non_rectangular_resilient_terminal_manifest_v1"
 PROVIDER_TOTALS_VERSION = "non_rectangular_resilient_provider_totals_v1"
-COORDINATOR_REVISION = "non_rectangular_resilient_coordinator_v2"
+COORDINATOR_REVISION = "non_rectangular_resilient_coordinator_v3"
 RETRYABLE_HTTP_STATUSES = frozenset({429, 500, 502, 503, 504})
 _HTTP_STATUS_PATTERN = re.compile(r"\bHTTP\s+(\d{3})\b", re.IGNORECASE)
 REQUIRED_SOURCE_ARTIFACTS = {
@@ -1664,6 +1671,13 @@ def _campaign_identity(
         ],
         "rejected_or_incomplete_scenes": [item.public_dict() for item in rejected],
         "materialization": {
+            "materialization_revision": NONRECT_MATERIALIZATION_REVISION,
+            "room_canonical_projection_version": (
+                ROOM_CANONICAL_PROJECTION_VERSION
+            ),
+            "evaluator_context_projection_version": (
+                EVALUATOR_CONTEXT_PROJECTION_VERSION
+            ),
             "asset_csv": str(config.asset_csv),
             "asset_csv_sha256": sha256_file(config.asset_csv),
             "asset_root": str(config.asset_root),

@@ -27,6 +27,115 @@ def _architecture_from_command(command: list[str]) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+@pytest.mark.parametrize("failure", [
+    None, "raw_missing", "raw_blank", "raw_process", "annotation_missing",
+    "annotation_blank", "mask_missing", "post_raw_process", "post_raw_timeout",
+    "hash_missing", "source_modified", "intermediate_modified",
+])
+def test_collision_bundle_one_process_integrity_and_failure_boundary(tmp_path, monkeypatch, failure):
+    import time
+    from benchmark.rendering.blender import BlenderSourceSceneModifiedError
+
+    blend = tmp_path / "scene.blend"
+    blend.write_bytes(b"fixture blend")
+    blender_bin = tmp_path / "blender"
+    blender_bin.write_text("fixture")
+    blender_bin.chmod(0o755)
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        assert "--disable-autoexec" in command
+        assert command.count(str(blend)) == 1
+        assert Path(command[command.index("--python") + 1]).name == "blender_collision_bundle_worker.py"
+        assert kwargs["timeout"] == 42
+        request = json.loads(Path(command[command.index("--request-json") + 1]).read_text())
+        assert request["source_blend"] == str(blend)
+        stages = request["stages"]
+        for stage, arguments in stages.items():
+            assert arguments[arguments.index("--width") + 1] == "640"
+            assert arguments[arguments.index("--height") + 1] == "480"
+            if stage == "mask":
+                assert "--respect-occlusion" in arguments
+                assert "--render-engine" not in arguments
+            else:
+                assert arguments[arguments.index("--render-engine") + 1] == "CYCLES"
+                assert "--cycles-denoising" in arguments
+            if stage == "annotation":
+                spec = json.loads(Path(arguments[arguments.index("--overlay-spec-json") + 1]).read_text())
+                assert spec["object_presentation"] == "annotations_only"
+                assert spec["role"] == "metric_contour_annotation_base"
+            destination = Path(arguments[arguments.index("--out-dir") + 1])
+            destination.mkdir()
+            if failure == stage + "_missing":
+                continue
+            path = destination / "view.png"
+            if failure == stage + "_blank":
+                Image.new("RGB", (8, 8), (0, 0, 0)).save(path)
+            else:
+                _write_nonuniform_png(path)
+            name = {"raw": "camera_render_manifest.json", "annotation": "collision_overlay_manifest.json",
+                    "mask": "target_id_mask_manifest.json"}[stage]
+            (destination / name).write_text(json.dumps({"views": [{"id": "v0", "path": str(path)}]}))
+        boundaries = ["raw_after", "annotation_before", "annotation_after", "mask_before"]
+        checks = [{"boundary": "raw_before", "sha256": request["source_sha256"], "location": "parent"}]
+        handshake_dir = Path(request["hash_handshake_dir"])
+        for boundary in boundaries:
+            (handshake_dir / f"{boundary}.request").touch()
+            response = handshake_dir / f"{boundary}.response.json"
+            deadline = time.monotonic() + 2
+            while not response.exists():
+                assert time.monotonic() < deadline
+                time.sleep(0.01)
+            checks.append(json.loads(response.read_text()))
+        if failure == "hash_missing":
+            checks.pop()
+        if failure == "intermediate_modified":
+            checks[2]["sha256"] = "changed"
+        Path(request["audit_path"]).write_text(json.dumps({
+            "status": "complete", "raw_complete": failure != "raw_process", "hash_checks": checks,
+        }))
+        if failure == "source_modified":
+            blend.write_bytes(b"fixture changed source")
+        if failure == "post_raw_timeout":
+            raise subprocess.TimeoutExpired(command, 42, output="fixture timeout", stderr="stopped")
+        return SimpleNamespace(returncode=1 if failure in {"raw_process", "post_raw_process"} else 0,
+                               stdout="fixture", stderr="fixture error")
+
+    monkeypatch.setattr("benchmark.rendering.blender.subprocess.run", fake_run)
+    renderer = BlenderRenderer(blender_bin=blender_bin, timeout_seconds=42,
+        width=640, height=480, render_engine="CYCLES", cycles_samples=8, cycles_denoising=True)
+    kwargs = dict(blend_file=blend, out_dir=tmp_path / "renders", camera_views=[{"id": "v0"}],
+                  overlay_spec={"targets": [{"id": "a"}, {"id": "b"}]})
+    if failure in {"source_modified", "intermediate_modified"}:
+        with pytest.raises(BlenderSourceSceneModifiedError):
+            renderer.render_collision_contour_evidence_bundle(**kwargs)
+    elif failure in {"raw_missing", "raw_blank", "raw_process"}:
+        with pytest.raises(BlenderRenderError):
+            renderer.render_collision_contour_evidence_bundle(**kwargs)
+    else:
+        result = renderer.render_collision_contour_evidence_bundle(**kwargs)
+        assert result["rgb_manifest"]["views"][0]["id"] == "v0"
+        if failure not in {None, "annotation_blank"}:
+            assert result["post_raw_error"]
+        else:
+            assert result["post_raw_error"] is None
+            audit = json.loads(Path(result["audit_path"]).read_text())
+            assert [item["boundary"] for item in audit["hash_checks"]] == [
+                "raw_before", "raw_after", "annotation_before", "annotation_after", "mask_before", "mask_after"]
+            assert result["mask_manifest"]["camera_evidence"]["occlusion_policy"] == "respect_scene_occlusion"
+            assert bool(result["annotation_manifest"]["render_validation"]["blank_views"]) is (failure == "annotation_blank")
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("poses,preview", [([], False), ([{}, {}], False), ([{}], True)])
+def test_collision_bundle_rejects_preview_or_multi_pose(tmp_path, poses, preview):
+    renderer = BlenderRenderer(blender_bin=tmp_path / "blender")
+    with pytest.raises(ValueError, match="exactly one non-preview pose"):
+        renderer.render_collision_contour_evidence_bundle(blend_file=tmp_path / "scene.blend",
+            out_dir=tmp_path / "renders", camera_views=poses, overlay_spec={"targets": []}, preview=preview)
+
+
 def test_blender_renderer_launches_trusted_worker_and_validates_views(monkeypatch, tmp_path: Path) -> None:
     blender_bin = tmp_path / "blender"
     blender_bin.write_text("fake", encoding="utf-8")

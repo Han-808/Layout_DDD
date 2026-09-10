@@ -810,6 +810,60 @@ def test_room_projection_drops_generator_private_plan_and_keeps_coordinates() ->
     )
 
 
+def test_room_projection_drops_agent_task_slot_alias_without_mutating_source() -> None:
+    artifacts = {
+        "room_layout": _fixture("simple_multi_room.json"),
+        "room_program": _fixture("simple_multi_room_program.json"),
+        "object_plan": _fixture("simple_multi_room_object_plan.json"),
+        "generated_scene": _fixture("simple_multi_room_scene.json"),
+    }
+    source_object = artifacts["generated_scene"]["rooms"][0]["objects"][0]
+    source_object["metadata"] = {
+        "task_slot": {
+            "intended_category": "generator-private category",
+            "placement_hints": ["generator-private placement"],
+            "retrieval_query": "generator-private retrieval",
+        },
+        "agent_intended_task_slot": {
+            "intended_category": "generator-private category",
+            "placement_hints": ["generator-private placement"],
+            "retrieval_query": "generator-private retrieval",
+        },
+        "uniform_scale": 1.0,
+    }
+    source_before = deepcopy(artifacts["generated_scene"])
+    without_agent_alias = deepcopy(artifacts["generated_scene"])
+    without_agent_alias["rooms"][0]["objects"][0]["metadata"].pop(
+        "agent_intended_task_slot"
+    )
+
+    unit = build_room_evaluation_units(
+        prepare_non_rectangular_evaluation(
+            NonRectangularEvaluationInput.from_artifacts(**artifacts)
+        )
+    )[0]
+    expected_unit = build_room_evaluation_units(
+        prepare_non_rectangular_evaluation(
+            NonRectangularEvaluationInput.from_artifacts(
+                room_layout=artifacts["room_layout"],
+                room_program=artifacts["room_program"],
+                object_plan=artifacts["object_plan"],
+                generated_scene=without_agent_alias,
+            )
+        )
+    )[0]
+
+    projected = project_room_unit_to_canonical_scene(unit)
+    expected = project_room_unit_to_canonical_scene(expected_unit)
+
+    assert projected == expected
+    assert artifacts["generated_scene"] == source_before
+    serialized = json.dumps(projected, sort_keys=True)
+    assert "agent_intended_task_slot" not in serialized
+    assert "generator-private placement" not in serialized
+    assert "generator-private retrieval" not in serialized
+
+
 def _fake_scene_quality(
     scene: dict[str, Any],
     **kwargs: Any,

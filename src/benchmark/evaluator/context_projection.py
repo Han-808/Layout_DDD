@@ -12,8 +12,10 @@ from copy import deepcopy
 from typing import Any
 
 
+EVALUATOR_CONTEXT_PROJECTION_VERSION = "evaluator_context_projection_v2"
 GENERATOR_PRIVATE_NESTED_KEYS = frozenset(
     {
+        "agent_intended_task_slot",
         "task_slot",
         "task_slots",
     }
@@ -33,11 +35,12 @@ def project_scene_for_evaluator_context(
 ) -> dict[str, Any]:
     """Return a geometry-preserving scene without generator-private intent.
 
-    ``task_slot`` is removed recursively because canonical adapters may retain
-    duplicate copies under both object metadata and the scene-level instance
-    registry.  Prompt-like fields are removed only from scene metadata so
-    unrelated schema fields named ``instruction`` are not silently rewritten.
-    The input scene is never mutated.
+    Task-slot records and generator-owned audit aliases are removed recursively
+    because canonical adapters may retain duplicate copies under both object
+    metadata and the scene-level instance registry.  Prompt-like fields are
+    removed only from scene metadata so unrelated schema fields named
+    ``instruction`` are not silently rewritten.  The input scene is never
+    mutated.
     """
 
     if not isinstance(scene, dict):
@@ -167,6 +170,7 @@ def _drop_nested_keys(value: Any, keys: frozenset[str]) -> None:
 
 
 __all__ = [
+    "EVALUATOR_CONTEXT_PROJECTION_VERSION",
     "GENERATOR_PRIVATE_NESTED_KEYS",
     "GENERATOR_PRIVATE_SCENE_METADATA_KEYS",
     "project_scene_for_evaluator_context",

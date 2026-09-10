@@ -264,6 +264,9 @@ def _repair_response_schema_once(
         ) from repair_transport_error
     second_metadata = dict(model.last_request_metadata)
     restored_fields: tuple[str, ...] = ()
+    # Parsing can fail before assignment; salvage must still receive the
+    # retained initial response without masking the parse error.
+    repaired_value: dict[str, Any] | None = None
     try:
         repaired_value = parse_json_object(repaired_raw)
         if semantic_signature is not None and locked_semantics:

@@ -12,7 +12,11 @@ from typing import Any, Mapping
 
 import pytest
 
+import benchmark.non_rectangular.resilient as nonrect_resilient_module
 from benchmark.materialization.catalog import FrozenCatalog
+from benchmark.evaluator.context_projection import (
+    EVALUATOR_CONTEXT_PROJECTION_VERSION,
+)
 from benchmark.models.openai_compatible_model import (
     EndpointConfigurationError,
     EndpointConnectionError,
@@ -23,12 +27,17 @@ from benchmark.models.openai_compatible_model import (
 from benchmark.non_rectangular.camera import NonRectangularCameraEvidenceExhausted
 from benchmark.non_rectangular.evaluator import NonRectangularRoomMetricIncomplete
 from benchmark.non_rectangular.materialization import (
+    NONRECT_MATERIALIZATION_REVISION,
+    NonRectangularMaterializationContractError,
     NonRectangularMaterializationInfrastructureError,
     build_nonrect_room_materialization_plan,
 )
 from benchmark.non_rectangular.preflight import (
     NonRectangularEvaluationInput,
     prepare_non_rectangular_evaluation,
+)
+from benchmark.non_rectangular.projection import (
+    ROOM_CANONICAL_PROJECTION_VERSION,
 )
 from benchmark.non_rectangular.resilient import (
     NoAPIMockEvaluatorFactory,
@@ -245,6 +254,19 @@ def test_no_api_generation_materialization_evaluation_and_resume(tmp_path: Path)
         config.output_root
         / "models/gpt-5.6-sol/scenes/scene_fixture"
     )
+    run_manifest = json.loads(
+        (config.output_root / "run_manifest.json").read_text(encoding="utf-8")
+    )
+    materialization_identity = run_manifest["identity"]["materialization"]
+    assert materialization_identity["materialization_revision"] == (
+        NONRECT_MATERIALIZATION_REVISION
+    )
+    assert materialization_identity["room_canonical_projection_version"] == (
+        ROOM_CANONICAL_PROJECTION_VERSION
+    )
+    assert materialization_identity["evaluator_context_projection_version"] == (
+        EVALUATOR_CONTEXT_PROJECTION_VERSION
+    )
     scene_report = json.loads(
         (scene_root / "evaluation_report.json").read_text(encoding="utf-8")
     )
@@ -265,6 +287,25 @@ def test_no_api_generation_materialization_evaluation_and_resume(tmp_path: Path)
         assert architecture["coordinates_transformed"] is False
         assert architecture["adjacent_room_objects_included"] is False
         assert architecture["ceiling_included"] is False
+        materialization_manifest = json.loads(
+            (materialization / "materialization_manifest.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        assert materialization_manifest["materialization_revision"] == (
+            NONRECT_MATERIALIZATION_REVISION
+        )
+        canonical_scene = json.loads(
+            (materialization / "canonical_room_scene.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        assert canonical_scene["metadata"]["projection_version"] == (
+            ROOM_CANONICAL_PROJECTION_VERSION
+        )
+        assert canonical_scene["metadata"][
+            "evaluator_context_projection_version"
+        ] == EVALUATOR_CONTEXT_PROJECTION_VERSION
         mock_camera = next(
             (room_root / "evaluation_attempts").glob(
                 "attempt_*/mock_camera/evidence_manifest.json"
@@ -291,6 +332,50 @@ def test_no_api_generation_materialization_evaluation_and_resume(tmp_path: Path)
         room_root = scene_root / "rooms" / room_id
         assert len(list((room_root / "materialization_attempts").glob("attempt_*"))) == 1
         assert len(list((room_root / "evaluation_attempts").glob("attempt_*"))) == 1
+
+
+def test_resume_refuses_projection_cache_identity_drift(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model_root, csv_path, asset_root = _generation_root(tmp_path)
+    config = _config(
+        tmp_path,
+        model_root=model_root,
+        csv_path=csv_path,
+        asset_root=asset_root,
+    )
+    result = run_resilient_nonrect_campaign(
+        config,
+        evaluator_factory=NoAPIMockEvaluatorFactory(),
+        materializer_backend=NoAPIMockMaterializer(),
+    )
+    assert result.status == "complete"
+    run_manifest = config.output_root / "run_manifest.json"
+    manifest_before = run_manifest.read_bytes()
+
+    monkeypatch.setattr(
+        nonrect_resilient_module,
+        "ROOM_CANONICAL_PROJECTION_VERSION",
+        "non_rectangular_room_canonical_projection_v1",
+    )
+    with pytest.raises(
+        ResilientCampaignError,
+        match="resume refused because input/config identity drifted",
+    ):
+        run_resilient_nonrect_campaign(
+            _config(
+                tmp_path,
+                model_root=model_root,
+                csv_path=csv_path,
+                asset_root=asset_root,
+                resume=True,
+            ),
+            evaluator_factory=NoAPIMockEvaluatorFactory(),
+            materializer_backend=NoAPIMockMaterializer(),
+        )
+
+    assert run_manifest.read_bytes() == manifest_before
 
 
 def test_no_api_whole_workflow_on_existing_completed_generated_scene(
@@ -696,6 +781,31 @@ class _TransientMaterializer(NoAPIMockMaterializer):
         return super().materialize(**kwargs)
 
 
+def test_backend_contract_failure_is_not_wrapped_or_retried(tmp_path: Path) -> None:
+    class RejectOneRoom(NoAPIMockMaterializer):
+        def materialize(self, **kwargs):
+            plan = json.loads(Path(kwargs["plan_path"]).read_text())
+            if plan["request"]["room_id"] == "room_000":
+                raise NonRectangularMaterializationContractError("inspection rejected geometry")
+            return super().materialize(**kwargs)
+
+    model_root, csv_path, asset_root = _generation_root(tmp_path)
+    config = _config(tmp_path, model_root=model_root, csv_path=csv_path,
+                     asset_root=asset_root, output_name="contract-failure")
+    result = run_resilient_nonrect_campaign(
+        config, evaluator_factory=NoAPIMockEvaluatorFactory(),
+        materializer_backend=RejectOneRoom(),
+    )
+    assert result.complete_room_count == 1  # Other room still progresses.
+    room = config.output_root / "models/gpt-5.6-sol/scenes/scene_fixture/rooms/room_000"
+    attempts = list((room / "materialization_attempts").glob("attempt_*"))
+    assert len(attempts) == 1  # No global retry despite budget=3.
+    failure = json.loads((attempts[0] / "attempt_manifest.json").read_text())["failure"]
+    assert failure["category"] == "semantic_or_contract"
+    assert failure["error_type"] == "NonRectangularMaterializationContractError"
+    assert failure["retryable"] is False
+
+
 def test_materialization_infrastructure_failure_has_separate_retry_budget(
     tmp_path: Path,
 ) -> None:
@@ -896,7 +1006,13 @@ def test_l_shape_plan_preserves_polygon_wall_order_and_global_coordinates(
                             "bbox_center_local": [0.0, 0.0, 0.0],
                             "bbox_size": [1.0, 1.0, 1.0],
                         },
-                        "metadata": {"uniform_scale": 1.0},
+                        "metadata": {
+                            "uniform_scale": 1.0,
+                            "agent_intended_task_slot": {
+                                "placement_hints": ["private wall affinity"],
+                                "retrieval_query": "private sofa retrieval",
+                            },
+                        },
                     }
                 ],
             }
@@ -962,6 +1078,8 @@ def test_l_shape_plan_preserves_polygon_wall_order_and_global_coordinates(
     ]
     assert materialization_plan["instances"][0]["center_m"] == [3.25, 0.75, 0.5]
     assert canonical["objects"][0]["center"] == [3.25, 0.75, 0.5]
+    assert "agent_intended_task_slot" not in json.dumps(canonical, sort_keys=True)
+    assert "agent_intended_task_slot" in scene["rooms"][0]["objects"][0]["metadata"]
     assert architecture["adjacent_room_objects_included"] is False
     assert architecture["ceiling_included"] is False
 
@@ -1003,6 +1121,50 @@ def test_runtime_identity_does_not_expose_endpoint_or_key_environment() -> None:
     assert set(identity) == {"provider", "model", "config_sha256"}
     assert "4999" not in serialized
     assert "PRIVATE_TEST_KEY" not in serialized
+
+
+@pytest.mark.parametrize("camera, expected", [
+    ({}, 1),
+    ({"collision_final_view_count": None}, None),
+    ({"mode": "bbox_track"}, None),
+    ({"metric_modes": {"collision": "bbox_track"}}, None),
+    ({"collision_final_bundle": False}, 1),
+    ({"collision_final_view_count": 2}, 2),
+])
+def test_nonrect_runtime_enables_collision_final_budget_only_on_l1(
+    tmp_path, monkeypatch, camera, expected
+):
+    from types import SimpleNamespace
+    import benchmark.non_rectangular.runtime as runtime
+
+    providers = []
+
+    def capture_provider(**kwargs):
+        providers.append(kwargs)
+        return SimpleNamespace(**kwargs)
+
+    monkeypatch.setattr(runtime, "_model_from_config", lambda *a, **kw: object())
+    monkeypatch.setattr(runtime, "OpenAICompatibleVLMJudge", lambda *a, **kw: object())
+    monkeypatch.setattr(runtime, "BlenderRenderer", lambda **kw: object())
+    monkeypatch.setattr(runtime, "CameraEvidenceProvider", capture_provider)
+    monkeypatch.setattr(runtime, "project_room_unit_to_canonical_scene", lambda unit: {})
+    monkeypatch.setattr(runtime, "_render_nonrect_global_evidence", lambda **kw: ([], {}))
+    monkeypatch.setattr(runtime, "CanonicalNonRectangularRoomEvaluator", lambda **kw: kw)
+    factory = DefaultNonRectangularRuntimeFactory({
+        "judge": {"model": "fixture-no-network"}, "camera": camera,
+    })
+    factory.build(SimpleNamespace(
+        attempt_root=tmp_path,
+        materialization=SimpleNamespace(blend_path=tmp_path / "scene.blend"),
+        unit=object(),
+    ))
+    local, l3 = providers
+    assert local["collision_final_view_count"] == expected
+    assert local["collision_final_bundle"] is camera.get("collision_final_bundle", expected == 1)
+    assert "collision_final_view_count" not in l3
+    assert "collision_final_bundle" not in l3
+    assert local["max_views"] == l3["max_views"] == 4
+    assert local["candidate_count"] == l3["candidate_count"] == 6
 
 
 def test_runtime_uses_one_combined_exact_request_retry_budget(
