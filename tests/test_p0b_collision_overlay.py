@@ -257,7 +257,9 @@ def test_collision_evaluator_forwards_no_prior_policy_to_judge() -> None:
     report = check_collision(_overlap_scene(), vlm_judge=_Judge())
     assert report["pairs"][0]["route"] == "vlm_adjudicated"
     assert captured[0]["candidate_selection_policy"] == COLLISION_CANDIDATE_SELECTION_POLICY
-    assert captured[0]["detector_evidence"]["candidate_selection_policy"] == COLLISION_CANDIDATE_SELECTION_POLICY
+    # The existing judge projection keeps policy at the request top level and
+    # intentionally removes its duplicate from measured detector evidence.
+    assert "candidate_selection_policy" not in captured[0]["detector_evidence"]
 
 
 def test_openai_p0b_context_includes_candidate_selection_policy(tmp_path: Path) -> None:
