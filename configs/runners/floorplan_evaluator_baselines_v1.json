@@ -1,0 +1,397 @@
+{
+  "schema_version": "floorplan_evaluator_baseline_registry_v1",
+  "registered_at": "2026-09-10T14:36:59.652775+08:00",
+  "registration_basis": "user_designated_latest_actually_run_evaluator_per_mode",
+  "latest_selection_scope": "Latest verified actual use per floor-plan mode is the baseline, including active runs; not highest metric version or working-tree HEAD.",
+  "current": {
+    "single_room": "single_room_sceneweaver_20260909_v1",
+    "multi_room": "multi_room_hy4_wall_20260902_v1",
+    "non_rectangular_multi_room": "nonrect_3186983_execution_v4_20260910_v1"
+  },
+  "policy": {
+    "automatic_promotion": false,
+    "mutates_existing_runs": false,
+    "relabels_historical_results": false,
+    "startup_enforcement": "reference_registry_only_no_runner_changes",
+    "registration_is_performance_validation": false,
+    "registration_is_cross_harness_comparability_approval": false,
+    "same_version_labels_prove_same_code": false,
+    "promotion_rule": "Refresh current to latest verified actual use when reconciling status, as authorized by user on 2026-09-10; preserve historical identities and limitations."
+  },
+  "baselines": {
+    "single_room_sceneweaver_20260909_v1": {
+      "mode": "single_room",
+      "display_name": "Open-space / independent single-room",
+      "status": "current_reference_baseline",
+      "source_run_root": "Support/artifacts/outputs/camera_cal_scene_level/sceneweaver_success9_floor_frame_api2_sol_20260909_r1/scene_weaver",
+      "source_run_started_at": "2026-09-09T07:08:31.118970+00:00",
+      "source_run_completed_at": "2026-09-09T09:16:05.217120+00:00",
+      "latest_case_started_at": "2026-09-09T08:53:17.839656+00:00",
+      "versions": {
+        "collision": "collision_p0b_v4",
+        "support": "support_p0b_v12",
+        "oob": "oob_p0b_v2",
+        "scene_quality": "scene_quality_v8",
+        "l3_prompt": "l3_burden_categories_v31"
+      },
+      "entrypoint": "benchmark.camera_cal_scene_level -> benchmark.api.evaluation.run_evaluate",
+      "code_identity": {
+        "kind": "existing_frozen_tree",
+        "path": "Support/artifacts/outputs/camera_cal_scene_level/sceneweaver_success9_floor_frame_api2_sol_20260909_r1/frozen_code",
+        "tree_sha256": "893b3a5c38751a553f348ac2e12a0142121cf489858abb28a66152f33ed069dd",
+        "file_count": 860,
+        "tree_hash_algorithm": "sorted relative paths under src/scripts/configs excluding __pycache__, .pyc, .DS_Store, plus two recipe extras; SHA256(relative_path + NUL + file_sha256 + LF)",
+        "extras": [
+          "Support/scripts/prepare_sceneweaver_success9_evaluation.py",
+          "Support/bash/local/run_litellm_gpt56sol_standard_proxy.sh"
+        ],
+        "verified_at_registration": true
+      },
+      "configuration": {
+        "scoring_profile": {
+          "layer_weights": {
+            "l1_physical_plausibility": 0.3,
+            "l2_specification_fidelity": 0,
+            "l3_scene_quality": 0.7,
+            "l4_downstream_task_functionality": 0
+          },
+          "l3_metric_weights": {
+            "scale_consistency": 0.04,
+            "style_consistency": 0.07,
+            "object_pairing_consistency": 0.09,
+            "functional_consistency": 0.52,
+            "semantic_placement_consistency": 0.28
+          },
+          "requires_l2_task": false,
+          "deduction_multiplier": 2,
+          "deduction_multiplier_metrics": [
+            "collision",
+            "support",
+            "oob",
+            "scale_consistency",
+            "style_consistency",
+            "object_pairing_consistency"
+          ],
+          "scoring_profile_id": "intrinsic_validity_v2",
+          "scoring_spec_version": "object_equivalent_burden_v3"
+        },
+        "renderer": {
+          "blender_bin": "/Applications/Blender.app/Contents/MacOS/Blender",
+          "timeout_seconds": 1800,
+          "width": 768,
+          "height": 768,
+          "render_engine": "BLENDER_EEVEE_NEXT",
+          "cycles_device": "CPU",
+          "cycles_samples": 16,
+          "cycles_denoising": false,
+          "preview_render_engine": "BLENDER_EEVEE_NEXT",
+          "preview_width": 256,
+          "preview_height": 256,
+          "preview_cycles_samples": 1
+        },
+        "mesh_geometry": "loaded_from_case_collision_geometry_manifest",
+        "max_workers": 2
+      },
+      "limitations": [
+        "Full architecture compatibility is not qualified; native clear height remains about 0.254881 m below public room height.",
+        "Existing curation qualification limits remain; designation does not approve cross-harness comparisons."
+      ],
+      "artifact_pins": [
+        {
+          "path": "Support/artifacts/outputs/camera_cal_scene_level/sceneweaver_success9_floor_frame_api2_sol_20260909_r1/curation_lock.json",
+          "sha256": "25148272422918406507fb9290c370daf90112fe2a74d22c90d67deca0137efd"
+        },
+        {
+          "path": "Support/artifacts/outputs/camera_cal_scene_level/sceneweaver_success9_floor_frame_api2_sol_20260909_r1/scene_weaver/experiment_plan.json",
+          "sha256": "ab73c5aca1a445780950e4a6f764582547e1a980b2540c43a4be6986e3f1e70f"
+        },
+        {
+          "path": "Support/artifacts/outputs/camera_cal_scene_level/sceneweaver_success9_floor_frame_api2_sol_20260909_r1/scene_weaver/cases/S108/control_manifest.json",
+          "sha256": "8e64a42d040a85beedf91cd539288d3afb0e17a32229ba94396ef2751870dedf"
+        },
+        {
+          "path": "Support/artifacts/outputs/camera_cal_scene_level/sceneweaver_success9_floor_frame_api2_sol_20260909_r1/scene_weaver/cases/S108/case_run_manifest.json",
+          "sha256": "d9d09679e728adb4df149fc37f71e30fab84a143dd838091589785289f4e3934"
+        }
+      ]
+    },
+    "multi_room_hy4_wall_20260902_v1": {
+      "mode": "multi_room",
+      "display_name": "Rectangular Multi-room",
+      "status": "current_reference_baseline",
+      "source_run_root": "Support/artifacts/outputs/camera_cal_scene_level/multi_room_floorplans_v2_hy4_preview_tokenhub_wall_updated_api2_gpt56sol_resilient_r2/hy4-preview-tokenhub",
+      "source_run_status": "complete",
+      "source_case_count": 31,
+      "latest_case_started_at": "2026-09-02T02:56:00.984728+00:00",
+      "latest_case_completed_at": "2026-09-02T03:11:14.947745+00:00",
+      "versions": {
+        "collision": "collision_p0b_v4",
+        "support": "support_p0b_v12",
+        "oob": "oob_p0b_v2",
+        "scene_quality": "scene_quality_v8",
+        "l3_prompt": "l3_burden_categories_v31"
+      },
+      "entrypoint": "benchmark.multi_room_evaluation -> per-room camera_cal_scene_level -> benchmark.api.evaluation.run_evaluate",
+      "code_identity": {
+        "kind": "historical_execution_artifacts_only",
+        "frozen_tree_sha256": null,
+        "exact_historical_code_recovery_verified": false,
+        "replay_ready": false,
+        "reason": "No independent frozen source tree or recoverable whole-tree code digest established for this historical run; do not substitute the current working tree or the single-room frozen tree."
+      },
+      "configuration": {
+        "scoring_profile": {
+          "layer_weights": {
+            "l1_physical_plausibility": 0.3,
+            "l2_specification_fidelity": 0,
+            "l3_scene_quality": 0.7,
+            "l4_downstream_task_functionality": 0
+          },
+          "l3_metric_weights": {
+            "scale_consistency": 0.04,
+            "style_consistency": 0.07,
+            "object_pairing_consistency": 0.09,
+            "functional_consistency": 0.52,
+            "semantic_placement_consistency": 0.28
+          },
+          "requires_l2_task": false,
+          "deduction_multiplier": 2,
+          "deduction_multiplier_metrics": [
+            "collision",
+            "support",
+            "oob",
+            "scale_consistency",
+            "style_consistency",
+            "object_pairing_consistency"
+          ],
+          "scoring_profile_id": "intrinsic_validity_v2",
+          "scoring_spec_version": "object_equivalent_burden_v3"
+        },
+        "mesh_geometry": "loaded_from_case_collision_geometry_manifest",
+        "architecture": "wall-enabled rectangular room materialization",
+        "camera_control_evidence": "Support/artifacts/outputs/camera_cal_scene_level/multi_room_floorplans_v2_hy4_preview_tokenhub_wall_updated_api2_gpt56sol_resilient_r2/hy4-preview-tokenhub/cases/mr.hy4-preview-tokenhub.layout_04.room_001/control_manifest.json"
+      },
+      "limitations": [
+        "Historical code replay remains unverified; this pins the reference execution and its recorded evaluator contract, not a newly reconstructed source release.",
+        "Same metric version labels as single_room do not establish byte-identical implementation."
+      ],
+      "artifact_pins": [
+        {
+          "path": "Support/artifacts/outputs/camera_cal_scene_level/multi_room_floorplans_v2_hy4_preview_tokenhub_wall_updated_api2_gpt56sol_resilient_r2/hy4-preview-tokenhub/selection_manifest.json",
+          "sha256": "f6870b8c612d74f249c41ed710cb5835bc9c11168dbd749f9b56afe3b486b56c"
+        },
+        {
+          "path": "Support/artifacts/outputs/camera_cal_scene_level/multi_room_floorplans_v2_hy4_preview_tokenhub_wall_updated_api2_gpt56sol_resilient_r2/hy4-preview-tokenhub/cases/mr.hy4-preview-tokenhub.layout_04.room_001/case_run_manifest.json",
+          "sha256": "c632a8e0a8fb8cb2f856877e03276efdb5d893362fc47502c6230177f70b56f5"
+        },
+        {
+          "path": "Support/artifacts/outputs/camera_cal_scene_level/multi_room_floorplans_v2_hy4_preview_tokenhub_wall_updated_api2_gpt56sol_resilient_r2/hy4-preview-tokenhub/cases/mr.hy4-preview-tokenhub.layout_04.room_001/l1_report.json",
+          "sha256": "8368794f7e62da7388abcd6fe21dfcd17aefdd8bd945a91d236705a8ec7b2321"
+        },
+        {
+          "path": "Support/artifacts/outputs/camera_cal_scene_level/multi_room_floorplans_v2_hy4_preview_tokenhub_wall_updated_api2_gpt56sol_resilient_r2/hy4-preview-tokenhub/cases/mr.hy4-preview-tokenhub.layout_04.room_001/scene_quality_report.json",
+          "sha256": "c62e555a844c6b999cd45a53e75a8729fb74c239bce3551ab1e48c3d8057cd79"
+        },
+        {
+          "path": "Support/artifacts/outputs/camera_cal_scene_level/multi_room_floorplans_v2_hy4_preview_tokenhub_wall_updated_api2_gpt56sol_resilient_r2/hy4-preview-tokenhub/cases/mr.hy4-preview-tokenhub.layout_04.room_001/control_manifest.json",
+          "sha256": "676ff4562fb7539b5bf0601fd90ad1dfbe65e7c473d29abc7ac85631a224686b"
+        },
+        {
+          "path": "Support/bash/local/run_multi_room_floorplans_v2_hy4_preview_tokenhub_wall_updated_api2_gpt56sol_resilient_v2.sh",
+          "sha256": "5f3668bcc13b9efe9fddc22900729a47632bfb161a3c34ecaa4947a33de8012d"
+        },
+        {
+          "path": "Support/bash/local/run_multi_room_floorplans_v2_hy4_preview_tokenhub_wall_updated_api2_gpt56sol_resilient_v1.sh",
+          "sha256": "d88b7ee56da65e3b767ee2b4c5f2a84181ccc0d1018856cbb316288cdb52896b"
+        }
+      ]
+    },
+    "nonrect_7fb8f91_20260909_v1": {
+      "mode": "non_rectangular_multi_room",
+      "display_name": "Complicated / non-rectangular FloorPlan",
+      "status": "historical_reference_baseline",
+      "source_run_root": "Support/artifacts/outputs/complicated_agent_evaluation/merged_success_kimi_glm_sol_7fb8f91_all_failed_v1_r1",
+      "source_run_started_at": "2026-09-09T03:53:14.339535+00:00",
+      "versions": {
+        "collision": "collision_p0b_v3",
+        "coordinator": "non_rectangular_resilient_coordinator_v3",
+        "l3_prompt": "l3_burden_categories_v30",
+        "materialization": "non_rectangular_fixed_catalog_materialization_v3",
+        "oob": "non_rectangular_polygon_oob_p0b_v2",
+        "scene_quality": "scene_quality_v7",
+        "support": "support_p0b_v11"
+      },
+      "entrypoint": "benchmark.non_rectangular.runtime -> CanonicalNonRectangularRoomEvaluator",
+      "code_identity": {
+        "kind": "existing_frozen_checkout_and_core_file_pins",
+        "checkout": "/private/tmp/layout-ddd-eval-placement-repair-v1.zwtBbW",
+        "commit": "7fb8f91b0037b0b36c21d6b9c2da6107c184c176",
+        "source_pins": [
+          {
+            "path": "/private/tmp/layout-ddd-eval-placement-repair-v1.zwtBbW/src/benchmark/non_rectangular/runtime.py",
+            "sha256": "db5edddf7974fcafb787def6bfa8e606d3921bae1f72918934d5ebac02a2e43e"
+          },
+          {
+            "path": "/private/tmp/layout-ddd-eval-placement-repair-v1.zwtBbW/src/benchmark/non_rectangular/evaluator.py",
+            "sha256": "345842b6c512f65e1617ae36a91fc01ced40cfccbcaf7f423b513a95a20e6a7d"
+          },
+          {
+            "path": "/private/tmp/layout-ddd-eval-placement-repair-v1.zwtBbW/src/benchmark/non_rectangular/materialization.py",
+            "sha256": "29512ff0e498d9e4dab9643993468dc27905765a5f04ca9c07aa988130b9dba1"
+          },
+          {
+            "path": "/private/tmp/layout-ddd-eval-placement-repair-v1.zwtBbW/src/benchmark/evaluator/generic_validity/collision.py",
+            "sha256": "209eaa5e5daa4bd174afaf62a7dcb5c7393d96a000861a34d58314a68d237d54"
+          },
+          {
+            "path": "/private/tmp/layout-ddd-eval-placement-repair-v1.zwtBbW/src/benchmark/evaluator/generic_validity/mesh_collision.py",
+            "sha256": "1bf4fb958c0e1da962ef4b01a79f6dddb2761809397efff4a53b66f9b646818b"
+          },
+          {
+            "path": "/private/tmp/layout-ddd-eval-placement-repair-v1.zwtBbW/src/benchmark/evaluator/generic_validity/support.py",
+            "sha256": "fb0ba1802168279799caf125b47b844ffb0ad22e2382debfae0b91e85cb3cb7e"
+          },
+          {
+            "path": "/private/tmp/layout-ddd-eval-placement-repair-v1.zwtBbW/src/benchmark/evaluator/scene_quality/definitions.py",
+            "sha256": "2c6ad867f6ccd185edd5c50ff86b5f1f3ad51036241e5a1f3e0bf3f2b4431a8b"
+          },
+          {
+            "path": "/private/tmp/layout-ddd-eval-placement-repair-v1.zwtBbW/src/benchmark/visual_judge/l3_prompts.py",
+            "sha256": "2bfc82e1bb0ce137cff4e7fc0ba246b42ff42bb3d5b1ed4ce4199b9cadbce2ff"
+          },
+          {
+            "path": "/private/tmp/layout-ddd-eval-placement-repair-v1.zwtBbW/src/benchmark/visual_judge/response_repair.py",
+            "sha256": "04a8f325cf5773fed4c083d5c50dba027a5354db0f57b62e45e3adc7c53b0a6c"
+          },
+          {
+            "path": "/private/tmp/layout-ddd-eval-placement-repair-v1.zwtBbW/scripts/run_non_rectangular_resilient_evaluation.py",
+            "sha256": "5c9f12a26f057a132a96073e6390bcbf4fbfa9d5c51290a8c256de77ed65689e"
+          }
+        ],
+        "verified_at_registration": true,
+        "availability_note": "Existing checkout is under /private/tmp; no durable full-source archive created by this registration."
+      },
+      "configuration": {
+        "workers_per_model": 1,
+        "blender_slots": 2,
+        "materialization_timeout_seconds": 3600,
+        "source_run_selected_room_count": 36,
+        "full_scene_aggregation": false,
+        "mesh_geometry": "not_passed_by_current_runtime_factory",
+        "runtime_config_sha256_by_lane": {
+          "kimi": "39a4b03df7801289934df49e21e91d1579af569df19a60c54ae84ee203d019fa",
+          "glm": "afa89d3163ab24d05262af0338ba20d34532a29f037473971be6b92f904fef60",
+          "sol": "438b36d5aded2884a3713ae2ae5882de2971a0373cfaf0491665ce9ddd840696"
+        }
+      },
+      "limitations": [
+        "Current Collision timing regression remains unexplained; baseline designation is not a performance acceptance.",
+        "Existing Placement/camera-renderer failures remain failures; designation does not convert them to valid scores.",
+        "Mesh remains disconnected in this baseline; enabling it requires a separately identified change."
+      ],
+      "artifact_pins": [
+        {
+          "path": "Support/artifacts/outputs/complicated_agent_evaluation/merged_success_kimi_glm_sol_7fb8f91_all_failed_v1_r1/parallel_plan.json",
+          "sha256": "94e9f1f4d305dae1ee424513849256d52a91b1dbe47a440430a0251e5f8e9938"
+        },
+        {
+          "path": "Support/artifacts/releases/complicated_eval_failed_only_7fb8f91_v1/official_evaluator.json",
+          "sha256": "363e11a930a29ce4464804fbc5657ade47a2660bcf9396c14667e78157f75d0b"
+        },
+        {
+          "path": "Support/artifacts/releases/complicated_eval_failed_only_7fb8f91_v1/failed_case_selection.json",
+          "sha256": "9c460530be1614390e5b5af37e9cb959320b89aea53a7e6c3d9370b62c64ccd2"
+        }
+      ],
+      "supersedes_as_current_reference": [
+        "fc0b656b02fedb3d8789b6620fff05c891ede2a3"
+      ],
+      "historical_bindings_preserved": true
+    },
+    "nonrect_3186983_execution_v4_20260910_v1": {
+      "mode": "non_rectangular_multi_room",
+      "display_name": "Complicated / non-rectangular FloorPlan",
+      "status": "current_reference_baseline",
+      "source_run_root": "Support/artifacts/outputs/complicated_agent_evaluation/combined_remaining29_plus20_113_execution_hardened_v4_r1",
+      "source_run_status_at_verification": "running",
+      "verified_at": "2026-09-10T14:36:59.652775+08:00",
+      "versions": {
+        "collision": "collision_p0b_v3",
+        "coordinator": "non_rectangular_resilient_coordinator_v3",
+        "l3_prompt": "l3_burden_categories_v30",
+        "materialization": "non_rectangular_fixed_catalog_materialization_v3",
+        "oob": "non_rectangular_polygon_oob_p0b_v2",
+        "scene_quality": "scene_quality_v7",
+        "support": "support_p0b_v11",
+        "execution_result": "nonrect_accounted_execution_result_v4"
+      },
+      "entrypoint": "benchmark.non_rectangular.runtime -> CanonicalNonRectangularRoomEvaluator",
+      "code_identity": {
+        "kind": "clean_frozen_checkout_plus_hash_pinned_execution_overlay",
+        "checkout": "Support/worktrees/collision-final-bundle-v1",
+        "commit": "31869837105d7ef10c3b3e382cb84eeb1f1f1efc",
+        "execution_plan_sha256": "7f31eee74c297b0cccdac8a815a72dd028bf8a95d71ff465d95caf6ac8397507",
+        "execution_overlay_files": {
+          "/Users/han_mohan/Desktop/Layout_DDD/Support/bash/local/run_complicated_combined142_hardened.sh": "096afef5bfff69b84f8d993bfa99f4524b7dae4caad33033576ada4f8ad127aa",
+          "/Users/han_mohan/Desktop/Layout_DDD/scripts/nonrect_hardening_v1/__init__.py": "21945d4e976e8cbbbdff14284ab4e0adaee2c95af3183bdd36e88a80634a91a5",
+          "/Users/han_mohan/Desktop/Layout_DDD/scripts/nonrect_hardening_v1/assurance.py": "5c9d663b66f2ab1ca633a799ffbb42acadc80eaf73f2bac0215e4e6b682419a3",
+          "/Users/han_mohan/Desktop/Layout_DDD/scripts/nonrect_hardening_v1/overlay.py": "a806c191cfeadb4035466bc257285c4a16a89f5093587b920d51b000b2b9a8d4",
+          "/Users/han_mohan/Desktop/Layout_DDD/scripts/nonrect_hardening_v1/reasons.py": "045be8c642df958dcf48ae18fdce5ad728de90b85d000d1295564c6b95aaae62",
+          "/Users/han_mohan/Desktop/Layout_DDD/scripts/nonrect_hardening_v1/recovery.py": "0347e0f77d1386c1d19f3eefc7c874e791504c544aa31938f066031b6d66e4bc",
+          "/Users/han_mohan/Desktop/Layout_DDD/scripts/nonrect_hardening_v1/results.py": "93a6b649f116e3cb69ebbc7207002d1cf072fff15341e3f07e52f2bc1f18b01e",
+          "/Users/han_mohan/Desktop/Layout_DDD/scripts/nonrect_hardening_v1/safety.py": "03a3e478502b383883eb7b72a3e15277065d9a661f6a030668a8d3b8f2eff9ca",
+          "/Users/han_mohan/Desktop/Layout_DDD/scripts/run_complicated_combined142_hardened.py": "450a8e183bd5ebd9f7f8b6d724c68ae8190c0cfac3d1658c16f8128e307f3713"
+        },
+        "verified_at_registration": true
+      },
+      "configuration": {
+        "workers_per_model": 2,
+        "global_room_slots": 4,
+        "blender_slots": 2,
+        "planned_room_tasks": 142,
+        "datasets": {
+          "remaining29": 29,
+          "plus20": 113
+        },
+        "runtime_config_sha256_by_lane": {
+          "sol": "390f6b4402f0524cc6156acc10e8bfd277c824785e3d3e8cb4c3b4184c20db35",
+          "glm": "0ba1e1a6f52a590be103307a57355d9cb3e97dafdad2b53c104d207910ba7a6b",
+          "kimi": "eb0d9fa4aa8a64926bce1fd5c7e535dc55936720e9130ae8fc6a830c348d802d"
+        },
+        "policy": {
+          "checkpoint_enabled": true,
+          "circuit_cooldown_seconds": 30.0,
+          "circuit_failure_threshold": 3,
+          "circuit_max_cooldown_seconds": 300.0,
+          "circuit_outage_timeout_seconds": 900.0,
+          "circuit_probe_limit": 3,
+          "heartbeat_timeout_seconds": 180.0,
+          "max_infra_failures_per_room": 12,
+          "max_repeated_failure_attempts": 3,
+          "max_request_attempts_per_room": 1024,
+          "max_same_request_attempts": 18,
+          "minimum_free_gib": 30.0,
+          "room_slot_timeout_seconds": 3600.0,
+          "room_timeout_seconds": 43200.0,
+          "terminate_grace_seconds": 30.0,
+          "worker_timeout_seconds": 259200.0
+        }
+      },
+      "limitations": [
+        "Active run is not completed or certified score-complete; baseline designation is not quality, performance or cross-harness comparability approval.",
+        "Room admission uses non-FIFO slot competition with a 3600-second timeout; a pending Sol room has recorded AdmissionTimeout.",
+        "GLM scene_011687/room_000 has a failed_nonretryable core summary involving camera_or_renderer_failure, with one evaluation attempt and zero room retries; do not infer a valid zero score or verified hard skip.",
+        "Execution overlay depends on locally frozen release inputs and launchers; pushing this commit alone does not make the active campaign portable."
+      ],
+      "supersedes_as_current_reference": [
+        "nonrect_7fb8f91_20260909_v1"
+      ],
+      "artifact_pins": [
+        {
+          "path": "Support/artifacts/outputs/complicated_agent_evaluation/combined_remaining29_plus20_113_execution_hardened_v4_r1/execution_plan.json",
+          "sha256": "7f31eee74c297b0cccdac8a815a72dd028bf8a95d71ff465d95caf6ac8397507"
+        }
+      ]
+    }
+  }
+}
