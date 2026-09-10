@@ -81,8 +81,13 @@ checkout without its sealed release before starting evaluation. Core file parity
 was verified independently of test results. The new evaluator CI runs on Python
 3.11 and 3.13, with fake transports, synthetic catalogs, and no API keys or Blender.
 
-The broad default suite also has failures outside this focused regression scope.
-Its main-versus-integration comparison is recorded in the PR; do not describe the
-entire default suite as green. Merge requires completed CI and no unaccounted
-new regression. Active evaluation code, outputs, processes and locks are left
-untouched throughout publication.
+The broad default suite was run in two isolated trees with the same Python 3.13
+environment. Unchanged main: **2135 passed, 33 failed, 1 skipped**. Integration:
+**2432 passed, 32 failed, 3 skipped** (additional default-suite coverage is included).
+JUnit failure-ID comparison found **zero newly failing tests**; the one removed
+failure is the stale duplicate-policy assertion described above. The 32 remaining
+failures are also present on unchanged main. This does not establish that those
+existing failures are harmless, nor that the entire default suite is green.
+
+Merge requires completed CI and no unaccounted new regression. Active evaluation
+code, outputs, processes and locks are left untouched throughout publication.
