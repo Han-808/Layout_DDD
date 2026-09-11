@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.org/layout-ddd/generator_catalog_placement_v1.schema.json",
+  "title": "GeneratorCatalogPlacementV1",
+  "description": "Generator-owned fixed-catalog instance identity, asset choice, and rigid placement. All scene semantics and rendering state are benchmark-owned.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["instances"],
+  "properties": {
+    "schema_version": {
+      "const": "catalog_placement_v1"
+    },
+    "instances": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/instance"
+      }
+    }
+  },
+  "$defs": {
+    "finiteNumber": {
+      "type": "number",
+      "description": "A finite JSON number. NaN and infinities are rejected by semantic validation."
+    },
+    "vec3": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "items": {
+        "$ref": "#/$defs/finiteNumber"
+      }
+    },
+    "instance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "instance_id",
+        "asset_id",
+        "center_m",
+        "uniform_scale",
+        "rotation_euler_xyz_deg"
+      ],
+      "properties": {
+        "instance_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "asset_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": ".*\\S.*"
+        },
+        "center_m": {
+          "$ref": "#/$defs/vec3"
+        },
+        "uniform_scale": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Generator-requested uniform scale applied exactly to the frozen catalog asset."
+        },
+        "rotation_euler_xyz_deg": {
+          "$ref": "#/$defs/vec3"
+        },
+        "slot_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": ".*\\S.*"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,143 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://layout-ddd.local/schemas/room_evaluation_index_v1.schema.json",
+  "title": "RoomEvaluationIndexV1",
+  "description": "Stable room-level handoff index covering every expected room and its terminal generation status.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "layout_id",
+    "floor_plan_hash",
+    "expected_room_ids",
+    "all_expected_rooms",
+    "ordered_room_ids",
+    "rooms"
+  ],
+  "properties": {
+    "schema_version": {"const": "room_evaluation_index_v1"},
+    "layout_id": {"type": "string", "pattern": "^layout_[0-9]{2}$"},
+    "floor_plan_hash": {"$ref": "#/$defs/sha256"},
+    "expected_room_ids": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"type": "string", "pattern": "^room_[0-9]+$"}
+    },
+    "all_expected_rooms": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"type": "string", "pattern": "^room_[0-9]+$"}
+    },
+    "ordered_room_ids": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"type": "string", "pattern": "^room_[0-9]+$"}
+    },
+    "rooms": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/room"}
+    },
+    "provenance": {"$ref": "#/$defs/provenance"}
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "vec3": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "items": {"type": "number"}
+    },
+    "artifactPath": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Layout-root-relative artifact path; traversal and hash policy are enforced by the semantic validator."
+    },
+    "terminalStatus": {
+      "enum": ["succeeded", "failed", "incomplete", "skipped"]
+    },
+    "room": {
+      "type": "object",
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {"terminal_status": {"const": "succeeded"}},
+            "required": ["terminal_status"]
+          },
+          "then": {
+            "required": [
+              "projection_path",
+              "projection_hash",
+              "scene_request_path",
+              "scene_request_hash",
+              "object_plan_path",
+              "object_plan_hash",
+              "asset_selection_path",
+              "asset_selection_hash",
+              "generation_input_path",
+              "generation_input_hash",
+              "architecture_contract_path",
+              "architecture_contract_hash"
+            ]
+          },
+          "else": {
+            "not": {
+              "anyOf": [
+                {"required": ["projection_path"]},
+                {"required": ["projection_hash"]},
+                {"required": ["scene_request_path"]},
+                {"required": ["scene_request_hash"]},
+                {"required": ["object_plan_path"]},
+                {"required": ["object_plan_hash"]},
+                {"required": ["asset_selection_path"]},
+                {"required": ["asset_selection_hash"]},
+                {"required": ["generation_input_path"]},
+                {"required": ["generation_input_hash"]},
+                {"required": ["architecture_contract_path"]},
+                {"required": ["architecture_contract_hash"]}
+              ]
+            }
+          }
+        }
+      ],
+      "required": [
+        "room_id",
+        "order_index",
+        "terminal_status",
+        "global_offset_m",
+        "source_room_result_hash"
+      ],
+      "properties": {
+        "room_id": {"type": "string", "pattern": "^room_[0-9]+$"},
+        "order_index": {"type": "integer", "minimum": 0},
+        "terminal_status": {"$ref": "#/$defs/terminalStatus"},
+        "global_offset_m": {"$ref": "#/$defs/vec3"},
+        "source_room_result_hash": {"$ref": "#/$defs/sha256"},
+        "projection_path": {"$ref": "#/$defs/artifactPath"},
+        "projection_hash": {"$ref": "#/$defs/sha256"},
+        "scene_request_path": {"$ref": "#/$defs/artifactPath"},
+        "scene_request_hash": {"$ref": "#/$defs/sha256"},
+        "object_plan_path": {"$ref": "#/$defs/artifactPath"},
+        "object_plan_hash": {"$ref": "#/$defs/sha256"},
+        "asset_selection_path": {"$ref": "#/$defs/artifactPath"},
+        "asset_selection_hash": {"$ref": "#/$defs/sha256"},
+        "generation_input_path": {"$ref": "#/$defs/artifactPath"},
+        "generation_input_hash": {"$ref": "#/$defs/sha256"},
+        "architecture_contract_path": {"$ref": "#/$defs/artifactPath"},
+        "architecture_contract_hash": {"$ref": "#/$defs/sha256"},
+        "provenance": {"$ref": "#/$defs/provenance"}
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": true
+    }
+  }
+}

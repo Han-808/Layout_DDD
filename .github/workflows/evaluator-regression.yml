@@ -43,6 +43,7 @@ jobs:
           tests/test_blender_renderer.py
           tests/test_nonrect_execution_hardening.py
           tests/test_nonrect_retry_recovery.py
+          tests/test_floorplan_evaluator_publication.py
           --junitxml=test-results/evaluator.xml
       - name: Build wheel
         run: python -m pip wheel . --no-deps -w dist

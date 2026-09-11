@@ -4,6 +4,14 @@
 
 唯一登记源：[floorplan_evaluator_baselines_v1.json](../configs/runners/floorplan_evaluator_baselines_v1.json)。每个 mode 在 `current` 中恰好有一个基准 ID。latest 以可核实的实际使用为准，不按版本号大小、分支时间或工作目录 HEAD 排序。发现新的实际使用后应更新登记；尚未实现启动器自动更新。
 
+## 源码发布与推荐入口（2026-09-11）
+
+本仓库现在包含 [Single-room 最新冻结源码及可执行入口](../evaluator_snapshots/single_room_sceneweaver_20260909_v1/README.md)，不再只是指向本地目录的登记。为保留 Nonrect 已确定的不同实现，两版源码并列存在，不互相覆盖。
+
+推荐通过 `python3 scripts/run_floorplan_evaluator.py --mode single_room`（或其他 mode）查询并校验当前登记版本；默认仅描述，显式 `--run -- <参数>` 才会执行。Single-room 在独立 Python 进程中加载它的精确源码。Nonrect 核心源码及 execution v4 已由 PR #8 合并；其原 combined142 recipe 仍需要本地 sealed release。矩形 Multi-room 仍缺完整历史源码，入口明确拒绝执行，不会把 Single-room 源码冒充为已恢复版本。
+
+此入口为新增的 registry-aware 入口，不自动改写已有启动器、Python API 或 console command 的行为。`current` 映射和历史结果身份不变。范围、评分源码位置与验证结果见 [2026-09-11 发布说明](evaluator_publication_20260911.md)。下文的运行状态与“尚未推送”等文字均为标注日期的历史快照；PR #8 已于 2026-09-10 合并为 `999e46dd4dfe36ae26d10f861cfae49bf2d8f99b`，不应把旧快照当作当前 GitHub 状态。
+
 ## 当前三个基准
 
 | Mode | 唯一当前基准 | 来源运行 | Collision / Support / OOB / L3 / Prompt |

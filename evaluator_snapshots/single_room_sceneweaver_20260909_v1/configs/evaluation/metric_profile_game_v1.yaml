@@ -1,0 +1,75 @@
+profile_version: scene_evaluation_draft_v1
+status: initial_not_frozen
+
+# RETIRED. The game track now runs on metric_profile_game_canonical_v1.yaml.
+#
+# This file is kept only so the legacy four-category adapter keeps a pinned
+# regression fixture; nothing in the active game track reads it. Do not add
+# cases against it.
+#
+# Game levels arrive as generator-authored geometry with no scene-level prompt
+# to score against, so Category 2 carries zero weight and is not evaluated. The
+# remaining budget goes to the two categories that do transfer: object-object
+# interpenetration (deterministic, and a real defect class in a game) and
+# appearance judged against a frozen visual style spec.
+#
+# oob, navigability, and accessibility stay off. All three model the scene as a
+# closed indoor room with a single floor at z=0, which an open or multi-level
+# level violates by construction rather than by fault. Support is off for the
+# same reason: intentional floating geometry is normal in a game level.
+weights:
+  prompt_fidelity: 0.0
+  spatial_fidelity: 0.0
+  structural_validity: 0.40
+  visual_quality: 0.60
+
+prompt_fidelity:
+  fine_grained:
+    vlm_policy: fallback
+    backend: structured_claims
+    modules: [object_presence, object_count, oor, oar]
+    alignment_modules: [object_mapping]
+
+spatial_fidelity:
+  enabled: false
+  vlm_policy: fallback
+  backend: sceneonto_statistics_plus_conditional_vlm
+  modules: [scale, cooccurrence_plausibility, functional_grouping]
+  ontology:
+    path: null
+    storage_semantics: sparse_top_k
+    category_aliases: {}
+  metric_weights:
+    scale: 0.50
+    cooccurrence_plausibility: 0.50
+    functional_grouping: 0.0
+  scale:
+    enabled: false
+  cooccurrence_plausibility:
+    enabled: false
+  functional_grouping:
+    enabled: false
+    implemented: false
+
+structural_validity:
+  vlm_policy: fallback
+  backend: deterministic_evidence_plus_conditional_vlm
+  modules: [collision, oob, navigability, accessibility, support]
+  never_vlm_modules: [navigability, accessibility]
+  applicability:
+    collision: true
+    oob: false
+    navigability: false
+    accessibility: false
+    support: false
+  metric_config:
+    collision:
+      # Game meshes are authored at gameplay scale rather than furniture scale,
+      # and touching geometry (wheels on road, balls on felt) is intended. A
+      # wider separation threshold keeps ordinary contact off the VLM route.
+      separation_threshold_m: 0.05
+
+visual_quality:
+  vlm_policy: primary
+  backend: standardized_renders
+  modules: [visual_coherence, commonsense_plausibility, style_and_appearance]

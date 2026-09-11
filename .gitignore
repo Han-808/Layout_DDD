@@ -51,6 +51,7 @@ downloads/
 
 # Local documentation and operational notes
 *.md
+!/README.md
 !/COMPATIBILITY_STATUS.md
 !/metrics.md
 !/experiment_agenda.md
@@ -62,6 +63,10 @@ downloads/
 !/docs/multi_room_generation_v1.md
 !/docs/GENERATION_COMPARABILITY_PROTOCOL.md
 !/docs/CONTROLLED_PILOT_V1.md
+!/docs/evaluator_publication_20260911.md
+!/evaluator_snapshots/single_room_sceneweaver_20260909_v1/README.md
+!/evaluator_snapshots/single_room_sceneweaver_20260909_v1/src/benchmark/legend/data/
+!/evaluator_snapshots/single_room_sceneweaver_20260909_v1/src/benchmark/legend/data/*.py
 !/docs/game/
 !/docs/game/counter_strike_benchmark.md
 
