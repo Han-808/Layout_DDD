@@ -1,0 +1,51 @@
+{
+  "schema_version": "public_judge_profile_registry_v1",
+  "profiles": [
+    {
+      "profile_id": "gpt56sol-api1-direct-v1",
+      "binding_id": "judge-api1-primary-v1",
+      "adapter": "openai_compatible_direct_v1",
+      "model_alias": "gpt-5.6-sol",
+      "request_protocol": "openai_chat_completions_v1",
+      "model_profile": {
+        "send_temperature": false,
+        "response_format_json": false,
+        "max_tokens_field": "max_tokens"
+      },
+      "wire_policy": {
+        "min_request_interval_seconds": 0.0,
+        "external_model_discovery": true,
+        "external_multimodal_smoke": true
+      },
+      "adapter_attestation": null
+    },
+    {
+      "profile_id": "gpt56sol-api2-standard-xhigh-v1",
+      "binding_id": "judge-api2-standard-v1",
+      "adapter": "openai_compatible_managed_proxy_v1",
+      "model_alias": "gpt-5.6-sol",
+      "request_protocol": "openai_chat_completions_v1",
+      "model_profile": {
+        "send_temperature": false,
+        "response_format_json": false,
+        "max_tokens_field": "max_tokens"
+      },
+      "wire_policy": {
+        "min_request_interval_seconds": 1.0,
+        "external_model_discovery": true,
+        "external_multimodal_smoke": true
+      },
+      "adapter_attestation": {
+        "schema_version": "litellm_model_entry_v1",
+        "model_name": "gpt-5.6-sol",
+        "provider_model": "openai/api_azure_openai_gpt-5.6-sol",
+        "base_model": "gpt-5.6-sol",
+        "reasoning_effort": "xhigh",
+        "additional_drop_params": ["output_config", "temperature"],
+        "drop_params": true,
+        "num_retries": 1,
+        "request_timeout_seconds": 3000
+      }
+    }
+  ]
+}

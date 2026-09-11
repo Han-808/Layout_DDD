@@ -23,6 +23,17 @@
       "mode": "single_room",
       "display_name": "Open-space / independent single-room",
       "status": "current_reference_baseline",
+      "source_publication": {
+        "kind": "isolated_exact_source_snapshot",
+        "path": "evaluator_snapshots/single_room_sceneweaver_20260909_v1",
+        "manifest": "evaluator_snapshots/single_room_sceneweaver_20260909_v1/source_manifest.json",
+        "manifest_sha256": "67b81ce14ccc475d09df915b18968df97ff59bd6fa02d72ea1fe7d46ad54383b",
+        "tree_sha256": "a9caf5cea2a0201a6eac69a84a852f393bed5ddffc9132541798e708fac0109a",
+        "published_file_count": 484,
+        "repository_entrypoint": "scripts/run_floorplan_evaluator.py --mode single_room",
+        "replaces_existing_runtime": false,
+        "complete_historical_environment": false
+      },
       "source_run_root": "Support/artifacts/outputs/camera_cal_scene_level/sceneweaver_success9_floor_frame_api2_sol_20260909_r1/scene_weaver",
       "source_run_started_at": "2026-09-09T07:08:31.118970+00:00",
       "source_run_completed_at": "2026-09-09T09:16:05.217120+00:00",

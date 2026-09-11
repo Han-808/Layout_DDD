@@ -1,0 +1,119 @@
+route_version: game_mode_v1
+mode: game
+workflow: canonical_l0_l4
+
+# Game mode is an ingestion route, not a second evaluator. It accepts only a
+# browser source with an instrumentable Three.js scene and then references the
+# same frozen canonical profile used by the trusted submission runner.
+input:
+  kind: browser_game
+  runtime: threejs
+  entry_html: index.html
+  unsupported_runtime_policy: reject_not_ingestable
+
+ingestion:
+  adapter: game_scene_probe_v1
+  instrumentation: load_time_scene_constructor_hook
+  scene_selection: richest_registered_scene
+  controlled_render_contract: threejs_direct_webgl_renderer_v1
+  serve_over_loopback_http: true
+  # If --three-replacement is supplied it must be the exact build expected by
+  # that game. Otherwise the page keeps its original local/CDN dependency.
+  external_three_policy: exact_version_replacement_or_original
+
+capture:
+  width: 768
+  height: 768
+  seed: 20260727
+  step_ms: 16.666666666666668
+  warmup_frames: 60
+  timeout_seconds: 120
+  # These authored-camera states advance the source to a frozen, reproducible
+  # scene state and remain in the manifest as diagnostics. They are not the
+  # canonical global evidence consumed by the judge.
+  states:
+    - name: initial_settled
+      step_frames: 0
+    - name: later_settled
+      step_frames: 120
+  # The benchmark then renders two cameras through the original Three.js
+  # renderer and scene. This preserves generator-authored geometry, materials,
+  # textures, lights, fog, shaders, and direct WebGLRenderer state; only the
+  # ephemeral camera changes. The current corpus contract covers direct
+  # WebGLRenderer.render(scene, camera). A custom composer/multi-render pipeline
+  # is not silently approximated: the case is not ingestible until a backend
+  # capability (not a scene-specific adapter) supports it.
+  controlled_camera:
+    enabled: true
+    required: true
+    view_family: canonical_high_oblique_pair_v1
+    image_budget: 2
+    style_local_fallback_enabled: true
+    style_local_view_family: canonical_style_region_quadrants_v1
+    style_local_image_budget: 4
+    canvas_only: true
+    include_authored_camera_diagnostics: true
+    unsupported_render_pipeline: fail_not_ingestable
+
+objectization:
+  # The probe emits one entry per visible mesh and the exporter decides what an
+  # object is, from geometry alone. Graph depth is not consulted: two generated
+  # implementations of the same static level differ by five levels of Group
+  # purely by coding habit, so any fixed-depth rule is right for some games and
+  # wrong for others with no way to tell which from inside the graph.
+  #
+  # This is the benchmark's definition of an object, applied identically to every
+  # implementation. It does not claim to recover the author's intent.
+  strategy: visible_mesh_then_geometric_collapse
+  exclude_non_mesh_nodes: true
+  exclude_invisible_meshes: true
+  # Camera-mounted FPS viewmodels are presentation, not level geometry.
+  exclude_camera_descendants: true
+  # A mesh drawing only back faces is invisible from outside its own hull, so it
+  # is scenery rather than a solid. Inflated toon outlines are the common case;
+  # a shell that only loosely encloses its contents is reported as a possible
+  # level boundary instead of being dropped in silence.
+  drop_non_physical_meshes: true
+  # A mesh whose fitted box lies entirely inside another's is interior detail of
+  # that object: its triangles are folded into the container and the container's
+  # box is refitted so it still encloses the merged mesh.
+  collapse_contained_meshes: true
+  # Internal structure of a collapsed object is not a layout defect.
+  compound_group_internal_collision: not_evaluated
+  # Per-object counts and every drop or absorption land in the exported scene's
+  # metadata.game_scene_import.individualization, so a level that collapses to a
+  # single object is readable from the artifact rather than hidden behind a
+  # flattering score.
+  report_individualization: true
+
+geometry:
+  source: world_baked_buffer_geometry
+  source_up_axis: y
+  unit_scale: 1.0
+  max_vertices_per_object: 200000
+  truncation_policy: bounds_proxy_and_report
+  narrow_phase: trimesh_fcl
+  containment_backend: trimesh_rtree
+
+evaluation:
+  profile: ../evaluation/metric_profile_game_canonical_v1.yaml
+  case_bundle_builder: canonical_game_case_bundle_v1
+  active_metrics:
+    - collision
+    - navigability
+    - style_consistency
+  scene_family: counter_strike_static_arena
+  instruction: >-
+    Evaluate only the frozen static 3D environment of this Counter-Strike-like
+    tactical FPS arena. Do not evaluate gameplay, competitive balance,
+    weapons, controls, HUD, animation, or player skill.
+  default_visual_style_spec: counter_strike_static_arena_style_v1.json
+  style_spec_policy: required_benchmark_owned
+  intentional_contact_policy: conditional_vlm_intentional_assembly_allowed
+
+failure_semantics:
+  unsupported_runtime: not_ingestable
+  unsupported_render_pipeline: not_ingestable
+  missing_probe: failed
+  incomplete_geometry: reported_not_silently_valid
+  unresolved_metric: unresolved

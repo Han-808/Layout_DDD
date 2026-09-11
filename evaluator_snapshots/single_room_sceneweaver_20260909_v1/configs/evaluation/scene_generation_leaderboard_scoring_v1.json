@@ -1,0 +1,48 @@
+{
+  "schema_version": "scene_generation_leaderboard_scoring_profile_v1",
+  "profile_id": "scene_generation_leaderboard_web_v1",
+  "status": "provisional",
+  "source_of_truth": "scene_generation_leaderboard_web_profile_v1",
+  "description": "Post-hoc leaderboard scoring applied to frozen evaluator reports.",
+  "category_weights": {
+    "physical_plausibility": 0.36,
+    "functional_semantics": 0.50,
+    "visual_coherence": 0.14
+  },
+  "metric_weights": {
+    "collision": 0.14,
+    "oob": 0.08,
+    "support": 0.14,
+    "style_consistency": 0.03,
+    "scale_consistency": 0.03,
+    "object_pairing_consistency": 0.08,
+    "functional_consistency": 0.30,
+    "semantic_placement_consistency": 0.20
+  },
+  "metric_groups": {
+    "physical_plausibility": [
+      "collision",
+      "oob",
+      "support"
+    ],
+    "functional_semantics": [
+      "functional_consistency",
+      "semantic_placement_consistency"
+    ],
+    "visual_coherence": [
+      "style_consistency",
+      "scale_consistency",
+      "object_pairing_consistency"
+    ]
+  },
+  "deduction_multipliers": {
+    "collision": 2.4,
+    "oob": 3.0,
+    "support": 2.05,
+    "style_consistency": 3.0,
+    "scale_consistency": 3.0,
+    "object_pairing_consistency": 3.0,
+    "functional_consistency": 1.5,
+    "semantic_placement_consistency": 1.75
+  }
+}

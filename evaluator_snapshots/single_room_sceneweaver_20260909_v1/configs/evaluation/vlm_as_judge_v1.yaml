@@ -1,0 +1,47 @@
+evaluation:
+  enabled: true
+  evaluator: vlm_as_judge_v1
+  vlm_judge: same_model
+  vlm_judge_input_mode: json_only
+  renderer: perspective_bbox
+  save_room_views: true
+  save_global_view: true
+  save_group_views: true
+  save_pair_views: true
+  save_debug_evidence: true
+vlm_judge_input_mode: json_only
+evaluation_policy:
+  evaluator_identity: vlm_as_judge_v1
+  deterministic_flags_affect_validity: false
+  skip_vlm_judge_only_if_unparseable: true
+  parseable_layout_requires_vlm_judge: true
+  overall_valid_source: vlm_judgement.valid
+vlm_judge:
+  text_budget:
+    max_total_chars: 12000
+    max_scene_summary_chars: 1500
+    max_layout_summary_chars: 2500
+    max_selected_group_objects: 40
+    max_objects_per_group_in_prompt: 12
+    max_flag_examples_per_type: 8
+    numeric_precision: 2
+  evidence_budget:
+    max_input_tokens: 60000
+    include_global_view: true
+    base_max_groups_for_judge: 3
+    budget_raise_ratio: 0.5
+    max_groups_for_judge_cap: 5
+    group_views: ["xy", "yz", "xz"]
+    include_full_object_list: false
+    include_compact_scene_summary: true
+    include_selected_group_details: true
+    summarize_schema_flags: true
+    summarize_physical_flags: true
+    summarize_view_flags: true
+  profiles:
+    hyak_h200_qwen3vl32b:
+      judge_generation:
+        temperature: 0.0
+        max_tokens: 2048
+        timeout_seconds: 300
+        response_format_json: true
