@@ -8,7 +8,7 @@ from typing import Any
 
 from benchmark.visual_judge.evidence_gap_v2 import enabled as fallback_v2_enabled
 from benchmark.visual_judge.evidence_resolution import failure_record
-from benchmark.visual_judge.acquisition_outcome import AcquisitionExhausted, acquire_evidence
+from benchmark.visual_judge.acquisition_outcome import AcquisitionExhausted, acquire_evidence, recorded_acquisition_audit
 
 from benchmark.non_rectangular.architecture import observable_architecture_from_scene
 from benchmark.evaluator.scene_quality.functional_acquisition import (
@@ -1734,6 +1734,8 @@ def functional_relation_judge_packet(
         ),
         decision_authority="none",
     )
+    if fallback_v2_enabled():
+        packet["acquisition_outcome"] = recorded_acquisition_audit(probe_result)
     return packet
 
 

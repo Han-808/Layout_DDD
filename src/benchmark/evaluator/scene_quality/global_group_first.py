@@ -12,6 +12,7 @@ aggregation. Conditional Style routing lives only in ``style_global_first``.
 
 from __future__ import annotations
 from benchmark.visual_judge.evidence_gap_v2 import enabled as fallback_v2_enabled
+from benchmark.visual_judge.acquisition_outcome import recorded_acquisition_audit
 
 from benchmark.visual_judge.evidence_resolution import (
     ADAPTIVE_POLICY, adaptive_enabled, with_evidence_policy, resolution_of,
@@ -654,6 +655,22 @@ def evaluate_global_discovery_then_group_local(
                 ),
             }
         )
+        if fallback_v2_enabled() and probe_audit.get("failure") is not None:
+            # Preserve the source's typed failure before any scene/group Judge
+            # calls. Normal exhaustion can still use the retained evidence;
+            # a service/input failure cannot become a best-effort verdict.
+            acquisition = recorded_acquisition_audit({
+                "failure": probe_audit["failure"],
+                "status": "available" if probe_paths else "failed",
+                "evidence_paths": probe_paths,
+            })
+            failure = acquisition.get("failure")
+            if failure and not failure["recoverable_acquisition"]:
+                base.update(status="failed", score=None,
+                            reason="functional_probe_acquisition_hard_failure",
+                            failure=deepcopy(failure),
+                            judgement={"failure": deepcopy(failure), "defects": []})
+                return terminalize_required_scope(base, phase="functional_probe_acquisition")
 
     pre_judge_artifact_paths = [
         *selected_global_evidence,

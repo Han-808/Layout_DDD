@@ -19,7 +19,10 @@ from __future__ import annotations
 from benchmark.visual_judge.evidence_resolution import (
     ADAPTIVE_POLICY, adaptive_enabled, with_evidence_policy, resolution_of,
     resolution_accepted, bind_resolution, failure_record, finite_score,
+    bind_provider_acquisition,
 )
+from benchmark.visual_judge.evidence_gap_v2 import enabled as fallback_v2_enabled
+from benchmark.visual_judge.acquisition_outcome import AcquisitionOutcome, recorded_acquisition_audit
 
 from copy import deepcopy
 from typing import Any, Callable
@@ -47,6 +50,7 @@ from benchmark.evaluator.structured_fallback import (
 )
 from benchmark.evaluator.scene_quality.functional_probe import (
     functional_relation_judge_packet,
+    _judge_measurements_for_checks,
 )
 from benchmark.visual_judge.orchestration.audit import (
     evidence_artifact_refs,
@@ -303,6 +307,13 @@ def _cross_group_relation_episode_specs(
         required_check_ids = [
             str(check.get("check_id") or "") for check in required_checks
         ]
+        if fallback_v2_enabled():
+            # The measurement bank is built before scheduling. Unscheduled
+            # probes have no result row to carry its facts, but their required
+            # checks still own those existing measurements at terminal review.
+            normalized_result["functional_measurements"] = _judge_measurements_for_checks(
+                acquisition_audit, required_check_ids
+            )
         specs.append(
             {
                 "relation_id": relation_id,
@@ -329,6 +340,8 @@ def _cross_group_relation_episode_specs(
                 "acquisition_status": str(
                     normalized_result.get("status") or "failed"
                 ),
+                **({"acquisition_outcome": recorded_acquisition_audit(normalized_result)}
+                   if fallback_v2_enabled() else {}),
                 "acquisition_error": (
                     {
                         "error_type": normalized_result.get("error_type"),
@@ -444,6 +457,18 @@ def _merge_relation_probe_results(
         result["status"] = "available"
         result["error_type"] = None
         result["error"] = None
+    if fallback_v2_enabled():
+        outcomes = [recorded_acquisition_audit(row) for row in (current, incoming)]
+        hard = next((a["failure"] for a in outcomes if a.get("failure")
+                     and not a["failure"]["recoverable_acquisition"]), None)
+        # Do not leave the first attempt's recoverable failure attached to a
+        # successful retry, or let a later hard fault disappear behind success.
+        chosen = next((a for a in outcomes if not a.get("failure")), outcomes[0])
+        result["acquisition_outcome"] = deepcopy(chosen)
+        result.pop("failure", None)
+        if hard:
+            result["failure"] = deepcopy(hard)
+        result["acquisition_outcome"] = recorded_acquisition_audit(result)
     return result
 
 
@@ -547,6 +572,8 @@ def _relation_schedule_audit(spec: dict[str, Any]) -> dict[str, Any]:
         ),
         "acquisition_status": spec.get("acquisition_status"),
         "acquisition_error": deepcopy(spec.get("acquisition_error")),
+        **({"acquisition_outcome": deepcopy(spec["acquisition_outcome"])}
+           if "acquisition_outcome" in spec else {}),
         "required_check_id": spec.get("required_check_id"),
         "required_check": deepcopy(spec.get("required_check")),
         "required_check_ids": deepcopy(
@@ -831,7 +858,19 @@ def _evaluate_cross_group_relation_scopes(
         )
         if functional_preflight is not None:
             request["functional_evidence_preflight"] = functional_preflight
-        if retained_evidence_forced_choice:
+        if fallback_v2_enabled():
+            # Carry the classified provider result to the same terminal entry
+            # used by group/check acquisition. A legacy forced-choice string
+            # cannot certify exhaustion and must not bypass hard failure checks.
+            acquisition = recorded_acquisition_audit({
+                "acquisition_outcome": spec.get("acquisition_outcome"),
+                "status": spec.get("acquisition_status"),
+                "evidence_paths": list(spec.get("evidence_paths") or []),
+                "error_type": (spec.get("acquisition_error") or {}).get("error_type"),
+            })
+            record["acquisition_outcome"] = deepcopy(acquisition)
+            bind_provider_acquisition(request, acquisition)
+        elif retained_evidence_forced_choice:
             missing_observations = list(
                 dict.fromkeys(
                     str(observation)
@@ -893,6 +932,10 @@ def _evaluate_cross_group_relation_scopes(
             len(audit_records) if isinstance(audit_records, list) else None
         )
         try:
+            if fallback_v2_enabled():
+                record.update(vlm_invoked=False, judge_episode_count=0)
+                AcquisitionOutcome([], acquisition).raise_if_failed()
+                record.update(vlm_invoked=True, judge_episode_count=1)
             raw = call_judge(vlm_judge, request)
             adjusted = apply_prompt_exemptions(
                 raw,
@@ -989,7 +1032,11 @@ def _evaluate_cross_group_relation_scopes(
             schema_audit = response_schema_audit_from_exception(exc)
             failure = {
                 "error_type": type(exc).__name__,
-                **({"failure": failure_record(exc, phase="judge")} if adaptive_enabled(metric=metric_name) else {}),
+                **({"failure": (
+                    deepcopy(acquisition["failure"])
+                    if fallback_v2_enabled() and not record["vlm_invoked"]
+                    else failure_record(exc, phase="judge")
+                )} if adaptive_enabled(metric=metric_name) else {}),
                 "error": str(exc),
                 **(
                     {"response_schema_audit": schema_audit}
