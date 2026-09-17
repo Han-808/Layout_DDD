@@ -1,4 +1,4 @@
-"""One protocol and explicit dependency graph for both Model floorplan modes.
+"""One protocol and explicit dependency graph for all Model floorplan modes.
 
 No mode-specific evaluator/fallback, no process-global monkeypatch, no proxy
 startup, and no automatic rerun, generation, publication or baseline promotion.
@@ -86,7 +86,7 @@ def verify_source(manifest: Path | None, *, required: bool) -> dict:
 
 def parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--mode', required=True, choices=('open-space', 'multi-room'))
+    p.add_argument('--mode', required=True, choices=('open-space', 'multi-room', 'non-rect'))
     p.add_argument('--dataset-root', required=True, type=Path)
     p.add_argument('--case-id', action='append', default=[])
     p.add_argument('--output-root', type=Path)
@@ -191,10 +191,22 @@ def inspect_inputs(args: argparse.Namespace) -> list[dict[str, Any]]:
             if key not in input_hashes or input_hashes[key] != expected:
                 raise ValueError('Prepared critical artifact identity mismatch: '+field)
         scene = read(paths['scene'])
+        from benchmark.non_rectangular.geometry import polygon_geometry_from_scene
+        polygon = polygon_geometry_from_scene(scene)
+        if args.mode == 'non-rect' and polygon is None:
+            raise ValueError('Non-rect inputs require authoritative polygon geometry; mode cannot fabricate it')
+        from benchmark.scene_io.validate import validate_generated_scene
+        validate_generated_scene(scene)
+        # Resolve geometric validity before any output/model/render. Selection
+        # labels never choose another scorer; geometry must be self-describing.
+        from benchmark.evaluator.generic_validity.oob import _resolve_room
+        if _resolve_room(scene) is None:
+            raise ValueError('Unsupported or incomplete room geometry')
         ids = [o['id'] for o in scene['objects']]
         if not ids or len(ids) != len(set(ids)):
             raise ValueError('Canonical object IDs must be nonempty and unique')
-        geometry = read(paths['collision_geometry'])
+        from benchmark.evaluator.generic_validity.mesh_geometry import load_collision_geometry_manifest
+        geometry = load_collision_geometry_manifest(paths['collision_geometry'])
         if set(geometry['objects']) != set(ids):
             raise ValueError('Collision geometry ownership differs from canonical scene')
         meshes = {}

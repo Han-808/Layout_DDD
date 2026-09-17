@@ -348,8 +348,8 @@ def test_nested_call_inherits_scope_and_explicit_control_can_override():
     assert policy_of() == LEGACY_POLICY
 
 
-@pytest.mark.skipif(not (Path(__file__).parents[1] / "src/benchmark/non_rectangular").is_dir(),
-                    reason="Non-rect entry point belongs only to the Non-rect lane")
+@pytest.mark.skipif(not (Path(__file__).parents[1] / "src/benchmark/non_rectangular/runtime.py").is_file(),
+                    reason="Legacy nonrect workflow is not the uniform prepared-room entry point")
 @pytest.mark.parametrize("judge_policy,control_policy", [
     (None, ADAPTIVE_POLICY), (ADAPTIVE_POLICY, None), (ADAPTIVE_POLICY, LEGACY_POLICY),
 ])

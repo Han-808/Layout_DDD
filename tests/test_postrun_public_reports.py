@@ -64,7 +64,7 @@ def test_public_canonical_v2_gap_report_is_persisted_and_schema_valid(tmp_path):
 
 
 def test_nonrect_terminal_v2_retains_all_room_metrics_with_null_gaps(tmp_path):
-    pytest.importorskip("benchmark.non_rectangular")
+    pytest.importorskip("benchmark.non_rectangular.runtime", reason="Legacy workflow not shipped by uniform geometry adapter")
     from benchmark.api.evaluation import run_evaluate
     from benchmark.non_rectangular import prepare_non_rectangular_evaluation
     from test_non_rectangular_polygon_evaluator import _input, _grouping_runtime
@@ -161,7 +161,7 @@ def test_v2_retained_target_does_not_force_or_relabel_judgement(tmp_path):
 
 
 def test_nonrect_all_room_failures_still_keep_v2_original_inventory():
-    pytest.importorskip("benchmark.non_rectangular")
+    pytest.importorskip("benchmark.non_rectangular.workflow", reason="Legacy workflow not shipped by uniform geometry adapter")
     from benchmark.non_rectangular.workflow import execute_non_rectangular_workflow
     from benchmark.non_rectangular.report import build_non_rectangular_evaluation_report
     from test_non_rectangular_workflow import _preflight

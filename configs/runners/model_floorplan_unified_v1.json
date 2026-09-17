@@ -1,7 +1,10 @@
 {
   "schema_version": "uniform_model_floorplan_protocol_v1",
   "protocol_id": "model_floorplan_unified_v1",
-  "modes": ["open-space", "multi-room"],
+  "parent_release_sha256": "98b02f5cfdbfa4a0ec46ddca1f9232f71ad6bac629d2acaba28d2a6b1b82a083",
+  "modes": ["open-space", "multi-room", "non-rect"],
+  "geometry_adapter": "polygon_room_adapter_v1",
+  "geometry_adapter_source_commit": "31869837105d7ef10c3b3e382cb84eeb1f1f1efc",
   "core": "benchmark.api.evaluation.run_evaluate",
   "evidence_resolution_policy": "evidence_consistency_fallback_v2",
   "terminal_evidence_policy": "best_available_final_v1",
@@ -12,5 +15,5 @@
   "historical_reports_unchanged": true,
   "group_context_projection": "judge_group_context_v1",
   "reporting_mapping_changed": false,
-  "scope": "Model Open-space and rectangular room cases only; no cross-room metrics"
+  "scope": "Model Open-space, rectangular and polygon room cases; one core, no cross-room metrics"
 }

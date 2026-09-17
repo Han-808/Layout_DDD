@@ -7,11 +7,13 @@ are separate steps owned by Eval_Final after the frozen handoff.
 
 ## Scope and ancestry
 
-Model Open-space and rectangular Multi-room use one runner, one source tree,
-one Judge/configuration and one evidence/score acceptance contract. A rectangular
-room is already a native prepared scene case; `--mode` is provenance only and
-never selects metric code, weights, fallback, or budgets. No cross-room metric is
-introduced. Pipeline, Agent and nonrect runs are not migrated or restarted.
+Model Open-space, rectangular Multi-room and non-rectangular Floorplan use one
+runner, one source tree, one Judge/configuration and one evidence/score acceptance
+contract. A room is a native prepared scene case; `--mode` labels provenance
+and checks input compatibility, never selects metric verdict code, weights,
+fallback, or budgets. Geometry adapters are selected by validated scene metadata,
+not the label. No cross-room metric is introduced. Pipeline/Agent ablations and
+historical runs are not migrated or restarted.
 
 The inherited evaluation implementation is the R15 Open-space candidate from
 `missing67_r15_acquisition_terminal_v2/release_manifest.json`:
@@ -30,6 +32,53 @@ website scores remain unchanged. The only proposed **new Model execution path**
 is `scripts/run_uniform_model_evaluation.py`; historical compatibility APIs
 remain for the out-of-scope consumers. Do not launch new Model comparisons with
 the old per-experiment runners or combine them as if source hashes matched.
+
+The polygon extension descends from the two-mode release
+`model_floorplan_unified_v1_20260917`, manifest SHA256
+`98b02f5cfdbfa4a0ec46ddca1f9232f71ad6bac629d2acaba28d2a6b1b82a083`.
+That release is unchanged and retained for audit, not an alternate new Model
+execution path. Protocol family and metric labels alone do not identify this
+extension: compare the sealed source and protocol hashes.
+
+## Polygon geometry, not another evaluator
+
+Geometry/camera adapters were ported from the registered nonrect source commit
+`31869837105d7ef10c3b3e382cb84eeb1f1f1efc`, then integrated with the common
+R15-derived core. Its old evaluator, runtime, continuity wrapper, L3 defaults,
+execution overlay and room aggregation were **not** imported.
+
+- Preserve the actual ordered floor polygon, wall segments, inward normals,
+  object transforms and floor elevation. Do not recenter to an AABB or intersect
+  the infinite half-planes of concave walls.
+- Validate the polygon, ordered edges, unique wall IDs, normals and height
+  agreement before launch. Polygon input requires
+  `metadata.evaluation_mode = non_rectangular_multi_room`,
+  `metadata.coordinates_transformed = false`, and
+  `metadata.non_rectangular_room_geometry` with schema
+  `non_rectangular_polygon_room_geometry_v1`. A mode flag cannot invent these.
+- The retained projection uses `scene_height` as absolute wall-top elevation;
+  it must agree with `ceiling_z_m`. The geometry also contains `floor_z_m`,
+  so a negative world elevation is not a negative room height.
+- Existing nonrect materializations have no ceiling. An absent
+  `ceiling_in_scope` therefore means false; wall-top elevation alone is not
+  a physical ceiling. An explicit true value is honored by OOB, Support and
+  camera feasibility. This is an architectural condition, not a relaxed verdict
+  or fallback policy; identical scores across different architectures are not
+  promised.
+- OOB contributes actual polygon measurements and wall-normal penetration
+  ratios to the common candidate/Judge/burden path. The original rectangular
+  path and full-severity threshold remain unchanged.
+- Support uses the real floor in the same contact graph and ray tests. L1/L3
+  judge context and structured fallback receive the same observable geometry.
+- Cameras preserve polygon containment/line of sight and floor height; overlays
+  follow actual walls and polygon floor/ceiling edges. Rendering uses retained
+  prepared blends, not rectangular re-materialization. Acquisition budgets are
+  unchanged. Proven empty searches use the common exhaustion type; malformed
+  inputs, rendering and transport faults remain failures.
+
+The JSON scene schema allows only this explicit opt-in polygon projection;
+ordinary canonical rooms retain their rectangular coordinate contract. The
+source and packaged schema copies are identical.
 
 ## Fixed execution configuration
 
@@ -109,6 +158,9 @@ Consumption rules:
 This is evaluator scoring, **not** a change to the website's reporting transform,
 weights, category presentation or cross-room/model aggregation. Publication must
 explicitly consume the new eligibility/observed ledger after result acceptance.
+Open-space case means versus layout-weighted Multi-room/Floorplan aggregation
+remain a separate reporting question. Endpoint selection and the previously
+accepted transport-environment overrides are not newly locked by this extension.
 
 ## Input and release safety
 
@@ -145,8 +197,25 @@ python -B RELEASE/scripts/run_uniform_model_evaluation.py \
   --input-manifest INPUT_RECEIPT --output-root NEW_OUTPUT --run
 ```
 
-For Multi-room change only mode and input selection. Recheck a new receipt for
-each selection. Supply no additional metric/policy/weight flags.
+For Multi-room use `--mode multi-room`; for polygon Floorplan use
+`--mode non-rect`. Change only the mode and input selection; recheck a new
+receipt for each selection. Supply no additional metric/policy/weight flags.
+
+All three modes require the **same native prepared-case contract**:
+`case_manifest.json`, `annotation.json`, `scene/canonical_scene.json`,
+`prepared/evaluation.blend`, standardized top/perspective/identity images,
+`evidence/prepared_render_manifest.json`, and an object-owned
+`evidence/collision_geometry_manifest.json` with retained mesh files when
+available. The manifest may select alternate paths through the existing
+discovery contract. A geometry helper passing does not certify this package.
+
+The inspected historical Sol `scene_011634/room_000` materialization retains
+its 8-edge polygon, 20 objects, negative world x coordinates and prepared blend;
+the new canonical validator and camera geometry accept it without rewriting.
+Its materialization directory alone does not contain the complete common
+identity/mesh/evidence package. No missing inputs were fabricated, no meshes
+were rebuilt and no historical results were used as new verdicts. Input staging,
+ownership/hash checks and the nonrect planned population remain operator gates.
 
 ## Verification and remaining gates
 
@@ -171,7 +240,18 @@ Multi-room rows are not authority to discard the 217th planned case. HY3/Opus4.8
 legacy cohorts are excluded, and no Pipeline/Agent rerun is part of this change.
 The latest status from Eval_Final says this readiness work is still pending.
 
-Before broad dispatch, run and accept one real Open-space and one real Multi-room
-case with the same frozen release; preserve genuine gaps/faults. Only verified
+Nonrect inclusion adds geometry and common-policy tests: concave/angled walls,
+nonzero and negative floor elevations, rectangular geometry equivalence,
+observable L3 architecture, polygon overlays, empty-view model fallback,
+hard-failure preservation, actual public evaluator/persisted-score projection,
+and serial/threaded native Judge construction for all three mode labels.
+Legacy nonrect-workflow tests remain skipped when that unshipped workflow is
+absent; shared camera tests now execute. This does not certify the old workflow.
+
+Before broad dispatch, run and accept one real Open-space, one real Multi-room
+and one real nonrect case with the **same new frozen release**; preserve genuine
+gaps/faults. The offline synthetic startup fixtures do not render or call a live
+model, and the retained real-room geometry check is not an end-to-end canary.
+Only verified
 actual use permits the coordinated baseline-registry update. No old result is
 retroactively relabelled, and neither rank order nor score equivalence is promised.

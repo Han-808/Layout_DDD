@@ -13,7 +13,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT/'src'))
-from benchmark.camera_cal_scene_level.uniform import source_files, digest, tree_digest
+from benchmark.camera_cal_scene_level.uniform import source_files, digest, tree_digest, protocol
 
 
 def main(argv=None):
@@ -46,7 +46,7 @@ def main(argv=None):
         'created_at': datetime.now(timezone.utc).isoformat(),
         'branch': subprocess.check_output(['git', 'branch', '--show-current'], cwd=ROOT, text=True).strip(),
         'git_commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
-        'parent_release_sha256': 'b1aad3d6cda533977ee251093f26e92fe9b9494d791bdc5a6e77ae8ac8d65de4',
+        'parent_release_sha256': protocol()['parent_release_sha256'],
         'validation_report_sha256': digest(args.validation_report),
         'runtime': {'python': platform.python_version(), 'packages': {name: importlib.metadata.version(name)
             for name in ('numpy', 'shapely', 'Pillow', 'PyYAML', 'jsonschema', 'networkx')}},

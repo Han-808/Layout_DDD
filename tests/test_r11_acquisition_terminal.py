@@ -220,7 +220,7 @@ def test_one_group_hard_acquisition_failure_does_not_erase_other_group(picture):
 
 @pytest.mark.parametrize("error", [ValueError("bad input"), ConnectionError("offline"), OSError("renderer")])
 def test_nonrect_empty_counter_cannot_relabel_hard_fault(error):
-    pytest.importorskip("benchmark.non_rectangular")
+    pytest.importorskip("benchmark.non_rectangular.runtime", reason="Legacy continuity wrapper is not the uniform acquisition boundary")
     from benchmark.non_rectangular.runtime import _NonRectangularContinuityCameraProvider
     class Provider:
         last_call_usage = {"candidate_count_generated": 0}

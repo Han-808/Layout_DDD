@@ -255,6 +255,9 @@ def check_support(
         return disabled_support_report()
 
     scene = project_scene_for_evaluator_context(scene)
+    from benchmark.non_rectangular.geometry import polygon_geometry_from_scene
+    polygon_geometry = polygon_geometry_from_scene(scene)
+    floor_z_m = polygon_geometry.floor_z_m if polygon_geometry is not None else 0.0
 
     objects, object_errors = normalize_objects(scene)
     num_objects = len(objects)
@@ -303,6 +306,7 @@ def check_support(
         base_band_tol=base_band_tol,
         minimum_contact_count=minimum_contact_count,
         grid=grid,
+        floor_z_m=floor_z_m,
     )
 
     records: list[dict[str, Any]] = []
@@ -316,6 +320,7 @@ def check_support(
             objects=objects,
             mesh_cache=mesh_cache,
             grounding_analysis=grounding_analysis,
+            floor_z_m=floor_z_m,
             boundary=boundary,
             has_boundary=has_boundary,
             fixed_contact_tolerance=fixed_contact_tolerance,
@@ -456,6 +461,7 @@ def _analyze_grounded_contact_graph(
     base_band_tol: float,
     minimum_contact_count: int,
     grid: tuple[int, int],
+    floor_z_m: float = 0.0,
 ) -> dict[str, Any]:
     """Certify tolerance-contact paths to the floor with an order-independent pass.
 
@@ -485,6 +491,7 @@ def _analyze_grounded_contact_graph(
                 candidate_tol,
                 direct_contact_tolerance,
                 obj.id,
+                floor_z_m=floor_z_m,
             )
             for point in sample_points
         ]
@@ -622,6 +629,7 @@ def _evaluate_object(
     objects,
     mesh_cache: dict[str, dict[str, Any]],
     grounding_analysis: dict[str, Any],
+    floor_z_m: float,
     boundary: np.ndarray,
     has_boundary: bool,
     fixed_contact_tolerance: float | None,
@@ -662,6 +670,7 @@ def _evaluate_object(
             candidate_tol,
             direct_contact_tolerance,
             obj.id,
+            floor_z_m=floor_z_m,
         )
         for point in sample_points
     ]
@@ -692,6 +701,7 @@ def _evaluate_object(
             candidate_tol,
             direct_contact_tolerance,
             obj.id,
+            floor_z_m=floor_z_m,
         )
     center_source_available = source_center_point is not None
     center_ray_supported = bool(center_hit["contact"])
@@ -737,24 +747,34 @@ def _evaluate_object(
     )
     evidence_level = _evidence_level(hits, source_representation=source_representation)
     geometry_provenance = _geometry_provenance(scene, obj.id, mesh_cache.get(obj.id))
-    architecture_plane_clearances = _architecture_plane_clearances(
-        scene,
-        obj,
-        boundary,
-        has_boundary,
-    )
-    active_physical_wall_ids = list(
-        active_wall_ids_from_contract(architecture_contract_from_scene(scene))
-    )
-    architecture_contact_candidates = _architecture_contact_candidates(
-        architecture_plane_clearances,
-        tolerance_m=candidate_tol,
-    )
-    nearest_logical_wall_measurement = _nearest_logical_wall_measurement(
-        obj,
-        boundary=boundary,
-        has_boundary=has_boundary,
-    )
+    from benchmark.non_rectangular.support_geometry import polygon_support_architecture_evidence
+    raw_object = next(item for item in scene["objects"] if str(item.get("id")) == obj.id)
+    polygon_architecture = polygon_support_architecture_evidence(
+        scene, raw_object=raw_object, tolerance_m=candidate_tol)
+    if polygon_architecture is not None:
+        architecture_plane_clearances = polygon_architecture["architecture_plane_clearances_m"]
+        active_physical_wall_ids = polygon_architecture["active_physical_wall_ids"]
+        architecture_contact_candidates = polygon_architecture["architecture_contact_candidates"]
+        nearest_logical_wall_measurement = polygon_architecture["nearest_logical_wall_measurement"]
+    else:
+        architecture_plane_clearances = _architecture_plane_clearances(
+            scene,
+            obj,
+            boundary,
+            has_boundary,
+        )
+        active_physical_wall_ids = list(
+            active_wall_ids_from_contract(architecture_contract_from_scene(scene))
+        )
+        architecture_contact_candidates = _architecture_contact_candidates(
+            architecture_plane_clearances,
+            tolerance_m=candidate_tol,
+        )
+        nearest_logical_wall_measurement = _nearest_logical_wall_measurement(
+            obj,
+            boundary=boundary,
+            has_boundary=has_boundary,
+        )
     lower_envelope_zs = [float(point[2]) for point in lower_envelope_points]
     geometry_degraded_reasons = _geometry_degraded_reasons(
         source_id=obj.id,
@@ -1443,6 +1463,8 @@ def _nearest_support(
     candidate_tol: float,
     direct_contact_tolerance: float,
     source_id: str,
+    *,
+    floor_z_m: float = 0.0,
 ) -> dict[str, Any]:
     x, y, z_p = float(point[0]), float(point[1]), float(point[2])
     best_h: float | None = None
@@ -1490,8 +1512,8 @@ def _nearest_support(
             best_degraded_reason = str(cache.get("load_error")) if cache.get("degraded") else None
 
     inside_room = (not has_boundary) or point_in_polygon_2d([x, y], boundary)
-    if inside_room and 0.0 <= z_p + candidate_tol and (best_h is None or 0.0 > best_h):
-        best_h, best_target, best_rep, best_source = 0.0, "floor", "architecture", "floor_plane"
+    if inside_room and floor_z_m <= z_p + candidate_tol and (best_h is None or floor_z_m > best_h):
+        best_h, best_target, best_rep, best_source = floor_z_m, "floor", "architecture", "floor_plane"
         best_degraded_reason = None
 
     if best_h is not None:
@@ -1513,9 +1535,9 @@ def _nearest_support(
         return {
             "target": "floor",
             "target_representation": "architecture",
-            "height_m": 0.0,
-            "gap_m": z_p,
-            "position": [x, y, 0.0],
+            "height_m": floor_z_m,
+            "gap_m": z_p - floor_z_m,
+            "position": [x, y, floor_z_m],
             "evidence_source": "floor_penetration",
             "target_geometry_degraded_reason": None,
             "contact": True,

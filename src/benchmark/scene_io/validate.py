@@ -226,11 +226,25 @@ def validate_generated_scene(scene: dict) -> dict:
     _require_string(scene, "request_id", "generated_scene")
     _require_string(scene, "scene_type", "generated_scene")
     _require_boundary(scene.get("boundary"), "generated_scene.boundary")
-    _require_axis_aligned_rectangular_boundary(scene["boundary"], "generated_scene.boundary")
-    _require_min_corner_boundary(scene["boundary"], "generated_scene.boundary")
-    _require_positive_number(scene.get("scene_height"), "generated_scene.scene_height")
+    from benchmark.non_rectangular.geometry import polygon_geometry_from_scene, PolygonRoomGeometryError
+    try:
+        polygon_geometry = polygon_geometry_from_scene(scene)
+    except PolygonRoomGeometryError as exc:
+        raise ArtifactValidationError(str(exc)) from exc
+    if polygon_geometry is None:
+        _require_axis_aligned_rectangular_boundary(scene["boundary"], "generated_scene.boundary")
+        _require_min_corner_boundary(scene["boundary"], "generated_scene.boundary")
+        _require_positive_number(scene.get("scene_height"), "generated_scene.scene_height")
+    # Polygon metadata validates finite absolute wall-top elevation and positive
+    # clear height; a room in an unchanged global frame may be below z = 0.
     metadata = _require_mapping(scene.get("metadata"), "generated_scene.metadata")
-    _validate_coordinate_frame(metadata.get("coordinate_frame"), "generated_scene.metadata.coordinate_frame")
+    if polygon_geometry is None:
+        _validate_coordinate_frame(metadata.get("coordinate_frame"), "generated_scene.metadata.coordinate_frame")
+    elif metadata.get("coordinates_transformed") is not False:
+        raise ArtifactValidationError("polygon projection must explicitly retain original coordinates")
+    # The polygon projection already declares meters/z-up through its versioned
+    # geometry contract. Do not fabricate a room-min-corner origin for a room
+    # retained in the layout's global frame.
     objects = _require_list(scene.get("objects"), "generated_scene.objects")
     object_ids: set[str] = set()
     for index, obj in enumerate(objects):

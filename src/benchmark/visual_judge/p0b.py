@@ -8,7 +8,7 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
-from benchmark.architecture_policy import architecture_contract_from_scene
+from benchmark.non_rectangular.architecture import observable_architecture_from_scene
 from benchmark.evaluator.context_projection import (
     project_scene_for_evaluator_context,
 )
@@ -168,7 +168,7 @@ def adjudicate_p0b_event(
         for item in scene.get("objects", [])
         if isinstance(item, dict) and str(item.get("id")) in resolved_ids
     ]
-    architecture = deepcopy(architecture_contract_from_scene(scene))
+    architecture = observable_architecture_from_scene(scene)
     local_request = build_p0b_local_evidence_request(
         metric=metric_name,
         event=event,
@@ -456,7 +456,14 @@ def _project_scene_for_camera_evidence(
     if not isinstance(metadata, dict):
         metadata = {}
         projected["metadata"] = metadata
-    architecture = deepcopy(architecture_contract_from_scene(scene))
+    from benchmark.non_rectangular.geometry import polygon_geometry_from_scene
+
+    if polygon_geometry_from_scene(projected) is not None:
+        # Polygon metadata is the render contract. Never store an observable
+        # polygon summary under the incompatible rectangular formal contract.
+        metadata.pop("architecture_contract", None)
+        return projected
+    architecture = observable_architecture_from_scene(scene)
     physical = architecture.get("physical_walls")
     if isinstance(physical, dict):
         physical["policy_source"] = "withheld_from_evaluator"
@@ -595,6 +602,8 @@ def _project_architecture_for_judge(
             "z": ceiling.get("z") if isinstance(ceiling, dict) else None,
         },
     }
+    if architecture.get("geometry_type") == "non_rectangular_polygon":
+        projected["geometry_type"] = "non_rectangular_polygon"
     if metric not in _PHYSICAL_WALL_METRICS:
         return projected
     physical = architecture.get("physical_walls")
@@ -619,6 +628,8 @@ def _project_architecture_for_judge(
             else None
         ),
     }
+    if architecture.get("geometry_type") == "non_rectangular_polygon":
+        projected["physical_walls"]["wall_segments"] = deepcopy(physical.get("wall_segments") or [])
     return projected
 
 

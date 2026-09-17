@@ -419,6 +419,10 @@ def structured_evidence(request: Mapping[str, Any]) -> dict[str, Any]:
         "geometry_is_proxy_unless_measurement_provenance_says_otherwise": True,
         "generator_private_intent_removed": True,
     }
+    from benchmark.non_rectangular.geometry import polygon_geometry_from_scene
+    geometry = polygon_geometry_from_scene(scene)
+    if geometry is not None:
+        packet["room"]["geometry"] = geometry.public_dict()
     packet["source_sha256"] = hashlib.sha256(json.dumps(
         packet, sort_keys=True, ensure_ascii=True, allow_nan=False, separators=(",", ":"),
     ).encode()).hexdigest()

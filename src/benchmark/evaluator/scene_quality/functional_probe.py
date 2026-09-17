@@ -10,7 +10,7 @@ from benchmark.visual_judge.evidence_gap_v2 import enabled as fallback_v2_enable
 from benchmark.visual_judge.evidence_resolution import failure_record
 from benchmark.visual_judge.acquisition_outcome import AcquisitionExhausted, acquire_evidence
 
-from benchmark.architecture_policy import architecture_contract_from_scene
+from benchmark.non_rectangular.architecture import observable_architecture_from_scene
 from benchmark.evaluator.scene_quality.functional_acquisition import (
     FUNCTIONAL_ACQUISITION_PLAN_VERSION,
     build_functional_acquisition_plan,
@@ -2243,7 +2243,7 @@ def _functional_architecture_context(
             "physical_walls_rendered": None,
             "physical_wall_ids": [],
         }
-    contract = architecture_contract_from_scene(scene)
+    contract = observable_architecture_from_scene(scene)
     logical = (
         contract.get("logical_boundary")
         if isinstance(contract.get("logical_boundary"), dict)

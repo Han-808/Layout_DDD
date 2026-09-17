@@ -1,4 +1,4 @@
-"""P0b out-of-bounds metric: exact OBB versus six room planes with conservative VLM adjudication."""
+"""P0b OOB: room geometry measurements followed by common VLM adjudication."""
 
 from __future__ import annotations
 from benchmark.visual_judge.evidence_gap_v2 import enabled as fallback_v2_enabled
@@ -187,64 +187,19 @@ def _evaluate_object(
     vlm_judge: object | None,
     local_view_provider: LocalViewProvider | None,
 ) -> dict[str, Any]:
+    geometry = room.get("polygon_geometry")
+    if geometry is not None:
+        from benchmark.non_rectangular.oob_geometry import measure_polygon_obb
+        record = measure_polygon_obb(obj, geometry, eps=eps, floor_tol=floor_tol)
+    else:
+        record = _measure_rectangular_obb(obj, room, eps=eps, floor_tol=floor_tol)
+    candidate_oob = record["candidate_oob"]
+    within_floor_contact_tolerance = record["within_floor_contact_tolerance"]
+    plane_flags = record["plane_flags"]
+    intervals = record["obb_intervals"]
+    plane_penetration = record["plane_penetration_m"]
+    crossing_depths = record["crossing_depths_m"]
     center = np.asarray(obj.center, dtype=float)
-    # radius_axis = sum_i half[i] * |R[axis, i]| ; columns of R are local axes in world.
-    radius = np.abs(np.asarray(obj.R, dtype=float)) @ np.asarray(obj.half, dtype=float)
-    min_axis = center - radius
-    max_axis = center + radius
-    intervals = {
-        "x": [float(min_axis[0]), float(max_axis[0])],
-        "y": [float(min_axis[1]), float(max_axis[1])],
-        "z": [float(min_axis[2]), float(max_axis[2])],
-    }
-    ceiling_z = room["ceiling_z"]
-    # Raw, non-negative penetration past each nominal plane, computed independently
-    # of the semantic plane_flags so an accepted shallow floor sink is preserved.
-    plane_penetration = _plane_penetration(min_axis, max_axis, room, ceiling_z)
-    floor_penetration = plane_penetration["floor_oob"]
-    # Wall and ceiling planes use ``numerical_eps`` for floating-point robustness.
-    # The floor plane uses the separate semantic ``floor_contact_tolerance_m`` so
-    # ordinary shallow floor sink is treated as valid contact rather than a
-    # candidate violation routed to the VLM. Numerical robustness stays additive
-    # so exactly ``floor_contact_tolerance_m`` (with float noise) is still accepted.
-    plane_flags = {
-        "west_oob": bool(plane_penetration["west_oob"] > eps),
-        "east_oob": bool(plane_penetration["east_oob"] > eps),
-        "south_oob": bool(plane_penetration["south_oob"] > eps),
-        "north_oob": bool(plane_penetration["north_oob"] > eps),
-        "floor_oob": bool(floor_penetration > floor_tol + eps),
-        "ceiling_oob": bool(ceiling_z is not None and plane_penetration["ceiling_oob"] > eps),
-    }
-    candidate_oob = any(plane_flags.values())
-    # A positive floor sink beyond numerical noise that does not meaningfully
-    # exceed the semantic tolerance. An OBB flush on the floor is not "within
-    # tolerance" because it has no actual penetration.
-    within_floor_contact_tolerance = bool(
-        floor_penetration > eps and not plane_flags["floor_oob"]
-    )
-    # Flagged-only view retained as a backward-compatible alias of the raw field.
-    crossing_depths = {
-        plane: plane_penetration[plane] for plane in OOB_PLANES if plane_flags[plane]
-    }
-
-    record: dict[str, Any] = {
-        "object_id": obj.id,
-        "obb_intervals": intervals,
-        "plane_flags": plane_flags,
-        "plane_penetration_m": plane_penetration,
-        "within_floor_contact_tolerance": within_floor_contact_tolerance,
-        "floor_contact_tolerance_m": floor_tol,
-        "numerical_eps": eps,
-        "crossing_depths_m": crossing_depths,
-        "floor_penetration_m": floor_penetration,
-        "candidate_oob": candidate_oob,
-        "requires_vlm": False,
-        "route": None,
-        "final_verdict": None,
-        "affects_oob_score": False,
-        "judge_result": None,
-        "adjudication_error": None,
-    }
 
     if not candidate_oob:
         # Both routes are direct-valid; the tolerance route makes explicit that the
@@ -274,8 +229,10 @@ def _evaluate_object(
         "object_ids": [obj.id],
         "architecture_element": "room_bounds",
         "plane_flags": plane_flags,
+        **{k: deepcopy(record[k]) for k in ("violated_edges", "violated_wall_ids") if k in record},
     }
     detector_evidence = {
+        **{k: deepcopy(record[k]) for k in ("room_geometry", "violated_edges", "violated_wall_ids", "outside_area_m2", "outside_area_ratio", "maximum_horizontal_penetration_m") if k in record},
         "detector": OOB_EVALUATOR_VERSION,
         "plane_flags": plane_flags,
         "obb_intervals": intervals,
@@ -339,6 +296,71 @@ def _evaluate_object(
     return record
 
 
+def _measure_rectangular_obb(
+    obj: Any, room: dict[str, Any], *, eps: float, floor_tol: float,
+) -> dict[str, Any]:
+    center = np.asarray(obj.center, dtype=float)
+    # radius_axis = sum_i half[i] * |R[axis, i]| ; columns of R are local axes in world.
+    radius = np.abs(np.asarray(obj.R, dtype=float)) @ np.asarray(obj.half, dtype=float)
+    min_axis = center - radius
+    max_axis = center + radius
+    intervals = {
+        "x": [float(min_axis[0]), float(max_axis[0])],
+        "y": [float(min_axis[1]), float(max_axis[1])],
+        "z": [float(min_axis[2]), float(max_axis[2])],
+    }
+    ceiling_z = room["ceiling_z"]
+    # Raw, non-negative penetration past each nominal plane, computed independently
+    # of the semantic plane_flags so an accepted shallow floor sink is preserved.
+    plane_penetration = _plane_penetration(min_axis, max_axis, room, ceiling_z)
+    floor_penetration = plane_penetration["floor_oob"]
+    # Wall and ceiling planes use ``numerical_eps`` for floating-point robustness.
+    # The floor plane uses the separate semantic ``floor_contact_tolerance_m`` so
+    # ordinary shallow floor sink is treated as valid contact rather than a
+    # candidate violation routed to the VLM. Numerical robustness stays additive
+    # so exactly ``floor_contact_tolerance_m`` (with float noise) is still accepted.
+    plane_flags = {
+        "west_oob": bool(plane_penetration["west_oob"] > eps),
+        "east_oob": bool(plane_penetration["east_oob"] > eps),
+        "south_oob": bool(plane_penetration["south_oob"] > eps),
+        "north_oob": bool(plane_penetration["north_oob"] > eps),
+        "floor_oob": bool(floor_penetration > floor_tol + eps),
+        "ceiling_oob": bool(ceiling_z is not None and plane_penetration["ceiling_oob"] > eps),
+    }
+    candidate_oob = any(plane_flags.values())
+    # A positive floor sink beyond numerical noise that does not meaningfully
+    # exceed the semantic tolerance. An OBB flush on the floor is not "within
+    # tolerance" because it has no actual penetration.
+    within_floor_contact_tolerance = bool(
+        floor_penetration > eps and not plane_flags["floor_oob"]
+    )
+    # Flagged-only view retained as a backward-compatible alias of the raw field.
+    crossing_depths = {
+        plane: plane_penetration[plane] for plane in OOB_PLANES if plane_flags[plane]
+    }
+
+    record: dict[str, Any] = {
+        "object_id": obj.id,
+        "obb_intervals": intervals,
+        "plane_flags": plane_flags,
+        "plane_penetration_m": plane_penetration,
+        "within_floor_contact_tolerance": within_floor_contact_tolerance,
+        "floor_contact_tolerance_m": floor_tol,
+        "numerical_eps": eps,
+        "crossing_depths_m": crossing_depths,
+        "floor_penetration_m": floor_penetration,
+        "candidate_oob": candidate_oob,
+        "requires_vlm": False,
+        "route": None,
+        "final_verdict": None,
+        "affects_oob_score": False,
+        "judge_result": None,
+        "adjudication_error": None,
+    }
+
+    return record
+
+
 def _plane_penetration(
     min_axis: np.ndarray,
     max_axis: np.ndarray,
@@ -368,6 +390,10 @@ def _plane_penetration(
 
 
 def _resolve_room(scene: dict) -> dict[str, Any] | None:
+    from benchmark.non_rectangular.geometry import polygon_geometry_from_scene
+    geometry = polygon_geometry_from_scene(scene)
+    if geometry is not None:
+        return {"polygon_geometry": geometry, "report": geometry.public_dict()}
     points = np.asarray(get_room_boundary(scene), dtype=float)
     if points.shape != (4, 2) or not np.all(np.isfinite(points)):
         return None
