@@ -66,6 +66,7 @@ include-package-data = false
 testpaths = [
   "tests/test_uniform_model_evaluator.py",
   "tests/test_uniform_nonrect_evaluator.py",
+  "tests/test_s100_evaluator_regressions.py",
   "tests/test_r12_placement_scope_control.py",
   "tests/test_r13_best_effort_terminal.py",
   "tests/test_r13_placement_stage_handoff.py",

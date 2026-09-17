@@ -47,7 +47,7 @@ def failure_of(record: Any) -> dict[str, Any] | None:
         if nested:
             failures.append(nested)
     for key in ("group_results", "group_judgements", "target_scope_judgements",
-                "cross_group_relation_judgements", "placement_global_handoff_reviews"):
+                "cross_group_relation_judgements", "placement_global_handoff_reviews", "check_episodes"):
         for value in record.get(key) or []:
             nested = failure_of(value)
             if nested:
@@ -59,7 +59,8 @@ def failure_of(record: Any) -> dict[str, Any] | None:
 def terminalize_scope(record: dict[str, Any], *, phase: str) -> dict[str, Any]:
     from benchmark.evaluator.scene_quality.adaptive_acceptance import _resolution_units
     resolution = resolution_of(record)
-    units = [resolution] if resolution is not None else _resolution_units(record)
+    units = (_resolution_units(record) if "check_episodes" in record else
+             [resolution] if resolution is not None else _resolution_units(record))
     accepted = bool(units and all(item.get("accepted") is True for item in units)
                     and record.get("status") == "evaluated" and finite_score(record.get("score")))
     record["evidence_resolution_policy"] = FALLBACK_POLICY
@@ -109,6 +110,29 @@ def _scope_record(unit_id: str, records: list[dict[str, Any]]) -> dict[str, Any]
     }
 
 
+def _stored_scope_outcome(record: dict[str, Any]) -> dict[str, Any]:
+    """Adapt a bare Judge record without overriding an explicit outcome.
+
+    A verdict alone is insufficient: an accepted, completed model judgement
+    receipt is required. Metric-owned scores and failure statuses stay intact.
+    """
+    if "status" in record or "score" in record:
+        return record
+    resolution = resolution_of(record)
+    accepted = bool(
+        resolution and resolution.get("accepted") is True
+        and resolution.get("model_judgement_completed") is True
+        and record.get("verdict") in {"valid", "invalid"}
+        and record.get("terminal_state") in {None, "evaluated", "evaluated_degraded"}
+        and failure_of(record) is None
+    )
+    return {
+        "status": "evaluated" if accepted else "failed",
+        "score": (0.0 if record["verdict"] == "invalid" else 1.0) if accepted else None,
+        "judgement": record,
+    }
+
+
 def summarize_metric(report: dict[str, Any], planned: list[str]) -> dict[str, Any]:
     judgement = report.get("judgement") or {}
     actual: dict[str, list[dict[str, Any]]] = {}
@@ -116,15 +140,7 @@ def summarize_metric(report: dict[str, Any], planned: list[str]) -> dict[str, An
     if not isinstance(global_record, dict):
         global_record = report.get("global_discovery")
     if isinstance(global_record, dict):
-        # Stored global results put the status alongside, or carry it through
-        # terminal_state. Never infer acceptance from a naked binary verdict.
-        resolution = resolution_of(global_record)
-        accepted = bool(resolution and resolution.get("accepted"))
-        status = "evaluated" if accepted else "not_evaluable" if failure_of(global_record) else "failed"
-        actual["scene_global"] = [{
-            "status": status, "score": (0.0 if global_record.get("verdict") == "invalid" else 1.0) if accepted else None,
-            "judgement": global_record,
-        }]
+        actual["scene_global"] = [_stored_scope_outcome(global_record)]
     for key in ("group_results", "group_judgements"):
         rows = report.get(key) or judgement.get(key) or []
         for row in rows if isinstance(rows, list) else []:
@@ -148,7 +164,7 @@ def summarize_metric(report: dict[str, Any], planned: list[str]) -> dict[str, An
             if not isinstance(row, dict):
                 continue
             name = label + ":" + str(row.get("relation_id") or row.get("target_id") or index)
-            actual[name] = [row]
+            actual[name] = [_stored_scope_outcome(row)]
     original = list(planned)
     all_scopes = original + [name for name in actual if name not in original]
     scope_records = [_scope_record(name, rows) for name, rows in actual.items()]

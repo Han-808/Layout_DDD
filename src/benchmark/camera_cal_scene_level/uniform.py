@@ -36,7 +36,7 @@ def source_files(root: Path = ROOT) -> list[str]:
              and '__pycache__' not in p.parts and not any(part.endswith('.egg-info') for part in p.parts)
              and p.suffix != '.pyc' and p.name != '.DS_Store']
     paths += [root/'scripts/run_uniform_model_evaluation.py', root/'scripts/freeze_uniform_model_evaluator.py',
-              root/'pyproject.toml']
+              root/'scripts/replay_s100_regressions.py', root/'pyproject.toml']
     return sorted(str(p.relative_to(root)) for p in paths)
 
 

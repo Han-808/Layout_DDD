@@ -64,6 +64,24 @@ def terminalize_adaptive_scope(record: dict[str, Any], *, phase: str) -> dict[st
 def _resolution_units(value: Any, *, path: str = "metric") -> list[dict[str, Any]]:
     if not isinstance(value, dict):
         return []
+    if "check_episodes" in value:
+        # Atomic Functional aggregation replaces the top-level judgement but
+        # retains each owning Judge's receipt. Never inherit only episode 0's
+        # resolution or certify an empty/missing/failed episode.
+        episodes = value["check_episodes"]
+        if not isinstance(episodes, list) or not episodes:
+            return [{"unit_id": path, "accepted": False,
+                     "failure_category": "required_judgement_unresolved"}]
+        units = []
+        for index, episode in enumerate(episodes):
+            episode_path = path + "/check_episodes/" + str(index)
+            nested = _resolution_units(episode, path=episode_path)
+            if (not isinstance(episode, dict) or episode.get("status") != "evaluated"
+                    or not finite_score(episode.get("score")) or not nested):
+                nested = [{"unit_id": episode_path, "accepted": False,
+                           "failure_category": "required_judgement_unresolved"}]
+            units.extend(nested)
+        return units
     # Persisted aggregate copies of the same scopes are de-duplicated later.
     own = resolution_of(value)
     if own is not None:
