@@ -35,11 +35,14 @@ class StoredCandidate:
     model_id = 'offline-real-semantic-candidate'
     endpoint = 'offline:no-network'
     last_request_metadata = {}
-    def __init__(self, value):
-        self.value, self.calls = value, 0
+    def __init__(self, values):
+        self.values, self.calls = values, 0
     def chat_messages(self, messages, **kwargs):
+        if self.calls >= len(self.values):
+            raise AssertionError('Replay exhausted the exact stored response sequence')
+        value = self.values[self.calls]
         self.calls += 1
-        return json.dumps(self.value)
+        return json.dumps(value)
 
 def replay(fixture, directory, *, campaign_module=None, expect_repaired=True):
     manifest = deepcopy(fixture['case_manifest'])
@@ -54,7 +57,7 @@ def replay(fixture, directory, *, campaign_module=None, expect_repaired=True):
     pixels = Image.new('RGB', (32,32), (80, 140, 200))
     pixels.paste((230, 30, 60), (0, 0, 16, 32))
     pixels.save(picture)
-    model = StoredCandidate(fixture['residual_candidates'][0]['candidate'])
+    model = StoredCandidate([a['candidate'] for a in fixture['residual_candidates']])
     judge = ControlledVLMJudge(OpenAICompatibleVLMJudge(model, max_context_chars=200000,
         evidence_resolution_policy=FALLBACK_POLICY, terminal_evidence_policy=TERMINAL_POLICY),
         control=replace(resolve_vlm_evaluation_control({}), evidence_resolution_policy=FALLBACK_POLICY))
