@@ -11,6 +11,12 @@ aggregation. Conditional Style routing lives only in ``style_global_first``.
 """
 
 from __future__ import annotations
+from benchmark.visual_judge.evidence_gap_v2 import enabled as fallback_v2_enabled
+
+from benchmark.visual_judge.evidence_resolution import (
+    ADAPTIVE_POLICY, adaptive_enabled, with_evidence_policy, resolution_of,
+    resolution_accepted, bind_resolution, failure_record, finite_score,
+)
 
 from copy import deepcopy
 from typing import Any, Callable
@@ -93,6 +99,15 @@ from benchmark.evaluator.scene_quality.terminal import (
     recoverable_validation_failure,
     scope_was_defaulted,
     terminalize_required_scope,
+)
+from benchmark.evaluator.structured_fallback import (
+    GEOMETRY_ONLY_VLM_MODE,
+    configure_geometry_only_request,
+    fallback_resolution,
+    has_inferred_binary_rows,
+    policy_resolved,
+    structured_fallback_record,
+    structured_geometry_packet,
 )
 from benchmark.visual_judge.functional_evidence import (
     FUNCTIONAL_PROBE_DEFAULT_UNITS,
@@ -662,6 +677,8 @@ def evaluate_global_discovery_then_group_local(
     global_episode_ledger = _initial_camera_acquisition_ledger(
         global_judge_evidence
     )
+    if fallback_v2_enabled() and metric_name == "semantic_placement_consistency":
+        base["placement_scene_groups"] = deepcopy(groups or [])
 
     (
         global_record,
@@ -1376,6 +1393,38 @@ def evaluate_global_discovery_then_group_local(
         residual_placement_policy["enabled"]
     )
     residual_phase_complete = not residual_phase_required
+    handoff_records: list[dict[str, Any]] = []
+    if fallback_v2_enabled() and metric_name == "semantic_placement_consistency":
+        pending_global = [
+            deepcopy(check) for check in (result.get("placement_check_ledger") or {}).get("checks") or []
+            if check.get("handoff_status") == "deferred_to_scene_global"
+        ]
+        if pending_global:
+            # One bounded owning-stage episode, before the independent residual
+            # component. Further proposals stay explicit pending obligations.
+            episode = _initial_camera_acquisition_ledger(global_judge_evidence)
+            handoff, outcome, audit = _evaluate_global_scope(
+                base=result, metric_name=metric_name, scene=scene, object_ids=object_ids,
+                groups=groups, global_evidence=global_judge_evidence,
+                functional_probe_packet=None, vlm_judge=vlm_judge, prompt=prompt,
+                visual_style_spec=visual_style_spec, authorized_deviations=authorized_deviations,
+                build_judge_request=build_judge_request, call_judge=call_judge,
+                apply_prompt_exemptions=apply_prompt_exemptions, normalize_judgement=normalize_judgement,
+                camera_acquisition_ledger=episode, forbidden_cross_group_target_sets=[],
+                required_placement_checks=pending_global, functional_ownership_ledger=functional_ownership_ledger,
+                update_placement_ledger=False,
+            )
+            handoff_records.append(handoff)
+            result["placement_global_handoff_reviews"] = [{
+                **deepcopy(outcome), "judgement": deepcopy(handoff), "camera_control_audit": deepcopy(audit),
+                "phase": "placement_global_handoff_review",
+                "planned_check_ids": [check["check_id"] for check in pending_global],
+            }]
+            after = _camera_acquisition_ledger_from_audit(audit)
+            if after is not None:
+                result["camera_acquisition_ledger"] = merge_acquisition_ledger_delta(
+                    result.get("camera_acquisition_ledger"), episode_before=episode, episode_after=after,
+                )
     if (
         metric_name == "semantic_placement_consistency"
         and isinstance(result.get("placement_check_ledger"), dict)
@@ -1388,6 +1437,7 @@ def evaluate_global_discovery_then_group_local(
             global_record=global_record,
             group_results=group_results,
             target_results=target_scope_results,
+            handoff_records=handoff_records,
         )
         result["placement_check_coverage"] = deepcopy(
             placement_check_coverage
@@ -1492,6 +1542,7 @@ def evaluate_global_discovery_then_group_local(
                 group_results=group_results,
                 target_results=target_scope_results,
                 residual_records=[residual_global_record],
+                handoff_records=handoff_records,
             )
             result["placement_check_coverage"] = deepcopy(
                 placement_check_coverage
@@ -1637,7 +1688,7 @@ def evaluate_global_discovery_then_group_local(
             or (1 if item.get("vlm_invoked") else 0)
         )
         for item in target_scope_results
-    ) + int(residual_phase_required)
+    ) + int(residual_phase_required) + len(handoff_records)
     result["vlm_invoked"] = True
     result["evidence_request"]["vlm_invoked"] = True
     result["global_discovery"] = deepcopy(global_record)
@@ -2068,6 +2119,23 @@ def _evaluate_global_scope(
     placement_residual_context: dict[str, Any] | None = None,
     update_placement_ledger: bool = True,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any] | None]:
+    geometry_packet = (
+        structured_geometry_packet(
+            scene,
+            metric=metric_name,
+            target_ids=object_ids,
+            trigger_reason=(
+                f"{evidence_phase}_visual_evidence_unavailable"
+            ),
+        )
+        if not adaptive_enabled(metric=metric_name) and not global_evidence
+        and metric_name
+        in {"functional_consistency", "semantic_placement_consistency"}
+        else None
+    )
+    geometry_only_final = bool(
+        geometry_packet is not None and vlm_judge is not None
+    )
     request = build_judge_request(
         metric_name=metric_name,
         scene=scene,
@@ -2085,9 +2153,21 @@ def _evaluate_global_scope(
         functional_ownership_ledger=functional_ownership_ledger,
         placement_residual_context=placement_residual_context,
     )
+    if geometry_only_final:
+        configure_geometry_only_request(request, geometry_packet)
     request["camera_acquisition_ledger"] = deepcopy(
         camera_acquisition_ledger
     )
+    if fallback_v2_enabled():
+        from benchmark.visual_judge.evidence_resolution import bind_acquisition_resolution
+        resolution = deepcopy(base.get("initial_acquisition_resolution") or {"scope_satisfied": True})
+        # The global packet has another selection budget after initial
+        # acquisition; retain those omitted images for terminal reuse as well.
+        resolution["images_not_delivered"] = list(dict.fromkeys(
+            list(resolution.get("images_not_delivered") or [])
+            + [path for path in resolution.get("available_paths") or [] if path not in global_evidence]
+        ))
+        bind_acquisition_resolution(request, resolution)
     if (
         evidence_phase == "global_discovery"
         and isinstance(base.get("placement_discovery"), dict)
@@ -2109,6 +2189,61 @@ def _evaluate_global_scope(
             metric_name=metric_name,
             authorized_deviations=authorized_deviations,
         )
+        if geometry_only_final:
+            fallback = structured_fallback_record(
+                mode=GEOMETRY_ONLY_VLM_MODE,
+                trigger_reason=(
+                    f"{evidence_phase}_visual_evidence_unavailable"
+                ),
+                geometry_packet=geometry_packet,
+            )
+            adjusted = deepcopy(adjusted)
+            adjusted.update(
+                evidence_ambiguous=True,
+                forced_binary=True,
+                decision_source=GEOMETRY_ONLY_VLM_MODE,
+                structured_fallback=deepcopy(fallback),
+            )
+            for row_key in (
+                "functional_check_results",
+                "placement_check_results",
+            ):
+                for row in adjusted.get(row_key) or []:
+                    if not isinstance(row, dict):
+                        continue
+                    if row.get("conclusion") in {
+                        "valid",
+                        "invalid",
+                        "excluded_function_owned",
+                    }:
+                        row["observation_status"] = (
+                            "inferred_under_budget"
+                        )
+        elif not adaptive_enabled(metric=metric_name) and has_inferred_binary_rows(
+            adjusted,
+            row_keys=(
+                "functional_check_results",
+                "placement_check_results",
+            ),
+        ):
+            inferred_geometry = structured_geometry_packet(
+                scene,
+                metric=metric_name,
+                target_ids=object_ids,
+                trigger_reason=(
+                    "judge_binary_inferred_from_structured_context"
+                ),
+            )
+            if inferred_geometry is not None:
+                fallback = structured_fallback_record(
+                    mode=GEOMETRY_ONLY_VLM_MODE,
+                    trigger_reason=(
+                        "judge_binary_inferred_from_structured_context"
+                    ),
+                    geometry_packet=inferred_geometry,
+                )
+                adjusted["structured_fallback"] = deepcopy(fallback)
+                adjusted["decision_source"] = GEOMETRY_ONLY_VLM_MODE
         if required_placement_checks:
             adjusted = canonicalize_typed_invalid_envelope(adjusted)
         placement_resolution = None
@@ -2304,6 +2439,7 @@ def _evaluate_global_scope(
             "global_status": "failed",
             "does_not_short_circuit_group_review": True,
             "error_type": type(exc).__name__,
+            **({"failure": failure_record(exc, phase="judge")} if adaptive_enabled(metric=metric_name) else {}),
             "error": str(exc),
             **(
                 {"response_schema_audit": schema_audit}
@@ -2317,6 +2453,10 @@ def _evaluate_global_scope(
             "score": None,
             "reason": f"vlm_{evidence_phase}_failed",
         }
+    if fallback_v2_enabled() and metric_name == "semantic_placement_consistency":
+        retained = _registered_placement_checks_from_controller_audit(audit_records, audit_start=audit_start)
+        if retained:
+            base["placement_check_ledger"] = merge_placement_checks(base["placement_check_ledger"], retained)
     audit = None
     if (
         audit_start is not None
@@ -3901,6 +4041,13 @@ def _aggregate_global_and_group_results(
         global_evaluated
         and float(global_outcome.get("score")) == 1.0
     )
+    handoff_scopes = base.get("placement_global_handoff_reviews") or []
+    if handoff_scopes:
+        global_evaluated = global_evaluated and all(item.get("status") == "evaluated" for item in handoff_scopes)
+        global_invalid = global_invalid or any(_is_invalid_outcome(item) for item in handoff_scopes)
+        global_valid = global_valid and all(
+            item.get("status") == "evaluated" and item.get("score") == 1.0 for item in handoff_scopes
+        )
     residual_evaluated = bool(
         not residual_phase_required
         or (
@@ -3936,6 +4083,7 @@ def _aggregate_global_and_group_results(
         if global_invalid and isinstance(defect, dict)
     ]
     relation_defects = [
+        # Relation scopes are unchanged; Placement handoffs remain global.
         deepcopy(defect)
         for item in invalid_relations
         for defect in (
@@ -3954,6 +4102,10 @@ def _aggregate_global_and_group_results(
         for defect in (residual_global_record or {}).get("defects") or []
         if residual_invalid and isinstance(defect, dict)
     ]
+    global_defects.extend(
+        deepcopy(defect) for item in handoff_scopes if _is_invalid_outcome(item)
+        for defect in (item.get("judgement") or {}).get("defects") or []
+    )
     defects = deduplicate_defects(
         metric_name,
         [
@@ -4369,6 +4521,26 @@ def _aggregate_global_and_group_results(
         )
         return base
 
+    if fallback_v2_enabled() and not coverage_complete:
+        base["observed_burden_input"] = {
+            "schema_version": "metric_owned_observed_defects_v1",
+            "defects": deepcopy(defects),
+            "source": "metric-owned final observations after ownership/exclusion/deduplication",
+        }
+        base.update(
+            status="not_evaluable", score=None, terminal_state="evidence_gap",
+            reason="required_scope_evidence_gap",
+            judgement={
+                "evidence_status": "insufficient", "verdict": "ambiguous", "defects": defects,
+                "missing_evidence": missing_evidence,
+                "failure": {"failure_category": "evidence_gap", "phase": "metric_aggregation"},
+                "scene_global_judgement": deepcopy(global_record),
+                "group_judgements": deepcopy(group_results),
+                "cross_group_relation_judgements": deepcopy(relation_results),
+                "target_scope_judgements": deepcopy(target_results),
+            },
+        )
+        return base
     scope_terminal_states = [
         str(global_record.get("terminal_state") or ""),
         *[
@@ -4703,12 +4875,20 @@ def _score_grounding_coverage(
     def add_scope(unit_id: str, record: Any) -> None:
         record = record if isinstance(record, dict) else {}
         grounded = _scope_has_grounded_binary(record)
+        fallback = fallback_resolution(record) or {}
         units.append(
             {
                 "unit_id": unit_id,
                 "unit_type": "judge_episode",
                 "grounded": grounded,
                 "defaulted": scope_was_defaulted(record),
+                "policy_resolved": bool(
+                    fallback.get("policy_resolved") is True
+                ),
+                "empirically_grounded": bool(
+                    grounded
+                    and fallback.get("empirically_grounded", True)
+                ),
             }
         )
 
@@ -4804,12 +4984,21 @@ def _score_grounding_coverage(
             )
             if unit_id in existing_ids:
                 continue
+            grounded = _scope_has_grounded_binary(record)
+            fallback = fallback_resolution(record) or {}
             units.append(
                 {
                     "unit_id": unit_id,
                     "unit_type": "judge_episode_baseline",
-                    "grounded": _scope_has_grounded_binary(record),
+                    "grounded": grounded,
                     "defaulted": scope_was_defaulted(record),
+                    "policy_resolved": bool(
+                        fallback.get("policy_resolved") is True
+                    ),
+                    "empirically_grounded": bool(
+                        grounded
+                        and fallback.get("empirically_grounded", True)
+                    ),
                 }
             )
 
@@ -4847,6 +5036,17 @@ def _score_grounding_coverage(
                 "grounded_count": functional_check_coverage.get(
                     "grounded_check_count", 0
                 ),
+                "empirically_grounded_count": (
+                    functional_check_coverage.get(
+                        "empirically_grounded_check_count",
+                        functional_check_coverage.get(
+                            "grounded_check_count", 0
+                        ),
+                    )
+                ),
+                "policy_resolved_count": functional_check_coverage.get(
+                    "policy_resolved_check_count", 0
+                ),
             }
             if isinstance(functional_check_coverage, dict)
             else None,
@@ -4859,6 +5059,17 @@ def _score_grounding_coverage(
                 ),
                 "grounded_count": placement_check_coverage.get(
                     "grounded_check_count", 0
+                ),
+                "empirically_grounded_count": (
+                    placement_check_coverage.get(
+                        "empirically_grounded_check_count",
+                        placement_check_coverage.get(
+                            "grounded_check_count", 0
+                        ),
+                    )
+                ),
+                "policy_resolved_count": placement_check_coverage.get(
+                    "policy_resolved_check_count", 0
                 ),
             }
             if isinstance(placement_check_coverage, dict)
@@ -4875,6 +5086,21 @@ def _score_grounding_coverage(
         eligible = max(0, int(coverage.get("eligible_count") or 0))
         grounded = max(0, int(coverage.get("grounded_count") or 0))
         grounded = min(eligible, grounded)
+        empirically_grounded = max(
+            0,
+            int(
+                coverage.get(
+                    "empirically_grounded_count", grounded
+                )
+                or 0
+            ),
+        )
+        empirically_grounded = min(eligible, empirically_grounded)
+        policy_count = max(
+            0,
+            int(coverage.get("policy_resolved_count") or 0),
+        )
+        policy_count = min(eligible, policy_count)
         included_in_fraction = True
         if functional_required_count and component_id in {
             "functional_discovery",
@@ -4892,6 +5118,8 @@ def _score_grounding_coverage(
                 "component_id": component_id,
                 "eligible_count": eligible,
                 "grounded_count": grounded,
+                "empirically_grounded_count": empirically_grounded,
+                "policy_resolved_count": policy_count,
                 "defaulted_count": eligible - grounded,
                 "included_in_fraction": included_in_fraction,
                 "role": (
@@ -4919,10 +5147,26 @@ def _score_grounding_coverage(
     fraction = (
         grounded_count / eligible_count if eligible_count else 0.0
     )
+    empirically_grounded_count = sum(
+        bool(unit.get("empirically_grounded")) for unit in units
+    ) + sum(
+        int(item.get("empirically_grounded_count") or 0)
+        for item in component_records
+        if item["included_in_fraction"]
+    )
+    policy_resolved_count = sum(
+        bool(unit.get("policy_resolved")) for unit in units
+    ) + sum(
+        int(item.get("policy_resolved_count") or 0)
+        for item in component_records
+        if item["included_in_fraction"]
+    )
     return {
         "unit": "frozen_evaluation_obligation",
         "eligible_count": eligible_count,
         "grounded_count": grounded_count,
+        "empirically_grounded_count": empirically_grounded_count,
+        "policy_resolved_count": policy_resolved_count,
         "defaulted_count": eligible_count - grounded_count,
         "fraction": fraction,
         "complete": grounded_count == eligible_count,
@@ -4937,7 +5181,7 @@ def _scope_has_grounded_binary(record: Any) -> bool:
 
     if not isinstance(record, dict) or record.get("status") != "evaluated":
         return False
-    if scope_was_defaulted(record):
+    if scope_was_defaulted(record) and not policy_resolved(record):
         return False
     evidence_coverage = record.get("evidence_coverage")
     if (

@@ -564,6 +564,28 @@ def test_feasible_oob_single_plane_candidates_are_inward_and_truthful(
         assert all(item["elevation_degrees"] < 0.0 for item in candidates)
 
 
+def test_oob_camera_targets_active_wall_inner_surface() -> None:
+    request = _request("oob")
+    request["object_ids"] = ["bed"]
+    request["event"] = {
+        "object_id": "bed",
+        "plane_flags": {"west_oob": True},
+    }
+    request["detector_evidence"] = {
+        "plane_flags": {"west_oob": True},
+        "room": {
+            "plane_reference": {
+                "west_oob": {"coordinate_m": 0.04},
+            }
+        },
+    }
+
+    candidates = generate_camera_pose_candidates(request, max_candidates=3)
+
+    assert candidates
+    assert all(item["target"][0] == pytest.approx(0.04) for item in candidates)
+
+
 def test_feasible_oob_multi_and_opposing_planes_are_all_represented_without_duplicates() -> None:
     flags = {
         "west_oob": True,
@@ -1072,13 +1094,30 @@ def test_oob_focus_overlay_highlights_target_and_flagged_room_plane(tmp_path: Pa
         scene=scene,
         metric="oob",
         object_ids=["bed"],
-        detector_evidence={"plane_flags": {"east_oob": True}},
-        architecture_element="room_bounds",
+        detector_evidence={
+            "plane_flags": {"east_oob": True},
+            "room": {
+                "plane_reference": {
+                    "east_oob": {
+                        "coordinate_m": 6.96,
+                        "reference": "active_physical_wall_inner_surface",
+                    }
+                }
+            },
+        },
+        architecture_element="room_envelope",
     )
 
     assert spec["targets"][0]["id"] == "bed"
     assert spec["targets"][0]["required_for_visibility"] is True
     assert spec["architecture_planes"][0]["flag"] == "east_oob"
+    assert all(
+        corner[0] == pytest.approx(6.96)
+        for corner in spec["architecture_planes"][0]["corners"]
+    )
+    assert spec["architecture_planes"][0]["plane_reference"][
+        "reference"
+    ] == "active_physical_wall_inner_surface"
     assert any(entry["role"] == "architecture_plane" for entry in spec["legend"])
 
     target_color = tuple(round(channel * 255) for channel in spec["targets"][0]["color"])

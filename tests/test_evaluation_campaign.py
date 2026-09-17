@@ -355,7 +355,7 @@ def _campaign(
             max_new_attempts_per_case=max_attempts,
             retry_delay_seconds=0.0,
             max_workers=2,
-            round0_preflight_attempts=10,
+            round0_preflight_attempts=5,
             retry_preflight_attempts=3,
             preflight_timeout_seconds=3000,
         ),
@@ -929,7 +929,7 @@ def test_exact_round_argv_and_retry_preflight_mapping(tmp_path: Path) -> None:
     assert round0.argv.count("--case-id") == 2
     assert "--metric" not in round0.argv
     assert round0.argv[round0.argv.index("--deduction-multiplier") + 1] == "2"
-    assert round0.argv[round0.argv.index("--endpoint-preflight-attempts") + 1] == "10"
+    assert round0.argv[round0.argv.index("--endpoint-preflight-attempts") + 1] == "5"
     assert retry.argv[retry.argv.index("--endpoint-preflight-attempts") + 1] == "3"
     assert retry.argv.count("--case-id") == 1
     assert "--no-resume" in retry.argv

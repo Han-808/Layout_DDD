@@ -123,6 +123,9 @@ def test_default_is_logically_bounded_floor_without_physical_walls() -> None:
     assert contract["floor"]["enabled"] is True
     assert contract["physical_walls"]["policy"] == "explicit_only"
     assert contract["physical_walls"]["active_wall_ids"] == []
+    assert contract["physical_walls"]["wall_thickness_m"] == pytest.approx(
+        0.08
+    )
 
 
 def test_scene_type_and_indoor_commonsense_do_not_activate_walls() -> None:
@@ -291,18 +294,28 @@ def test_oar_active_wall_keeps_deterministic_geometry_behavior() -> None:
     assert report["checks"][0]["passed"] is True
 
 
-def test_oob_is_identical_across_wall_policies() -> None:
+def test_oob_uses_inner_surfaces_only_for_active_walls() -> None:
     wall_free = check_oob(_scene(_contract(), outside=True), {"detector_only": True})
     enclosed = check_oob(
         _scene(_contract(policy="always_enclosed"), outside=True),
         {"detector_only": True},
     )
 
-    assert wall_free["objects"] == enclosed["objects"]
-    assert sum(
-        bool(item.get("candidate_oob")) for item in wall_free["objects"]
-    ) == sum(
-        bool(item.get("candidate_oob")) for item in enclosed["objects"]
+    wall_free_object = wall_free["objects"][0]
+    enclosed_object = enclosed["objects"][0]
+    assert wall_free_object["candidate_oob"] is True
+    assert enclosed_object["candidate_oob"] is True
+    assert wall_free_object["plane_reference"]["east_oob"]["reference"] == (
+        "logical_room_boundary"
+    )
+    assert enclosed_object["plane_reference"]["east_oob"]["reference"] == (
+        "active_physical_wall_inner_surface"
+    )
+    assert enclosed_object["plane_penetration_m"]["east_oob"] == (
+        pytest.approx(
+            wall_free_object["plane_penetration_m"]["east_oob"]
+            + enclosed["room"]["physical_wall_inner_surface_offset_m"]
+        )
     )
 
 
@@ -328,7 +341,10 @@ def test_architecture_clearances_ignore_inactive_and_keep_active_walls() -> None
     )
 
     assert inactive["west"] is None
-    assert active["west"] == pytest.approx(0.0)
+    # The OBB reaches the logical boundary, which is the center plane of the
+    # 0.08 m physical wall.  Its signed clearance to the room-facing surface
+    # is therefore -0.04 m; penetration remains OOB-owned.
+    assert active["west"] == pytest.approx(-0.04)
     assert inactive["floor"] == active["floor"]
 
 

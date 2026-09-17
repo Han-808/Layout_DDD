@@ -1519,7 +1519,7 @@ def test_evaluation_audit_derives_catalog_and_reruns_fresh_consistency(
                 "catalog_materialization_provenance_core_v1"
             ),
             "adapter_contract_revision": "catalog_placement_v1",
-            "materialization_revision": "fixed_catalog_materialization_v1",
+            "materialization_revision": preparation_module.MATERIALIZATION_REVISION,
             "case_id": bundle.case_id,
             "case_bundle_manifest_sha256": bundle.manifest_sha256,
             "catalog_snapshot_id": catalog.snapshot_id,

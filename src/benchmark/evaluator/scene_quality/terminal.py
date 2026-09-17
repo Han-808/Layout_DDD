@@ -9,8 +9,18 @@ explicit infrastructure failures.
 
 from __future__ import annotations
 
+from benchmark.visual_judge.evidence_resolution import (
+    ADAPTIVE_POLICY, adaptive_enabled, with_evidence_policy, resolution_of,
+    resolution_accepted, bind_resolution, failure_record, finite_score,
+)
+
 from copy import deepcopy
 from typing import Any
+
+from benchmark.evaluator.structured_fallback import (
+    apply_policy_default_valid,
+    policy_resolved,
+)
 
 
 TERMINAL_EVALUATED = "evaluated"
@@ -124,6 +134,10 @@ def terminalize_required_scope(
 ) -> dict[str, Any]:
     """Finalize one scope as binary, degraded binary, or hard failure."""
 
+    if adaptive_enabled(record) or resolution_of(record) is not None:
+        from benchmark.evaluator.scene_quality.adaptive_acceptance import terminalize_adaptive_scope
+        return terminalize_adaptive_scope(record, phase=phase)
+
     status = str(record.get("status") or "").strip().lower()
     audit = record.get("camera_control_audit")
     stop_reason = controller_stop_reason(audit)
@@ -175,47 +189,29 @@ def terminalize_required_scope(
             "error_type": error_type,
             "error": error,
         }
-        default_judgement = {
-            "evidence_status": "sufficient",
-            "verdict": "valid",
-            "confidence": 0.0,
-            "reason": (
-                "No legal invalid finding survived the bounded recovery "
-                "path; the episode therefore defaults to valid while "
-                "retaining explicit ambiguity audit."
-            ),
-            "missing_evidence": [],
-            "defects": [],
-            "evidence_request": None,
-            "evidence_ambiguous": True,
+        apply_policy_default_valid(
+            record,
+            reason="default_valid_after_non_hard_failure",
+            recovery_failure=failure,
+        )
+        record["terminal_state"] = TERMINAL_EVALUATED_DEGRADED
+        record["terminal_decision"] = {
             "forced_binary": True,
             "defaulted": True,
-            "decision_source": "default_valid_after_non_hard_failure",
-            "recovery_failure": deepcopy(failure),
+            "evidence_ambiguous": True,
+            "decision_source": (
+                "policy_default_valid_no_evidence"
+            ),
+            "failure": deepcopy(failure),
         }
-        record.update(
-            status="evaluated",
-            score=1.0,
-            reason=None,
-            judgement=default_judgement,
-            terminal_state=TERMINAL_EVALUATED_DEGRADED,
-            terminal_decision={
-                "forced_binary": True,
-                "defaulted": True,
-                "evidence_ambiguous": True,
-                "decision_source": (
-                    "default_valid_after_non_hard_failure"
-                ),
-                "failure": deepcopy(failure),
-            },
-            degradation_audit={
-                "phase": phase,
-                "controller_stop_reason": stop_reason,
-                "forced_binary": True,
-                "defaulted": True,
-                "evidence_ambiguous": True,
-            },
-        )
+        record["degradation_audit"] = {
+            "phase": phase,
+            "controller_stop_reason": stop_reason,
+            "forced_binary": True,
+            "defaulted": True,
+            "evidence_ambiguous": True,
+            "policy_resolved": True,
+        }
         record.pop("infrastructure_failure", None)
         return record
 
@@ -303,24 +299,26 @@ def _is_hard_failure(
         return True
     if any(token in normalized_reason for token in _HARD_REASON_TOKENS):
         return True
+    structured_policy_resolved = policy_resolved(record)
     if (
         "evidence_paths" in record
         and not record.get("evidence_paths")
         and str(record.get("status") or "").lower() != "evaluated"
+        and not structured_policy_resolved
     ):
-        # A retained packet lets the Judge make a forced choice after camera
-        # acquisition fails.  With no decodable packet at all there is no
-        # scientific input to project, so the failure remains infrastructure.
-        return True
+        # The terminal policy resolves a missing visual packet through
+        # structured geometry when available and otherwise explicit valid.
+        return False
     evidence_resolution = record.get("evidence_resolution")
     if (
         isinstance(evidence_resolution, dict)
         and evidence_resolution.get("scope_satisfied") is False
         and not _uses_retained_global_forced_final(record)
+        and not structured_policy_resolved
     ):
-        # A global overview cannot be relabelled as the required group/local
-        # packet merely to avoid an infrastructure result.
-        return True
+        # Scope truth remains unsatisfied in audit, but it no longer prevents
+        # a binary policy resolution.
+        return False
     schema_audit = _schema_audit(record)
     if any(
         isinstance(attempt, dict)

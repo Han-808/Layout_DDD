@@ -1191,6 +1191,34 @@ def _architecture_plane_overlays(scene: dict[str, Any], detector_evidence: dict[
     if bounds is None:
         return []
     min_x, max_x, min_y, max_y, floor_z, ceiling_z = bounds
+    room = (
+        detector_evidence.get("room")
+        if isinstance(detector_evidence.get("room"), dict)
+        else {}
+    )
+    references = (
+        room.get("plane_reference")
+        if isinstance(room.get("plane_reference"), dict)
+        else {}
+    )
+
+    def coordinate(flag: str, fallback: float) -> float:
+        item = references.get(flag)
+        raw = item.get("coordinate_m") if isinstance(item, dict) else None
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            return float(fallback)
+        return value if np.isfinite(value) else float(fallback)
+
+    min_x = coordinate("west_oob", min_x)
+    max_x = coordinate("east_oob", max_x)
+    min_y = coordinate("south_oob", min_y)
+    max_y = coordinate("north_oob", max_y)
+    floor_z = coordinate("floor_oob", floor_z)
+    ceiling_z = coordinate("ceiling_oob", ceiling_z)
+    if not (max_x > min_x and max_y > min_y and ceiling_z > floor_z):
+        return []
     definitions = {
         "west_oob": ("west", [[min_x, min_y, floor_z], [min_x, max_y, floor_z], [min_x, max_y, ceiling_z], [min_x, min_y, ceiling_z]], [-1.0, 0.0, 0.0]),
         "east_oob": ("east", [[max_x, min_y, floor_z], [max_x, max_y, floor_z], [max_x, max_y, ceiling_z], [max_x, min_y, ceiling_z]], [1.0, 0.0, 0.0]),
@@ -1215,6 +1243,11 @@ def _architecture_plane_overlays(scene: dict[str, Any], detector_evidence: dict[
                 "normal_from": [float(value) for value in center],
                 "normal_to": [float(value) for value in normal_end],
                 "color": list(COLLISION_OVERLAY_COLORS["architecture"]),
+                "plane_reference": (
+                    references.get(flag)
+                    if isinstance(references.get(flag), dict)
+                    else None
+                ),
             }
         )
     return result

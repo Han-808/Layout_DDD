@@ -21,9 +21,9 @@ Canonical hierarchy (single source of truth for ownership labels):
 - L3 Scene Quality ("Is the scene coherent, except prompt-authorized
   deviations?"):
   - L3a Semantic Coherence: scale_consistency, object_pairing_consistency.
-    Object pairing is category/role compatibility over groups supplied by the
-    grouping algorithm; position, angle, and functional arrangement are outside
-    its verdict.
+    Object pairing is room-global object-inventory coherence over identities,
+    semantic roles, coexistence, and materially implausible redundancy;
+    position, angle, and functional arrangement are outside its verdict.
   - L3b Perceptual Visual Quality: style_consistency.
   - L3c Functional Validity: functional_consistency.
   - L3d Semantic Placement: semantic_placement_consistency.
@@ -185,7 +185,7 @@ CANONICAL_HIERARCHY: dict[str, Any] = {
         "perceptual_visual_quality": ["style_consistency"],
         "functional_validity": ["functional_consistency"],
         "semantic_placement": ["semantic_placement_consistency"],
-        "object_pairing_scope": "group_member_category_and_role_compatibility_only",
+        "object_pairing_scope": "room_global_object_inventory_coherence_only",
     },
     "l4_downstream_task_functionality": {
         "question": "Does the environment support the downstream task?",

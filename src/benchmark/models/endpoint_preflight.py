@@ -5,9 +5,11 @@ from __future__ import annotations
 import base64
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from copy import deepcopy
+import math
 import mimetypes
 from pathlib import Path
 import threading
+import time
 from typing import Any, Callable
 
 from benchmark.models.openai_compatible_model import (
@@ -40,25 +42,54 @@ def run_endpoint_stability_preflight(
     image_path: Path,
     attempts: int = 10,
     concurrency: int = 2,
+    required_successes: int | None = None,
+    inter_attempt_sleep_seconds: float = 0.0,
     timeout_seconds: int = 300,
     max_tokens: int = 64,
     min_request_interval_seconds: float = 0.0,
+    max_retries: int = 0,
+    retry_backoff_seconds: float = 1.0,
+    retry_backoff_mode: str = "linear",
+    retry_all_http_errors: bool = False,
+    retry_malformed_response: bool = False,
     model_factory: Callable[..., Any] = OpenAICompatibleModel,
 ) -> dict[str, Any]:
-    """Require every repeated real-image call to succeed before evaluation.
+    """Run repeated real-image calls before evaluation.
 
     The calls are deliberately separate model instances so shared mutable
     response metadata cannot cross threads.  Any upstream route-configuration
     error trips a shared stop flag; queued checks then fail locally without
-    issuing more requests.
+    issuing more requests.  By default every attempt must succeed, preserving
+    the historical stability gate.  A smaller ``required_successes`` enables
+    an availability gate; with concurrency one, attempts run serially and stop
+    as soon as the required number of successes is reached.
     """
 
     resolved_attempts = int(attempts)
     resolved_concurrency = int(concurrency)
+    resolved_required_successes = (
+        resolved_attempts
+        if required_successes is None
+        else int(required_successes)
+    )
+    resolved_sleep_seconds = float(inter_attempt_sleep_seconds)
     if resolved_attempts < 1:
         raise ValueError("endpoint preflight attempts must be at least 1")
     if resolved_concurrency < 1:
         raise ValueError("endpoint preflight concurrency must be at least 1")
+    if not 1 <= resolved_required_successes <= resolved_attempts:
+        raise ValueError(
+            "endpoint preflight required successes must be between 1 and "
+            "the attempt budget"
+        )
+    if not math.isfinite(resolved_sleep_seconds) or resolved_sleep_seconds < 0.0:
+        raise ValueError(
+            "endpoint preflight inter-attempt sleep must be non-negative"
+        )
+    if resolved_sleep_seconds > 0.0 and resolved_concurrency != 1:
+        raise ValueError(
+            "endpoint preflight inter-attempt sleep requires concurrency 1"
+        )
     resolved_image = image_path.expanduser().resolve()
     image_data_url = _image_data_url(resolved_image)
     stop = threading.Event()
@@ -78,7 +109,11 @@ def run_endpoint_stability_preflight(
             max_tokens=int(max_tokens),
             timeout_seconds=int(timeout_seconds),
             response_format_json=False,
-            max_retries=0,
+            max_retries=int(max_retries),
+            retry_backoff_seconds=float(retry_backoff_seconds),
+            retry_backoff_mode=str(retry_backoff_mode),
+            retry_all_http_errors=bool(retry_all_http_errors),
+            retry_malformed_response=bool(retry_malformed_response),
             min_request_interval_seconds=float(min_request_interval_seconds),
             send_temperature=False,
             require_api_key=True,
@@ -137,16 +172,39 @@ def run_endpoint_stability_preflight(
             "tokens_usage": deepcopy(metadata.get("usage")),
         }
 
+    def is_success(item: dict[str, Any]) -> bool:
+        return (
+            item.get("status") == "complete"
+            and item.get("content_nonempty") is True
+        )
+
     results: list[dict[str, Any]] = []
-    with ThreadPoolExecutor(
-        max_workers=min(resolved_attempts, resolved_concurrency)
-    ) as executor:
-        futures = [
-            executor.submit(invoke, index)
-            for index in range(1, resolved_attempts + 1)
-        ]
-        for future in as_completed(futures):
-            results.append(future.result())
+    if resolved_concurrency == 1 and (
+        resolved_required_successes < resolved_attempts
+        or resolved_sleep_seconds > 0.0
+    ):
+        successes = 0
+        for index in range(1, resolved_attempts + 1):
+            item = invoke(index)
+            results.append(item)
+            if is_success(item):
+                successes += 1
+                if successes >= resolved_required_successes:
+                    break
+            if stop.is_set():
+                break
+            if index < resolved_attempts and resolved_sleep_seconds > 0.0:
+                time.sleep(resolved_sleep_seconds)
+    else:
+        with ThreadPoolExecutor(
+            max_workers=min(resolved_attempts, resolved_concurrency)
+        ) as executor:
+            futures = [
+                executor.submit(invoke, index)
+                for index in range(1, resolved_attempts + 1)
+            ]
+            for future in as_completed(futures):
+                results.append(future.result())
     results.sort(key=lambda item: int(item["attempt"]))
     failures = [
         deepcopy(item)
@@ -154,9 +212,19 @@ def run_endpoint_stability_preflight(
         if item.get("status") != "complete"
         or item.get("content_nonempty") is not True
     ]
+    completed_attempts = (
+        sum(item.get("status") == "complete" for item in results)
+        if required_successes is None
+        else sum(is_success(item) for item in results)
+    )
+    passed = (
+        not failures
+        if required_successes is None
+        else completed_attempts >= resolved_required_successes
+    )
     report = {
         "schema_version": ENDPOINT_PREFLIGHT_SCHEMA_VERSION,
-        "status": "passed" if not failures else "failed",
+        "status": "passed" if passed else "failed",
         "endpoint": str(endpoint),
         "model_id": str(model_id),
         "api_key_env": str(api_key_env),
@@ -165,9 +233,14 @@ def run_endpoint_stability_preflight(
         "attempts_required": resolved_attempts,
         "concurrency": min(resolved_attempts, resolved_concurrency),
         "min_request_interval_seconds": float(min_request_interval_seconds),
-        "completed_attempts": sum(
-            item.get("status") == "complete" for item in results
-        ),
+        "per_call_retry_policy": {
+            "max_retries": int(max_retries),
+            "retry_backoff_seconds": float(retry_backoff_seconds),
+            "retry_backoff_mode": str(retry_backoff_mode),
+            "retry_all_http_errors": bool(retry_all_http_errors),
+            "retry_malformed_response": bool(retry_malformed_response),
+        },
+        "completed_attempts": completed_attempts,
         "api_invocations": sum(
             item.get("api_invoked") is True for item in results
         ),
@@ -177,7 +250,14 @@ def run_endpoint_stability_preflight(
         "results": results,
         "failures": failures,
     }
-    if failures:
+    if required_successes is not None:
+        report.update(
+            pass_policy="minimum_successes",
+            successes_required=resolved_required_successes,
+            attempts_performed=len(results),
+            inter_attempt_sleep_seconds=resolved_sleep_seconds,
+        )
+    if not passed:
         raise EndpointStabilityPreflightError(report)
     return report
 

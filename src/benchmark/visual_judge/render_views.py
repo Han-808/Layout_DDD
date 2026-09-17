@@ -107,6 +107,9 @@ _CAMERA_EVIDENCE_IMPLEMENTATION_FILES = (
     "src/benchmark/visual_judge/openai_camera_selector.py",
     "src/benchmark/visual_judge/openai_compatible.py",
     "src/benchmark/visual_judge/render_views.py",
+    "src/benchmark/visual_judge/acquisition_outcome.py",
+    "src/benchmark/visual_judge/evidence_resolution.py",
+    "src/benchmark/visual_judge/evidence_gap_v2.py",
     "src/benchmark/visual_judge/roles.py",
 )
 
@@ -702,6 +705,13 @@ class CameraEvidenceProvider:
             )
         _write_json(event_dir / "pose_candidates.json", candidates)
 
+        # Stop at the algorithm's empty-bank branch, before a selector or
+        # renderer turns normal exhaustion into ValueError/IndexError.
+        from benchmark.visual_judge.evidence_gap_v2 import enabled as fallback_v2_enabled
+        if not candidates and fallback_v2_enabled():
+            from benchmark.visual_judge.acquisition_outcome import AcquisitionExhausted
+            raise AcquisitionExhausted("trusted_candidate_bank_empty")
+
         if collision_overlay:
             return self._finish_call_usage(
                 self._collision_overlay_evidence(
@@ -985,6 +995,10 @@ class CameraEvidenceProvider:
                         if candidate_id in eligible_ids
                     }
                     if not current:
+                        from benchmark.visual_judge.evidence_gap_v2 import enabled as fallback_v2_enabled
+                        if fallback_v2_enabled():
+                            from benchmark.visual_judge.acquisition_outcome import AcquisitionExhausted
+                            raise AcquisitionExhausted("required_target_visibility_exhausted")
                         raise RuntimeError(
                             "no_feasible_candidate: all previews failed "
                             "required target visibility"
@@ -2107,6 +2121,10 @@ class CameraEvidenceProvider:
                 resolved_mode=resolved_mode,
             )
         if not selected:
+            from benchmark.visual_judge.evidence_gap_v2 import enabled as fallback_v2_enabled
+            if fallback_v2_enabled():
+                from benchmark.visual_judge.acquisition_outcome import AcquisitionExhausted
+                raise AcquisitionExhausted("functional_preview_bank_exhausted")
             raise RuntimeError(
                 "no_feasible_candidate: no functional preview survived"
             )

@@ -55,6 +55,7 @@ DEFAULT_BLENDER_BIN = Path(
         "/Applications/Blender.app/Contents/MacOS/Blender",
     )
 )
+DEFAULT_ENDPOINT_PREFLIGHT_ATTEMPTS = 5
 
 
 def positive_int(value: str) -> int:
@@ -113,6 +114,12 @@ def _parse_args_impl(
         default=default_grouping_config,
     )
     parser.add_argument(
+        "--evidence-resolution-policy",
+        choices=("legacy", "evidence_adaptive_judgement_v1", "evidence_consistency_fallback_v2"),
+        default=None,
+        help="Explicit per-run policy; omission preserves the existing control.",
+    )
+    parser.add_argument(
         "--case-id",
         action="append",
         default=[],
@@ -156,7 +163,18 @@ def _parse_args_impl(
             "unscaled projection)."
         ),
     )
-    parser.add_argument(
+    layer_only = parser.add_mutually_exclusive_group()
+    layer_only.add_argument(
+        "--l1-only",
+        action=argparse.BooleanOptionalAction,
+        default=argparse.SUPPRESS,
+        help=(
+            "Recovery mode: disable L3 and execute only L1. The L1 report "
+            "is diagnostic and must be merged post-hoc with a separately "
+            "retained L3 result when a complete benchmark score is needed."
+        ),
+    )
+    layer_only.add_argument(
         "--l3-only",
         action=argparse.BooleanOptionalAction,
         default=False,
@@ -171,10 +189,11 @@ def _parse_args_impl(
     parser.add_argument(
         "--endpoint-preflight-attempts",
         type=positive_int,
-        default=10,
+        default=DEFAULT_ENDPOINT_PREFLIGHT_ATTEMPTS,
         help=(
-            "Required consecutive real-image endpoint calls before any case "
-            "starts (default: 10). All attempts must succeed."
+            "Maximum real-image endpoint calls before any case starts "
+            "(default: 5). The default route policy passes after the first "
+            "successful call; explicit route policy may require more."
         ),
     )
     parser.add_argument(
@@ -252,7 +271,10 @@ def _parse_args_impl(
         type=positive_int,
         default=900,
     )
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if getattr(args, "l1_only", False) and args.metric:
+        parser.error("--l1-only cannot be combined with --metric")
+    return args
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:

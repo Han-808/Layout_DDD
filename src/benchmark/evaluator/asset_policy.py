@@ -145,9 +145,9 @@ def scene_quality_applicability(policy: dict[str, Any] | None) -> dict[str, dict
     if generator_controls_assets:
         scale_basis.append(f"mode={mode}")
 
-    # object_pairing_consistency: category/role compatibility only. Arrangement
-    # ownership does not activate it; position/orientation/function are outside
-    # the canonical pairing verdict.
+    # object_pairing_consistency: room-global inventory identity/role
+    # coherence only. Arrangement ownership does not activate it;
+    # position/orientation/function are outside the canonical pairing verdict.
     pairing_basis: list[str] = []
     if _owner(policy, "category_selection_owner") == "generator":
         pairing_basis.append("category_selection_owner=generator")

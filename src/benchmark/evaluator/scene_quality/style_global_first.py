@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from benchmark.visual_judge.evidence_resolution import adaptive_enabled
+from benchmark.visual_judge.evidence_gap_v2 import enabled as fallback_v2_enabled
+
 from copy import deepcopy
 from typing import Any, Callable
 
@@ -84,6 +87,18 @@ def evaluate_style_global_then_group_local(
     global_request["camera_acquisition_ledger"] = deepcopy(
         base["camera_acquisition_ledger"]
     )
+    if fallback_v2_enabled():
+        from benchmark.visual_judge.evidence_resolution import bind_acquisition_resolution
+        resolution = deepcopy(base.get("initial_acquisition_resolution") or {"scope_satisfied": True})
+        resolution["images_not_delivered"] = list(dict.fromkeys(
+            list(resolution.get("images_not_delivered") or [])
+            + [path for path in global_evidence if path not in selected_global_evidence]
+        ))
+        bind_acquisition_resolution(global_request, resolution)
+    if adaptive_enabled(metric="style_consistency") and not selected_global_evidence:
+        # Empty global packets go through the bounded final-evidence controller,
+        # including the explicit no-appearance Style policy.
+        global_request["decision_mode"] = "final"
     base["evidence_request"]["vlm_invoked"] = True
     base["evidence_request"]["evidence_phase"] = "global_screen"
     base["vlm_invoked"] = True
@@ -108,6 +123,7 @@ def evaluate_style_global_then_group_local(
         )
     except Exception as exc:
         schema_audit = response_schema_audit_from_exception(exc)
+        from benchmark.visual_judge.evidence_resolution import failure_record
         base.update(
             status="unresolved",
             reason="vlm_global_style_screen_failed",
@@ -117,6 +133,7 @@ def evaluate_style_global_then_group_local(
                 "reason": "global_screen_failed",
             },
             judgement={
+                **({"failure": failure_record(exc, phase="judge")} if fallback_v2_enabled() else {}),
                 "error_type": type(exc).__name__,
                 "error": str(exc),
                 **(

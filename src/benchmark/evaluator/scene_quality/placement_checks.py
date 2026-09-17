@@ -7,11 +7,17 @@ and merges their audit-only lifecycle.  It never decides a metric verdict.
 
 from __future__ import annotations
 
+from benchmark.visual_judge.evidence_resolution import adaptive_enabled, resolution_of, resolution_accepted
+
 from copy import deepcopy
 import hashlib
 import json
 from typing import Any, Iterable
 
+from benchmark.evaluator.structured_fallback import (
+    POLICY_DEFAULT_VALID_MODE,
+    fallback_resolution,
+)
 
 PLACEMENT_CHECK_LEDGER_VERSION = "placement_check_ledger_v1"
 PLACEMENT_CHECK_RESULT_VERSION = "placement_check_results_v2"
@@ -511,6 +517,7 @@ def placement_global_checks(
         deepcopy(check)
         for check in (ledger or {}).get("checks") or []
         if check.get("owner_stage") == "scene_global"
+        and check.get("judge_status") != "resolved"
     ]
 
 
@@ -580,6 +587,7 @@ def validate_placement_check_results(
     *,
     required_checks: list[dict[str, Any]],
     function_events: list[dict[str, Any]] | None = None,
+    allow_scope_evidence_request: bool = False,
 ) -> dict[str, Any]:
     """Require exact rows, subject ownership, and exact same-event links.
 
@@ -761,9 +769,27 @@ def validate_placement_check_results(
             "acquisition verdict; an early invalid cannot stop the loop"
         )
     pending_proposal = _pending_proposal_from_result(result)
+    # A scope can be occluded before the Judge can discover any typed claim.
+    # A validated request for visibility is a control signal, not a missing
+    # check result, invented proposal, accepted score, or infrastructure fault.
+    evidence_request = result.get("evidence_request")
+    scope_evidence_unresolved = (
+        allow_scope_evidence_request and not expected and not rows
+        and verdict == "ambiguous" and result.get("evidence_status") == "insufficient"
+        and not result.get("defects") and pending_proposal is None
+        and isinstance(evidence_request, dict)
+        and isinstance(evidence_request.get("target_ids"), list)
+        and bool(evidence_request["target_ids"])
+        and all(isinstance(item, str) and item.strip() for item in evidence_request["target_ids"])
+        and isinstance(evidence_request.get("missing_observations"), list)
+        and bool(evidence_request["missing_observations"])
+        and all(isinstance(item, str) and item.strip() for item in evidence_request["missing_observations"])
+        and isinstance(evidence_request.get("view_goal"), str)
+        and bool(evidence_request["view_goal"].strip())
+    )
     if verdict == "ambiguous" and (
         result.get("defects")
-        or (not unresolved and pending_proposal is None)
+        or (not unresolved and pending_proposal is None and not scope_evidence_unresolved)
     ):
         raise ValueError(
             "placement ambiguous verdict requires unresolved checks and cannot "
@@ -776,7 +802,8 @@ def validate_placement_check_results(
         "unresolved_check_ids": unresolved,
         "invalid_check_ids": invalid,
         "excluded_function_owned_check_ids": excluded,
-        "complete": not unresolved,
+        "complete": not unresolved and not scope_evidence_unresolved,
+        **({"scope_evidence_unresolved": True} if scope_evidence_unresolved else {}),
         "rows": normalized_rows,
         "decision_authority": "none",
     }
@@ -1208,9 +1235,23 @@ def normalize_judge_originated_placement_results(
         raise ValueError(
             "judge_originated_placement_results must be a list of objects"
         )
-    if result.get("verdict") != "invalid" and raw_items:
+    valid_all_function_owned = bool(
+        result.get("verdict") == "valid"
+        and raw_items
+        and all(
+            str(item.get("conclusion") or "")
+            == "excluded_function_owned"
+            for item in raw_items
+        )
+    )
+    if (
+        result.get("verdict") != "invalid"
+        and raw_items
+        and not valid_all_function_owned
+    ):
         raise ValueError(
-            "judge-originated placement results require an invalid verdict"
+            "judge-originated placement results require an invalid verdict, "
+            "except exact Function-owned exclusions under a valid verdict"
         )
     canonical_items: list[dict[str, Any]] = []
     transport_warnings: list[dict[str, Any]] = []
@@ -1285,6 +1326,8 @@ def normalize_judge_originated_placement_results(
             "conclusion",
             "reason",
             "severity",
+            "function_event_ref",
+            "same_physical_event",
         }
         if unknown:
             raise ValueError(
@@ -1309,17 +1352,18 @@ def normalize_judge_originated_placement_results(
             raise ValueError(
                 "judge-originated placement result duplicates a routed check"
             )
-        if item.get("conclusion") != "invalid":
+        conclusion = str(item.get("conclusion") or "")
+        if conclusion not in {"invalid", "excluded_function_owned"}:
             raise ValueError(
                 "judge-originated placement result must be a supported invalid "
-                "finding; uncertainty must request evidence"
+                "finding or an exact Function-owned exclusion"
             )
         if item.get("observation_status") not in {
             "observed",
             "inferred_under_budget",
         }:
             raise ValueError(
-                "judge-originated invalid placement result requires observed "
+                "judge-originated placement result requires observed "
                 "or inferred_under_budget evidence"
             )
         if not str(item.get("reason") or "").strip():
@@ -1333,14 +1377,14 @@ def normalize_judge_originated_placement_results(
             object_to_group=object_to_group,
             known_groups=known_groups,
         )
-        if (
-            expected_owner_stage is not None
-            and owner_stage != expected_owner_stage
-        ):
-            raise ValueError(
-                "judge-originated placement check belongs to "
-                f"{owner_stage!r}, not the active "
-                f"{expected_owner_stage!r} phase"
+        if expected_owner_stage is not None and owner_stage != expected_owner_stage:
+            transport_warnings.append(
+                {
+                    "code": "judge_originated_check_rehomed",
+                    "proposal_id": proposal_id,
+                    "from_phase": expected_owner_stage,
+                    "owner_stage": owner_stage,
+                }
             )
         check_id = placement_check_id(*identity)
         check = {
@@ -1378,7 +1422,7 @@ def normalize_judge_originated_placement_results(
             "observation_complete": True,
             "observation_status": item["observation_status"],
             "judge_status": "resolved",
-            "check_conclusion": "invalid",
+            "check_conclusion": conclusion,
             "judge_result_ref": None,
             "decision_authority": "none",
         }
@@ -1458,6 +1502,7 @@ def normalize_judge_originated_placement_results(
     missing = sorted(
         str(check["check_id"])
         for check in new_checks
+        if check.get("check_conclusion") == "invalid"
         if str(check["check_id"]) not in referenced_new_ids
     )
     if missing:
@@ -1496,6 +1541,13 @@ def normalize_judge_originated_placement_results(
             "conclusion": item["conclusion"],
             "reason": item["reason"],
         }
+        if item.get("conclusion") == "excluded_function_owned":
+            normalized_row["function_event_ref"] = item.get(
+                "function_event_ref"
+            )
+            normalized_row["same_physical_event"] = item.get(
+                "same_physical_event"
+            )
         prior_row = existing_rows.get(check["check_id"])
         if prior_row is not None:
             if prior_row != normalized_row:
@@ -1648,6 +1700,7 @@ def apply_placement_check_judgements(
     group_results: list[dict[str, Any]],
     target_results: list[dict[str, Any]] | None = None,
     residual_records: list[dict[str, Any]] | None = None,
+    handoff_records: list[dict[str, Any]] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     result = deepcopy(ledger)
     checks_by_id = {
@@ -1655,10 +1708,16 @@ def apply_placement_check_judgements(
         for check in result.get("checks") or []
         if isinstance(check, dict) and check.get("check_id")
     }
-    rows_by_id: dict[str, tuple[dict[str, Any], str, bool]] = {}
+    rows_by_id: dict[
+        str,
+        tuple[dict[str, Any], str, bool, str | None],
+    ] = {}
+    collapsed_duplicate_rows: list[dict[str, str]] = []
+    resolutions_by_id: dict[str, dict[str, Any]] = {}
     records: list[tuple[dict[str, Any], str]] = []
     if isinstance(global_record, dict):
         records.append((global_record, "global_discovery"))
+    records.extend((item, "placement_global_handoff_review") for item in handoff_records or [])
     records.extend(
         (
             item,
@@ -1687,11 +1746,19 @@ def apply_placement_check_judgements(
         retained_visual_forced_check_ids = (
             _retained_visual_forced_placement_check_ids(record)
         )
+        structured_fallback_modes = _structured_fallback_check_modes(
+            record,
+            row_key="placement_check_results",
+        )
         judgement = (
             record.get("judgement")
             if isinstance(record.get("judgement"), dict)
             else record
         )
+        from benchmark.visual_judge.evidence_gap_v2 import enabled as fallback_v2_enabled
+        if fallback_v2_enabled():
+            for check_id, resolution in (judgement.get("placement_check_resolutions") or {}).items():
+                resolutions_by_id[check_id] = deepcopy(resolution)
         for row in judgement.get("placement_check_results") or []:
             if not isinstance(row, dict):
                 continue
@@ -1701,13 +1768,34 @@ def apply_placement_check_judgements(
                     f"Judge returned unknown placement check {check_id!r}"
                 )
             if check_id in rows_by_id:
-                raise ValueError(
-                    f"placement check {check_id!r} was judged more than once"
+                prior_row, prior_phase, prior_forced, prior_fallback = (
+                    rows_by_id[check_id]
                 )
+                if not _placement_rows_are_idempotent_duplicates(
+                    prior_row,
+                    row,
+                ) or (
+                    prior_forced
+                    != (check_id in retained_visual_forced_check_ids)
+                    or prior_fallback
+                    != structured_fallback_modes.get(check_id)
+                ):
+                    raise ValueError(
+                        f"placement check {check_id!r} was judged more than once"
+                    )
+                collapsed_duplicate_rows.append(
+                    {
+                        "check_id": check_id,
+                        "retained_phase": prior_phase,
+                        "duplicate_phase": phase,
+                    }
+                )
+                continue
             rows_by_id[check_id] = (
                 row,
                 phase,
                 check_id in retained_visual_forced_check_ids,
+                structured_fallback_modes.get(check_id),
             )
         for item in judgement.get(
             "judge_originated_placement_results"
@@ -1734,13 +1822,19 @@ def apply_placement_check_judgements(
                 },
                 phase,
                 check_id in retained_visual_forced_check_ids,
+                structured_fallback_modes.get(check_id),
             )
     for check_id, check in checks_by_id.items():
         routed = rows_by_id.get(check_id)
         if routed is None:
             check["judge_status"] = "pending"
             continue
-        row, phase, retained_visual_forced_choice = routed
+        (
+            row,
+            phase,
+            retained_visual_forced_choice,
+            structured_fallback_mode,
+        ) = routed
         conclusion = str(row.get("conclusion") or "")
         observation_status = str(row.get("observation_status") or "")
         check["judge_status"] = (
@@ -1754,10 +1848,33 @@ def apply_placement_check_judgements(
             observation_status == "observed"
             or (
                 observation_status == "inferred_under_budget"
-                and conclusion in {"valid", "invalid"}
-                and retained_visual_forced_choice
+                and conclusion
+                in {"valid", "invalid", "excluded_function_owned"}
+                and (
+                    retained_visual_forced_choice
+                    or structured_fallback_mode is not None
+                )
             )
         )
+        check["policy_resolved"] = bool(
+            structured_fallback_mode is not None
+        )
+        check["empirically_grounded"] = bool(
+            check["grounded"]
+            and structured_fallback_mode != POLICY_DEFAULT_VALID_MODE
+        )
+        if structured_fallback_mode is not None:
+            check["decision_authority"] = structured_fallback_mode
+        if adaptive_enabled():
+            check["evidence_resolution"] = deepcopy(resolution_of(row))
+            check["resolution_accepted"] = resolution_accepted(row)
+            check["grounded"] = bool(observation_status == "observed" and (resolution_of(row) or {}).get("images_used"))
+            if fallback_v2_enabled():
+                check["evidence_resolution"] = deepcopy(resolutions_by_id.get(check_id))
+                check["resolution_accepted"] = bool((check["evidence_resolution"] or {}).get("accepted"))
+                check["grounded"] = bool(observation_status == "observed"
+                                        and (check["evidence_resolution"] or {}).get("images_used"))
+            check["empirically_grounded"] = check["grounded"]
         check["observation_complete"] = observation_status in {
             "observed",
             "inferred_under_budget",
@@ -1810,6 +1927,16 @@ def apply_placement_check_judgements(
         for check_id, check in checks_by_id.items()
         if check.get("grounded") is True
     ]
+    empirically_grounded_ids = [
+        check_id
+        for check_id, check in checks_by_id.items()
+        if check.get("empirically_grounded") is True
+    ]
+    policy_resolved_ids = [
+        check_id
+        for check_id, check in checks_by_id.items()
+        if check.get("policy_resolved") is True
+    ]
     resolved_ids = sorted(set(checks_by_id) - set(unresolved_ids))
     coverage = {
         "schema_version": PLACEMENT_CHECK_RESULT_VERSION,
@@ -1821,6 +1948,16 @@ def apply_placement_check_judgements(
         "excluded_function_owned_check_ids": excluded_ids,
         "grounded_check_count": len(grounded_ids),
         "grounded_check_ids": grounded_ids,
+        "empirically_grounded_check_count": len(
+            empirically_grounded_ids
+        ),
+        "empirically_grounded_check_ids": empirically_grounded_ids,
+        "policy_resolved_check_count": len(policy_resolved_ids),
+        "policy_resolved_check_ids": policy_resolved_ids,
+        "idempotent_duplicate_result_count": len(
+            collapsed_duplicate_rows
+        ),
+        "idempotent_duplicate_results": collapsed_duplicate_rows,
         "grounding_fraction": (
             len(grounded_ids) / len(checks_by_id)
             if checks_by_id
@@ -1830,6 +1967,30 @@ def apply_placement_check_judgements(
         "decision_authority": "none",
     }
     return result, coverage
+
+
+def _placement_rows_are_idempotent_duplicates(
+    first: dict[str, Any],
+    second: dict[str, Any],
+) -> bool:
+    """Accept only the same typed decision repeated across review phases.
+
+    Free-text reasons may differ.  Every field that can affect ownership,
+    coverage, grounding, or scoring must match exactly.
+    """
+
+    def identity(row: dict[str, Any]) -> tuple[Any, ...]:
+        return (
+            str(row.get("check_id") or ""),
+            str(row.get("subject_id") or ""),
+            tuple(sorted(str(item) for item in row.get("context_ids") or [])),
+            str(row.get("observation_status") or ""),
+            str(row.get("conclusion") or ""),
+            str(row.get("function_event_ref") or ""),
+            row.get("same_physical_event"),
+        )
+
+    return identity(first) == identity(second)
 
 
 def _retained_visual_forced_placement_check_ids(
@@ -1904,6 +2065,48 @@ def _retained_visual_forced_placement_check_ids(
             if check_id:
                 grounded_ids.add(check_id)
     return grounded_ids
+
+
+def _structured_fallback_check_modes(
+    record: Any,
+    *,
+    row_key: str,
+) -> dict[str, str]:
+    """Map terminal structured-fallback rows to their decision mode."""
+
+    if not isinstance(record, dict):
+        return {}
+    raw_episodes = record.get("check_episodes")
+    episodes = (
+        [item for item in raw_episodes if isinstance(item, dict)]
+        if isinstance(raw_episodes, list)
+        else [record]
+    )
+    result: dict[str, str] = {}
+    for episode in episodes:
+        fallback = fallback_resolution(episode)
+        if not isinstance(fallback, dict) or fallback.get(
+            "policy_resolved"
+        ) is not True:
+            continue
+        mode = str(fallback.get("mode") or "").strip()
+        if not mode:
+            continue
+        judgement = episode.get("judgement")
+        judgement = judgement if isinstance(judgement, dict) else {}
+        for row in judgement.get(row_key) or []:
+            if not isinstance(row, dict):
+                continue
+            if row.get("conclusion") not in {
+                "valid",
+                "invalid",
+                "excluded_function_owned",
+            }:
+                continue
+            check_id = str(row.get("check_id") or "")
+            if check_id:
+                result[check_id] = mode
+    return result
 
 
 def _append_obligation_transition(

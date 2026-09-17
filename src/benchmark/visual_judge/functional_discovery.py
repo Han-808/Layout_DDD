@@ -1030,6 +1030,9 @@ def _validate_discovery_response_with_single_repair(
         status="complete",
         latency_seconds=round(time.perf_counter() - started, 6),
     )
+    # Parsing may fail before assignment (for example, a length-truncated reply).
+    # Salvage must still see an empty repair and retain legal initial atoms.
+    repaired_value: Any = None
     try:
         repaired_value = parse_json_object(repaired_raw)
         repaired = validator(repaired_value)

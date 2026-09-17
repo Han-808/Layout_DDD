@@ -8,6 +8,8 @@ scoring contract and is imported rather than duplicated here.
 
 from __future__ import annotations
 
+from benchmark.evaluator.adaptive_audit import adaptive_persisted_summary
+
 from copy import deepcopy
 from typing import Any
 
@@ -40,6 +42,7 @@ def _numeric(value: Any) -> float | None:
     return float(value)
 
 
+@adaptive_persisted_summary
 def case_scoring_summary(
     *,
     case_id: str,
@@ -483,10 +486,10 @@ def _mean_numeric(values: list[Any]) -> float | None:
     return sum(numbers) / len(numbers) if numbers else None
 
 
-def run_scoring_aggregate(
+def _run_room_macro_scoring_aggregate(
     summaries: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """Summarize persisted case scores without filling missing coverage."""
+    """Preserve the historical equal-room aggregate for audit/fallback."""
 
     total_cases = len(summaries)
     published_combined = [
@@ -581,6 +584,206 @@ def run_scoring_aggregate(
         ),
         "metrics": metric_summaries,
     }
+
+
+def _multi_room_scene_groups(
+    summaries: list[dict[str, Any]],
+) -> dict[str, list[dict[str, Any]]] | None:
+    """Return layout groups only for complete multi-room scoring inputs."""
+
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for summary in summaries:
+        case_id = str(summary.get("case_id") or "")
+        if ".room_" not in case_id:
+            return None
+        scene_id, room_suffix = case_id.rsplit(".room_", 1)
+        if not scene_id or not room_suffix:
+            return None
+        object_count = _numeric(summary.get("n_scene"))
+        if object_count is None or object_count <= 0.0:
+            return None
+        groups.setdefault(scene_id, []).append(summary)
+    return groups if groups else None
+
+
+def _scene_weighted_mean(
+    groups: dict[str, list[dict[str, Any]]],
+    value_getter: Any,
+    *,
+    require_every_room: bool,
+) -> tuple[float | None, dict[str, dict[str, Any]]]:
+    """Object-weight rooms within scenes, then room-count-weight scenes."""
+
+    scene_records: dict[str, dict[str, Any]] = {}
+    model_points = 0.0
+    model_room_weight = 0
+    for scene_id, rooms in groups.items():
+        weighted_points = 0.0
+        object_weight = 0.0
+        contributing_rooms = 0
+        for room in rooms:
+            value = _numeric(value_getter(room))
+            room_object_count = _numeric(room.get("n_scene"))
+            if value is None or room_object_count is None:
+                continue
+            weighted_points += value * room_object_count
+            object_weight += room_object_count
+            contributing_rooms += 1
+        complete = contributing_rooms == len(rooms)
+        scene_value = (
+            weighted_points / object_weight
+            if object_weight > 0.0
+            and (complete or not require_every_room)
+            else None
+        )
+        scene_room_weight = (
+            len(rooms) if complete else contributing_rooms
+        )
+        if scene_value is not None and scene_room_weight > 0:
+            model_points += scene_value * scene_room_weight
+            model_room_weight += scene_room_weight
+        scene_records[scene_id] = {
+            "scene_id": scene_id,
+            "layout_id": scene_id.rsplit(".", 1)[-1],
+            "room_count": len(rooms),
+            "contributing_room_count": contributing_rooms,
+            "object_count": int(
+                sum(float(room["n_scene"]) for room in rooms)
+            ),
+            "value": scene_value,
+            "complete": complete,
+        }
+    if require_every_room and model_room_weight != sum(
+        len(rooms) for rooms in groups.values()
+    ):
+        return None, scene_records
+    return (
+        model_points / model_room_weight
+        if model_room_weight > 0
+        else None,
+        scene_records,
+    )
+
+
+def _metric_value(
+    summary: dict[str, Any],
+    metric: str,
+    field: str,
+) -> float | None:
+    record = next(
+        (
+            item
+            for item in summary.get("metrics") or []
+            if item.get("metric") == metric
+        ),
+        {},
+    )
+    value = _numeric(record.get(field))
+    if value is None:
+        return None
+    return value * 100.0 if field in {"score", "observed_score"} else value
+
+
+def run_scoring_aggregate(
+    summaries: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Aggregate persisted scores under the multi-room scene contract.
+
+    Multi-room models first object-weight room scores within each layout, then
+    weight layout scores by their room counts. Inputs without the canonical
+    ``.room_`` case identity retain the historical equal-room aggregate.
+    """
+
+    room_macro = _run_room_macro_scoring_aggregate(summaries)
+    groups = _multi_room_scene_groups(summaries)
+    if groups is None:
+        return room_macro
+
+    official_score, official_scenes = _scene_weighted_mean(
+        groups,
+        lambda item: item.get("combined_score_100"),
+        require_every_room=True,
+    )
+    observed_score, observed_scenes = _scene_weighted_mean(
+        groups,
+        lambda item: item.get("combined_observed_score_100"),
+        require_every_room=False,
+    )
+    mean_coverage, coverage_scenes = _scene_weighted_mean(
+        groups,
+        lambda item: item.get("combined_coverage_fraction"),
+        require_every_room=False,
+    )
+
+    metric_summaries = deepcopy(room_macro["metrics"])
+    for metric_summary in metric_summaries:
+        metric = str(metric_summary["metric"])
+        metric_score, _ = _scene_weighted_mean(
+            groups,
+            lambda item, metric=metric: _metric_value(
+                item, metric, "score"
+            ),
+            require_every_room=False,
+        )
+        observed_metric_score, _ = _scene_weighted_mean(
+            groups,
+            lambda item, metric=metric: _metric_value(
+                item, metric, "observed_score"
+            ),
+            require_every_room=False,
+        )
+        metric_coverage, _ = _scene_weighted_mean(
+            groups,
+            lambda item, metric=metric: _metric_value(
+                item, metric, "coverage_fraction"
+            ),
+            require_every_room=False,
+        )
+        metric_summary["mean_score_100"] = metric_score
+        metric_summary["mean_observed_score_100"] = observed_metric_score
+        metric_summary["mean_coverage_fraction"] = metric_coverage
+
+    scene_summaries = []
+    for scene_id in sorted(groups):
+        official = official_scenes[scene_id]
+        observed = observed_scenes[scene_id]
+        coverage = coverage_scenes[scene_id]
+        scene_summaries.append(
+            {
+                "scene_id": scene_id,
+                "layout_id": official["layout_id"],
+                "room_count": official["room_count"],
+                "object_count": official["object_count"],
+                "official_score_100": official["value"],
+                "diagnostic_observed_score_100": observed["value"],
+                "mean_coverage_fraction": coverage["value"],
+            }
+        )
+
+    result = deepcopy(room_macro)
+    result["official_score_100"] = official_score
+    result["diagnostic_observed_score_100"] = observed_score
+    result["mean_combined_coverage_fraction"] = mean_coverage
+    result["metrics"] = metric_summaries
+    result["scene_count"] = len(groups)
+    result["aggregation_policy"] = {
+        "schema_version": "multi_room_scene_weighted_aggregate_v1",
+        "within_scene": "room_score_weighted_by_canonical_object_count",
+        "across_scenes": "scene_score_weighted_by_room_count",
+        "object_count_field": "canonical_object_denominator.n_scene",
+        "room_identity": "case_id_suffix_.room_",
+    }
+    result["room_macro_diagnostic"] = {
+        "official_score_100": room_macro["official_score_100"],
+        "diagnostic_observed_score_100": room_macro[
+            "diagnostic_observed_score_100"
+        ],
+        "mean_combined_coverage_fraction": room_macro[
+            "mean_combined_coverage_fraction"
+        ],
+    }
+    result["scenes"] = scene_summaries
+    return result
 
 
 __all__ = [

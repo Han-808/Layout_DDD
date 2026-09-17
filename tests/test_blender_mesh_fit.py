@@ -212,6 +212,39 @@ def test_centering_holds_under_rotation() -> None:
     assert world_center == pytest.approx(target_center)
 
 
+def test_bounds_center_alignment_corrects_rotated_asymmetric_aabb() -> None:
+    alignment = worker._bounds_center_alignment_delta(
+        minimum=[3.1, 1.8, 0.0],
+        maximum=[4.7, 3.0, 0.8],
+        expected_center=[4.0, 2.5, 0.4],
+    )
+
+    assert alignment["pre_alignment_world_bounds_center"] == pytest.approx(
+        [3.9, 2.4, 0.4]
+    )
+    assert alignment["world_bounds_center_alignment_delta"] == pytest.approx(
+        [0.1, 0.1, 0.0]
+    )
+    assert alignment["world_bounds_center_alignment_distance_m"] == pytest.approx(
+        2**0.5 / 10.0
+    )
+
+
+def test_bounds_center_alignment_is_noop_for_centered_aabb() -> None:
+    alignment = worker._bounds_center_alignment_delta(
+        minimum=[3.5, 2.0, 0.0],
+        maximum=[4.5, 3.0, 0.8],
+        expected_center=[4.0, 2.5, 0.4],
+    )
+
+    assert alignment["world_bounds_center_alignment_delta"] == pytest.approx(
+        [0.0, 0.0, 0.0]
+    )
+    assert alignment["world_bounds_center_alignment_distance_m"] == pytest.approx(
+        0.0
+    )
+
+
 def test_bottom_anchor_places_contain_fit_on_canonical_local_bottom() -> None:
     placement = _anchored_root_placement(
         source_center=[0.0, 0.0, 1.0],
@@ -343,7 +376,7 @@ def test_build_object_falls_back_to_proxy_when_import_fails(monkeypatch) -> None
     assert len(proxy_calls) == 1
 
 
-def test_mesh_complexity_counts_triangulated_polygons() -> None:
+def test_mesh_complexity_counts_only_face_referenced_vertices() -> None:
     mesh = SimpleNamespace(
         vertices=[object()] * 7,
         polygons=[
@@ -354,7 +387,29 @@ def test_mesh_complexity_counts_triangulated_polygons() -> None:
     child = SimpleNamespace(type="MESH", data=mesh)
     root = SimpleNamespace(type="EMPTY", data=None, children_recursive=[child])
 
-    assert _mesh_complexity(root) == (7, 3)
+    assert _mesh_complexity(root) == (4, 3)
+
+
+def test_world_vertex_bounds_uses_exported_vertex_geometry(monkeypatch) -> None:
+    class IdentityMatrix:
+        def __matmul__(self, value):
+            return value
+
+    mesh = SimpleNamespace(
+        vertices=[
+            SimpleNamespace(co=[-1.0, 2.0, 0.5]),
+            SimpleNamespace(co=[3.0, -4.0, 1.5]),
+            SimpleNamespace(co=[0.0, 0.0, 1.0]),
+        ],
+        polygons=[SimpleNamespace(vertices=[0, 1, 2])],
+    )
+    obj = SimpleNamespace(matrix_world=IdentityMatrix(), data=mesh)
+    monkeypatch.setattr(worker, "Vector", lambda values: list(values))
+
+    minimum, maximum = worker._world_vertex_bounds([obj])
+
+    assert minimum == [-1.0, -4.0, 0.5]
+    assert maximum == [3.0, 2.0, 1.5]
 
 
 def test_collision_geometry_complexity_budget_skips_only_optional_mesh_evidence() -> None:
@@ -382,6 +437,39 @@ def test_collision_geometry_complexity_budget_skips_only_optional_mesh_evidence(
         max_total_vertices=200,
         max_total_faces=400,
     ) is None
+
+
+def test_collision_decimation_ratio_uses_strictest_remaining_budget() -> None:
+    ratio = worker._collision_decimation_ratio(
+        vertex_count=3_169_058,
+        face_count=3_419_466,
+        exported_vertices=179_477,
+        exported_faces=310_660,
+        max_vertices_per_object=400_000,
+        max_faces_per_object=550_000,
+        max_total_vertices=2_000_000,
+        max_total_faces=2_500_000,
+    )
+
+    assert ratio == pytest.approx(
+        (400_000 / 3_169_058) * worker.COLLISION_DECIMATION_SAFETY_FACTOR
+    )
+    assert 0.0 < ratio < 1.0
+
+
+def test_collision_decimation_ratio_is_one_when_already_within_budget() -> None:
+    ratio = worker._collision_decimation_ratio(
+        vertex_count=10_000,
+        face_count=20_000,
+        exported_vertices=100_000,
+        exported_faces=200_000,
+        max_vertices_per_object=400_000,
+        max_faces_per_object=550_000,
+        max_total_vertices=2_000_000,
+        max_total_faces=2_500_000,
+    )
+
+    assert ratio == 1.0
 
 
 def test_collision_geometry_frame_validation_detects_stale_origin_transform() -> None:

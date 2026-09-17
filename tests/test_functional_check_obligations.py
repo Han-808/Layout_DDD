@@ -111,16 +111,110 @@ def test_cross_group_relation_without_any_visual_returns_defaulted_binary(
         {
             "check_id": "functional_check_001",
             "target_ids": ["sofa", "television"],
-            "observation_status": "missing",
+            "observation_status": "inferred_under_budget",
             "conclusion": "valid",
             "reason": (
-                "No visual artifact was available for this required check; "
-                "the terminal policy returned a zero-confidence default "
-                "without claiming evidence coverage."
+                "The explicit no-evidence terminal policy resolved this "
+                "required Functional check as valid."
             ),
         }
     ]
-    assert result["evidence_coverage"]["grounded"] is False
+    assert result["evidence_coverage"]["grounded"] is True
+    assert result["evidence_coverage"]["empirically_grounded"] is False
+    assert result["structured_fallback"]["mode"] == (
+        "policy_default_valid_no_evidence"
+    )
+
+
+def test_cross_group_relation_without_visual_uses_geometry_only_vlm() -> None:
+    requests: list[dict] = []
+
+    def call_judge(_judge, request: dict) -> dict:
+        requests.append(request)
+        return {
+            "evidence_status": "sufficient",
+            "verdict": "valid",
+            "confidence": 0.8,
+            "reason": "Structured relative geometry is plausible.",
+            "missing_evidence": [],
+            "defects": [],
+            "evidence_request": None,
+            "functional_check_results": [
+                {
+                    "check_id": "functional_check_001",
+                    "target_ids": ["sofa", "television"],
+                    "observation_status": "observed",
+                    "conclusion": "valid",
+                    "reason": "The canonical facing geometry is plausible.",
+                }
+            ],
+        }
+
+    result = _evaluate_cross_group_relation_scopes(
+        specs=[
+            {
+                "relation_id": "sofa_tv",
+                "target_ids": ["sofa", "television"],
+                "group_ids": ["seating", "media"],
+                "pair_specific_evidence_available": False,
+                "required_checks": [
+                    {
+                        "check_id": "functional_check_001",
+                        "check_type": "directional_correspondence",
+                        "target_ids": ["sofa", "television"],
+                        "required_observations": ["joint_visibility"],
+                    }
+                ],
+                "required_check_ids": ["functional_check_001"],
+                "acquisition_status": "failed",
+            }
+        ],
+        metric_name="functional_consistency",
+        scene={
+            "boundary": [[0.0, 0.0], [5.0, 0.0], [5.0, 5.0]],
+            "scene_height": 3.0,
+            "objects": [
+                {
+                    "id": "sofa",
+                    "category": "sofa",
+                    "center": [1.0, 1.0, 0.5],
+                    "size": [2.0, 1.0, 1.0],
+                    "rotation": [0.0, 0.0, 0.0],
+                },
+                {
+                    "id": "television",
+                    "category": "television",
+                    "center": [4.0, 1.0, 1.2],
+                    "size": [1.5, 0.1, 0.9],
+                    "rotation": [0.0, 0.0, 180.0],
+                },
+            ],
+        },
+        global_evidence=[],
+        vlm_judge=object(),
+        prompt=None,
+        visual_style_spec=None,
+        authorized_deviations=[],
+        build_judge_request=lambda **kwargs: kwargs,
+        call_judge=call_judge,
+        apply_prompt_exemptions=lambda value, **_: value,
+        normalize_judgement=lambda value, **_: {
+            "status": "evaluated",
+            "score": 1.0,
+            "reason": None,
+        },
+    )[0]
+
+    assert len(requests) == 1
+    assert requests[0]["render_evidence"] == []
+    assert requests[0]["structured_geometry_finalization"]["mode"] == (
+        "geometry_only_vlm"
+    )
+    assert result["status"] == "evaluated"
+    assert result["structured_fallback"]["mode"] == "geometry_only_vlm"
+    assert result["judgement"]["functional_check_results"][0][
+        "observation_status"
+    ] == "inferred_under_budget"
 
 
 def test_batched_functional_salvage_keeps_initial_invalid_and_repairs_bad_row(
@@ -1503,6 +1597,228 @@ def test_check_acknowledgement_closes_the_audit_lifecycle() -> None:
     assert updated["checks"][0]["judge_result_ref"] == (
         "group_local_review:dining"
     )
+
+
+def test_retained_visual_forced_choice_counts_as_grounded() -> None:
+    discovery = _base_discovery()
+    discovery["within_group_correspondences"] = [
+        {
+            "discovery_id": "chair_table_correspondence",
+            "target_ids": ["chair_1", "chair_2", "table"],
+            "group_ids": ["dining"],
+            "observation_kinds": ["mutual_orientation"],
+            "observation_goal": "show chair and table interaction sides",
+        }
+    ]
+    ledger = build_functional_check_ledger(discovery, groups=GROUPS)
+    check = checks_for_group(ledger, "dining")[0]
+    row = {
+        "check_id": check["check_id"],
+        "target_ids": check["target_ids"],
+        "observation_status": "inferred_under_budget",
+        "conclusion": "valid",
+        "reason": "The retained room and group views support a final choice.",
+    }
+    judgement = {
+        "evidence_status": "sufficient",
+        "verdict": "valid",
+        "functional_check_results": [row],
+    }
+    episode_judgement = {
+        **judgement,
+        "budget_exhaustion_forced_choice": {
+            "applied": True,
+            "final_verdict": "valid",
+        },
+    }
+
+    updated, coverage = apply_functional_check_judgements(
+        ledger,
+        relation_results=[],
+        group_results=[
+            {
+                "group_id": "dining",
+                "status": "evaluated",
+                "judgement": judgement,
+                "check_episodes": [
+                    {
+                        "functional_check_episode_id": check["check_id"],
+                        "status": "evaluated",
+                        "vlm_invoked": True,
+                        "judge_episode_count": 1,
+                        "evidence_paths": [
+                            "/evidence/global.png",
+                        ],
+                        "judgement": episode_judgement,
+                    }
+                ],
+            }
+        ],
+    )
+
+    assert updated["checks"][0]["grounded"] is True
+    assert coverage["grounded_check_count"] == 1
+    assert coverage["grounding_fraction"] == 1.0
+
+
+def test_forced_choice_without_visual_evidence_is_not_grounded() -> None:
+    discovery = _base_discovery()
+    discovery["within_group_correspondences"] = [
+        {
+            "discovery_id": "chair_table_correspondence",
+            "target_ids": ["chair_1", "chair_2", "table"],
+            "group_ids": ["dining"],
+            "observation_kinds": ["mutual_orientation"],
+            "observation_goal": "show chair and table interaction sides",
+        }
+    ]
+    ledger = build_functional_check_ledger(discovery, groups=GROUPS)
+    check = checks_for_group(ledger, "dining")[0]
+    row = {
+        "check_id": check["check_id"],
+        "target_ids": check["target_ids"],
+        "observation_status": "inferred_under_budget",
+        "conclusion": "valid",
+        "reason": "No retained visual exists.",
+    }
+
+    updated, coverage = apply_functional_check_judgements(
+        ledger,
+        relation_results=[],
+        group_results=[
+            {
+                "group_id": "dining",
+                "status": "evaluated",
+                "judgement": {
+                    "evidence_status": "sufficient",
+                    "verdict": "valid",
+                    "functional_check_results": [row],
+                },
+                "check_episodes": [
+                    {
+                        "functional_check_episode_id": check["check_id"],
+                        "status": "evaluated",
+                        "vlm_invoked": True,
+                        "judge_episode_count": 1,
+                        "evidence_paths": [],
+                        "judgement": {
+                            "evidence_status": "sufficient",
+                            "verdict": "valid",
+                            "functional_check_results": [row],
+                            "budget_exhaustion_forced_choice": {
+                                "applied": True,
+                                "final_verdict": "valid",
+                                "evidence_artifacts": [],
+                            },
+                        },
+                    }
+                ],
+            }
+        ],
+    )
+
+    assert updated["checks"][0]["grounded"] is False
+    assert coverage["grounded_check_count"] == 0
+
+
+def test_inferred_default_without_retained_visual_forcing_is_not_grounded(
+) -> None:
+    discovery = _base_discovery()
+    discovery["within_group_correspondences"] = [
+        {
+            "discovery_id": "chair_table_correspondence",
+            "target_ids": ["chair_1", "chair_2", "table"],
+            "group_ids": ["dining"],
+            "observation_kinds": ["mutual_orientation"],
+            "observation_goal": "show chair and table interaction sides",
+        }
+    ]
+    ledger = build_functional_check_ledger(discovery, groups=GROUPS)
+    check = checks_for_group(ledger, "dining")[0]
+
+    updated, coverage = apply_functional_check_judgements(
+        ledger,
+        relation_results=[],
+        group_results=[
+            {
+                "group_id": "dining",
+                "status": "evaluated",
+                "vlm_invoked": False,
+                "judgement": {
+                    "evidence_status": "sufficient",
+                    "verdict": "valid",
+                    "defaulted": True,
+                    "functional_check_results": [
+                        {
+                            "check_id": check["check_id"],
+                            "target_ids": check["target_ids"],
+                            "observation_status": "inferred_under_budget",
+                            "conclusion": "valid",
+                            "reason": "Defaulted without a visual Judge call.",
+                        }
+                    ],
+                },
+            }
+        ],
+    )
+
+    assert updated["checks"][0]["grounded"] is False
+    assert coverage["complete"] is True
+    assert coverage["grounded_check_count"] == 0
+    assert coverage["grounding_fraction"] == 0.0
+
+
+def test_policy_default_without_visual_is_terminally_grounded_and_audited(
+) -> None:
+    discovery = _base_discovery()
+    discovery["within_group_correspondences"] = [
+        {
+            "discovery_id": "chair_table_correspondence",
+            "target_ids": ["chair_1", "chair_2", "table"],
+            "group_ids": ["dining"],
+            "observation_kinds": ["mutual_orientation"],
+            "observation_goal": "show chair and table interaction sides",
+        }
+    ]
+    ledger = build_functional_check_ledger(discovery, groups=GROUPS)
+    check = checks_for_group(ledger, "dining")[0]
+    fallback = {
+        "mode": "policy_default_valid_no_evidence",
+        "policy_resolved": True,
+        "empirically_grounded": False,
+    }
+    row = {
+        "check_id": check["check_id"],
+        "target_ids": check["target_ids"],
+        "observation_status": "inferred_under_budget",
+        "conclusion": "valid",
+        "reason": "Explicit terminal policy.",
+    }
+
+    updated, coverage = apply_functional_check_judgements(
+        ledger,
+        relation_results=[],
+        group_results=[
+            {
+                "group_id": "dining",
+                "status": "evaluated",
+                "structured_fallback": fallback,
+                "judgement": {
+                    "verdict": "valid",
+                    "defaulted": True,
+                    "structured_fallback": fallback,
+                    "functional_check_results": [row],
+                },
+            }
+        ],
+    )
+
+    assert updated["checks"][0]["grounded"] is True
+    assert updated["checks"][0]["empirically_grounded"] is False
+    assert updated["checks"][0]["policy_resolved"] is True
+    assert coverage["grounded_check_count"] == 1
+    assert coverage["policy_resolved_check_count"] == 1
+    assert coverage["empirically_grounded_check_count"] == 0
 
 
 def test_in_group_relation_uses_lazy_group_judge_acquisition() -> None:

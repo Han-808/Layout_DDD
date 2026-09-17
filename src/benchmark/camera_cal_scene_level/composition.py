@@ -56,6 +56,8 @@ from benchmark.camera_cal_scene_level import telemetry
 
 
 FUNCTIONAL_PROBE_IMPLEMENTATION_FILES = (
+    "src/benchmark/evaluator/context_projection.py",
+    "src/benchmark/evaluator/structured_fallback.py",
     "src/benchmark/evaluator/scene_quality/functional_acquisition.py",
     "src/benchmark/evaluator/scene_quality/functional_boundary_evidence.py",
     "src/benchmark/evaluator/scene_quality/cross_group_relations.py",
@@ -67,6 +69,8 @@ FUNCTIONAL_PROBE_IMPLEMENTATION_FILES = (
     "src/benchmark/evaluator/scene_quality/group_scoped.py",
     "src/benchmark/evaluator/scene_quality/interfaces.py",
     "src/benchmark/evaluator/scene_quality/placement_checks.py",
+    "src/benchmark/evaluator/scene_quality/target_scoped.py",
+    "src/benchmark/evaluator/scene_quality/terminal.py",
     "src/benchmark/rendering/camera_pose.py",
     "src/benchmark/visual_judge/functional_discovery.py",
     "src/benchmark/visual_judge/functional_discovery_contract.py",
@@ -114,6 +118,7 @@ def _provenance_dependencies() -> provenance.ProvenanceDependencies:
         file_sha256=io.file_sha256,
         json_sha256=io.json_sha256,
         promptless_l1_l3_profile=policy.promptless_l1_l3_profile,
+        promptless_l1_only_profile=policy.promptless_l1_only_profile,
         promptless_l3_only_profile=policy.promptless_l3_only_profile,
         scene_quality_config=policy.scene_quality_config,
         camera_cal_asset_policy=policy.camera_cal_asset_policy,
@@ -185,6 +190,7 @@ def case_runtime_dependencies() -> case_runtime.CaseRuntimeDeps:
             grouping_evidence_packet=discovery.grouping_evidence_packet,
             promptless_scene_request=policy.promptless_scene_request,
             promptless_l1_l3_profile=policy.promptless_l1_l3_profile,
+            promptless_l1_only_profile=policy.promptless_l1_only_profile,
             promptless_l3_only_profile=policy.promptless_l3_only_profile,
             scene_quality_config=policy.scene_quality_config,
             camera_cal_asset_policy=policy.camera_cal_asset_policy,

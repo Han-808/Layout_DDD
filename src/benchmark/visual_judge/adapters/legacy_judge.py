@@ -22,6 +22,14 @@ from benchmark.visual_judge.camera_dsl import (
     canonical_camera_metric,
 )
 from benchmark.visual_judge.roles import DecisionContract
+from benchmark.visual_judge.evidence_resolution import (
+    ADAPTIVE_POLICY, AdaptiveEvidenceError, AdaptiveJudgeError, adaptive_enabled, attach_resolution,
+    prepare_adaptive_request, style_policy_result, failure_record, with_evidence_policy,
+    bind_provider_acquisition, policy_of,
+)
+from benchmark.visual_judge.evidence_gap_v2 import (
+    EvidenceGapError, enabled as fallback_v2_enabled, gap_record,
+)
 from benchmark.visual_judge.control_config import VLMEvaluationControl
 from benchmark.visual_judge.orchestration.controller import (
     VLMEvaluationController,
@@ -228,6 +236,10 @@ def _legacy_judge_request(request: JudgeRequest) -> dict[str, Any]:
         _legacy_visual_evidence_ref(item)
         for item in request.visual_evidence
     ]
+    if adaptive_enabled(result, metric=request.metric):
+        result["local_render_evidence_metadata"] = list(result.get("local_render_evidence_metadata") or []) + [
+            deepcopy(item) for item in request.visual_evidence if isinstance(item, dict)
+        ]
     result.setdefault("scene_summary", deepcopy(request.scene_context))
     result.setdefault("metric_rubric", deepcopy(request.rubric))
     if "event" not in result and request.claim_or_event:
@@ -673,7 +685,27 @@ class _CapturedLegacyCall:
             raise AttributeError(name)
 
         def invoke(request: dict[str, Any]) -> Any:
-            raw = self.call(request)
+            adaptive = adaptive_enabled(request, metric=str(request.get("metric") or ""))
+            if adaptive:
+                request = prepare_adaptive_request(
+                    request, terminal=bool(request.get("adaptive_terminal")),
+                    trigger=str(request.get("adaptive_trigger") or "controller_judge"),
+                )
+                policy_result = style_policy_result(request)
+                if policy_result is not None:
+                    self.responses.append(deepcopy(policy_result))
+                    return policy_result
+            try:
+                raw = self.call(request)
+            except Exception as exc:
+                if adaptive:
+                    failure = failure_record(exc, phase="judge")
+                    wrapped = AdaptiveJudgeError("Judge failed; no policy verdict was substituted", audit=failure)
+                    wrapped.failure_category = failure["failure_category"]
+                    raise wrapped from exc
+                raise
+            if adaptive and isinstance(raw, dict):
+                raw = attach_resolution(raw, request)
             if isinstance(raw, dict):
                 self.responses.append(deepcopy(raw))
             return raw
@@ -1020,6 +1052,7 @@ class ControlledVLMJudge:
             "controlled_calls": deepcopy(self.audit_records),
         }
 
+    @with_evidence_policy
     def _adjudicate(
         self,
         method_name: str,
@@ -1027,13 +1060,26 @@ class ControlledVLMJudge:
     ) -> dict[str, Any]:
         if not isinstance(request, dict):
             raise TypeError(f"{method_name} request must be a JSON object")
+        adaptive = adaptive_enabled(self.control, metric=str(request.get("metric") or ""))
+        if adaptive:
+            request = deepcopy(request)
+            request["evidence_resolution_policy"] = policy_of(self.control)
+            from benchmark.visual_judge import best_effort_terminal as best_effort
+            request = best_effort.inject(request, getattr(
+                self._judge, "terminal_evidence_policy", best_effort.DEFAULT_POLICY))
+            if request.get("adaptive_terminal") or request.get("structured_geometry_finalization"):
+                return self._adaptive_terminal(method_name, request, trigger="metric_acquisition_unavailable")
+            request = prepare_adaptive_request(request, terminal=False, trigger="initial_evidence")
         legacy_call = _resolve_legacy_method(
             self._judge,
             method_name,
             allow_control_status=self.strict,
         )
         if not self.strict:
-            return legacy_call(request)
+            if adaptive and not request.get("render_evidence") and not _compatibility_screen_request(request):
+                return self._adaptive_terminal(method_name, request, trigger="no_visual_provider")
+            raw = legacy_call(request)
+            return attach_resolution(raw, request) if adaptive else raw
 
         decision_contract = _METHOD_CONTRACTS[method_name]
         responses: list[dict[str, Any]] = []
@@ -1167,6 +1213,54 @@ class ControlledVLMJudge:
                 "audit": deepcopy(result.audit),
             }
         )
+        if adaptive and result.status == "unresolved" and not _compatibility_screen_request(request):
+            failure = result.audit.get("failure")
+            if fallback_v2_enabled(request) and not isinstance(failure, dict):
+                failure = failure_record(EvidenceControlUnresolvedError(result), phase="acquisition")
+            if isinstance(failure, dict) and not failure.get("recoverable_acquisition", False):
+                error = AdaptiveEvidenceError("acquisition failed; no policy verdict was substituted", audit={
+                    **deepcopy(failure), "acquisition_audit": deepcopy(result.audit),
+                })
+                error.failure_category = str(failure.get("failure_category") or "implementation_or_input_failure")
+                raise error
+            terminal_request = deepcopy(request)
+            if core_request.metric == "semantic_placement_consistency":
+                # Registration happens inside the controller.  The original
+                # request predates any Judge-originated obligations, so using
+                # it alone would silently lose them on acquisition exhaustion.
+                registered_context = (result.audit.get("judge_request") or {}).get("context") or {}
+                for key in ("required_placement_checks", "deferred_placement_checks", "response_contract"):
+                    if key in registered_context:
+                        terminal_request[key] = deepcopy(registered_context[key])
+            for entry in result.audit.get("trace") or []:
+                provenance = (entry.get("result") or {}).get("provenance") or entry.get("provenance") or {}
+                acquisition = provenance.get("adaptive_acquisition")
+                if isinstance(acquisition, dict):
+                    bind_provider_acquisition(terminal_request, acquisition)
+            terminal_request["local_render_evidence_metadata"] = list(terminal_request.get("local_render_evidence_metadata") or []) + [
+                deepcopy(item) for item in result.visual_evidence if isinstance(item, dict)
+            ]
+            terminal_request["render_evidence"] = [
+                str(item.get("path") or item.get("image_path")) if isinstance(item, dict) else str(item)
+                for item in result.visual_evidence
+            ]
+            if fallback_v2_enabled(request):
+                # A controller window may replace its active packet. Initial
+                # same-scope evidence remains available to terminal review.
+                terminal_request["render_evidence"] = list(dict.fromkeys(
+                    list(request.get("render_evidence") or []) + terminal_request["render_evidence"]
+                ))
+            terminal_request["camera_acquisition_ledger"] = deepcopy(
+                result.audit.get("camera_acquisition_ledger") or request.get("camera_acquisition_ledger")
+            )
+            try:
+                resolved = self._adaptive_terminal(method_name, terminal_request, trigger=result.stop_reason)
+            except EvidenceGapError as exc:
+                exc.audit["acquisition_audit"] = deepcopy(result.audit)
+                exc.audit["acquisition_stop_reason"] = result.stop_reason
+                raise
+            resolved["acquisition_audit"] = deepcopy(result.audit)
+            return resolved
         if result.status in {"valid", "invalid"} and responses:
             if decision_contract.value in _BINARY_CONTRACTS:
                 return _with_forced_choice_audit(
@@ -1196,6 +1290,74 @@ class ControlledVLMJudge:
             ),
             result,
         )
+
+    def _adaptive_terminal(self, method_name: str, request: dict[str, Any], *, trigger: str) -> dict[str, Any]:
+        terminal = prepare_adaptive_request(request, terminal=True, trigger=trigger)
+        policy_result = style_policy_result(terminal)
+        if policy_result is not None:
+            self.audit_records.append({"metric": request.get("metric"), "stage": "adaptive_terminal",
+                                       "resolution": deepcopy(policy_result["evidence_resolution"])})
+            return policy_result
+        fallback_v2 = fallback_v2_enabled(terminal)
+        call = _resolve_legacy_method(self._judge, method_name, allow_control_status=fallback_v2)
+        try:
+            raw = call(terminal)
+            if not isinstance(raw, dict):
+                raise AdaptiveJudgeError("terminal Judge did not produce a JSON object")
+            if not fallback_v2 and raw.get("verdict") not in {"valid", "invalid"}:
+                raise AdaptiveJudgeError("terminal Judge did not produce a binary verdict")
+            validator = (
+                _validate_native_judge_contract
+                if fallback_v2 and raw.get("status") in JUDGE_STATUSES
+                else _validate_legacy_judge_contract
+            )
+            validator(
+                raw, request=_judge_request(terminal),
+                decision_contract=_METHOD_CONTRACTS[method_name].value, method_name=method_name,
+            )
+        except Exception as exc:
+            failure = failure_record(exc, phase="judge")
+            wrapped = AdaptiveJudgeError("terminal Judge failed; no default verdict", audit=failure)
+            wrapped.failure_category = failure["failure_category"]
+            raise wrapped from exc
+        result = attach_resolution(raw, terminal)
+        if fallback_v2 and not result["evidence_resolution"]["accepted"]:
+            resolution = result["evidence_resolution"]
+            gap = gap_record(
+                unit_id=resolution["unit_key"], reason="terminal_evidence_insufficient",
+                source="bounded_terminal_judge", evidence=resolution,
+            )
+            audit = {
+                "evidence_resolution": deepcopy(resolution),
+                "judgement": deepcopy(result), "coverage_gap": gap,
+                "judge_request": {"context": {
+                    key: deepcopy(terminal[key])
+                    for key in ("required_placement_checks", "deferred_placement_checks")
+                    if key in terminal
+                }},
+            }
+            self.audit_records.append({
+                "metric": request.get("metric"), "stage": "terminal_evidence_gap",
+                "judge_method": method_name, "status": "not_evaluable", **deepcopy(audit),
+            })
+            raise EvidenceGapError("terminal_evidence_insufficient", audit=audit)
+        if fallback_v2 and _METHOD_CONTRACTS[method_name].value in _BINARY_CONTRACTS:
+            result = _binary_compatibility_response(
+                result, method_name=method_name, decision_contract=_METHOD_CONTRACTS[method_name],
+            )
+        self.audit_records.append({"metric": request.get("metric"), "stage": "adaptive_terminal",
+                                   "judge_method": method_name, "status": result.get("verdict"),
+                                   "resolution": deepcopy(result["evidence_resolution"])})
+        if request.get("metric") == "semantic_placement_consistency":
+            # The scope evaluator reads the latest call's trusted registration
+            # context.  Keep only the check lists, not another copy of images
+            # and full acquisition history, and never take them from the model.
+            self.audit_records[-1]["judge_request"] = {"context": {
+                key: deepcopy(terminal[key])
+                for key in ("required_placement_checks", "deferred_placement_checks")
+                if key in terminal
+            }}
+        return result
 
     def _consume_provider_usage(
         self,
@@ -1455,6 +1617,8 @@ def _binary_compatibility_response(
         if raw.get(key) is not None:
             result[key] = deepcopy(raw[key])
     result.setdefault("vlm_role", "judge")
+    if isinstance(raw.get("evidence_resolution"), dict):
+        result["evidence_resolution"] = deepcopy(raw["evidence_resolution"])
     result.setdefault("decision_contract", decision_contract.value)
     result.setdefault("judge_method", method_name)
     validate_binary_judge_response(
@@ -1574,6 +1738,8 @@ def _request_acquisition_ledger(
 
 
 def _compatibility_screen_request(request: dict[str, Any]) -> bool:
+    if adaptive_enabled(request) and request.get("decision_mode") == "final":
+        return False
     return (
         str(request.get("decision_mode") or "").strip().lower()
         == "screen"

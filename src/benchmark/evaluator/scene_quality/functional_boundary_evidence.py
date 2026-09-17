@@ -108,12 +108,18 @@ def acquire_functional_boundary_evidence(
             requested_targets=targets,
         )
     except Exception as exc:
+        from benchmark.visual_judge.evidence_gap_v2 import enabled as fallback_v2_enabled
+        from benchmark.visual_judge.evidence_resolution import failure_record
+        failure = failure_record(exc, phase="acquisition") if fallback_v2_enabled() else None
         audit.update(
-            status="failed",
+            status="insufficient" if failure and failure["recoverable_acquisition"] else "failed",
             reason="functional_boundary_evidence_failed",
             error_type=type(exc).__name__,
             error=str(exc),
         )
+        if failure:
+            audit["failure"] = failure
+            audit["error"] = type(exc).__name__
         return audit
     audit.update(deepcopy(validated))
     decoder = (

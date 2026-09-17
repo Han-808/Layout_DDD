@@ -71,8 +71,8 @@ l3_scene_quality:
       enabled: true
       weight: 0.09
       requires:
-        - object_grouping_report
-      scope: group_member_category_and_role_compatibility_only
+        - canonical_room_object_inventory
+      scope: room_global_object_inventory_coherence_only
     style_consistency:
       enabled: true
       weight: 0.07

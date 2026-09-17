@@ -546,6 +546,68 @@ def test_direct_canonical_public_method_returns_compatible_unresolved_without_mo
     assert model.calls == []
 
 
+def test_structured_geometry_finalization_calls_model_without_images() -> None:
+    model = FakeMultimodalModel(
+        {
+            "evidence_status": "sufficient",
+            "verdict": "valid",
+            "confidence": 0.7,
+            "reason": "The canonical placement geometry is plausible.",
+            "missing_evidence": [],
+            "defects": [],
+            "evidence_request": None,
+        }
+    )
+    packet = {
+        "mode": "geometry_only_vlm",
+        "target_ids": ["chair"],
+        "objects": [
+            {
+                "id": "chair",
+                "category": "chair",
+                "center": [1.0, 1.0, 0.5],
+                "size": [0.5, 0.5, 1.0],
+            }
+        ],
+    }
+
+    result = OpenAICompatibleVLMJudge(
+        model
+    )._adjudicate_scene_quality_raw(
+        {
+            "metric": "semantic_placement_consistency",
+            "evidence_phase": "group_local_review",
+            "decision_mode": "final",
+            "target_object_ids": ["chair"],
+            "judgment_scope": {
+                "included": ["semantically_inappropriate_scene_zone"]
+            },
+            "scene_summary": {
+                "scene_type": "office",
+                "objects": packet["objects"],
+            },
+            "render_evidence": [],
+            "structured_geometry_finalization": packet,
+        }
+    )
+
+    assert result["verdict"] == "valid"
+    assert result["images_used"] == []
+    assert len(model.calls) == 1
+    assert model.calls[0]["kwargs"]["call_type"].endswith(
+        ".geometry_only"
+    )
+    context = json.loads(
+        model.calls[0]["messages"][1]["content"][0]["text"].split(
+            "\n", 1
+        )[1]
+    )
+    assert context["structured_geometry_finalization"]["target_ids"] == [
+        "chair"
+    ]
+    assert "Do not request visual evidence" in context["phase_instruction"]
+
+
 @pytest.mark.parametrize(
     "metric",
     [
@@ -619,7 +681,7 @@ def test_explicit_json_screen_calls_model_without_images(metric):
         )
         assert "final scale defect" in context["phase_instruction"]
     else:
-        assert "Apply the relocation test" in (
+        assert "Apply the inventory counterfactual" in (
             context["phase_instruction"]
         )
         assert "final pairing defect" in context["phase_instruction"]
@@ -647,7 +709,7 @@ def test_explicit_json_screen_calls_model_without_images(metric):
         ),
         (
             "object_pairing_consistency",
-            "Apply the relocation test again",
+            "Apply the inventory counterfactual again",
             "physical-size mismatch remains material",
         ),
     ],

@@ -8,10 +8,16 @@ verdict.
 
 from __future__ import annotations
 
+from benchmark.visual_judge.evidence_resolution import adaptive_enabled, resolution_of, resolution_accepted
+
 from copy import deepcopy
 import math
 from typing import Any
 
+from benchmark.evaluator.structured_fallback import (
+    POLICY_DEFAULT_VALID_MODE,
+    fallback_resolution,
+)
 from benchmark.visual_judge.functional_discovery_contract import (
     FUNCTIONAL_RELATION_PREDICATES,
     normalized_functional_relation_predicates,
@@ -1600,7 +1606,10 @@ def apply_functional_check_judgements(
         for check in result.get("checks") or []
         if isinstance(check, dict) and check.get("check_id")
     }
-    rows_by_id: dict[str, tuple[dict[str, Any], str]] = {}
+    rows_by_id: dict[
+        str,
+        tuple[dict[str, Any], str, bool, str | None],
+    ] = {}
     for record, phase in [
         *[
             (
@@ -1620,6 +1629,13 @@ def apply_functional_check_judgements(
             if isinstance(item, dict)
         ],
     ]:
+        retained_visual_forced_check_ids = (
+            _retained_visual_forced_check_ids(record)
+        )
+        structured_fallback_modes = _structured_fallback_check_modes(
+            record,
+            row_key="functional_check_results",
+        )
         judgement = (
             record.get("judgement")
             if isinstance(record.get("judgement"), dict)
@@ -1647,6 +1663,8 @@ def apply_functional_check_judgements(
             rows_by_id[check_id] = (
                 row,
                 str(check_result_refs.get(check_id) or phase),
+                check_id in retained_visual_forced_check_ids,
+                structured_fallback_modes.get(check_id),
             )
 
     for check_id, check in checks_by_id.items():
@@ -1655,7 +1673,12 @@ def apply_functional_check_judgements(
             check["judge_status"] = "pending"
             check["lifecycle_status"] = "routed"
             continue
-        row, phase = routed
+        (
+            row,
+            phase,
+            retained_visual_forced_choice,
+            structured_fallback_mode,
+        ) = routed
         observation_status = str(row.get("observation_status") or "")
         conclusion = str(row.get("conclusion") or "")
         check["judge_status"] = (
@@ -1668,8 +1691,32 @@ def apply_functional_check_judgements(
         check["observation_status"] = observation_status
         check["check_conclusion"] = conclusion
         check["result_row"] = deepcopy(row)
-        check["grounded"] = observation_status == "observed"
-        if observation_status == "observed":
+        check["grounded"] = bool(
+            observation_status == "observed"
+            or (
+                observation_status == "inferred_under_budget"
+                and conclusion in {"valid", "invalid"}
+                and (
+                    retained_visual_forced_choice
+                    or structured_fallback_mode is not None
+                )
+            )
+        )
+        check["policy_resolved"] = bool(
+            structured_fallback_mode is not None
+        )
+        check["empirically_grounded"] = bool(
+            check["grounded"]
+            and structured_fallback_mode != POLICY_DEFAULT_VALID_MODE
+        )
+        if structured_fallback_mode is not None:
+            check["decision_authority"] = structured_fallback_mode
+        if adaptive_enabled():
+            check["evidence_resolution"] = deepcopy(resolution_of(row))
+            check["resolution_accepted"] = resolution_accepted(row)
+            check["grounded"] = bool(observation_status == "observed" and (resolution_of(row) or {}).get("images_used"))
+            check["empirically_grounded"] = check["grounded"]
+        if check["grounded"]:
             _append_obligation_transition(
                 check,
                 "gate_ready",
@@ -1716,6 +1763,16 @@ def apply_functional_check_judgements(
         for check_id, check in checks_by_id.items()
         if check.get("grounded") is True
     ]
+    empirically_grounded_ids = [
+        check_id
+        for check_id, check in checks_by_id.items()
+        if check.get("empirically_grounded") is True
+    ]
+    policy_resolved_ids = [
+        check_id
+        for check_id, check in checks_by_id.items()
+        if check.get("policy_resolved") is True
+    ]
     coverage = {
         "schema_version": FUNCTIONAL_CHECK_RESULT_VERSION,
         "required_check_count": len(checks_by_id),
@@ -1725,6 +1782,12 @@ def apply_functional_check_judgements(
         "invalid_check_ids": invalid_ids,
         "grounded_check_count": len(grounded_ids),
         "grounded_check_ids": grounded_ids,
+        "empirically_grounded_check_count": len(
+            empirically_grounded_ids
+        ),
+        "empirically_grounded_check_ids": empirically_grounded_ids,
+        "policy_resolved_check_count": len(policy_resolved_ids),
+        "policy_resolved_check_ids": policy_resolved_ids,
         "grounding_fraction": (
             len(grounded_ids) / len(checks_by_id)
             if checks_by_id
@@ -1734,6 +1797,100 @@ def apply_functional_check_judgements(
         "decision_authority": "none",
     }
     return result, coverage
+
+
+def _retained_visual_forced_check_ids(record: Any) -> set[str]:
+    """Return atomic checks finalized from retained visual evidence.
+
+    A bounded Camera failure may end with a real Judge forced choice when the
+    prior visual packet remains available.  That is a terminal visual
+    adjudication, not an ungrounded default.  Keep the rule deliberately
+    narrow so synthetic/default rows without a Judge call or retained image
+    never gain score grounding.
+    """
+
+    if not isinstance(record, dict):
+        return set()
+    raw_episodes = record.get("check_episodes")
+    episodes = (
+        [item for item in raw_episodes if isinstance(item, dict)]
+        if isinstance(raw_episodes, list)
+        else [record]
+    )
+    grounded_ids: set[str] = set()
+    for episode in episodes:
+        if episode.get("vlm_invoked") is not True:
+            continue
+        if int(episode.get("judge_episode_count") or 0) < 1:
+            continue
+        judgement = episode.get("judgement")
+        judgement = judgement if isinstance(judgement, dict) else {}
+        forced = judgement.get("budget_exhaustion_forced_choice")
+        if not isinstance(forced, dict) or forced.get("applied") is not True:
+            continue
+        if str(forced.get("final_verdict") or "") not in {"valid", "invalid"}:
+            continue
+        evidence_paths = {
+            str(path)
+            for path in episode.get("evidence_paths") or []
+            if str(path).strip()
+        }
+        forced_evidence = {
+            str(path)
+            for path in forced.get("evidence_artifacts") or []
+            if str(path).strip()
+        }
+        if not evidence_paths and not forced_evidence:
+            continue
+        for row in judgement.get("functional_check_results") or []:
+            if not isinstance(row, dict):
+                continue
+            if row.get("observation_status") != "inferred_under_budget":
+                continue
+            if row.get("conclusion") not in {"valid", "invalid"}:
+                continue
+            check_id = str(row.get("check_id") or "")
+            if check_id:
+                grounded_ids.add(check_id)
+    return grounded_ids
+
+
+def _structured_fallback_check_modes(
+    record: Any,
+    *,
+    row_key: str,
+) -> dict[str, str]:
+    """Map terminal structured-fallback rows to their decision mode."""
+
+    if not isinstance(record, dict):
+        return {}
+    raw_episodes = record.get("check_episodes")
+    episodes = (
+        [item for item in raw_episodes if isinstance(item, dict)]
+        if isinstance(raw_episodes, list)
+        else [record]
+    )
+    result: dict[str, str] = {}
+    for episode in episodes:
+        fallback = fallback_resolution(episode)
+        if not isinstance(fallback, dict) or fallback.get(
+            "policy_resolved"
+        ) is not True:
+            continue
+        mode = str(fallback.get("mode") or "").strip()
+        if not mode:
+            continue
+        judgement = episode.get("judgement")
+        judgement = judgement if isinstance(judgement, dict) else {}
+        for row in judgement.get(row_key) or []:
+            if not isinstance(row, dict):
+                continue
+            if row.get("conclusion") not in {"valid", "invalid"}:
+                continue
+            check_id = str(row.get("check_id") or "")
+            if check_id:
+                result[check_id] = mode
+    return result
 
 
 def _append_obligation_transition(

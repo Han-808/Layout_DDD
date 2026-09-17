@@ -334,6 +334,144 @@ def test_http_error_body_is_bounded_and_redacts_credentials(
     assert len(message) < 2_200
 
 
+def test_exact_call_retry_policy_uses_constant_delay_and_all_http_statuses(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payloads: list[bytes] = []
+    sleeps: list[float] = []
+    attempts = 0
+
+    def fake_urlopen(request: urllib.request.Request, timeout: int):
+        nonlocal attempts
+        del timeout
+        attempts += 1
+        payloads.append(bytes(request.data or b""))
+        if attempts <= 2:
+            raise urllib.error.HTTPError(
+                request.full_url,
+                418,
+                "retry exact call",
+                {},
+                io.BytesIO(b'{"error":"transient"}'),
+            )
+        return _chat_response()
+
+    monkeypatch.setattr(
+        openai_compatible_model_module,
+        "_urlopen_no_redirect",
+        fake_urlopen,
+    )
+    monkeypatch.setattr(
+        openai_compatible_model_module.time,
+        "sleep",
+        lambda seconds: sleeps.append(float(seconds)),
+    )
+    model = OpenAICompatibleModel(
+        name="bounded-exact-retry",
+        endpoint="http://127.0.0.1:4010/v1",
+        model_id="judge-model",
+        max_retries=5,
+        retry_backoff_seconds=30.0,
+        retry_backoff_mode="constant",
+        retry_all_http_errors=True,
+        retry_malformed_response=True,
+    )
+
+    assert model.chat_messages(
+        [{"role": "user", "content": "same logical call"}]
+    ) == '{"ok":true}'
+    assert attempts == 3
+    assert sleeps == [30.0, 30.0]
+    assert len(set(payloads)) == 1
+    assert model.last_request_metadata["transport_attempts"] == 3
+    assert model.last_request_metadata["transport_retries"] == 2
+
+
+def test_exact_call_retry_policy_stops_after_five_retries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attempts = 0
+    sleeps: list[float] = []
+
+    def fake_urlopen(request: urllib.request.Request, timeout: int):
+        nonlocal attempts
+        del timeout
+        attempts += 1
+        raise urllib.error.HTTPError(
+            request.full_url,
+            500,
+            "still unavailable",
+            {},
+            io.BytesIO(b'{"error":"unavailable"}'),
+        )
+
+    monkeypatch.setattr(
+        openai_compatible_model_module,
+        "_urlopen_no_redirect",
+        fake_urlopen,
+    )
+    monkeypatch.setattr(
+        openai_compatible_model_module.time,
+        "sleep",
+        lambda seconds: sleeps.append(float(seconds)),
+    )
+    model = OpenAICompatibleModel(
+        name="bounded-failure",
+        endpoint="http://127.0.0.1:4010/v1",
+        model_id="judge-model",
+        max_retries=5,
+        retry_backoff_seconds=30.0,
+        retry_backoff_mode="constant",
+        retry_all_http_errors=True,
+    )
+
+    with pytest.raises(EndpointHTTPError, match="HTTP 500"):
+        model.chat_messages([{"role": "user", "content": "same call"}])
+    assert attempts == 6
+    assert sleeps == [30.0] * 5
+
+
+def test_exact_call_retry_policy_retries_malformed_success_envelope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attempts = 0
+    sleeps: list[float] = []
+
+    def fake_urlopen(request: urllib.request.Request, timeout: int):
+        nonlocal attempts
+        del request, timeout
+        attempts += 1
+        if attempts == 1:
+            return _FakeResponse({"unexpected": True})
+        return _chat_response()
+
+    monkeypatch.setattr(
+        openai_compatible_model_module,
+        "_urlopen_no_redirect",
+        fake_urlopen,
+    )
+    monkeypatch.setattr(
+        openai_compatible_model_module.time,
+        "sleep",
+        lambda seconds: sleeps.append(float(seconds)),
+    )
+    model = OpenAICompatibleModel(
+        name="malformed-retry",
+        endpoint="http://127.0.0.1:4010/v1",
+        model_id="judge-model",
+        max_retries=5,
+        retry_backoff_seconds=30.0,
+        retry_backoff_mode="constant",
+        retry_malformed_response=True,
+    )
+
+    assert model.chat_messages(
+        [{"role": "user", "content": "same call"}]
+    ) == '{"ok":true}'
+    assert attempts == 2
+    assert sleeps == [30.0]
+
+
 def test_bedrock_on_demand_model_id_failure_is_typed_as_route_configuration(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -372,6 +510,59 @@ def test_bedrock_on_demand_model_id_failure_is_typed_as_route_configuration(
 
     with pytest.raises(EndpointConfigurationError, match="inference profile"):
         model.chat_messages([{"role": "user", "content": "hello"}])
+
+
+def test_retry_all_policy_does_not_trip_permanent_route_circuit_breaker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attempts = 0
+    body = json.dumps(
+        {
+            "error": {
+                "message": (
+                    "Invocation with on-demand throughput isn't supported. "
+                    "Use an inference profile."
+                )
+            }
+        }
+    ).encode("utf-8")
+
+    def fake_urlopen(request: urllib.request.Request, timeout: int):
+        nonlocal attempts
+        del timeout
+        attempts += 1
+        raise urllib.error.HTTPError(
+            request.full_url,
+            400,
+            "bad route",
+            {},
+            io.BytesIO(body),
+        )
+
+    monkeypatch.setattr(
+        openai_compatible_model_module,
+        "_urlopen_no_redirect",
+        fake_urlopen,
+    )
+    monkeypatch.setattr(
+        openai_compatible_model_module.time,
+        "sleep",
+        lambda _: None,
+    )
+    model = OpenAICompatibleModel(
+        name="never-abort-campaign-route",
+        endpoint="http://127.0.0.1:4010/v1",
+        model_id="judge-model",
+        max_retries=1,
+        retry_backoff_seconds=30.0,
+        retry_backoff_mode="constant",
+        retry_all_http_errors=True,
+    )
+
+    with pytest.raises(EndpointHTTPError) as captured:
+        model.chat_messages([{"role": "user", "content": "same call"}])
+    assert not isinstance(captured.value, EndpointConfigurationError)
+    assert attempts == 2
 
 
 def test_credential_entrypoint_scripts_have_no_literal_key_channel() -> None:

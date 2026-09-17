@@ -27,6 +27,9 @@ Function:
 
 from __future__ import annotations
 
+from benchmark.visual_judge.evidence_resolution import ADAPTIVE_POLICY, adaptive_enabled, with_evidence_policy, policy_of, FALLBACK_POLICY
+from benchmark.evaluator.adaptive_audit import adaptive_layer_accepted, policy_code_identity
+
 import argparse
 from copy import deepcopy
 import math
@@ -139,6 +142,7 @@ from benchmark.visual_judge import (
 )
 
 
+@with_evidence_policy
 def run_evaluate(
     **kwargs: Any,
 ) -> dict:
@@ -438,6 +442,9 @@ def _run_canonical_evaluate(
             deduction_multiplier=resolved_deduction_multiplier,
         )
     l1_report = _canonical_l1_report(reports["generic_validity"])
+    if adaptive_enabled():
+        from benchmark.evaluator.adaptive_audit import apply_adaptive_layer_audit
+        apply_adaptive_layer_audit(l1_report)
 
     if "oor" in active_l2_metrics:
         generic_metrics = reports["generic_validity"].get("metrics") or {}
@@ -631,11 +638,18 @@ def _run_canonical_evaluate(
         if scoring_profile is not None
         else None
     )
+    reliability_calls = controlled_calls
+    if adaptive_enabled():
+        from benchmark.visual_judge.evidence_resolution import ADAPTIVE_METRICS
+        reliability_calls = [item for item in controlled_calls if
+            item.get("metric") not in ADAPTIVE_METRICS
+            or (item.get("resolution") or {}).get("model_invoked") is True
+            or int(((item.get("audit") or {}).get("experiment_telemetry") or {}).get("judge_calls") or 0) > 0]
     scoring_reliability = scoring_reliability_summary(
         l1_metrics=(reports["generic_validity"].get("metrics") or {}),
         l2_metrics=(l2_report.get("claim_family_reports") or {}),
         l3_metrics=(scene_quality_report.get("metrics") or {}),
-        judge_episodes=controlled_calls,
+        judge_episodes=reliability_calls,
         required_metrics_by_layer=required_reliability_metrics,
         scoring_coverage=coverage,
     )
@@ -752,6 +766,21 @@ def _run_canonical_evaluate(
             "L4 is deferred until downstream task types are frozen.",
         ],
     }
+    if adaptive_enabled():
+        from benchmark.evaluator.adaptive_audit import coverage_from_units
+        units = [unit for layer in (l1_report, scene_quality_report)
+                 for unit in layer.get("resolution_coverage", {}).get("units", [])]
+        report["evidence_resolution_policy"] = policy_of()
+        report["resolution_coverage"] = coverage_from_units(
+            units, complete=coverage.get("complete") is True and benchmark_score is not None,
+        )
+        if policy_of() == FALLBACK_POLICY:
+            from benchmark.evaluator.consistency_audit_v2 import inventory_coverage
+            sources = {**(l1_report.get("metrics") or {}), **(scene_quality_report.get("metrics") or {})}
+            planned = [name for name, item in sources.items() if item.get("enabled", True)
+                       and item.get("status") != "not_applicable"]
+            report["resolution_coverage"] = inventory_coverage(sources, planned)
+            report["execution_complete"] = True
     out_path = Path(out)
     if out_path.suffix.lower() != ".json":
         out_path = out_path / "evaluation_report.json"
@@ -1815,6 +1844,8 @@ def _resolve_runtime_vlm_control(
     existing_max_views = getattr(camera_provider, "max_views", None)
     existing_max_steps = getattr(camera_provider, "max_steps", None)
     judge_max_images = getattr(vlm_judge, "max_images", None)
+    if adaptive_enabled(vlm_judge) and (value is None or "evidence_resolution_policy" not in value):
+        value = {**(value or {}), "evidence_resolution_policy": policy_of(vlm_judge)}
     return resolve_vlm_evaluation_control(
         value,
         existing_max_views=(
@@ -1855,6 +1886,8 @@ def _runtime_vlm_control_manifest(
     runtime_judge: object | None = None,
 ) -> dict[str, Any]:
     result = control.manifest()
+    if adaptive_enabled(control):
+        result["evidence_resolution_implementation"] = policy_code_identity()
     runtime_manifest = getattr(runtime_judge, "manifest", None)
     result["integration"] = {
         "core_boundaries": [
@@ -2788,6 +2821,10 @@ def _strict_scoring_profile_score(
     numerator = 0.0
     denominator = 0.0
     required_weight = sum(float(layer_weights[name]) for name in required)
+    if adaptive_enabled():
+        if not all(adaptive_layer_accepted(reports.get(name) or {}) for name in required):
+            return None
+        return sum(float(reports[name]["score"]) * float(layer_weights[name]) for name in required) / required_weight
     for name in required:
         report = reports.get(name) or {}
         if report.get("status") in {"not_applicable", "not_implemented"}:
@@ -2929,6 +2966,15 @@ def _strict_scoring_profile_coverage(
             "aggregation_denominator": required_weight,
         }
     )
+    if adaptive_enabled():
+        accepted = [name for name in required if adaptive_layer_accepted(scoring_reports.get(name) or {})]
+        result.update(
+            evidence_resolution_policy=policy_of(),
+            accepted_layers=accepted,
+            acceptance_complete=bool(required and len(accepted) == len(required)),
+            complete=bool(required and len(accepted) == len(required)),
+            coverage_threshold_passed=bool(required and len(accepted) == len(required)),
+        )
     return result
 
 

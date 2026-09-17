@@ -4,6 +4,8 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any
 
+from benchmark.visual_judge.evidence_resolution import ADAPTIVE_POLICY, LEGACY_POLICY, FALLBACK_POLICY
+
 from benchmark.visual_judge.camera_ranking import (
     DEFAULT_DETERMINISTIC_CAMERA_RANKING,
     DeterministicCameraRankingConfig,
@@ -126,9 +128,10 @@ class VLMEvaluationControl:
     on_render_failure: str
     requested: dict[str, Any]
     sources: dict[str, str]
+    evidence_resolution_policy: str = LEGACY_POLICY
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        result = {
             "schema_version": self.schema_version,
             "camera_selector": {
                 "backend": self.camera_selector_backend,
@@ -205,6 +208,9 @@ class VLMEvaluationControl:
             "on_selector_failure": self.on_selector_failure,
             "on_render_failure": self.on_render_failure,
         }
+        if self.evidence_resolution_policy != LEGACY_POLICY:
+            result["evidence_resolution_policy"] = self.evidence_resolution_policy
+        return result
 
     def manifest(self) -> dict[str, Any]:
         return {
@@ -424,13 +430,16 @@ def _from_mapping(
         on_render_failure=str(value["on_render_failure"]),
         requested=deepcopy(requested),
         sources=deepcopy(sources),
+        evidence_resolution_policy=str(value.get("evidence_resolution_policy", LEGACY_POLICY)),
     )
 
 
 def _validate_patch(value: dict[str, Any]) -> None:
     if not isinstance(value, dict):
         raise TypeError("VLM evaluation control patch must be a JSON object")
-    allowed = set(DEFAULT_VLM_EVALUATION_CONTROL)
+    allowed = set(DEFAULT_VLM_EVALUATION_CONTROL) | {"evidence_resolution_policy"}
+    if value.get("evidence_resolution_policy", LEGACY_POLICY) not in {LEGACY_POLICY, ADAPTIVE_POLICY, FALLBACK_POLICY}:
+        raise ValueError("unsupported evidence_resolution_policy")
     unknown = set(value) - allowed
     if unknown:
         raise ValueError(

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import replace
 import json
 from pathlib import Path
 import threading
@@ -10,6 +11,7 @@ from typing import Any
 
 import pytest
 
+from benchmark.camera_cal_scene_level import case_runtime, composition, policy
 from benchmark.evaluator.profile import L1, L2, L3
 from benchmark.models import EndpointConfigurationError
 from benchmark.visual_judge.contracts import ResponseSchemaRepairError
@@ -180,6 +182,252 @@ def test_l3_only_recovery_profile_disables_l1() -> None:
     assert profile[L3]["enabled"] is True
 
 
+def test_l1_only_recovery_profile_disables_l3_and_is_cli_exclusive() -> None:
+    profile = policy.promptless_l1_only_profile()
+    args = runner.parse_args(["--output-root", "/tmp/l1-only", "--l1-only"])
+
+    assert args.l1_only is True
+    assert args.l3_only is False
+    assert profile["layer_weights"] == {
+        runner.L1: 1.0,
+        runner.L2: 0.0,
+        runner.L3: 0.0,
+        runner.L4: 0.0,
+    }
+    assert profile[L1]["enabled"] is True
+    assert profile[L3]["enabled"] is False
+    assert all(
+        metric["enabled"] is False and metric["weight"] == 0.0
+        for metric in profile[L3]["metrics"].values()
+    )
+    with pytest.raises(SystemExit):
+        runner.parse_args(
+            [
+                "--output-root",
+                "/tmp/invalid-layer-only",
+                "--l1-only",
+                "--l3-only",
+            ]
+        )
+    with pytest.raises(SystemExit):
+        runner.parse_args(
+            [
+                "--output-root",
+                "/tmp/invalid-l1-metric",
+                "--l1-only",
+                "--metric",
+                "functional_consistency",
+            ]
+        )
+
+
+def test_l1_only_plan_disables_l3_without_changing_public_signature(
+    tmp_path: Path,
+) -> None:
+    grouping = tmp_path / "grouping.yaml"
+    grouping.write_text("fixture: true\n", encoding="utf-8")
+    plan = runner.build_experiment_plan(
+        dataset_root=tmp_path / "dataset",
+        output_root=tmp_path / "output",
+        grouping_config_path=grouping,
+        route={
+            "endpoint": "https://example.invalid/v1",
+            "model": "fixture-model",
+            "api_key_env": "FIXTURE_KEY",
+            "authorization_configured": True,
+        },
+        metrics=(),
+        functional_group_local_granularity="per_check",
+        functional_group_local_evidence_policy="shared_group_bank",
+        deduction_multiplier=2.0,
+        cases=[{"case_id": "N001"}],
+        renderer_config={},
+        control={},
+        max_workers=1,
+        endpoint_preflight_attempts=5,
+        endpoint_preflight_timeout_seconds=300,
+        resume=False,
+        continue_on_error=False,
+        export_audit_graphs=False,
+        l3_only=False,
+    )
+
+    assert plan["recovery_mode"] == "l1_only"
+    assert plan["layers"][L1]["enabled"] is True
+    assert plan["layers"][L3]["enabled"] is False
+    assert plan["layers"][L3]["metrics"] == []
+    assert plan["layers"][L3]["reason"] == "l1_only_recovery"
+
+
+def test_l1_only_case_runtime_records_layer_boundary(
+    tmp_path: Path,
+) -> None:
+    source_case = runner.discover_cases(
+        runner.DEFAULT_DATASET_ROOT,
+        case_ids=["N001"],
+    )[0]
+    captured: dict[str, Any] = {}
+
+    def fake_adapter_builder(**_: Any) -> SimpleNamespace:
+        return SimpleNamespace(
+            raw_judge=None,
+            grouping_model=None,
+            l1_provider=None,
+            l3_provider=None,
+            functional_probe_provider=None,
+            vlm_selector=None,
+            deterministic_selector=None,
+            evidence_renderer=None,
+            preview_renderer=None,
+        )
+
+    def fake_run_evaluate(**kwargs: Any) -> dict[str, Any]:
+        captured.update(kwargs)
+        return {
+            # The runner must fail closed even if a future evaluator response
+            # accidentally claims a complete score for one layer.
+            "evaluation_status": "complete",
+            "benchmark_score": 1.0,
+            "benchmark_score_100": 100.0,
+            "benchmark_score_status": "complete",
+            "coverage": {
+                "complete": True,
+                "score_resolution_complete": True,
+                "score_grounding_complete": True,
+                "coverage_threshold_passed": True,
+            },
+            "scoring_profile": {"scoring_profile_id": "fixture"},
+            "scoring_reliability": {
+                "schema_version": "scoring_reliability_v2",
+                "terminal_state": "complete",
+            },
+            "reports": {
+                "object_grouping": {
+                    "status": "complete",
+                    "object_groups": [],
+                },
+                "scene_quality": {
+                    "status": "not_applicable",
+                    "score": None,
+                    "metrics": {},
+                },
+            },
+            "layer_reports": {
+                L1: {
+                    "status": "evaluated",
+                    "score": 0.875,
+                    "metrics": {
+                        "collision": {"status": "evaluated", "score": 1.0},
+                        "oob": {"status": "evaluated", "score": 1.0},
+                        "support": {"status": "evaluated", "score": 0.75},
+                    },
+                }
+            },
+            "evaluation_config": {
+                "vlm_evaluation_control": {
+                    "integration": {"runtime": {"controlled_calls": []}}
+                }
+            },
+        }
+
+    deps = composition.case_runtime_dependencies()
+    deps = replace(
+        deps,
+        external=replace(
+            deps.external,
+            adapter_builder=fake_adapter_builder,
+            run_evaluate=fake_run_evaluate,
+            load_collision_geometry_manifest=(
+                lambda _: {"schema_version": "collision_geometry_v1"}
+            ),
+        ),
+    )
+    output_root = tmp_path / "l1-only-run"
+    record = case_runtime.run_case_impl(
+        case=source_case,
+        dataset_root=runner.DEFAULT_DATASET_ROOT,
+        output_root=output_root,
+        grouping_config_path=runner.DEFAULT_GROUPING_CONFIG,
+        route={
+            "endpoint": "https://example.invalid/v1",
+            "model": "fixture-model",
+            "api_key_env": "FIXTURE_KEY",
+            "authorization_configured": True,
+        },
+        metrics=(),
+        renderer_config={
+            "blender_bin": "/fixture/blender",
+            "timeout_seconds": 10,
+            "width": 64,
+            "height": 64,
+            "render_engine": "BLENDER_EEVEE_NEXT",
+            "cycles_device": "CPU",
+            "cycles_samples": 1,
+            "cycles_denoising": False,
+            "preview_render_engine": "BLENDER_EEVEE_NEXT",
+            "preview_width": 64,
+            "preview_height": 64,
+            "preview_cycles_samples": 1,
+        },
+        control_config=runner.resolved_control().to_dict(),
+        resume=False,
+        l3_only=False,
+        deps=deps,
+    )
+
+    assert captured["evaluation_profile"][L1]["enabled"] is True
+    assert captured["evaluation_profile"][L3]["enabled"] is False
+    assert all(
+        metric["enabled"] is False
+        for metric in captured["scene_quality_config"]["metrics"].values()
+    )
+    assert record["status"] == "complete"
+    assert record["l1_decision_status"] == "resolved"
+    assert record["l3_decision_status"] == "not_executed"
+    assert record["final_decision_status"] == "resolved"
+    manifest = runner.read_json(
+        output_root / "cases" / "N001" / "case_run_manifest.json"
+    )
+    assert manifest["recovery_mode"] == "l1_only"
+    assert manifest["layers_executed"] == [L1]
+    assert manifest["layers_not_executed"] == [L2, L3, runner.L4]
+    assert manifest["selected_l3_metrics"] == []
+    assert manifest["benchmark_score"] is None
+    assert manifest["benchmark_score_100"] is None
+    assert manifest["benchmark_score_status"] == (
+        "insufficient_metric_coverage"
+    )
+    assert manifest["layer_merge_identity"]["schema_version"] == (
+        "camera_cal_layer_merge_identity_v1"
+    )
+    assert manifest["layer_merge_identity"]["required_pair"] == [
+        "l1_only",
+        "l3_only",
+    ]
+    assert manifest["layer_merge_identity"]["canonical_l3_metrics"] == [
+        "scale_consistency",
+        "object_pairing_consistency",
+        "style_consistency",
+        "functional_consistency",
+        "semantic_placement_consistency",
+    ]
+    diagnostics = runner.read_json(
+        output_root / "cases" / "N001" / "l1_diagnostics.json"
+    )
+    assert diagnostics["recovery_mode"] == "l1_only"
+    assert diagnostics["l1_executed"] is True
+    assert diagnostics["l3_diagnostics_completed"] is False
+    evaluation = runner.read_json(
+        output_root / "cases" / "N001" / "evaluation_report.json"
+    )
+    assert evaluation["evaluation_status"] == "incomplete"
+    assert evaluation["benchmark_score_status"] == (
+        "insufficient_metric_coverage"
+    )
+    assert evaluation["benchmark_score_100"] is None
+    assert evaluation["coverage"]["complete"] is False
+
+
 def test_audit_graph_export_is_explicitly_opt_in(tmp_path: Path) -> None:
     default_args = runner.parse_args(
         ["--output-root", str(tmp_path / "default")]
@@ -196,12 +444,12 @@ def test_audit_graph_export_is_explicitly_opt_in(tmp_path: Path) -> None:
     assert enabled_args.export_audit_graphs is True
 
 
-def test_endpoint_stability_preflight_defaults_to_ten_real_image_calls(
+def test_endpoint_stability_preflight_defaults_to_five_real_image_calls(
     tmp_path: Path,
 ) -> None:
     args = runner.parse_args(["--output-root", str(tmp_path / "run")])
 
-    assert args.endpoint_preflight_attempts == 10
+    assert args.endpoint_preflight_attempts == 5
     assert args.endpoint_preflight_timeout_seconds == 300
 
 
@@ -366,8 +614,65 @@ def test_route_is_explicit_and_never_falls_back_to_port_4000() -> None:
         "model": "model",
         "api_key_env": "TEST_KEY",
         "authorization_configured": True,
+        "endpoint_preflight_required_successes": 1,
+        "endpoint_preflight_concurrency": 1,
+        "endpoint_preflight_sleep_seconds": 5.0,
     }
     assert "secret" not in json.dumps(runner.safe_route_manifest(route))
+
+
+def test_route_preflight_policy_remains_explicitly_overridable() -> None:
+    route = runner.effective_model_route(
+        {
+            "JUDGE_ENDPOINT": "http://127.0.0.1:4010/v1",
+            "JUDGE_MODEL": "model",
+            "JUDGE_API_KEY_ENV": "TEST_KEY",
+            "TEST_KEY": "secret",
+            "JUDGE_ENDPOINT_PREFLIGHT_REQUIRED_SUCCESSES": "3",
+            "JUDGE_ENDPOINT_PREFLIGHT_CONCURRENCY": "1",
+            "JUDGE_ENDPOINT_PREFLIGHT_SLEEP_SECONDS": "2.5",
+        }
+    )
+
+    assert route["endpoint_preflight_required_successes"] == 3
+    assert route["endpoint_preflight_concurrency"] == 1
+    assert route["endpoint_preflight_sleep_seconds"] == 2.5
+
+
+def test_route_exact_call_retry_policy_is_explicit_and_persisted() -> None:
+    route = runner.effective_model_route(
+        {
+            "JUDGE_ENDPOINT": "http://127.0.0.1:4010/v1",
+            "JUDGE_MODEL": "model",
+            "JUDGE_API_KEY_ENV": "TEST_KEY",
+            "TEST_KEY": "secret",
+            "JUDGE_MAX_RETRIES": "5",
+            "JUDGE_RETRY_BACKOFF_SECONDS": "30",
+            "JUDGE_RETRY_BACKOFF_MODE": "constant",
+            "JUDGE_RETRY_ALL_HTTP_ERRORS": "true",
+            "JUDGE_RETRY_MALFORMED_RESPONSE": "true",
+        }
+    )
+
+    expected = {
+        "max_retries": 5,
+        "retry_backoff_seconds": 30.0,
+        "retry_backoff_mode": "constant",
+        "retry_all_http_errors": True,
+        "retry_malformed_response": True,
+    }
+    for key, value in expected.items():
+        assert route[key] == value
+    assert {
+        key: runner.safe_route_manifest(route)[key]
+        for key in expected
+    } == expected
+    judge = runner.model_config(route, role="judge")
+    for key, value in expected.items():
+        assert judge[key] == value
+    grouping = runner.build_grouping_model(route)
+    for key, value in expected.items():
+        assert getattr(grouping, key) == value
 
 
 def test_grouping_model_uses_dedicated_completion_budget() -> None:

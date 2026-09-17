@@ -779,12 +779,13 @@ def _generate_feasible_camera_pose_candidates(
         policy_source = "functional_required_observation_candidate_bank_v3"
         event_focus_source = "functional_probe_relation_target_union"
     elif metric in {"oob", "object_architecture_penetration"}:
+        oob_room = _oob_reference_room(request, room)
         desired_distance = max(1.2, float(max(extent)) * 2.2)
         base_lens = 52.0 if float(max(extent)) < 2.5 else 45.0
         specifications = _oob_feasible_specifications(
             request=request,
             bounds=target_bounds,
-            room=room,
+            room=oob_room,
             count=count,
         )
         policy_source = "metric_aware_feasible_candidate_bank_v2"
@@ -2945,6 +2946,7 @@ def _event_target(
         source = objects[0]
         target[2] = max(room[4] + 0.03, float(source.bottom_z) + 0.03)
     elif metric in {"oob", "object_architecture_penetration"} and objects:
+        room = _oob_reference_room(request, room)
         flags = _plane_flags(request)
         if flags.get("west_oob"):
             target[0] = room[0]
@@ -3143,6 +3145,44 @@ def _plane_flags(request: dict[str, Any]) -> dict[str, bool]:
     evidence = request.get("detector_evidence") if isinstance(request.get("detector_evidence"), dict) else {}
     raw = event.get("plane_flags") if isinstance(event.get("plane_flags"), dict) else evidence.get("plane_flags")
     return {str(key): bool(value) for key, value in raw.items()} if isinstance(raw, dict) else {}
+
+
+def _oob_reference_room(
+    request: dict[str, Any],
+    fallback: tuple[float, float, float, float, float, float],
+) -> tuple[float, float, float, float, float, float]:
+    evidence = (
+        request.get("detector_evidence")
+        if isinstance(request.get("detector_evidence"), dict)
+        else {}
+    )
+    room = evidence.get("room") if isinstance(evidence.get("room"), dict) else {}
+    references = (
+        room.get("plane_reference")
+        if isinstance(room.get("plane_reference"), dict)
+        else {}
+    )
+    order = (
+        "west_oob",
+        "east_oob",
+        "south_oob",
+        "north_oob",
+        "floor_oob",
+        "ceiling_oob",
+    )
+    values: list[float] = []
+    for index, key in enumerate(order):
+        item = references.get(key)
+        raw = item.get("coordinate_m") if isinstance(item, dict) else None
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            value = float(fallback[index])
+        values.append(value if math.isfinite(value) else float(fallback[index]))
+    resolved = tuple(values)
+    if not (resolved[1] > resolved[0] and resolved[3] > resolved[2]):
+        return fallback
+    return resolved
 
 
 def _room_bounds(scene: dict[str, Any]) -> tuple[float, float, float, float, float, float]:

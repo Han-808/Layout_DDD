@@ -57,6 +57,9 @@ PLAN_SCHEMA_VERSION = "camera_cal_scene_level_plan_v2"
 GROUPING_COMPLETION_MAX_TOKENS = 3192
 JUDGE_COMPLETION_MAX_TOKENS = 8192
 CAMERA_SELECTOR_COMPLETION_MAX_TOKENS = 2048
+DEFAULT_ENDPOINT_PREFLIGHT_REQUIRED_SUCCESSES = 1
+DEFAULT_ENDPOINT_PREFLIGHT_CONCURRENCY = 1
+DEFAULT_ENDPOINT_PREFLIGHT_SLEEP_SECONDS = 5.0
 
 L1_METRICS = ("collision", "oob", "support")
 ANNOTATED_L3_METRICS = (
@@ -80,6 +83,17 @@ L1_BINARY_FAILURE_POLICY = {
 _ENV_NAME_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 
+def _environment_bool(env: dict[str, str] | os._Environ[str], name: str) -> bool | None:
+    raw = str(env.get(name) or "").strip().lower()
+    if not raw:
+        return None
+    if raw in {"1", "true", "yes", "on"}:
+        return True
+    if raw in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"{name} must be a boolean value")
+
+
 def _safe_route_manifest(route: dict[str, Any]) -> dict[str, Any]:
     """Return the non-secret route portion recorded in a plan.
 
@@ -96,6 +110,27 @@ def _safe_route_manifest(route: dict[str, Any]) -> dict[str, Any]:
     if "min_request_interval_seconds" in route:
         manifest["min_request_interval_seconds"] = float(
             route["min_request_interval_seconds"]
+        )
+    if "max_retries" in route:
+        manifest["max_retries"] = int(route["max_retries"])
+    if "retry_backoff_seconds" in route:
+        manifest["retry_backoff_seconds"] = float(
+            route["retry_backoff_seconds"]
+        )
+    if "retry_backoff_mode" in route:
+        manifest["retry_backoff_mode"] = str(route["retry_backoff_mode"])
+    for key in ("retry_all_http_errors", "retry_malformed_response"):
+        if key in route:
+            manifest[key] = bool(route[key])
+    for key in (
+        "endpoint_preflight_required_successes",
+        "endpoint_preflight_concurrency",
+    ):
+        if key in route:
+            manifest[key] = int(route[key])
+    if "endpoint_preflight_sleep_seconds" in route:
+        manifest["endpoint_preflight_sleep_seconds"] = float(
+            route["endpoint_preflight_sleep_seconds"]
         )
     return manifest
 
@@ -187,6 +222,97 @@ def effective_model_route(
                 "JUDGE_MIN_REQUEST_INTERVAL_SECONDS must be finite and non-negative"
             )
         route["min_request_interval_seconds"] = min_request_interval_seconds
+    max_retries_raw = str(env.get("JUDGE_MAX_RETRIES") or "").strip()
+    if max_retries_raw:
+        try:
+            max_retries = int(max_retries_raw)
+        except ValueError as exc:
+            raise ValueError("JUDGE_MAX_RETRIES must be an integer") from exc
+        if max_retries < 0:
+            raise ValueError("JUDGE_MAX_RETRIES must be non-negative")
+        route["max_retries"] = max_retries
+    backoff_raw = str(env.get("JUDGE_RETRY_BACKOFF_SECONDS") or "").strip()
+    if backoff_raw:
+        try:
+            retry_backoff_seconds = float(backoff_raw)
+        except ValueError as exc:
+            raise ValueError(
+                "JUDGE_RETRY_BACKOFF_SECONDS must be numeric"
+            ) from exc
+        if (
+            not math.isfinite(retry_backoff_seconds)
+            or retry_backoff_seconds < 0.0
+        ):
+            raise ValueError(
+                "JUDGE_RETRY_BACKOFF_SECONDS must be finite and non-negative"
+            )
+        route["retry_backoff_seconds"] = retry_backoff_seconds
+    backoff_mode_raw = str(
+        env.get("JUDGE_RETRY_BACKOFF_MODE") or ""
+    ).strip().lower()
+    if backoff_mode_raw:
+        if backoff_mode_raw not in {"constant", "linear"}:
+            raise ValueError(
+                "JUDGE_RETRY_BACKOFF_MODE must be 'constant' or 'linear'"
+            )
+        route["retry_backoff_mode"] = backoff_mode_raw
+    retry_all_http_errors = _environment_bool(
+        env, "JUDGE_RETRY_ALL_HTTP_ERRORS"
+    )
+    if retry_all_http_errors is not None:
+        route["retry_all_http_errors"] = retry_all_http_errors
+    retry_malformed_response = _environment_bool(
+        env, "JUDGE_RETRY_MALFORMED_RESPONSE"
+    )
+    if retry_malformed_response is not None:
+        route["retry_malformed_response"] = retry_malformed_response
+    preflight_integer_envs = {
+        "JUDGE_ENDPOINT_PREFLIGHT_REQUIRED_SUCCESSES": (
+            "endpoint_preflight_required_successes"
+        ),
+        "JUDGE_ENDPOINT_PREFLIGHT_CONCURRENCY": (
+            "endpoint_preflight_concurrency"
+        ),
+    }
+    for env_name, route_key in preflight_integer_envs.items():
+        raw = str(env.get(env_name) or "").strip()
+        if not raw:
+            continue
+        try:
+            value = int(raw)
+        except ValueError as exc:
+            raise ValueError(f"{env_name} must be an integer") from exc
+        if value < 1:
+            raise ValueError(f"{env_name} must be at least 1")
+        route[route_key] = value
+    sleep_raw = str(
+        env.get("JUDGE_ENDPOINT_PREFLIGHT_SLEEP_SECONDS") or ""
+    ).strip()
+    if sleep_raw:
+        try:
+            sleep_seconds = float(sleep_raw)
+        except ValueError as exc:
+            raise ValueError(
+                "JUDGE_ENDPOINT_PREFLIGHT_SLEEP_SECONDS must be numeric"
+            ) from exc
+        if not math.isfinite(sleep_seconds) or sleep_seconds < 0.0:
+            raise ValueError(
+                "JUDGE_ENDPOINT_PREFLIGHT_SLEEP_SECONDS must be finite and "
+                "non-negative"
+            )
+        route["endpoint_preflight_sleep_seconds"] = sleep_seconds
+    route.setdefault(
+        "endpoint_preflight_required_successes",
+        DEFAULT_ENDPOINT_PREFLIGHT_REQUIRED_SUCCESSES,
+    )
+    route.setdefault(
+        "endpoint_preflight_concurrency",
+        DEFAULT_ENDPOINT_PREFLIGHT_CONCURRENCY,
+    )
+    route.setdefault(
+        "endpoint_preflight_sleep_seconds",
+        DEFAULT_ENDPOINT_PREFLIGHT_SLEEP_SECONDS,
+    )
     return route
 
 
@@ -295,6 +421,36 @@ def build_experiment_plan(
     """Build the byte/schema-compatible experiment plan mapping."""
 
     deps = dependencies or default_planning_dependencies()
+    l1_only = not metrics and not l3_only
+    recovery_mode = (
+        "l1_only" if l1_only else "l3_only" if l3_only else None
+    )
+    resolved_preflight_concurrency = (
+        min(int(max_workers), int(endpoint_preflight_attempts))
+        if "endpoint_preflight_concurrency" not in route
+        else int(route["endpoint_preflight_concurrency"])
+    )
+    endpoint_preflight_required_successes = route.get(
+        "endpoint_preflight_required_successes"
+    )
+    endpoint_preflight_sleep_seconds = float(
+        route.get("endpoint_preflight_sleep_seconds") or 0.0
+    )
+    preflight_plan = {
+        "required": True,
+        "attempts": int(endpoint_preflight_attempts),
+        "concurrency": resolved_preflight_concurrency,
+        "timeout_seconds": int(endpoint_preflight_timeout_seconds),
+        "input": "first_selected_case_standardized_perspective",
+        "success_contract": "all_real_image_calls_complete",
+        "route_configuration_failure_policy": "abort_run",
+    }
+    if endpoint_preflight_required_successes is not None:
+        preflight_plan.update(
+            successes_required=int(endpoint_preflight_required_successes),
+            sleep_seconds=float(endpoint_preflight_sleep_seconds),
+            success_contract="minimum_successes_within_attempt_budget",
+        )
     return {
         "schema_version": PLAN_SCHEMA_VERSION,
         "runner_schema_version": RUNNER_SCHEMA_VERSION,
@@ -304,7 +460,7 @@ def build_experiment_plan(
         "source_cases_read_only": True,
         "source_prompt_used": False,
         "prompt_policy": "metric_rubrics_only_no_generation_prompt",
-        "recovery_mode": "l3_only" if l3_only else None,
+        "recovery_mode": recovery_mode,
         "audit_graph_export": {
             "enabled": bool(export_audit_graphs),
             "schema_version": AUDIT_GRAPH_EXPORT_VERSION,
@@ -334,8 +490,13 @@ def build_experiment_plan(
                 "reason": "promptless_camera_cal_experiment",
             },
             L3: {
-                "enabled": True,
+                "enabled": not l1_only,
                 "metrics": list(metrics),
+                **(
+                    {"reason": "l1_only_recovery"}
+                    if l1_only
+                    else {}
+                ),
                 "scope": "metric_policy_then_scene_level_aggregation",
                 "functional_group_local_granularity": (
                     functional_group_local_granularity
@@ -418,18 +579,7 @@ def build_experiment_plan(
             L4: {"enabled": False},
         },
         "model_route": deps.safe_route_manifest(route),
-        "endpoint_stability_preflight": {
-            "required": True,
-            "attempts": int(endpoint_preflight_attempts),
-            "concurrency": min(
-                int(max_workers),
-                int(endpoint_preflight_attempts),
-            ),
-            "timeout_seconds": int(endpoint_preflight_timeout_seconds),
-            "input": "first_selected_case_standardized_perspective",
-            "success_contract": "all_real_image_calls_complete",
-            "route_configuration_failure_policy": "abort_run",
-        },
+        "endpoint_stability_preflight": preflight_plan,
         "grouping": {
             "config_path": str(grouping_config_path),
             "config_sha256": deps.file_sha256(grouping_config_path),
@@ -485,8 +635,19 @@ def model_config(
         "max_tokens": completion_tokens,
         "timeout_seconds": 3000,
         "response_format_json": False,
-        "max_retries": 1,
-        "retry_backoff_seconds": 1.0,
+        "max_retries": int(route.get("max_retries", 1)),
+        "retry_backoff_seconds": float(
+            route.get("retry_backoff_seconds", 1.0)
+        ),
+        "retry_backoff_mode": str(
+            route.get("retry_backoff_mode", "linear")
+        ),
+        "retry_all_http_errors": bool(
+            route.get("retry_all_http_errors", False)
+        ),
+        "retry_malformed_response": bool(
+            route.get("retry_malformed_response", False)
+        ),
         "min_request_interval_seconds": float(
             route.get("min_request_interval_seconds") or 0.0
         ),
@@ -514,8 +675,15 @@ def build_grouping_model(
         max_tokens=GROUPING_COMPLETION_MAX_TOKENS,
         timeout_seconds=3000,
         response_format_json=False,
-        max_retries=1,
-        retry_backoff_seconds=1.0,
+        max_retries=int(route.get("max_retries", 1)),
+        retry_backoff_seconds=float(route.get("retry_backoff_seconds", 1.0)),
+        retry_backoff_mode=str(route.get("retry_backoff_mode", "linear")),
+        retry_all_http_errors=bool(
+            route.get("retry_all_http_errors", False)
+        ),
+        retry_malformed_response=bool(
+            route.get("retry_malformed_response", False)
+        ),
         min_request_interval_seconds=float(
             route.get("min_request_interval_seconds") or 0.0
         ),

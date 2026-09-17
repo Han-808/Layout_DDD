@@ -1,6 +1,11 @@
 """P0b out-of-bounds metric: exact OBB versus six room planes with conservative VLM adjudication."""
 
 from __future__ import annotations
+from benchmark.visual_judge.evidence_gap_v2 import enabled as fallback_v2_enabled
+
+from benchmark.evaluator.adaptive_audit import adaptive_l1_result
+
+from benchmark.visual_judge.evidence_resolution import adaptive_enabled, with_evidence_policy, failure_record
 
 from copy import deepcopy
 import math
@@ -58,6 +63,8 @@ class OOBEvaluationError(RuntimeError):
     """Raised when official OOB evaluation cannot complete required adjudication."""
 
 
+@with_evidence_policy
+@adaptive_l1_result
 def check_oob(
     scene: dict,
     config: dict | None = None,
@@ -117,7 +124,7 @@ def check_oob(
         if record.get("requires_vlm") and record.get("final_verdict") not in {"valid", "invalid"}
     )
 
-    if adjudication_failures and official_mode:
+    if adjudication_failures and official_mode and not fallback_v2_enabled():
         raise OOBEvaluationError("; ".join(adjudication_failures))
     if requires_vlm_count and official_mode and vlm_judge is None:
         raise OOBEvaluationError(
@@ -303,16 +310,20 @@ def _evaluate_object(
             local_view_provider=local_view_provider,
         )
     except EvidenceControlUnresolvedError as exc:
+        if fallback_v2_enabled():
+            record["failure"] = failure_record(exc, phase="judge")
         record["route"] = "unresolved"
         record["evidence_control"] = exc.result.to_dict()
         return record
     except Exception as exc:
         record["adjudication_error"] = f"{type(exc).__name__}: {exc}"
+        if fallback_v2_enabled():
+            record["failure"] = failure_record(exc, phase="judge")
         record["route"] = "vlm_adjudication_failed"
         schema_audit = response_schema_audit_from_exception(exc)
         if schema_audit is not None:
             record["adjudication_failure_audit"] = schema_audit
-        if bool(cfg.get("official_mode")):
+        if bool(cfg.get("official_mode")) and not fallback_v2_enabled():
             raise OOBEvaluationError(record["adjudication_error"]) from exc
         return record
 

@@ -2,9 +2,9 @@
 
 The screening pass is a routing decision, not a final invalid verdict.  It
 lets scale and object-pairing checks use canonical object metadata before
-paying for camera selection and rendering.  Suspicious or insufficient
-screens are confirmed through the existing group-scoped Judge/Controller
-path, so ``need_more_evidence`` keeps using the normal camera repair loop.
+paying for camera selection and rendering. Suspicious Object Pairing screens
+receive exactly one room-global confirmation view; Scale retains its existing
+group/target-scoped confirmation path.
 """
 
 from __future__ import annotations
@@ -33,6 +33,7 @@ from benchmark.evaluator.scene_quality.target_scoped import (
     resolve_target_evidence_packets,
     target_packet_audit,
 )
+from benchmark.evaluator.structured_fallback import policy_resolved
 
 
 def evaluate_json_screen_then_group_visual(
@@ -59,7 +60,7 @@ def evaluate_json_screen_then_group_visual(
     group_packet_audit: Callable[[dict[str, Any]], dict[str, Any]],
     evaluate_group_scoped_judgements: Callable[..., dict[str, Any]],
 ) -> dict[str, Any]:
-    """Screen canonical JSON, then visually confirm only routed groups."""
+    """Screen canonical JSON, then use the metric's bounded visual route."""
 
     screen_groups = groups or []
     screen_group_ids = [
@@ -195,6 +196,28 @@ def evaluate_json_screen_then_group_visual(
     base["routed_candidate_claims"] = deepcopy(
         routed_candidate_claims
     )
+    if metric_name == "object_pairing_consistency":
+        return _evaluate_pairing_global_confirmation(
+            base=base,
+            metric_name=metric_name,
+            scene=scene,
+            object_ids=object_ids,
+            render_evidence=render_evidence,
+            camera_evidence_provider=camera_evidence_provider,
+            vlm_judge=vlm_judge,
+            prompt=prompt,
+            visual_style_spec=visual_style_spec,
+            authorized_deviations=authorized_deviations,
+            routed_candidate_claims=routed_candidate_claims,
+            screen_record=screen_record,
+            screen_adjusted=screen_adjusted,
+            router_state=router_state,
+            build_judge_request=build_judge_request,
+            call_judge=call_judge,
+            apply_prompt_exemptions=apply_prompt_exemptions,
+            normalize_judgement=normalize_judgement,
+            resolve_metric_evidence=resolve_metric_evidence,
+        )
     compatibility_without_grouping = bool(
         not groups and metric_name == "scale_consistency"
     )
@@ -580,6 +603,231 @@ def evaluate_json_screen_then_group_visual(
     )
 
 
+def _evaluate_pairing_global_confirmation(
+    *,
+    base: dict[str, Any],
+    metric_name: str,
+    scene: dict[str, Any],
+    object_ids: list[str],
+    render_evidence: list[str] | dict[str, Any] | None,
+    camera_evidence_provider: Any,
+    vlm_judge: Any,
+    prompt: str | None,
+    visual_style_spec: dict[str, Any] | None,
+    authorized_deviations: list[dict[str, Any]],
+    routed_candidate_claims: list[dict[str, Any]],
+    screen_record: dict[str, Any],
+    screen_adjusted: dict[str, Any],
+    router_state: str,
+    build_judge_request: Callable[..., dict[str, Any]],
+    call_judge: Callable[[Any, dict[str, Any]], dict[str, Any]],
+    apply_prompt_exemptions: Callable[..., dict[str, Any]],
+    normalize_judgement: Callable[..., dict[str, Any]],
+    resolve_metric_evidence: Callable[..., tuple[list[str], dict[str, Any]]],
+) -> dict[str, Any]:
+    """Confirm one suspicious room inventory with one global view only."""
+
+    global_policy = {
+        "camera_scope": "global",
+        "camera_mode": "global_oblique",
+        "selector": "deterministic",
+        "image_budget": 1,
+        "global_image_budget": 1,
+        "presentation": "raw",
+        "image_order": ["global_context"],
+        "include_global_context": True,
+        # Pairing is a room-global inventory judgement. Never inherit an old
+        # focus/local camera mode from a caller override or metric default.
+        "camera_pose_mode": "global_only",
+    }
+    paths, resolution = resolve_metric_evidence(
+        render_evidence,
+        metric_name=metric_name,
+        policy=global_policy,
+        scene=scene,
+        prompt=prompt,
+        selected_object_ids=list(object_ids),
+        selected_group_ids=[],
+        selected_groups=[],
+        camera_evidence_provider=camera_evidence_provider,
+    )
+    paths = list(paths[:1])
+    scope_satisfied = bool(
+        paths and resolution.get("scope_satisfied") is True
+    )
+    base.update(
+        route="json_screen_then_global_inventory_visual",
+        router_state=router_state,
+        selected_group_ids=[],
+        selected_object_ids=list(object_ids),
+        evidence_paths=paths,
+        local_evidence_paths=[],
+        global_context_evidence_paths=paths,
+        resolved_evidence_policy={
+            "global_policy": deepcopy(global_policy),
+            "local_confirmation_enabled": False,
+            "maximum_visual_confirmation_images": 1,
+        },
+    )
+    base["dependencies"].update(
+        {
+            "object_grouping": "not_required",
+            "render_evidence": (
+                "available" if paths else "unavailable"
+            ),
+            "requested_evidence_scope": "global",
+            "evidence_scope_satisfied": scope_satisfied,
+            "evidence_source": resolution.get("source"),
+            "provider_status": resolution.get("provider_status"),
+        }
+    )
+    base["evidence_request"].update(
+        {
+            "camera_scope": "global",
+            "image_budget": 1,
+            "global_image_budget": 1,
+            "scoped_image_budget": 0,
+            "image_order": ["global_context"],
+            "include_global_context": True,
+            "evidence_phase": "global_inventory_confirmation",
+            "provider_invoked": bool(
+                resolution.get("provider_invoked")
+            ),
+            "provider_status": resolution.get("provider_status"),
+            "provider_reason": resolution.get("provider_reason"),
+            "evidence_source": resolution.get("source"),
+            "scope_satisfied": scope_satisfied,
+            "missing_paths": list(
+                resolution.get("missing_paths") or []
+            ),
+            "target_object_ids": list(object_ids),
+            "target_group_ids": [],
+            "group_requests": [],
+            "target_requests": [],
+            "vlm_invoked": scope_satisfied,
+        }
+    )
+    if not scope_satisfied:
+        base.update(
+            status="unresolved",
+            reason="render_evidence_unavailable",
+            judgement={
+                "error_type": "GlobalInventoryEvidenceUnavailable",
+                "error": str(
+                    resolution.get("provider_reason")
+                    or "one global room view is required"
+                ),
+            },
+        )
+        return terminalize_required_scope(
+            base,
+            phase=f"{metric_name}.global_inventory_confirmation",
+        )
+
+    request = build_judge_request(
+        metric_name=metric_name,
+        scene=scene,
+        prompt=prompt,
+        render_evidence=paths,
+        selected_object_ids=list(object_ids),
+        selected_group_ids=[],
+        groups=[],
+        authorized_deviations=authorized_deviations,
+        visual_style_spec=visual_style_spec,
+        evidence_phase="global_inventory_confirmation",
+        decision_mode="final",
+        routed_screen_claims=routed_candidate_claims,
+        attribution_target_ids=list(object_ids),
+        context_object_ids=[],
+    )
+    request["budget_exhaustion_finalization"] = {
+        "required": True,
+        "trigger_stop_reason": "global_inventory_image_budget_exhausted",
+        "ambiguity_before_forcing": (
+            screen_adjusted.get("evidence_status") == "insufficient"
+        ),
+        "previous_missing_observations": list(
+            screen_adjusted.get("missing_evidence") or []
+        ),
+        "previous_evidence_request": deepcopy(
+            screen_adjusted.get("evidence_request")
+        ),
+        "scope_limit": "one_global_room_view_no_local_expansion",
+    }
+    audit_records = getattr(vlm_judge, "audit_records", None)
+    audit_start = (
+        len(audit_records)
+        if isinstance(audit_records, list)
+        else None
+    )
+    try:
+        raw = call_judge(vlm_judge, request)
+        adjusted = apply_prompt_exemptions(
+            raw,
+            metric_name=metric_name,
+            authorized_deviations=authorized_deviations,
+        )
+        outcome = normalize_judgement(
+            adjusted,
+            metric_name=metric_name,
+            valid_object_ids=set(object_ids),
+        )
+    except Exception as exc:
+        base.update(
+            status="failed",
+            reason="global_inventory_judge_failed",
+            judgement={
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+            },
+            judge_call_count=2,
+            vlm_invoked=True,
+        )
+        return terminalize_required_scope(
+            base,
+            phase=f"{metric_name}.global_inventory_confirmation",
+        )
+
+    if (
+        audit_start is not None
+        and isinstance(audit_records, list)
+        and len(audit_records) > audit_start
+        and isinstance(audit_records[-1], dict)
+    ):
+        base["global_inventory_camera_control_audit"] = deepcopy(
+            audit_records[-1]
+        )
+    base.update(
+        status=outcome["status"],
+        reason=outcome.get("reason"),
+        score=outcome.get("score"),
+        judgement=deepcopy(adjusted),
+        judge_call_count=2,
+        vlm_invoked=True,
+        json_screen=deepcopy(screen_record),
+        routed_candidate_claims=deepcopy(routed_candidate_claims),
+        final_defect_claims=claim_records(
+            metric_name,
+            adjusted.get("defects") or [],
+            source_phase="global_inventory_confirmation",
+            claim_status="final",
+        ),
+        coverage={
+            "eligible_count": 1,
+            "resolved_count": 1 if outcome["status"] == "evaluated" else 0,
+            "fraction": 1.0 if outcome["status"] == "evaluated" else 0.0,
+            "complete": outcome["status"] == "evaluated",
+            "scope": "room_global_inventory",
+            "global_view_count": len(paths),
+            "local_view_count": 0,
+        },
+    )
+    return terminalize_required_scope(
+        base,
+        phase=f"{metric_name}.global_inventory_confirmation",
+    )
+
+
 def _merge_json_visual_scopes(
     *,
     base: dict[str, Any],
@@ -609,7 +857,10 @@ def _merge_json_visual_scopes(
     grounded = [
         item
         for item in evaluated
-        if not scope_was_defaulted(item)
+        if (
+            not scope_was_defaulted(item)
+            or policy_resolved(item)
+        )
         and not (
             isinstance(item.get("evidence_coverage"), dict)
             and item["evidence_coverage"].get("grounded") is False
