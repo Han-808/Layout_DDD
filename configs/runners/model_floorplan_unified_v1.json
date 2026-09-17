@@ -1,8 +1,8 @@
 {
   "schema_version": "uniform_model_floorplan_protocol_v1",
   "protocol_id": "model_floorplan_unified_v1",
-  "parent_release_sha256": "a49af914c91bd1edc4d7125a2d5bb4b936ca3e43cf44a5b08003815170835577",
-  "implementation_revision": "s100_acquisition_scope_feedback_fix_v1",
+  "parent_release_sha256": "f6928e0bd6b36d24ef38d9de9386357e788badd7ceb194888a57d467e6065705",
+  "implementation_revision": "s100_residual_typed_reference_score_fix_v2",
   "modes": ["open-space", "multi-room", "non-rect"],
   "geometry_adapter": "polygon_room_adapter_v1",
   "geometry_adapter_source_commit": "31869837105d7ef10c3b3e382cb84eeb1f1f1efc",

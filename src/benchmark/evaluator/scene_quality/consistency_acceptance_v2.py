@@ -158,6 +158,11 @@ def summarize_metric(report: dict[str, Any], planned: list[str]) -> dict[str, An
                        ("placement_global_handoff_reviews", "handoff"),
                        ("residual_global_placement_judgement", "residual")):
         rows = report.get(key) or judgement.get(key) or []
+        if label == "residual" and not rows:
+            rows = report.get("residual_global_placement_review") or []
+            if not rows and (report.get("residual_global_placement_phase") or {}).get("required"):
+                rows = [{"status": "failed", "score": None,
+                         "failure": {"failure_category": "unresolved_required_judgement"}}]
         if isinstance(rows, dict):
             rows = [rows]
         for index, row in enumerate(rows):
@@ -213,7 +218,7 @@ def finish_metric(report: dict[str, Any], planned: list[str]) -> dict[str, Any]:
     report.update(evidence_resolution_policy=FALLBACK_POLICY, resolution_coverage=coverage,
                   execution_complete=True)
     if not coverage["complete"]:
-        hard = coverage["failure_count"] > 0 or bool(failure_of(report) and
+        hard = bool(report.get("infrastructure_failures")) or coverage["failure_count"] > 0 or bool(failure_of(report) and
             failure_of(report).get("failure_category") not in {"evidence_gap", "evidence_unavailable"})
         report.update(status="failed" if hard else "not_evaluable", score=None,
                       terminal_state="infrastructure_failure" if hard else "evidence_gap")

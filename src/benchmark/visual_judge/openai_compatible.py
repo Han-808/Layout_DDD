@@ -1019,6 +1019,12 @@ class OpenAICompatibleVLMJudge:
         )
 
         def validate_response(result: dict[str, Any], *, _ignore_handoff_stage: bool = False) -> dict[str, Any]:
+            referenced_typed_checks = []
+            if residual_placement_phase:
+                from benchmark.evaluator.scene_quality.placement_residual_references import resolve_typed_references
+                result, referenced_typed_checks = resolve_typed_references(
+                    result, request.get("placement_residual_context"))
+            validation_placement_checks = [*deepcopy(required_placement_checks), *referenced_typed_checks]
             judge_originated_placement_checks: list[
                 dict[str, Any]
             ] = []
@@ -1058,7 +1064,7 @@ class OpenAICompatibleVLMJudge:
                     ),
                     groups=_placement_groups_for_request(request),
                     existing_checks=deepcopy(
-                        required_placement_checks
+                        validation_placement_checks
                     ),
                     expected_owner_stage=(
                         None if _ignore_handoff_stage else _expected_placement_owner_stage(request)
@@ -1071,7 +1077,7 @@ class OpenAICompatibleVLMJudge:
                 result = canonicalize_placement_defect_linkage(
                     result,
                     required_checks=[
-                        *deepcopy(required_placement_checks),
+                        *deepcopy(validation_placement_checks),
                         *judge_originated_placement_checks,
                     ],
                 )
@@ -1166,7 +1172,7 @@ class OpenAICompatibleVLMJudge:
                     normalized,
                     allow_scope_evidence_request=fallback_v2_enabled(request),
                     required_checks=[
-                        *deepcopy(required_placement_checks),
+                        *deepcopy(validation_placement_checks),
                         *judge_originated_placement_checks,
                     ],
                     function_events=list(

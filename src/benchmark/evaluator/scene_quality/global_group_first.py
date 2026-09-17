@@ -1460,6 +1460,7 @@ def evaluate_global_discovery_then_group_local(
                 group_results=group_results,
                 target_results=target_scope_results,
                 groups=groups,
+                handoff_records=handoff_records,
             )
             residual_episode_ledger = (
                 _initial_camera_acquisition_ledger(residual_evidence)
@@ -2344,6 +2345,11 @@ def _evaluate_global_scope(
                 if str(check.get("check_id") or "")
                 in phase_check_ids
             ]
+            if evidence_phase == "residual_global_placement_review":
+                from .placement_residual_references import resolve_typed_references
+                adjusted, repeated_checks = resolve_typed_references(adjusted, placement_residual_context)
+                phase_checks.extend(c for c in repeated_checks
+                                    if c["check_id"] not in {r["check_id"] for r in phase_checks})
             adjusted = canonicalize_placement_defect_linkage(
                 adjusted,
                 required_checks=phase_checks,
@@ -2558,6 +2564,8 @@ def _validate_and_tag_residual_placement_result(
     """Keep residual findings novel, typed, and independently attributable."""
 
     result = deepcopy(value)
+    from .placement_residual_references import repeated_typed_ids
+    repeated_ids = repeated_typed_ids(result, residual_context)
     typed_subject_ids = {
         str(item)
         for item in (residual_context or {}).get(
@@ -2597,6 +2605,13 @@ def _validate_and_tag_residual_placement_result(
             raise ValueError(
                 "residual Placement defects must be JSON objects"
             )
+        if defect.get("check_id") in repeated_ids:
+            # Preserve the model's invalid observation; its typed owner supplies
+            # the burden once. Novel residual findings still use strict rules.
+            defect["placement_component"] = "typed"
+            defect["residual_repeats_typed_claim"] = True
+            continue
+        defect.pop("residual_repeats_typed_claim", None)
         check_type = str(
             defect.get("check_type") or defect.get("relation") or ""
         )
@@ -2670,6 +2685,20 @@ def _validate_and_tag_residual_placement_result(
             "residual Placement may score at most one collective scene-zone "
             "distribution finding"
         )
+    if repeated_ids:
+        # The typed ledger already owns these decisions and their original
+        # evidence receipts. A repeated residual observation is audit-only,
+        # not another ledger write (or an upgrade of inferred visual coverage).
+        result["repeated_typed_check_observations"] = [
+            deepcopy(row) for row in result.get("placement_check_results") or []
+            if row.get("check_id") in repeated_ids]
+        result["placement_check_results"] = [
+            row for row in result.get("placement_check_results") or []
+            if row.get("check_id") not in repeated_ids]
+        if isinstance(result.get("placement_check_resolutions"), dict):
+            result["placement_check_resolutions"] = {
+                key: row for key, row in result["placement_check_resolutions"].items()
+                if key not in repeated_ids}
     observation_coverage = validate_residual_group_global_observations(
         result,
         groups=(residual_context or {}).get("groups") or [],
@@ -3273,6 +3302,7 @@ def _placement_residual_context(
     group_results: list[dict[str, Any]],
     target_results: list[dict[str, Any]],
     groups: list[dict[str, Any]] | None,
+    handoff_records: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Freeze compact scene semantics and completed typed Placement work."""
 
@@ -3324,7 +3354,7 @@ def _placement_residual_context(
         if isinstance(item, dict)
     ]
     typed_defects: list[dict[str, Any]] = []
-    records = [global_record, *group_results, *target_results]
+    records = [global_record, *group_results, *target_results, *(handoff_records or [])]
     for record in records:
         if not isinstance(record, dict):
             continue
@@ -4100,7 +4130,7 @@ def _aggregate_global_and_group_results(
     residual_defects = [
         deepcopy(defect)
         for defect in (residual_global_record or {}).get("defects") or []
-        if residual_invalid and isinstance(defect, dict)
+        if residual_invalid and isinstance(defect, dict) and not defect.get("residual_repeats_typed_claim")
     ]
     global_defects.extend(
         deepcopy(defect) for item in handoff_scopes if _is_invalid_outcome(item)
