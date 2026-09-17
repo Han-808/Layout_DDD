@@ -1363,6 +1363,11 @@ class OpenAICompatibleVLMJudge:
             fail_soft_fallback=None if adaptive else fail_soft_fallback,
             preserve_terminal_semantics=adaptive,
             include_validation_feedback=fallback_v2_enabled(request),
+            function_events=(
+                deepcopy(function_events)
+                if metric == "semantic_placement_consistency" and fallback_v2_enabled(request)
+                else None
+            ),
         )
         request_metadata = dict(self.model.last_request_metadata)
         request_metadata["response_schema_validation"] = schema_audit

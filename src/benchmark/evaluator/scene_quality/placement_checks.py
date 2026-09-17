@@ -73,6 +73,16 @@ _RESIDUAL_GROUP_CANDIDATES = {
 }
 
 
+def placement_function_event_subject_ids(event: dict[str, Any]) -> set[str]:
+    """Exact roles eligible for an explicit same-event ownership reference."""
+    return {
+        str(item)
+        for field in ("affected_object_ids", "causal_object_ids",
+                      "scoring_target_ids", "counterpart_object_ids")
+        for item in event.get(field) or []
+    }
+
+
 def validate_residual_group_global_observations(
     value: dict[str, Any],
     *,
@@ -719,16 +729,7 @@ def validate_placement_check_results(
                     f"placement check {check_id} must explicitly confirm "
                     "same_physical_event before deduplication"
                 )
-            event_targets = {
-                str(item)
-                for field in (
-                    "affected_object_ids",
-                    "causal_object_ids",
-                    "scoring_target_ids",
-                    "counterpart_object_ids",
-                )
-                for item in event_by_id[event_ref].get(field) or []
-            }
+            event_targets = placement_function_event_subject_ids(event_by_id[event_ref])
             if str(check["subject_id"]) not in event_targets:
                 raise ValueError(
                     f"placement check {check_id} exact event reference has "

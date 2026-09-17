@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from collections import Counter
 import json
 from typing import Any, Callable
 
@@ -118,6 +119,7 @@ def repair_canonical_response_schema_once(
     allowed_scopes: tuple[str, ...] = (),
     allowed_target_ids: tuple[str, ...] = (),
     allowed_missing_observations: tuple[str, ...] = (),
+    function_events: list[dict[str, Any]] | None = None,
     fail_soft_fallback: (
         Callable[
             [dict[str, Any], dict[str, Any]],
@@ -128,24 +130,53 @@ def repair_canonical_response_schema_once(
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Permit one same-evidence repair for a canonical metric response."""
 
-    return _repair_response_schema_once(
+    # Lock genuine decisions, not a reference already disproved by the trusted
+    # ownership ledger. The model must supply a replacement; the unchanged full
+    # validator still decides whether it is legal. Never select an event here.
+    repairable: dict[tuple[Any, ...], dict[str, Any]] | None = None
+    repaired_refs: dict[tuple[Any, ...], str] = {}
+
+    def signature(value: dict[str, Any]) -> dict[str, Any]:
+        nonlocal repairable, repaired_refs
+        if repairable is None:
+            repairable = _invalid_placement_function_references(value, function_events)
+        repaired_refs = {
+            _placement_reference_identity(field, row): str(row.get("function_event_ref") or "")
+            for field, row in _placement_reference_rows(value)
+        }
+        return _canonical_semantic_signature(
+            value, allowed_scopes=allowed_scopes,
+            repairable_function_references=frozenset(repairable),
+        )
+
+    repair_prompt = (
+        _FORCED_CHOICE_CANONICAL_SCHEMA_REPAIR_PROMPT if force_binary_choice
+        else _canonical_schema_repair_prompt(
+            allowed_scopes=allowed_scopes, allowed_target_ids=allowed_target_ids,
+            allowed_missing_observations=allowed_missing_observations,
+        )
+    )
+    if function_events is not None:
+        repair_prompt = repair_prompt.replace(
+            "Preserve exact Function ownership references", "Preserve valid exact Function ownership references"
+        )
+        repair_prompt += (
+            "\nAn unknown Function event reference, or one whose supplied event has no "
+            "subject-role overlap, is not a valid binding to preserve. You may correct only "
+            "that invalid reference using the supplied final ownership ledger, without "
+            "changing the subject/context, conclusion, severity, same-physical-event claim "
+            "or defect identity. Never switch an already valid event reference, invent "
+            "an event or turn a finding into an exclusion. The strict ownership validator "
+            "must still accept the corrected response."
+        )
+    result, audit = _repair_response_schema_once(
         model=model,
         messages=messages,
         response_format_json=response_format_json,
         call_type=call_type,
         judge_label=judge_label,
         validator=validator,
-        repair_prompt=(
-            _FORCED_CHOICE_CANONICAL_SCHEMA_REPAIR_PROMPT
-            if force_binary_choice
-            else _canonical_schema_repair_prompt(
-                allowed_scopes=allowed_scopes,
-                allowed_target_ids=allowed_target_ids,
-                allowed_missing_observations=(
-                    allowed_missing_observations
-                ),
-            )
-        ),
+        repair_prompt=repair_prompt,
         policy=(
             "single_forced_choice_decision_retry_v1"
             if force_binary_choice
@@ -154,10 +185,7 @@ def repair_canonical_response_schema_once(
         semantic_signature=(
             None
             if force_binary_choice and not preserve_terminal_semantics
-            else lambda value: _canonical_semantic_signature(
-                value,
-                allowed_scopes=allowed_scopes,
-            )
+            else signature
         ),
         semantic_restore=(
             None
@@ -167,6 +195,61 @@ def repair_canonical_response_schema_once(
         fail_soft_fallback=fail_soft_fallback,
         include_validation_feedback=include_validation_feedback,
     )
+    if audit.get("recovered") and repairable:
+        repairs = [
+            {**record, "repaired_ref": repaired_refs.get(identity),
+             "same_event_claim_preserved": True}
+            for identity, record in repairable.items()
+            if repaired_refs.get(identity) != record["original_ref"]
+        ]
+        if repairs:
+            audit["function_reference_repairs"] = repairs
+    return result, audit
+
+
+def _placement_reference_identity(field: str, row: dict[str, Any]) -> tuple[Any, ...]:
+    return (
+        field,
+        str(row.get("check_id") or "") if field == "placement_check_results" else str(
+            row.get("check_type") or row.get("placement_check_type") or ""),
+        str(row.get("subject_id") or ""),
+        _normalized_text_set(row.get("context_ids")),
+    )
+
+
+def _placement_reference_rows(value: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
+    return [(field, row) for field in ("placement_check_results", "judge_originated_placement_results")
+            if isinstance(value.get(field), list)
+            for row in value[field] if isinstance(row, dict)]
+
+
+def _invalid_placement_function_references(
+    value: dict[str, Any], function_events: list[dict[str, Any]] | None,
+) -> dict[tuple[Any, ...], dict[str, Any]]:
+    if function_events is None:
+        return {}
+    from benchmark.evaluator.scene_quality.placement_checks import placement_function_event_subject_ids
+    events = {str(e.get("event_id") or ""): e for e in function_events if isinstance(e, dict)}
+    rows = _placement_reference_rows(value)
+    counts = Counter(_placement_reference_identity(field, row) for field, row in rows)
+    repairable = {}
+    for field, row in rows:
+        identity = _placement_reference_identity(field, row)
+        subject = str(row.get("subject_id") or "")
+        if (counts[identity] != 1 or not subject or row.get("conclusion") != "excluded_function_owned"
+                or row.get("same_physical_event") is not True
+                or row.get("observation_status") not in {"observed", "inferred_under_budget"}
+                or not str(row.get("reason") or "").strip()):
+            continue
+        reference = str(row.get("function_event_ref") or "").strip()
+        event = events.get(reference)
+        if event is not None and subject in placement_function_event_subject_ids(event):
+            continue
+        repairable[identity] = {
+            "row_kind": field, "subject_id": subject, "original_ref": reference,
+            "reason": "unknown_function_event" if event is None else "function_event_has_no_subject_role",
+        }
+    return repairable
 
 
 def _repair_response_schema_once(
@@ -397,6 +480,7 @@ def _canonical_semantic_signature(
     value: dict[str, Any],
     *,
     allowed_scopes: tuple[str, ...] = (),
+    repairable_function_references: frozenset[tuple[Any, ...]] = frozenset(),
 ) -> dict[str, Any]:
     """Capture structured decisions that a schema-only retry may not change.
 
@@ -573,7 +657,9 @@ def _canonical_semantic_signature(
                 ),
                 str(item.get("observation_status") or ""),
                 str(item.get("conclusion") or ""),
-                str(item.get("function_event_ref") or ""),
+                ("<invalid_reference_under_repair>" if _placement_reference_identity(
+                    "placement_check_results", item) in repairable_function_references
+                 else str(item.get("function_event_ref") or "")),
                 bool(item.get("same_physical_event") is True),
             )
             for item in placement_rows
@@ -649,7 +735,9 @@ def _canonical_semantic_signature(
                         str(item.get("observation_status")),
                         str(item.get("conclusion")),
                         str(item.get("severity") or ""),
-                        str(item.get("function_event_ref") or ""),
+                        ("<invalid_reference_under_repair>" if _placement_reference_identity(
+                            "judge_originated_placement_results", item) in repairable_function_references
+                         else str(item.get("function_event_ref") or "")),
                         bool(item.get("same_physical_event")),
                     )
                 )
