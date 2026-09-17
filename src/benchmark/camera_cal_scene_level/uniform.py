@@ -38,6 +38,7 @@ def source_files(root: Path = ROOT) -> list[str]:
     paths += [root/'scripts/run_uniform_model_evaluation.py', root/'scripts/freeze_uniform_model_evaluator.py',
               root/'scripts/replay_s100_regressions.py', root/'scripts/replay_placement_scoring.py',
               root/'scripts/preserve_placement_regressions.py', root/'pyproject.toml']
+    paths += [root/'scripts/preserve_functional_regression.py', root/'scripts/replay_functional_scoring.py']
     return sorted(str(p.relative_to(root)) for p in paths)
 
 
