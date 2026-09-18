@@ -758,106 +758,15 @@ def _any_reported_invocation(values: Iterable[bool | None]) -> bool | None:
     return None if any(value is None for value in values) else False
 
 
-@adaptive_metric_result
-def _evaluate_metric(
+def _select_scope_targets(
     *,
+    scope: str,
     metric_name: str,
-    metric_config: dict[str, Any],
-    top_enabled: bool,
-    scene: dict[str, Any],
     object_ids: list[str],
     groups: list[dict[str, Any]] | None,
     grouping_available: bool,
-    grouping_report: dict[str, Any] | None,
-    render_evidence: list[str] | dict[str, Any] | None,
-    camera_evidence_provider: Any,
-    functional_evidence_planner: Any,
-    functional_probe_evidence_provider: Any,
-    functional_prejudgement_evidence_source: Any,
-    functional_prejudgement_evidence_config: dict[str, Any],
-    discovery_identity_image_path: str | None,
-    discovery_identity_legend: dict[str, str] | None,
-    vlm_judge: Any,
-    prompt: str | None,
-    resolved_prompt_context: Mapping[str, Any],
-    visual_style_spec: dict[str, Any] | None,
-    authorized_deviations: list[dict[str, Any]],
-    applicability: Any,
-    prior_metric_reports: dict[str, dict[str, Any]],
-) -> dict[str, Any]:
-    metric_context = metric_prompt_context(
-        resolved_prompt_context,
-        metric_name,
-    )
-    # Downstream workflow modules already accept a prompt string. Feed them
-    # the deterministic metric-scoped rendering rather than the complete
-    # generator instruction; the structured selection remains in the report.
-    prompt = metric_context.get("rendered_prompt")
-    policy = deepcopy(metric_config["evidence_policy"])
-    evidence_plan = (
-        metric_config.get("evidence_plan")
-        if isinstance(metric_config.get("evidence_plan"), dict)
-        else {}
-    )
-    if metric_name == "object_pairing_consistency":
-        # Pairing's evidence boundary is invariant, not a tunable local-camera
-        # optimization. Keep compatibility config parsing, but never execute a
-        # group/pair/target-local Pairing acquisition.
-        policy.update(
-            camera_scope="global",
-            camera_mode="global_oblique",
-            image_budget=1,
-            global_image_budget=1,
-            presentation="raw",
-            image_order=["global_context"],
-            include_global_context=True,
-            camera_pose_mode="global_only",
-        )
-        policy.pop("scoped_image_budget", None)
-    json_screen_first = bool(
-        metric_name
-        in {"scale_consistency", "object_pairing_consistency"}
-        and evidence_plan.get("evidence_strategy")
-        == "json_screen_then_visual"
-    )
-    global_discovery_then_group_local = bool(
-        metric_name
-        in {
-            "functional_consistency",
-            "semantic_placement_consistency",
-        }
-        and evidence_plan.get("evidence_strategy")
-        == "global_discovery_then_group_local"
-    )
-    style_global_screen_then_local = bool(
-        metric_name == "style_consistency"
-        and evidence_plan.get("evidence_strategy")
-        in {
-            "global_screen_then_local",
-            "global_discovery_then_group_local",
-        }
-    )
-    declared_scope = str(policy["camera_scope"])
-    if adaptive_enabled(metric=metric_name) and json_screen_first:
-        # JSON screening has routing authority only. The adaptive policy uses
-        # the existing final scope and its configured acquisition budget.
-        json_screen_first = False
-    # Existing direct callers can still adjudicate a scale packet without
-    # supplying the new grouping dependency. Canonical runs provide grouping
-    # and therefore take the group-scoped branch below.
-    legacy_scale_scope = bool(
-        metric_name == "scale_consistency"
-        and declared_scope in _GROUP_SCOPES
-        and not grouping_available
-    )
-    if legacy_scale_scope:
-        policy.update(
-            camera_scope="object_local",
-            include_global_context=False,
-            image_order=None,
-        )
-    scope = str(policy["camera_scope"])
-    enabled = bool(metric_config["enabled"])
+) -> tuple[list[str], list[str], list[dict[str, Any]], int]:
+    """Resolve (selected_object_ids, selected_group_ids, groups, eligible)."""
 
     selected_object_ids: list[str] = []
     selected_group_ids: list[str] = []
@@ -906,31 +815,32 @@ def _evaluate_metric(
             eligible_count = len(selected_group_ids)
         else:
             eligible_count = 0
-
-    if adaptive_enabled(metric=metric_name) and metric_name == "object_pairing_consistency" and object_ids and eligible_count == 0:
-        # The complete semantic inventory remains judgeable without a multi-object
-        # camera group. This does not remove inventory items or create a verdict.
-        policy["camera_scope"] = "global"
-        scope = "global"
-        selected_object_ids = list(object_ids)
-        selected_groups_for_judge = deepcopy(groups or [])
-        eligible_count = 1
-
-    if json_screen_first and object_ids:
-        # JSON screening itself is scene-wide. Scale can use a target-centred
-        # fallback without grouping; Pairing stays room-global throughout.
-        eligible_count = max(1, eligible_count)
-
-    applicable_state, applicability_record = _applicability_state(applicability)
-    applicability_assumed = applicable_state == "pending"
-    should_acquire_evidence = bool(
-        top_enabled
-        and enabled
-        and float(metric_config.get("weight", 1.0)) > 0.0
-        and applicable_state == "relevant"
-        and eligible_count > 0
-        and vlm_judge is not None
+    return (
+        selected_object_ids,
+        selected_group_ids,
+        selected_groups_for_judge,
+        eligible_count,
     )
+
+
+def _resolve_scope_evidence(
+    render_evidence: list[str] | dict[str, Any] | None,
+    *,
+    scope: str,
+    metric_name: str,
+    policy: dict[str, Any],
+    scene: dict[str, Any],
+    prompt: str | None,
+    selected_object_ids: list[str],
+    selected_group_ids: list[str],
+    selected_groups_for_judge: list[dict[str, Any]],
+    grouping_report: dict[str, Any] | None,
+    camera_evidence_provider: Any,
+    should_acquire_evidence: bool,
+    json_screen_first: bool,
+) -> tuple[list[dict[str, Any]], list[str], dict[str, Any]]:
+    """Resolve (group packets, deduped evidence paths, resolution audit)."""
+
     group_evidence_packets: list[dict[str, Any]] = []
     if scope in _GROUP_SCOPES:
         group_evidence_packets = _resolve_group_evidence_packets(
@@ -977,14 +887,32 @@ def _evaluate_metric(
                 else None
             ),
         )
-    evidence_available = bool(resolved_evidence)
-    available, unavailable_reason, dependencies = _dependency_state(
-        scope=scope,
-        grouping_available=grouping_available,
-        evidence_available=evidence_available,
-        provider_available=camera_evidence_provider is not None,
-        evidence_resolution=evidence_resolution,
-    )
+    return group_evidence_packets, resolved_evidence, evidence_resolution
+
+
+def _metric_report_base(
+    *,
+    metric_name: str,
+    metric_config: dict[str, Any],
+    enabled: bool,
+    scope: str,
+    declared_scope: str,
+    legacy_scale_scope: bool,
+    policy: dict[str, Any],
+    selected_object_ids: list[str],
+    selected_group_ids: list[str],
+    resolved_evidence: list[str],
+    evidence_resolution: dict[str, Any],
+    group_evidence_packets: list[dict[str, Any]],
+    authorized_deviations: list[dict[str, Any]],
+    metric_context: dict[str, Any],
+    applicability_record: dict[str, Any],
+    applicability_assumed: bool,
+    dependencies: dict[str, Any],
+    unavailable_reason: str | None,
+    eligible_count: int,
+) -> dict[str, Any]:
+    """Build the unresolved metric report skeleton every path fills in."""
 
     base: dict[str, Any] = {
         "metric": metric_name,
@@ -1093,6 +1021,290 @@ def _evaluate_metric(
                 "active_metric_pending_applicability_defaults_valid_v1"
             ),
         }
+    return base
+
+
+def _direct_final_judgement(
+    base: dict[str, Any],
+    *,
+    metric_name: str,
+    scene: dict[str, Any],
+    prompt: str | None,
+    resolved_evidence: list[str],
+    evidence_resolution: dict[str, Any],
+    selected_object_ids: list[str],
+    selected_group_ids: list[str],
+    selected_groups_for_judge: list[dict[str, Any]],
+    object_ids: list[str],
+    authorized_deviations: list[dict[str, Any]],
+    visual_style_spec: dict[str, Any] | None,
+    vlm_judge: Any,
+    eligible_count: int,
+) -> dict[str, Any]:
+    """Single direct final judge call for scopes without staged routing."""
+
+    request = _judge_request(
+        metric_name=metric_name,
+        scene=scene,
+        prompt=prompt,
+        render_evidence=resolved_evidence,
+        selected_object_ids=selected_object_ids,
+        selected_group_ids=selected_group_ids,
+        groups=selected_groups_for_judge,
+        authorized_deviations=authorized_deviations,
+        visual_style_spec=visual_style_spec,
+    )
+    if adaptive_enabled(metric=metric_name):
+        from benchmark.visual_judge.evidence_resolution import bind_acquisition_resolution
+        bind_acquisition_resolution(request, evidence_resolution)
+    base["evidence_request"]["vlm_invoked"] = True
+    base["vlm_invoked"] = True
+    audit_records = getattr(vlm_judge, "audit_records", None)
+    audit_start = (
+        len(audit_records)
+        if isinstance(audit_records, list)
+        else None
+    )
+    try:
+        raw = _call_scene_quality_judge(vlm_judge, request)
+        if (
+            audit_start is not None
+            and isinstance(audit_records, list)
+            and len(audit_records) > audit_start
+        ):
+            _apply_controller_render_audit(
+                base,
+                audit_records[-1],
+            )
+        adjusted = _apply_prompt_exemptions(
+            raw,
+            metric_name=metric_name,
+            authorized_deviations=authorized_deviations,
+        )
+        outcome = _normalize_judgement(
+            adjusted,
+            metric_name=metric_name,
+            valid_object_ids=set(object_ids),
+        )
+    except Exception as exc:
+        base.update(
+            status="unresolved",
+            reason="vlm_judge_failed",
+            judgement={
+                "error_type": type(exc).__name__,
+                **({"failure": failure_record(exc, phase="judge")} if adaptive_enabled(metric=metric_name) else {}),
+                "error": str(exc),
+            },
+        )
+        return terminalize_required_scope(
+            base,
+            phase=f"{metric_name}:direct_final_judge",
+        )
+
+    base["judgement"] = adjusted
+    base["status"] = outcome["status"]
+    base["reason"] = outcome["reason"]
+    base["score"] = outcome["score"]
+    if outcome["status"] == "evaluated":
+        base["coverage"] = {
+            "eligible_count": eligible_count,
+            "resolved_count": eligible_count,
+            "fraction": 1.0,
+            "complete": True,
+        }
+    return terminalize_required_scope(
+        base,
+        phase=f"{metric_name}:direct_final_judge",
+    )
+
+
+@adaptive_metric_result
+def _evaluate_metric(
+    *,
+    metric_name: str,
+    metric_config: dict[str, Any],
+    top_enabled: bool,
+    scene: dict[str, Any],
+    object_ids: list[str],
+    groups: list[dict[str, Any]] | None,
+    grouping_available: bool,
+    grouping_report: dict[str, Any] | None,
+    render_evidence: list[str] | dict[str, Any] | None,
+    camera_evidence_provider: Any,
+    functional_evidence_planner: Any,
+    functional_probe_evidence_provider: Any,
+    functional_prejudgement_evidence_source: Any,
+    functional_prejudgement_evidence_config: dict[str, Any],
+    discovery_identity_image_path: str | None,
+    discovery_identity_legend: dict[str, str] | None,
+    vlm_judge: Any,
+    prompt: str | None,
+    resolved_prompt_context: Mapping[str, Any],
+    visual_style_spec: dict[str, Any] | None,
+    authorized_deviations: list[dict[str, Any]],
+    applicability: Any,
+    prior_metric_reports: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    metric_context = metric_prompt_context(
+        resolved_prompt_context,
+        metric_name,
+    )
+    # Downstream workflow modules already accept a prompt string. Feed them
+    # the deterministic metric-scoped rendering rather than the complete
+    # generator instruction; the structured selection remains in the report.
+    prompt = metric_context.get("rendered_prompt")
+    policy = deepcopy(metric_config["evidence_policy"])
+    evidence_plan = (
+        metric_config.get("evidence_plan")
+        if isinstance(metric_config.get("evidence_plan"), dict)
+        else {}
+    )
+    if metric_name == "object_pairing_consistency":
+        # Pairing's evidence boundary is invariant, not a tunable local-camera
+        # optimization. Keep compatibility config parsing, but never execute a
+        # group/pair/target-local Pairing acquisition.
+        policy.update(
+            camera_scope="global",
+            camera_mode="global_oblique",
+            image_budget=1,
+            global_image_budget=1,
+            presentation="raw",
+            image_order=["global_context"],
+            include_global_context=True,
+            camera_pose_mode="global_only",
+        )
+        policy.pop("scoped_image_budget", None)
+    json_screen_first = bool(
+        metric_name
+        in {"scale_consistency", "object_pairing_consistency"}
+        and evidence_plan.get("evidence_strategy")
+        == "json_screen_then_visual"
+    )
+    global_discovery_then_group_local = bool(
+        metric_name
+        in {
+            "functional_consistency",
+            "semantic_placement_consistency",
+        }
+        and evidence_plan.get("evidence_strategy")
+        == "global_discovery_then_group_local"
+    )
+    style_global_screen_then_local = bool(
+        metric_name == "style_consistency"
+        and evidence_plan.get("evidence_strategy")
+        in {
+            "global_screen_then_local",
+            "global_discovery_then_group_local",
+        }
+    )
+    declared_scope = str(policy["camera_scope"])
+    if adaptive_enabled(metric=metric_name) and json_screen_first:
+        # JSON screening has routing authority only. The adaptive policy uses
+        # the existing final scope and its configured acquisition budget.
+        json_screen_first = False
+    # Existing direct callers can still adjudicate a scale packet without
+    # supplying the new grouping dependency. Canonical runs provide grouping
+    # and therefore take the group-scoped branch below.
+    legacy_scale_scope = bool(
+        metric_name == "scale_consistency"
+        and declared_scope in _GROUP_SCOPES
+        and not grouping_available
+    )
+    if legacy_scale_scope:
+        policy.update(
+            camera_scope="object_local",
+            include_global_context=False,
+            image_order=None,
+        )
+    scope = str(policy["camera_scope"])
+    enabled = bool(metric_config["enabled"])
+
+    (
+        selected_object_ids,
+        selected_group_ids,
+        selected_groups_for_judge,
+        eligible_count,
+    ) = _select_scope_targets(
+        scope=scope,
+        metric_name=metric_name,
+        object_ids=object_ids,
+        groups=groups,
+        grouping_available=grouping_available,
+    )
+
+    if adaptive_enabled(metric=metric_name) and metric_name == "object_pairing_consistency" and object_ids and eligible_count == 0:
+        # The complete semantic inventory remains judgeable without a multi-object
+        # camera group. This does not remove inventory items or create a verdict.
+        policy["camera_scope"] = "global"
+        scope = "global"
+        selected_object_ids = list(object_ids)
+        selected_groups_for_judge = deepcopy(groups or [])
+        eligible_count = 1
+
+    if json_screen_first and object_ids:
+        # JSON screening itself is scene-wide. Scale can use a target-centred
+        # fallback without grouping; Pairing stays room-global throughout.
+        eligible_count = max(1, eligible_count)
+
+    applicable_state, applicability_record = _applicability_state(applicability)
+    applicability_assumed = applicable_state == "pending"
+    should_acquire_evidence = bool(
+        top_enabled
+        and enabled
+        and float(metric_config.get("weight", 1.0)) > 0.0
+        and applicable_state == "relevant"
+        and eligible_count > 0
+        and vlm_judge is not None
+    )
+    (
+        group_evidence_packets,
+        resolved_evidence,
+        evidence_resolution,
+    ) = _resolve_scope_evidence(
+        render_evidence,
+        scope=scope,
+        metric_name=metric_name,
+        policy=policy,
+        scene=scene,
+        prompt=prompt,
+        selected_object_ids=selected_object_ids,
+        selected_group_ids=selected_group_ids,
+        selected_groups_for_judge=selected_groups_for_judge,
+        grouping_report=grouping_report,
+        camera_evidence_provider=camera_evidence_provider,
+        should_acquire_evidence=should_acquire_evidence,
+        json_screen_first=json_screen_first,
+    )
+    evidence_available = bool(resolved_evidence)
+    available, unavailable_reason, dependencies = _dependency_state(
+        scope=scope,
+        grouping_available=grouping_available,
+        evidence_available=evidence_available,
+        provider_available=camera_evidence_provider is not None,
+        evidence_resolution=evidence_resolution,
+    )
+
+    base = _metric_report_base(
+        metric_name=metric_name,
+        metric_config=metric_config,
+        enabled=enabled,
+        scope=scope,
+        declared_scope=declared_scope,
+        legacy_scale_scope=legacy_scale_scope,
+        policy=policy,
+        selected_object_ids=selected_object_ids,
+        selected_group_ids=selected_group_ids,
+        resolved_evidence=resolved_evidence,
+        evidence_resolution=evidence_resolution,
+        group_evidence_packets=group_evidence_packets,
+        authorized_deviations=authorized_deviations,
+        metric_context=metric_context,
+        applicability_record=applicability_record,
+        applicability_assumed=applicability_assumed,
+        dependencies=dependencies,
+        unavailable_reason=unavailable_reason,
+        eligible_count=eligible_count,
+    )
 
     if not top_enabled or not enabled:
         base.update(status="not_applicable", reason="disabled_by_configuration")
@@ -1289,78 +1501,21 @@ def _evaluate_metric(
             ),
         )
 
-    request = _judge_request(
+    return _direct_final_judgement(
+        base,
         metric_name=metric_name,
         scene=scene,
         prompt=prompt,
-        render_evidence=resolved_evidence,
+        resolved_evidence=resolved_evidence,
+        evidence_resolution=evidence_resolution,
         selected_object_ids=selected_object_ids,
         selected_group_ids=selected_group_ids,
-        groups=selected_groups_for_judge,
+        selected_groups_for_judge=selected_groups_for_judge,
+        object_ids=object_ids,
         authorized_deviations=authorized_deviations,
         visual_style_spec=visual_style_spec,
-    )
-    if adaptive_enabled(metric=metric_name):
-        from benchmark.visual_judge.evidence_resolution import bind_acquisition_resolution
-        bind_acquisition_resolution(request, evidence_resolution)
-    base["evidence_request"]["vlm_invoked"] = True
-    base["vlm_invoked"] = True
-    audit_records = getattr(vlm_judge, "audit_records", None)
-    audit_start = (
-        len(audit_records)
-        if isinstance(audit_records, list)
-        else None
-    )
-    try:
-        raw = _call_scene_quality_judge(vlm_judge, request)
-        if (
-            audit_start is not None
-            and isinstance(audit_records, list)
-            and len(audit_records) > audit_start
-        ):
-            _apply_controller_render_audit(
-                base,
-                audit_records[-1],
-            )
-        adjusted = _apply_prompt_exemptions(
-            raw,
-            metric_name=metric_name,
-            authorized_deviations=authorized_deviations,
-        )
-        outcome = _normalize_judgement(
-            adjusted,
-            metric_name=metric_name,
-            valid_object_ids=set(object_ids),
-        )
-    except Exception as exc:
-        base.update(
-            status="unresolved",
-            reason="vlm_judge_failed",
-            judgement={
-                "error_type": type(exc).__name__,
-                **({"failure": failure_record(exc, phase="judge")} if adaptive_enabled(metric=metric_name) else {}),
-                "error": str(exc),
-            },
-        )
-        return terminalize_required_scope(
-            base,
-            phase=f"{metric_name}:direct_final_judge",
-        )
-
-    base["judgement"] = adjusted
-    base["status"] = outcome["status"]
-    base["reason"] = outcome["reason"]
-    base["score"] = outcome["score"]
-    if outcome["status"] == "evaluated":
-        base["coverage"] = {
-            "eligible_count": eligible_count,
-            "resolved_count": eligible_count,
-            "fraction": 1.0,
-            "complete": True,
-        }
-    return terminalize_required_scope(
-        base,
-        phase=f"{metric_name}:direct_final_judge",
+        vlm_judge=vlm_judge,
+        eligible_count=eligible_count,
     )
 
 
