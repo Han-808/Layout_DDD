@@ -3976,6 +3976,286 @@ def _update_local_evidence_metadata(
     )
 
 
+def _collect_phase_defects(
+    *,
+    global_record: dict[str, Any],
+    global_invalid: bool,
+    invalid_groups: list[dict[str, Any]],
+    invalid_relations: list[dict[str, Any]],
+    invalid_targets: list[dict[str, Any]],
+    residual_global_record: dict[str, Any] | None,
+    residual_invalid: bool,
+    handoff_scopes: list[dict[str, Any]],
+) -> tuple[
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+]:
+    """Deep-copy per-phase defect lists; ordering feeds deduplication."""
+
+    local_defects = [
+        deepcopy(defect)
+        for item in invalid_groups
+        for defect in (
+            (item.get("judgement") or {}).get("defects") or []
+        )
+        if isinstance(defect, dict)
+    ]
+    global_defects = [
+        deepcopy(defect)
+        for defect in global_record.get("defects") or []
+        if global_invalid and isinstance(defect, dict)
+    ]
+    relation_defects = [
+        # Relation scopes are unchanged; Placement handoffs remain global.
+        deepcopy(defect)
+        for item in invalid_relations
+        for defect in (
+            (item.get("judgement") or {}).get("defects") or []
+        )
+        if isinstance(defect, dict)
+    ]
+    target_defects = [
+        deepcopy(defect)
+        for item in invalid_targets
+        for defect in (item.get("judgement") or {}).get("defects") or []
+        if isinstance(defect, dict)
+    ]
+    residual_defects = [
+        deepcopy(defect)
+        for defect in (residual_global_record or {}).get("defects") or []
+        if residual_invalid and isinstance(defect, dict) and not defect.get("residual_repeats_typed_claim")
+    ]
+    global_defects.extend(
+        deepcopy(defect) for item in handoff_scopes if _is_invalid_outcome(item)
+        for defect in (item.get("judgement") or {}).get("defects") or []
+    )
+    return (
+        local_defects,
+        global_defects,
+        relation_defects,
+        target_defects,
+        residual_defects,
+    )
+
+
+def _final_claims_ledger(
+    metric_name: str,
+    *,
+    scene_claims: list[dict[str, Any]],
+    relation_claims: list[dict[str, Any]],
+    invalid_groups: list[dict[str, Any]],
+    invalid_targets: list[dict[str, Any]],
+    residual_invalid: bool,
+    residual_defects: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Append final local/target/residual claims, deduped by claim ID."""
+
+    final_claims = [*scene_claims, *relation_claims]
+    seen_claim_ids = {
+        str(claim.get("claim_id"))
+        for claim in final_claims
+        if claim.get("claim_id")
+    }
+    for item in invalid_groups:
+        for defect in (item.get("judgement") or {}).get("defects") or []:
+            if not isinstance(defect, dict):
+                continue
+            claim = claim_record(
+                metric_name,
+                defect,
+                source_phase=(
+                    f"group_local_review:{item.get('group_id')}"
+                ),
+                claim_status="final",
+            )
+            claim_id = str(claim["claim_id"])
+            if claim_id in seen_claim_ids:
+                continue
+            seen_claim_ids.add(claim_id)
+            final_claims.append(claim)
+    for item in invalid_targets:
+        for defect in (item.get("judgement") or {}).get("defects") or []:
+            if not isinstance(defect, dict):
+                continue
+            claim = claim_record(
+                metric_name,
+                defect,
+                source_phase=(
+                    f"target_local_confirmation:{item.get('target_id')}"
+                ),
+                claim_status="final",
+            )
+            claim_id = str(claim["claim_id"])
+            if claim_id in seen_claim_ids:
+                continue
+            seen_claim_ids.add(claim_id)
+            final_claims.append(claim)
+    if residual_invalid:
+        for defect in residual_defects:
+            claim = claim_record(
+                metric_name,
+                defect,
+                source_phase="residual_global_placement_review",
+                claim_status="final",
+            )
+            claim_id = str(claim["claim_id"])
+            if claim_id in seen_claim_ids:
+                continue
+            seen_claim_ids.add(claim_id)
+            final_claims.append(claim)
+    return final_claims
+
+
+def _missing_evidence_inventory(
+    base: dict[str, Any],
+    *,
+    global_evaluated: bool,
+    relation_results: list[dict[str, Any]],
+    target_results: list[dict[str, Any]],
+    group_results: list[dict[str, Any]],
+    group_phase_required: bool,
+    residual_phase_required: bool,
+    residual_evaluated: bool,
+    functional_check_coverage: dict[str, Any],
+    placement_check_coverage: dict[str, Any],
+) -> list[str]:
+    """List every unresolved scope, check and discovery obligation."""
+
+    missing_evidence: list[str] = []
+    if not global_evaluated:
+        missing_evidence.append("scene_global_judgement")
+    missing_evidence.extend(
+        "cross_group_relation_judgement:"
+        f"{item.get('relation_id')}"
+        for item in relation_results
+        if item.get("status") != "evaluated"
+    )
+    missing_evidence.extend(
+        f"target_local_judgement:{item.get('target_id')}"
+        for item in target_results
+        if item.get("status") != "evaluated"
+    )
+    missing_evidence.extend(
+        f"group_local_judgement:{item.get('group_id')}"
+        for item in group_results
+        if item.get("status") != "evaluated"
+    )
+    if group_phase_required and not group_results:
+        missing_evidence.append("eligible_group_partition")
+    if residual_phase_required and not residual_evaluated:
+        missing_evidence.append(
+            "residual_global_placement_judgement"
+        )
+    missing_evidence.extend(
+        f"functional_check:{check_id}"
+        for check_id in (
+            functional_check_coverage.get("unresolved_check_ids") or []
+        )
+    )
+    missing_evidence.extend(
+        f"placement_check:{check_id}"
+        for check_id in (
+            placement_check_coverage.get("unresolved_check_ids") or []
+        )
+    )
+    if _explicit_stage_failure(base.get("functional_discovery")) or (
+        _explicit_stage_failure(base.get("functional_probe_acquisition"))
+    ):
+        missing_evidence.append("functional_discovery")
+    if _explicit_stage_failure(base.get("placement_discovery")):
+        missing_evidence.append("placement_discovery")
+    return list(dict.fromkeys(missing_evidence))
+
+
+def _collect_infrastructure_failures(
+    base: dict[str, Any],
+    *,
+    global_scope_record: dict[str, Any],
+    relation_results: list[dict[str, Any]],
+    group_results: list[dict[str, Any]],
+    target_results: list[dict[str, Any]],
+    residual_scope_record: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    """Collect scope- and stage-level engineering failure certificates."""
+
+    infrastructure_failures: list[dict[str, Any]] = []
+    global_failure = infrastructure_failure_from_scope(
+        global_scope_record,
+        phase="scene_global",
+        scope_id="scene_global",
+    )
+    if global_failure is not None:
+        infrastructure_failures.append(global_failure)
+    infrastructure_failures.extend(
+        failure
+        for item in relation_results
+        if (
+            failure := infrastructure_failure_from_scope(
+                item,
+                phase="cross_group_relation",
+                scope_id=str(item.get("relation_id") or "") or None,
+            )
+        )
+        is not None
+    )
+    if residual_scope_record is not None:
+        residual_failure = infrastructure_failure_from_scope(
+            residual_scope_record,
+            phase="residual_global_placement_review",
+            scope_id="residual_global_placement_review",
+        )
+        if residual_failure is not None:
+            infrastructure_failures.append(residual_failure)
+    infrastructure_failures.extend(
+        failure
+        for item in group_results
+        if (
+            failure := infrastructure_failure_from_scope(
+                item,
+                phase="group_local",
+                scope_id=str(item.get("group_id") or "") or None,
+            )
+        )
+        is not None
+    )
+    infrastructure_failures.extend(
+        failure
+        for item in target_results
+        if (
+            failure := infrastructure_failure_from_scope(
+                item,
+                phase="target_local",
+                scope_id=str(item.get("target_id") or "") or None,
+            )
+        )
+        is not None
+    )
+    for stage_name in (
+        "functional_discovery",
+        "functional_probe_acquisition",
+        "placement_discovery",
+    ):
+        stage = base.get(stage_name)
+        if not _explicit_stage_failure(stage):
+            continue
+        stage = stage if isinstance(stage, dict) else {}
+        infrastructure_failures.append(
+            {
+                "phase": stage_name,
+                "scope_id": stage_name,
+                "failure_kind": "engineering_failure",
+                "reason": str(stage.get("reason") or "stage_failed"),
+                "controller_stop_reason": None,
+                "error_type": stage.get("error_type"),
+                "error": stage.get("error"),
+            }
+        )
+    return infrastructure_failures
+
+
 def _apply_infrastructure_failure_terminal(
     base: dict[str, Any],
     *,
@@ -4403,42 +4683,21 @@ def _aggregate_global_and_group_results(
         )
     )
 
-    local_defects = [
-        deepcopy(defect)
-        for item in invalid_groups
-        for defect in (
-            (item.get("judgement") or {}).get("defects") or []
-        )
-        if isinstance(defect, dict)
-    ]
-    global_defects = [
-        deepcopy(defect)
-        for defect in global_record.get("defects") or []
-        if global_invalid and isinstance(defect, dict)
-    ]
-    relation_defects = [
-        # Relation scopes are unchanged; Placement handoffs remain global.
-        deepcopy(defect)
-        for item in invalid_relations
-        for defect in (
-            (item.get("judgement") or {}).get("defects") or []
-        )
-        if isinstance(defect, dict)
-    ]
-    target_defects = [
-        deepcopy(defect)
-        for item in invalid_targets
-        for defect in (item.get("judgement") or {}).get("defects") or []
-        if isinstance(defect, dict)
-    ]
-    residual_defects = [
-        deepcopy(defect)
-        for defect in (residual_global_record or {}).get("defects") or []
-        if residual_invalid and isinstance(defect, dict) and not defect.get("residual_repeats_typed_claim")
-    ]
-    global_defects.extend(
-        deepcopy(defect) for item in handoff_scopes if _is_invalid_outcome(item)
-        for defect in (item.get("judgement") or {}).get("defects") or []
+    (
+        local_defects,
+        global_defects,
+        relation_defects,
+        target_defects,
+        residual_defects,
+    ) = _collect_phase_defects(
+        global_record=global_record,
+        global_invalid=global_invalid,
+        invalid_groups=invalid_groups,
+        invalid_relations=invalid_relations,
+        invalid_targets=invalid_targets,
+        residual_global_record=residual_global_record,
+        residual_invalid=residual_invalid,
+        handoff_scopes=handoff_scopes,
     )
     defects = deduplicate_defects(
         metric_name,
@@ -4520,115 +4779,38 @@ def _aggregate_global_and_group_results(
         "penalty_unit_count": len(object_findings),
     }
 
-    final_claims = [*scene_claims, *relation_claims]
-    seen_claim_ids = {
-        str(claim.get("claim_id"))
-        for claim in final_claims
-        if claim.get("claim_id")
-    }
-    for item in invalid_groups:
-        for defect in (item.get("judgement") or {}).get("defects") or []:
-            if not isinstance(defect, dict):
-                continue
-            claim = claim_record(
-                metric_name,
-                defect,
-                source_phase=(
-                    f"group_local_review:{item.get('group_id')}"
-                ),
-                claim_status="final",
-            )
-            claim_id = str(claim["claim_id"])
-            if claim_id in seen_claim_ids:
-                continue
-            seen_claim_ids.add(claim_id)
-            final_claims.append(claim)
-    for item in invalid_targets:
-        for defect in (item.get("judgement") or {}).get("defects") or []:
-            if not isinstance(defect, dict):
-                continue
-            claim = claim_record(
-                metric_name,
-                defect,
-                source_phase=(
-                    f"target_local_confirmation:{item.get('target_id')}"
-                ),
-                claim_status="final",
-            )
-            claim_id = str(claim["claim_id"])
-            if claim_id in seen_claim_ids:
-                continue
-            seen_claim_ids.add(claim_id)
-            final_claims.append(claim)
-    if residual_invalid:
-        for defect in residual_defects:
-            claim = claim_record(
-                metric_name,
-                defect,
-                source_phase="residual_global_placement_review",
-                claim_status="final",
-            )
-            claim_id = str(claim["claim_id"])
-            if claim_id in seen_claim_ids:
-                continue
-            seen_claim_ids.add(claim_id)
-            final_claims.append(claim)
-    base["final_defect_claims"] = final_claims
+    base["final_defect_claims"] = _final_claims_ledger(
+        metric_name,
+        scene_claims=scene_claims,
+        relation_claims=relation_claims,
+        invalid_groups=invalid_groups,
+        invalid_targets=invalid_targets,
+        residual_invalid=residual_invalid,
+        residual_defects=residual_defects,
+    )
 
-    missing_evidence: list[str] = []
-    if not global_evaluated:
-        missing_evidence.append("scene_global_judgement")
-    missing_evidence.extend(
-        "cross_group_relation_judgement:"
-        f"{item.get('relation_id')}"
-        for item in relation_results
-        if item.get("status") != "evaluated"
-    )
-    missing_evidence.extend(
-        f"target_local_judgement:{item.get('target_id')}"
-        for item in target_results
-        if item.get("status") != "evaluated"
-    )
-    missing_evidence.extend(
-        f"group_local_judgement:{item.get('group_id')}"
-        for item in group_results
-        if item.get("status") != "evaluated"
-    )
-    if group_phase_required and not group_results:
-        missing_evidence.append("eligible_group_partition")
-    if residual_phase_required and not residual_evaluated:
-        missing_evidence.append(
-            "residual_global_placement_judgement"
-        )
     functional_check_coverage = (
         base.get("functional_check_coverage")
         if isinstance(base.get("functional_check_coverage"), dict)
         else {}
-    )
-    missing_evidence.extend(
-        f"functional_check:{check_id}"
-        for check_id in (
-            functional_check_coverage.get("unresolved_check_ids") or []
-        )
     )
     placement_check_coverage = (
         base.get("placement_check_coverage")
         if isinstance(base.get("placement_check_coverage"), dict)
         else {}
     )
-    missing_evidence.extend(
-        f"placement_check:{check_id}"
-        for check_id in (
-            placement_check_coverage.get("unresolved_check_ids") or []
-        )
+    missing_evidence = _missing_evidence_inventory(
+        base,
+        global_evaluated=global_evaluated,
+        relation_results=relation_results,
+        target_results=target_results,
+        group_results=group_results,
+        group_phase_required=group_phase_required,
+        residual_phase_required=residual_phase_required,
+        residual_evaluated=residual_evaluated,
+        functional_check_coverage=functional_check_coverage,
+        placement_check_coverage=placement_check_coverage,
     )
-    if _explicit_stage_failure(base.get("functional_discovery")) or (
-        _explicit_stage_failure(base.get("functional_probe_acquisition"))
-    ):
-        missing_evidence.append("functional_discovery")
-    if _explicit_stage_failure(base.get("placement_discovery")):
-        missing_evidence.append("placement_discovery")
-    missing_evidence = list(dict.fromkeys(missing_evidence))
 
     required_group_units = (
         len(group_results)
@@ -4731,78 +4913,14 @@ def _aggregate_global_and_group_results(
         coverage_complete and score_grounding.get("complete")
     )
 
-    infrastructure_failures: list[dict[str, Any]] = []
-    global_failure = infrastructure_failure_from_scope(
-        global_scope_record,
-        phase="scene_global",
-        scope_id="scene_global",
+    infrastructure_failures = _collect_infrastructure_failures(
+        base,
+        global_scope_record=global_scope_record,
+        relation_results=relation_results,
+        group_results=group_results,
+        target_results=target_results,
+        residual_scope_record=residual_scope_record,
     )
-    if global_failure is not None:
-        infrastructure_failures.append(global_failure)
-    infrastructure_failures.extend(
-        failure
-        for item in relation_results
-        if (
-            failure := infrastructure_failure_from_scope(
-                item,
-                phase="cross_group_relation",
-                scope_id=str(item.get("relation_id") or "") or None,
-            )
-        )
-        is not None
-    )
-    if residual_scope_record is not None:
-        residual_failure = infrastructure_failure_from_scope(
-            residual_scope_record,
-            phase="residual_global_placement_review",
-            scope_id="residual_global_placement_review",
-        )
-        if residual_failure is not None:
-            infrastructure_failures.append(residual_failure)
-    infrastructure_failures.extend(
-        failure
-        for item in group_results
-        if (
-            failure := infrastructure_failure_from_scope(
-                item,
-                phase="group_local",
-                scope_id=str(item.get("group_id") or "") or None,
-            )
-        )
-        is not None
-    )
-    infrastructure_failures.extend(
-        failure
-        for item in target_results
-        if (
-            failure := infrastructure_failure_from_scope(
-                item,
-                phase="target_local",
-                scope_id=str(item.get("target_id") or "") or None,
-            )
-        )
-        is not None
-    )
-    for stage_name in (
-        "functional_discovery",
-        "functional_probe_acquisition",
-        "placement_discovery",
-    ):
-        stage = base.get(stage_name)
-        if not _explicit_stage_failure(stage):
-            continue
-        stage = stage if isinstance(stage, dict) else {}
-        infrastructure_failures.append(
-            {
-                "phase": stage_name,
-                "scope_id": stage_name,
-                "failure_kind": "engineering_failure",
-                "reason": str(stage.get("reason") or "stage_failed"),
-                "controller_stop_reason": None,
-                "error_type": stage.get("error_type"),
-                "error": stage.get("error"),
-            }
-        )
     component_degradations = [
         deepcopy(item)
         for item in score_grounding.get("defaulted_units") or []
