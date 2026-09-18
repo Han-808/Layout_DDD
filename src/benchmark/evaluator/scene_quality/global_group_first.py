@@ -5051,6 +5051,13 @@ def _score_grounding_coverage(
 
     eligible_count = len(units)
     grounded_count = sum(bool(unit["grounded"]) for unit in units)
+    from benchmark.visual_judge.functional_relation_recovery import unresolved_inventory_units
+    discovery_gaps = unresolved_inventory_units({"functional_discovery": functional_discovery})
+    for gap in discovery_gaps:
+        units.append({"unit_id":gap["unit_id"], "unit_type":"unresolved_discovery_contract",
+                      "grounded":False, "defaulted":False, "policy_resolved":False,
+                      "empirically_grounded":False})
+    eligible_count += len(discovery_gaps)
     component_records: list[dict[str, Any]] = []
     for component_id, coverage in (
         (

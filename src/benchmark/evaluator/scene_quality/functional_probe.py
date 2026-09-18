@@ -245,6 +245,11 @@ def acquire_functional_probe_evidence(
             audit["response_schema_validation"] = deepcopy(
                 schema_audit
             )
+        if not recoverable:
+            # Do not let an incomplete inventory or service/program failure
+            # reach downstream judges as a successful empty relation plan.
+            audit["failure"] = failure_record(exc, phase="acquisition")
+            audit["failed_stage"] = "functional_discovery"
         return [], audit
     units = (
         plan.get("probe_units")

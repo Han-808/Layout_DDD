@@ -27,7 +27,8 @@ class Model:
         response = self.responses.pop(0)
         if isinstance(response, Exception):
             raise response
-        self.last_request_metadata = {"finish_reason": "length", "tokens_usage": {"completion_tokens": 4096}}
+        self.last_request_metadata = {"finish_reason": "length" if isinstance(response, str) else "stop",
+                                      "tokens_usage": {"completion_tokens": 4096}}
         return response if isinstance(response, str) else json.dumps(response)
 
 
@@ -63,7 +64,7 @@ def test_discovery_repair_parse_failure_salvages_without_unbound_local(bad, init
 
 @pytest.mark.parametrize("phase", ["affordance", "relations"])
 @pytest.mark.parametrize("bad", ["", '{"unfinished":'])
-def test_public_functional_discovery_double_truncation_keeps_explicit_defaults(tmp_path, phase, bad):
+def test_public_discovery_double_truncation_requires_real_relation_inventory(tmp_path, phase, bad):
     image = tmp_path / "global.png"
     Image.new("RGB", (16, 16), "white").save(image)
     affordance = {
@@ -74,21 +75,25 @@ def test_public_functional_discovery_double_truncation_keeps_explicit_defaults(t
         "reason": "mock",
     }
     relations = {"considered_object_ids": ["cabinet"], "relations": [], "reason": "mock"}
-    responses = [bad, bad, relations] if phase == "affordance" else [affordance, bad, bad]
+    responses = [bad, bad, relations] if phase == "affordance" else [affordance, bad, bad, relations]
     model = Model(responses)
     result = OpenAICompatibleCameraSelector(model).discover_functional_evidence({
         "metric": "functional_consistency", "scene_id": "mock", "scene_type": "living_room",
         "global_image_path": str(image), "objects": [{"id": "cabinet", "category": "cabinet"}],
         "groups": [{"group_id": "one", "object_ids": ["cabinet"]}],
     })
-    assert len(model.calls) == 3
+    assert len(model.calls) == (3 if phase == "affordance" else 4)
     audit = result["provenance"]["calls"][phase]["schema_validation"]
-    assert audit["attempt_count"] == 2 and audit["recovered"] is False
+    assert audit["attempt_count"] == (2 if phase == "affordance" else 3)
+    assert audit["recovered"] is False
     assert audit["item_level_salvage"] is True
     if phase == "affordance":
         assert result["object_coverage"][0]["defaulted"] is True
         assert result["object_coverage"][0]["inspected"] is False
         assert result["coverage"]["fraction"] < 1.0
+    else:
+        assert audit["inventory_recovery"]["complete"] is True
+        assert result["coverage"]["relations"]["consideration_contract_valid"] is True
 
 
 @pytest.mark.parametrize("bad", ["", '{"unfinished":'])

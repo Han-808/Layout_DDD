@@ -35,6 +35,12 @@ def metric_projection(metric: str, report: dict, object_ids: list[str], *,
     if not isinstance(planned, list) or not planned:
         raise ValueError(metric + ': missing fixed judgement inventory')
     units = deepcopy(original.get('units') or [])
+    if metric == 'functional_consistency':
+        from benchmark.visual_judge.functional_relation_recovery import unresolved_inventory_units
+        required = unresolved_inventory_units(report)
+        by_id = {u['unit_id']:u for u in units}
+        if any(u['unit_id'] not in planned or by_id.get(u['unit_id']) != u for u in required):
+            raise ValueError(metric + ': unresolved relation discovery missing from fixed inventory')
     for unit in units:
         if unit.get('accepted') and (unit.get('defaulted') or unit.get('decision_source') in {
             'program_default', 'default_valid', 'style_policy_no_deduction',

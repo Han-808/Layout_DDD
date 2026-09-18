@@ -196,10 +196,14 @@ def summarize_metric(report: dict[str, Any], planned: list[str]) -> dict[str, An
                 "fallback_source": "typed_check_ledger",
             })
     checks = coverage_from_plan([row["unit_id"] for row in check_records], check_records)
-    all_records = scope_records + check_records
-    combined = coverage_from_plan(all_scopes + checks["planned_ids"], all_records)
+    from benchmark.visual_judge.functional_relation_recovery import unresolved_inventory_units
+    discovery_records = unresolved_inventory_units(report)
+    all_records = scope_records + check_records + discovery_records
+    combined = coverage_from_plan(all_scopes + checks["planned_ids"] +
+        [row["unit_id"] for row in discovery_records], all_records)
     complete = bool(scopes["evaluation_complete"] and
-                    (not check_records or checks["evaluation_complete"]) and report.get("status") == "evaluated")
+                    (not check_records or checks["evaluation_complete"]) and
+                    not discovery_records and report.get("status") == "evaluated")
     combined.update(
         original_planned_scope_ids=original, scope_coverage=scopes, typed_check_coverage=checks,
         complete=complete, eligible_count=combined["planned_count"],
