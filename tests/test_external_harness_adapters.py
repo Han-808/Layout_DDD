@@ -1,7 +1,9 @@
 from __future__ import annotations
 
-from copy import deepcopy
+import copy
+import hashlib
 import math
+from copy import deepcopy
 from pathlib import Path
 
 import pytest
@@ -37,6 +39,96 @@ FULL_EVALUATOR_COMPATIBILITY_ADAPTERS = (
     "respace",
     "scene_weaver",
 )
+
+
+def _floor_frame_fixture(tmp_path: Path) -> tuple[dict, dict, Path]:
+    layout = write_json(tmp_path / "layout_2.json", {"objects": {}})
+    scene = {
+        "scene_height": 3.0,
+        "objects": [
+            {"id": "table", "center": [2.0, 1.0, 0.637], "size": [1.0, 1.0, 1.0]},
+            {"id": "cup", "center": [2.0, 1.0, 1.237], "size": [0.1, 0.1, 0.2]},
+        ],
+        "metadata": {
+            "architecture_contract": {"floor": {"z": 0.0}, "ceiling": {"z": 3.0}},
+            "harness_compatibility": {
+                "selected_iteration": 2,
+                "coordinate_conversion": {"origin_shift": [0.0, 0.0, 0.0]},
+            },
+        },
+    }
+    evidence = {
+        "schema_version": "sceneweaver_measured_floor_frame_v1",
+        "measurement_source": "saved_blend_architecture_world_vertices",
+        "selected_iteration": 2,
+        "layout_sha256": hashlib.sha256(layout.read_bytes()).hexdigest(),
+        "native_blend_sha256": "a" * 64,
+        "floor_z_m": 0.127,
+        "ceiling_z_m": 2.873,
+        "floor": {"object_name": "newroom_0.floor", "world_z_min_m": 0.127, "world_z_max_m": 0.127},
+        "ceiling": {"object_name": "newroom_0.ceiling", "world_z_min_m": 2.873, "world_z_max_m": 2.873},
+    }
+    return scene, {"sceneweaver_native_floor_frame": evidence,
+                   "sceneweaver_allow_room_height_mismatch": True}, layout
+
+
+def test_sceneweaver_floor_frame_preserves_relative_poses_and_public_architecture(tmp_path: Path) -> None:
+    from benchmark.adapters.scene_weaver.floor_frame import apply_native_floor_frame
+
+    scene, config, layout = _floor_frame_fixture(tmp_path)
+    original = copy.deepcopy(scene)
+    result = apply_native_floor_frame(scene, config, layout)
+    assert scene == original
+    assert result["objects"][0]["center"] == pytest.approx([2.0, 1.0, 0.510])
+    assert result["objects"][1]["center"][2] - result["objects"][0]["center"][2] == pytest.approx(0.6)
+    assert result["objects"][0]["center"][2] - 0.5 == pytest.approx(0.01)
+    assert result["metadata"]["architecture_contract"] == original["metadata"]["architecture_contract"]
+    assert result["scene_height"] == 3.0
+    assert result["metadata"]["harness_compatibility"]["full_architecture_compatibility_qualified"] is False
+    with pytest.raises(ValueError, match="already applied"):
+        apply_native_floor_frame(result, config, layout)
+
+
+@pytest.mark.parametrize("bad_field,bad_value,match", [
+    ("layout_sha256", "b" * 64, "hash mismatch"),
+    ("selected_iteration", 3, "iteration mismatch"),
+    ("floor_z_m", float("nan"), "finite"),
+    ("measurement_source", "furniture_bottom", "architecture geometry"),
+    ("native_blend_sha256", "", "blend SHA256"),
+])
+def test_sceneweaver_floor_frame_rejects_unbound_evidence(tmp_path: Path, bad_field, bad_value, match) -> None:
+    from benchmark.adapters.scene_weaver.floor_frame import apply_native_floor_frame
+
+    scene, config, layout = _floor_frame_fixture(tmp_path)
+    config["sceneweaver_native_floor_frame"][bad_field] = bad_value
+    with pytest.raises(ValueError, match=match):
+        apply_native_floor_frame(scene, config, layout)
+
+
+def test_sceneweaver_floor_frame_fails_closed_for_unknown_or_mismatched_architecture(tmp_path: Path) -> None:
+    from benchmark.adapters.scene_weaver.floor_frame import apply_native_floor_frame
+
+    scene, config, layout = _floor_frame_fixture(tmp_path)
+    with pytest.raises(ValueError, match="requires measured"):
+        apply_native_floor_frame(scene, {"sceneweaver_native_size_semantics": "released_object_dimensions_rounded_2dp"}, layout)
+    config.pop("sceneweaver_allow_room_height_mismatch")
+    with pytest.raises(ValueError, match="clear height differs"):
+        apply_native_floor_frame(scene, config, layout)
+    assert apply_native_floor_frame(scene, {}, layout) is scene
+
+
+def test_sceneweaver_converter_applies_measured_floor_frame(tmp_path: Path) -> None:
+    from benchmark.adapters.scene_weaver.converter import convert_scene_weaver
+
+    _, config, layout = _floor_frame_fixture(tmp_path)
+    write_json(layout, {"roomsize": [4.0, 5.0], "objects": {
+        "table": {"asset_id": "native-table", "location": [2.0, 2.0, 0.137],
+                  "size": [1.0, 1.0, 1.0], "rotation": [0.0, 0.0, 0.0]},
+    }})
+    config["sceneweaver_native_floor_frame"]["layout_sha256"] = hashlib.sha256(layout.read_bytes()).hexdigest()
+    result = convert_scene_weaver(layout, _generation_input(), config, None)
+    assert result["objects"][0]["center"] == pytest.approx([2.0, 2.0, 0.510])
+    assert result["metadata"]["harness_compatibility"]["coordinate_conversion"]["origin_shift"][2] == -0.127
 
 
 def test_selected_external_harnesses_are_registered_without_excluded_methods() -> None:
