@@ -4,7 +4,7 @@
     {
       "fragment_id": "multi-room-with-architecture-v1",
       "path": "multi_room_v1/registry_v1.json",
-      "sha256": "7d4411040645c9050b5c199c431bee0c2e1576cc6a3f95004a9ca6abe5e7e529",
+      "sha256": "325b9a668ca71992a3a8246af73bc46a3dd12a7c4185b9f836f4b0004dc82779",
       "generation_mode": "multi_room_with_architecture_v1",
       "workflow_profile_id": "frozen-two-stage-multi-room-with-architecture-v1"
     }

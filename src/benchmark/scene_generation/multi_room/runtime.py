@@ -5,6 +5,7 @@ from __future__ import annotations
 from copy import deepcopy
 import json
 from pathlib import Path
+import time
 from typing import Any, Callable, Mapping, Sequence
 
 from benchmark.scene_generation.multi_room.artifacts import (
@@ -234,6 +235,7 @@ def _finalize_room(
     eligible: bool,
     has_later_declared_room: bool,
     run_identity: Mapping[str, str],
+    semantic_audit: Mapping[str, int],
 ) -> dict[str, Any]:
     one_shot = {
         "schema_version": "multi_room_one_shot_audit_v1",
@@ -241,14 +243,17 @@ def _finalize_room(
         "room_id": room_brief["room_id"],
         "room_key": room_key,
         "stage_a_semantic_emissions": int(
-            stage_a is not None and getattr(stage_a, "status", None) == "captured"
+            semantic_audit["stage_a_semantic_emissions"]
         ),
         "stage_c_placement_emissions": int(
-            stage_c is not None and getattr(stage_c, "status", None) == "captured"
+            semantic_audit["stage_c_semantic_emissions"]
         ),
         "retrieval_batch_calls": retrieval_batch_calls,
         "retrieval_slot_invocations": retrieval_slot_count,
-        "semantic_retry_count": 0,
+        "semantic_retry_count": int(semantic_audit["semantic_retry_count"]),
+        "api_infrastructure_retry_count": int(
+            semantic_audit["api_infrastructure_retry_count"]
+        ),
         "retrieval_retry_count": 0,
         "post_placement_edit_count": 0,
         "cross_room_context_used": False,
@@ -272,6 +277,7 @@ def _finalize_room(
         "status": status,
         "reason_code": reason_code,
         "error_type": error_type,
+        "semantic_retry_count": int(semantic_audit["semantic_retry_count"]),
         "eligible_for_room_projection": eligible,
         "continued_after_terminal_room": has_later_declared_room,
         "room_brief_sha256": sha256_bytes(canonical_json_bytes(room_brief)),
@@ -296,13 +302,18 @@ def _initialize_run(
     layout.require_fresh()
     layout.initialize_directories()
     source_manifest = run_spec["source_manifest"]
+    model_public = dict(model.to_public_dict())
+    model_public["generator_semantic_retry_allowed"] = True
+    model_public["max_semantic_retries_per_stage"] = int(
+        run_spec["retry_policy"].max_infrastructure_retries
+    )
     manifest = {
         "schema_version": artifact.run_manifest_schema_version,
         "created_at": core.utc_now(),
         "campaign_id": run_spec["campaign_id"],
         "workflow_profile_id": run_spec["workflow_profile_id"],
         "generation_mode": "multi_room_with_architecture_v1",
-        "model": model.to_public_dict(),
+        "model": model_public,
         "route_profile_id": run_spec["route_profile_id"],
         "retrieval_profile_id": run_spec["retrieval_profile_id"],
         "artifact_contract": artifact.public_dict(),
@@ -319,8 +330,8 @@ def _initialize_run(
         "retrieval": dict(retriever.public_provenance),
         "retriever_gate_status": retriever.gate_report["status"],
         "state_machine": (
-            "floor_plan_gate -> sequential(room:stage_a_once -> "
-            "top1_once_per_slot -> stage_c_once -> terminal) -> "
+            "floor_plan_gate -> sequential(room:stage_a_bounded_semantic_retry -> "
+            "top1_once_per_slot -> stage_c_bounded_semantic_retry -> terminal) -> "
             "translation_only_assembly -> room_projections"
         ),
         "room_concurrency": 1,
@@ -455,6 +466,14 @@ def _run_room(
     run_identity: Mapping[str, str],
 ) -> dict[str, Any]:
     room_root.mkdir(parents=False, exist_ok=False)
+    maximum_semantic_attempts = int(retry_policy.max_infrastructure_retries) + 1
+    semantic_retry_delay_seconds = float(retry_policy.retry_delay_seconds)
+    semantic_audit = {
+        "stage_a_semantic_emissions": 0,
+        "stage_c_semantic_emissions": 0,
+        "semantic_retry_count": 0,
+        "api_infrastructure_retry_count": 0,
+    }
     fixed = {
         "schema_version": "multi_room_fixed_instruction_v1",
         "generation_mode": "multi_room_with_architecture_v1",
@@ -464,9 +483,10 @@ def _run_room(
             "stage_c": sha256_bytes(stage_c_prompt.encode("utf-8")),
         },
         "one_shot_contract": {
-            "stage_a_semantic_emissions_allowed": 1,
+            "stage_a_semantic_emissions_allowed": maximum_semantic_attempts,
             "retrieval_invocations_per_public_slot": 1,
-            "stage_c_placement_emissions_allowed": 1,
+            "stage_c_placement_emissions_allowed": maximum_semantic_attempts,
+            "semantic_retry_delay_seconds": semantic_retry_delay_seconds,
             "post_placement_edits_allowed": 0,
             "cross_room_context_allowed": False,
             "geometry_render_or_evaluator_feedback_allowed": False,
@@ -474,69 +494,117 @@ def _run_room(
         "run_identity": dict(run_identity),
     }
     core.write_json_exclusive(room_root / "fixed_instruction.json", fixed)
-    stage_a = core.call_model_stage(
-        stage="stage_a_object_plan",
-        stage_dir=room_root / "stage_a",
-        model=model,
-        system_prompt=stage_a_prompt,
-        user_value={"brief": _model_room_brief(room_brief)},
-        provider_route=provider_route,
-        retry_policy=retry_policy,
-    )
-    if stage_a.status != "captured" or stage_a.content is None:
-        return _finalize_room(
-            core=core,
-            room_root=room_root,
-            artifact=artifact,
-            campaign_id=campaign_id,
+    stage_a = None
+    plan = None
+    object_plan_bytes = b""
+    stage_a_envelope = ""
+    stage_a_error_type = None
+    for semantic_attempt in range(1, maximum_semantic_attempts + 1):
+        stage_a_dir = (
+            room_root / "stage_a"
+            if semantic_attempt == 1
+            else room_root / f"stage_a_semantic_retry_{semantic_attempt - 1:02d}"
+        )
+        stage_a = core.call_model_stage(
+            stage="stage_a_object_plan",
+            stage_dir=stage_a_dir,
             model=model,
-            room_brief=room_brief,
-            room_key=room_key,
-            status="stage_a_failed",
-            reason_code=stage_a.reason or stage_a.status,
-            error_type=None,
-            stage_a=stage_a,
-            stage_c=None,
-            retrieval_slot_count=0,
-            retrieval_batch_calls=0,
-            eligible=False,
-            has_later_declared_room=has_later_declared_room,
-            run_identity=run_identity,
+            system_prompt=stage_a_prompt,
+            user_value={"brief": _model_room_brief(room_brief)},
+            provider_route=provider_route,
+            retry_policy=retry_policy,
         )
-    core.write_exclusive(room_root / "object_plan_first_emission.json", stage_a.content)
-    try:
-        raw_plan, object_plan_bytes, stage_a_envelope = _load_model_json_emission(
-            core, stage_a.content
+        semantic_audit["api_infrastructure_retry_count"] += int(
+            stage_a.infrastructure_retry_count
         )
-        plan = validate_room_object_plan(
-            raw_plan,
-            room_brief=room_brief,
-            frozen_validate_object_plan=core.validate_object_plan,
-        )
-    except Exception as exc:
+        if stage_a.status != "captured" or stage_a.content is None:
+            return _finalize_room(
+                core=core,
+                room_root=room_root,
+                artifact=artifact,
+                campaign_id=campaign_id,
+                model=model,
+                room_brief=room_brief,
+                room_key=room_key,
+                status="stage_a_failed",
+                reason_code=stage_a.reason or stage_a.status,
+                error_type=None,
+                stage_a=stage_a,
+                stage_c=None,
+                retrieval_slot_count=0,
+                retrieval_batch_calls=0,
+                eligible=False,
+                has_later_declared_room=has_later_declared_room,
+                run_identity=run_identity,
+                semantic_audit=semantic_audit,
+            )
+        semantic_audit["stage_a_semantic_emissions"] += 1
+        if not (room_root / "object_plan_first_emission.json").exists():
+            core.write_exclusive(
+                room_root / "object_plan_first_emission.json", stage_a.content
+            )
+        try:
+            raw_plan, object_plan_bytes, stage_a_envelope = _load_model_json_emission(
+                core, stage_a.content
+            )
+            plan = validate_room_object_plan(
+                raw_plan,
+                room_brief=room_brief,
+                frozen_validate_object_plan=core.validate_object_plan,
+            )
+        except Exception as exc:
+            stage_a_error_type = _safe_error_type(exc)
+            core.write_json_exclusive(
+                stage_a_dir / "semantic_validation.json",
+                {
+                    "valid": False,
+                    "semantic_attempt": semantic_attempt,
+                    "error_type": stage_a_error_type,
+                },
+            )
+            if semantic_attempt < maximum_semantic_attempts:
+                semantic_audit["semantic_retry_count"] += 1
+                if semantic_retry_delay_seconds:
+                    time.sleep(semantic_retry_delay_seconds)
+                continue
+            core.write_json_exclusive(
+                room_root / "object_plan_validation.json",
+                {
+                    "valid": False,
+                    "error_type": stage_a_error_type,
+                    "semantic_attempt_count": semantic_attempt,
+                    "semantic_retry_count": semantic_attempt - 1,
+                },
+            )
+            return _finalize_room(
+                core=core,
+                room_root=room_root,
+                artifact=artifact,
+                campaign_id=campaign_id,
+                model=model,
+                room_brief=room_brief,
+                room_key=room_key,
+                status="stage_a_schema_invalid",
+                reason_code="stage_a_contract_invalid",
+                error_type=stage_a_error_type,
+                stage_a=stage_a,
+                stage_c=None,
+                retrieval_slot_count=0,
+                retrieval_batch_calls=0,
+                eligible=False,
+                has_later_declared_room=has_later_declared_room,
+                run_identity=run_identity,
+                semantic_audit=semantic_audit,
+            )
         core.write_json_exclusive(
-            room_root / "object_plan_validation.json",
-            {"valid": False, "error_type": _safe_error_type(exc)},
+            stage_a_dir / "semantic_validation.json",
+            {"valid": True, "semantic_attempt": semantic_attempt},
         )
-        return _finalize_room(
-            core=core,
-            room_root=room_root,
-            artifact=artifact,
-            campaign_id=campaign_id,
-            model=model,
-            room_brief=room_brief,
-            room_key=room_key,
-            status="stage_a_schema_invalid",
-            reason_code="stage_a_contract_invalid",
-            error_type=_safe_error_type(exc),
-            stage_a=stage_a,
-            stage_c=None,
-            retrieval_slot_count=0,
-            retrieval_batch_calls=0,
-            eligible=False,
-            has_later_declared_room=has_later_declared_room,
-            run_identity=run_identity,
-        )
+        break
+    assert stage_a is not None and plan is not None
+    core.write_exclusive(
+        room_root / "object_plan_accepted_emission.json", stage_a.content
+    )
     core.write_exclusive(room_root / "object_plan.json", object_plan_bytes)
     if core.sha256_file(room_root / "object_plan.json") != sha256_bytes(
         object_plan_bytes
@@ -548,6 +616,10 @@ def _run_room(
             "valid": True,
             "response_envelope": stage_a_envelope,
             "syntactic_normalization": stage_a_envelope != "raw_json",
+            "semantic_attempt_count": semantic_audit[
+                "stage_a_semantic_emissions"
+            ],
+            "semantic_retry_count": semantic_audit["semantic_retry_count"],
         },
     )
     retrieval_request = build_retrieval_request(
@@ -580,6 +652,7 @@ def _run_room(
             eligible=False,
             has_later_declared_room=has_later_declared_room,
             run_identity=run_identity,
+            semantic_audit=semantic_audit,
         )
     core.write_json_exclusive(room_root / "retrieval_results.json", retrieval_results)
     asset_selection = build_asset_selection(plan, retrieval_results)
@@ -590,79 +663,137 @@ def _run_room(
         asset_selection=asset_selection,
     )
     core.write_json_exclusive(room_root / "generation_input.json", generation_input)
-    stage_c = core.call_model_stage(
-        stage="stage_c_placement",
-        stage_dir=room_root / "stage_c",
-        model=model,
-        system_prompt=stage_c_prompt,
-        user_value=generation_input,
-        provider_route=provider_route,
-        retry_policy=retry_policy,
+    stage_model_factory = getattr(model, "for_stage", None)
+    stage_c_model = (
+        stage_model_factory("stage_c")
+        if callable(stage_model_factory)
+        else model
     )
-    if stage_c.status != "captured" or stage_c.content is None:
-        return _finalize_room(
-            core=core,
-            room_root=room_root,
-            artifact=artifact,
-            campaign_id=campaign_id,
-            model=model,
-            room_brief=room_brief,
-            room_key=room_key,
-            status="stage_c_failed",
-            reason_code=stage_c.reason or stage_c.status,
-            error_type=None,
-            stage_a=stage_a,
-            stage_c=stage_c,
-            retrieval_slot_count=len(retrieval_request["requests"]),
-            retrieval_batch_calls=1,
-            eligible=False,
-            has_later_declared_room=has_later_declared_room,
-            run_identity=run_identity,
+    stage_c = None
+    placement_bytes = b""
+    stage_c_envelope = ""
+    stage_c_error_type = None
+    stage_c_retry_base = semantic_audit["semantic_retry_count"]
+    for semantic_attempt in range(1, maximum_semantic_attempts + 1):
+        stage_c_dir = (
+            room_root / "stage_c"
+            if semantic_attempt == 1
+            else room_root / f"stage_c_semantic_retry_{semantic_attempt - 1:02d}"
         )
-    core.write_exclusive(
-        room_root / "catalog_placement_first_emission.json", stage_c.content
-    )
-    try:
-        raw_placement, placement_bytes, stage_c_envelope = _load_model_json_emission(
-            core, stage_c.content
+        stage_c = core.call_model_stage(
+            stage="stage_c_placement",
+            stage_dir=stage_c_dir,
+            model=stage_c_model,
+            system_prompt=stage_c_prompt,
+            user_value=generation_input,
+            provider_route=provider_route,
+            retry_policy=retry_policy,
         )
-        validate_room_placement(
-            raw_placement,
-            plan=plan,
-            retrieval_results=retrieval_results,
-            room_brief=room_brief,
-            frozen_validate_placement=core.validate_placement,
+        semantic_audit["api_infrastructure_retry_count"] += int(
+            stage_c.infrastructure_retry_count
         )
-    except Exception as exc:
+        if stage_c.status != "captured" or stage_c.content is None:
+            return _finalize_room(
+                core=core,
+                room_root=room_root,
+                artifact=artifact,
+                campaign_id=campaign_id,
+                model=model,
+                room_brief=room_brief,
+                room_key=room_key,
+                status="stage_c_failed",
+                reason_code=stage_c.reason or stage_c.status,
+                error_type=None,
+                stage_a=stage_a,
+                stage_c=stage_c,
+                retrieval_slot_count=len(retrieval_request["requests"]),
+                retrieval_batch_calls=1,
+                eligible=False,
+                has_later_declared_room=has_later_declared_room,
+                run_identity=run_identity,
+                semantic_audit=semantic_audit,
+            )
+        semantic_audit["stage_c_semantic_emissions"] += 1
+        if not (room_root / "catalog_placement_first_emission.json").exists():
+            core.write_exclusive(
+                room_root / "catalog_placement_first_emission.json", stage_c.content
+            )
+        try:
+            raw_placement, placement_bytes, stage_c_envelope = _load_model_json_emission(
+                core, stage_c.content
+            )
+            validate_room_placement(
+                raw_placement,
+                plan=plan,
+                retrieval_results=retrieval_results,
+                room_brief=room_brief,
+                frozen_validate_placement=core.validate_placement,
+            )
+        except Exception as exc:
+            stage_c_error_type = _safe_error_type(exc)
+            core.write_json_exclusive(
+                stage_c_dir / "semantic_validation.json",
+                {
+                    "valid": False,
+                    "semantic_attempt": semantic_attempt,
+                    "error_type": stage_c_error_type,
+                },
+            )
+            if semantic_attempt < maximum_semantic_attempts:
+                semantic_audit["semantic_retry_count"] += 1
+                if semantic_retry_delay_seconds:
+                    time.sleep(semantic_retry_delay_seconds)
+                continue
+            core.write_json_exclusive(
+                room_root / "placement_validation.json",
+                {
+                    "valid": False,
+                    "error_type": stage_c_error_type,
+                    "semantic_attempt_count": semantic_attempt,
+                    "semantic_retry_count": semantic_attempt - 1,
+                },
+            )
+            return _finalize_room(
+                core=core,
+                room_root=room_root,
+                artifact=artifact,
+                campaign_id=campaign_id,
+                model=model,
+                room_brief=room_brief,
+                room_key=room_key,
+                status="placement_schema_invalid",
+                reason_code="stage_c_contract_invalid",
+                error_type=stage_c_error_type,
+                stage_a=stage_a,
+                stage_c=stage_c,
+                retrieval_slot_count=len(retrieval_request["requests"]),
+                retrieval_batch_calls=1,
+                eligible=False,
+                has_later_declared_room=has_later_declared_room,
+                run_identity=run_identity,
+                semantic_audit=semantic_audit,
+            )
         core.write_json_exclusive(
-            room_root / "placement_validation.json",
-            {"valid": False, "error_type": _safe_error_type(exc)},
+            stage_c_dir / "semantic_validation.json",
+            {"valid": True, "semantic_attempt": semantic_attempt},
         )
-        return _finalize_room(
-            core=core,
-            room_root=room_root,
-            artifact=artifact,
-            campaign_id=campaign_id,
-            model=model,
-            room_brief=room_brief,
-            room_key=room_key,
-            status="placement_schema_invalid",
-            reason_code="stage_c_contract_invalid",
-            error_type=_safe_error_type(exc),
-            stage_a=stage_a,
-            stage_c=stage_c,
-            retrieval_slot_count=len(retrieval_request["requests"]),
-            retrieval_batch_calls=1,
-            eligible=False,
-            has_later_declared_room=has_later_declared_room,
-            run_identity=run_identity,
-        )
+        break
+    assert stage_c is not None
+    core.write_exclusive(
+        room_root / "catalog_placement_accepted_emission.json", stage_c.content
+    )
     core.write_json_exclusive(
         room_root / "placement_validation.json",
         {
             "valid": True,
             "response_envelope": stage_c_envelope,
             "syntactic_normalization": stage_c_envelope != "raw_json",
+            "semantic_attempt_count": semantic_audit[
+                "stage_c_semantic_emissions"
+            ],
+            "semantic_retry_count": (
+                semantic_audit["semantic_retry_count"] - stage_c_retry_base
+            ),
         },
     )
     core.write_exclusive(room_root / "catalog_placement_v1.json", placement_bytes)
@@ -672,7 +803,7 @@ def _run_room(
         raise MultiRoomRuntimeError("normalized placement write mismatch")
     if (
         stage_c_envelope == "raw_json"
-        and core.sha256_file(room_root / "catalog_placement_first_emission.json")
+        and core.sha256_file(room_root / "catalog_placement_accepted_emission.json")
         != core.sha256_file(room_root / "catalog_placement_v1.json")
     ):
         raise MultiRoomRuntimeError("placement byte-copy identity mismatch")
@@ -694,6 +825,7 @@ def _run_room(
         eligible=True,
         has_later_declared_room=has_later_declared_room,
         run_identity=run_identity,
+        semantic_audit=semantic_audit,
     )
 
 

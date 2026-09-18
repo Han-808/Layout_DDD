@@ -518,7 +518,7 @@
         },
         {
           "path": "providers/gateways/api2.py",
-          "sha256": "070d89fdcb869bf105657a8b08a8fde8be14a3fde5983595a9d7af6cdd647c8e",
+          "sha256": "f9441e11f167f1e8e0e94b82febf2263a76be60b4e33ee9804ce9349a063a5fc",
           "mode": "0644"
         },
         {
@@ -596,12 +596,12 @@
         },
         {
           "path": "campaign_v2/campaigns_v2.json",
-          "sha256": "7d1fb1c0304d2df16da786ea09047ba31af59e077c76c7b45d66171e6be2fa6a",
+          "sha256": "2987d62f23dc7346c7df40582b198319cc654aa7fc441da64551e31f7346012b",
           "mode": "0644"
         },
         {
           "path": "campaign_v2/contracts_v2.json",
-          "sha256": "ae4452aa3f13ad621fd87f0db5dc067466aabbee58d3d508543ea0677905c386",
+          "sha256": "10af3b4b892f39f9a3edf2bc23adc170b9b6c23962c0e259003b3d01a5d0e0e8",
           "mode": "0644"
         },
         {
@@ -611,12 +611,12 @@
         },
         {
           "path": "campaign_v2/model_profiles_v2.json",
-          "sha256": "9a00e1086dd6d502a26ee565bf8baaf05211c0ef0a19c9e0bb950f3422e81507",
+          "sha256": "a0bdcbcda44ac0e2df97ef6e5cf170d0f4a9e0b7e30c8822c00f56642f20a89c",
           "mode": "0644"
         },
         {
           "path": "campaign_v2/route_profiles_v2.json",
-          "sha256": "6fb0c0edc5e5a7a4be2cec97b6e13b603318af3bd68110b17dfba79779bf1bba",
+          "sha256": "098262af7670b9531faaa5353b8ef21924cd342405c9e631325d94dd928661b0",
           "mode": "0644"
         }
       ]
@@ -663,17 +663,17 @@
         },
         {
           "path": "legacy_v1.py",
-          "sha256": "133540e7184b558bc3813ee737a24cf446b21ee68cdc77f01e96e49c42c79e96",
+          "sha256": "a1625cc3ca168fd2e05b80277224fb0b5d7ca0a7f4aee925f16d8fe1a194b955",
           "mode": "0644"
         },
         {
           "path": "loader.py",
-          "sha256": "ec7101c6ab5aa834eccdfe48471c2f432424f7663203d7fc5a9018078e91c647",
+          "sha256": "78138b503e73177da76510dc9352379ac7b4d30b0a47c04718c48bf565a8140f",
           "mode": "0644"
         },
         {
           "path": "multi_room_execution.py",
-          "sha256": "473f59d11207da7282beb7775ab823c55a7e2b153b687cd54ea8fa93d5c2b3ce",
+          "sha256": "eab7b418179ee86f21397a222f6164f540a31f174e697ed82f1dc7f78b1cd9fe",
           "mode": "0644"
         },
         {
@@ -683,12 +683,12 @@
         },
         {
           "path": "profiles.py",
-          "sha256": "9762e2c6ce0a11982ef7e41dd30565081efe27335fbb9a49b3feec4c95dcf8c9",
+          "sha256": "19070a7dcdabd36b3688faebc3bc71205d3a9d2547db461c62ad88e6380836ea",
           "mode": "0644"
         },
         {
           "path": "runtime.py",
-          "sha256": "7d1d25466adba9d84fb0698ae55b24bdda4a0c88233d046dc3a9e603e4517133",
+          "sha256": "4dee70b25dc952a4589c60c6809c773909c600b28248a5a9a66da4f4c5ebba92",
           "mode": "0644"
         }
       ]
@@ -765,7 +765,7 @@
         },
         {
           "path": "runtime.py",
-          "sha256": "433475ae186c3a4c281863254c45b2ae353ef5fa105489bc9e5d424247c8a65b",
+          "sha256": "0df8f26ed369eb72c643d0f0c97640afbc7ee8391550212f66f8d572840f9b25",
           "mode": "0644"
         }
       ]
@@ -820,17 +820,17 @@
         },
         {
           "path": "contracts.py",
-          "sha256": "607689f173c03e136c917b38ca9c6add71613d7d5da5d3ae4cf2884fb559e84b",
+          "sha256": "1a78ec7a4197ae8365e7abb7c4c29df0a1e46ea18000f2dd9666a6a35223c8e4",
           "mode": "0644"
         },
         {
           "path": "floor_plan.py",
-          "sha256": "f01c72c67b5be61ec9735f8dfc3d97c464b34d27f5b000b7a9b53748bf0b91f9",
+          "sha256": "27414f738a3858233db588b9bb867e02f7360b3d924f5b4f6051c2919f063d51",
           "mode": "0644"
         },
         {
           "path": "prompts/stage_a_prompt_v1.txt",
-          "sha256": "399470578efae7dcab9fe2698f7300a2be78b2d8296b4a69106a7da2f3d0efba",
+          "sha256": "9fb6008cb0398abf012e2eb274cc4ffbdc5d4f6a32f502b74664e9ecdac7f7f6",
           "mode": "0644"
         },
         {
@@ -840,12 +840,12 @@
         },
         {
           "path": "provenance.py",
-          "sha256": "4e9e886e8639416b67f7e398f12597686012d46b130af58d49f22c70cfeb026a",
+          "sha256": "a560c16fed8349d7f1ee2a9efc97e32f6cc4df04a671cdc7650b3ec16c4bc149",
           "mode": "0644"
         },
         {
           "path": "runtime.py",
-          "sha256": "816cf64856029ee8c95ac82deb6f5cbe91e53053b6fdea39bd0cf87ac0e74acc",
+          "sha256": "6aa1469044580446b407911ce3d74a21701c47fa39114b7699aa55b4536f4ef8",
           "mode": "0644"
         }
       ]
@@ -860,12 +860,12 @@
       "files": [
         {
           "path": "additive_registry_manifest_v1.json",
-          "sha256": "49dd9ee1675174c170f56653011418d0c0899eca17c7e3675c9206f4ef874a21",
+          "sha256": "2bc59750f7cf5ee3f6c62906132306a178c0e3bcef4490a8614cb81780fba63f",
           "mode": "0644"
         },
         {
           "path": "multi_room_v1/registry_v1.json",
-          "sha256": "7d4411040645c9050b5c199c431bee0c2e1576cc6a3f95004a9ca6abe5e7e529",
+          "sha256": "325b9a668ca71992a3a8246af73bc46a3dd12a7c4185b9f836f4b0004dc82779",
           "mode": "0644"
         }
       ]
