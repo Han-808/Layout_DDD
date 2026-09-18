@@ -97,6 +97,8 @@ def test_cli_and_discovery_match_the_frozen_e0_runner(tmp_path: Path) -> None:
         "functional_consistency",
         "--max-workers",
         "2",
+        "--endpoint-preflight-attempts",
+        "10",
         "--no-terminal-progress",
     ]
     assert vars(runner.parse_args(argv)) == vars(historical.parse_args(argv))
