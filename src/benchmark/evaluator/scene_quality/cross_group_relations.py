@@ -31,6 +31,7 @@ from benchmark.evaluator.scene_quality.claim_identity import (
     canonical_target_ids,
 )
 from benchmark.evaluator.scene_quality.functional_checks import (
+    _stable_unique,
     canonicalize_clearance_causal_attribution,
     canonicalize_functional_defect_check_linkage,
     canonicalize_typed_invalid_envelope,
@@ -511,18 +512,6 @@ def _legacy_atomic_required_check(
         "judge_status": "pending",
         "decision_authority": "none",
     }
-
-
-def _stable_unique(values: list[Any]) -> list[Any]:
-    result: list[Any] = []
-    seen: set[str] = set()
-    for value in values:
-        marker = repr(value)
-        if marker in seen:
-            continue
-        seen.add(marker)
-        result.append(value)
-    return result
 
 
 def _discovered_cross_group_target_sets(

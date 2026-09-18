@@ -2308,6 +2308,9 @@ def _optional_text(value: Any) -> str | None:
 
 
 def _stable_unique(values: list[Any]) -> list[Any]:
+    # repr-marker dedup, no copying; shared by the functional ledger,
+    # cross-group relations and acquisition planning. placement_checks
+    # keeps its own equality+deepcopy variant with different semantics.
     result: list[Any] = []
     seen: set[str] = set()
     for value in values:

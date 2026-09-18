@@ -14,6 +14,9 @@ import hashlib
 import json
 from typing import Any, Iterable
 
+from benchmark.evaluator.scene_quality.functional_checks import (
+    _append_obligation_transition,
+)
 from benchmark.evaluator.structured_fallback import (
     POLICY_DEFAULT_VALID_MODE,
     fallback_resolution,
@@ -2110,18 +2113,6 @@ def _structured_fallback_check_modes(
     return result
 
 
-def _append_obligation_transition(
-    check: dict[str, Any],
-    state: str,
-    *,
-    source: str,
-) -> None:
-    lifecycle = check.setdefault("obligation_lifecycle", [])
-    transition = {"state": str(state), "source": str(source)}
-    if not lifecycle or lifecycle[-1] != transition:
-        lifecycle.append(transition)
-
-
 def _validate_exact_placement_row(
     row: dict[str, Any],
     *,
@@ -2295,6 +2286,8 @@ def _id_list(
 
 
 def _stable_unique(values: Iterable[Any]) -> list[Any]:
+    # Equality-based dedup with deep copies; NOT the repr-marker variant
+    # in functional_checks (e.g. unequal NaN entries are all retained here).
     result: list[Any] = []
     for value in values:
         if value not in result:
