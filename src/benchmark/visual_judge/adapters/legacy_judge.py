@@ -828,38 +828,22 @@ class ControlledVLMJudge:
     def __call__(self, request: dict[str, Any]) -> dict[str, Any]:
         return self.evaluate(request)
 
-    def evaluate(self, request: dict[str, Any]) -> dict[str, Any]:
-        """Run generic-score compatibility through the same evidence boundary."""
+    def _run_evidence_controller(
+        self,
+        request: dict[str, Any],
+        *,
+        judge_adapter: Any,
+        provider_available: bool,
+        independent_renderer_available: bool,
+        selector_metric: str,
+    ) -> tuple[Any, Any]:
+        """Shared acquisition wiring for evaluate and _adjudicate.
 
-        if not isinstance(request, dict):
-            raise TypeError("evaluate request must be a JSON object")
-        call = getattr(self._judge, "_evaluate_raw", None)
-        if not callable(call):
-            call = getattr(self._judge, "evaluate", None)
-        if not callable(call) and callable(self._judge):
-            call = self._judge
-        if not callable(call):
-            raise TypeError(
-                "generic visual evaluator must be callable or expose evaluate"
-            )
-        if not self.strict:
-            return call(request)
+        The availability triage and the selector metric fallback differ by
+        method and stay with the callers; everything from provider usage
+        consumption through ``controller.run`` is one wiring site.
+        """
 
-        responses: list[dict[str, Any]] = []
-        judge_adapter = _GenericCompatibilityJudgeAdapter(
-            call=call,
-            responses=responses,
-        )
-        compatibility_screen = _compatibility_screen_request(request)
-        provider_available = (
-            self.camera_provider is not None
-            and self.evidence_renderer is None
-            and not compatibility_screen
-        )
-        independent_renderer_available = (
-            self.evidence_renderer is not None
-            and not compatibility_screen
-        )
         initial_camera_usage = (
             self._consume_provider_usage(
                 request,
@@ -873,11 +857,7 @@ class ControlledVLMJudge:
                 self.camera_provider,
                 requested_backend=self.control.camera_selector_backend,
                 injected_selector=self.camera_selector,
-                metric=str(
-                    request.get("metric")
-                    or request.get("category")
-                    or "visual_quality"
-                ),
+                metric=selector_metric,
             )
             selector: Any = _ExistingProviderCameraSelector(
                 self.camera_provider,
@@ -891,7 +871,7 @@ class ControlledVLMJudge:
                 self.camera_provider,
                 usage_consumer=self._mark_provider_usage_consumed,
             )
-            candidates = (
+            candidates: tuple[dict[str, Any], ...] = (
                 {
                     "id": _EXISTING_PROVIDER_CANDIDATE_ID,
                     "kind": "legacy_composite_backend_acquisition",
@@ -943,6 +923,51 @@ class ControlledVLMJudge:
             initial_camera_usage=initial_camera_usage,
             initial_acquisition_ledger=_request_acquisition_ledger(
                 request
+            ),
+        )
+        return core_request, result
+
+    def evaluate(self, request: dict[str, Any]) -> dict[str, Any]:
+        """Run generic-score compatibility through the same evidence boundary."""
+
+        if not isinstance(request, dict):
+            raise TypeError("evaluate request must be a JSON object")
+        call = getattr(self._judge, "_evaluate_raw", None)
+        if not callable(call):
+            call = getattr(self._judge, "evaluate", None)
+        if not callable(call) and callable(self._judge):
+            call = self._judge
+        if not callable(call):
+            raise TypeError(
+                "generic visual evaluator must be callable or expose evaluate"
+            )
+        if not self.strict:
+            return call(request)
+
+        responses: list[dict[str, Any]] = []
+        judge_adapter = _GenericCompatibilityJudgeAdapter(
+            call=call,
+            responses=responses,
+        )
+        compatibility_screen = _compatibility_screen_request(request)
+        provider_available = (
+            self.camera_provider is not None
+            and self.evidence_renderer is None
+            and not compatibility_screen
+        )
+        independent_renderer_available = (
+            self.evidence_renderer is not None
+            and not compatibility_screen
+        )
+        core_request, result = self._run_evidence_controller(
+            request,
+            judge_adapter=judge_adapter,
+            provider_available=provider_available,
+            independent_renderer_available=independent_renderer_available,
+            selector_metric=str(
+                request.get("metric")
+                or request.get("category")
+                or "visual_quality"
             ),
         )
         self.audit_records.append(
@@ -1111,91 +1136,16 @@ class ControlledVLMJudge:
             and not independent_renderer_available
             and not compatibility_screen
         )
-        initial_camera_usage = (
-            self._consume_provider_usage(
-                request,
-                packet=_visual_evidence_packet(request),
-            )
-            if provider_available
-            else None
-        )
-        if provider_available:
-            selector_binding = _bind_provider_selector_backend(
-                self.camera_provider,
-                requested_backend=self.control.camera_selector_backend,
-                injected_selector=self.camera_selector,
-                metric=str(
-                    request.get("metric")
-                    or request.get("family")
-                    or request.get("category")
-                    or ""
-                ),
-            )
-            selector: Any = _ExistingProviderCameraSelector(
-                self.camera_provider,
-                requested_backend=self.control.camera_selector_backend,
-                effective_backend=str(
-                    selector_binding["effective_backend"]
-                ),
-                selector_binding=selector_binding,
-            )
-            renderer: Any = _ExistingProviderEvidenceRenderer(
-                self.camera_provider,
-                usage_consumer=self._mark_provider_usage_consumed,
-            )
-            candidates = (
-                {
-                    "id": _EXISTING_PROVIDER_CANDIDATE_ID,
-                    "kind": "legacy_composite_backend_acquisition",
-                    "backend": "existing",
-                },
-            )
-        elif independent_renderer_available:
-            selector = self.camera_selector
-            renderer = _coerce_evidence_renderer(self.evidence_renderer)
-            candidates = tuple(_request_candidate_views(request))
-        else:
-            selector = self.camera_selector
-            renderer = _UnavailableEvidenceRenderer()
-            candidates = tuple(_request_candidate_views(request))
-
-        controller = VLMEvaluationController(
-            judge=judge_adapter,
-            renderer=renderer,
-            camera_selector=selector,
-            deterministic_camera_selector=(
-                None
-                if provider_available
-                else self.deterministic_camera_selector
-            ),
-            vlm_camera_selector=(
-                None
-                if provider_available
-                else self.vlm_camera_selector
-            ),
-            candidate_preview_renderer=(
-                None
-                if provider_available
-                else self.candidate_preview_renderer
-            ),
-            control=self.control,
-        )
-        core_request = _judge_request(request)
-        result = controller.run(
-            core_request,
-            evidence_goal=_evidence_goal(
-                request,
-                camera_repairable=(
-                    provider_available or independent_renderer_available
-                ),
-            ),
-            candidate_views=candidates,
-            allowed_actions=tuple(_request_allowed_actions(request)),
-            selector_context=_selector_context(request),
-            gate_manifest_path=_request_manifest_path(request),
-            initial_camera_usage=initial_camera_usage,
-            initial_acquisition_ledger=_request_acquisition_ledger(
-                request
+        core_request, result = self._run_evidence_controller(
+            request,
+            judge_adapter=judge_adapter,
+            provider_available=provider_available,
+            independent_renderer_available=independent_renderer_available,
+            selector_metric=str(
+                request.get("metric")
+                or request.get("family")
+                or request.get("category")
+                or ""
             ),
         )
         self.audit_records.append(
