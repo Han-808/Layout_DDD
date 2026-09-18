@@ -6,8 +6,9 @@ set -Eeuo pipefail
 # Creates a dedicated PointLLM virtual environment and checks out the two code
 # repositories at pinned commits. PointLLM needs the transformers 4.28.0.dev
 # era; the benchmark venv (transformers 4.57) and the SGLang venv cannot host
-# it. This script therefore never touches /mnt/group/cmh/.venvs/layoutddd_sys
-# or /mnt/group/cmh/envs/sglang-qwen3vl.
+# it. This script therefore never touches /mnt/group/cmh/.venvs/layoutddd_sys,
+# /mnt/group/cmh/envs/sglang-qwen3vl, or the legacy
+# /mnt/group/cmh/envs/pointllm environment.
 #
 # Both checkouts ship a `pointllm` package, so neither is pip-installed.
 # Dependencies are installed once and the active code tree is selected at run
@@ -20,7 +21,7 @@ set -Eeuo pipefail
 
 REPO_ROOT=${REPO_ROOT:-/mnt/group/cmh/Layout_DDD}
 TOOLS_ROOT=${TOOLS_ROOT:-/mnt/group/cmh/tools}
-ENV_DIR=${ENV_DIR:-/mnt/group/cmh/envs/pointllm}
+ENV_DIR=${ENV_DIR:-/mnt/group/cmh/envs/pointllm-cu126}
 ENV_PY=${ENV_PY:-${ENV_DIR}/bin/python}
 REQUIREMENTS=${REQUIREMENTS:-${REPO_ROOT}/Support/bash/mnet/pointllm_requirements.txt}
 
@@ -144,14 +145,31 @@ pip_install -r "$REQUIREMENTS" \
 
 log "stage 2d: verify imports and CUDA visibility"
 PYTHONPATH="$POINTLLM_DIR" "$ENV_PY" - <<'PY'
+import matplotlib
 import torch
 import tokenizers
 import transformers
+import torchvision
 
+print("matplotlib     :", matplotlib.__version__)
 print("torch          :", torch.__version__)
+print("torch CUDA     :", torch.version.cuda)
+print("torchvision    :", torchvision.__version__)
 print("transformers   :", transformers.__version__)
 print("tokenizers     :", tokenizers.__version__)
 print("cuda available :", torch.cuda.is_available())
+
+if torch.__version__ != "2.8.0+cu126":
+    raise SystemExit(
+        f"expected torch 2.8.0+cu126, got {torch.__version__}; "
+        "the H20 FP16 Linear probe did not pass under the former 2.1.2+cu121 pin"
+    )
+if torch.version.cuda != "12.6":
+    raise SystemExit(f"expected a CUDA 12.6 torch build, got {torch.version.cuda}")
+if torchvision.__version__ != "0.23.0+cu126":
+    raise SystemExit(
+        f"expected torchvision 0.23.0+cu126, got {torchvision.__version__}"
+    )
 
 # PointLLM subclasses the LLaMA implementation as it stood in 4.28. The cache
 # and attention-mask refactors from 4.36 onward change that base class, so a
@@ -175,15 +193,20 @@ for index in range(torch.cuda.device_count()):
 if not torch.cuda.is_available():
     raise SystemExit("CUDA is not available in the PointLLM environment")
 
-# Hopper (sm_90) needs a torch built against CUDA 11.8 or newer. Upstream
-# PointLLM was tested on CUDA 11.7, which silently has no sm_90 kernels.
-build_cuda = tuple(int(part) for part in (torch.version.cuda or "0.0").split(".")[:2])
+# Catch the exact failure that the former torch 2.1.2+cu121 environment
+# exhibited on the live H20: SIGFPE inside the Point-BERT MLP's half-precision
+# nn.Linear. Do this before loading either 27 GB checkpoint.
 if any(torch.cuda.get_device_capability(i)[0] >= 9 for i in range(torch.cuda.device_count())):
-    if build_cuda < (11, 8):
-        raise SystemExit(
-            f"Hopper GPU present but torch was built against CUDA {torch.version.cuda}; "
-            "reinstall with a cu118 or newer wheel"
-        )
+    with torch.inference_mode():
+        for dtype in (torch.float16, torch.bfloat16):
+            layer = torch.nn.Linear(768, 384, device="cuda", dtype=dtype)
+            inputs = torch.randn((1, 513, 768), device="cuda", dtype=dtype)
+            for _ in range(3):
+                outputs = layer(inputs)
+                torch.cuda.synchronize()
+            print(
+                f"H20 Linear probe: PASS ({dtype}, output={tuple(outputs.shape)})"
+            )
 
 from pointllm.model import PointLLMLlamaForCausalLM
 from pointllm.conversation import conv_templates

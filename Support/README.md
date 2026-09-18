@@ -35,3 +35,10 @@ New Bash launch commands use `Support/bash/...`. Python entry points remain in
 Large/support-only directories are excluded from Git. Do not package
 `Support/Assets`, `Support/Scenes`, `Support/artifacts`, `Support/data`,
 `Support/datasets`, `Support/notes`, or `Support/third_party` into code bundles.
+
+Evaluation and generation artifacts keep their original runner-compatible paths
+under `Support/artifacts/outputs/`. A non-destructive category view is available
+at `Support/artifacts/outputs/_catalog/`, with a second-level evaluation catalog
+at `Support/artifacts/outputs/camera_cal_scene_level/_catalog/`. Catalog entries
+are relative symlinks, so organizing the workspace does not relocate bulky
+reports or break manifests and dashboards.

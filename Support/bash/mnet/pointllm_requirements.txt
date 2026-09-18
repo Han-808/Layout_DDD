@@ -7,7 +7,7 @@
 # explicitly recorded step if an experiment needs them.
 #
 # Install with:
-#   pip install --extra-index-url https://download.pytorch.org/whl/cu121 -r <this file>
+#   pip install -r <this file>
 #
 # Target interpreter: Python 3.11, which MNET already provides. Upstream tested
 # on 3.10.13, but the only package that actually required 3.10 was
@@ -20,8 +20,11 @@
 #     range and removes the need to build a separate 3.10 interpreter. The
 #     checkpoints ship tokenizer.model and no tokenizer.json, so LLaMA loads
 #     through the sentencepiece slow tokenizer and barely touches this package.
-#   - torch 2.1.2+cu121 instead of 2.0.1+cu117. H20 is Hopper (sm_90), which
-#     CUDA 11.7 does not target. cu118 or newer is mandatory on this hardware.
+#   - torch 2.8.0+cu126 instead of 2.0.1+cu117. A live-H20 probe on MNET showed
+#     torch 2.1.2+cu121 crashing with SIGFPE in an FP16 nn.Linear of the same
+#     shape used by Point-BERT, while torch 2.8.0+cu126 passed. The local
+#     version suffix below also prevents the primary package index from
+#     satisfying the pin with a CPU-only wheel.
 #   - numpy is pinned below 2.0. The transformers 4.28 era predates numpy 2 and
 #     fails at import against it.
 #   - huggingface_hub is pinned to a version contemporary with transformers
@@ -29,13 +32,14 @@
 #     4.28 itself caps it at <1.0. Weights load from a local directory, so the
 #     hub is only an import dependency.
 
---extra-index-url https://download.pytorch.org/whl/cu121
+--extra-index-url https://download.pytorch.org/whl/cu126
 
-torch==2.1.2+cu121
-torchvision==0.16.2+cu121
+torch==2.8.0+cu126
+torchvision==0.23.0+cu126
 
 numpy==1.26.4
 scipy==1.11.4
+matplotlib==3.8.4
 
 transformers @ git+https://github.com/huggingface/transformers.git@cae78c46
 tokenizers==0.13.3
