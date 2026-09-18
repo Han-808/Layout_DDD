@@ -42,6 +42,332 @@ def _numeric(value: Any) -> float | None:
     return float(value)
 
 
+def _local_metric_weight(
+    layer: str,
+    metric: str,
+    *,
+    weight_map: dict[str, Any],
+    scoring: dict[str, Any],
+    metric_report: dict[str, Any],
+) -> float:
+    """Resolve the persisted local metric weight through the legacy chain."""
+
+    local_weight = _numeric(weight_map.get(metric))
+    if local_weight is None:
+        local_weight = _numeric(scoring.get("nominal_metric_weight"))
+    if local_weight is None and layer == "L3":
+        local_weight = _numeric(metric_report.get("weight"))
+    if local_weight is None and layer == "L1":
+        local_weight = 1.0 / 3.0
+    return 0.0 if local_weight is None else local_weight
+
+
+def _metric_coverage_view(
+    metric_report: dict[str, Any],
+    observed_score: float | None,
+) -> tuple[dict[str, Any], float, bool | None]:
+    """Extract (coverage dict, clamped fraction, complete flag) for a metric."""
+
+    metric_coverage = metric_report.get("coverage")
+    metric_coverage = (
+        metric_coverage if isinstance(metric_coverage, dict) else {}
+    )
+    score_grounding = metric_coverage.get("score_grounding")
+    score_grounding = (
+        score_grounding if isinstance(score_grounding, dict) else {}
+    )
+    coverage_fraction = _numeric(score_grounding.get("fraction"))
+    if coverage_fraction is None:
+        coverage_fraction = _numeric(metric_coverage.get("fraction"))
+    coverage_complete = (
+        score_grounding.get("complete")
+        if isinstance(score_grounding.get("complete"), bool)
+        else metric_coverage.get("complete")
+        if isinstance(metric_coverage.get("complete"), bool)
+        else None
+    )
+    if coverage_fraction is None:
+        coverage_fraction = 1.0 if observed_score is not None else 0.0
+    coverage_fraction = min(1.0, max(0.0, coverage_fraction))
+    return metric_coverage, coverage_fraction, coverage_complete
+
+
+def _score_status(
+    score: float | None,
+    observed_score: float | None,
+    fraction: float,
+) -> str:
+    """Shared metric/layer status ladder; the combined ladder stays inline."""
+
+    return (
+        "complete"
+        if score is not None and fraction >= 1.0 - 1.0e-12
+        else "partial_coverage"
+        if score is not None
+        else "failed_coverage_threshold"
+        if observed_score is not None
+        else "insufficient_metric_coverage"
+    )
+
+
+def _placement_components_summary(
+    scoring: dict[str, Any],
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    """Extract the persisted placement component weights and summaries."""
+
+    placement_component_weights = scoring.get(
+        "placement_component_weights"
+    )
+    placement_component_weights = (
+        deepcopy(placement_component_weights)
+        if isinstance(placement_component_weights, dict)
+        else None
+    )
+    placement_components = scoring.get("placement_components")
+    placement_components = (
+        {
+            str(name): {
+                "score": _numeric(component.get("score")),
+                "deduction": _numeric(
+                    component.get("metric_deduction")
+                ),
+                "event_count": int(
+                    component.get("event_count") or 0
+                ),
+            }
+            for name, component in placement_components.items()
+            if isinstance(component, dict)
+        }
+        if isinstance(placement_components, dict)
+        else None
+    )
+    return placement_component_weights, placement_components
+
+
+def _metric_record(
+    layer: str,
+    metric: str,
+    label: str,
+    *,
+    metric_report: dict[str, Any],
+    layer_weight: float,
+    weight_map: dict[str, Any],
+) -> dict[str, Any]:
+    """Build one persisted metrics[] row without re-scoring anything."""
+
+    scoring = metric_report.get("scoring")
+    scoring = scoring if isinstance(scoring, dict) else {}
+    local_weight = _local_metric_weight(
+        layer,
+        metric,
+        weight_map=weight_map,
+        scoring=scoring,
+        metric_report=metric_report,
+    )
+    persisted_score = _numeric(metric_report.get("score"))
+    coverage_projection = scoring.get("coverage_projection")
+    coverage_projection = (
+        coverage_projection
+        if isinstance(coverage_projection, dict)
+        else {}
+    )
+    observed_score = persisted_score
+    if observed_score is None:
+        observed_score = _numeric(
+            coverage_projection.get(
+                "raw_score_before_coverage_projection"
+            )
+        )
+    metric_coverage, coverage_fraction, coverage_complete = (
+        _metric_coverage_view(metric_report, observed_score)
+    )
+    coverage_threshold_passed = (
+        observed_score is not None
+        and coverage_fraction >= MIN_PUBLISHABLE_SCORE_COVERAGE
+    )
+    score = observed_score if coverage_threshold_passed else None
+    events = scoring.get("events")
+    events = (
+        [deepcopy(event) for event in events if isinstance(event, dict)]
+        if isinstance(events, list)
+        else []
+    )
+    judgement = metric_report.get("judgement")
+    judgement = judgement if isinstance(judgement, dict) else {}
+    placement_component_weights, placement_components = (
+        _placement_components_summary(scoring)
+    )
+    return {
+        "layer": layer,
+        "metric": metric,
+        "label": label,
+        "status": str(metric_report.get("status") or "not_recorded"),
+        "verdict": judgement.get("verdict"),
+        "reason": str(
+            metric_report.get("reason")
+            or judgement.get("reason")
+            or ""
+        ),
+        "score": score,
+        "observed_score": observed_score,
+        "score_status": _score_status(
+            score, observed_score, coverage_fraction
+        ),
+        "coverage_fraction": coverage_fraction,
+        "coverage_complete": coverage_complete,
+        "coverage_threshold_passed": coverage_threshold_passed,
+        "coverage": deepcopy(metric_coverage),
+        "local_weight": local_weight,
+        "overall_weight": layer_weight * local_weight,
+        "grounded_overall_weight": (
+            layer_weight * local_weight * coverage_fraction
+            if observed_score is not None
+            else 0.0
+        ),
+        "weighted_points": (
+            observed_score
+            * layer_weight
+            * local_weight
+            * coverage_fraction
+            * 100.0
+            if observed_score is not None
+            else None
+        ),
+        "coefficient": _numeric(scoring.get("coefficient_n_m")),
+        "burden": _numeric(scoring.get("burden_total_b_m")),
+        "p_max": _numeric(scoring.get("p_max")),
+        "deduction": _numeric(scoring.get("metric_deduction")),
+        "effective_factor": _numeric(
+            scoring.get("effective_local_factor_w_m_n_m")
+        ),
+        "ledger_available": bool(scoring),
+        "event_count": int(scoring.get("event_count") or 0),
+        "events": events,
+        "placement_component_weights": placement_component_weights,
+        "placement_components": placement_components,
+    }
+
+
+def _covered_layer(
+    records: list[dict[str, Any]],
+) -> tuple[float | None, float | None, float, int]:
+    """Aggregate one layer's records: (score, observed, fraction, resolved)."""
+
+    required = sum(float(item.get("local_weight") or 0.0) for item in records)
+    grounded = sum(
+        float(item.get("local_weight") or 0.0)
+        * float(item.get("coverage_fraction") or 0.0)
+        for item in records
+        if _numeric(item.get("observed_score")) is not None
+    )
+    points = sum(
+        float(item["observed_score"])
+        * float(item.get("local_weight") or 0.0)
+        * float(item.get("coverage_fraction") or 0.0)
+        for item in records
+        if _numeric(item.get("observed_score")) is not None
+    )
+    observed_score = points / grounded if grounded > 0.0 else None
+    fraction = grounded / required if required > 0.0 else 0.0
+    fraction = min(1.0, max(0.0, fraction))
+    score = (
+        observed_score
+        if observed_score is not None
+        and fraction >= MIN_PUBLISHABLE_SCORE_COVERAGE
+        else None
+    )
+    resolved = sum(
+        _numeric(item.get("observed_score")) is not None
+        and float(item.get("coverage_fraction") or 0.0) > 0.0
+        for item in records
+    )
+    return score, observed_score, fraction, resolved
+
+
+def _layer_coverage(
+    base_coverage: dict[str, Any],
+    *,
+    record_count: int,
+    resolved_count: int,
+    fraction: float,
+    observed_score: float | None,
+) -> dict[str, Any]:
+    """Overlay the derived layer coverage fields onto the persisted dict."""
+
+    return {
+        **base_coverage,
+        "eligible_count": record_count,
+        "resolved_count": resolved_count,
+        "fraction": fraction,
+        "grounded_score_fraction": fraction,
+        "observed_score": observed_score,
+        "earned_score_mass": (
+            observed_score * fraction
+            if observed_score is not None
+            else None
+        ),
+        "minimum_publishable_coverage": MIN_PUBLISHABLE_SCORE_COVERAGE,
+        "coverage_threshold_passed": (
+            fraction >= MIN_PUBLISHABLE_SCORE_COVERAGE
+        ),
+        "complete": record_count > 0 and fraction >= 1.0 - 1.0e-12,
+    }
+
+
+def _layer_view(
+    *,
+    layer: str,
+    label: str,
+    report: dict[str, Any],
+    score: float | None,
+    observed_score: float | None,
+    fraction: float,
+    weight: float,
+    coverage: dict[str, Any],
+) -> dict[str, Any]:
+    """Build one persisted layers[] row."""
+
+    return {
+        "layer": layer,
+        "label": label,
+        "status": str(report.get("status") or "not_recorded"),
+        "score": score,
+        "observed_score": observed_score,
+        "score_status": _score_status(score, observed_score, fraction),
+        "weight": weight,
+        "coverage": deepcopy(coverage),
+    }
+
+
+def _unique_engineering_failures(
+    l1_diagnostics: dict[str, Any],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Copy the recorded failures and dedupe by (metric, error-or-route)."""
+
+    engineering_failures = l1_diagnostics.get("engineering_failures")
+    engineering_failures = (
+        [
+            deepcopy(failure)
+            for failure in engineering_failures
+            if isinstance(failure, dict)
+        ]
+        if isinstance(engineering_failures, list)
+        else []
+    )
+    unique_failure_keys: set[tuple[str, str]] = set()
+    unique_engineering_failures: list[dict[str, Any]] = []
+    for failure in engineering_failures:
+        key = (
+            str(failure.get("metric") or "unknown"),
+            str(failure.get("error") or failure.get("route") or "unknown"),
+        )
+        if key in unique_failure_keys:
+            continue
+        unique_failure_keys.add(key)
+        unique_engineering_failures.append(failure)
+    return engineering_failures, unique_engineering_failures
+
+
 @adaptive_persisted_summary
 def case_scoring_summary(
     *,
@@ -98,154 +424,19 @@ def case_scoring_summary(
         metric_report = (
             metric_report if isinstance(metric_report, dict) else {}
         )
-        scoring = metric_report.get("scoring")
-        scoring = scoring if isinstance(scoring, dict) else {}
-        local_weight = _numeric(
-            (
-                l1_metric_weights.get(metric)
-                if layer == "L1"
-                else l3_metric_weights.get(metric)
-            )
-        )
-        if local_weight is None:
-            local_weight = _numeric(scoring.get("nominal_metric_weight"))
-        if local_weight is None and layer == "L3":
-            local_weight = _numeric(metric_report.get("weight"))
-        if local_weight is None and layer == "L1":
-            local_weight = 1.0 / 3.0
-        local_weight = 0.0 if local_weight is None else local_weight
-        layer_weight = l1_layer_weight if layer == "L1" else l3_layer_weight
-        persisted_score = _numeric(metric_report.get("score"))
-        coverage_projection = scoring.get("coverage_projection")
-        coverage_projection = (
-            coverage_projection
-            if isinstance(coverage_projection, dict)
-            else {}
-        )
-        observed_score = persisted_score
-        if observed_score is None:
-            observed_score = _numeric(
-                coverage_projection.get(
-                    "raw_score_before_coverage_projection"
-                )
-            )
-        metric_coverage = metric_report.get("coverage")
-        metric_coverage = (
-            metric_coverage if isinstance(metric_coverage, dict) else {}
-        )
-        score_grounding = metric_coverage.get("score_grounding")
-        score_grounding = (
-            score_grounding if isinstance(score_grounding, dict) else {}
-        )
-        coverage_fraction = _numeric(score_grounding.get("fraction"))
-        if coverage_fraction is None:
-            coverage_fraction = _numeric(metric_coverage.get("fraction"))
-        coverage_complete = (
-            score_grounding.get("complete")
-            if isinstance(score_grounding.get("complete"), bool)
-            else metric_coverage.get("complete")
-            if isinstance(metric_coverage.get("complete"), bool)
-            else None
-        )
-        if coverage_fraction is None:
-            coverage_fraction = 1.0 if observed_score is not None else 0.0
-        coverage_fraction = min(1.0, max(0.0, coverage_fraction))
-        coverage_threshold_passed = (
-            observed_score is not None
-            and coverage_fraction >= MIN_PUBLISHABLE_SCORE_COVERAGE
-        )
-        score = observed_score if coverage_threshold_passed else None
-        score_status = (
-            "complete"
-            if score is not None and coverage_fraction >= 1.0 - 1.0e-12
-            else "partial_coverage"
-            if score is not None
-            else "failed_coverage_threshold"
-            if observed_score is not None
-            else "insufficient_metric_coverage"
-        )
-        events = scoring.get("events")
-        events = (
-            [deepcopy(event) for event in events if isinstance(event, dict)]
-            if isinstance(events, list)
-            else []
-        )
-        judgement = metric_report.get("judgement")
-        judgement = judgement if isinstance(judgement, dict) else {}
-        placement_component_weights = scoring.get(
-            "placement_component_weights"
-        )
-        placement_component_weights = (
-            deepcopy(placement_component_weights)
-            if isinstance(placement_component_weights, dict)
-            else None
-        )
-        placement_components = scoring.get("placement_components")
-        placement_components = (
-            {
-                str(name): {
-                    "score": _numeric(component.get("score")),
-                    "deduction": _numeric(
-                        component.get("metric_deduction")
-                    ),
-                    "event_count": int(
-                        component.get("event_count") or 0
-                    ),
-                }
-                for name, component in placement_components.items()
-                if isinstance(component, dict)
-            }
-            if isinstance(placement_components, dict)
-            else None
-        )
         metric_records.append(
-            {
-                "layer": layer,
-                "metric": metric,
-                "label": label,
-                "status": str(metric_report.get("status") or "not_recorded"),
-                "verdict": judgement.get("verdict"),
-                "reason": str(
-                    metric_report.get("reason")
-                    or judgement.get("reason")
-                    or ""
+            _metric_record(
+                layer,
+                metric,
+                label,
+                metric_report=metric_report,
+                layer_weight=(
+                    l1_layer_weight if layer == "L1" else l3_layer_weight
                 ),
-                "score": score,
-                "observed_score": observed_score,
-                "score_status": score_status,
-                "coverage_fraction": coverage_fraction,
-                "coverage_complete": coverage_complete,
-                "coverage_threshold_passed": coverage_threshold_passed,
-                "coverage": deepcopy(metric_coverage),
-                "local_weight": local_weight,
-                "overall_weight": layer_weight * local_weight,
-                "grounded_overall_weight": (
-                    layer_weight * local_weight * coverage_fraction
-                    if observed_score is not None
-                    else 0.0
+                weight_map=(
+                    l1_metric_weights if layer == "L1" else l3_metric_weights
                 ),
-                "weighted_points": (
-                    observed_score
-                    * layer_weight
-                    * local_weight
-                    * coverage_fraction
-                    * 100.0
-                    if observed_score is not None
-                    else None
-                ),
-                "coefficient": _numeric(scoring.get("coefficient_n_m")),
-                "burden": _numeric(scoring.get("burden_total_b_m")),
-                "p_max": _numeric(scoring.get("p_max")),
-                "deduction": _numeric(scoring.get("metric_deduction")),
-                "effective_factor": _numeric(
-                    scoring.get("effective_local_factor_w_m_n_m")
-                ),
-                "ledger_available": bool(scoring),
-                "event_count": int(scoring.get("event_count") or 0),
-                "events": events,
-                "placement_component_weights": placement_component_weights,
-                "placement_components": placement_components,
-            }
+            )
         )
 
     scoreable_records = [
@@ -260,87 +451,32 @@ def case_scoring_summary(
     l1_records = [item for item in scoreable_records if item["layer"] == "L1"]
     l3_records = [item for item in scoreable_records if item["layer"] == "L3"]
 
-    def covered_layer(
-        records: list[dict[str, Any]],
-    ) -> tuple[float | None, float | None, float, int]:
-        required = sum(float(item.get("local_weight") or 0.0) for item in records)
-        grounded = sum(
-            float(item.get("local_weight") or 0.0)
-            * float(item.get("coverage_fraction") or 0.0)
-            for item in records
-            if _numeric(item.get("observed_score")) is not None
-        )
-        points = sum(
-            float(item["observed_score"])
-            * float(item.get("local_weight") or 0.0)
-            * float(item.get("coverage_fraction") or 0.0)
-            for item in records
-            if _numeric(item.get("observed_score")) is not None
-        )
-        observed_score = points / grounded if grounded > 0.0 else None
-        fraction = grounded / required if required > 0.0 else 0.0
-        fraction = min(1.0, max(0.0, fraction))
-        score = (
-            observed_score
-            if observed_score is not None
-            and fraction >= MIN_PUBLISHABLE_SCORE_COVERAGE
-            else None
-        )
-        resolved = sum(
-            _numeric(item.get("observed_score")) is not None
-            and float(item.get("coverage_fraction") or 0.0) > 0.0
-            for item in records
-        )
-        return score, observed_score, fraction, resolved
-
     (
         l1_score,
         l1_observed_score,
         l1_fraction,
         l1_resolved_count,
-    ) = covered_layer(l1_records)
+    ) = _covered_layer(l1_records)
     (
         l3_score,
         l3_observed_score,
         l3_fraction,
         l3_resolved_count,
-    ) = covered_layer(l3_records)
-    l1_coverage = {
-        **l1_coverage,
-        "eligible_count": len(l1_records),
-        "resolved_count": l1_resolved_count,
-        "fraction": l1_fraction,
-        "grounded_score_fraction": l1_fraction,
-        "observed_score": l1_observed_score,
-        "earned_score_mass": (
-            l1_observed_score * l1_fraction
-            if l1_observed_score is not None
-            else None
-        ),
-        "minimum_publishable_coverage": MIN_PUBLISHABLE_SCORE_COVERAGE,
-        "coverage_threshold_passed": (
-            l1_fraction >= MIN_PUBLISHABLE_SCORE_COVERAGE
-        ),
-        "complete": bool(l1_records) and l1_fraction >= 1.0 - 1.0e-12,
-    }
-    l3_coverage = {
-        **l3_coverage,
-        "eligible_count": len(l3_records),
-        "resolved_count": l3_resolved_count,
-        "fraction": l3_fraction,
-        "grounded_score_fraction": l3_fraction,
-        "observed_score": l3_observed_score,
-        "earned_score_mass": (
-            l3_observed_score * l3_fraction
-            if l3_observed_score is not None
-            else None
-        ),
-        "minimum_publishable_coverage": MIN_PUBLISHABLE_SCORE_COVERAGE,
-        "coverage_threshold_passed": (
-            l3_fraction >= MIN_PUBLISHABLE_SCORE_COVERAGE
-        ),
-        "complete": bool(l3_records) and l3_fraction >= 1.0 - 1.0e-12,
-    }
+    ) = _covered_layer(l3_records)
+    l1_coverage = _layer_coverage(
+        l1_coverage,
+        record_count=len(l1_records),
+        resolved_count=l1_resolved_count,
+        fraction=l1_fraction,
+        observed_score=l1_observed_score,
+    )
+    l3_coverage = _layer_coverage(
+        l3_coverage,
+        record_count=len(l3_records),
+        resolved_count=l3_resolved_count,
+        fraction=l3_fraction,
+        observed_score=l3_observed_score,
+    )
     layer_values = (
         (l1_observed_score, l1_layer_weight, l1_fraction),
         (l3_observed_score, l3_layer_weight, l3_fraction),
@@ -389,27 +525,9 @@ def case_scoring_summary(
     l1_diagnostics = (
         l1_diagnostics if isinstance(l1_diagnostics, dict) else {}
     )
-    engineering_failures = l1_diagnostics.get("engineering_failures")
-    engineering_failures = (
-        [
-            deepcopy(failure)
-            for failure in engineering_failures
-            if isinstance(failure, dict)
-        ]
-        if isinstance(engineering_failures, list)
-        else []
+    engineering_failures, unique_engineering_failures = (
+        _unique_engineering_failures(l1_diagnostics)
     )
-    unique_failure_keys: set[tuple[str, str]] = set()
-    unique_engineering_failures: list[dict[str, Any]] = []
-    for failure in engineering_failures:
-        key = (
-            str(failure.get("metric") or "unknown"),
-            str(failure.get("error") or failure.get("route") or "unknown"),
-        )
-        if key in unique_failure_keys:
-            continue
-        unique_failure_keys.add(key)
-        unique_engineering_failures.append(failure)
 
     return {
         "case_id": case_id,
@@ -435,44 +553,26 @@ def case_scoring_summary(
             case_manifest.get("final_decision_status") or "unknown"
         ),
         "layers": [
-            {
-                "layer": "L1",
-                "label": "Physical plausibility",
-                "status": str(l1_report.get("status") or "not_recorded"),
-                "score": l1_score,
-                "observed_score": l1_observed_score,
-                "score_status": (
-                    "complete"
-                    if l1_score is not None
-                    and l1_fraction >= 1.0 - 1.0e-12
-                    else "partial_coverage"
-                    if l1_score is not None
-                    else "failed_coverage_threshold"
-                    if l1_observed_score is not None
-                    else "insufficient_metric_coverage"
-                ),
-                "weight": l1_layer_weight,
-                "coverage": deepcopy(l1_coverage),
-            },
-            {
-                "layer": "L3",
-                "label": "Implicit scene validity",
-                "status": str(l3_report.get("status") or "not_recorded"),
-                "score": l3_score,
-                "observed_score": l3_observed_score,
-                "score_status": (
-                    "complete"
-                    if l3_score is not None
-                    and l3_fraction >= 1.0 - 1.0e-12
-                    else "partial_coverage"
-                    if l3_score is not None
-                    else "failed_coverage_threshold"
-                    if l3_observed_score is not None
-                    else "insufficient_metric_coverage"
-                ),
-                "weight": l3_layer_weight,
-                "coverage": deepcopy(l3_coverage),
-            },
+            _layer_view(
+                layer="L1",
+                label="Physical plausibility",
+                report=l1_report,
+                score=l1_score,
+                observed_score=l1_observed_score,
+                fraction=l1_fraction,
+                weight=l1_layer_weight,
+                coverage=l1_coverage,
+            ),
+            _layer_view(
+                layer="L3",
+                label="Implicit scene validity",
+                report=l3_report,
+                score=l3_score,
+                observed_score=l3_observed_score,
+                fraction=l3_fraction,
+                weight=l3_layer_weight,
+                coverage=l3_coverage,
+            ),
         ],
         "metrics": metric_records,
         "reliability": deepcopy(reliability),

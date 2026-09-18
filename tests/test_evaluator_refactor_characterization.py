@@ -113,3 +113,139 @@ class TestAppendObligationTransition:
             right, "deferred_budget", source="routing"
         )
         assert left == right
+
+
+# ---------------------------------------------------------------------------
+# case_scoring_summary characterization (step 2 of the v8 refactor)
+# ---------------------------------------------------------------------------
+
+import json
+from pathlib import Path
+
+from benchmark.camera_cal_scene_level.persisted_scoring import (
+    case_scoring_summary,
+)
+
+_PERSISTED_SNAPSHOT = (
+    Path(__file__).parent
+    / "fixtures"
+    / "persisted_scoring_characterization_v1.json"
+)
+
+_PERSISTED_SCENARIOS = {
+    "empty_inputs": dict(
+        case_id="case_empty",
+        case_manifest={},
+        l1_report={},
+        l3_report={},
+    ),
+    "partial_l3_only": dict(
+        case_id="case_partial",
+        case_manifest={
+            "scoring_profile": {
+                "scoring_profile_id": "intrinsic_validity_v2",
+                "scoring_spec_version": "object_equivalent_burden_v3",
+                "deduction_multiplier": 2,
+                "layer_weights": {
+                    "l1_physical_plausibility": 0.3,
+                    "l3_scene_quality": 0.7,
+                },
+            },
+            "canonical_object_denominator": {
+                "n_scene": 2,
+                "ordered_object_ids": ["obj_a", "obj_b"],
+            },
+            "final_decision_status": "unresolved",
+        },
+        l1_report={"status": "complete", "metrics": {}},
+        l3_report={
+            "status": "complete",
+            "scoring": {
+                "metric_weights": {
+                    "functional_consistency": 0.52,
+                    "semantic_placement_consistency": 0.28,
+                }
+            },
+            "metrics": {
+                "functional_consistency": {
+                    "status": "evaluated",
+                    "score": 0.9,
+                    "judgement": {"verdict": "valid", "reason": "ok"},
+                    "coverage": {
+                        "fraction": 0.5,
+                        "complete": False,
+                        "score_grounding": {
+                            "fraction": 0.9,
+                            "complete": False,
+                        },
+                    },
+                    "scoring": {
+                        "coefficient_n_m": 2.0,
+                        "burden_total_b_m": 0.4,
+                        "p_max": 0.4,
+                        "metric_deduction": 0.1,
+                        "event_count": 1,
+                        "events": [
+                            {"event_id": "evt", "burden": 0.4},
+                            "not-a-dict",
+                        ],
+                    },
+                },
+                "semantic_placement_consistency": {
+                    "status": "evaluated",
+                    "judgement": {"verdict": None},
+                    "coverage": {},
+                    "scoring": {
+                        "coverage_projection": {
+                            "raw_score_before_coverage_projection": 0.8,
+                        },
+                        "placement_component_weights": {
+                            "typed": 0.8,
+                            "residual_global_review": 0.2,
+                        },
+                        "placement_components": {
+                            "typed": {
+                                "score": 0.75,
+                                "metric_deduction": 0.25,
+                                "event_count": 2,
+                            },
+                            "bad": "not-a-dict",
+                        },
+                    },
+                },
+            },
+        },
+    ),
+    "engineering_failure_dedup": dict(
+        case_id="case_failures",
+        case_manifest={
+            "scoring_reliability": {"summary": "kept"},
+        },
+        l1_report={
+            "backend_report": {
+                "scoring": {"metric_weights": {"collision": 0.5}},
+            },
+        },
+        l3_report={},
+        l1_diagnostics={
+            "engineering_failures": [
+                {"metric": "collision", "error": "boom"},
+                {"metric": "collision", "error": "boom"},
+                {"metric": "collision", "route": "r2"},
+                {"error": "boom"},
+                "not-a-dict",
+            ]
+        },
+    ),
+}
+
+
+class TestCaseScoringSummaryCharacterization:
+    """Snapshot of pre-refactor outputs for boundary-shaped inputs."""
+
+    def test_outputs_match_recorded_snapshot(self) -> None:
+        expected = json.loads(_PERSISTED_SNAPSHOT.read_text())
+        assert set(expected) == set(_PERSISTED_SCENARIOS)
+        for name, kwargs in _PERSISTED_SCENARIOS.items():
+            actual = json.loads(json.dumps(case_scoring_summary(**kwargs)))
+            assert actual == expected[name], name
