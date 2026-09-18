@@ -3976,6 +3976,293 @@ def _update_local_evidence_metadata(
     )
 
 
+def _apply_infrastructure_failure_terminal(
+    base: dict[str, Any],
+    *,
+    infrastructure_failures: list[dict[str, Any]],
+    missing_evidence: list[str],
+    global_record: dict[str, Any],
+    relation_results: list[dict[str, Any]],
+    group_results: list[dict[str, Any]],
+    target_results: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Fail closed: a required scope failed for an engineering reason."""
+
+    base["infrastructure_failures"] = deepcopy(
+        infrastructure_failures
+    )
+    base.update(
+        status="failed",
+        terminal_state="infrastructure_failure",
+        reason="required_scope_infrastructure_failure",
+        score=None,
+        judgement={
+            "evidence_status": "unavailable",
+            "verdict": None,
+            "confidence": 0.0,
+            "reason": (
+                "One or more required evaluation scopes failed for an "
+                "engineering reason; no scientific verdict was fabricated."
+            ),
+            "missing_evidence": missing_evidence,
+            "defects": [],
+            "object_findings": [],
+            "object_penalty_count": 0,
+            "object_penalty_policy": (
+                "one_per_metric_object_across_global_and_local"
+            ),
+            "aggregation": "fail_closed_on_required_scope_failure",
+            "infrastructure_failures": deepcopy(
+                infrastructure_failures
+            ),
+            "scene_global_judgement": deepcopy(global_record),
+            "cross_group_relation_judgements": deepcopy(
+                relation_results
+            ),
+            "group_judgements": deepcopy(group_results),
+            "target_scope_judgements": deepcopy(target_results),
+        },
+    )
+    return base
+
+
+def _apply_evidence_gap_terminal(
+    base: dict[str, Any],
+    *,
+    defects: list[dict[str, Any]],
+    missing_evidence: list[str],
+    global_record: dict[str, Any],
+    relation_results: list[dict[str, Any]],
+    group_results: list[dict[str, Any]],
+    target_results: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """fallback-v2 incomplete coverage: expose the gap, never default."""
+
+    base["observed_burden_input"] = {
+        "schema_version": "metric_owned_observed_defects_v1",
+        "defects": deepcopy(defects),
+        "source": "metric-owned final observations after ownership/exclusion/deduplication",
+    }
+    base.update(
+        status="not_evaluable", score=None, terminal_state="evidence_gap",
+        reason="required_scope_evidence_gap",
+        judgement={
+            "evidence_status": "insufficient", "verdict": "ambiguous", "defects": defects,
+            "missing_evidence": missing_evidence,
+            "failure": {"failure_category": "evidence_gap", "phase": "metric_aggregation"},
+            "scene_global_judgement": deepcopy(global_record),
+            "group_judgements": deepcopy(group_results),
+            "cross_group_relation_judgements": deepcopy(relation_results),
+            "target_scope_judgements": deepcopy(target_results),
+        },
+    )
+    return base
+
+
+def _apply_invalid_terminal(
+    base: dict[str, Any],
+    *,
+    aggregate_terminal_state: str,
+    invalid_judgements: list[dict[str, Any]],
+    missing_evidence: list[str],
+    defects: list[dict[str, Any]],
+    object_findings: list[dict[str, Any]],
+    placement_summary: dict[str, Any] | None,
+    global_record: dict[str, Any],
+    relation_results: list[dict[str, Any]],
+    group_results: list[dict[str, Any]],
+    target_results: list[dict[str, Any]],
+    residual_global_record: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """A supported in-scope defect makes the whole metric invalid."""
+
+    confidence = min(
+        (
+            float(item.get("confidence") or 0.0)
+            for item in invalid_judgements
+        ),
+        default=0.0,
+    )
+    judgement = {
+        "evidence_status": "sufficient",
+        "verdict": "invalid",
+        "confidence": confidence,
+        "reason": (
+            "At least one scene-global, cross-group relation, or eligible "
+            "group/target-local scope has a significant in-scope defect."
+        ),
+        "missing_evidence": [],
+        "evidence_ambiguous": aggregate_terminal_state
+        == "evaluated_degraded",
+        "unresolved_scopes": missing_evidence,
+        "defects": defects,
+        "object_findings": deepcopy(object_findings),
+        "object_penalty_count": len(object_findings),
+        "object_penalty_policy": (
+            "one_per_metric_object_across_global_and_local"
+        ),
+        "aggregation": (
+            "invalid_if_global_relation_or_group_scope_invalid"
+        ),
+        **(
+            {"placement_severity": deepcopy(placement_summary)}
+            if placement_summary is not None
+            else {}
+        ),
+        "scene_global_judgement": deepcopy(global_record),
+        "cross_group_relation_judgements": deepcopy(
+            relation_results
+        ),
+        "group_judgements": deepcopy(group_results),
+        "target_scope_judgements": deepcopy(target_results),
+        "residual_global_placement_judgement": deepcopy(
+            residual_global_record
+        ),
+    }
+    base.update(
+        status="evaluated",
+        terminal_state=aggregate_terminal_state,
+        reason=None,
+        score=0.0,
+        judgement=judgement,
+    )
+    return base
+
+
+def _apply_valid_terminal(
+    base: dict[str, Any],
+    *,
+    aggregate_terminal_state: str,
+    confidence_values: list[float],
+    placement_summary: dict[str, Any] | None,
+    global_record: dict[str, Any],
+    relation_results: list[dict[str, Any]],
+    group_results: list[dict[str, Any]],
+    target_results: list[dict[str, Any]],
+    residual_global_record: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Every required scope resolved valid; the metric scores 1.0."""
+
+    base.update(
+        status="evaluated",
+        terminal_state=aggregate_terminal_state,
+        reason=None,
+        score=1.0,
+        judgement={
+            "evidence_status": "sufficient",
+            "verdict": "valid",
+            "confidence": min(confidence_values),
+            "reason": (
+                "The scene-global scope, every routed cross-group "
+                "relation, and every eligible or explicitly routed group "
+                "or target scope resolved without an in-scope defect."
+            ),
+            "missing_evidence": [],
+            "evidence_ambiguous": aggregate_terminal_state
+            == "evaluated_degraded",
+            "defects": [],
+            "object_findings": [],
+            "object_penalty_count": 0,
+            "object_penalty_policy": (
+                "one_per_metric_object_across_global_and_local"
+            ),
+            "aggregation": (
+                "global_relations_and_groups_must_resolve_valid"
+            ),
+            **(
+                {"placement_severity": deepcopy(placement_summary)}
+                if placement_summary is not None
+                else {}
+            ),
+            "scene_global_judgement": deepcopy(global_record),
+            "cross_group_relation_judgements": deepcopy(
+                relation_results
+            ),
+            "group_judgements": deepcopy(group_results),
+            "target_scope_judgements": deepcopy(target_results),
+            "residual_global_placement_judgement": deepcopy(
+                residual_global_record
+            ),
+        },
+    )
+    return base
+
+
+def _apply_default_valid_terminal(
+    base: dict[str, Any],
+    *,
+    metric_name: str,
+    placement_summary: dict[str, Any] | None,
+    global_record: dict[str, Any],
+    relation_results: list[dict[str, Any]],
+    group_results: list[dict[str, Any]],
+    target_results: list[dict[str, Any]],
+    residual_global_record: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Program default valid on a non-hard terminal contract violation.
+
+    This is the explicitly labelled ``default_valid_after_non_hard_failure``
+    row that judgement coverage refuses to count as an accepted judgement.
+    """
+
+    contract_failure = {
+        "phase": "metric_aggregation",
+        "scope_id": metric_name,
+        "failure_kind": "recoverable_terminal_contract_failure",
+        "reason": "non_binary_terminal_scope_result",
+    }
+    base["component_degradations"] = [
+        *deepcopy(base.get("component_degradations") or []),
+        deepcopy(contract_failure),
+    ]
+    base.update(
+        status="evaluated",
+        terminal_state="evaluated_degraded",
+        reason=None,
+        score=1.0,
+        judgement={
+            "evidence_status": "sufficient",
+            "verdict": "valid",
+            "confidence": 0.0,
+            "reason": (
+                "No legal invalid finding survived aggregation; the metric "
+                "defaults valid with explicit ambiguity."
+            ),
+            "missing_evidence": [],
+            "defects": [],
+            "evidence_request": None,
+            "evidence_ambiguous": True,
+            "forced_binary": True,
+            "defaulted": True,
+            "decision_source": "default_valid_after_non_hard_failure",
+            "object_findings": [],
+            "object_penalty_count": 0,
+            "object_penalty_policy": (
+                "one_per_metric_object_across_global_and_local"
+            ),
+            "aggregation": (
+                "fail_soft_on_non_hard_terminal_contract_violation"
+            ),
+            "component_failures": [deepcopy(contract_failure)],
+            **(
+                {"placement_severity": deepcopy(placement_summary)}
+                if placement_summary is not None
+                else {}
+            ),
+            "scene_global_judgement": deepcopy(global_record),
+            "cross_group_relation_judgements": deepcopy(
+                relation_results
+            ),
+            "group_judgements": deepcopy(group_results),
+            "target_scope_judgements": deepcopy(target_results),
+            "residual_global_placement_judgement": deepcopy(
+                residual_global_record
+            ),
+        },
+    )
+    return base
+
+
 def _aggregate_global_and_group_results(
     base: dict[str, Any],
     *,
@@ -4531,63 +4818,26 @@ def _aggregate_global_and_group_results(
     if component_degradations:
         base["component_degradations"] = component_degradations
     if infrastructure_failures:
-        base["infrastructure_failures"] = deepcopy(
-            infrastructure_failures
+        return _apply_infrastructure_failure_terminal(
+            base,
+            infrastructure_failures=infrastructure_failures,
+            missing_evidence=missing_evidence,
+            global_record=global_record,
+            relation_results=relation_results,
+            group_results=group_results,
+            target_results=target_results,
         )
-        base.update(
-            status="failed",
-            terminal_state="infrastructure_failure",
-            reason="required_scope_infrastructure_failure",
-            score=None,
-            judgement={
-                "evidence_status": "unavailable",
-                "verdict": None,
-                "confidence": 0.0,
-                "reason": (
-                    "One or more required evaluation scopes failed for an "
-                    "engineering reason; no scientific verdict was fabricated."
-                ),
-                "missing_evidence": missing_evidence,
-                "defects": [],
-                "object_findings": [],
-                "object_penalty_count": 0,
-                "object_penalty_policy": (
-                    "one_per_metric_object_across_global_and_local"
-                ),
-                "aggregation": "fail_closed_on_required_scope_failure",
-                "infrastructure_failures": deepcopy(
-                    infrastructure_failures
-                ),
-                "scene_global_judgement": deepcopy(global_record),
-                "cross_group_relation_judgements": deepcopy(
-                    relation_results
-                ),
-                "group_judgements": deepcopy(group_results),
-                "target_scope_judgements": deepcopy(target_results),
-            },
-        )
-        return base
 
     if fallback_v2_enabled() and not coverage_complete:
-        base["observed_burden_input"] = {
-            "schema_version": "metric_owned_observed_defects_v1",
-            "defects": deepcopy(defects),
-            "source": "metric-owned final observations after ownership/exclusion/deduplication",
-        }
-        base.update(
-            status="not_evaluable", score=None, terminal_state="evidence_gap",
-            reason="required_scope_evidence_gap",
-            judgement={
-                "evidence_status": "insufficient", "verdict": "ambiguous", "defects": defects,
-                "missing_evidence": missing_evidence,
-                "failure": {"failure_category": "evidence_gap", "phase": "metric_aggregation"},
-                "scene_global_judgement": deepcopy(global_record),
-                "group_judgements": deepcopy(group_results),
-                "cross_group_relation_judgements": deepcopy(relation_results),
-                "target_scope_judgements": deepcopy(target_results),
-            },
+        return _apply_evidence_gap_terminal(
+            base,
+            defects=defects,
+            missing_evidence=missing_evidence,
+            global_record=global_record,
+            relation_results=relation_results,
+            group_results=group_results,
+            target_results=target_results,
         )
-        return base
     scope_terminal_states = [
         str(global_record.get("terminal_state") or ""),
         *[
@@ -4648,57 +4898,20 @@ def _aggregate_global_and_group_results(
         )
         if residual_invalid and residual_global_record is not None:
             invalid_judgements.append(residual_global_record)
-        confidence = min(
-            (
-                float(item.get("confidence") or 0.0)
-                for item in invalid_judgements
-            ),
-            default=0.0,
+        return _apply_invalid_terminal(
+            base,
+            aggregate_terminal_state=aggregate_terminal_state,
+            invalid_judgements=invalid_judgements,
+            missing_evidence=missing_evidence,
+            defects=defects,
+            object_findings=object_findings,
+            placement_summary=placement_summary,
+            global_record=global_record,
+            relation_results=relation_results,
+            group_results=group_results,
+            target_results=target_results,
+            residual_global_record=residual_global_record,
         )
-        judgement = {
-            "evidence_status": "sufficient",
-            "verdict": "invalid",
-            "confidence": confidence,
-            "reason": (
-                "At least one scene-global, cross-group relation, or eligible "
-                "group/target-local scope has a significant in-scope defect."
-            ),
-            "missing_evidence": [],
-            "evidence_ambiguous": aggregate_terminal_state
-            == "evaluated_degraded",
-            "unresolved_scopes": missing_evidence,
-            "defects": defects,
-            "object_findings": deepcopy(object_findings),
-            "object_penalty_count": len(object_findings),
-            "object_penalty_policy": (
-                "one_per_metric_object_across_global_and_local"
-            ),
-            "aggregation": (
-                "invalid_if_global_relation_or_group_scope_invalid"
-            ),
-            **(
-                {"placement_severity": deepcopy(placement_summary)}
-                if placement_summary is not None
-                else {}
-            ),
-            "scene_global_judgement": deepcopy(global_record),
-            "cross_group_relation_judgements": deepcopy(
-                relation_results
-            ),
-            "group_judgements": deepcopy(group_results),
-            "target_scope_judgements": deepcopy(target_results),
-            "residual_global_placement_judgement": deepcopy(
-                residual_global_record
-            ),
-        }
-        base.update(
-            status="evaluated",
-            terminal_state=aggregate_terminal_state,
-            reason=None,
-            score=0.0,
-            judgement=judgement,
-        )
-        return base
 
     all_groups_valid = all(
         item.get("score") == 1.0 for item in evaluated_groups
@@ -4756,106 +4969,28 @@ def _aggregate_global_and_group_results(
                 else []
             ),
         ]
-        base.update(
-            status="evaluated",
-            terminal_state=aggregate_terminal_state,
-            reason=None,
-            score=1.0,
-            judgement={
-                "evidence_status": "sufficient",
-                "verdict": "valid",
-                "confidence": min(confidence_values),
-                "reason": (
-                    "The scene-global scope, every routed cross-group "
-                    "relation, and every eligible or explicitly routed group "
-                    "or target scope resolved without an in-scope defect."
-                ),
-                "missing_evidence": [],
-                "evidence_ambiguous": aggregate_terminal_state
-                == "evaluated_degraded",
-                "defects": [],
-                "object_findings": [],
-                "object_penalty_count": 0,
-                "object_penalty_policy": (
-                    "one_per_metric_object_across_global_and_local"
-                ),
-                "aggregation": (
-                    "global_relations_and_groups_must_resolve_valid"
-                ),
-                **(
-                    {"placement_severity": deepcopy(placement_summary)}
-                    if placement_summary is not None
-                    else {}
-                ),
-                "scene_global_judgement": deepcopy(global_record),
-                "cross_group_relation_judgements": deepcopy(
-                    relation_results
-                ),
-                "group_judgements": deepcopy(group_results),
-                "target_scope_judgements": deepcopy(target_results),
-                "residual_global_placement_judgement": deepcopy(
-                    residual_global_record
-                ),
-            },
+        return _apply_valid_terminal(
+            base,
+            aggregate_terminal_state=aggregate_terminal_state,
+            confidence_values=confidence_values,
+            placement_summary=placement_summary,
+            global_record=global_record,
+            relation_results=relation_results,
+            group_results=group_results,
+            target_results=target_results,
+            residual_global_record=residual_global_record,
         )
-        return base
 
-    contract_failure = {
-        "phase": "metric_aggregation",
-        "scope_id": metric_name,
-        "failure_kind": "recoverable_terminal_contract_failure",
-        "reason": "non_binary_terminal_scope_result",
-    }
-    base["component_degradations"] = [
-        *deepcopy(base.get("component_degradations") or []),
-        deepcopy(contract_failure),
-    ]
-    base.update(
-        status="evaluated",
-        terminal_state="evaluated_degraded",
-        reason=None,
-        score=1.0,
-        judgement={
-            "evidence_status": "sufficient",
-            "verdict": "valid",
-            "confidence": 0.0,
-            "reason": (
-                "No legal invalid finding survived aggregation; the metric "
-                "defaults valid with explicit ambiguity."
-            ),
-            "missing_evidence": [],
-            "defects": [],
-            "evidence_request": None,
-            "evidence_ambiguous": True,
-            "forced_binary": True,
-            "defaulted": True,
-            "decision_source": "default_valid_after_non_hard_failure",
-            "object_findings": [],
-            "object_penalty_count": 0,
-            "object_penalty_policy": (
-                "one_per_metric_object_across_global_and_local"
-            ),
-            "aggregation": (
-                "fail_soft_on_non_hard_terminal_contract_violation"
-            ),
-            "component_failures": [deepcopy(contract_failure)],
-            **(
-                {"placement_severity": deepcopy(placement_summary)}
-                if placement_summary is not None
-                else {}
-            ),
-            "scene_global_judgement": deepcopy(global_record),
-            "cross_group_relation_judgements": deepcopy(
-                relation_results
-            ),
-            "group_judgements": deepcopy(group_results),
-            "target_scope_judgements": deepcopy(target_results),
-            "residual_global_placement_judgement": deepcopy(
-                residual_global_record
-            ),
-        },
+    return _apply_default_valid_terminal(
+        base,
+        metric_name=metric_name,
+        placement_summary=placement_summary,
+        global_record=global_record,
+        relation_results=relation_results,
+        group_results=group_results,
+        target_results=target_results,
+        residual_global_record=residual_global_record,
     )
-    return base
 
 
 def _explicit_stage_failure(value: Any) -> bool:
