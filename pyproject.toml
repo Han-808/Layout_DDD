@@ -98,6 +98,7 @@ testpaths = [
   "tests/test_camera_dsl.py",
   "tests/test_functional_acquisition_routing.py",
   "tests/test_placement_reference_repair.py",
+  "tests/test_placement_ownership_retry.py",
   "tests/test_functional_camera_contract.py",
   "tests/test_camera_cal_scene_level_e0_contract.py",
   "tests/test_camera_cal_scene_level_leaf_runtime.py",

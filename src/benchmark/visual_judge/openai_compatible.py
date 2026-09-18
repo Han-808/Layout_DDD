@@ -1018,13 +1018,15 @@ class OpenAICompatibleVLMJudge:
             else {}
         )
 
-        def validate_response(result: dict[str, Any], *, _ignore_handoff_stage: bool = False) -> dict[str, Any]:
+        def validate_response(result: dict[str, Any], *, _ignore_handoff_stage: bool = False,
+                              _additional_placement_checks: list | None = None) -> dict[str, Any]:
             referenced_typed_checks = []
             if residual_placement_phase:
                 from benchmark.evaluator.scene_quality.placement_residual_references import resolve_typed_references
                 result, referenced_typed_checks = resolve_typed_references(
                     result, request.get("placement_residual_context"))
-            validation_placement_checks = [*deepcopy(required_placement_checks), *referenced_typed_checks]
+            validation_placement_checks = [*deepcopy(required_placement_checks), *referenced_typed_checks,
+                                          *deepcopy(_additional_placement_checks or [])]
             judge_originated_placement_checks: list[
                 dict[str, Any]
             ] = []
@@ -1344,6 +1346,23 @@ class OpenAICompatibleVLMJudge:
                 # derived registration ledger.
                 return candidate
 
+        ownership_decision_retry = None
+        if (metric == "semantic_placement_consistency" and best_effort.enabled(request)
+                and isinstance(functional_ownership_ledger, dict)):
+            # Absence of the ledger is not proof that no legal event exists.
+            # The supplied ledger has already passed strict validation above.
+            from benchmark.visual_judge.placement_ownership_retry import retry_unbound_ownership_once
+            from benchmark.visual_judge.placement_scope_v2 import validate_subject_scope
+
+            def ownership_decision_retry(initial, error):
+                return retry_unbound_ownership_once(initial=initial, error=error, model=self.model,
+                    messages=messages, response_format_json=self.response_format_json, call_type=call_type,
+                    validator=lambda value, checks: validate_response(value, _additional_placement_checks=checks),
+                    required_checks=deepcopy(required_placement_checks), function_events=deepcopy(function_events),
+                    known_ids=_placement_known_ids_for_request(request), groups=_placement_groups_for_request(request),
+                    expected_owner_stage=_expected_placement_owner_stage(request),
+                    validate_scope=lambda subject: validate_subject_scope(request, subject))
+
         result, schema_audit = repair_canonical_response_schema_once(
             model=self.model,
             messages=messages,
@@ -1362,6 +1381,7 @@ class OpenAICompatibleVLMJudge:
             ),
             fail_soft_fallback=None if adaptive else fail_soft_fallback,
             preserve_terminal_semantics=adaptive,
+            ownership_decision_retry=ownership_decision_retry,
             include_validation_feedback=fallback_v2_enabled(request),
             function_events=(
                 deepcopy(function_events)

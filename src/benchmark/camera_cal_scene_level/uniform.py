@@ -41,6 +41,7 @@ def source_files(root: Path = ROOT) -> list[str]:
     paths += [root/'scripts/preserve_functional_regression.py', root/'scripts/replay_functional_scoring.py']
     paths += [root/'scripts/preserve_crossgroup_regression.py', root/'scripts/replay_crossgroup_scoring.py']
     paths += [root/'scripts/preserve_placement_reference_regression.py', root/'scripts/replay_placement_reference_scoring.py']
+    paths += [root/'scripts/replay_placement_ownership_scoring.py']
     return sorted(str(p.relative_to(root)) for p in paths)
 
 

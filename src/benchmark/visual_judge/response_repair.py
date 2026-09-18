@@ -120,6 +120,7 @@ def repair_canonical_response_schema_once(
     allowed_target_ids: tuple[str, ...] = (),
     allowed_missing_observations: tuple[str, ...] = (),
     function_events: list[dict[str, Any]] | None = None,
+    ownership_decision_retry: Callable | None = None,
     fail_soft_fallback: (
         Callable[
             [dict[str, Any], dict[str, Any]],
@@ -135,10 +136,12 @@ def repair_canonical_response_schema_once(
     # validator still decides whether it is legal. Never select an event here.
     repairable: dict[tuple[Any, ...], dict[str, Any]] | None = None
     repaired_refs: dict[tuple[Any, ...], str] = {}
+    initial_candidate: dict[str, Any] | None = None
 
     def signature(value: dict[str, Any]) -> dict[str, Any]:
-        nonlocal repairable, repaired_refs
+        nonlocal repairable, repaired_refs, initial_candidate
         if repairable is None:
+            initial_candidate = deepcopy(value)
             repairable = _invalid_placement_function_references(value, function_events)
         repaired_refs = {
             _placement_reference_identity(field, row): str(row.get("function_event_ref") or "")
@@ -169,7 +172,15 @@ def repair_canonical_response_schema_once(
             "an event or turn a finding into an exclusion. The strict ownership validator "
             "must still accept the corrected response."
         )
-    result, audit = _repair_response_schema_once(
+    def bounded_repair(**kwargs):
+        try:
+            return _repair_response_schema_once(**kwargs)
+        except ResponseSchemaRepairError as error:
+            if ownership_decision_retry is None or initial_candidate is None:
+                raise
+            return ownership_decision_retry(initial_candidate, error)
+
+    result, audit = bounded_repair(
         model=model,
         messages=messages,
         response_format_json=response_format_json,
@@ -195,7 +206,7 @@ def repair_canonical_response_schema_once(
         fail_soft_fallback=fail_soft_fallback,
         include_validation_feedback=include_validation_feedback,
     )
-    if audit.get("recovered") and repairable:
+    if audit.get("recovered") and repairable and not audit.get("ownership_decision_retry"):
         repairs = [
             {**record, "repaired_ref": repaired_refs.get(identity),
              "same_event_claim_preserved": True}
