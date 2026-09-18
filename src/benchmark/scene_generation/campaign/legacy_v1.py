@@ -7,7 +7,7 @@ discarded from the projection.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import hashlib
 from pathlib import Path
 
@@ -241,6 +241,13 @@ def _matches_model(
     model: ModelProfile,
     route: RouteProfile,
 ) -> bool:
+    # A v1 run has one transport timeout and cannot express the additive
+    # multi-room Stage-C override.  Compare the shared v1 surface exactly while
+    # allowing the v2 profile to carry that explicitly scoped extension.
+    comparable_request_options = replace(
+        model.request_options,
+        stage_c_request_timeout_seconds=None,
+    )
     return (
         _matches_route(projection, route)
         and model.model_profile_id == projection.model_profile_id
@@ -248,7 +255,7 @@ def _matches_model(
         and model.configured_model == projection.configured_model
         and model.wire_model == projection.wire_model
         and model.gateway_options == projection.gateway_options
-        and model.request_options == projection.request_options
+        and comparable_request_options == projection.request_options
         and model.transport_policy == projection.transport_policy
         and model.preflight_contract_id == projection.preflight_contract_id
     )

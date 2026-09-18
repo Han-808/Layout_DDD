@@ -7,7 +7,7 @@ exclusively by the reviewed protocol grammar carried by ``RouteProfile``.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import time
 from typing import Any, Callable
 
@@ -52,6 +52,12 @@ class RuntimeProviderModel:
     reasoning_effort: str | None
     preserved_thinking: bool | None
     strategy_type: str
+    stage_c_timeout_seconds: float | None = None
+    gateway_timeout_override_seconds: float | None = field(
+        default=None,
+        repr=False,
+        compare=False,
+    )
 
     @classmethod
     def from_profile(
@@ -87,12 +93,26 @@ class RuntimeProviderModel:
             reasoning_effort=options.reasoning_effort,
             preserved_thinking=options.preserved_thinking,
             strategy_type=gateway.strategy_type or "unused",
+            stage_c_timeout_seconds=(
+                options.stage_c_request_timeout_seconds
+            ),
+        )
+
+    def for_stage(self, stage: str) -> "RuntimeProviderModel":
+        """Return the same configured model with a stage-owned timeout view."""
+
+        if stage != "stage_c" or self.stage_c_timeout_seconds is None:
+            return self
+        return replace(
+            self,
+            timeout_seconds=self.stage_c_timeout_seconds,
+            gateway_timeout_override_seconds=self.stage_c_timeout_seconds,
         )
 
     def to_public_dict(self) -> dict[str, Any]:
         """Return only the profile-owned public values, never the credential."""
 
-        return {
+        result = {
             "key": self.key,
             "label": self.label,
             "configured_model": self.configured_model,
@@ -113,6 +133,9 @@ class RuntimeProviderModel:
             "generator_semantic_retry_allowed": False,
             "transport_binding": "private-redacted-v1",
         }
+        if self.stage_c_timeout_seconds is not None:
+            result["stage_c_timeout_seconds"] = self.stage_c_timeout_seconds
+        return result
 
     # The frozen core calls ``public_dict``. Keep the familiar name while
     # preserving the v3 private/public split.
