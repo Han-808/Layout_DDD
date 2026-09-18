@@ -25,6 +25,13 @@ _SIZE_SCORE_MODERATE = 0.03
 _SIZE_PENALTY_FAR = -0.02
 _SIZE_PENALTY_VERY_FAR = -0.08
 
+# Benchmark-owned catalog retirement policy. Retired rows remain in the frozen
+# index so historical scenes can still be materialized and audited, but they
+# are not members of the active generation candidate pool.
+ASSET_ELIGIBILITY_POLICY_VERSION = "imaginarium_asset_eligibility_v1"
+IMAGINARIUM_DATASET_ID = "imaginarium-assets-v1"
+RETIRED_ASSET_IDS = frozenset({"5_SM_PC_B_Monitor"})
+
 
 def _compute_size_score(
     asset_size: Sequence[float] | None,
@@ -169,12 +176,19 @@ class SharedRetrieverRuntime:
         norms = np.linalg.norm(self.embeddings, axis=1) * np.linalg.norm(query) + 1e-8
         cosine_scores = self.embeddings @ query / norms
         tolerance = self.composed.profile.policy.size_tolerance
+        retired_asset_ids = self._retired_asset_ids()
         scored: list[tuple[float, int, str]] = []
         for index, jid in enumerate(self.jid_list):
+            if jid in retired_asset_ids:
+                continue
             asset = self.assets[jid]
             score = float(cosine_scores[index])
             score += _compute_size_score(asset.get("size"), size_constraint, tolerance)
             scored.append((score, index, jid))
+        if not scored:
+            raise RetrievalContractError(
+                "retrieval index contains no active generation assets"
+            )
         scored.sort(key=lambda item: item[0], reverse=True)
         min_score = self.composed.profile.policy.min_score
         eligible = [item for item in scored if item[0] >= min_score]
@@ -266,6 +280,10 @@ class SharedRetrieverRuntime:
                 raise RetrievalContractError(
                     f"golden query {query_id!r} references an unknown asset"
                 )
+            if asset_id in self._retired_asset_ids():
+                raise RetrievalContractError(
+                    f"golden query {query_id!r} references a retired asset"
+                )
             seen.add(query_id)
             normalized.append(dict(row))
         self._resource_observations[
@@ -338,6 +356,7 @@ class SharedRetrieverRuntime:
         }
 
     def public_provenance(self) -> dict[str, Any]:
+        retired_asset_ids = self._retired_asset_ids()
         return {
             "schema_version": "generation_retrieval_provenance_v2",
             "retrieval_profile_id": self.profile_id,
@@ -349,6 +368,15 @@ class SharedRetrieverRuntime:
             "embedding_model": self.composed.encoder.upstream_model_id,
             "encoder_revision": self.composed.encoder.revision,
             "index_id": self.composed.index.index_id,
+            "asset_eligibility_policy": {
+                "policy_version": ASSET_ELIGIBILITY_POLICY_VERSION,
+                "retired_asset_ids": sorted(retired_asset_ids),
+            },
             "resource_content_sha256": dict(sorted(self._resource_observations.items())),
             "runtime_source_sha256": retrieval_source_manifest()["manifest_sha256"],
         }
+
+    def _retired_asset_ids(self) -> frozenset[str]:
+        if self.composed.dataset.dataset_id == IMAGINARIUM_DATASET_ID:
+            return RETIRED_ASSET_IDS
+        return frozenset()

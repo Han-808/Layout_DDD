@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 import hashlib
 import json
 from pathlib import Path
@@ -15,6 +16,8 @@ from benchmark.scene_generation.retrieval import (
     select_binding_path,
 )
 from benchmark.scene_generation.retrieval.runtime import (
+    ASSET_ELIGIBILITY_POLICY_VERSION,
+    RETIRED_ASSET_IDS,
     _compute_size_score as _v2_size_score,
 )
 from tools.api3_anthropic_runner_v2 import retriever_runtime as frozen_v1
@@ -353,6 +356,44 @@ def test_batch_is_exactly_one_stable_top1_invocation_per_slot(tmp_path: Path) ->
                 "accepted_as_frozen_outcome": True,
             }
         ],
+    }
+
+
+def test_retired_asset_is_excluded_before_stable_top1_ranking(
+    tmp_path: Path,
+) -> None:
+    runtime, *_ = _fixture(tmp_path)
+    runtime.composed = replace(
+        runtime.composed,
+        dataset=replace(
+            runtime.composed.dataset,
+            dataset_id="imaginarium-assets-v1",
+        ),
+    )
+    runtime._load_index()
+    retired_id = "5_SM_PC_B_Monitor"
+    assert retired_id in RETIRED_ASSET_IDS
+    runtime.assets[retired_id] = {
+        "jid": retired_id,
+        "short_desc": "retired monitor",
+        "description": "retired monitor",
+        "category": "monitor",
+        "size": [1.0, 1.0, 1.0],
+    }
+    runtime.jid_list = [retired_id, "a", "b"]
+    runtime.embeddings = np.asarray(
+        [[1.0, 0.0], [0.9, 0.1], [0.0, 1.0]],
+        dtype=np.float32,
+    )
+
+    result = runtime.retrieve("monitor", size_constraint=None)
+
+    assert result["jid"] == "a"
+    # Index-row provenance stays bound to the unchanged frozen index order.
+    assert result["index_row"] == 1
+    assert runtime.public_provenance()["asset_eligibility_policy"] == {
+        "policy_version": ASSET_ELIGIBILITY_POLICY_VERSION,
+        "retired_asset_ids": [retired_id],
     }
 
 
