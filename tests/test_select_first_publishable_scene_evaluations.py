@@ -96,6 +96,40 @@ def test_partial_coverage_remains_pending_until_publishable_retry(
     assert selections["S105"] == retry / "cases" / "S105"
 
 
+def test_resolved_scoreable_partial_coverage_is_publishable(
+    tmp_path: Path,
+) -> None:
+    attempt = tmp_path / "attempt"
+    _write_attempt(attempt, "S105", score=86.5, publishable=False)
+    case_dir = attempt / "cases/S105"
+    manifest_path = case_dir / "case_run_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest.update(
+        benchmark_score_status="partial_coverage",
+        l3_unresolved_metrics=[],
+        l3_infrastructure_failure_metrics=[],
+    )
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    report_path = case_dir / "evaluation_report.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report.update(
+        coverage={"coverage_threshold_passed": True},
+        runner_outcome={
+            "final_decision_status": "resolved",
+            "l1_engineering_failure": False,
+        },
+    )
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    selections, pending = selector.first_publishable_attempts(
+        attempt_roots=(attempt,),
+        case_ids=("S105",),
+    )
+
+    assert pending == []
+    assert selections["S105"] == case_dir
+
+
 def test_publishability_rejects_manifest_case_identity_mismatch(
     tmp_path: Path,
 ) -> None:
@@ -151,3 +185,45 @@ def test_final_selection_is_self_contained_after_attempt_cleanup(
     )
     assert selection["schema_version"] == "scene_level_first_publishable_selection_v2"
     assert selection["cases"][0]["storage"] == "self_contained_directory_copy_v1"
+
+
+def test_hardlinked_final_selection_survives_attempt_cleanup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attempt = (tmp_path / "attempt").resolve()
+    final = tmp_path / "final"
+    _write_attempt(attempt, "S100", score=80.0, publishable=True)
+    monkeypatch.setattr(
+        selector,
+        "run_scoring_aggregate",
+        lambda rows: {
+            "official_score_100": 80.0,
+            "mean_combined_coverage_fraction": 1.0,
+            "infrastructure_failure_case_count": 0,
+        },
+    )
+
+    source_report = attempt / "cases/S100/evaluation_report.json"
+    selector.write_selection(
+        output_root=final,
+        model_label="fixture",
+        provider_route="fixture-route",
+        attempt_roots=(attempt,),
+        case_ids=("S100",),
+        selections={"S100": attempt / "cases/S100"},
+        hardlink_files=True,
+    )
+
+    snapshot_report = final / "cases/S100/evaluation_report.json"
+    assert source_report.stat().st_ino == snapshot_report.stat().st_ino
+    selection = json.loads(
+        (final / "selection_manifest.json").read_text(encoding="utf-8")
+    )
+    assert (
+        selection["cases"][0]["storage"]
+        == "same_filesystem_hard_linked_case_tree_v1"
+    )
+
+    shutil.rmtree(attempt)
+    assert snapshot_report.is_file()
