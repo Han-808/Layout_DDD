@@ -249,3 +249,103 @@ class TestCaseScoringSummaryCharacterization:
         for name, kwargs in _PERSISTED_SCENARIOS.items():
             actual = json.loads(json.dumps(case_scoring_summary(**kwargs)))
             assert actual == expected[name], name
+
+
+# ---------------------------------------------------------------------------
+# _judge_request placement contract aliasing (step 5 of the v8 refactor)
+# ---------------------------------------------------------------------------
+
+from benchmark.evaluator.scene_quality import interfaces as sq_interfaces
+from benchmark.visual_judge.evidence_resolution import (
+    FALLBACK_POLICY,
+    evidence_policy_scope,
+)
+
+_ALIAS_SCENE = {
+    "scene_id": "alias_scene",
+    "scene_type": "room",
+    "objects": [
+        {"id": "obj_a", "category": "table"},
+        {"id": "obj_b", "category": "chair"},
+    ],
+    "boundary": None,
+    "scene_height": None,
+}
+
+
+def _placement_judge_request(evidence_phase: str) -> dict:
+    return sq_interfaces._judge_request(
+        metric_name="semantic_placement_consistency",
+        scene=_ALIAS_SCENE,
+        prompt=None,
+        render_evidence=[],
+        selected_object_ids=["obj_a", "obj_b"],
+        selected_group_ids=[],
+        groups=[],
+        authorized_deviations=[],
+        visual_style_spec=None,
+        evidence_phase=evidence_phase,
+    )
+
+
+class TestPlacementContractAliasing:
+    """The adaptive tail narrows placement_check_policy.allowed_check_types
+    in place; judge_originated_placement_results.check_type holds a copy
+    that must stay unnarrowed."""
+
+    def test_group_local_fallback_narrows_policy_only(self) -> None:
+        with evidence_policy_scope(
+            {"evidence_resolution_policy": FALLBACK_POLICY}
+        ):
+            request = _placement_judge_request("group_local_review")
+        assert request["placement_check_policy"]["allowed_check_types"] == [
+            "support_and_height",
+            "contextual_anchor",
+        ]
+        assert request["response_contract"][
+            "judge_originated_placement_results"
+        ]["check_type"] == [
+            "support_and_height",
+            "scene_zone",
+            "contextual_anchor",
+        ]
+        assert (
+            request["placement_check_policy"]["final_owner_stage"]
+            == "group_local"
+        )
+
+    def test_scene_global_fallback_keeps_full_type_list(self) -> None:
+        with evidence_policy_scope(
+            {"evidence_resolution_policy": FALLBACK_POLICY}
+        ):
+            request = _placement_judge_request("scene_global")
+        assert request["placement_check_policy"]["allowed_check_types"] == [
+            "support_and_height",
+            "scene_zone",
+            "contextual_anchor",
+        ]
+        assert (
+            request["placement_check_policy"]["final_owner_stage"]
+            == "scene_global"
+        )
+
+    def test_legacy_policy_keeps_full_type_list(self) -> None:
+        request = _placement_judge_request("group_local_review")
+        assert request["placement_check_policy"]["allowed_check_types"] == [
+            "support_and_height",
+            "scene_zone",
+            "contextual_anchor",
+        ]
+        assert "final_owner_stage" not in request["placement_check_policy"]
+
+    def test_residual_phase_narrows_both_from_construction(self) -> None:
+        request = _placement_judge_request(
+            "residual_global_placement_review"
+        )
+        assert request["placement_check_policy"]["allowed_check_types"] == [
+            "scene_zone",
+            "contextual_anchor",
+        ]
+        assert request["response_contract"][
+            "judge_originated_placement_results"
+        ]["check_type"] == ["scene_zone", "contextual_anchor"]

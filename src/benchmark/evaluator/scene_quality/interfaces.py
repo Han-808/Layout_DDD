@@ -2180,6 +2180,509 @@ def _default_valid_metric_without_specialized_target(
     return base
 
 
+def _selected_scene_objects(
+    scene: dict[str, Any],
+    selected_object_ids: list[str],
+    *,
+    functional_visual_context: bool,
+    pairing_inventory_context: bool,
+) -> list[dict[str, Any]]:
+    """Project scene objects for the metric's judge-facing context."""
+
+    return [
+        (
+            _compact_functional_object(item)
+            if functional_visual_context
+            else _compact_pairing_object(item)
+            if pairing_inventory_context
+            else _compact_object(item)
+        )
+        for item in scene.get("objects", [])
+        if isinstance(item, dict)
+        and (
+            not selected_object_ids
+            or str(item.get("id")) in set(selected_object_ids)
+        )
+    ]
+
+
+def _selected_group_contexts(
+    groups: list[dict[str, Any]] | None,
+    selected_group_ids: list[str],
+    *,
+    membership_only: bool,
+) -> list[dict[str, Any]]:
+    """Project selected groups: bare membership or the audited projection."""
+
+    return [
+        (
+            {
+                "group_id": str(group.get("group_id") or ""),
+                "object_ids": [
+                    str(item)
+                    for item in group.get("object_ids") or []
+                    if str(item).strip()
+                ],
+            }
+            if membership_only
+            else _judge_group_context(group)
+        )
+        for group in groups or []
+        if not selected_group_ids or str(group.get("group_id")) in set(selected_group_ids)
+    ]
+
+
+def _allowed_defect_targets(
+    scene: dict[str, Any],
+    selected_object_ids: list[str],
+    *,
+    allow_scene_wide_functional_ownership: bool,
+    attribution_target_ids: list[str] | None,
+) -> list[str]:
+    """Resolve the exact defect-ownership ID whitelist for the contract."""
+
+    allowed_defect_target_ids = list(
+        dict.fromkeys(
+            str(item)
+            for item in (
+                (
+                    [
+                        object_record.get("id")
+                        for object_record in scene.get("objects") or []
+                        if isinstance(object_record, dict)
+                    ]
+                    if allow_scene_wide_functional_ownership
+                    else selected_object_ids
+                )
+                or [
+                    object_record.get("id")
+                    for object_record in scene.get("objects") or []
+                    if isinstance(object_record, dict)
+                ]
+            )
+            if str(item).strip()
+        )
+    )
+    if attribution_target_ids is not None:
+        allowed_defect_target_ids = list(
+            dict.fromkeys(
+                str(item)
+                for item in attribution_target_ids
+                if str(item).strip()
+            )
+        )
+    return allowed_defect_target_ids
+
+
+def _structured_context_policy(
+    *,
+    pairing_inventory_context: bool,
+    functional_visual_context: bool,
+    residual_placement_context: bool,
+) -> dict[str, Any] | None:
+    """Declare which structured fields the judge may rely on, per context."""
+
+    return (
+        {
+            "object_fields": ["id", "category"],
+            "group_fields": [],
+            "excluded_object_fields": [
+                "description",
+                "center",
+                "size",
+                "rotation",
+                "generator_relationships",
+                "task_slots",
+            ],
+            "reason": (
+                "Pairing judges canonical room-inventory identity and "
+                "role composition without generator intent or transform "
+                "shortcuts; visual evidence independently confirms identity"
+            ),
+        }
+        if pairing_inventory_context
+        else
+        {
+            "object_fields": ["id", "category"],
+            "group_fields": ["group_id", "object_ids"],
+            "excluded_object_fields": [
+                "center",
+                "size",
+                "rotation",
+                "description",
+            ],
+            "reason": (
+                "functional visual grounding must not be replaced by "
+                "transform or grouping-prose shortcuts"
+            ),
+        }
+        if functional_visual_context
+        else {
+            "object_fields": [
+                "id",
+                "category",
+                "center",
+                "size",
+                "rotation",
+            ],
+            "group_fields": ["group_id", "object_ids"],
+            "excluded_group_fields": [
+                "group_source",
+                "region_category",
+                "edge_reasons",
+                "formation_edges",
+            ],
+            "reason": (
+                "residual Placement uses group membership only to "
+                "organize independent visual observations; grouping "
+                "interpretations are not decision evidence"
+            ),
+        }
+        if residual_placement_context
+        else None
+    )
+
+
+def _base_response_contract(
+    metric_name: str,
+    allowed_defect_target_ids: list[str],
+) -> dict[str, Any]:
+    """The canonical-metric response contract shared by all five metrics."""
+
+    return {
+        "evidence_status": ["sufficient", "insufficient"],
+        "verdict": ["valid", "invalid", "ambiguous"],
+        "invalid_requires_significant_metric_scoped_defect": True,
+        "insufficient_requires_ambiguous": True,
+        "missing_evidence": {
+            "allowed": (
+                "empty_or_exact_evidence_request_token_mirror"
+            ),
+            "authority": "evidence_request.missing_observations",
+        },
+        "evidence_request": {
+            "required_when_insufficient": True,
+            "fields": [
+                "target_ids",
+                "missing_observations",
+                "view_goal",
+                "metadata",
+            ],
+        },
+        "allowed_target_ids": allowed_defect_target_ids,
+        "defect_attribution_unit": (
+            "object"
+            if metric_name
+            in {
+                "style_consistency",
+                "functional_consistency",
+                "semantic_placement_consistency",
+            }
+            else "claim"
+        ),
+        "defects": {
+            "required_when_invalid": True,
+            "fields": [
+                "scope",
+                "target_ids",
+                "relation",
+                "reason",
+                "category",
+                "attribution_mode",
+                *(
+                    []
+                    if metric_name == "object_pairing_consistency"
+                    else ["severity"]
+                ),
+            ],
+            "allowed_scopes": list(
+                JUDGMENT_SCOPE_BY_METRIC[metric_name]["included"]
+            ),
+            "allowed_target_ids": allowed_defect_target_ids,
+            "allowed_field_values": {
+                "category": sorted(L3_CATEGORIES[metric_name]),
+                "severity": sorted(L3_SEVERITY_BURDENS[metric_name]),
+                "attribution_mode": [
+                    "unary",
+                    "responsible_endpoint",
+                    "minimum_repair_set",
+                ],
+            },
+        },
+    }
+
+
+def _attach_functional_check_contract(
+    request: dict[str, Any],
+    required_functional_checks: list[dict[str, Any]],
+) -> None:
+    """Bind the exact typed Function check obligations to the contract."""
+
+    request["required_functional_checks"] = deepcopy(
+        required_functional_checks
+    )
+    request["response_contract"]["functional_check_results"] = {
+        "required": True,
+        "exact_check_ids": [
+            str(item.get("check_id") or "")
+            for item in required_functional_checks
+            if isinstance(item, dict)
+        ],
+        "fields": [
+            "check_id",
+            "target_ids",
+            "observation_status",
+            "conclusion",
+            "reason",
+        ],
+        "conditional_invalid_clearance_fields": [
+            "affected_object_ids",
+            "cause_kind",
+            "causal_object_ids",
+            "scoring_target_ids",
+        ],
+        "deterministically_derived_fields": {
+            "scoring_target_ids": (
+                "validated causal_object_ids for external_object; "
+                "affected_object_ids for self_layout"
+            ),
+            "defect.target_ids": "derived scoring_target_ids",
+        },
+        "observation_status": [
+            "observed",
+            "inferred_under_budget",
+            "missing",
+        ],
+        "conclusion": ["valid", "invalid", "unresolved"],
+        "invalid_defect_linkage": {
+            "field": "check_refs",
+            "coverage": "every_invalid_check_exactly_once",
+            "multiple_refs_allowed_only_for_one_physical_defect": True,
+        },
+    }
+
+
+def _attach_placement_contracts(
+    request: dict[str, Any],
+    *,
+    evidence_phase: str,
+    placement_checks: list[dict[str, Any]],
+    selected_groups: list[dict[str, Any]],
+) -> list[str]:
+    """Bind Placement policies/contracts to the request.
+
+    Returns the ``allowed_check_types`` list object that is embedded in
+    ``placement_check_policy`` so the adaptive tail can narrow it in place;
+    ``judge_originated_placement_results.check_type`` holds a copy and is
+    deliberately not affected by that later narrowing.
+    """
+
+    residual_phase = (
+        evidence_phase == "residual_global_placement_review"
+    )
+    allowed_placement_check_types = (
+        ["scene_zone", "contextual_anchor"]
+        if residual_phase
+        else [
+            "support_and_height",
+            "scene_zone",
+            "contextual_anchor",
+        ]
+    )
+    request["response_contract"]["defects"]["fields"].extend(
+        [
+            "check_id",
+            "check_type",
+        ]
+    )
+    request["placement_severity_policy"] = {
+        "schema_version": SCORING_SPEC_VERSION,
+        "levels": sorted(
+            L3_SEVERITY_BURDENS[
+                "semantic_placement_consistency"
+            ]
+        ),
+        "metric_verdict_unchanged": True,
+        "severity_controls_burden_only": True,
+    }
+    request["placement_check_policy"] = {
+        "schema_version": "placement_check_results_v2",
+        "allowed_check_types": allowed_placement_check_types,
+        "discovery_is_routing_prior_only": True,
+        "baseline_judge_may_register_discovery_miss": True,
+        "defect_owner": "subject_id_only",
+        "context_ids_are_non_owning": True,
+        "functional_verdicts_are_not_placement_evidence": True,
+        "placement_claim_is_judged_independently": True,
+        "cross_metric_overlap_is_posthoc_audit_only": False,
+        "exact_function_event_deduplication_enabled": True,
+        "exact_function_event_deduplication_requires": [
+            "conclusion=excluded_function_owned",
+            "known final function_event_ref",
+            "same_physical_event=true",
+            "placement subject overlaps a cited Function event role",
+        ],
+        "object_overlap_alone_suppresses": False,
+    }
+    request["response_contract"]["placement_check_results"] = {
+        "required": bool(placement_checks),
+        "exact_check_ids": [
+            str(item.get("check_id") or "")
+            for item in placement_checks
+        ],
+        "fields": [
+            "check_id",
+            "subject_id",
+            "context_ids",
+            "observation_status",
+            "conclusion",
+            "reason",
+        ],
+        "observation_status": [
+            "observed",
+            "inferred_under_budget",
+            "missing",
+        ],
+        "conclusion": [
+            "valid",
+            "invalid",
+            "excluded_function_owned",
+            "unresolved",
+        ],
+        "conditional_excluded_function_owned_fields": [
+            "function_event_ref",
+            "same_physical_event",
+        ],
+        "excluded_function_owned_contract": {
+            "function_event_ref": "one exact supplied final event ID",
+            "same_physical_event": True,
+            "defects_for_check": 0,
+            "shared_object_identity_is_sufficient": False,
+        },
+    }
+    request["response_contract"][
+        "judge_originated_placement_results"
+    ] = {
+        "purpose": "strictly_typed_discovery_miss_recovery",
+        "same_call_resolution_requires_current_evidence": True,
+        "insufficient_evidence_requires": (
+            "evidence_request.metadata.placement_check_proposal"
+        ),
+        "fields": [
+            "proposal_id",
+            "subject_id",
+            "context_ids",
+            "check_type",
+            "observation_goal",
+            "observation_status",
+            "conclusion",
+            "reason",
+            "severity",
+            "function_event_ref",
+            "same_physical_event",
+        ],
+        "check_type": [
+            *allowed_placement_check_types,
+        ],
+        "proposal_defect_reference": (
+            "defect.check_id equals proposal_id in the model response; "
+            "the Controller replaces it with the stable check_id"
+        ),
+        "valid_verdict_exception": (
+            "allowed only when every Judge-originated row concludes "
+            "excluded_function_owned with an exact final Function event"
+        ),
+    }
+    if residual_phase:
+        residual_groups = [
+            {
+                "group_id": str(item.get("group_id") or ""),
+                "object_ids": list(item.get("object_ids") or []),
+            }
+            for item in selected_groups
+            if isinstance(item, dict)
+        ]
+        request["response_contract"][
+            "group_global_observations"
+        ] = {
+            "required": True,
+            "schema_version": (
+                "placement_residual_group_observations_v1"
+            ),
+            "exact_group_ids": [
+                item["group_id"] for item in residual_groups
+            ],
+            "one_row_per_group": True,
+            "fields": [
+                "group_id",
+                "object_ids",
+                "global_position_observation",
+                "related_group_ids",
+                "inter_group_observation",
+                "evidence_sufficiency",
+                "residual_issue_candidate",
+            ],
+            "evidence_sufficiency": [
+                "sufficient",
+                "partial_but_usable",
+                "insufficient",
+            ],
+            "residual_issue_candidate": [
+                "none",
+                "scene_zone",
+                "contextual_anchor",
+            ],
+            "decision_authority": "none",
+            "final_synthesis_rule": (
+                "inspect every group first; then issue only novel "
+                "scene_zone/contextual_anchor results"
+            ),
+        }
+    return allowed_placement_check_types
+
+
+def _attach_group_scope(
+    request: dict[str, Any],
+    group_scope: "GroupCameraScope",
+    *,
+    functional_visual_context: bool,
+) -> None:
+    """Bind the group camera scope to the request and its event record."""
+
+    scope_value = group_scope.to_dict()
+    request["scene_summary"]["group_scope"] = deepcopy(
+        {
+            "group_id": scope_value.get("group_id"),
+            "member_ids": deepcopy(
+                scope_value.get("member_ids") or []
+            ),
+        }
+        if functional_visual_context
+        else scope_value
+    )
+    request.update(
+        {
+            "group_scope": scope_value,
+            "member_ids": list(group_scope.member_ids),
+            "target_bounds": deepcopy(
+                scope_value["target_bounds"]
+            ),
+            "focus_center": list(group_scope.focus_center),
+            "target_extent": list(group_scope.extent),
+            "evidence_goal": group_scope_evidence_goal(
+                group_scope
+            ),
+            "grouping_role": (
+                "primary_visual_evidence_decomposition"
+            ),
+        }
+    )
+    request["event"]["group_id"] = group_scope.group_id
+    request["event"]["focus_region"] = deepcopy(
+        scope_value["target_bounds"]
+    )
+
+
 def _judge_request(
     *,
     metric_name: str,
@@ -2222,37 +2725,19 @@ def _judge_request(
     pairing_inventory_context = bool(
         metric_name == "object_pairing_consistency"
     )
-    objects = [
-        (
-            _compact_functional_object(item)
-            if functional_visual_context
-            else _compact_pairing_object(item)
-            if pairing_inventory_context
-            else _compact_object(item)
-        )
-        for item in scene.get("objects", [])
-        if isinstance(item, dict)
-        and (
-            not selected_object_ids
-            or str(item.get("id")) in set(selected_object_ids)
-        )
-    ]
-    selected_groups = [
-        (
-            {
-                "group_id": str(group.get("group_id") or ""),
-                "object_ids": [
-                    str(item)
-                    for item in group.get("object_ids") or []
-                    if str(item).strip()
-                ],
-            }
-            if functional_visual_context or residual_placement_context
-            else _judge_group_context(group)
-        )
-        for group in groups or []
-        if not selected_group_ids or str(group.get("group_id")) in set(selected_group_ids)
-    ]
+    objects = _selected_scene_objects(
+        scene,
+        selected_object_ids,
+        functional_visual_context=functional_visual_context,
+        pairing_inventory_context=pairing_inventory_context,
+    )
+    selected_groups = _selected_group_contexts(
+        groups,
+        selected_group_ids,
+        membership_only=(
+            functional_visual_context or residual_placement_context
+        ),
+    )
     required_functional_checks = (
         (
             functional_probe_evidence.get("required_checks")
@@ -2274,36 +2759,14 @@ def _judge_request(
             if isinstance(item, dict)
         )
     )
-    allowed_defect_target_ids = list(
-        dict.fromkeys(
-            str(item)
-            for item in (
-                (
-                    [
-                        object_record.get("id")
-                        for object_record in scene.get("objects") or []
-                        if isinstance(object_record, dict)
-                    ]
-                    if allow_scene_wide_functional_ownership
-                    else selected_object_ids
-                )
-                or [
-                    object_record.get("id")
-                    for object_record in scene.get("objects") or []
-                    if isinstance(object_record, dict)
-                ]
-            )
-            if str(item).strip()
-        )
+    allowed_defect_target_ids = _allowed_defect_targets(
+        scene,
+        selected_object_ids,
+        allow_scene_wide_functional_ownership=(
+            allow_scene_wide_functional_ownership
+        ),
+        attribution_target_ids=attribution_target_ids,
     )
-    if attribution_target_ids is not None:
-        allowed_defect_target_ids = list(
-            dict.fromkeys(
-                str(item)
-                for item in attribution_target_ids
-                if str(item).strip()
-            )
-        )
     scene_summary = {
         "scene_id": scene.get("scene_id"),
         "scene_type": scene.get("scene_type"),
@@ -2375,64 +2838,10 @@ def _judge_request(
         "functional_ownership_ledger": deepcopy(
             functional_ownership_ledger
         ),
-        "structured_context_policy": (
-            {
-                "object_fields": ["id", "category"],
-                "group_fields": [],
-                "excluded_object_fields": [
-                    "description",
-                    "center",
-                    "size",
-                    "rotation",
-                    "generator_relationships",
-                    "task_slots",
-                ],
-                "reason": (
-                    "Pairing judges canonical room-inventory identity and "
-                    "role composition without generator intent or transform "
-                    "shortcuts; visual evidence independently confirms identity"
-                ),
-            }
-            if pairing_inventory_context
-            else
-            {
-                "object_fields": ["id", "category"],
-                "group_fields": ["group_id", "object_ids"],
-                "excluded_object_fields": [
-                    "center",
-                    "size",
-                    "rotation",
-                    "description",
-                ],
-                "reason": (
-                    "functional visual grounding must not be replaced by "
-                    "transform or grouping-prose shortcuts"
-                ),
-            }
-            if functional_visual_context
-            else {
-                "object_fields": [
-                    "id",
-                    "category",
-                    "center",
-                    "size",
-                    "rotation",
-                ],
-                "group_fields": ["group_id", "object_ids"],
-                "excluded_group_fields": [
-                    "group_source",
-                    "region_category",
-                    "edge_reasons",
-                    "formation_edges",
-                ],
-                "reason": (
-                    "residual Placement uses group membership only to "
-                    "organize independent visual observations; grouping "
-                    "interpretations are not decision evidence"
-                ),
-            }
-            if residual_placement_context
-            else None
+        "structured_context_policy": _structured_context_policy(
+            pairing_inventory_context=pairing_inventory_context,
+            functional_visual_context=functional_visual_context,
+            residual_placement_context=residual_placement_context,
         ),
         "defect_attribution": (
             {
@@ -2471,67 +2880,9 @@ def _judge_request(
             else None
         ),
         "render_evidence": list(render_evidence),
-        "response_contract": {
-            "evidence_status": ["sufficient", "insufficient"],
-            "verdict": ["valid", "invalid", "ambiguous"],
-            "invalid_requires_significant_metric_scoped_defect": True,
-            "insufficient_requires_ambiguous": True,
-            "missing_evidence": {
-                "allowed": (
-                    "empty_or_exact_evidence_request_token_mirror"
-                ),
-                "authority": "evidence_request.missing_observations",
-            },
-            "evidence_request": {
-                "required_when_insufficient": True,
-                "fields": [
-                    "target_ids",
-                    "missing_observations",
-                    "view_goal",
-                    "metadata",
-                ],
-            },
-            "allowed_target_ids": allowed_defect_target_ids,
-            "defect_attribution_unit": (
-                "object"
-                if metric_name
-                in {
-                    "style_consistency",
-                    "functional_consistency",
-                    "semantic_placement_consistency",
-                }
-                else "claim"
-            ),
-            "defects": {
-                "required_when_invalid": True,
-                "fields": [
-                    "scope",
-                    "target_ids",
-                    "relation",
-                    "reason",
-                    "category",
-                    "attribution_mode",
-                    *(
-                        []
-                        if metric_name == "object_pairing_consistency"
-                        else ["severity"]
-                    ),
-                ],
-                "allowed_scopes": list(
-                    JUDGMENT_SCOPE_BY_METRIC[metric_name]["included"]
-                ),
-                "allowed_target_ids": allowed_defect_target_ids,
-                "allowed_field_values": {
-                    "category": sorted(L3_CATEGORIES[metric_name]),
-                    "severity": sorted(L3_SEVERITY_BURDENS[metric_name]),
-                    "attribution_mode": [
-                        "unary",
-                        "responsible_endpoint",
-                        "minimum_repair_set",
-                    ],
-                },
-            },
-        },
+        "response_contract": _base_response_contract(
+            metric_name, allowed_defect_target_ids
+        ),
         **vlm_audit_metadata(
             VLMRole.JUDGE,
             decision_contract=DecisionContract.CANONICAL_METRIC,
@@ -2542,210 +2893,16 @@ def _judge_request(
         metric_name == "functional_consistency"
         and required_functional_checks
     ):
-        request["required_functional_checks"] = deepcopy(
-            required_functional_checks
+        _attach_functional_check_contract(
+            request, required_functional_checks
         )
-        request["response_contract"]["functional_check_results"] = {
-            "required": True,
-            "exact_check_ids": [
-                str(item.get("check_id") or "")
-                for item in required_functional_checks
-                if isinstance(item, dict)
-            ],
-            "fields": [
-                "check_id",
-                "target_ids",
-                "observation_status",
-                "conclusion",
-                "reason",
-            ],
-            "conditional_invalid_clearance_fields": [
-                "affected_object_ids",
-                "cause_kind",
-                "causal_object_ids",
-                "scoring_target_ids",
-            ],
-            "deterministically_derived_fields": {
-                "scoring_target_ids": (
-                    "validated causal_object_ids for external_object; "
-                    "affected_object_ids for self_layout"
-                ),
-                "defect.target_ids": "derived scoring_target_ids",
-            },
-            "observation_status": [
-                "observed",
-                "inferred_under_budget",
-                "missing",
-            ],
-            "conclusion": ["valid", "invalid", "unresolved"],
-            "invalid_defect_linkage": {
-                "field": "check_refs",
-                "coverage": "every_invalid_check_exactly_once",
-                "multiple_refs_allowed_only_for_one_physical_defect": True,
-            },
-        }
     if metric_name == "semantic_placement_consistency":
-        residual_phase = (
-            evidence_phase == "residual_global_placement_review"
+        allowed_placement_check_types = _attach_placement_contracts(
+            request,
+            evidence_phase=evidence_phase,
+            placement_checks=placement_checks,
+            selected_groups=selected_groups,
         )
-        allowed_placement_check_types = (
-            ["scene_zone", "contextual_anchor"]
-            if residual_phase
-            else [
-                "support_and_height",
-                "scene_zone",
-                "contextual_anchor",
-            ]
-        )
-        request["response_contract"]["defects"]["fields"].extend(
-            [
-                "check_id",
-                "check_type",
-            ]
-        )
-        request["placement_severity_policy"] = {
-            "schema_version": SCORING_SPEC_VERSION,
-            "levels": sorted(
-                L3_SEVERITY_BURDENS[
-                    "semantic_placement_consistency"
-                ]
-            ),
-            "metric_verdict_unchanged": True,
-            "severity_controls_burden_only": True,
-        }
-        request["placement_check_policy"] = {
-            "schema_version": "placement_check_results_v2",
-            "allowed_check_types": allowed_placement_check_types,
-            "discovery_is_routing_prior_only": True,
-            "baseline_judge_may_register_discovery_miss": True,
-            "defect_owner": "subject_id_only",
-            "context_ids_are_non_owning": True,
-            "functional_verdicts_are_not_placement_evidence": True,
-            "placement_claim_is_judged_independently": True,
-            "cross_metric_overlap_is_posthoc_audit_only": False,
-            "exact_function_event_deduplication_enabled": True,
-            "exact_function_event_deduplication_requires": [
-                "conclusion=excluded_function_owned",
-                "known final function_event_ref",
-                "same_physical_event=true",
-                "placement subject overlaps a cited Function event role",
-            ],
-            "object_overlap_alone_suppresses": False,
-        }
-        request["response_contract"]["placement_check_results"] = {
-            "required": bool(placement_checks),
-            "exact_check_ids": [
-                str(item.get("check_id") or "")
-                for item in placement_checks
-            ],
-            "fields": [
-                "check_id",
-                "subject_id",
-                "context_ids",
-                "observation_status",
-                "conclusion",
-                "reason",
-            ],
-            "observation_status": [
-                "observed",
-                "inferred_under_budget",
-                "missing",
-            ],
-            "conclusion": [
-                "valid",
-                "invalid",
-                "excluded_function_owned",
-                "unresolved",
-            ],
-            "conditional_excluded_function_owned_fields": [
-                "function_event_ref",
-                "same_physical_event",
-            ],
-            "excluded_function_owned_contract": {
-                "function_event_ref": "one exact supplied final event ID",
-                "same_physical_event": True,
-                "defects_for_check": 0,
-                "shared_object_identity_is_sufficient": False,
-            },
-        }
-        request["response_contract"][
-            "judge_originated_placement_results"
-        ] = {
-            "purpose": "strictly_typed_discovery_miss_recovery",
-            "same_call_resolution_requires_current_evidence": True,
-            "insufficient_evidence_requires": (
-                "evidence_request.metadata.placement_check_proposal"
-            ),
-            "fields": [
-                "proposal_id",
-                "subject_id",
-                "context_ids",
-                "check_type",
-                "observation_goal",
-                "observation_status",
-                "conclusion",
-                "reason",
-                "severity",
-                "function_event_ref",
-                "same_physical_event",
-            ],
-            "check_type": [
-                *allowed_placement_check_types,
-            ],
-            "proposal_defect_reference": (
-                "defect.check_id equals proposal_id in the model response; "
-                "the Controller replaces it with the stable check_id"
-            ),
-            "valid_verdict_exception": (
-                "allowed only when every Judge-originated row concludes "
-                "excluded_function_owned with an exact final Function event"
-            ),
-        }
-        if residual_phase:
-            residual_groups = [
-                {
-                    "group_id": str(item.get("group_id") or ""),
-                    "object_ids": list(item.get("object_ids") or []),
-                }
-                for item in selected_groups
-                if isinstance(item, dict)
-            ]
-            request["response_contract"][
-                "group_global_observations"
-            ] = {
-                "required": True,
-                "schema_version": (
-                    "placement_residual_group_observations_v1"
-                ),
-                "exact_group_ids": [
-                    item["group_id"] for item in residual_groups
-                ],
-                "one_row_per_group": True,
-                "fields": [
-                    "group_id",
-                    "object_ids",
-                    "global_position_observation",
-                    "related_group_ids",
-                    "inter_group_observation",
-                    "evidence_sufficiency",
-                    "residual_issue_candidate",
-                ],
-                "evidence_sufficiency": [
-                    "sufficient",
-                    "partial_but_usable",
-                    "insufficient",
-                ],
-                "residual_issue_candidate": [
-                    "none",
-                    "scene_zone",
-                    "contextual_anchor",
-                ],
-                "decision_authority": "none",
-                "final_synthesis_rule": (
-                    "inspect every group first; then issue only novel "
-                    "scene_zone/contextual_anchor results"
-                ),
-            }
     if allow_scene_wide_functional_ownership:
         request["allowed_external_evidence_target_ids"] = list(
             allowed_defect_target_ids
@@ -2763,37 +2920,10 @@ def _judge_request(
             if isinstance(item, dict) and item.get("id")
         ]
     if group_scope is not None:
-        scope_value = group_scope.to_dict()
-        request["scene_summary"]["group_scope"] = deepcopy(
-            {
-                "group_id": scope_value.get("group_id"),
-                "member_ids": deepcopy(
-                    scope_value.get("member_ids") or []
-                ),
-            }
-            if functional_visual_context
-            else scope_value
-        )
-        request.update(
-            {
-                "group_scope": scope_value,
-                "member_ids": list(group_scope.member_ids),
-                "target_bounds": deepcopy(
-                    scope_value["target_bounds"]
-                ),
-                "focus_center": list(group_scope.focus_center),
-                "target_extent": list(group_scope.extent),
-                "evidence_goal": group_scope_evidence_goal(
-                    group_scope
-                ),
-                "grouping_role": (
-                    "primary_visual_evidence_decomposition"
-                ),
-            }
-        )
-        request["event"]["group_id"] = group_scope.group_id
-        request["event"]["focus_region"] = deepcopy(
-            scope_value["target_bounds"]
+        _attach_group_scope(
+            request,
+            group_scope,
+            functional_visual_context=functional_visual_context,
         )
     if adaptive_enabled(metric=metric_name):
         from benchmark.visual_judge.evidence_resolution import policy_of
