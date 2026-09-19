@@ -383,7 +383,7 @@ def check_support(
         "grounded_support_policy": GROUNDED_SUPPORT_POLICY,
         **(
             {"architecture_scope": "floor_wall_object_support_no_ceiling"}
-            if polygon_room_geometry is not None
+            if polygon_geometry is not None
             else {}
         ),
         "logical_architecture_attachment_policy": {
@@ -395,7 +395,7 @@ def check_support(
             "decision_authority": "vlm_after_missing_support_route",
             **(
                 {"ceiling_attachment_enabled": False}
-                if polygon_room_geometry is not None
+                if polygon_geometry is not None
                 else {}
             ),
         },
@@ -466,7 +466,7 @@ def check_support(
             + [
                 "Non-rectangular mode evaluates floor, wall-segment, and object support only; ceiling attachment is excluded."
             ]
-            if polygon_room_geometry is not None
+            if polygon_geometry is not None
             else list(SUPPORT_NOTES)
         ),
     }
