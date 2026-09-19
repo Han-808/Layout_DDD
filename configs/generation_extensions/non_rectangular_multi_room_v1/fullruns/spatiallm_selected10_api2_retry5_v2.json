@@ -35,6 +35,12 @@
       "campaign_id": "api2-kimi-k3-nonrect-global-retry5-v2",
       "model_profile_id": "api2-kimi-k3-nonrect-global-retry5-v1",
       "output_name": "kimi-k3"
+    },
+    {
+      "model_key": "gpt-6-astra-xhigh",
+      "campaign_id": "api2-gpt6-astra-xhigh-nonrect-global-retry5-v2",
+      "model_profile_id": "api2-gpt-6-astra-xhigh-nonrect-global-retry5-v1",
+      "output_name": "gpt-6-astra-xhigh"
     }
   ],
   "stage_timeouts_seconds": {

@@ -15,7 +15,7 @@ of parallelism, one OS process each with its own output directory:
 
 * ``open-space``     - 1 task (one campaign, 10 briefs serial inside)
 * ``multi-room``     - 1 task per floor-plan layout
-* ``complex-layout`` - not runnable from this repository (see ``_complex_tasks``)
+* ``complex-layout`` - 1 task per non-rect scene, in the fullrun's scene order
 
 Process-per-task isolation is deliberate: it keeps any per-run in-process cache
 private to one task, so raising ``--workers`` cannot make two tasks share
@@ -49,11 +49,15 @@ PYTHON_BIN = _REPO_VENV_PYTHON if _REPO_VENV_PYTHON.is_file() else Path(sys.exec
 
 OPEN_SPACE_CAMPAIGN = "api2-gpt6-astra-xhigh-scene10-v1"
 MULTI_ROOM_CAMPAIGN = "api2-gpt6-astra-xhigh-multi-room-v1"
-COMPLEX_LAYOUT_CAMPAIGN = "api2-gpt6-astra-xhigh-nonrect-v1"
+COMPLEX_LAYOUT_CAMPAIGN = "api2-gpt6-astra-xhigh-nonrect-global-retry5-v2"
 
 DEFAULT_FLOOR_PLAN_ROOT = (
     REPO_ROOT / "output" / "multi_room_generation_floorplans_v2" / "runner_inputs_v1"
 )
+NONRECT_ROOT = (
+    REPO_ROOT / "configs" / "generation_extensions" / "non_rectangular_multi_room_v1"
+)
+NONRECT_FULLRUN = NONRECT_ROOT / "fullruns" / "spatiallm_selected10_api2_retry5_v2.json"
 DEFAULT_GENERATION_BINDINGS = REPO_ROOT / ".runtime" / "generation_bindings.local.json"
 DEFAULT_RESOURCE_BINDINGS = REPO_ROOT / ".runtime" / "retrieval_bindings.local.json"
 
@@ -86,13 +90,55 @@ class Task:
     condition: str
     campaign_id: str
     floor_plan: Path | None = None
+    room_layout: Path | None = None
+    room_program: Path | None = None
     expected_units: int = 0
 
-    def command(self, *, output_dir: Path, args: argparse.Namespace) -> list[str]:
-        command = [
+    @property
+    def module(self) -> str:
+        """Non-rect has its own CLI; it is not a `benchmark.scene_generation` mode.
+
+        Target the package, not `.cli`: `cli.py` defines `main` but has no
+        ``__main__`` guard, so ``-m ...cli`` imports it and exits 0 having done
+        nothing, which looks exactly like a silent success.
+        """
+
+        if self.condition == "complex-layout":
+            return "benchmark.scene_generation.non_rectangular_multi_room"
+        return "benchmark.scene_generation"
+
+    def _scoped_args(self) -> list[str]:
+        scoped: list[str] = []
+        if self.floor_plan is not None:
+            scoped += ["--floor-plan", str(self.floor_plan)]
+        if self.room_layout is not None:
+            scoped += ["--room-layout", str(self.room_layout)]
+        if self.room_program is not None:
+            scoped += ["--room-program", str(self.room_program)]
+        if self.condition == "complex-layout":
+            # The non-rect CLI defaults to the v1 contract, but the retry5 cohort
+            # this model joins is registered in registry_v2.json.
+            scoped += ["--contract-version", "v2"]
+        return scoped
+
+    def check_command(self) -> list[str]:
+        return [
             str(PYTHON_BIN),
             "-m",
-            "benchmark.scene_generation",
+            self.module,
+            "check",
+            "--campaign",
+            self.campaign_id,
+            *self._scoped_args(),
+        ]
+
+    def command(self, *, output_dir: Path, args: argparse.Namespace) -> list[str]:
+        # Both CLIs take the subcommand first and then its flags; the only
+        # difference is which module owns the mode and which scope flags apply.
+        return [
+            str(PYTHON_BIN),
+            "-m",
+            self.module,
             "run",
             "--campaign",
             self.campaign_id,
@@ -102,10 +148,8 @@ class Task:
             str(args.generation_bindings),
             "--resource-bindings",
             str(args.resource_bindings),
+            *self._scoped_args(),
         ]
-        if self.floor_plan is not None:
-            command += ["--floor-plan", str(self.floor_plan)]
-        return command
 
 
 @dataclass
@@ -175,18 +219,55 @@ def _multi_room_tasks(floor_plan_root: Path) -> list[Task]:
 
 
 def _complex_tasks() -> list[Task]:
-    # The non-rectangular generator is not part of this repository's `src/`: it
-    # lives in the frozen release `floorplan_api_complexity_v1`, whose runner
-    # hash-verifies every file against `release.lock.json`. Registering Astra
-    # there means building a NEW release, which this launcher deliberately does
-    # not do. Surfaced as a blocked task rather than skipped silently.
-    return [
-        Task(
-            task_id="complex-layout.blocked",
-            condition="complex-layout",
-            campaign_id=COMPLEX_LAYOUT_CAMPAIGN,
+    """One task per non-rectangular scene, in the fullrun's frozen scene order.
+
+    The cohort_runner entry would drive every model declared in the fullrun, so
+    the per-scene `cli` entry is used instead: it isolates this model and lets the
+    ten scenes run concurrently. Scene order comes from the fullrun profile so the
+    set and its order stay owned by configuration, not by this launcher.
+    """
+
+    if not NONRECT_FULLRUN.is_file():
+        raise FileNotFoundError(
+            f"non-rect fullrun profile does not exist: {NONRECT_FULLRUN}"
         )
-    ]
+    fullrun = json.loads(NONRECT_FULLRUN.read_text(encoding="utf-8"))
+    declared = {
+        str(entry.get("campaign_id"))
+        for entry in fullrun.get("models", [])
+        if isinstance(entry, dict)
+    }
+    if COMPLEX_LAYOUT_CAMPAIGN not in declared:
+        raise ValueError(
+            f"{COMPLEX_LAYOUT_CAMPAIGN!r} is not declared in {NONRECT_FULLRUN.name}"
+        )
+    scenes = [str(scene) for scene in fullrun.get("scene_order", [])]
+    if not scenes:
+        raise ValueError(f"{NONRECT_FULLRUN.name} declares no scene_order")
+
+    tasks: list[Task] = []
+    for scene in scenes:
+        layout = NONRECT_ROOT / "layouts" / "spatiallm_selected10_v1" / scene / "room_layout.json"
+        program = (
+            NONRECT_ROOT
+            / "programs"
+            / "spatiallm_source_types_area_density_v1"
+            / scene
+            / "room_program.json"
+        )
+        missing = [str(p) for p in (layout, program) if not p.is_file()]
+        if missing:
+            raise FileNotFoundError(f"non-rect inputs are absent: {missing}")
+        tasks.append(
+            Task(
+                task_id=f"complex-layout.{scene}",
+                condition="complex-layout",
+                campaign_id=COMPLEX_LAYOUT_CAMPAIGN,
+                room_layout=layout,
+                room_program=program,
+            )
+        )
+    return tasks
 
 
 def build_tasks(conditions: Iterable[str], floor_plan_root: Path) -> list[Task]:
@@ -204,18 +285,37 @@ def build_tasks(conditions: Iterable[str], floor_plan_root: Path) -> list[Task]:
 
 
 def _unit_counts(output_dir: Path) -> tuple[int, int]:
-    """Return (terminalized units, units whose own status is complete)."""
+    """Return (terminalized units, units whose own status is complete).
 
-    results = sorted(output_dir.glob("*/case.result.json"))
+    The three conditions name and nest their per-unit terminal file differently:
+
+    * open-space  - ``brief_*/case.result.json`` directly under the output dir
+    * multi-room  - ``<layout>/rooms/<room>/room_result.json``, one level deeper
+    * non-rect    - a single ``summary.json`` at the root; the unit is the whole
+      scene, whose own ``room_count`` is recorded inside it
+
+    Search all three shapes rather than assuming one, and ignore the per-attempt
+    ``attempt.result.json`` files, which are transport records, not unit verdicts.
+    """
+
+    results = [
+        path
+        for pattern in (
+            "*/case.result.json",
+            "**/rooms/*/room_result.json",
+            "summary.json",
+        )
+        for path in output_dir.glob(pattern)
+    ]
     complete = 0
-    for path in results:
+    for path in sorted(set(results)):
         try:
             value = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             continue
         if value.get("status") == "complete":
             complete += 1
-    return len(results), complete
+    return len(set(results)), complete
 
 
 def _already_finished(output_dir: Path) -> bool:
@@ -226,26 +326,8 @@ def _check_task(task: Task, args: argparse.Namespace) -> TaskOutcome:
     """Validate registration and inputs without network or generation."""
 
     outcome = TaskOutcome(task_id=task.task_id, condition=task.condition, state="")
-    if task.condition == "complex-layout":
-        outcome.state = "blocked"
-        outcome.blocked_reason = (
-            "non-rectangular generation lives in the frozen release "
-            "floorplan_api_complexity_v1; adding Astra requires building a new "
-            "release (build_release.py --destination NEW), not editing one"
-        )
-        return outcome
-    command = [
-        str(PYTHON_BIN),
-        "-m",
-        "benchmark.scene_generation",
-        "check",
-        "--campaign",
-        task.campaign_id,
-    ]
-    if task.floor_plan is not None:
-        command += ["--floor-plan", str(task.floor_plan)]
     completed = subprocess.run(
-        command,
+        task.check_command(),
         cwd=REPO_ROOT,
         env=_subprocess_env(),
         capture_output=True,
@@ -264,9 +346,6 @@ def _check_task(task: Task, args: argparse.Namespace) -> TaskOutcome:
 
 def _run_task(task: Task, args: argparse.Namespace, output_base: Path) -> TaskOutcome:
     outcome = TaskOutcome(task_id=task.task_id, condition=task.condition, state="")
-    if task.condition == "complex-layout":
-        return _check_task(task, args)
-
     output_dir = output_base / task.task_id.replace(".", "/")
     outcome.output_dir = str(output_dir)
     if _already_finished(output_dir):
@@ -361,15 +440,17 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         parser.error("--max-attempts must be at least 1")
     if args.run and args.output_base is None:
         parser.error("--run requires --output-base")
-    # A git worktree has no `.runtime/` of its own, so the default paths can point
-    # at files that do not exist. Fail here with the path rather than letting the
-    # campaign CLI surface a redacted contract error per task.
-    for label, path in (
-        ("--generation-bindings", args.generation_bindings),
-        ("--resource-bindings", args.resource_bindings),
-    ):
-        if not Path(path).expanduser().is_file():
-            parser.error(f"{label} does not exist: {path}")
+    if args.run:
+        # A git worktree has no `.runtime/` of its own, so the default paths can
+        # point at files that do not exist. Fail here with the path rather than
+        # letting the campaign CLI surface a redacted contract error per task.
+        # Only `--run` consumes bindings; `--check` never passes them.
+        for label, path in (
+            ("--generation-bindings", args.generation_bindings),
+            ("--resource-bindings", args.resource_bindings),
+        ):
+            if not Path(path).expanduser().is_file():
+                parser.error(f"{label} does not exist: {path}")
     return args
 
 
@@ -384,8 +465,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"task planning failed: {exc}", file=sys.stderr)
         return 2
 
-    runnable = [task for task in tasks if task.condition != "complex-layout"]
-    workers = min(args.workers, max(1, len(runnable)))
+    workers = min(args.workers, max(1, len(tasks)))
 
     if not args.run:
         outcomes = [_check_task(task, args) for task in tasks]

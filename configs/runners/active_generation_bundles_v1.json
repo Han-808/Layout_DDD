@@ -1270,7 +1270,7 @@
         },
         {
           "path": "non_rectangular_multi_room_v1/campaign_profiles/model_profiles_v2.json",
-          "sha256": "66c5dc6ab566a30b2b66e86920c4abfa02de1c3778f2eb6e2b026c63adb7faa2",
+          "sha256": "1b59b71dc808e9b10616f12c3188998cc454b27a6eb8faef9e1d61ee8229cc35",
           "mode": "0644"
         },
         {
@@ -1280,7 +1280,7 @@
         },
         {
           "path": "non_rectangular_multi_room_v1/fullruns/spatiallm_selected10_api2_retry5_v2.json",
-          "sha256": "a249556ba17e891cf050ed33f586953a64b19a6b942d37fd77e036f196810586",
+          "sha256": "fbcf4820b7043a77dc124a5c758ad0938017acb7376ac06ce1ed117c5da0446f",
           "mode": "0644"
         },
         {
@@ -1605,7 +1605,7 @@
         },
         {
           "path": "non_rectangular_multi_room_v1/registry_v2.json",
-          "sha256": "1e5954d2111deb97bf2e26ad5c9c38d2da16b1ab9be8697c6c099fd4cb2991be",
+          "sha256": "314c8e6447b31d95ba1075f562ea9fbcf3271e783af2c66beeec2b4522e3b055",
           "mode": "0644"
         }
       ]

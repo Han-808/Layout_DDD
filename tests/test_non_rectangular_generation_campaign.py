@@ -51,7 +51,8 @@ def test_independent_registry_exposes_reviewed_model_campaigns() -> None:
     assert registry[CAMPAIGN_ID].model_profile_id == "api2-kimi-k3"
 
     registry_v2 = load_non_rectangular_campaign_registry_v2(repository_root())
-    assert len(registry_v2) == 14
+    # Grows by one per onboarded model; the last is Astra (xhigh).
+    assert len(registry_v2) == 15
     assert registry_v2[CAMPAIGN_V2_ID].model_profile_id == "api2-kimi-k3"
     assert registry_v2[
         "api3-sonnet5-nonrect-global-retry5-v2"
