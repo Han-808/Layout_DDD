@@ -361,6 +361,15 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         parser.error("--max-attempts must be at least 1")
     if args.run and args.output_base is None:
         parser.error("--run requires --output-base")
+    # A git worktree has no `.runtime/` of its own, so the default paths can point
+    # at files that do not exist. Fail here with the path rather than letting the
+    # campaign CLI surface a redacted contract error per task.
+    for label, path in (
+        ("--generation-bindings", args.generation_bindings),
+        ("--resource-bindings", args.resource_bindings),
+    ):
+        if not Path(path).expanduser().is_file():
+            parser.error(f"{label} does not exist: {path}")
     return args
 
 
