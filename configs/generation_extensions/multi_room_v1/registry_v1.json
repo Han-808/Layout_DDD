@@ -163,6 +163,14 @@
       "retrieval_profile_id": "imaginarium-qwen3-embedding-0.6b-stable-top1-v2",
       "execution_policy_id": "multi-room-retry5-continue-v1",
       "artifact_contract_id": "multi-room-generation-artifacts-v1"
+    },
+    {
+      "campaign_id": "api2-gpt6-astra-xhigh-multi-room-v1",
+      "workflow_profile_id": "frozen-two-stage-multi-room-with-architecture-v1",
+      "model_profile_id": "api2-gpt-6-astra-xhigh",
+      "retrieval_profile_id": "imaginarium-qwen3-embedding-0.6b-stable-top1-v2",
+      "execution_policy_id": "api2-scene10-retry3-continue-v1",
+      "artifact_contract_id": "multi-room-generation-artifacts-v1"
     }
   ]
 }
