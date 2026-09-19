@@ -74,6 +74,7 @@ include-package-data = false
 
 [tool.pytest.ini_options]
 testpaths = [
+  "tests/test_runtime_resources.py",
   "tests/test_uniform_model_evaluator.py",
   "tests/test_uniform_nonrect_evaluator.py",
   "tests/test_s100_evaluator_regressions.py",
