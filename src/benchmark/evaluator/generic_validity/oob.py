@@ -1,6 +1,11 @@
-"""P0b out-of-bounds metric: exact OBB versus six room planes with conservative VLM adjudication."""
+"""P0b OOB: room geometry measurements followed by common VLM adjudication."""
 
 from __future__ import annotations
+from benchmark.visual_judge.evidence_gap_v2 import enabled as fallback_v2_enabled
+
+from benchmark.evaluator.adaptive_audit import adaptive_l1_result
+
+from benchmark.visual_judge.evidence_resolution import adaptive_enabled, with_evidence_policy, failure_record
 
 from copy import deepcopy
 import math
@@ -58,6 +63,8 @@ class OOBEvaluationError(RuntimeError):
     """Raised when official OOB evaluation cannot complete required adjudication."""
 
 
+@with_evidence_policy
+@adaptive_l1_result
 def check_oob(
     scene: dict,
     config: dict | None = None,
@@ -117,7 +124,7 @@ def check_oob(
         if record.get("requires_vlm") and record.get("final_verdict") not in {"valid", "invalid"}
     )
 
-    if adjudication_failures and official_mode:
+    if adjudication_failures and official_mode and not fallback_v2_enabled():
         raise OOBEvaluationError("; ".join(adjudication_failures))
     if requires_vlm_count and official_mode and vlm_judge is None:
         raise OOBEvaluationError(
@@ -180,6 +187,118 @@ def _evaluate_object(
     vlm_judge: object | None,
     local_view_provider: LocalViewProvider | None,
 ) -> dict[str, Any]:
+    geometry = room.get("polygon_geometry")
+    if geometry is not None:
+        from benchmark.non_rectangular.oob_geometry import measure_polygon_obb
+        record = measure_polygon_obb(obj, geometry, eps=eps, floor_tol=floor_tol)
+    else:
+        record = _measure_rectangular_obb(obj, room, eps=eps, floor_tol=floor_tol)
+    candidate_oob = record["candidate_oob"]
+    within_floor_contact_tolerance = record["within_floor_contact_tolerance"]
+    plane_flags = record["plane_flags"]
+    intervals = record["obb_intervals"]
+    plane_penetration = record["plane_penetration_m"]
+    crossing_depths = record["crossing_depths_m"]
+    center = np.asarray(obj.center, dtype=float)
+
+    if not candidate_oob:
+        # Both routes are direct-valid; the tolerance route makes explicit that the
+        # raw OBB is not strictly inside but sinks only within floor-contact tolerance.
+        route = (
+            "direct_valid_floor_contact_tolerance"
+            if within_floor_contact_tolerance
+            else "direct_valid_inside"
+        )
+        record.update(
+            {
+                "route": route,
+                "final_verdict": "valid",
+                "affects_oob_score": True,
+            }
+        )
+        return record
+
+    record["requires_vlm"] = True
+    if bool(cfg.get("detector_only")):
+        return record
+    if vlm_judge is None:
+        return record
+
+    event = {
+        "object_id": obj.id,
+        "object_ids": [obj.id],
+        "architecture_element": "room_bounds",
+        "plane_flags": plane_flags,
+        **{k: deepcopy(record[k]) for k in ("violated_edges", "violated_wall_ids") if k in record},
+    }
+    detector_evidence = {
+        **{k: deepcopy(record[k]) for k in ("room_geometry", "violated_edges", "violated_wall_ids", "outside_area_m2", "outside_area_ratio", "maximum_horizontal_penetration_m") if k in record},
+        "detector": OOB_EVALUATOR_VERSION,
+        "plane_flags": plane_flags,
+        "obb_intervals": intervals,
+        "room": room["report"],
+        "numerical_eps": eps,
+        "floor_contact_tolerance_m": floor_tol,
+        "plane_penetration_m": plane_penetration,
+        "within_floor_contact_tolerance": within_floor_contact_tolerance,
+        "crossing_depths_m": crossing_depths,
+        "object": {
+            "id": obj.id,
+            "category": obj.category,
+            "description": obj.desc,
+            "center": [float(value) for value in center],
+            "size": [float(value) for value in np.asarray(obj.size, dtype=float)],
+            "rotation_degrees": [float(value) for value in np.asarray(obj.rotation, dtype=float)],
+            "geometry_provenance": _geometry_provenance(scene, obj.id),
+        },
+        "extracted_relationships_are_claims_only": True,
+    }
+    try:
+        judge_result = adjudicate_p0b_event(
+            metric="oob",
+            event=event,
+            prompt=str(prompt or ""),
+            relationships=relationships,
+            scene=scene,
+            detector_evidence=detector_evidence,
+            judge=vlm_judge,
+            object_ids=[obj.id],
+            overview_render_evidence=list(render_evidence or []),
+            local_view_provider=local_view_provider,
+        )
+    except EvidenceControlUnresolvedError as exc:
+        if fallback_v2_enabled():
+            record["failure"] = failure_record(exc, phase="judge")
+        record["route"] = "unresolved"
+        record["evidence_control"] = exc.result.to_dict()
+        return record
+    except Exception as exc:
+        record["adjudication_error"] = f"{type(exc).__name__}: {exc}"
+        if fallback_v2_enabled():
+            record["failure"] = failure_record(exc, phase="judge")
+        record["route"] = "vlm_adjudication_failed"
+        schema_audit = response_schema_audit_from_exception(exc)
+        if schema_audit is not None:
+            record["adjudication_failure_audit"] = schema_audit
+        if bool(cfg.get("official_mode")) and not fallback_v2_enabled():
+            raise OOBEvaluationError(record["adjudication_error"]) from exc
+        return record
+
+    verdict = str(judge_result.get("verdict"))
+    record.update(
+        {
+            "route": "vlm_adjudicated",
+            "final_verdict": verdict,
+            "affects_oob_score": True,
+            "judge_result": deepcopy(judge_result),
+        }
+    )
+    return record
+
+
+def _measure_rectangular_obb(
+    obj: Any, room: dict[str, Any], *, eps: float, floor_tol: float,
+) -> dict[str, Any]:
     center = np.asarray(obj.center, dtype=float)
     # radius_axis = sum_i half[i] * |R[axis, i]| ; columns of R are local axes in world.
     radius = np.abs(np.asarray(obj.R, dtype=float)) @ np.asarray(obj.half, dtype=float)
@@ -239,92 +358,6 @@ def _evaluate_object(
         "adjudication_error": None,
     }
 
-    if not candidate_oob:
-        # Both routes are direct-valid; the tolerance route makes explicit that the
-        # raw OBB is not strictly inside but sinks only within floor-contact tolerance.
-        route = (
-            "direct_valid_floor_contact_tolerance"
-            if within_floor_contact_tolerance
-            else "direct_valid_inside"
-        )
-        record.update(
-            {
-                "route": route,
-                "final_verdict": "valid",
-                "affects_oob_score": True,
-            }
-        )
-        return record
-
-    record["requires_vlm"] = True
-    if bool(cfg.get("detector_only")):
-        return record
-    if vlm_judge is None:
-        return record
-
-    event = {
-        "object_id": obj.id,
-        "object_ids": [obj.id],
-        "architecture_element": "room_bounds",
-        "plane_flags": plane_flags,
-    }
-    detector_evidence = {
-        "detector": OOB_EVALUATOR_VERSION,
-        "plane_flags": plane_flags,
-        "obb_intervals": intervals,
-        "room": room["report"],
-        "numerical_eps": eps,
-        "floor_contact_tolerance_m": floor_tol,
-        "plane_penetration_m": plane_penetration,
-        "within_floor_contact_tolerance": within_floor_contact_tolerance,
-        "crossing_depths_m": crossing_depths,
-        "object": {
-            "id": obj.id,
-            "category": obj.category,
-            "description": obj.desc,
-            "center": [float(value) for value in center],
-            "size": [float(value) for value in np.asarray(obj.size, dtype=float)],
-            "rotation_degrees": [float(value) for value in np.asarray(obj.rotation, dtype=float)],
-            "geometry_provenance": _geometry_provenance(scene, obj.id),
-        },
-        "extracted_relationships_are_claims_only": True,
-    }
-    try:
-        judge_result = adjudicate_p0b_event(
-            metric="oob",
-            event=event,
-            prompt=str(prompt or ""),
-            relationships=relationships,
-            scene=scene,
-            detector_evidence=detector_evidence,
-            judge=vlm_judge,
-            object_ids=[obj.id],
-            overview_render_evidence=list(render_evidence or []),
-            local_view_provider=local_view_provider,
-        )
-    except EvidenceControlUnresolvedError as exc:
-        record["route"] = "unresolved"
-        record["evidence_control"] = exc.result.to_dict()
-        return record
-    except Exception as exc:
-        record["adjudication_error"] = f"{type(exc).__name__}: {exc}"
-        record["route"] = "vlm_adjudication_failed"
-        schema_audit = response_schema_audit_from_exception(exc)
-        if schema_audit is not None:
-            record["adjudication_failure_audit"] = schema_audit
-        if bool(cfg.get("official_mode")):
-            raise OOBEvaluationError(record["adjudication_error"]) from exc
-        return record
-
-    verdict = str(judge_result.get("verdict"))
-    record.update(
-        {
-            "route": "vlm_adjudicated",
-            "final_verdict": verdict,
-            "affects_oob_score": True,
-            "judge_result": deepcopy(judge_result),
-        }
-    )
     return record
 
 
@@ -357,6 +390,10 @@ def _plane_penetration(
 
 
 def _resolve_room(scene: dict) -> dict[str, Any] | None:
+    from benchmark.non_rectangular.geometry import polygon_geometry_from_scene
+    geometry = polygon_geometry_from_scene(scene)
+    if geometry is not None:
+        return {"polygon_geometry": geometry, "report": geometry.public_dict()}
     points = np.asarray(get_room_boundary(scene), dtype=float)
     if points.shape != (4, 2) or not np.all(np.isfinite(points)):
         return None

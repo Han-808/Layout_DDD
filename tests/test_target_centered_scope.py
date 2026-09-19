@@ -108,17 +108,16 @@ def _valid(request: dict | None = None) -> dict:
     return result
 
 
-def test_object_pairing_singleton_candidate_gets_non_group_target_scope(
+def test_object_pairing_singleton_candidate_stays_room_global(
     tmp_path: Path,
 ) -> None:
     global_image = _image(tmp_path, "global")
-    local_image = _image(tmp_path, "chair_local")
     provider_calls: list[dict] = []
     judge_calls: list[dict] = []
 
     def provider(request: dict) -> list[dict]:
         provider_calls.append(request)
-        return [{"path": local_image, "role": "object_local"}]
+        raise AssertionError("Pairing must not acquire target-local evidence")
 
     def judge(request: dict) -> dict:
         judge_calls.append(request)
@@ -131,7 +130,7 @@ def test_object_pairing_singleton_candidate_gets_non_group_target_scope(
                 "missing_evidence": [],
                 "defects": [
                     {
-                        "scope": "group_member_category_compatibility",
+                        "scope": "scene_member_category_compatibility",
                         "target_ids": ["chair"],
                         "relation": "category_compatibility_candidate",
                         "reason": "Confirm the isolated target visually.",
@@ -160,24 +159,26 @@ def test_object_pairing_singleton_candidate_gets_non_group_target_scope(
     metric = report["metrics"]["object_pairing_consistency"]
 
     assert metric["status"] == "evaluated"
-    assert metric["route"] == "json_screen_then_target_visual"
+    assert metric["route"] == "json_screen_then_global_inventory_visual"
     assert metric["selected_group_ids"] == []
-    assert len(metric["target_scope_results"]) == 1
-    assert metric["target_scope_policy"]["creates_group"] is False
-    assert len(provider_calls) == 1
-    provider_request = provider_calls[0]
-    assert "group_scope" not in provider_request
-    assert provider_request["object_groups"] == []
-    assert provider_request["target_scope"]["target_id"] == "chair"
-    assert provider_request["target_scope"]["group_identity"] is None
+    assert "target_scope_results" not in metric
+    assert provider_calls == []
     target_judge = judge_calls[1]
-    assert target_judge["target_object_ids"] == ["chair"]
-    assert target_judge["framing_object_ids"][0] == "chair"
+    assert target_judge["evidence_phase"] == (
+        "global_inventory_confirmation"
+    )
+    assert target_judge["target_object_ids"] == [
+        "chair",
+        "desk",
+        "lamp",
+    ]
     assert target_judge["response_contract"]["allowed_target_ids"] == [
-        "chair"
+        "chair",
+        "desk",
+        "lamp",
     ]
     assert target_judge["object_groups"] == []
-    assert target_judge["render_evidence"] == [global_image, local_image]
+    assert target_judge["render_evidence"] == [global_image]
 
 
 def test_placement_without_group_owner_routes_check_to_target_scope(
@@ -334,7 +335,10 @@ def test_target_local_acquisition_failure_uses_retained_global_forced_final(
     assert target["retained_global_forced_final"] is True
     assert target["evidence_paths"] == [global_image]
     assert target["evidence_resolution"]["scope_satisfied"] is False
-    assert target["evidence_coverage"]["grounded"] is False
+    assert target["evidence_coverage"]["grounded"] is True
+    assert target["evidence_coverage"]["grounding_policy"] == (
+        "real_judge_forced_choice_with_retained_visual_v1"
+    )
     assert target["judgement"]["evidence_ambiguous"] is True
     assert target["judgement"]["forced_binary"] is True
     assert target["placement_check_resolution"]["rows"][0][
@@ -342,7 +346,77 @@ def test_target_local_acquisition_failure_uses_retained_global_forced_final(
     ] == "inferred_under_budget"
     assert judge_calls[-1]["render_evidence"] == [global_image]
     assert judge_calls[-1]["budget_exhaustion_finalization"]["required"] is True
-    assert metric["coverage"]["score_grounding"]["fraction"] < 1.0
+    assert metric["coverage"]["score_grounding"]["fraction"] == 1.0
+    assert metric["coverage"]["score_grounding"]["complete"] is True
+
+
+def test_target_local_without_visual_uses_geometry_only_vlm() -> None:
+    scene = _scene()
+    scope = build_target_camera_scope(
+        scene,
+        target_id="chair",
+        metric="semantic_placement_consistency",
+        explicit_context_ids=["desk"],
+        include_global_context=True,
+    )
+    requests: list[dict] = []
+    required_check = {
+        "check_id": "placement_check_chair_desk",
+        "check_type": "contextual_anchor",
+        "subject_id": "chair",
+        "context_ids": ["desk"],
+    }
+
+    def call_judge(_judge, request: dict) -> dict:
+        requests.append(request)
+        return _valid(request)
+
+    records = evaluate_target_scoped_judgements(
+        metric_name="semantic_placement_consistency",
+        scene=scene,
+        prompt=None,
+        packets=[
+            {
+                "target_id": "chair",
+                "context_ids": ["desk"],
+                "framing_ids": ["chair", "desk"],
+                "target_scope": scope,
+                "paths": [],
+                "resolution": {
+                    "scope_satisfied": False,
+                    "global_anchor_satisfied": False,
+                    "local_scope_satisfied": False,
+                    "provider_status": "failed",
+                    "provider_reason": "no_feasible_candidate",
+                },
+                "required_placement_checks": [required_check],
+            }
+        ],
+        vlm_judge=object(),
+        authorized_deviations=[],
+        visual_style_spec=None,
+        build_judge_request=lambda **kwargs: kwargs,
+        call_judge=call_judge,
+        apply_prompt_exemptions=lambda value, **_: value,
+        normalize_judgement=lambda value, **_: {
+            "status": "evaluated",
+            "score": 1.0,
+            "reason": None,
+        },
+    )
+
+    target = records[0]
+    assert len(requests) == 1
+    assert requests[0]["render_evidence"] == []
+    assert requests[0]["structured_geometry_finalization"]["mode"] == (
+        "geometry_only_vlm"
+    )
+    assert target["status"] == "evaluated"
+    assert target["structured_fallback"]["mode"] == "geometry_only_vlm"
+    assert target["placement_check_resolution"]["complete"] is True
+    assert target["judgement"]["placement_check_results"][0][
+        "observation_status"
+    ] == "inferred_under_budget"
 
 
 def test_corrupt_global_anchor_cannot_enable_target_fallback(
@@ -380,14 +454,12 @@ def test_corrupt_global_anchor_cannot_enable_target_fallback(
     assert "undecodable_render" in integrity["reason_codes"]
 
 
-def test_target_context_object_cannot_become_defect_owner(
+def test_pairing_global_confirmation_can_attribute_any_room_object(
     tmp_path: Path,
 ) -> None:
     global_image = _image(tmp_path, "global_context_owner")
-    local_image = _image(tmp_path, "target_context_owner")
-
     def judge(request: dict) -> dict:
-        if request["evidence_phase"] != "target_local_confirmation":
+        if request["evidence_phase"] != "global_inventory_confirmation":
             return _valid(request)
         value = _valid(request)
         value.update(
@@ -395,10 +467,10 @@ def test_target_context_object_cannot_become_defect_owner(
             reason="The context desk is invalid.",
             defects=[
                 {
-                    "scope": "object_environment_fit",
+                    "scope": "scene_member_role_compatibility",
                     "target_ids": ["desk"],
                     "relation": "context_object_wrongly_attributed",
-                    "reason": "Context objects cannot own this episode.",
+                    "reason": "The full room inventory permits this attribution.",
                 }
             ],
         )
@@ -415,9 +487,9 @@ def test_target_context_object_cannot_become_defect_owner(
             ]
         },
         render_evidence={"global": [global_image]},
-        camera_evidence_provider=lambda request: [
-            {"path": local_image, "role": "object_local"}
-        ],
+        camera_evidence_provider=lambda request: (_ for _ in ()).throw(
+            AssertionError("global evidence is already available")
+        ),
         vlm_judge=lambda request: (
             {
                 "evidence_status": "sufficient",
@@ -427,7 +499,7 @@ def test_target_context_object_cannot_become_defect_owner(
                 "missing_evidence": [],
                 "defects": [
                     {
-                        "scope": "group_member_category_compatibility",
+                            "scope": "scene_member_category_compatibility",
                         "target_ids": ["chair"],
                         "relation": "candidate",
                         "reason": "Confirm visually.",
@@ -441,13 +513,11 @@ def test_target_context_object_cannot_become_defect_owner(
             "object_pairing_consistency": {"applicability": "relevant"}
         },
     )
-    target = report["metrics"]["object_pairing_consistency"][
-        "target_scope_results"
-    ][0]
-    assert target["status"] == "failed"
-    assert target["terminal_state"] == "infrastructure_failure"
-    assert target["reason"] == "vlm_judge_failed"
-    assert target["judgement"]["error_type"] == "ValueError"
+    metric = report["metrics"]["object_pairing_consistency"]
+    assert metric["status"] == "evaluated"
+    assert metric["score"] == 0.0
+    assert "target_scope_results" not in metric
+    assert metric["judgement"]["defects"][0]["target_ids"] == ["desk"]
 
 
 def test_target_local_placement_can_deduplicate_exact_function_event(

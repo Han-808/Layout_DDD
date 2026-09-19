@@ -298,6 +298,7 @@ class RequestOptions:
     reasoning_effort: str | None
     thinking_type: str | None
     preserved_thinking: bool | None
+    stage_c_request_timeout_seconds: float | None = None
 
     def __post_init__(self) -> None:
         timeout = _finite_number(
@@ -309,6 +310,17 @@ class RequestOptions:
         if timeout <= 0:
             raise ValueError("request_timeout_seconds must be positive")
         object.__setattr__(self, "request_timeout_seconds", timeout)
+        stage_c_timeout = _finite_number(
+            self.stage_c_request_timeout_seconds,
+            field_name="stage_c_request_timeout_seconds",
+        )
+        if stage_c_timeout is not None and stage_c_timeout <= 0:
+            raise ValueError("stage_c_request_timeout_seconds must be positive")
+        object.__setattr__(
+            self,
+            "stage_c_request_timeout_seconds",
+            stage_c_timeout,
+        )
         _positive_int(self.max_tokens, field_name="max_tokens")
         for field_name in ("temperature", "top_p", "repetition_penalty"):
             value = _finite_number(getattr(self, field_name), field_name=field_name)
@@ -380,7 +392,7 @@ class RequestOptions:
         raise ValueError(f"unsupported option contract: {option_id!r}")
 
     def to_public_dict(self) -> dict[str, Any]:
-        return {
+        result = {
             "request_timeout_seconds": self.request_timeout_seconds,
             "max_tokens": self.max_tokens,
             "temperature": self.temperature,
@@ -391,6 +403,11 @@ class RequestOptions:
             "thinking_type": self.thinking_type,
             "preserved_thinking": self.preserved_thinking,
         }
+        if self.stage_c_request_timeout_seconds is not None:
+            result["stage_c_request_timeout_seconds"] = (
+                self.stage_c_request_timeout_seconds
+            )
+        return result
 
 
 @dataclass(frozen=True, slots=True)

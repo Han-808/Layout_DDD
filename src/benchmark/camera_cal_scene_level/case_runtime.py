@@ -49,6 +49,7 @@ class CaseRuntimePolicy:
         [dict[str, Any], dict[str, Any]], dict[str, Any]
     ]
     promptless_l1_l3_profile: Callable[[], dict[str, Any]]
+    promptless_l1_only_profile: Callable[[], dict[str, Any]]
     promptless_l3_only_profile: Callable[[], dict[str, Any]]
     scene_quality_config: Callable[..., dict[str, Any]]
     camera_cal_asset_policy: Callable[[], dict[str, Any]]
@@ -123,6 +124,10 @@ def run_case_impl(
     """Run exactly one case using explicitly supplied runtime dependencies."""
 
     del dataset_root
+    l1_only = not metrics and not l3_only
+    recovery_mode = (
+        "l1_only" if l1_only else "l3_only" if l3_only else None
+    )
     case_id = str(case["case_id"])
     progress = progress or deps.external.progress_factory(
         output_root / "progress.jsonl",
@@ -152,6 +157,37 @@ def run_case_impl(
         control_config=control_config,
         l3_only=l3_only,
     )
+    layer_merge_identity = None
+    if recovery_mode is not None:
+        canonical_profile = deps.policy.promptless_l1_l3_profile()
+        canonical_l3_metrics = tuple(
+            str(metric)
+            for metric in canonical_profile[deps.policy.l3_layer]["metrics"]
+        )
+        neutral_fingerprint = deps.resume.case_input_fingerprint(
+            case=case,
+            case_manifest=case_manifest,
+            paths=paths,
+            route=route,
+            metrics=canonical_l3_metrics,
+            functional_group_local_granularity=(
+                functional_group_local_granularity
+            ),
+            functional_group_local_evidence_policy=(
+                functional_group_local_evidence_policy
+            ),
+            deduction_multiplier=deduction_multiplier,
+            grouping_config=grouping_config,
+            renderer_config=renderer_config,
+            control_config=control_config,
+            l3_only=False,
+        )
+        layer_merge_identity = {
+            "schema_version": "camera_cal_layer_merge_identity_v1",
+            "neutral_input_fingerprint": neutral_fingerprint,
+            "required_pair": ["l1_only", "l3_only"],
+            "canonical_l3_metrics": list(canonical_l3_metrics),
+        }
     case_out = output_root / "cases" / case_id
     existing_manifest_path = case_out / "case_run_manifest.json"
 
@@ -268,17 +304,21 @@ def run_case_impl(
         "source_prompt_used": False,
         "model_route": deps.policy.safe_route_manifest(route),
         "selected_l3_metrics": list(metrics),
-        "layers_executed": [deps.policy.l3_layer]
-        if l3_only
-        else [deps.policy.l1_layer, deps.policy.l3_layer],
-        "layers_not_executed": [
-            deps.policy.l1_layer,
-            deps.policy.l2_layer,
-            deps.policy.l4_layer,
-        ]
-        if l3_only
-        else [deps.policy.l2_layer, deps.policy.l4_layer],
-        "recovery_mode": "l3_only" if l3_only else None,
+        "layers_executed": (
+            [deps.policy.l1_layer]
+            if l1_only
+            else [deps.policy.l3_layer]
+            if l3_only
+            else [deps.policy.l1_layer, deps.policy.l3_layer]
+        ),
+        "layers_not_executed": (
+            [deps.policy.l2_layer, deps.policy.l3_layer, deps.policy.l4_layer]
+            if l1_only
+            else [deps.policy.l1_layer, deps.policy.l2_layer, deps.policy.l4_layer]
+            if l3_only
+            else [deps.policy.l2_layer, deps.policy.l4_layer]
+        ),
+        "recovery_mode": recovery_mode,
         "deduction_multiplier": deduction_multiplier,
         "l1_binary_failure_policy": deepcopy(
             deps.policy.l1_binary_failure_policy
@@ -292,6 +332,11 @@ def run_case_impl(
             "status": "pending" if export_audit_graphs else "disabled",
             "decision_authority": "none",
         },
+        **(
+            {"layer_merge_identity": layer_merge_identity}
+            if layer_merge_identity is not None
+            else {}
+        ),
     }
     deps.io.atomic_write_json(existing_manifest_path, case_run_manifest)
     progress.emit(
@@ -335,9 +380,13 @@ def run_case_impl(
     progress.emit(
         "evaluation_started",
         case_id=case_id,
-        layers=[deps.policy.l3_layer]
-        if l3_only
-        else [deps.policy.l1_layer, deps.policy.l3_layer],
+        layers=(
+            [deps.policy.l1_layer]
+            if l1_only
+            else [deps.policy.l3_layer]
+            if l3_only
+            else [deps.policy.l1_layer, deps.policy.l3_layer]
+        ),
         metrics=list(metrics),
     )
     try:
@@ -352,7 +401,9 @@ def run_case_impl(
             vlm_judge=adapters.raw_judge,
             grouping_model=adapters.grouping_model,
             evaluation_profile=(
-                deps.policy.promptless_l3_only_profile()
+                deps.policy.promptless_l1_only_profile()
+                if l1_only
+                else deps.policy.promptless_l3_only_profile()
                 if l3_only
                 else deps.policy.promptless_l1_l3_profile()
             ),
@@ -400,6 +451,27 @@ def run_case_impl(
             api_usage=api_usage,
         )
         raise
+    if recovery_mode is not None:
+        report["evaluation_status"] = "incomplete"
+        report["benchmark_score"] = None
+        report["benchmark_score_100"] = None
+        report["benchmark_score_status"] = "insufficient_metric_coverage"
+        coverage = report.get("coverage")
+        coverage = deepcopy(coverage) if isinstance(coverage, dict) else {}
+        coverage.update(
+            complete=False,
+            score_resolution_complete=False,
+            score_grounding_complete=False,
+            coverage_threshold_passed=False,
+        )
+        report["coverage"] = coverage
+        notes = [str(value) for value in report.get("notes") or []]
+        notes.append(
+            f"{recovery_mode} is a diagnostic layer-only result and cannot "
+            "claim a complete benchmark score before an identity-checked "
+            "complementary-layer merge."
+        )
+        report["notes"] = list(dict.fromkeys(notes))
     api_usage = api_tracker.summary()
     progress.emit(
         "evaluation_completed",
@@ -431,9 +503,13 @@ def run_case_impl(
         l3_report,
         metrics=metrics,
     )
-    l3_decision_status = str(l3_resolution["status"])
+    l3_decision_status = (
+        "not_executed" if l1_only else str(l3_resolution["status"])
+    )
     final_decision_status = (
-        l3_decision_status
+        l1_decision_status
+        if l1_only
+        else l3_decision_status
         if l3_only
         else "resolved"
         if l1_decision_status == "resolved"
@@ -446,6 +522,8 @@ def run_case_impl(
     diagnostic_reason = (
         "l1_engineering_failure"
         if l1_failures
+        else "l1_only_recovery"
+        if l1_only
         else "l3_infrastructure_failure"
         if l3_decision_status == "infrastructure_failure"
         else "l1_unresolved"
@@ -460,11 +538,13 @@ def run_case_impl(
         scene_quality_report=l3_report,
         metrics=metrics,
     )
-    comparison["diagnostic_only"] = final_decision_status != "resolved"
+    comparison["diagnostic_only"] = bool(
+        recovery_mode is not None or final_decision_status != "resolved"
+    )
     comparison["diagnostic_reason"] = diagnostic_reason
     l1_diagnostics = {
         "policy": deepcopy(deps.policy.l1_binary_failure_policy),
-        "recovery_mode": "l3_only" if l3_only else None,
+        "recovery_mode": recovery_mode,
         "l1_executed": not l3_only,
         "final_decision_status": l1_decision_status,
         "l1_decision_status": l1_decision_status,
@@ -472,19 +552,36 @@ def run_case_impl(
         "engineering_failure_count": len(l1_failures),
         "engineering_failures": l1_failures,
         "response_schema_validation": schema_validation,
-        "l3_diagnostics_completed": True,
+        "l3_diagnostics_completed": not l1_only,
     }
     report["runner_outcome"] = {
         "final_decision_status": final_decision_status,
         "l1_decision_status": l1_decision_status,
         "l3_decision_status": l3_decision_status,
         "l3_resolution_audit": deepcopy(l3_resolution),
+        **(
+            {"recovery_mode": recovery_mode}
+            if recovery_mode is not None
+            else {}
+        ),
         "l1_engineering_failure": bool(l1_failures),
-        "l3_results_are_diagnostic_only": final_decision_status != "resolved",
+        "l3_results_are_diagnostic_only": bool(
+            l1_only or final_decision_status != "resolved"
+        ),
         "l1_diagnostics_path": str(
             (case_out / "l1_diagnostics.json").resolve()
         ),
     }
+    uniform_acceptance = deepcopy(report.get("judgement_coverage_summary"))
+    if uniform_acceptance is not None:
+        # Execution/resolution diagnostics remain raw facts. Score acceptance
+        # is a separate explicit contract, not a relabelled all-eight success.
+        report["runner_outcome"]["uniform_score_acceptance"] = {
+            key: uniform_acceptance[key] for key in (
+                "schema_version", "eligible", "status", "judgement_coverage_fraction",
+                "minimum_judgement_coverage", "infrastructure_failure_metrics")}
+        case_run_manifest["uniform_score_acceptance"] = deepcopy(
+            report["runner_outcome"]["uniform_score_acceptance"])
     elapsed = deps.io.monotonic() - started
 
     deps.io.atomic_write_json(case_out / "evaluation_report.json", report)
@@ -569,6 +666,8 @@ def run_case_impl(
     deps.io.atomic_write_json(existing_manifest_path, case_run_manifest)
     return {
         "case_id": case_id,
+        **({"uniform_score_acceptance": deepcopy(case_run_manifest["uniform_score_acceptance"])}
+           if "uniform_score_acceptance" in case_run_manifest else {}),
         "status": "complete",
         "input_fingerprint": fingerprint,
         "elapsed_seconds": elapsed,

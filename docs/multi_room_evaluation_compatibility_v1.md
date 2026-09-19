@@ -63,6 +63,17 @@ the existing formal evaluation datasets:
 - collision limits: 400,000 vertices/object, 550,000 faces/object,
   2,000,000 total vertices, and 2,500,000 total faces.
 
+Visible assets above those collision limits retain their original mesh for all
+renders and for the saved inspection `.blend`. The Blender worker creates a
+temporary collision-only copy, applies deterministic collapse decimation until
+both per-object and remaining scene budgets are satisfied, compacts vertices
+that are not referenced by any exported face, realigns the simplified copy to
+the canonical frame, and then deletes the temporary copy. The collision
+manifest records the original/final complexity, every decimation ratio, frame
+alignment, and explicit `visible_scene_modified=false` and
+`saved_blend_modified=false` attestations. Official validation rejects missing
+or inconsistent decimation audit fields; no collision limit is increased.
+
 Changing any of these settings while using `--require-complete` fails before
 rendering. Alternative renderer settings require `--allow-incomplete` and
 produce a diagnostic, campaign-ineligible dataset even when all source rooms

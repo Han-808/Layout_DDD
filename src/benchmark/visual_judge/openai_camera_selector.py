@@ -684,6 +684,15 @@ def build_openai_compatible_camera_selector(
         retry_backoff_seconds=float(
             config.get("retry_backoff_seconds", 1.0)
         ),
+        retry_backoff_mode=str(
+            config.get("retry_backoff_mode", "linear")
+        ),
+        retry_all_http_errors=bool(
+            config.get("retry_all_http_errors", False)
+        ),
+        retry_malformed_response=bool(
+            config.get("retry_malformed_response", False)
+        ),
         min_request_interval_seconds=float(
             config.get("min_request_interval_seconds", 0.0)
         ),

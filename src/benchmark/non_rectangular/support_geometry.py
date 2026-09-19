@@ -26,7 +26,7 @@ def polygon_support_architecture_evidence(
     if geometry is None:
         return None
     footprint = object_footprint_polygon(raw_object)
-    minimum_z, _ = object_vertical_interval(raw_object)
+    minimum_z, maximum_z = object_vertical_interval(raw_object)
     measurements = geometry.wall_measurements(footprint)
     nearest = geometry.nearest_wall_measurement(footprint)
     contacts = [
@@ -42,13 +42,21 @@ def polygon_support_architecture_evidence(
         for item in measurements
         if float(item["distance_m"]) <= float(tolerance_m)
     ]
+    ceiling_clearance = geometry.ceiling_z_m - maximum_z
+    if geometry.ceiling_in_scope and abs(ceiling_clearance) <= float(tolerance_m):
+        contacts.append({
+            "plane": "ceiling",
+            "signed_clearance_m": ceiling_clearance,
+            "mode": "ceiling_attachment",
+        })
     return {
         "schema_version": POLYGON_SUPPORT_ARCHITECTURE_VERSION,
         "floor_z_m": geometry.floor_z_m,
-        "ceiling_in_scope": False,
+        "ceiling_in_scope": geometry.ceiling_in_scope,
         "active_physical_wall_ids": [wall.wall_id for wall in geometry.walls],
         "architecture_plane_clearances_m": {
             "floor": float(minimum_z - geometry.floor_z_m),
+            **({"ceiling": ceiling_clearance} if geometry.ceiling_in_scope else {}),
             **{
                 str(item["wall_id"]): float(item["signed_clearance_m"])
                 for item in measurements

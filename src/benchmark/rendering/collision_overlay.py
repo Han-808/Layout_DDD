@@ -1184,12 +1184,10 @@ def _minimum_angular_diversity(candidate: dict[str, Any], selected: list[dict[st
 
 
 def _architecture_plane_overlays(scene: dict[str, Any], detector_evidence: dict[str, Any]) -> list[dict[str, Any]]:
-    polygon_planes = _nonrect_architecture_plane_overlays(
-        scene,
-        detector_evidence,
-    )
-    if polygon_planes:
-        return polygon_planes
+    from benchmark.non_rectangular.geometry import polygon_geometry_from_scene
+    if polygon_geometry_from_scene(scene) is not None:
+        # Never display an enclosing rectangle as a physical wall.
+        return _nonrect_architecture_plane_overlays(scene, detector_evidence)
     flags = detector_evidence.get("plane_flags") if isinstance(detector_evidence, dict) else None
     if not isinstance(flags, dict):
         return []
@@ -1197,6 +1195,34 @@ def _architecture_plane_overlays(scene: dict[str, Any], detector_evidence: dict[
     if bounds is None:
         return []
     min_x, max_x, min_y, max_y, floor_z, ceiling_z = bounds
+    room = (
+        detector_evidence.get("room")
+        if isinstance(detector_evidence.get("room"), dict)
+        else {}
+    )
+    references = (
+        room.get("plane_reference")
+        if isinstance(room.get("plane_reference"), dict)
+        else {}
+    )
+
+    def coordinate(flag: str, fallback: float) -> float:
+        item = references.get(flag)
+        raw = item.get("coordinate_m") if isinstance(item, dict) else None
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            return float(fallback)
+        return value if np.isfinite(value) else float(fallback)
+
+    min_x = coordinate("west_oob", min_x)
+    max_x = coordinate("east_oob", max_x)
+    min_y = coordinate("south_oob", min_y)
+    max_y = coordinate("north_oob", max_y)
+    floor_z = coordinate("floor_oob", floor_z)
+    ceiling_z = coordinate("ceiling_oob", ceiling_z)
+    if not (max_x > min_x and max_y > min_y and ceiling_z > floor_z):
+        return []
     definitions = {
         "west_oob": ("west", [[min_x, min_y, floor_z], [min_x, max_y, floor_z], [min_x, max_y, ceiling_z], [min_x, min_y, ceiling_z]], [-1.0, 0.0, 0.0]),
         "east_oob": ("east", [[max_x, min_y, floor_z], [max_x, max_y, floor_z], [max_x, max_y, ceiling_z], [max_x, min_y, ceiling_z]], [1.0, 0.0, 0.0]),
@@ -1221,6 +1247,11 @@ def _architecture_plane_overlays(scene: dict[str, Any], detector_evidence: dict[
                 "normal_from": [float(value) for value in center],
                 "normal_to": [float(value) for value in normal_end],
                 "color": list(COLLISION_OVERLAY_COLORS["architecture"]),
+                "plane_reference": (
+                    references.get(flag)
+                    if isinstance(references.get(flag), dict)
+                    else None
+                ),
             }
         )
     return result
@@ -1230,100 +1261,52 @@ def _nonrect_architecture_plane_overlays(
     scene: dict[str, Any],
     detector_evidence: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    metadata = scene.get("metadata")
-    geometry = (
-        metadata.get("non_rectangular_room_geometry")
-        if isinstance(metadata, dict)
-        and metadata.get("evaluation_mode")
-        == "non_rectangular_multi_room"
-        else None
-    )
-    violated = detector_evidence.get("violated_edges")
-    if not isinstance(geometry, dict) or not isinstance(violated, list):
+    from benchmark.non_rectangular.geometry import polygon_geometry_from_scene
+
+    geometry = polygon_geometry_from_scene(scene)
+    if geometry is None:
         return []
-    floor_z = geometry.get("floor_z_m")
-    if (
-        isinstance(floor_z, bool)
-        or not isinstance(floor_z, (int, float))
-        or not np.isfinite(float(floor_z))
-    ):
-        return []
-    walls = {
-        str(item.get("wall_id") or ""): item
-        for item in geometry.get("wall_segments") or []
-        if isinstance(item, dict) and item.get("wall_id")
-    }
     result: list[dict[str, Any]] = []
+
+    def add(name, flag, corners, normal, *, wall_id=None):
+        center = np.mean(np.asarray(corners, dtype=float), axis=0)
+        # Use an actual interior point for a concave floor/ceiling normal.
+        if wall_id is None:
+            center[:2] = geometry.representative_interior_xy()
+        normal_end = center + np.asarray(normal, dtype=float) * 0.5
+        result.append({
+            "id": f"room_polygon_{name}_plane", "flag": flag, "name": name,
+            **({"wall_id": wall_id} if wall_id is not None else {}),
+            "corners": corners,
+            "edges": [[i, (i + 1) % len(corners)] for i in range(len(corners))],
+            "normal_from": center.tolist(), "normal_to": normal_end.tolist(),
+            "color": list(COLLISION_OVERLAY_COLORS["architecture"]),
+            "geometry_source": "authoritative_polygon_room",
+        })
+
     seen: set[str] = set()
-    for edge in violated:
+    for edge in detector_evidence.get("violated_edges") or []:
         if not isinstance(edge, dict):
             continue
         wall_id = str(edge.get("wall_id") or "")
-        if not wall_id or wall_id in seen:
+        if wall_id in seen:
             continue
-        wall = walls.get(wall_id, {})
-        start = edge.get("start_xy") or wall.get("start_xy")
-        end = edge.get("end_xy") or wall.get("end_xy")
-        normal = (
-            edge.get("inward_normal_xy")
-            or (
-                edge.get("edge_local_frame")
-                if isinstance(edge.get("edge_local_frame"), dict)
-                else {}
-            ).get("inward_normal_xy")
-            or wall.get("inward_normal_xy")
-        )
-        height = edge.get("height_m", wall.get("height_m"))
-        try:
-            start_xy = np.asarray(start, dtype=float)
-            end_xy = np.asarray(end, dtype=float)
-            inward = np.asarray(normal, dtype=float)
-            height_m = float(height)
-        except (TypeError, ValueError):
+        # Detector records select a wall but never redefine its physical shape.
+        wall = next((wall for wall in geometry.walls if wall.wall_id == wall_id), None)
+        if wall is None:
             continue
-        if (
-            start_xy.shape != (2,)
-            or end_xy.shape != (2,)
-            or inward.shape != (2,)
-            or not np.all(np.isfinite(start_xy))
-            or not np.all(np.isfinite(end_xy))
-            or not np.all(np.isfinite(inward))
-            or not np.isfinite(height_m)
-            or height_m <= 0.0
-        ):
-            continue
-        normal_norm = float(np.linalg.norm(inward))
-        if normal_norm <= 1.0e-9:
-            continue
-        inward /= normal_norm
-        bottom = float(floor_z)
-        top = bottom + height_m
-        corners = [
-            [float(start_xy[0]), float(start_xy[1]), bottom],
-            [float(end_xy[0]), float(end_xy[1]), bottom],
-            [float(end_xy[0]), float(end_xy[1]), top],
-            [float(start_xy[0]), float(start_xy[1]), top],
-        ]
-        center = np.mean(np.asarray(corners, dtype=float), axis=0)
-        normal_end = center + np.asarray(
-            [float(inward[0]), float(inward[1]), 0.0],
-            dtype=float,
-        ) * 0.5
-        result.append(
-            {
-                "id": f"room_polygon_{wall_id}_plane",
-                "flag": "polygon_wall_oob",
-                "wall_id": wall_id,
-                "name": wall_id,
-                "corners": corners,
-                "edges": [[0, 1], [1, 2], [2, 3], [3, 0]],
-                "normal_from": [float(value) for value in center],
-                "normal_to": [float(value) for value in normal_end],
-                "color": list(COLLISION_OVERLAY_COLORS["architecture"]),
-                "geometry_source": "ordered_nonrect_wall_segment",
-            }
-        )
+        bottom, top = geometry.floor_z_m, geometry.floor_z_m + wall.height_m
+        corners = [[*wall.start_xy, bottom], [*wall.end_xy, bottom],
+                   [*wall.end_xy, top], [*wall.start_xy, top]]
+        add(wall_id, "polygon_wall_oob", corners, [*wall.inward_normal_xy, 0.0], wall_id=wall_id)
         seen.add(wall_id)
+    flags = detector_evidence.get("plane_flags") or {}
+    for name, enabled, z, normal in (
+        ("floor", True, geometry.floor_z_m, [0, 0, -1]),
+        ("ceiling", geometry.ceiling_in_scope, geometry.ceiling_z_m, [0, 0, 1]),
+    ):
+        if enabled and flags.get(name + "_oob"):
+            add(name, name + "_oob", [[x, y, z] for x, y in geometry.floor_polygon_xy], normal)
     return result
 
 

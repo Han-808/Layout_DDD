@@ -24,6 +24,9 @@ from benchmark.visual_judge.adapters.legacy_camera import (
 from benchmark.visual_judge.orchestration.budget import (
     selection_action_count as _selection_action_count,
 )
+from benchmark.visual_judge.evidence_resolution import (
+    adaptive_enabled, adaptive_provider_payload, usable_visuals, EvidenceUnavailableError,
+)
 
 
 @dataclass(frozen=True)
@@ -446,22 +449,58 @@ class _ExistingProviderEvidenceRenderer:
             )
         provider_request = _provider_request(request)
         provider_evidence: list[Any] = []
+        adaptive = adaptive_enabled(request.judge_request.context, metric=request.judge_request.metric)
+        acquisition: dict[str, Any] = {}
         try:
-            raw = _call_provider(
-                self.provider,
-                provider_request,
-                metric=request.judge_request.metric,
-            )
-            provider_evidence = _provider_visual_evidence(raw)
-            if not provider_evidence:
+            from benchmark.visual_judge.evidence_gap_v2 import enabled as fallback_v2_enabled
+            outcome = None
+            if adaptive and fallback_v2_enabled(request.judge_request.context):
+                from benchmark.visual_judge.acquisition_outcome import acquire_evidence
+                outcome = acquire_evidence(lambda value: _call_provider(
+                    self.provider, value, metric=request.judge_request.metric,
+                ), provider_request)
+                provider_evidence, acquisition = outcome.items, deepcopy(outcome.audit)
+                raw = provider_evidence
+                outcome.raise_if_failed()
+            else:
+                raw = _call_provider(self.provider, provider_request, metric=request.judge_request.metric)
+            if adaptive:
+                if outcome is None:
+                    provider_evidence, acquisition = adaptive_provider_payload(raw)
+                paths, excluded = usable_visuals(provider_evidence, target_ids=list(
+                    request.evidence_goal.get("target_ids") or provider_request.get("object_ids") or []
+                ))
+                by_path: dict[str, Any] = {}
+                for item in provider_evidence:
+                    path = item.get("path") or item.get("image_path") if isinstance(item, dict) else item
+                    if isinstance(path, (str, Path)) and str(path).strip():
+                        by_path.setdefault(str(Path(path).expanduser().resolve()), item)
+                eligible_evidence = [deepcopy(by_path[path]) for path in paths]
+                acquisition.update(
+                    available_paths=paths, excluded_images=excluded,
+                    evidence_metadata=[deepcopy(item) for item in provider_evidence if isinstance(item, dict)],
+                    packet_incomplete=bool(acquisition["packet_incomplete"] or excluded),
+                )
+            else:
+                provider_evidence = _provider_visual_evidence(raw)
+                eligible_evidence = provider_evidence
+            if not eligible_evidence:
+                if adaptive:
+                    raise EvidenceUnavailableError("provider returned no usable visual evidence", audit=acquisition)
                 raise RuntimeError(
                     "existing camera evidence provider returned no visual "
                     "evidence"
                 )
             evidence, budget_audit = _fit_provider_evidence_to_budget(
-                provider_evidence,
+                eligible_evidence,
                 remaining_images=request.budget.get("remaining_images"),
+                allow_partial_bundles=adaptive,
             )
+            if adaptive:
+                selected_paths = {str(Path(item.get("path") or item.get("image_path") if isinstance(item, dict) else item).expanduser().resolve())
+                                  for item in evidence}
+                acquisition["images_not_delivered"] = [path for path in paths if path not in selected_paths]
+                acquisition["packet_incomplete"] = bool(acquisition["packet_incomplete"] or acquisition["images_not_delivered"])
         except Exception as exc:
             try:
                 usage = _provider_observed_usage(
@@ -483,6 +522,7 @@ class _ExistingProviderEvidenceRenderer:
                         "usage_observation_error": (
                             f"{type(usage_exc).__name__}: {usage_exc}"
                         ),
+                        **({"adaptive_acquisition": deepcopy(acquisition)} if adaptive else {}),
                     },
                 ) from exc
             if self.usage_consumer is not None:
@@ -518,6 +558,7 @@ class _ExistingProviderEvidenceRenderer:
                     "usage_source": (
                         "existing_provider_last_call_usage"
                     ),
+                    **({"adaptive_acquisition": deepcopy(acquisition)} if adaptive else {}),
                 },
             ) from exc
         usage = _provider_observed_usage(
@@ -553,6 +594,7 @@ class _ExistingProviderEvidenceRenderer:
                 "full_render_count": len(acquired_artifact_paths),
                 "usage_source": "existing_provider_last_call_usage",
                 "provider_evidence_budget": budget_audit,
+                **({"adaptive_acquisition": deepcopy(acquisition)} if adaptive else {}),
             },
         )
 
@@ -686,6 +728,7 @@ def _fit_provider_evidence_to_budget(
     evidence: list[Any],
     *,
     remaining_images: Any,
+    allow_partial_bundles: bool = False,
 ) -> tuple[list[Any], dict[str, Any]]:
     """Keep complete same-pose bundles within the Controller image budget."""
 
@@ -731,6 +774,11 @@ def _fit_provider_evidence_to_budget(
             continue
         selected_indices.update(index for index, _ in bundle)
         selected_bundle_keys.append(key)
+    if allow_partial_bundles:
+        for index in range(len(evidence)):
+            if len(selected_indices) >= remaining_images:
+                break
+            selected_indices.add(index)
     if not selected_indices:
         raise RuntimeError(
             "existing provider evidence bundles do not fit the remaining "

@@ -88,7 +88,9 @@ def test_collision_counts_overlap_and_routes_separated_pairs_without_vlm() -> No
     separated_report = check_collision(separated)
     overlapping_report = check_collision(overlapping, {"detector_only": True})
 
-    assert separated_report["pairs"][0]["route"] == "direct_valid_obb_separated"
+    # A circumscribing sphere contains the OBB, so a certified sphere separation
+    # already proves the OBBs cannot touch and decides the pair before the OBB test.
+    assert separated_report["pairs"][0]["route"] == "direct_valid_bounding_sphere_separated"
     assert separated_report["collision_count"] == 0
     assert separated_report["score"] == 1.0
     assert overlapping_report["requires_vlm_count"] == 1

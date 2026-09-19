@@ -38,6 +38,7 @@ _TIER_BY_NAME = {
     "compact_7_10": (7, 10),
     "standard_11_14": (11, 14),
     "large_15_19": (15, 19),
+    "expanded_22_26": (22, 26),
 }
 
 
@@ -289,7 +290,9 @@ def _tier_for_area(area: Decimal) -> tuple[str, tuple[int, int]]:
         return "compact_7_10", _TIER_BY_NAME["compact_7_10"]
     if area < Decimal("28"):
         return "standard_11_14", _TIER_BY_NAME["standard_11_14"]
-    return "large_15_19", _TIER_BY_NAME["large_15_19"]
+    if area < Decimal("40"):
+        return "large_15_19", _TIER_BY_NAME["large_15_19"]
+    return "expanded_22_26", _TIER_BY_NAME["expanded_22_26"]
 
 
 def _validate_schema(value: Mapping[str, Any]) -> None:

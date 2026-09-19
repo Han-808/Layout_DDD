@@ -524,8 +524,11 @@ def test_generic_floating_cabinet_near_logical_wall_is_not_auto_attached() -> No
 
     assert cabinet["architecture_contact_candidates"] == []
     assert cabinet["nearest_logical_wall_measurement"]["distance_m"] == 0.0
-    assert cabinet["route"] is None
-    assert cabinet["requires_vlm"] is True
+    assert cabinet["route"] == "direct_valid_policy_fallback"
+    assert cabinet["requires_vlm"] is False
+    assert cabinet["structured_fallback"]["mode"] == (
+        "policy_default_valid_no_evidence"
+    )
 
 
 def test_grounded_object_near_wall_does_not_invoke_support_judge() -> None:
@@ -659,16 +662,19 @@ def test_local_view_provider_receives_support_event(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------- #
 # 8. Missing judge in official mode raises a support evaluation error
 # --------------------------------------------------------------------------- #
-def test_missing_judge_official_mode_raises() -> None:
+def test_missing_judge_official_mode_uses_explicit_valid_policy() -> None:
     scene = _scene([_obj("float", [1.0, 1.0, 1.2], [0.5, 0.5, 0.5])])
-    with pytest.raises(SupportEvaluationError, match="official mode"):
-        check_support(scene, {"official_mode": True})
+    report = check_support(scene, {"official_mode": True})
+
+    assert report["status"] == "checked"
+    assert report["score"] == 1.0
+    assert report["objects"][0]["route"] == "direct_valid_policy_fallback"
 
 
 # --------------------------------------------------------------------------- #
 # 9. Non-binary VLM output raises
 # --------------------------------------------------------------------------- #
-def test_non_binary_vlm_output_raises() -> None:
+def test_non_binary_vlm_output_defaults_valid() -> None:
     class _Bad:
         vlm_control_enabled = False
 
@@ -676,11 +682,18 @@ def test_non_binary_vlm_output_raises() -> None:
             return {"verdict": "maybe", "confidence": 0.5}
 
     scene = _scene([_obj("float", [1.0, 1.0, 1.2], [0.5, 0.5, 0.5])])
-    with pytest.raises(SupportEvaluationError):
-        check_support(scene, {"official_mode": True}, vlm_judge=_Bad())
+    report = check_support(
+        scene,
+        {"official_mode": True},
+        vlm_judge=_Bad(),
+    )
+
+    assert report["status"] == "checked"
+    assert report["score"] == 1.0
+    assert report["objects"][0]["route"] == "direct_valid_policy_fallback"
 
 
-def test_non_official_support_judge_failure_is_not_counted_as_adjudicated() -> None:
+def test_non_official_support_judge_failure_uses_policy_valid() -> None:
     class _Bad:
         vlm_control_enabled = False
 
@@ -693,9 +706,10 @@ def test_non_official_support_judge_failure_is_not_counted_as_adjudicated() -> N
     )
     record = report["objects"][0]
 
-    assert record["route"] == "vlm_adjudication_failed"
-    assert record["final_verdict"] is None
-    assert report["status"] == "requires_vlm"
+    assert record["route"] == "direct_valid_policy_fallback"
+    assert record["final_verdict"] == "valid"
+    assert report["status"] == "checked"
+    assert report["score"] == 1.0
     assert report["coverage"]["vlm_adjudicated_objects"] == 0
 
 
@@ -729,7 +743,7 @@ def _no_wall_scene(objects: list[dict]) -> dict:
     return scene
 
 
-def test_zero_visual_support_uses_distance_without_category_gate_valid() -> None:
+def test_zero_visual_support_uses_geometry_and_object_semantics_invalid() -> None:
     scene = _no_wall_scene(
         [
             _obj(
@@ -752,21 +766,23 @@ def test_zero_visual_support_uses_distance_without_category_gate_valid() -> None
     record = _by_id(report, "generic_fixture")
 
     assert report["status"] == "checked"
-    assert report["score"] == 1.0
-    assert record["route"] == (
-        "direct_valid_zero_visual_wall_distance"
-    )
-    assert record["final_verdict"] == "valid"
+    assert report["score"] == 0.0
+    assert record["route"] == "vlm_adjudicated_zero_visual_geometry"
+    assert record["final_verdict"] == "invalid"
     assert record["requires_vlm"] is False
     fallback = record["zero_visual_support_fallback"]
     assert fallback["available"] == 0
-    assert fallback["nearest_plane"] == "north"
-    assert fallback["distance_m"] == pytest.approx(0.0)
-    assert fallback["threshold_m"] == pytest.approx(0.06)
-    assert judge.requests == []
+    assert fallback["mode"] == "geometry_only_vlm"
+    assert fallback["nearest_logical_wall_measurement"]["plane"] == "north"
+    assert fallback["nearest_logical_wall_measurement"]["distance_m"] == pytest.approx(0.0)
+    assert len(judge.requests) == 1
+    assert judge.requests[0]["render_evidence"] == []
+    assert judge.requests[0]["structured_geometry_finalization"]["objects"][0][
+        "category"
+    ] == "generic fixture"
 
 
-def test_zero_visual_support_uses_distance_without_category_gate_invalid() -> None:
+def test_zero_visual_support_geometry_vlm_can_return_valid_far_from_wall() -> None:
     scene = _no_wall_scene(
         [
             _obj(
@@ -789,22 +805,20 @@ def test_zero_visual_support_uses_distance_without_category_gate_invalid() -> No
     record = _by_id(report, "floating_fixture")
 
     assert report["status"] == "checked"
-    assert report["score"] == 0.0
-    assert record["route"] == (
-        "direct_invalid_zero_visual_wall_distance"
-    )
-    assert record["final_verdict"] == "invalid"
+    assert report["score"] == 1.0
+    assert record["route"] == "vlm_adjudicated_zero_visual_geometry"
+    assert record["final_verdict"] == "valid"
     assert record["requires_vlm"] is False
     fallback = record["zero_visual_support_fallback"]
     assert fallback["available"] == 0
-    assert fallback["distance_m"] == pytest.approx(1.25)
-    assert fallback["nearest_plane"] == "north"
-    assert fallback["comparison"] == "distance_m < threshold_m"
-    assert fallback["threshold_m"] == pytest.approx(0.06)
-    assert judge.requests == []
+    assert fallback["mode"] == "geometry_only_vlm"
+    measurement = fallback["nearest_logical_wall_measurement"]
+    assert measurement["distance_m"] == pytest.approx(1.25)
+    assert measurement["plane"] == "north"
+    assert len(judge.requests) == 1
 
 
-def test_nonzero_candidate_camera_failure_remains_infrastructure_failure() -> None:
+def test_nonzero_candidate_camera_failure_uses_geometry_only_vlm() -> None:
     scene = _no_wall_scene(
         [_obj("floating", [2.0, 1.5, 1.5], [0.5, 0.5, 0.4])]
     )
@@ -817,9 +831,36 @@ def test_nonzero_candidate_camera_failure_remains_infrastructure_failure() -> No
     )
     record = _by_id(report, "floating")
 
-    assert report["status"] == "requires_vlm"
-    assert record["route"] == "vlm_adjudication_failed"
-    assert record["final_verdict"] is None
+    assert report["status"] == "checked"
+    assert record["route"] == "vlm_adjudicated_zero_visual_geometry"
+    assert record["final_verdict"] == "valid"
+
+
+def test_zero_visual_support_vlm_failure_defaults_valid() -> None:
+    class _Bad:
+        vlm_control_enabled = False
+
+        def adjudicate_p0b(self, request: dict) -> dict:
+            del request
+            raise RuntimeError("judge unavailable")
+
+    scene = _no_wall_scene(
+        [_obj("floating", [2.0, 1.5, 1.5], [0.5, 0.5, 0.4])]
+    )
+
+    report = check_support(
+        scene,
+        vlm_judge=_Bad(),
+        local_view_provider=_ZeroVisualProvider(),
+    )
+    record = _by_id(report, "floating")
+
+    assert report["status"] == "checked"
+    assert report["score"] == 1.0
+    assert record["route"] == "direct_valid_zero_visual_policy"
+    assert record["structured_fallback"]["mode"] == (
+        "policy_default_valid_no_evidence"
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -928,7 +969,7 @@ def test_disabled_support_excluded_from_aggregation() -> None:
 # --------------------------------------------------------------------------- #
 # 15. Enabled-but-unresolved support is not silently excluded (not "disabled")
 # --------------------------------------------------------------------------- #
-def test_enabled_unresolved_support_is_not_treated_as_disabled() -> None:
+def test_enabled_support_without_judge_is_policy_resolved_not_disabled() -> None:
     scene = _scene([_obj("float", [1.0, 1.0, 1.2], [0.5, 0.5, 0.5])])
     report = evaluate_generic_validity(
         scene,
@@ -936,15 +977,15 @@ def test_enabled_unresolved_support_is_not_treated_as_disabled() -> None:
     )  # support enabled by default, no judge configured
     support = report["metrics"]["support"]
 
-    assert support["status"] == "requires_vlm"
-    assert support["score"] is None
+    assert support["status"] == "checked"
+    assert support["score"] == 1.0
     assert support["enabled"] is True
     assert support.get("reason") != "disabled_by_configuration"
     assert "support" not in report["disabled_metrics"]
-    assert report["metric_scores"]["support"] is None
-    assert report["score"] is None
-    assert report["status"] == "incomplete"
-    assert "support" in report["unresolved_metrics"]
+    assert report["metric_scores"]["support"] == 1.0
+    assert report["score"] == 1.0
+    assert report["status"] == "ok"
+    assert "support" not in report["unresolved_metrics"]
 
 
 def test_mesh_lower_envelope_does_not_inherit_grounded_bbox_bottom(tmp_path: Path) -> None:
@@ -961,9 +1002,10 @@ def test_mesh_lower_envelope_does_not_inherit_grounded_bbox_bottom(tmp_path: Pat
     assert record["evidence_level"] == "mesh"
     assert record["contact_fraction"] == 0.0
     assert record["gap_statistics_m"]["min"] == pytest.approx(0.4)
-    assert record["requires_vlm"] is True
-    assert record["final_verdict"] is None
-    assert report["score"] is None
+    assert record["requires_vlm"] is False
+    assert record["final_verdict"] == "valid"
+    assert record["route"] == "direct_valid_policy_fallback"
+    assert report["score"] == 1.0
 
 
 def test_mesh_base_band_excludes_raised_tabletop_from_contact_denominator(tmp_path: Path) -> None:
@@ -1186,25 +1228,29 @@ def test_enabled_unresolved_support_blocks_l1_category(tmp_path: Path) -> None:
     )
 
     physical = report["category_reports"]["l1_physical_plausibility"]
-    assert physical["status"] == "incomplete"
-    assert physical["score"] is None
-    assert physical["coverage"]["unresolved_metrics"] == ["support"]
+    assert physical["status"] == "evaluated"
+    assert physical["score"] == 1.0
+    assert physical["coverage"]["unresolved_metrics"] == []
+    # Other disabled/unexecuted layers still prevent a top-level benchmark
+    # score; L1 itself is now complete and binary.
     assert report["benchmark_score"] is None
 
 
-def test_top_level_official_mode_requires_binary_support_adjudication() -> None:
+def test_top_level_official_mode_policy_resolves_missing_support_judge() -> None:
     scene = _scene([_obj("floating", [1.0, 1.0, 1.2], [0.5, 0.5, 0.5])])
-    with pytest.raises(SupportEvaluationError, match="official mode"):
-        evaluate_generic_validity(
-            scene,
-            {
-                "collision": {"enabled": False},
-                "oob": {"enabled": False},
-                "navigability": {"enabled": False},
-                "accessibility": {"enabled": False},
-            },
-            p0b_official_mode=True,
-        )
+    report = evaluate_generic_validity(
+        scene,
+        {
+            "collision": {"enabled": False},
+            "oob": {"enabled": False},
+            "navigability": {"enabled": False},
+            "accessibility": {"enabled": False},
+        },
+        p0b_official_mode=True,
+    )
+
+    assert report["status"] == "ok"
+    assert report["metrics"]["support"]["score"] == 1.0
 
 
 # --------------------------------------------------------------------------- #
@@ -1309,15 +1355,15 @@ def test_strong_positive_clearance_routes_to_vlm() -> None:
     assert "strong_positive_clearance" in detector["routing_reasons"]
 
 
-def test_no_deterministic_direct_invalid_route() -> None:
+def test_missing_judge_never_creates_deterministic_invalid_route() -> None:
     scene = _scene([_obj("floater", [1.0, 1.0, 1.5], [0.5, 0.5, 1.0])])
-    # No judge configured and not official: the detector never emits a verdict.
+    # No judge configured: the explicit terminal policy returns valid.
     record = _by_id(check_support(scene), "floater")
 
     assert record["gap_band"] == "strong_positive_clearance"
-    assert record["requires_vlm"] is True
-    assert record["final_verdict"] is None
-    assert record["route"] is None
+    assert record["requires_vlm"] is False
+    assert record["final_verdict"] == "valid"
+    assert record["route"] == "direct_valid_policy_fallback"
     assert not str(record["route"] or "").startswith("direct_invalid")
 
 
@@ -1457,7 +1503,9 @@ def test_judge_request_includes_policy_and_threshold_context() -> None:
         "architecture_contact_candidates",
     ):
         assert key in evidence, key
-    assert "candidate_selection_policy" not in evidence
+    assert evidence["candidate_selection_policy"] == (
+        SUPPORT_CANDIDATE_SELECTION_POLICY
+    )
     assert evidence["hard_contact_tolerance_m"] == pytest.approx(_hard_contact_tolerance(0.4))
     assert evidence["near_support_tolerance_m"] == pytest.approx(_near_support_tolerance(0.4))
 
@@ -1509,7 +1557,8 @@ def test_cli_ignores_no_support_enabled_for_canonical_profile(tmp_path: Path) ->
     )
 
     validity = read_json(out_path)["reports"]["generic_validity"]
-    assert validity["metrics"]["support"]["status"] == "requires_vlm"
+    assert validity["metrics"]["support"]["status"] == "checked"
+    assert validity["metrics"]["support"]["score"] == 1.0
     assert validity["metrics"]["support"]["enabled"] is True
     assert "support" not in validity["disabled_metrics"]
 
@@ -1554,7 +1603,8 @@ def test_scene_harness_ignores_no_support_enabled_for_canonical_profile(tmp_path
     )
 
     validity = read_json(out_dir / "evaluation_report.json")["reports"]["generic_validity"]
-    assert validity["metrics"]["support"]["status"] == "requires_vlm"
+    assert validity["metrics"]["support"]["status"] == "checked"
+    assert validity["metrics"]["support"]["score"] == 1.0
     assert validity["metrics"]["support"]["enabled"] is True
     assert "support" not in validity["disabled_metrics"]
     manifest = read_json(out_dir / "run_manifest.json")

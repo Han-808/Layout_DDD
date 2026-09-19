@@ -183,7 +183,10 @@
         "room_type": {"type": "string", "minLength": 1},
         "theme": {"type": "string", "minLength": 1},
         "object_count_tier": {
-          "enum": ["compact_7_10", "standard_11_14", "large_15_19"]
+          "enum": [
+            "compact_7_10", "standard_11_14", "large_15_19",
+            "expanded_22_26"
+          ]
         },
         "instruction": {"type": "string", "minLength": 1},
         "target_instances": {"$ref": "#/$defs/targetRange"},
@@ -222,6 +225,16 @@
             "properties": {
               "target_instances": {
                 "properties": {"min": {"const": 15}, "max": {"const": 19}}
+              }
+            }
+          }
+        },
+        {
+          "if": {"properties": {"object_count_tier": {"const": "expanded_22_26"}}},
+          "then": {
+            "properties": {
+              "target_instances": {
+                "properties": {"min": {"const": 22}, "max": {"const": 26}}
               }
             }
           }

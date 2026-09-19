@@ -39,6 +39,24 @@
       "retryable_http_statuses": [408, 409, 425, 429, 500, 502, 503, 504],
       "retry_ambiguous_timeouts": false,
       "continue_after_case_failure": true
+    },
+    {
+      "execution_policy_id": "tokenhub-scene10-retry5-continue-v1",
+      "max_infrastructure_retries": 5,
+      "retry_delay_seconds": 30.0,
+      "retryable_transport_statuses": ["transport_failure"],
+      "retryable_http_statuses": [408, 409, 425, 429, 500, 502, 503, 504],
+      "retry_ambiguous_timeouts": false,
+      "continue_after_case_failure": true
+    },
+    {
+      "execution_policy_id": "multi-room-retry5-continue-v1",
+      "max_infrastructure_retries": 5,
+      "retry_delay_seconds": 30.0,
+      "retryable_transport_statuses": ["transport_failure"],
+      "retryable_http_statuses": [408, 409, 425, 429, 500, 502, 503, 504],
+      "retry_ambiguous_timeouts": false,
+      "continue_after_case_failure": true
     }
   ],
   "artifact_contracts": [
@@ -81,6 +99,14 @@
       "require_model_identity": true,
       "require_reasoning_signal": false,
       "record_reasoning_diagnostic": true
+    },
+    {
+      "preflight_contract_id": "tokenhub-chat-json-content-v1",
+      "response_contract_id": "openai_chat_single_choice_v1",
+      "content_validation": "json_object",
+      "require_model_identity": false,
+      "require_reasoning_signal": false,
+      "record_reasoning_diagnostic": false
     }
   ]
 }

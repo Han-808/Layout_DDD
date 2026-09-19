@@ -445,7 +445,7 @@ def test_shared_scheduler_promotes_first_check_render_for_second_check() -> None
     ]
 
 
-def test_shared_scheduler_fails_closed_when_fixed_seed_is_invalid() -> None:
+def test_shared_scheduler_defaults_binary_when_fixed_seed_is_invalid() -> None:
     calls: list[dict] = []
 
     def call_judge(_judge, request: dict) -> dict:
@@ -459,8 +459,9 @@ def test_shared_scheduler_fails_closed_when_fixed_seed_is_invalid() -> None:
     )
 
     assert calls == []
-    assert result["status"] == "failed"
-    assert result["terminal_state"] == "infrastructure_failure"
+    assert result["status"] == "evaluated"
+    assert result["terminal_state"] == "evaluated_degraded"
+    assert result["score"] == 1.0
     assert result["judge_call_count"] == 0
     bank = result["functional_group_evidence_bank"]["groups"]["group_001"]
     assert bank["status"] == "unavailable"
@@ -469,3 +470,6 @@ def test_shared_scheduler_fails_closed_when_fixed_seed_is_invalid() -> None:
         assert episode["functional_group_evidence_window_audit"][
             "status"
         ] == "failed_closed"
+        assert episode["structured_fallback"]["mode"] == (
+            "policy_default_valid_no_evidence"
+        )

@@ -526,14 +526,22 @@ def test_judge_originated_check_is_typed_and_phase_scoped() -> None:
     ] == checks
     assert len(adjusted["placement_check_results"]) == 1
 
-    with pytest.raises(ValueError, match="active 'group_local' phase"):
-        normalize_judge_originated_placement_results(
-            raw,
-            known_ids=set(OBJECT_IDS),
-            groups=GROUPS,
-            existing_checks=[],
-            expected_owner_stage="group_local",
-        )
+    rehomed, rehomed_checks = normalize_judge_originated_placement_results(
+        raw,
+        known_ids=set(OBJECT_IDS),
+        groups=GROUPS,
+        existing_checks=[],
+        expected_owner_stage="group_local",
+    )
+    assert rehomed_checks[0]["owner_stage"] == "scene_global"
+    assert rehomed["placement_transport_normalization"]["warnings"] == [
+        {
+            "code": "judge_originated_check_rehomed",
+            "proposal_id": "proposal-zone",
+            "from_phase": "group_local",
+            "owner_stage": "scene_global",
+        }
+    ]
 
 
 def test_placement_transport_repairs_only_alias_and_missing_proposal_id() -> None:
@@ -561,6 +569,58 @@ def test_placement_transport_repairs_only_alias_and_missing_proposal_id() -> Non
             },
             known_ids=set(OBJECT_IDS),
         )
+
+
+def test_valid_judge_originated_function_owned_exclusion_is_accepted() -> None:
+    event = {
+        "event_id": "functional_event:blocker",
+        "affected_object_ids": ["table"],
+        "causal_object_ids": ["chair"],
+        "scoring_target_ids": ["chair"],
+    }
+    raw = {
+        "verdict": "valid",
+        "defects": [],
+        "judge_originated_placement_results": [
+            {
+                "proposal_id": "proposal-function-owned",
+                "subject_id": "chair",
+                "context_ids": ["table"],
+                "check_type": "contextual_anchor",
+                "observation_goal": "Inspect chair relative to table.",
+                "observation_status": "observed",
+                "conclusion": "excluded_function_owned",
+                "reason": "Exact duplicate of the Function-owned blocker.",
+                "severity": "implausible",
+                "function_event_ref": event["event_id"],
+                "same_physical_event": True,
+            }
+        ],
+    }
+
+    adjusted, checks = normalize_judge_originated_placement_results(
+        raw,
+        known_ids=set(OBJECT_IDS),
+        groups=GROUPS,
+        existing_checks=[],
+        expected_owner_stage="group_local",
+    )
+    resolution = validate_placement_check_results(
+        adjusted,
+        required_checks=checks,
+        function_events=[event],
+    )
+
+    assert adjusted["verdict"] == "valid"
+    assert adjusted["placement_check_results"][0]["conclusion"] == (
+        "excluded_function_owned"
+    )
+    assert adjusted["placement_check_results"][0][
+        "function_event_ref"
+    ] == event["event_id"]
+    assert resolution["excluded_function_owned_check_ids"] == [
+        checks[0]["check_id"]
+    ]
 
 
 def test_duplicate_proposal_ids_are_rekeyed_without_changing_findings() -> None:
@@ -1184,6 +1244,57 @@ def test_normal_scene_resolves_every_typed_placement_check_valid() -> None:
     )
 
 
+def test_identical_cross_phase_placement_result_is_collapsed_once() -> None:
+    ledger = build_placement_check_ledger(
+        _discovery(_candidate(subject="chair", check_type="scene_zone")),
+        groups=GROUPS,
+    )
+    check = ledger["checks"][0]
+    row = _valid_row(check)
+    duplicate = {**deepcopy(row), "reason": "Same decision from residual review."}
+
+    updated, coverage = apply_placement_check_judgements(
+        ledger,
+        global_record={"placement_check_results": [row]},
+        group_results=[],
+        residual_records=[{"placement_check_results": [duplicate]}],
+    )
+
+    assert coverage["complete"] is True
+    assert coverage["resolved_check_count"] == 1
+    assert coverage["idempotent_duplicate_result_count"] == 1
+    assert coverage["idempotent_duplicate_results"] == [
+        {
+            "check_id": check["check_id"],
+            "retained_phase": "global_discovery",
+            "duplicate_phase": "residual_global_placement_review",
+        }
+    ]
+    assert updated["checks"][0]["check_conclusion"] == "valid"
+
+
+def test_conflicting_cross_phase_placement_result_still_fails_closed() -> None:
+    ledger = build_placement_check_ledger(
+        _discovery(_candidate(subject="chair", check_type="scene_zone")),
+        groups=GROUPS,
+    )
+    check = ledger["checks"][0]
+    valid = _valid_row(check)
+    invalid = {
+        **deepcopy(valid),
+        "conclusion": "invalid",
+        "reason": "Conflicting residual decision.",
+    }
+
+    with pytest.raises(ValueError, match="judged more than once"):
+        apply_placement_check_judgements(
+            ledger,
+            global_record={"placement_check_results": [valid]},
+            group_results=[],
+            residual_records=[{"placement_check_results": [invalid]}],
+        )
+
+
 def test_placement_forced_choice_with_retained_visual_is_grounded() -> None:
     ledger = build_placement_check_ledger(
         _discovery(_candidate(subject="chair", check_type="scene_zone")),
@@ -1262,3 +1373,43 @@ def test_placement_forced_choice_without_visual_is_not_grounded() -> None:
     assert updated["checks"][0]["grounded"] is False
     assert coverage["grounded_check_count"] == 0
     assert coverage["grounding_fraction"] == 0.0
+
+
+def test_placement_policy_default_is_terminally_grounded_and_audited() -> None:
+    ledger = build_placement_check_ledger(
+        _discovery(_candidate(subject="chair", check_type="scene_zone")),
+        groups=GROUPS,
+    )
+    check = ledger["checks"][0]
+    fallback = {
+        "mode": "policy_default_valid_no_evidence",
+        "policy_resolved": True,
+        "empirically_grounded": False,
+    }
+    row = {
+        **_valid_row(check),
+        "observation_status": "inferred_under_budget",
+        "reason": "Explicit terminal policy.",
+    }
+
+    updated, coverage = apply_placement_check_judgements(
+        ledger,
+        global_record={
+            "status": "evaluated",
+            "structured_fallback": fallback,
+            "judgement": {
+                "verdict": "valid",
+                "defaulted": True,
+                "structured_fallback": fallback,
+                "placement_check_results": [row],
+            },
+        },
+        group_results=[],
+    )
+
+    assert updated["checks"][0]["grounded"] is True
+    assert updated["checks"][0]["empirically_grounded"] is False
+    assert updated["checks"][0]["policy_resolved"] is True
+    assert coverage["grounded_check_count"] == 1
+    assert coverage["policy_resolved_check_count"] == 1
+    assert coverage["empirically_grounded_check_count"] == 0

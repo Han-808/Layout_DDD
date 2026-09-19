@@ -13,7 +13,7 @@ set -Eeuo pipefail
 # preflight prints what actually holds each GPU so an unrelated training job or
 # a stale process is never mistaken for this run.
 #
-# PointLLM is a 7B dense model in bf16, roughly 14 GB. It needs one GPU. The
+# PointLLM is a 7B dense model in FP16, roughly 14 GB. It needs one GPU. The
 # TP8/EP8 and DeepGEMM constraints that govern the Qwen3-VL-235B FP8 MoE
 # checkpoint do not apply here, and neither does the SGLang serving path:
 # `model_type: pointllm` is a custom architecture that SGLang and vLLM cannot
@@ -23,7 +23,7 @@ REPO_ROOT=${REPO_ROOT:-/mnt/group/cmh/Layout_DDD}
 MODELS_ROOT=${MODELS_ROOT:-/mnt/group/cmh/models}
 REGISTRY=${REGISTRY:-${REPO_ROOT}/configs/models/pointllm_mnet_registry.json}
 
-ENV_PY=${ENV_PY:-/mnt/group/cmh/envs/pointllm/bin/python}
+ENV_PY=${ENV_PY:-/mnt/group/cmh/envs/pointllm-cu126/bin/python}
 BENCH_PY=${BENCH_PY:-/mnt/group/cmh/.venvs/layoutddd_sys/bin/python}
 POINTLLM_DIR=${POINTLLM_DIR:-/mnt/group/cmh/tools/PointLLM}
 POINTLLM_R_DIR=${POINTLLM_R_DIR:-/mnt/group/cmh/tools/PointLLM-R}
@@ -31,12 +31,13 @@ POINTLLM_R_DIR=${POINTLLM_R_DIR:-/mnt/group/cmh/tools/PointLLM-R}
 MODELNET_DAT=${MODELNET_DAT:-${MODELS_ROOT}/pointllm_data/modelnet40_data/modelnet40_test_8192pts_fps.dat}
 MODELNET_INDEX_A=${MODELNET_INDEX_A:-0}
 MODELNET_INDEX_B=${MODELNET_INDEX_B:-1234}
-TORCH_DTYPE=${TORCH_DTYPE:-bfloat16}
+TORCH_DTYPE=${TORCH_DTYPE:-float16}
 PROMPT=${PROMPT:-What is this?}
 MAX_NEW_TOKENS=${MAX_NEW_TOKENS:-512}
 
 GPU=${GPU:-}
 MIN_FREE_MIB=${MIN_FREE_MIB:-40000}
+ALLOW_COMPETING_WORKLOADS=${ALLOW_COMPETING_WORKLOADS:-0}
 
 RUN_TAG=${RUN_TAG:-pointllm_smoke_$(date '+%Y%m%d_%H%M%S')}
 OUT_ROOT=${OUT_ROOT:-${REPO_ROOT}/outputs/${RUN_TAG}}
@@ -70,10 +71,16 @@ nvidia-smi --query-compute-apps=pid,used_memory,gpu_uuid --format=csv || true
 echo "--- competing workloads ---"
 pgrep -af 'blender|sglang.launch_server|run_p0b|run_scene_harness' || echo "none found"
 
-# Blender and a resident model must not share the node; the two-phase contract
-# exists so evidence generation and model inference never contend for memory.
-if pgrep -af 'blender' >/dev/null 2>&1; then
-  fail "Blender workers are still running. Stop them before loading a model (two-phase contract)."
+# Keep the two-phase contract as the safe default, but permit an explicit
+# operator override when a known-free GPU has been selected. Match an actual
+# blender executable token, not log/directory names such as asset_blender.
+if pgrep -af '(^|[[:space:]/])blender([[:space:]]|$)' >/dev/null 2>&1; then
+  if [[ "$ALLOW_COMPETING_WORKLOADS" != 1 ]]; then
+    fail "Blender workers are still running. Stop them, or set ALLOW_COMPETING_WORKLOADS=1 with an explicitly selected free GPU."
+  fi
+  [[ -n "$GPU" ]] \
+    || fail "ALLOW_COMPETING_WORKLOADS=1 requires an explicit GPU index"
+  echo "WARNING: competing Blender workload allowed by operator override on explicit GPU ${GPU}"
 fi
 
 if [[ -z "$GPU" ]]; then

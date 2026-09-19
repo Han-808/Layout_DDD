@@ -111,6 +111,9 @@ _CAMERA_EVIDENCE_IMPLEMENTATION_FILES = (
     "src/benchmark/visual_judge/openai_camera_selector.py",
     "src/benchmark/visual_judge/openai_compatible.py",
     "src/benchmark/visual_judge/render_views.py",
+    "src/benchmark/visual_judge/acquisition_outcome.py",
+    "src/benchmark/visual_judge/evidence_resolution.py",
+    "src/benchmark/visual_judge/evidence_gap_v2.py",
     "src/benchmark/visual_judge/roles.py",
 )
 
@@ -768,6 +771,13 @@ class CameraEvidenceProvider:
             )
         _write_json(event_dir / "pose_candidates.json", candidates)
 
+        # Stop at the algorithm's empty-bank branch, before a selector or
+        # renderer turns normal exhaustion into ValueError/IndexError.
+        from benchmark.visual_judge.evidence_gap_v2 import enabled as fallback_v2_enabled
+        if not candidates and fallback_v2_enabled():
+            from benchmark.visual_judge.acquisition_outcome import AcquisitionExhausted
+            raise AcquisitionExhausted("trusted_candidate_bank_empty")
+
         if collision_overlay:
             return self._finish_call_usage(
                 self._collision_overlay_evidence(
@@ -929,6 +939,9 @@ class CameraEvidenceProvider:
         overlay_spec: dict[str, Any] | None = None,
         require_visible_targets: bool = False,
     ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        from benchmark.visual_judge.evidence_gap_v2 import enabled as fallback_v2_enabled
+        partial_previews = fallback_v2_enabled()
+        blank_rejections: list[dict[str, Any]] = []
         current = [deepcopy(item) for item in candidates]
         if (
             self.active_repair
@@ -974,9 +987,14 @@ class CameraEvidenceProvider:
                         camera_views=current,
                         overlay_spec=overlay_spec,
                         preview=True,
+                        allow_blank_views=partial_previews,
                     )
                     preview_role = "highlighted_focus"
                 except Exception as exc:
+                    if partial_previews:
+                        # Blank candidates are returned explicitly by the
+                        # renderer. A raised exception is still a real fault.
+                        raise
                     if require_visible_targets:
                         raise RuntimeError(
                             "required target-identity preview failed"
@@ -995,11 +1013,21 @@ class CameraEvidenceProvider:
                     out_dir=preview_dir,
                     camera_views=current,
                     preview=True,
+                    **({"allow_blank_views": True} if partial_previews else {}),
                 )
+            if partial_previews:
+                blank_ids = _blank_view_ids(preview_manifest)
+                blank_rejections.extend({"step": step, "candidate_id": view_id,
+                                         "reason": "blank_preview"} for view_id in sorted(blank_ids))
+                current = [pose for pose in current if str(pose["id"]) not in blank_ids]
+                if not current:
+                    from benchmark.visual_judge.acquisition_outcome import AcquisitionExhausted
+                    raise AcquisitionExhausted("preview_bank_blank", audit={"candidate_rejections": blank_rejections})
             preview_by_id = {
                 str(item.get("id")): str(item.get("path"))
                 for item in preview_manifest.get("views", [])
                 if isinstance(item, dict) and item.get("id") and item.get("path")
+                and (not partial_previews or str(item["id"]) not in blank_ids)
             }
             preview_visibility_warning = None
             latest_visibility_by_id = {}
@@ -1051,6 +1079,10 @@ class CameraEvidenceProvider:
                         if candidate_id in eligible_ids
                     }
                     if not current:
+                        from benchmark.visual_judge.evidence_gap_v2 import enabled as fallback_v2_enabled
+                        if fallback_v2_enabled():
+                            from benchmark.visual_judge.acquisition_outcome import AcquisitionExhausted
+                            raise AcquisitionExhausted("required_target_visibility_exhausted")
                         raise RuntimeError(
                             "no_feasible_candidate: all previews failed "
                             "required target visibility"
@@ -1119,6 +1151,7 @@ class CameraEvidenceProvider:
                 "preview_role": preview_role,
                 "preview_degradation": preview_degradation,
                 "preview_visibility_warning": preview_visibility_warning,
+                "candidate_rejections": deepcopy(blank_rejections),
             }
             steps.append(step_record)
             final_ids = selected_ids
@@ -2164,6 +2197,8 @@ class CameraEvidenceProvider:
     ) -> list[dict[str, Any]]:
         """Select with previews, then send only unmodified final RGB onward."""
 
+        from benchmark.visual_judge.evidence_gap_v2 import enabled as fallback_v2_enabled
+        partial_views = fallback_v2_enabled()
         probe_context = (
             request.get("functional_probe")
             if isinstance(request.get("functional_probe"), dict)
@@ -2215,6 +2250,10 @@ class CameraEvidenceProvider:
                 resolved_mode=resolved_mode,
             )
         if not selected:
+            from benchmark.visual_judge.evidence_gap_v2 import enabled as fallback_v2_enabled
+            if fallback_v2_enabled():
+                from benchmark.visual_judge.acquisition_outcome import AcquisitionExhausted
+                raise AcquisitionExhausted("functional_preview_bank_exhausted")
             raise RuntimeError(
                 "no_feasible_candidate: no functional preview survived"
             )
@@ -2279,6 +2318,7 @@ class CameraEvidenceProvider:
             out_dir=event_dir / "final",
             camera_views=selected,
             preview=False,
+            **({"allow_blank_views": True} if partial_views else {}),
         )
         final_identity_error: str | None = None
         try:
@@ -2288,15 +2328,20 @@ class CameraEvidenceProvider:
                 camera_views=selected,
                 overlay_spec=spec,
                 preview=False,
+                allow_blank_views=partial_views,
             )
         except Exception as exc:
-            if not soft_visibility_fallback:
+            if partial_views or not soft_visibility_fallback:
                 raise
             final_identity_error = (
                 f"{type(exc).__name__}: {exc}"
             )
             final_identity_manifest = {"views": []}
         final_identity_by_id = _views_by_id(final_identity_manifest)
+        blank_rgb_ids = _blank_view_ids(final_manifest)
+        blank_identity_ids = _blank_view_ids(final_identity_manifest)
+        final_identity_by_id = {key: path for key, path in final_identity_by_id.items()
+                                if key not in blank_identity_ids}
         selected_by_id = {
             str(item.get("id")): item for item in selected
         }
@@ -2345,7 +2390,7 @@ class CameraEvidenceProvider:
             if not isinstance(view, dict) or not view.get("path"):
                 continue
             view_id = str(view.get("id") or "")
-            if view_id not in eligible_final_ids:
+            if view_id in blank_rgb_ids or view_id not in eligible_final_ids:
                 continue
             items.append(
                 {
@@ -2372,6 +2417,8 @@ class CameraEvidenceProvider:
                 if not isinstance(view, dict) or not view.get("path"):
                     continue
                 view_id = str(view.get("id") or "")
+                if view_id in blank_rgb_ids:
+                    continue
                 items.append(
                     {
                         "path": str(view["path"]),
@@ -2417,6 +2464,19 @@ class CameraEvidenceProvider:
                     selection_outcome="selected_but_post_render_insufficient",
                     post_render_reason="required_target_visibility_lost",
                 )
+            if partial_views:
+                from benchmark.visual_judge.acquisition_outcome import AcquisitionExhausted
+                # Unmodified surviving RGB remains usable for constrained
+                # judgement, but never claim its target identity was verified.
+                available = [{"path": str(view["path"]), "view_id": str(view.get("id") or ""),
+                              "role": "functional_probe_rgb", "evidence_style": "raw",
+                              "identity_grounded": False, "fallback_reason": "required_target_visibility_lost"}
+                             for view in final_manifest.get("views") or []
+                             if isinstance(view, dict) and view.get("path")
+                             and str(view.get("id") or "") not in blank_rgb_ids]
+                raise AcquisitionExhausted("functional_final_visibility_exhausted",
+                    audit={"available_items": available, "blank_rgb_ids": sorted(blank_rgb_ids),
+                           "blank_identity_ids": sorted(blank_identity_ids)})
             raise RuntimeError(
                 "post_render_insufficient: functional final render lost a "
                 "required target"
@@ -4328,11 +4388,16 @@ def _blank_view_ids(manifest: dict[str, Any]) -> set[str]:
         and isinstance(manifest.get("render_validation"), dict)
         else {}
     )
-    return {
+    labels = {
         str(item)
         for item in validation.get("blank_views") or []
         if str(item).strip()
     }
+    # Renderer validation historically records name/path, not camera id.
+    # Resolve exact aliases in this manifest; never guess from name fragments.
+    return labels | {str(view["id"]) for view in manifest.get("views") or []
+                     if isinstance(view, dict) and view.get("id")
+                     and any(str(view.get(key) or "") in labels for key in ("id", "name", "path"))}
 
 
 def _effective_candidate_count(

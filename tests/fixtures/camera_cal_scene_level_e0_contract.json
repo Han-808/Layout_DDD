@@ -86,7 +86,7 @@
     "FUNCTIONAL_DISCOVERY_SCHEMA_VERSION": "functional_discovery_v6",
     "FUNCTIONAL_OWNERSHIP_LEDGER_VERSION": "functional_ownership_ledger_v2",
     "FUNCTIONAL_RELATION_SCHEMA_VERSION": "functional_relation_audit_v4",
-    "L3_METRIC_PROMPT_VERSION": "l3_burden_categories_v30",
+    "L3_METRIC_PROMPT_VERSION": "l3_burden_categories_v31",
     "PLACEMENT_CHECK_LEDGER_VERSION": "placement_check_ledger_v1",
     "PLACEMENT_CHECK_RESULT_VERSION": "placement_check_results_v2",
     "PLACEMENT_DISCOVERY_SCHEMA_VERSION": "placement_discovery_v2",
@@ -97,43 +97,47 @@
   },
   "source_sha256": {
     "prompt": {
-      "src/benchmark/visual_judge/l3_prompts.py": "2bfc82e1bb0ce137cff4e7fc0ba246b42ff42bb3d5b1ed4ce4199b9cadbce2ff",
-      "src/benchmark/evaluator/scene_quality/prompt_context.py": "097d59030af0088ece70748df2d7fe4d6ed11172c19e400a620e8351cdfb3049"
+      "src/benchmark/visual_judge/l3_prompts.py": "97c67e1e6c15ceacd5da237128ad321f7e6c4531540c39905ea677a2bd3f6ddf",
+      "src/benchmark/evaluator/scene_quality/prompt_context.py": "5efa573b3b45f74e2e36a3bb72e7a42480f22707d30140db26398cc85869384d"
     },
     "camera": {
-      "src/benchmark/rendering/camera_pose.py": "0d05c56806f8b4ff364690e6f261dacca646dd1229a6306ddb181c46c4256f2c",
-      "src/benchmark/visual_judge/openai_camera_selector.py": "ac873bf37cceda0fff66bf21682597da44b8516116ab4803e0998c7472a40e36"
+      "src/benchmark/rendering/camera_pose.py": "a4485217cbe7bf0594f9a72e0d1d5fe83e7977b718a6be556a2dc073121d53f2",
+      "src/benchmark/visual_judge/openai_camera_selector.py": "aa14002e00c5c4c85870fab395ec0dcf89b1ec1c6e8e37ed83c318752a6a965d"
     },
     "metric": {
-      "src/benchmark/evaluator/scoring.py": "94d8d7fa60fd86b8e36df8b3065c7f50f36e2645941d103482b7b6a44cf7911f",
+      "src/benchmark/evaluator/scoring.py": "39f9ea37bdf73e97d11e9514116ba2019d4d55a0e863282d25bb2eaf76f90f2f",
       "src/benchmark/scoring_profiles.py": "2a37bff192b55087a2b322f92db32e5bff7ffd4e9864ccc6c13cbab891947a75"
     },
     "functional_probe": {
-      "src/benchmark/evaluator/scene_quality/functional_acquisition.py": "a756d218d55b0e767f2c1f8766af1ef2fa4f154836ec76f39776df7cdfd4a9c3",
-      "src/benchmark/evaluator/scene_quality/functional_boundary_evidence.py": "f97798eed64e5ccc857e5bad9fad10d1ccdbf01b203ba95d9e42923723e7708f",
-      "src/benchmark/evaluator/scene_quality/cross_group_relations.py": "c97a62dcb640414d3cd07fcd41dcbfd5429e4b04df6d31cef17b3c2775e94e54",
+      "src/benchmark/evaluator/context_projection.py": "c8afe320646ae7d806f30777808059b86c9f6ade6ba76dc585c0fdecbf494f64",
+      "src/benchmark/evaluator/structured_fallback.py": "d9e2e24bedbfbc24e168a15e70c258cd4f291fe636ec266922d24e8affe56694",
+      "src/benchmark/evaluator/scene_quality/functional_acquisition.py": "5adf98af54f5b801e972f0bae9e8ce5148e6aa34389a0eb4c9b1ecd2844fee22",
+      "src/benchmark/evaluator/scene_quality/functional_boundary_evidence.py": "753d4e4e2dbdc953ed3d7cdbf4e35723bef1e47681edd88a70fa5a84495b1f5e",
+      "src/benchmark/evaluator/scene_quality/cross_group_relations.py": "0a61624dcd54a2480b3bbf4ee99f37b6e1f5e2bc0825b587e8a29d54989e6099",
       "src/benchmark/evaluator/scene_quality/functional_geometry.py": "6d6ef3796570ad6b7f0fcb24c2b6e5680e5fd1bf9d640b7ba60bfe9d6cf16be6",
-      "src/benchmark/evaluator/scene_quality/functional_checks.py": "729e88bb26c5319a12ff92f53447dfc83fc13772e31d7fe9f0db7eb58c34adba",
+      "src/benchmark/evaluator/scene_quality/functional_checks.py": "10adc628db846d4048eefab7b710373dbe622daaeadc5d9cbe5a770eba5e8461",
       "src/benchmark/evaluator/scene_quality/functional_ownership.py": "e70419d026ba56c56ac4298d49de33a1b1942b9f420f82242e94fd828ec71614",
-      "src/benchmark/evaluator/scene_quality/functional_probe.py": "af4624b79d5cb2627477b741e968a426b9dfda099a23bd97c658d7e3895fb3a4",
-      "src/benchmark/evaluator/scene_quality/global_group_first.py": "b651f9c2bf970c0310d956e9e4d12daecf792174a8437ac3d821d6bd61eb61bf",
-      "src/benchmark/evaluator/scene_quality/group_scoped.py": "c7a0ca044465fb4e6ab4c7d6c8a4ce7c0f6ea5d12e469fd76c780a1a57858331",
-      "src/benchmark/evaluator/scene_quality/interfaces.py": "569528e101cb5a58d5f78172f4acfccd6ea0f7be177ee7dfba2abf8ec906a670",
-      "src/benchmark/evaluator/scene_quality/placement_checks.py": "7e32d3129840e99563f239128c675a208be893ce07c68c9232948bfca22a0ed5",
-      "src/benchmark/rendering/camera_pose.py": "0d05c56806f8b4ff364690e6f261dacca646dd1229a6306ddb181c46c4256f2c",
-      "src/benchmark/visual_judge/functional_discovery.py": "5dfb2d5ab083f5e36f5746d92338bcd6fc8c942f50d85d39f1fc8556464f580f",
+      "src/benchmark/evaluator/scene_quality/functional_probe.py": "0b0b49fd9e39de1235aa39aea24dddfbf02d9288d90cdd710e759c2b3c17f45d",
+      "src/benchmark/evaluator/scene_quality/global_group_first.py": "83cd6e987b4000dea0b19aba3acb5a5f456b472cd641020e3fa64cb215db00c1",
+      "src/benchmark/evaluator/scene_quality/group_scoped.py": "771e674b9f68977e0191e18ee5d5a93aaaee94eb8beedf07e972db81161a5f5f",
+      "src/benchmark/evaluator/scene_quality/interfaces.py": "795427272d4fbe26d77223a85e38aa4855eed7302f26280aecad6d7a3ce99dbd",
+      "src/benchmark/evaluator/scene_quality/placement_checks.py": "47e96cc1f998e1868c672bedb34a1bd6fcbc1ce3d930fdfedd7444aeb567904d",
+      "src/benchmark/evaluator/scene_quality/target_scoped.py": "625ce4f632965430a77ca43e3a2eb7f735b5060233c46cb4e2c8ff06bba9f555",
+      "src/benchmark/evaluator/scene_quality/terminal.py": "561f2fd4668ecfc54284971d45c5c7995e173ec3406f3275b9eb1490de39d2c8",
+      "src/benchmark/rendering/camera_pose.py": "a4485217cbe7bf0594f9a72e0d1d5fe83e7977b718a6be556a2dc073121d53f2",
+      "src/benchmark/visual_judge/functional_discovery.py": "8506e1c6c356567d22e7f953e5330020529b2b8a9cc1829006bba1c9192257b2",
       "src/benchmark/visual_judge/functional_discovery_contract.py": "4fa79397394b0e70969c4afecd1f5195c5b93ab1d68d55132b02ca6eadaf20c4",
       "src/benchmark/visual_judge/functional_discovery_validation.py": "984435c787f7db3c4c4dba6d90ba1a71bb6ea57fcd741994e4f3b4b5860687e1",
       "src/benchmark/visual_judge/functional_evidence.py": "3c97ca3554dbbee1555c7c8e78f4d3804318ee984bd3ad300deae8391dcc3469",
-      "src/benchmark/visual_judge/openai_camera_selector.py": "ac873bf37cceda0fff66bf21682597da44b8516116ab4803e0998c7472a40e36",
-      "src/benchmark/visual_judge/openai_compatible.py": "52a08b259444a0fc2f23c57c493791481e5ba4645311316bad9a349df8261d97",
-      "src/benchmark/visual_judge/orchestration/controller.py": "ac0d9bd4a09df7426f7d635d32e53c40e5bd3f9619990dfd200f476db79aa01b",
+      "src/benchmark/visual_judge/openai_camera_selector.py": "aa14002e00c5c4c85870fab395ec0dcf89b1ec1c6e8e37ed83c318752a6a965d",
+      "src/benchmark/visual_judge/openai_compatible.py": "52df47d2032d66c08b93a468095ce1589b4403f3c551fe7e04872d6598f36ad7",
+      "src/benchmark/visual_judge/orchestration/controller.py": "90b5eb51eba5ed26d9b6f839c010c09391c8d5bbecf36cfadd07e083e0367cee",
       "src/benchmark/visual_judge/placement_discovery.py": "66c5a7f26680b0ff1adbbcda7ca9fa1cdd785981a9fd342f65bc8c42fec9e6c2",
       "src/benchmark/visual_judge/graphs/evaluation.py": "9617a088811ba5b9480577180fe9e9de4920204ede8bef34df2d3f58b4ebbb37",
       "src/benchmark/visual_judge/graphs/evaluation_projection.py": "5631e17286d410a22cb841915db022910da7320d3a38cb914a304bb997de52df",
       "src/benchmark/visual_judge/graphs/exporter.py": "e2825e8d092dc30145bc49283987a82d10b556b734bfaadd471894adb9eb721b",
-      "src/benchmark/visual_judge/render_views.py": "4e8eda2b84d5a702847d2a88e6bb7ab844eeaf67403265bc79e89e9c53b331e9",
-      "src/benchmark/visual_judge/response_repair.py": "0e812267c4072f668741a98fc16c2201f85d3cd868399b9de64a72ba7e37e200",
+      "src/benchmark/visual_judge/render_views.py": "1788a14d19299e391977eae87bbfb972889e36923f05e3e60c54a523aba29820",
+      "src/benchmark/visual_judge/response_repair.py": "50a9dba773cfa726f2b8c2e8e8d48cbf66e2196b822111ea23dbbf00721b7533",
       "src/benchmark/visual_judge/usable_surface.py": "305aa6a0eaa63fb17f8737443d05af2635bd5303fd070526fa9e281d1df7136d"
     }
   }

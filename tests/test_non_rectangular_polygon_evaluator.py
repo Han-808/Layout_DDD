@@ -192,7 +192,7 @@ def test_nonrect_oob_overlay_legend_owns_exact_violated_wall() -> None:
     assert len(spec["architecture_planes"]) == 1
     plane = spec["architecture_planes"][0]
     assert plane["wall_id"] == "room_000.wall_003"
-    assert plane["geometry_source"] == "ordered_nonrect_wall_segment"
+    assert plane["geometry_source"] == "authoritative_polygon_room"
     assert any(
         item["role"] == "architecture_plane"
         and item["id"] == plane["id"]

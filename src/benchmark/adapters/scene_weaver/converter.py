@@ -29,6 +29,7 @@ from benchmark.adapters.common.geometry import (
     shift_center,
     vector3,
 )
+from benchmark.adapters.scene_weaver.floor_frame import apply_native_floor_frame
 from benchmark.scene_io.validate import ArtifactValidationError
 from benchmark.utils.io import read_json
 
@@ -410,7 +411,7 @@ def convert_scene_weaver(
             }
         )
 
-    return build_scene(
+    scene = build_scene(
         generation_input,
         adapter_name="scene_weaver",
         native_schema="sceneweaver_layout_v1",
@@ -440,6 +441,7 @@ def convert_scene_weaver(
             "native_structure": payload.get("structure") or {},
         },
     )
+    return apply_native_floor_frame(scene, config, layout_path)
 
 
 def _world_aabb_size(

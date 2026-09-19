@@ -16,6 +16,14 @@ scene-level aggregation.
 
 from __future__ import annotations
 
+from benchmark.visual_judge.evidence_resolution import (
+    ADAPTIVE_POLICY, adaptive_enabled, with_evidence_policy, resolution_of,
+    resolution_accepted, bind_resolution, failure_record, finite_score,
+    bind_provider_acquisition,
+)
+from benchmark.visual_judge.evidence_gap_v2 import enabled as fallback_v2_enabled
+from benchmark.visual_judge.acquisition_outcome import AcquisitionOutcome, recorded_acquisition_audit
+
 from copy import deepcopy
 from typing import Any, Callable
 
@@ -23,6 +31,7 @@ from benchmark.evaluator.scene_quality.claim_identity import (
     canonical_target_ids,
 )
 from benchmark.evaluator.scene_quality.functional_checks import (
+    _stable_unique,
     canonicalize_clearance_causal_attribution,
     canonicalize_functional_defect_check_linkage,
     canonicalize_typed_invalid_envelope,
@@ -33,8 +42,16 @@ from benchmark.evaluator.scene_quality.functional_checks import (
 from benchmark.evaluator.scene_quality.terminal import (
     terminalize_required_scope,
 )
+from benchmark.evaluator.structured_fallback import (
+    GEOMETRY_ONLY_VLM_MODE,
+    apply_policy_default_valid,
+    configure_geometry_only_request,
+    structured_fallback_record,
+    structured_geometry_packet,
+)
 from benchmark.evaluator.scene_quality.functional_probe import (
     functional_relation_judge_packet,
+    _judge_measurements_for_checks,
 )
 from benchmark.visual_judge.orchestration.audit import (
     evidence_artifact_refs,
@@ -291,6 +308,13 @@ def _cross_group_relation_episode_specs(
         required_check_ids = [
             str(check.get("check_id") or "") for check in required_checks
         ]
+        if fallback_v2_enabled():
+            # The measurement bank is built before scheduling. Unscheduled
+            # probes have no result row to carry its facts, but their required
+            # checks still own those existing measurements at terminal review.
+            normalized_result["functional_measurements"] = _judge_measurements_for_checks(
+                acquisition_audit, required_check_ids
+            )
         specs.append(
             {
                 "relation_id": relation_id,
@@ -317,6 +341,8 @@ def _cross_group_relation_episode_specs(
                 "acquisition_status": str(
                     normalized_result.get("status") or "failed"
                 ),
+                **({"acquisition_outcome": recorded_acquisition_audit(normalized_result)}
+                   if fallback_v2_enabled() else {}),
                 "acquisition_error": (
                     {
                         "error_type": normalized_result.get("error_type"),
@@ -432,6 +458,18 @@ def _merge_relation_probe_results(
         result["status"] = "available"
         result["error_type"] = None
         result["error"] = None
+    if fallback_v2_enabled():
+        outcomes = [recorded_acquisition_audit(row) for row in (current, incoming)]
+        hard = next((a["failure"] for a in outcomes if a.get("failure")
+                     and not a["failure"]["recoverable_acquisition"]), None)
+        # Do not leave the first attempt's recoverable failure attached to a
+        # successful retry, or let a later hard fault disappear behind success.
+        chosen = next((a for a in outcomes if not a.get("failure")), outcomes[0])
+        result["acquisition_outcome"] = deepcopy(chosen)
+        result.pop("failure", None)
+        if hard:
+            result["failure"] = deepcopy(hard)
+        result["acquisition_outcome"] = recorded_acquisition_audit(result)
     return result
 
 
@@ -474,18 +512,6 @@ def _legacy_atomic_required_check(
         "judge_status": "pending",
         "decision_authority": "none",
     }
-
-
-def _stable_unique(values: list[Any]) -> list[Any]:
-    result: list[Any] = []
-    seen: set[str] = set()
-    for value in values:
-        marker = repr(value)
-        if marker in seen:
-            continue
-        seen.add(marker)
-        result.append(value)
-    return result
 
 
 def _discovered_cross_group_target_sets(
@@ -535,6 +561,8 @@ def _relation_schedule_audit(spec: dict[str, Any]) -> dict[str, Any]:
         ),
         "acquisition_status": spec.get("acquisition_status"),
         "acquisition_error": deepcopy(spec.get("acquisition_error")),
+        **({"acquisition_outcome": deepcopy(spec["acquisition_outcome"])}
+           if "acquisition_outcome" in spec else {}),
         "required_check_id": spec.get("required_check_id"),
         "required_check": deepcopy(spec.get("required_check")),
         "required_check_ids": deepcopy(
@@ -582,9 +610,33 @@ def _evaluate_cross_group_relation_scopes(
         retained_evidence_forced_choice = bool(
             not pair_specific_evidence_available and global_evidence
         )
-        if (
-            not pair_specific_evidence_available
+        no_visual_evidence = bool(
+            not adaptive_enabled(metric=metric_name)
+            and not pair_specific_evidence_available
             and not retained_evidence_forced_choice
+        )
+        fallback_reason = str(
+            spec.get("acquisition_status")
+            or "cross_group_visual_evidence_unavailable"
+        )
+        geometry_packet = (
+            structured_geometry_packet(
+                scene,
+                metric=metric_name,
+                target_ids=target_ids,
+                trigger_reason=fallback_reason,
+            )
+            if no_visual_evidence
+            else None
+        )
+        geometry_only_final = bool(
+            no_visual_evidence
+            and geometry_packet is not None
+            and vlm_judge is not None
+        )
+        if (
+            no_visual_evidence
+            and not geometry_only_final
         ):
             empty_ledger = _initial_camera_acquisition_ledger([])
             required_checks = [
@@ -690,6 +742,22 @@ def _evaluate_cross_group_relation_scopes(
                         "ledger_after_judge": deepcopy(empty_ledger),
                     },
                 }
+            apply_policy_default_valid(
+                missing_record,
+                reason=fallback_reason,
+                geometry_packet=geometry_packet,
+            )
+            missing_record["judgement"]["functional_check_results"] = [
+                {
+                    **row,
+                    "observation_status": "inferred_under_budget",
+                    "reason": (
+                        "The explicit no-evidence terminal policy resolved "
+                        "this required Functional check as valid."
+                    ),
+                }
+                for row in default_rows
+            ]
             results.append(
                 terminalize_required_scope(
                     missing_record,
@@ -728,7 +796,11 @@ def _evaluate_cross_group_relation_scopes(
             "evidence_coverage": {
                 "pair_specific": pair_specific_evidence_available,
                 "retained_global": bool(global_evidence),
-                "grounded": pair_specific_evidence_available,
+                "grounded": bool(
+                    pair_specific_evidence_available
+                    or retained_evidence_forced_choice
+                    or geometry_only_final
+                ),
                 "defaulted": False,
             },
             "judgement": None,
@@ -738,6 +810,18 @@ def _evaluate_cross_group_relation_scopes(
                 "ledger_after_judge": deepcopy(episode_ledger),
             },
         }
+        if geometry_only_final:
+            fallback = structured_fallback_record(
+                mode=GEOMETRY_ONLY_VLM_MODE,
+                trigger_reason=fallback_reason,
+                geometry_packet=geometry_packet,
+            )
+            record["structured_fallback"] = deepcopy(fallback)
+            record["evidence_coverage"].update(
+                empirically_grounded=True,
+                policy_resolved=True,
+                coverage_kind=GEOMETRY_ONLY_VLM_MODE,
+            )
         request = build_judge_request(
             metric_name=metric_name,
             scene=scene,
@@ -754,10 +838,28 @@ def _evaluate_cross_group_relation_scopes(
                 spec.get("judge_packet")
             ),
         )
-        functional_preflight = _cross_group_visual_preflight(spec)
+        if geometry_only_final:
+            configure_geometry_only_request(request, geometry_packet)
+        functional_preflight = (
+            None
+            if geometry_only_final
+            else _cross_group_visual_preflight(spec)
+        )
         if functional_preflight is not None:
             request["functional_evidence_preflight"] = functional_preflight
-        if retained_evidence_forced_choice:
+        if fallback_v2_enabled():
+            # Carry the classified provider result to the same terminal entry
+            # used by group/check acquisition. A legacy forced-choice string
+            # cannot certify exhaustion and must not bypass hard failure checks.
+            acquisition = recorded_acquisition_audit({
+                "acquisition_outcome": spec.get("acquisition_outcome"),
+                "status": spec.get("acquisition_status"),
+                "evidence_paths": list(spec.get("evidence_paths") or []),
+                "error_type": (spec.get("acquisition_error") or {}).get("error_type"),
+            })
+            record["acquisition_outcome"] = deepcopy(acquisition)
+            bind_provider_acquisition(request, acquisition)
+        elif retained_evidence_forced_choice:
             missing_observations = list(
                 dict.fromkeys(
                     str(observation)
@@ -819,12 +921,34 @@ def _evaluate_cross_group_relation_scopes(
             len(audit_records) if isinstance(audit_records, list) else None
         )
         try:
+            if fallback_v2_enabled():
+                record.update(vlm_invoked=False, judge_episode_count=0)
+                AcquisitionOutcome([], acquisition).raise_if_failed()
+                record.update(vlm_invoked=True, judge_episode_count=1)
             raw = call_judge(vlm_judge, request)
             adjusted = apply_prompt_exemptions(
                 raw,
                 metric_name=metric_name,
                 authorized_deviations=authorized_deviations,
             )
+            if geometry_only_final:
+                adjusted = deepcopy(adjusted)
+                adjusted.update(
+                    evidence_ambiguous=True,
+                    forced_binary=True,
+                    decision_source=GEOMETRY_ONLY_VLM_MODE,
+                    structured_fallback=deepcopy(
+                        record["structured_fallback"]
+                    ),
+                )
+                for row in adjusted.get("functional_check_results") or []:
+                    if (
+                        isinstance(row, dict)
+                        and row.get("conclusion") in {"valid", "invalid"}
+                    ):
+                        row["observation_status"] = (
+                            "inferred_under_budget"
+                        )
             adjusted = canonicalize_typed_invalid_envelope(adjusted)
             adjusted = canonicalize_clearance_causal_attribution(
                 adjusted,
@@ -895,21 +1019,53 @@ def _evaluate_cross_group_relation_scopes(
             )
         except Exception as exc:
             schema_audit = response_schema_audit_from_exception(exc)
-            record.update(
-                status="failed",
-                score=None,
-                reason="vlm_cross_group_relation_judge_failed",
-                final_metric_verdict=False,
-                judgement={
-                    "error_type": type(exc).__name__,
-                    "error": str(exc),
-                    **(
-                        {"response_schema_audit": schema_audit}
-                        if schema_audit is not None
-                        else {}
-                    ),
-                },
-            )
+            failure = {
+                "error_type": type(exc).__name__,
+                **({"failure": (
+                    deepcopy(acquisition["failure"])
+                    if fallback_v2_enabled() and not record["vlm_invoked"]
+                    else failure_record(exc, phase="judge")
+                )} if adaptive_enabled(metric=metric_name) else {}),
+                "error": str(exc),
+                **(
+                    {"response_schema_audit": schema_audit}
+                    if schema_audit is not None
+                    else {}
+                ),
+            }
+            if geometry_only_final:
+                apply_policy_default_valid(
+                    record,
+                    reason="geometry_only_vlm_failed",
+                    geometry_packet=geometry_packet,
+                    recovery_failure=failure,
+                )
+                record["final_metric_verdict"] = True
+                record["judgement"]["functional_check_results"] = [
+                    {
+                        "check_id": str(check.get("check_id") or ""),
+                        "target_ids": [
+                            str(item)
+                            for item in check.get("target_ids") or []
+                        ],
+                        "observation_status": "inferred_under_budget",
+                        "conclusion": "valid",
+                        "reason": (
+                            "The geometry-only Judge failed; the explicit "
+                            "terminal policy resolved this check as valid."
+                        ),
+                    }
+                    for check in spec.get("required_checks") or []
+                    if isinstance(check, dict)
+                ]
+            else:
+                record.update(
+                    status="failed",
+                    score=None,
+                    reason="vlm_cross_group_relation_judge_failed",
+                    final_metric_verdict=False,
+                    judgement=failure,
+                )
         if (
             audit_start is not None
             and isinstance(audit_records, list)

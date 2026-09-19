@@ -1,8 +1,8 @@
-"""Deterministic polygon geometry for the additive non-rectangular evaluator.
+"""Deterministic polygon geometry for the common floorplan evaluator.
 
 This module is deliberately isolated from the canonical rectangular geometry
 helpers.  Callers must opt in by carrying the versioned room metadata emitted
-by :func:`project_room_unit_to_canonical_scene`.
+by the historical room projection. No legacy evaluation policy is imported.
 """
 
 from __future__ import annotations
@@ -24,12 +24,10 @@ from shapely.geometry import (
 from shapely.ops import nearest_points, polylabel
 
 from benchmark.evaluator.generic_validity.geometry import get_obb_corners
-from benchmark.non_rectangular.contracts import (
-    NON_RECTANGULAR_EVALUATION_MODE,
-)
 from benchmark.scene_io.object_normalization import normalize_object
 
 
+NON_RECTANGULAR_EVALUATION_MODE = "non_rectangular_multi_room"
 POLYGON_ROOM_GEOMETRY_SCHEMA_VERSION = "non_rectangular_polygon_room_geometry_v1"
 POLYGON_ROOM_METADATA_KEY = "non_rectangular_room_geometry"
 DEFAULT_CAMERA_WALL_CLEARANCE_M = 0.08
@@ -80,6 +78,7 @@ class PolygonRoomGeometry:
     floor_z_m: float
     ceiling_z_m: float
     tolerance_m: float = 1.0e-6
+    ceiling_in_scope: bool = False
 
     @classmethod
     def from_metadata(
@@ -95,8 +94,10 @@ class PolygonRoomGeometry:
                 "unsupported non-rectangular room geometry version"
             )
         points = tuple(_point(item, "floor_polygon_xy") for item in value.get("floor_polygon_xy", ()))
+        if len(points) < 3:
+            raise PolygonRoomGeometryError("floor_polygon_xy needs at least three vertices")
         polygon = Polygon(points)
-        if len(points) < 3 or not polygon.is_valid or polygon.is_empty:
+        if not polygon.is_valid or polygon.is_empty:
             raise PolygonRoomGeometryError("floor_polygon_xy must be a valid polygon")
         floor_z = _finite(value.get("floor_z_m"), "floor_z_m")
         ceiling_z = _finite(value.get("ceiling_z_m"), "ceiling_z_m")
@@ -140,6 +141,27 @@ class PolygonRoomGeometry:
             )
         if any(not wall.wall_id for wall in walls):
             raise PolygonRoomGeometryError("wall_id is required")
+        if len({wall.wall_id for wall in walls}) != len(walls):
+            raise PolygonRoomGeometryError("wall IDs must be unique")
+        # A matching count is insufficient: pin each wall to its actual edge.
+        orientation = 1.0 if polygon.exterior.is_ccw else -1.0
+        for index, wall in enumerate(walls):
+            start = np.asarray(points[index], dtype=float)
+            end = np.asarray(points[(index + 1) % len(points)], dtype=float)
+            direction = end - start
+            length = float(np.linalg.norm(direction))
+            if length <= tolerance or not np.allclose(wall.start_xy, start, atol=tolerance, rtol=0) or not np.allclose(wall.end_xy, end, atol=tolerance, rtol=0):
+                raise PolygonRoomGeometryError("wall segments must follow ordered polygon edges")
+            inward = orientation * np.array([-direction[1], direction[0]]) / length
+            if not np.allclose(wall.inward_normal_xy, inward, atol=1e-5, rtol=0):
+                raise PolygonRoomGeometryError("wall normal must point inward and be perpendicular")
+            if wall.height_m <= 0 or wall.thickness_m < 0:
+                raise PolygonRoomGeometryError("wall height must be positive and thickness nonnegative")
+        ceiling_in_scope = value.get("ceiling_in_scope", False)
+        if not isinstance(ceiling_in_scope, bool):
+            raise PolygonRoomGeometryError("ceiling_in_scope must be boolean")
+        if not str(value.get("room_id") or "").strip():
+            raise PolygonRoomGeometryError("room_id is required")
         return cls(
             room_id=str(value.get("room_id") or "").strip(),
             floor_polygon_xy=points,
@@ -147,6 +169,7 @@ class PolygonRoomGeometry:
             floor_z_m=floor_z,
             ceiling_z_m=ceiling_z,
             tolerance_m=tolerance,
+            ceiling_in_scope=ceiling_in_scope,
         )
 
     @property
@@ -170,8 +193,10 @@ class PolygonRoomGeometry:
 
     @property
     def camera_max_z_m(self) -> float:
-        """Bounded camera-search ceiling; the benchmark has no room ceiling."""
+        """Respect an explicit ceiling, otherwise bound the open-top search."""
 
+        if self.ceiling_in_scope:
+            return self.ceiling_z_m
         return self.ceiling_z_m + max(5.0, self.span_m * 1.5)
 
     def public_dict(self) -> dict[str, Any]:
@@ -182,8 +207,12 @@ class PolygonRoomGeometry:
             "wall_segments": [wall.public_dict() for wall in self.walls],
             "floor_z_m": self.floor_z_m,
             "ceiling_z_m": self.ceiling_z_m,
+            "ceiling_in_scope": self.ceiling_in_scope,
             "camera_max_z_m": self.camera_max_z_m,
-            "camera_vertical_limit_policy": "no_ceiling_bounded_search_v1",
+            "camera_vertical_limit_policy": (
+                "explicit_ceiling_v1" if self.ceiling_in_scope
+                else "no_ceiling_bounded_search_v1"
+            ),
             "tolerance_m": self.tolerance_m,
         }
 
@@ -460,7 +489,15 @@ def polygon_geometry_from_scene(
         raise PolygonRoomGeometryError(
             "selected non-rectangular scene lacks polygon room metadata"
         )
-    return PolygonRoomGeometry.from_metadata(geometry)
+    resolved = PolygonRoomGeometry.from_metadata(geometry)
+    boundary = scene.get("boundary")
+    if boundary != [list(point) for point in resolved.floor_polygon_xy]:
+        raise PolygonRoomGeometryError("canonical boundary disagrees with authoritative polygon")
+    if _finite(scene.get("scene_height"), "scene_height") != resolved.ceiling_z_m:
+        raise PolygonRoomGeometryError("canonical scene_height disagrees with polygon wall-top elevation")
+    if "floor_z" in scene and float(scene["floor_z"]) != resolved.floor_z_m:
+        raise PolygonRoomGeometryError("canonical floor_z disagrees with authoritative polygon")
+    return resolved
 
 
 def is_non_rectangular_camera_scene(scene: Mapping[str, Any] | None) -> bool:

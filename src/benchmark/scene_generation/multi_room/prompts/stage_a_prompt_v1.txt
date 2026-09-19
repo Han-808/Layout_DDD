@@ -25,6 +25,10 @@ and exactly one natural-language retrieval query. Object membership, counts,
 queries, support, and semantics freeze after this response. IDs are unique
 lowercase snake_case.
 
+For every object slot, metadata.requested_count MUST equal that object's sibling
+count exactly. Do not copy the room-level target or use a different value. This
+equality is contract-checked.
+
 RETRIEVAL CONTRACT
 
 - The benchmark invokes deterministic semantic Top-1 retrieval once per slot.

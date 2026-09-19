@@ -1,0 +1,4 @@
+{
+  "schema_version": "vlm_evaluation_control_v2",
+  "evidence_resolution_policy": "evidence_adaptive_judgement_v1"
+}

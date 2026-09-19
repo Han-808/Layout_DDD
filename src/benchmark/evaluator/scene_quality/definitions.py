@@ -27,7 +27,7 @@ from benchmark.visual_judge.usable_surface import (
     CATALOG_CONTRACT_USABLE_SURFACE_DETECTOR_BACKEND,
 )
 
-SCENE_QUALITY_INTERFACE_VERSION = "scene_quality_v7"
+SCENE_QUALITY_INTERFACE_VERSION = "scene_quality_v8"
 
 # Canonical L3 output namespace.
 SCENE_QUALITY_INTERFACE_NAMESPACE = "l3_scene_quality"
@@ -74,8 +74,7 @@ JUDGMENT_SCOPE_BY_METRIC = {
         "included": [
             "scene_member_category_compatibility",
             "scene_member_role_compatibility",
-            "group_member_category_compatibility",
-            "group_member_role_compatibility",
+            "scene_inventory_coherence",
         ],
         "excluded": [
             "position",
@@ -85,7 +84,7 @@ JUDGMENT_SCOPE_BY_METRIC = {
             "access",
             "functional_arrangement",
         ],
-        "prerequisite": "object_grouping_report",
+        "prerequisite": "canonical_room_object_inventory",
     },
     "functional_consistency": {
         "included": [
@@ -286,16 +285,15 @@ DEFAULT_SCENE_QUALITY_INTERFACE_CONFIG: dict[str, Any] = {
                 "object_pairing_consistency"
             ],
             "evidence_policy": {
-                "camera_scope": "group_local",
-                "camera_mode": "metric_local",
+                "camera_scope": "global",
+                "camera_mode": "global_oblique",
                 "selector": "deterministic",
-                "image_budget": 3,
+                "image_budget": 1,
                 "global_image_budget": 1,
-                "scoped_image_budget": 1,
                 "presentation": "raw",
-                "image_order": ["global_context", "group_local"],
+                "image_order": ["global_context"],
                 "include_global_context": True,
-                "camera_pose_mode": None,
+                "camera_pose_mode": "global_only",
             },
             "evidence_plan": {
                 "evidence_strategy": "json_screen_then_visual",
@@ -303,16 +301,7 @@ DEFAULT_SCENE_QUALITY_INTERFACE_CONFIG: dict[str, Any] = {
                     "view_family": "wall_occlusion_aware_room_perspective",
                     "image_budget": 1,
                     "top_down": False,
-                },
-                "local_policy": {
-                    "camera_scope": "group_local",
-                    "grouping_policy_id": GROUPING_POLICY_ID,
-                    "image_budget": 1,
-                    "max_packet_images": 3,
-                    "trigger_states": [
-                        "suspicious",
-                        "insufficient_evidence",
-                    ],
+                    "camera_pose_mode": "global_only",
                 },
                 "router_options": {
                     "json_screen_then_visual": {
@@ -327,7 +316,7 @@ DEFAULT_SCENE_QUALITY_INTERFACE_CONFIG: dict[str, Any] = {
                     "metric_prompt_context.room_type",
                     "authorized_deviations",
                     "asset_policy",
-                    "object_grouping_report",
+                    "canonical_room_object_inventory",
                 ],
             },
         },

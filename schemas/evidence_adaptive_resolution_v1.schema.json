@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://layout-ddd.local/schemas/evidence_adaptive_resolution_v1.schema.json",
+  "title": "Evidence-adaptive judgement resolution v1",
+  "type": "object",
+  "required": ["schema_version", "policy", "accepted", "decision_source", "evidence_tier", "model_invoked", "model_judgement_completed", "visual_observation_complete"],
+  "properties": {
+    "schema_version": {"const": "adaptive_evidence_resolution_v1"},
+    "policy": {"const": "evidence_adaptive_judgement_v1"},
+    "accepted": {"type": "boolean"},
+    "decision_source": {"enum": ["model", "deterministic_rule", "style_policy_no_deduction", null]},
+    "evidence_tier": {"enum": ["full_visual", "partial_visual", "structured_fallback", "deterministic_geometry", "unresolved"]},
+    "fallback": {"type": "boolean"},
+    "model_invoked": {"type": "boolean"},
+    "model_judgement_completed": {"type": "boolean"},
+    "model_call_count": {"type": "integer", "minimum": 0},
+    "visual_observation_complete": {"type": "boolean"},
+    "images_used": {"type": "array", "items": {"type": "string"}},
+    "images_not_delivered": {"type": "array", "items": {"type": "string"}},
+    "missing_observations": {"type": "array", "items": {"type": "string"}}
+  },
+  "allOf": [{
+    "if": {"properties": {"decision_source": {"const": "style_policy_no_deduction"}}},
+    "then": {"properties": {
+      "model_invoked": {"const": false}, "model_judgement_completed": {"const": false},
+      "visual_observation_complete": {"const": false}, "model_call_count": {"const": 0}
+    }}
+  }]
+}

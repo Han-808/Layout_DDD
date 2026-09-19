@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+from benchmark.visual_judge.evidence_resolution import (
+    ADAPTIVE_POLICY, adaptive_enabled, with_evidence_policy, resolution_of,
+    resolution_accepted, bind_resolution, failure_record, finite_score,
+    FALLBACK_POLICY, policy_of,
+)
+
 from copy import deepcopy
 from typing import Any, Callable
 
@@ -22,6 +28,14 @@ from benchmark.evaluator.scene_quality.target_scope import (
 from benchmark.evaluator.scene_quality.terminal import (
     scope_was_defaulted,
     terminalize_required_scope,
+)
+from benchmark.evaluator.structured_fallback import (
+    GEOMETRY_ONLY_VLM_MODE,
+    apply_policy_default_valid,
+    configure_geometry_only_request,
+    has_inferred_binary_rows,
+    structured_fallback_record,
+    structured_geometry_packet,
 )
 from benchmark.visual_judge.contracts import (
     response_schema_audit_from_exception,
@@ -90,6 +104,8 @@ def resolve_target_evidence_packets(
                 include_global_context=True,
             )
         except Exception as exc:
+            if adaptive_enabled(metric=metric_name) and not failure_record(exc, phase="acquisition")["recoverable_acquisition"]:
+                raise
             packets.append(
                 {
                     "target_id": target_id,
@@ -234,13 +250,36 @@ def evaluate_target_scoped_judgements(
                     _integrity_failure_reason(retained_global_integrity)
                 )
             record["evidence_resolution"] = deepcopy(resolution)
-        if (
-            not isinstance(scope, TargetCameraScope)
-            or (not normal_packet_ready and not retained_global_fallback)
-        ):
-            record["reason"] = (
-                resolution.get("provider_reason")
-                or "target_local_render_evidence_unavailable"
+        no_visual_evidence = bool(
+            not adaptive_enabled(metric=metric_name)
+            and (not isinstance(scope, TargetCameraScope)
+                 or (not normal_packet_ready and not retained_global_fallback))
+        )
+        fallback_reason = str(
+            resolution.get("provider_reason")
+            or "target_local_render_evidence_unavailable"
+        )
+        geometry_packet = (
+            structured_geometry_packet(
+                scene,
+                metric=metric_name,
+                target_ids=list(record["framing_ids"]),
+                trigger_reason=fallback_reason,
+            )
+            if no_visual_evidence
+            and metric_name == "semantic_placement_consistency"
+            else None
+        )
+        geometry_only_final = bool(
+            no_visual_evidence
+            and geometry_packet is not None
+            and vlm_judge is not None
+        )
+        if no_visual_evidence and not geometry_only_final:
+            apply_policy_default_valid(
+                record,
+                reason=fallback_reason,
+                geometry_packet=geometry_packet,
             )
             records.append(
                 _attach_default_placement_row(
@@ -252,7 +291,48 @@ def evaluate_target_scoped_judgements(
             )
             continue
 
-        if retained_global_fallback:
+        is_v2 = policy_of() == FALLBACK_POLICY
+        if is_v2:
+            record["evidence_coverage"] = {
+                "grounded": bool(normal_packet_ready),
+                "coverage_kind": "available_target_packet",
+                "required_components": ["global_anchor", "target_local"],
+                "observed_components": (
+                    ["global_anchor", "target_local"] if normal_packet_ready
+                    else ["global_anchor"] if retained_global_fallback else []
+                ),
+                "missing_components": [] if normal_packet_ready else ["target_local"],
+                "grounding_fraction": 1.0 if normal_packet_ready else 0.0,
+            }
+            if not normal_packet_ready:
+                record["evidence_degradation"] = {
+                    "reason": resolution.get("provider_reason") or "target_local_acquisition_unavailable",
+                    "provider_status": resolution.get("provider_status"),
+                    "provider_error": resolution.get("provider_error"),
+                    "forced_final_judge": False,
+                    "ambiguity_retained": True,
+                }
+        elif geometry_only_final:
+            fallback = structured_fallback_record(
+                mode=GEOMETRY_ONLY_VLM_MODE,
+                trigger_reason=fallback_reason,
+                geometry_packet=geometry_packet,
+            )
+            record["structured_fallback"] = deepcopy(fallback)
+            record["evidence_coverage"] = {
+                "grounded": True,
+                "empirically_grounded": True,
+                "policy_resolved": True,
+                "coverage_kind": GEOMETRY_ONLY_VLM_MODE,
+                "grounding_fraction": 1.0,
+            }
+            record["evidence_degradation"] = {
+                "reason": fallback_reason,
+                "provider_status": resolution.get("provider_status"),
+                "provider_error": resolution.get("provider_error"),
+                "geometry_only_final_judge": True,
+            }
+        elif retained_global_fallback:
             record["retained_global_forced_final"] = True
             record["evidence_coverage"] = {
                 "grounded": True,
@@ -300,8 +380,10 @@ def evaluate_target_scoped_judgements(
             metric_name=metric_name,
             scene=scene,
             prompt=prompt,
-            render_evidence=list(packet["paths"]),
-            selected_object_ids=list(scope.framing_ids),
+            render_evidence=(
+                [] if geometry_only_final else list(packet["paths"])
+            ),
+            selected_object_ids=list(record["framing_ids"]),
             selected_group_ids=[],
             groups=[],
             authorized_deviations=authorized_deviations,
@@ -316,11 +398,18 @@ def evaluate_target_scoped_judgements(
                 if metric_name == "semantic_placement_consistency"
                 else None
             ),
-            target_scope=scope,
+            target_scope=(
+                scope if isinstance(scope, TargetCameraScope) else None
+            ),
             attribution_target_ids=[target_id],
-            context_object_ids=list(scope.context_ids),
+            context_object_ids=list(record["context_ids"]),
         )
-        if retained_global_fallback:
+        if adaptive_enabled(metric=metric_name):
+            from benchmark.visual_judge.evidence_resolution import bind_acquisition_resolution
+            bind_acquisition_resolution(request, resolution)
+        if geometry_only_final:
+            configure_geometry_only_request(request, geometry_packet)
+        elif retained_global_fallback and not is_v2:
             request["budget_exhaustion_finalization"] = {
                 "required": True,
                 "trigger_stop_reason": (
@@ -366,7 +455,40 @@ def evaluate_target_scoped_judgements(
                 metric_name=metric_name,
                 authorized_deviations=authorized_deviations,
             )
-            if retained_global_fallback:
+            if geometry_only_final:
+                adjusted = deepcopy(adjusted)
+                adjusted.update(
+                    evidence_ambiguous=True,
+                    forced_binary=True,
+                    decision_source=GEOMETRY_ONLY_VLM_MODE,
+                    structured_fallback=deepcopy(
+                        record["structured_fallback"]
+                    ),
+                )
+            elif not adaptive_enabled(metric=metric_name) and has_inferred_binary_rows(
+                adjusted,
+                row_keys=("placement_check_results",),
+            ):
+                inferred_geometry = structured_geometry_packet(
+                    scene,
+                    metric=metric_name,
+                    target_ids=list(record["framing_ids"]),
+                    trigger_reason=(
+                        "judge_binary_inferred_from_structured_context"
+                    ),
+                )
+                if inferred_geometry is not None:
+                    fallback = structured_fallback_record(
+                        mode=GEOMETRY_ONLY_VLM_MODE,
+                        trigger_reason=(
+                            "judge_binary_inferred_from_structured_context"
+                        ),
+                        geometry_packet=inferred_geometry,
+                    )
+                    record["structured_fallback"] = deepcopy(fallback)
+                    adjusted["structured_fallback"] = deepcopy(fallback)
+                    adjusted["decision_source"] = GEOMETRY_ONLY_VLM_MODE
+            elif retained_global_fallback and not is_v2:
                 adjusted = deepcopy(adjusted)
                 adjusted.update(
                     evidence_ambiguous=True,
@@ -382,7 +504,7 @@ def evaluate_target_scoped_judgements(
                     adjusted,
                     required_checks=required_checks,
                 )
-                if retained_global_fallback:
+                if not is_v2 and (retained_global_fallback or geometry_only_final):
                     for row in adjusted.get("placement_check_results") or []:
                         if not isinstance(row, dict):
                             continue
@@ -423,19 +545,29 @@ def evaluate_target_scoped_judgements(
             )
         except Exception as exc:
             schema_audit = response_schema_audit_from_exception(exc)
-            record.update(
-                status="failed",
-                reason="vlm_judge_failed",
-                judgement={
-                    "error_type": type(exc).__name__,
-                    "error": str(exc),
-                    **(
-                        {"response_schema_audit": schema_audit}
-                        if schema_audit is not None
-                        else {}
-                    ),
-                },
-            )
+            failure = {
+                "error_type": type(exc).__name__,
+                **({"failure": failure_record(exc, phase="judge")} if adaptive_enabled(metric=metric_name) else {}),
+                "error": str(exc),
+                **(
+                    {"response_schema_audit": schema_audit}
+                    if schema_audit is not None
+                    else {}
+                ),
+            }
+            if geometry_only_final:
+                apply_policy_default_valid(
+                    record,
+                    reason="geometry_only_vlm_failed",
+                    geometry_packet=geometry_packet,
+                    recovery_failure=failure,
+                )
+            else:
+                record.update(
+                    status="failed",
+                    reason="vlm_judge_failed",
+                    judgement=failure,
+                )
         if (
             audit_start is not None
             and isinstance(audit_records, list)

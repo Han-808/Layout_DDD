@@ -127,9 +127,9 @@ def _write_json(path: Path, value: Any) -> None:
 def test_checked_in_campaign_bundle_is_portable_and_immutable() -> None:
     bundle = load_campaign_profile_bundle(PROFILE_ROOT)
 
-    assert len(bundle.routes.routes) == 5
-    assert len(bundle.models.models) == 8
-    assert len(bundle.campaigns.campaigns) == 3
+    assert len(bundle.routes.routes) == 6
+    assert len(bundle.models.models) == 17
+    assert len(bundle.campaigns.campaigns) == 4
     campaign, model, route = bundle.resolve_campaign(
         "api3-opus48-high-scene10-v2"
     )
@@ -152,6 +152,55 @@ def test_checked_in_campaign_bundle_is_portable_and_immutable() -> None:
     assert "/users/" not in lowered
     assert "api_key" not in lowered
     assert "credential_env" not in lowered
+
+
+@pytest.mark.parametrize(
+    "profile_id",
+    [
+        "api2-gpt-5-6-sol-retry5",
+        "api2-kimi-k3-retry5",
+        "api2-kimi-k3-retry5-stagec1500",
+        "api2-glm-5-3-retry5",
+        "api2-hy4-preview-retry5",
+        "tokenhub-hy4-preview-retry5",
+        "api3-claude-opus-5-retry5",
+        "api3-claude-sonnet-5-retry5",
+        "api3-claude-fable-5-retry5",
+    ],
+)
+def test_multi_room_retry5_models_use_exact_bounded_transport_policy(
+    profile_id: str,
+) -> None:
+    bundle = load_campaign_profile_bundle(PROFILE_ROOT)
+    model = bundle.models.by_id[profile_id]
+
+    assert model.transport_policy.max_infrastructure_retries == 5
+    assert model.transport_policy.retry_delay_seconds == 30.0
+
+
+@pytest.mark.parametrize(
+    ("profile_id", "reasoning_effort", "stage_c_timeout"),
+    [
+        ("api2-gpt-5-6-sol-retry5", "high", None),
+        ("api2-kimi-k3-retry5", "max", None),
+        ("api2-kimi-k3-retry5-stagec1500", "max", 1500.0),
+        ("api2-glm-5-3-retry5", "max", 1200.0),
+        ("api2-hy4-preview-retry5", "high", None),
+        ("tokenhub-hy4-preview-retry5", "high", None),
+        ("api3-claude-opus-5-retry5", None, None),
+        ("api3-claude-fable-5-retry5", None, None),
+        ("api3-claude-sonnet-5-retry5", None, None),
+    ],
+)
+def test_multi_room_retry5_models_preserve_reviewed_reasoning_configuration(
+    profile_id: str,
+    reasoning_effort: str | None,
+    stage_c_timeout: float | None,
+) -> None:
+    model = load_campaign_profile_bundle(PROFILE_ROOT).models.by_id[profile_id]
+
+    assert model.request_options.reasoning_effort == reasoning_effort
+    assert model.request_options.stage_c_request_timeout_seconds == stage_c_timeout
 
 
 @pytest.mark.parametrize(
@@ -290,7 +339,7 @@ def test_multiple_models_share_one_retrieval_profile_without_resource_fields() -
     assert {item["retrieval_profile_id"] for item in campaigns} == {
         RETRIEVAL_PROFILE_ID
     }
-    assert len({item["model_profile_id"] for item in campaigns}) == 3
+    assert len({item["model_profile_id"] for item in campaigns}) == 4
     allowed = {
         "campaign_id",
         "workflow_profile_id",
@@ -422,6 +471,53 @@ def test_runtime_model_public_projection_never_serializes_credential() -> None:
     assert "credential-that-must-not-be-recorded" not in public
     assert "private-runtime.example.invalid" not in public
     assert "api_key" not in runtime.to_public_dict()
+
+
+def test_glm_stage_c_timeout_is_config_owned_and_updates_api2_gateway() -> None:
+    bundle = load_campaign_profile_bundle(PROFILE_ROOT)
+    _, glm, route_profile = bundle.resolve_campaign("api2-glm53-scene10-v2")
+    route = build_provider_route(route_profile, glm, clock=lambda: 1.0)
+    runtime = RuntimeProviderModel.from_profile(
+        glm,
+        endpoint="https://runtime.example.invalid/api/v1/responses",
+        api_key="app:credential",
+    )
+
+    stage_a = runtime.for_stage("stage_a")
+    stage_c = runtime.for_stage("stage_c")
+
+    assert stage_a is runtime
+    assert stage_a.timeout_seconds == 600.0
+    assert stage_a.gateway_timeout_override_seconds is None
+    assert stage_c is not runtime
+    assert stage_c.timeout_seconds == 1200.0
+    assert stage_c.stage_c_timeout_seconds == 1200.0
+    assert stage_c.gateway_timeout_override_seconds == 1200.0
+    assert "timeout=600" in route.request_headers(stage_a, "stage-a")[
+        "Authorization"
+    ]
+    assert "timeout=1200" in route.request_headers(stage_c, "stage-c")[
+        "Authorization"
+    ]
+    assert runtime.to_public_dict()["stage_c_timeout_seconds"] == 1200.0
+
+
+def test_kimi_keeps_single_600_second_timeout_for_both_stages() -> None:
+    bundle = load_campaign_profile_bundle(PROFILE_ROOT)
+    _, kimi, route_profile = bundle.resolve_campaign("api2-kimi-k3-scene10-v2")
+    route = build_provider_route(route_profile, kimi, clock=lambda: 1.0)
+    runtime = RuntimeProviderModel.from_profile(
+        kimi,
+        endpoint="https://runtime.example.invalid/v1/chat/completions",
+        api_key="app:credential",
+    )
+
+    assert runtime.for_stage("stage_c") is runtime
+    assert runtime.timeout_seconds == 600.0
+    assert runtime.stage_c_timeout_seconds is None
+    assert "timeout=600" in route.request_headers(runtime, "stage-c")[
+        "Authorization"
+    ]
 
 
 @pytest.mark.parametrize(

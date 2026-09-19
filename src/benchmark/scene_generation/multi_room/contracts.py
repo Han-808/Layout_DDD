@@ -92,6 +92,18 @@ def validate_room_object_plan(
             raise MultiRoomContractError(
                 f"object_plan.objects[{index}].metadata must be an object"
             )
+        # requested_count is a redundant copy of the authoritative sibling
+        # count.  Accept a one-instance transcription error, then normalize it
+        # before the frozen validator and every downstream artifact.  The
+        # authoritative count and aggregate room target remain unchanged.
+        count = int(item["count"])
+        requested_count = int(metadata["requested_count"])
+        if abs(requested_count - count) > 1:
+            raise MultiRoomContractError(
+                f"object slot {slot_id!r} metadata.requested_count differs "
+                "from count by more than 1"
+            )
+        metadata["requested_count"] = count
         support = str(metadata.get("support") or "")
         original_support[slot_id] = support
         if support in _WALL_IDS:

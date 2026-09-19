@@ -52,13 +52,27 @@ class API2GatewayPolicy:
         self, model: ProviderModel, session_id: str
     ) -> dict[str, str]:
         app_id, app_key = parse_api2_credential(model.api_key)
+        request_timeout = getattr(
+            model,
+            "gateway_timeout_override_seconds",
+            None,
+        )
+        if request_timeout is None:
+            request_timeout = self.timeout_seconds
+        if (
+            isinstance(request_timeout, bool)
+            or not isinstance(request_timeout, (int, float))
+            or float(request_timeout) <= 0
+        ):
+            raise ValueError("API2 model timeout_seconds must be positive")
+        effective_timeout = max(1, int(float(request_timeout)))
         cache_task_id = hashlib.md5(
             f"{self.clock()}{app_id}{session_id}".encode("utf-8")
         ).hexdigest()
         authorization = (
             f"Bearer {app_id}:{app_key}"
             f"?provider={self.provider}&model={self.gateway_model}"
-            f"&timeout={self.timeout_seconds}&cache_task_id={cache_task_id}"
+            f"&timeout={effective_timeout}&cache_task_id={cache_task_id}"
         )
         return {
             "Content-Type": "application/json; charset=utf-8",

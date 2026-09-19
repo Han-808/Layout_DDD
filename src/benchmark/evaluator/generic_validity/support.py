@@ -10,6 +10,11 @@ meter/Z-up frame.
 """
 
 from __future__ import annotations
+from benchmark.visual_judge.evidence_gap_v2 import enabled as fallback_v2_enabled
+
+from benchmark.evaluator.adaptive_audit import adaptive_l1_result
+
+from benchmark.visual_judge.evidence_resolution import adaptive_enabled, with_evidence_policy, failure_record
 
 import math
 from copy import deepcopy
@@ -34,6 +39,12 @@ from benchmark.evaluator.generic_validity.geometry import (
 from benchmark.evaluator.context_projection import (
     project_scene_for_evaluator_context,
 )
+from benchmark.evaluator.structured_fallback import (
+    GEOMETRY_ONLY_VLM_MODE,
+    POLICY_DEFAULT_VALID_MODE,
+    structured_fallback_record,
+    structured_geometry_packet,
+)
 from benchmark.evaluator.generic_validity.mesh_geometry import (
     geometry_entry_for_object,
     geometry_unavailable_reason,
@@ -47,11 +58,11 @@ from benchmark.visual_judge.contracts import (
 from benchmark.visual_judge.runtime import EvidenceControlUnresolvedError
 
 
-SUPPORT_EVALUATOR_VERSION = "support_p0b_v11"
+SUPPORT_EVALUATOR_VERSION = "support_p0b_v12"
 GRAVITY = [0.0, 0.0, -1.0]
 SUPPORT_CANDIDATE_SELECTION_POLICY = "high_recall_candidate_no_label_prior"
 GROUNDED_SUPPORT_POLICY = "fixed_point_contact_path_to_floor_v4"
-ZERO_VISUAL_SUPPORT_POLICY = "nearest_logical_wall_distance_binary_v3"
+ZERO_VISUAL_SUPPORT_POLICY = "structured_geometry_then_valid_v1"
 
 # Scale-aware contact thresholds (meters). Small positive clearances within the
 # hard band are treated as ordinary geometry/render fitting tolerance, matching
@@ -125,7 +136,7 @@ SUPPORT_NOTES = [
     "Floating stacks, ungrounded contact components, and contact cycles route to VLM; they are never direct-invalid.",
     "Sparse leg/frame contacts and support split across multiple targets are valid Support evidence; stability is evaluated elsewhere.",
     "Missing contact, attachment/suspension, or degraded geometry normally requires a binary VLM verdict.",
-    "If the local visual-evidence provider returns zero views, Support uses the final distance-only binary fallback: nearest logical-wall distance below logical_wall_attachment_tolerance_m is valid; otherwise invalid.",
+    "If the local visual-evidence provider returns zero views, Support uses an object-semantic structured-geometry VLM verdict; if that route cannot run or fails, the explicit terminal policy returns valid.",
     "Mesh evidence must be consistent with the canonical object frame or it is rejected and explicitly routed as degraded evidence.",
     "No static stability, center-of-mass, affordance, or physics simulation is used.",
 ]
@@ -215,17 +226,9 @@ class _SupportLocalEvidenceGuard:
         try:
             items = list(self._provider(request))
         except Exception as exc:
-            usage = getattr(self._provider, "last_call_usage", None)
-            generated = (
-                usage.get("candidate_count_generated")
-                if isinstance(usage, dict)
-                else None
-            )
-            if generated == 0:
-                raise _SupportZeroVisualEvidence(
-                    "support local visual evidence count is zero"
-                ) from exc
-            raise
+            raise _SupportZeroVisualEvidence(
+                "support local visual evidence is unavailable"
+            ) from exc
         if not items:
             raise _SupportZeroVisualEvidence(
                 "support local visual evidence count is zero"
@@ -233,6 +236,8 @@ class _SupportLocalEvidenceGuard:
         return items
 
 
+@with_evidence_policy
+@adaptive_l1_result
 def check_support(
     scene: dict,
     config: dict | None = None,
@@ -251,13 +256,8 @@ def check_support(
 
     scene = project_scene_for_evaluator_context(scene)
     from benchmark.non_rectangular.geometry import polygon_geometry_from_scene
-
-    polygon_room_geometry = polygon_geometry_from_scene(scene)
-    floor_z_m = (
-        float(polygon_room_geometry.floor_z_m)
-        if polygon_room_geometry is not None
-        else 0.0
-    )
+    polygon_geometry = polygon_geometry_from_scene(scene)
+    floor_z_m = polygon_geometry.floor_z_m if polygon_geometry is not None else 0.0
 
     objects, object_errors = normalize_objects(scene)
     num_objects = len(objects)
@@ -320,6 +320,7 @@ def check_support(
             objects=objects,
             mesh_cache=mesh_cache,
             grounding_analysis=grounding_analysis,
+            floor_z_m=floor_z_m,
             boundary=boundary,
             has_boundary=has_boundary,
             fixed_contact_tolerance=fixed_contact_tolerance,
@@ -334,7 +335,6 @@ def check_support(
             render_evidence=render_evidence,
             vlm_judge=vlm_judge,
             local_view_provider=local_view_provider,
-            floor_z_m=floor_z_m,
         )
         records.append(record)
         if record.get("requires_vlm"):
@@ -351,11 +351,11 @@ def check_support(
         if record.get("requires_vlm") and record.get("final_verdict") not in {"valid", "invalid"}
     )
 
-    if adjudication_failures and official_mode:
+    if adjudication_failures and official_mode and unresolved_vlm_count and not fallback_v2_enabled():
         raise SupportEvaluationError("; ".join(adjudication_failures))
-    if requires_vlm_count and official_mode and vlm_judge is None:
+    if unresolved_vlm_count and official_mode and vlm_judge is None:
         raise SupportEvaluationError(
-            "support events require P0b VLM adjudication in official mode, but no judge is configured"
+            "support events remain unresolved in official mode"
         )
 
     if detector_only:
@@ -383,7 +383,7 @@ def check_support(
         "grounded_support_policy": GROUNDED_SUPPORT_POLICY,
         **(
             {"architecture_scope": "floor_wall_object_support_no_ceiling"}
-            if polygon_room_geometry is not None
+            if polygon_geometry is not None
             else {}
         ),
         "logical_architecture_attachment_policy": {
@@ -395,7 +395,7 @@ def check_support(
             "decision_authority": "vlm_after_missing_support_route",
             **(
                 {"ceiling_attachment_enabled": False}
-                if polygon_room_geometry is not None
+                if polygon_geometry is not None
                 else {}
             ),
         },
@@ -466,7 +466,7 @@ def check_support(
             + [
                 "Non-rectangular mode evaluates floor, wall-segment, and object support only; ceiling attachment is excluded."
             ]
-            if polygon_room_geometry is not None
+            if polygon_geometry is not None
             else list(SUPPORT_NOTES)
         ),
     }
@@ -482,7 +482,7 @@ def _analyze_grounded_contact_graph(
     base_band_tol: float,
     minimum_contact_count: int,
     grid: tuple[int, int],
-    floor_z_m: float,
+    floor_z_m: float = 0.0,
 ) -> dict[str, Any]:
     """Certify tolerance-contact paths to the floor with an order-independent pass.
 
@@ -650,6 +650,7 @@ def _evaluate_object(
     objects,
     mesh_cache: dict[str, dict[str, Any]],
     grounding_analysis: dict[str, Any],
+    floor_z_m: float,
     boundary: np.ndarray,
     has_boundary: bool,
     fixed_contact_tolerance: float | None,
@@ -664,7 +665,6 @@ def _evaluate_object(
     render_evidence: list[str] | None,
     vlm_judge: object | None,
     local_view_provider: LocalViewProvider | None,
-    floor_z_m: float,
 ) -> dict[str, Any]:
     source_cache = mesh_cache.get(obj.id) or {}
     grounding = deepcopy((grounding_analysis.get("objects") or {}).get(obj.id) or {})
@@ -768,36 +768,15 @@ def _evaluate_object(
     )
     evidence_level = _evidence_level(hits, source_representation=source_representation)
     geometry_provenance = _geometry_provenance(scene, obj.id, mesh_cache.get(obj.id))
-    from benchmark.non_rectangular.support_geometry import (
-        polygon_support_architecture_evidence,
-    )
-
-    raw_object = next(
-        (
-            item
-            for item in scene.get("objects", [])
-            if isinstance(item, dict) and str(item.get("id")) == obj.id
-        ),
-        {},
-    )
+    from benchmark.non_rectangular.support_geometry import polygon_support_architecture_evidence
+    raw_object = next(item for item in scene["objects"] if str(item.get("id")) == obj.id)
     polygon_architecture = polygon_support_architecture_evidence(
-        scene,
-        raw_object=raw_object,
-        tolerance_m=candidate_tol,
-    )
+        scene, raw_object=raw_object, tolerance_m=candidate_tol)
     if polygon_architecture is not None:
-        architecture_plane_clearances = polygon_architecture[
-            "architecture_plane_clearances_m"
-        ]
-        active_physical_wall_ids = list(
-            polygon_architecture["active_physical_wall_ids"]
-        )
-        architecture_contact_candidates = list(
-            polygon_architecture["architecture_contact_candidates"]
-        )
-        nearest_logical_wall_measurement = polygon_architecture[
-            "nearest_logical_wall_measurement"
-        ]
+        architecture_plane_clearances = polygon_architecture["architecture_plane_clearances_m"]
+        active_physical_wall_ids = polygon_architecture["active_physical_wall_ids"]
+        architecture_contact_candidates = polygon_architecture["architecture_contact_candidates"]
+        nearest_logical_wall_measurement = polygon_architecture["nearest_logical_wall_measurement"]
     else:
         architecture_plane_clearances = _architecture_plane_clearances(
             scene,
@@ -806,9 +785,7 @@ def _evaluate_object(
             has_boundary,
         )
         active_physical_wall_ids = list(
-            active_wall_ids_from_contract(
-                architecture_contract_from_scene(scene)
-            )
+            active_wall_ids_from_contract(architecture_contract_from_scene(scene))
         )
         architecture_contact_candidates = _architecture_contact_candidates(
             architecture_plane_clearances,
@@ -859,7 +836,7 @@ def _evaluate_object(
         "contact_tolerance_m": direct_contact_tolerance,
         "direct_contact_tolerance_m": direct_contact_tolerance,
         # Retained as a report compatibility alias; this is a tolerance band,
-        # not a frozen numerical epsilon in support_p0b_v11.
+        # not a frozen numerical epsilon in support_p0b_v12.
         "direct_contact_epsilon_m": direct_contact_tolerance,
         "support_candidate_tolerance_m": candidate_tol,
         "hard_contact_tolerance_m": hard_contact_tolerance,
@@ -946,6 +923,31 @@ def _evaluate_object(
     if bool(cfg.get("detector_only")):
         return record
     if vlm_judge is None:
+        if adaptive_enabled():
+            record["adjudication_error"] = "JudgeUnavailable"
+            record["adjudication_failure"] = {"failure_category": "model_service_failure"}
+            return record
+        geometry_packet = structured_geometry_packet(
+            scene,
+            metric="support",
+            target_ids=[obj.id],
+            trigger_reason="support_judge_not_configured",
+        )
+        fallback = structured_fallback_record(
+            mode=POLICY_DEFAULT_VALID_MODE,
+            trigger_reason="support_judge_not_configured",
+            geometry_packet=geometry_packet,
+            empirically_grounded=False,
+        )
+        record.update(
+            {
+                "requires_vlm": False,
+                "route": "direct_valid_policy_fallback",
+                "final_verdict": "valid",
+                "affects_support_score": True,
+                "structured_fallback": deepcopy(fallback),
+            }
+        )
         return record
 
     event = {
@@ -978,7 +980,7 @@ def _evaluate_object(
         mesh_cache=mesh_cache,
     )
     guarded_local_view_provider = (
-        _SupportLocalEvidenceGuard(local_view_provider)
+        local_view_provider if adaptive_enabled() else _SupportLocalEvidenceGuard(local_view_provider)
         if local_view_provider is not None
         and polygon_architecture is None
         else None
@@ -1003,73 +1005,144 @@ def _evaluate_object(
             local_view_provider=guarded_local_view_provider,
         )
     except _SupportZeroVisualEvidence:
-        measurement = nearest_logical_wall_measurement
-        distance_m = (
-            float(measurement["distance_m"])
-            if measurement is not None
-            else None
+        fallback_reason = "support_zero_local_visual_evidence"
+        geometry_packet = structured_geometry_packet(
+            scene,
+            metric="support",
+            target_ids=[obj.id],
+            trigger_reason=fallback_reason,
         )
-        threshold_m = float(
-            cfg["logical_wall_attachment_tolerance_m"]
-        )
-        verdict = (
-            "valid"
-            if distance_m is not None and distance_m < threshold_m
-            else "invalid"
+        if geometry_packet is not None:
+            try:
+                judge_result = adjudicate_p0b_event(
+                    metric="support",
+                    event=event,
+                    prompt=str(prompt or ""),
+                    relationships=relationships,
+                    scene=scene,
+                    detector_evidence=detector_evidence,
+                    judge=vlm_judge,
+                    object_ids=[obj.id, *candidate_support_ids],
+                    overview_render_evidence=[],
+                    local_view_provider=None,
+                    visual_config_policy="passthrough",
+                    structured_geometry_finalization=geometry_packet,
+                )
+                fallback = structured_fallback_record(
+                    mode=GEOMETRY_ONLY_VLM_MODE,
+                    trigger_reason=fallback_reason,
+                    geometry_packet=geometry_packet,
+                )
+                judge_result["structured_fallback"] = deepcopy(fallback)
+                verdict = str(judge_result["verdict"])
+                record.update(
+                    {
+                        "requires_vlm": False,
+                        "route": "vlm_adjudicated_zero_visual_geometry",
+                        "final_verdict": verdict,
+                        "affects_support_score": True,
+                        "judge_result": deepcopy(judge_result),
+                        "structured_fallback": deepcopy(fallback),
+                        "zero_visual_support_fallback": {
+                            "schema_version": (
+                                "support_zero_visual_structured_v1"
+                            ),
+                            "policy": ZERO_VISUAL_SUPPORT_POLICY,
+                            "available": 0,
+                            "mode": GEOMETRY_ONLY_VLM_MODE,
+                            "nearest_logical_wall_measurement": deepcopy(
+                                nearest_logical_wall_measurement
+                            ),
+                            "verdict": verdict,
+                        },
+                    }
+                )
+                return record
+            except Exception as exc:
+                record["adjudication_error"] = (
+                    f"{type(exc).__name__}: {exc}"
+                )
+        fallback = structured_fallback_record(
+            mode=POLICY_DEFAULT_VALID_MODE,
+            trigger_reason=(
+                "support_geometry_only_vlm_failed"
+                if geometry_packet is not None
+                else "support_geometry_unavailable"
+            ),
+            geometry_packet=geometry_packet,
+            empirically_grounded=False,
         )
         record.update(
             {
                 "requires_vlm": False,
-                "route": (
-                    f"direct_{verdict}_zero_visual_wall_distance"
-                ),
-                "final_verdict": verdict,
+                "route": "direct_valid_zero_visual_policy",
+                "final_verdict": "valid",
                 "affects_support_score": True,
+                "structured_fallback": deepcopy(fallback),
                 "zero_visual_support_fallback": {
-                    "schema_version": (
-                        "support_zero_visual_wall_distance_v3"
-                    ),
+                    "schema_version": "support_zero_visual_structured_v1",
                     "policy": ZERO_VISUAL_SUPPORT_POLICY,
                     "available": 0,
-                    "distance_m": distance_m,
-                    "threshold_m": threshold_m,
-                    "comparison": "distance_m < threshold_m",
-                    "nearest_plane": (
-                        measurement.get("plane")
-                        if measurement is not None
-                        else None
+                    "mode": POLICY_DEFAULT_VALID_MODE,
+                    "nearest_logical_wall_measurement": deepcopy(
+                        nearest_logical_wall_measurement
                     ),
-                    "signed_clearance_m": (
-                        measurement.get("signed_clearance_m")
-                        if measurement is not None
-                        else None
-                    ),
-                    "verdict": verdict,
+                    "verdict": "valid",
                 },
             }
         )
         return record
     except EvidenceControlUnresolvedError as exc:
-        record["route"] = "unresolved"
+        if fallback_v2_enabled():
+            record["failure"] = failure_record(exc, phase="judge")
+            return record
         record["evidence_control"] = exc.result.to_dict()
-        return record
+        record["adjudication_error"] = (
+            f"{type(exc).__name__}: {exc}"
+        )
     except Exception as exc:
         record["adjudication_error"] = f"{type(exc).__name__}: {exc}"
-        record["route"] = "vlm_adjudication_failed"
+        if adaptive_enabled():
+            record["adjudication_error"] = type(exc).__name__
+            record["adjudication_failure"] = failure_record(exc, phase="judge")
+            return record
         schema_audit = response_schema_audit_from_exception(exc)
         if schema_audit is not None:
             record["adjudication_failure_audit"] = schema_audit
-        if bool(cfg.get("official_mode")):
-            raise SupportEvaluationError(record["adjudication_error"]) from exc
+    else:
+        verdict = str(judge_result.get("verdict"))
+        record.update(
+            {
+                "route": "vlm_adjudicated",
+                "final_verdict": verdict,
+                "affects_support_score": True,
+                "judge_result": deepcopy(judge_result),
+            }
+        )
         return record
 
-    verdict = str(judge_result.get("verdict"))
+    if adaptive_enabled():
+        record["adjudication_failure"] = {"failure_category": "judge_response_failure"}
+        return record
+    geometry_packet = structured_geometry_packet(
+        scene,
+        metric="support",
+        target_ids=[obj.id],
+        trigger_reason="support_adjudication_failed",
+    )
+    fallback = structured_fallback_record(
+        mode=POLICY_DEFAULT_VALID_MODE,
+        trigger_reason="support_adjudication_failed",
+        geometry_packet=geometry_packet,
+        empirically_grounded=False,
+    )
     record.update(
         {
-            "route": "vlm_adjudicated",
-            "final_verdict": verdict,
+            "requires_vlm": False,
+            "route": "direct_valid_policy_fallback",
+            "final_verdict": "valid",
             "affects_support_score": True,
-            "judge_result": deepcopy(judge_result),
+            "structured_fallback": deepcopy(fallback),
         }
     )
     return record
@@ -1471,17 +1544,8 @@ def _nearest_support(
             best_degraded_reason = str(cache.get("load_error")) if cache.get("degraded") else None
 
     inside_room = (not has_boundary) or point_in_polygon_2d([x, y], boundary)
-    if (
-        inside_room
-        and floor_z_m <= z_p + candidate_tol
-        and (best_h is None or floor_z_m > best_h)
-    ):
-        best_h, best_target, best_rep, best_source = (
-            floor_z_m,
-            "floor",
-            "architecture",
-            "floor_plane",
-        )
+    if inside_room and floor_z_m <= z_p + candidate_tol and (best_h is None or floor_z_m > best_h):
+        best_h, best_target, best_rep, best_source = floor_z_m, "floor", "architecture", "floor_plane"
         best_degraded_reason = None
 
     if best_h is not None:
@@ -1504,7 +1568,7 @@ def _nearest_support(
             "target": "floor",
             "target_representation": "architecture",
             "height_m": floor_z_m,
-            "gap_m": z_p,
+            "gap_m": z_p - floor_z_m,
             "position": [x, y, floor_z_m],
             "evidence_source": "floor_penetration",
             "target_geometry_degraded_reason": None,

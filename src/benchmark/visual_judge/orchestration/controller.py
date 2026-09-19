@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from benchmark.visual_judge.evidence_resolution import adaptive_enabled, bind_provider_acquisition, failure_record, with_evidence_policy
+from benchmark.visual_judge.evidence_gap_v2 import enabled as fallback_v2_enabled
+
 from copy import deepcopy
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -291,6 +294,7 @@ class VLMEvaluationController:
         self.candidate_bank_builder = resolved_builder
         self.candidate_preview_renderer = candidate_preview_renderer
 
+    @with_evidence_policy
     def run(
         self,
         request: JudgeRequest | dict[str, Any],
@@ -406,6 +410,7 @@ class VLMEvaluationController:
         last_judge: JudgeResult | None = None
         pending_request: EvidenceRequest | None = None
         post_render_validation_error: str | None = None
+        adaptive_failure: dict[str, Any] | None = None
         last_deterministic_selection: CameraSelectionResult | None = None
         candidate_bank_episode = -1
         preview_episode = -1
@@ -520,7 +525,7 @@ class VLMEvaluationController:
             reason: str,
             stop_reason: str,
         ) -> VLMEvaluationResult:
-            return finish(
+            result = finish(
                 status="unresolved",
                 reason=reason,
                 stop_reason=stop_reason,
@@ -534,6 +539,9 @@ class VLMEvaluationController:
                 total_images_acquired=total_images_acquired,
                 control_manifest_path=control_manifest_path,
             )
+            if adaptive_failure is not None:
+                result.audit["failure"] = deepcopy(adaptive_failure)
+            return result
 
         def force_terminal_choice(
             *,
@@ -575,6 +583,20 @@ class VLMEvaluationController:
                     stop_reason=(
                         f"{trigger_stop_reason}_screen_deferred"
                     ),
+                )
+            if fallback_v2_enabled(self.control) and adaptive_enabled(metric=judge_request.metric):
+                # End acquisition without changing the Judge's conclusion.
+                # The enclosing metric adapter owns one bounded terminal
+                # review and coverage accounting; no binary contract here.
+                trace.append({
+                    "stage": "terminal_choice_policy",
+                    "outcome": "deferred_to_evidence_gap_review",
+                    "trigger_stop_reason": trigger_stop_reason,
+                    "evidence_request": pending_request.to_dict(),
+                })
+                return unresolved(
+                    reason="acquisition ended; unsupported conclusions remain unresolved",
+                    stop_reason=trigger_stop_reason,
                 )
             ambiguity_before_forcing = bool(
                 last_judge is not None
@@ -674,6 +696,36 @@ class VLMEvaluationController:
                 control_manifest_path=control_manifest_path,
             )
 
+        initial_forced_choice = judge_request.context.get(
+            "budget_exhaustion_finalization"
+        )
+        if (
+            isinstance(initial_forced_choice, dict)
+            and initial_forced_choice.get("required") is True
+        ):
+            initial_forced_choice_stop_reason = str(
+                initial_forced_choice.get("trigger_stop_reason") or ""
+            ).strip()
+            if not initial_forced_choice_stop_reason:
+                raise ValueError(
+                    "budget_exhaustion_finalization requires "
+                    "trigger_stop_reason"
+                )
+            pending_request = EvidenceRequest(
+                target_ids=targets or ("scene",),
+                missing_observations=("local_visual_evidence",),
+                view_goal=(
+                    "make a binary decision from deterministic context and "
+                    "all available visual evidence"
+                ),
+                metadata={
+                    "source": "initial_forced_choice_policy",
+                },
+            )
+            return force_terminal_choice(
+                trigger_stop_reason=initial_forced_choice_stop_reason,
+            )
+
         while True:
             gate_result = self._check_gate(
                 request=judge_request,
@@ -757,6 +809,11 @@ class VLMEvaluationController:
                 )
 
             if post_render_validation_error is not None:
+                if adaptive_enabled(self.control, metric=judge_request.metric):
+                    adaptive_failure = {"failure_category": "input_integrity_failure", "phase": "acquisition",
+                                        "error_type": "RendererContractError", "recoverable_acquisition": False}
+                    return unresolved(reason="renderer follow-up contract is invalid",
+                                      stop_reason="renderer_followup_contract_invalid")
                 if gate_result.ready and pending_request is not None:
                     return force_terminal_choice(
                         trigger_stop_reason=(
@@ -944,6 +1001,14 @@ class VLMEvaluationController:
                                     "decision_authority": "none",
                                 }
                             )
+                            if adaptive_enabled(self.control, metric=judge_request.metric):
+                                adaptive_failure = failure_record(exc, phase="acquisition")
+                                trace[-1]["failure"] = deepcopy(adaptive_failure)
+                                trace[-1]["error"] = type(exc).__name__
+                                if not adaptive_failure["recoverable_acquisition"]:
+                                    trace[-1]["fallback"] = None
+                                    return unresolved(reason="evidence readiness failed with a non-recoverable error",
+                                                      stop_reason=adaptive_failure["failure_category"])
                             return force_terminal_choice(
                                 trigger_stop_reason=(
                                     "camera_evidence_readiness_failed"
@@ -1146,6 +1211,15 @@ class VLMEvaluationController:
                             }
                         )
                     acquisition_source = "judge_need_more_evidence"
+                    if (
+                        fallback_v2_enabled(self.control)
+                        and registered_placement_check is not None
+                        and str(registered_placement_check.get("handoff_status") or "").startswith("deferred_to_")
+                    ):
+                        return unresolved(
+                            reason="Placement proposal retained for its owning stage",
+                            stop_reason="placement_handoff_deferred",
+                        )
 
                 if (
                     functional_soft_contract_active
@@ -1686,6 +1760,14 @@ class VLMEvaluationController:
                                     ),
                                 }
                             )
+                            if adaptive_enabled(self.control, metric=judge_request.metric):
+                                adaptive_failure = failure_record(exc, phase="acquisition")
+                                trace[-1]["failure"] = deepcopy(adaptive_failure)
+                                trace[-1]["error"] = type(exc).__name__
+                                if not adaptive_failure["recoverable_acquisition"]:
+                                    trace[-1]["fallback"] = None
+                                    return unresolved(reason="camera preview failed with a non-recoverable error",
+                                                      stop_reason=adaptive_failure["failure_category"])
                             if (
                                 functional_terminal_recovery_active
                                 and gate_result.ready
@@ -1757,6 +1839,7 @@ class VLMEvaluationController:
                 )
                 selector_calls += selection_execution.selector_calls
                 if selection_execution.selection is None:
+                    adaptive_failure = deepcopy(selection_execution.failure)
                     failure_kind = str(
                         selection_execution.failure_kind
                         or "selector_exception"
@@ -1779,6 +1862,9 @@ class VLMEvaluationController:
                         failure_kind=failure_kind,
                         failure_error=failure_error,
                     )
+                    if adaptive_failure is not None and not adaptive_failure["recoverable_acquisition"]:
+                        return unresolved(reason="camera selection failed with a non-recoverable error",
+                                          stop_reason=adaptive_failure["failure_category"])
                     # Selection is reached only after this packet passed the
                     # deterministic integrity gate and the Judge requested a
                     # repair.  A selector engineering failure must not erase
@@ -1958,6 +2044,8 @@ class VLMEvaluationController:
                 failure_provenance = (
                     render_execution.failure_provenance or {}
                 )
+                if adaptive_enabled(self.control, metric=judge_request.metric):
+                    adaptive_failure = deepcopy(failure_provenance.get("failure"))
                 failure_artifacts = (
                     _acquired_artifacts_from_provenance(
                         failure_provenance,
@@ -2021,6 +2109,11 @@ class VLMEvaluationController:
                 raise RuntimeError(
                     "CameraRepairExecutor returned no render or failure"
                 )
+            rendered_acquisition = rendered.provenance.get("adaptive_acquisition")
+            if adaptive_enabled(self.control, metric=judge_request.metric) and isinstance(rendered_acquisition, dict):
+                updated_context = deepcopy(judge_request.context)
+                bind_provider_acquisition(updated_context, rendered_acquisition)
+                judge_request = replace(judge_request, context=updated_context)
             post_render_validation_error = (
                 render_execution.post_render_validation_error
             )
@@ -2172,6 +2265,11 @@ class VLMEvaluationController:
                 evidence_round=rounds_used,
                 episode_index=acquisition_state.episode_index,
             )
+            if (adaptive_enabled(self.control, metric=judge_request.metric)
+                    and isinstance(rendered_acquisition, dict) and rendered_acquisition.get("failure")):
+                adaptive_failure = deepcopy(rendered_acquisition["failure"])
+                return unresolved(reason="camera acquisition returned an incomplete evidence packet",
+                                  stop_reason="acquisition_incomplete")
             # Looping is intentional: the next operation is always
             # EvidenceGate.
             if previous_fingerprint == current_fingerprint:
@@ -2801,6 +2899,9 @@ def _terminal_forced_choice_judge_request(
             "budget-exhaustion finalization requires a stop reason"
         )
     context = deepcopy(request.context)
+    if adaptive_enabled(context, metric=request.metric):
+        context["adaptive_terminal"] = True
+        context["adaptive_trigger"] = stop_reason
     # Keep the established additive request key for compatibility. The
     # trigger reason distinguishes budget exhaustion from an exhausted camera
     # acquisition path such as no_feasible_candidate.
@@ -2966,6 +3067,17 @@ def _register_pending_placement_check(
     if request.metric != "semantic_placement_consistency":
         return request, None
     metadata = evidence_request.metadata
+    if isinstance(metadata, dict) and metadata.get("placement_check_handoffs") is not None:
+        from benchmark.visual_judge.placement_stage_handoff import handoff_requests
+        updated, registered = request, []
+        for child in handoff_requests(evidence_request.to_dict()):
+            updated, check = _register_pending_placement_check(
+                updated, raw_response={}, evidence_request=EvidenceRequest(**child))
+            if check is None or not str(check.get("handoff_status") or "").startswith("deferred_to_"):
+                raise ValueError("batch stage handoff must defer every check to its owner")
+            registered.append(check)
+        # All immutable registrations succeed before the caller sees any result.
+        return updated, registered[0]
     proposal = (
         metadata.get("placement_check_proposal")
         if isinstance(metadata, dict)
@@ -2999,7 +3111,10 @@ def _register_pending_placement_check(
         if isinstance(group_scope, dict)
         else set()
     )
-    if group_members:
+    if fallback_v2_enabled():
+        from benchmark.visual_judge.placement_scope_v2 import scene_ids
+        known_ids = scene_ids({**context, "scene_context": request.scene_context})
+    elif group_members:
         known_ids = group_members
     else:
         known_ids = {
@@ -3025,6 +3140,10 @@ def _register_pending_placement_check(
         )
     groups = context.get("object_groups")
     groups = groups if isinstance(groups, list) else []
+    if fallback_v2_enabled():
+        from benchmark.visual_judge.placement_scope_v2 import groups_for_request, validate_subject_scope
+        groups = groups_for_request(context)
+        validate_subject_scope(context, proposal_subject)
     check = build_pending_placement_check(
         proposal,
         known_ids=known_ids,
@@ -3034,6 +3153,10 @@ def _register_pending_placement_check(
             f"{context.get('evidence_phase') or 'unknown'}"
         ),
     )
+    handoff = metadata.get("validated_stage_handoff") if isinstance(metadata, dict) else None
+    if isinstance(handoff, dict):
+        # Diagnostic prior claim only; the trusted pending check remains unjudged.
+        check["prior_stage_finding"] = deepcopy(handoff)
     phase = str(context.get("evidence_phase") or "")
     expected_owner = (
         "scene_global"
@@ -3050,10 +3173,15 @@ def _register_pending_placement_check(
         expected_owner == "scene_global"
         and owner_stage == "group_local"
     )
+    deferred_to_global = bool(
+        fallback_v2_enabled() and expected_owner == "group_local"
+        and owner_stage == "scene_global"
+    )
     if (
         expected_owner is not None
         and owner_stage != expected_owner
         and not deferred_to_group
+        and not deferred_to_global
     ):
         raise ValueError(
             "placement evidence-request proposal is routed to the wrong "
@@ -3061,7 +3189,7 @@ def _register_pending_placement_check(
         )
     collection_key = (
         "deferred_placement_checks"
-        if deferred_to_group
+        if deferred_to_group or deferred_to_global
         else "required_placement_checks"
     )
     required = [
@@ -3094,10 +3222,13 @@ def _register_pending_placement_check(
         if deferred_to_group:
             check["handoff_status"] = "deferred_to_group_local"
             check["handoff_from_stage"] = "scene_global"
+        elif deferred_to_global:
+            check["handoff_status"] = "deferred_to_scene_global"
+            check["handoff_from_stage"] = "group_local"
         required.append(deepcopy(check))
         registered = check
     context[collection_key] = required
-    if deferred_to_group:
+    if deferred_to_group or deferred_to_global:
         return (
             JudgeRequest(
                 task=request.task,

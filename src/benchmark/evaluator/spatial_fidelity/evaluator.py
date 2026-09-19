@@ -131,7 +131,7 @@ def evaluate_spatial_fidelity(
             "Statistical priors certify ordinary cases and route suspicious cases; rarity or an outlier alone is not a semantic invalidity verdict.",
             "Unknown ontology data remains visible as incomplete coverage and cannot silently increase a score.",
             "Functional Grouping is an explicit zero-weight placeholder and Functionality is out of scope.",
-            "LEGACY OWNERSHIP: generic Scale and category/role Co-occurrence coherence are canonically owned by L3 Scene Quality (scale_consistency / object_pairing_consistency). Pairing excludes position, angle, orientation, and functional arrangement. These L2 implementations remain compatibility-only scored versions while L3 is a placeholder.",
+            "LEGACY OWNERSHIP: generic Scale and room-global object-inventory coherence are canonically owned by L3 Scene Quality (scale_consistency / object_pairing_consistency). Pairing excludes position, angle, orientation, and functional arrangement. These L2 implementations remain compatibility-only scored versions.",
         ],
     }
 
@@ -157,7 +157,7 @@ def _canonical_ownership() -> dict[str, Any]:
             "legacy": True,
             "still_scored": True,
             "canonical_owner": "scene_quality.object_pairing_consistency (L3 semantic_coherence)",
-            "canonical_scope": "group_member_category_and_role_compatibility_only",
+            "canonical_scope": "room_global_object_inventory_coherence_only",
             "excluded_from_canonical_scope": [
                 "position",
                 "distance",

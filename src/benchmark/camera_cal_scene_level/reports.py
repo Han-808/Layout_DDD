@@ -8,6 +8,9 @@ to preserve monkeypatch behavior and exact artifact ordering.
 
 from __future__ import annotations
 
+from benchmark.visual_judge.evidence_resolution import ADAPTIVE_POLICY
+from benchmark.evaluator.adaptive_audit import adaptive_layer_accepted
+
 from copy import deepcopy
 import math
 from dataclasses import dataclass
@@ -318,6 +321,14 @@ def l3_resolution_audit(
     coverage_warnings: dict[str, list[str]] = {}
     for metric in metrics:
         item = report_metrics.get(metric)
+        if isinstance(item, dict) and item.get("evidence_resolution_policy") == ADAPTIVE_POLICY:
+            if not adaptive_layer_accepted(item):
+                infrastructure_failures.append(metric)
+                reasons[metric] = ["required_judgements_unresolved"]
+            elif item.get("resolution_coverage", {}).get("visual_evidence_fraction") != 1.0:
+                partial_coverage.append(metric)
+                coverage_warnings[metric] = ["accepted_with_limited_visual_evidence"]
+            continue
         metric_reasons: list[str] = []
         metric_coverage_warnings: list[str] = []
         if not isinstance(item, dict):
@@ -445,6 +456,8 @@ def _metric_score_is_publishable(item: dict[str, Any]) -> bool:
     """Treat the evaluator's published score and threshold audit as authority."""
 
     score = item.get("score")
+    if item.get("evidence_resolution_policy") == ADAPTIVE_POLICY:
+        return adaptive_layer_accepted(item)
     if (
         not isinstance(score, (int, float))
         or isinstance(score, bool)

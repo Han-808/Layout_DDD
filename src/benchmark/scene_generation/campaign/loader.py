@@ -174,9 +174,10 @@ def _exact_keys(
     *,
     field_name: str,
     required: frozenset[str],
+    optional: frozenset[str] = frozenset(),
 ) -> None:
     missing = required - value.keys()
-    unknown = value.keys() - required
+    unknown = value.keys() - required - optional
     if missing:
         raise ValueError(f"{field_name} missing fields: {sorted(missing)}")
     if unknown:
@@ -366,11 +367,20 @@ def _request_options(value: Any, *, field_name: str) -> RequestOptions:
             "preserved_thinking",
         }
     )
-    _exact_keys(item, field_name=field_name, required=required)
+    _exact_keys(
+        item,
+        field_name=field_name,
+        required=required,
+        optional=frozenset({"stage_c_request_timeout_seconds"}),
+    )
     return RequestOptions(
         request_timeout_seconds=_number(
             item["request_timeout_seconds"],
             field_name=f"{field_name}.request_timeout_seconds",
+        ),
+        stage_c_request_timeout_seconds=_nullable_number(
+            item.get("stage_c_request_timeout_seconds"),
+            field_name=f"{field_name}.stage_c_request_timeout_seconds",
         ),
         max_tokens=_integer(
             item["max_tokens"], field_name=f"{field_name}.max_tokens"

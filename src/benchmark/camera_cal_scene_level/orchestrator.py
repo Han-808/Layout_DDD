@@ -8,10 +8,23 @@ library data handling; it never imports the script or Evaluation Campaign.
 from __future__ import annotations
 
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import json
 from pathlib import Path
 from typing import Any, Callable
+
+
+def resolve_run_control(control: Any, policy: str | None = None) -> Any:
+    """Override only the policy, preserving every resolved acquisition budget."""
+    if policy is None:
+        return control
+    if policy not in {"legacy", "evidence_adaptive_judgement_v1", "evidence_consistency_fallback_v2"}:
+        raise ValueError("unsupported evidence_resolution_policy")
+    return replace(
+        control, evidence_resolution_policy=policy,
+        requested={**deepcopy(control.requested), "evidence_resolution_policy": policy},
+        sources={**deepcopy(control.sources), "evidence_resolution_policy": "explicit_cli"},
+    )
 
 
 @dataclass(frozen=True)
@@ -83,7 +96,15 @@ def run_main(*, deps: RunOrchestratorDeps) -> None:
     output_root = args.output_root.expanduser().resolve()
     grouping_config_path = args.grouping_config.expanduser().resolve()
     blender_bin = args.blender_bin.expanduser().resolve()
-    metrics = deps.planning.normalize_metric_selection(args.metric)
+    l1_only = bool(getattr(args, "l1_only", False))
+    metrics = (
+        ()
+        if l1_only
+        else deps.planning.normalize_metric_selection(args.metric)
+    )
+    recovery_mode = (
+        "l1_only" if l1_only else "l3_only" if args.l3_only else None
+    )
     cases = deps.planning.discover_cases(
         dataset_root,
         case_ids=args.case_id,
@@ -105,7 +126,19 @@ def run_main(*, deps: RunOrchestratorDeps) -> None:
         args,
         blender_bin=blender_bin,
     )
-    control = deps.planning.resolved_control()
+    control = resolve_run_control(
+        deps.planning.resolved_control(), getattr(args, "evidence_resolution_policy", None)
+    )
+    preflight_required_successes = route.get(
+        "endpoint_preflight_required_successes"
+    )
+    preflight_concurrency = int(
+        route.get("endpoint_preflight_concurrency")
+        or min(args.max_workers, args.endpoint_preflight_attempts)
+    )
+    preflight_sleep_seconds = float(
+        route.get("endpoint_preflight_sleep_seconds") or 0.0
+    )
     experiment = deps.planning.build_experiment_plan(
         dataset_root=dataset_root,
         output_root=output_root,
@@ -145,17 +178,21 @@ def run_main(*, deps: RunOrchestratorDeps) -> None:
         "elapsed_seconds": None,
         "experiment_plan_sha256": deps.io.json_sha256(experiment),
         "source_prompt_used": False,
-        "layers_executed": [deps.constants.l3_layer]
-        if args.l3_only
-        else [deps.constants.l1_layer, deps.constants.l3_layer],
-        "layers_not_executed": [
-            deps.constants.l1_layer,
-            deps.constants.l2_layer,
-            deps.constants.l4_layer,
-        ]
-        if args.l3_only
-        else [deps.constants.l2_layer, deps.constants.l4_layer],
-        "recovery_mode": "l3_only" if args.l3_only else None,
+        "layers_executed": (
+            [deps.constants.l1_layer]
+            if l1_only
+            else [deps.constants.l3_layer]
+            if args.l3_only
+            else [deps.constants.l1_layer, deps.constants.l3_layer]
+        ),
+        "layers_not_executed": (
+            [deps.constants.l2_layer, deps.constants.l3_layer, deps.constants.l4_layer]
+            if l1_only
+            else [deps.constants.l1_layer, deps.constants.l2_layer, deps.constants.l4_layer]
+            if args.l3_only
+            else [deps.constants.l2_layer, deps.constants.l4_layer]
+        ),
+        "recovery_mode": recovery_mode,
         "cases": [],
         "progress_path": str(progress.path),
         "api_usage": deps.execution.api_usage_summary([]),
@@ -165,27 +202,50 @@ def run_main(*, deps: RunOrchestratorDeps) -> None:
     }
     deps.io.atomic_write_json(output_root / "run_manifest.json", run_manifest)
     preflight_image = deps.planning.endpoint_preflight_image(cases[0])
-    progress.emit(
-        "endpoint_preflight_started",
-        attempts=args.endpoint_preflight_attempts,
-        concurrency=min(args.max_workers, args.endpoint_preflight_attempts),
-        model=route["model"],
-    )
+    preflight_progress = {
+        "attempts": args.endpoint_preflight_attempts,
+        "concurrency": preflight_concurrency,
+        "model": route["model"],
+    }
+    if preflight_required_successes is not None:
+        preflight_progress.update(
+            required_successes=int(preflight_required_successes),
+            inter_attempt_sleep_seconds=preflight_sleep_seconds,
+        )
+    progress.emit("endpoint_preflight_started", **preflight_progress)
     try:
-        endpoint_preflight = deps.execution.endpoint_preflight(
-            endpoint=str(route["endpoint"]),
-            model_id=str(route["model"]),
-            api_key_env=str(route["api_key_env"]),
-            image_path=preflight_image,
-            attempts=args.endpoint_preflight_attempts,
-            concurrency=min(
-                args.max_workers,
-                args.endpoint_preflight_attempts,
-            ),
-            timeout_seconds=args.endpoint_preflight_timeout_seconds,
-            min_request_interval_seconds=float(
+        preflight_kwargs = {
+            "endpoint": str(route["endpoint"]),
+            "model_id": str(route["model"]),
+            "api_key_env": str(route["api_key_env"]),
+            "image_path": preflight_image,
+            "attempts": args.endpoint_preflight_attempts,
+            "concurrency": preflight_concurrency,
+            "timeout_seconds": args.endpoint_preflight_timeout_seconds,
+            "min_request_interval_seconds": float(
                 route.get("min_request_interval_seconds") or 0.0
             ),
+            "max_retries": int(route.get("max_retries", 0)),
+            "retry_backoff_seconds": float(
+                route.get("retry_backoff_seconds", 1.0)
+            ),
+            "retry_backoff_mode": str(
+                route.get("retry_backoff_mode", "linear")
+            ),
+            "retry_all_http_errors": bool(
+                route.get("retry_all_http_errors", False)
+            ),
+            "retry_malformed_response": bool(
+                route.get("retry_malformed_response", False)
+            ),
+        }
+        if preflight_required_successes is not None:
+            preflight_kwargs.update(
+                required_successes=int(preflight_required_successes),
+                inter_attempt_sleep_seconds=preflight_sleep_seconds,
+            )
+        endpoint_preflight = deps.execution.endpoint_preflight(
+            **preflight_kwargs,
         )
     except deps.execution.endpoint_preflight_error_type as exc:
         endpoint_preflight = exc.report
@@ -251,6 +311,7 @@ def run_main(*, deps: RunOrchestratorDeps) -> None:
         metrics=list(metrics),
         max_workers=args.max_workers,
         l3_only=args.l3_only,
+        **({"l1_only": True} if l1_only else {}),
         output_root=str(output_root),
     )
 

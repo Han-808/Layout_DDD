@@ -204,6 +204,10 @@ def revalidate_polygon_camera_pose(
     geometry = polygon_geometry_from_scene(scene)
     if geometry is None or str(pose.get("camera_type")) == "ORTHO":
         return pose
+    for field in ("location", "target"):
+        vector = np.asarray(pose.get(field), dtype=float)
+        if vector.shape != (3,) or not np.all(np.isfinite(vector)):
+            raise ValueError(f"camera {field} must be a finite 3-vector")
     return _gate_candidate(
         pose,
         scene=scene,
@@ -913,6 +917,10 @@ def _vector(value: np.ndarray) -> list[float]:
 
 
 def _raise_no_action_pose() -> dict[str, Any]:
+    from benchmark.visual_judge.evidence_gap_v2 import enabled
+    if enabled():
+        from benchmark.visual_judge.acquisition_outcome import AcquisitionExhausted
+        raise AcquisitionExhausted("camera action has no polygon-feasible pose")
     raise ValueError("camera action has no polygon-feasible pose")
 
 

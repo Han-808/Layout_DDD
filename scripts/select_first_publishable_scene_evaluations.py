@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import math
+import os
 from pathlib import Path
 import shutil
 import sys
@@ -34,6 +35,14 @@ def main() -> None:
     parser.add_argument("--output-root", type=Path)
     parser.add_argument("--model-label")
     parser.add_argument("--provider-route", default="ForgeAX API1")
+    parser.add_argument(
+        "--hardlink-files",
+        action="store_true",
+        help=(
+            "Materialize final case trees with same-filesystem hard links. "
+            "The final remains complete if attempt directory entries are removed."
+        ),
+    )
     args = parser.parse_args()
 
     attempt_roots = tuple(path.expanduser().resolve() for path in args.attempt_root)
@@ -57,6 +66,7 @@ def main() -> None:
         attempt_roots=attempt_roots,
         case_ids=case_ids,
         selections=selections,
+        hardlink_files=args.hardlink_files,
     )
     print(json.dumps(result, indent=2, ensure_ascii=False))
 
@@ -72,7 +82,7 @@ def first_publishable_attempts(
         selected = None
         for attempt_root in attempt_roots:
             case_dir = attempt_root / "cases" / case_id
-            if _is_publishable(case_dir):
+            if is_publishable_case(case_dir):
                 selected = case_dir
                 break
         if selected is None:
@@ -90,6 +100,7 @@ def write_selection(
     attempt_roots: tuple[Path, ...],
     case_ids: tuple[str, ...],
     selections: dict[str, Path],
+    hardlink_files: bool = False,
 ) -> dict[str, Any]:
     if output_root.exists():
         raise FileExistsError(f"refusing to overwrite existing output: {output_root}")
@@ -112,14 +123,19 @@ def write_selection(
                 raise ValueError(f"selection source is not an attempt root: {case_id}")
             if source_case != source_run / "cases" / case_id:
                 raise ValueError(f"selection source identity relation mismatch: {case_id}")
-            if not _is_publishable(source_case):
+            if not is_publishable_case(source_case):
                 raise ValueError(f"selection source is not publishable: {case_id}")
             report = _read_json(source_case / "evaluation_report.json")
             manifest = _read_json(source_case / "case_run_manifest.json")
             coverage = report.get("coverage")
             coverage = coverage if isinstance(coverage, dict) else {}
             target = building / "cases" / case_id
-            shutil.copytree(source_case, target, symlinks=False)
+            shutil.copytree(
+                source_case,
+                target,
+                symlinks=False,
+                copy_function=os.link if hardlink_files else shutil.copy2,
+            )
             snapshot_file_count, snapshot_tree_sha256 = _directory_tree_identity(
                 target
             )
@@ -130,7 +146,11 @@ def write_selection(
                     "selected_attempt_index": attempt_indices[source_run],
                     "source_run": str(source_run),
                     "source_case": str(source_case),
-                    "storage": "self_contained_directory_copy_v1",
+                    "storage": (
+                        "same_filesystem_hard_linked_case_tree_v1"
+                        if hardlink_files
+                        else "self_contained_directory_copy_v1"
+                    ),
                     "snapshot_case": f"cases/{case_id}",
                     "snapshot_file_count": snapshot_file_count,
                     "snapshot_tree_sha256": snapshot_tree_sha256,
@@ -176,8 +196,16 @@ def write_selection(
                 "case_status": "complete",
                 "final_decision_status": "resolved",
                 "l1_engineering_failure": False,
-                "evaluation_status": "complete",
-                "benchmark_score_status": "complete",
+                "evaluation_status": (
+                    "complete_or_scoreable_partial_coverage"
+                ),
+                "benchmark_score_status": "complete_or_partial_coverage",
+                "scoreable_partial_coverage_gate": {
+                    "coverage_threshold_passed": True,
+                    "runner_outcome": "resolved",
+                    "l3_unresolved_metrics": [],
+                    "l3_infrastructure_failure_metrics": [],
+                },
                 "benchmark_score_100": "finite_number",
             },
             "cases": case_records,
@@ -219,7 +247,7 @@ def write_selection(
     }
 
 
-def _is_publishable(case_dir: Path) -> bool:
+def is_publishable_case(case_dir: Path) -> bool:
     manifest_path = case_dir / "case_run_manifest.json"
     report_path = case_dir / "evaluation_report.json"
     if not manifest_path.is_file() or not report_path.is_file():
@@ -230,13 +258,32 @@ def _is_publishable(case_dir: Path) -> bool:
     except (OSError, TypeError, ValueError, json.JSONDecodeError):
         return False
     score = report.get("benchmark_score_100")
+    score_status = str(report.get("benchmark_score_status") or "")
+    evaluation_status = str(report.get("evaluation_status") or "")
+    coverage = report.get("coverage")
+    coverage = coverage if isinstance(coverage, dict) else {}
+    runner_outcome = report.get("runner_outcome")
+    runner_outcome = (
+        runner_outcome if isinstance(runner_outcome, dict) else {}
+    )
+    complete_score = bool(
+        evaluation_status == "complete" and score_status == "complete"
+    )
+    scoreable_partial = bool(
+        evaluation_status == "incomplete"
+        and score_status == "partial_coverage"
+        and coverage.get("coverage_threshold_passed") is True
+        and runner_outcome.get("final_decision_status") == "resolved"
+        and runner_outcome.get("l1_engineering_failure") is False
+        and not (manifest.get("l3_unresolved_metrics") or [])
+        and not (manifest.get("l3_infrastructure_failure_metrics") or [])
+    )
     return (
         manifest.get("case_id") == case_dir.name
         and manifest.get("status") == "complete"
         and manifest.get("final_decision_status") == "resolved"
         and manifest.get("l1_engineering_failure") is False
-        and report.get("evaluation_status") == "complete"
-        and report.get("benchmark_score_status") == "complete"
+        and (complete_score or scoreable_partial)
         and isinstance(score, (int, float))
         and not isinstance(score, bool)
         and math.isfinite(float(score))

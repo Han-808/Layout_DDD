@@ -10,7 +10,7 @@ from typing import Any, Mapping
 from benchmark.resources import runtime_resource_path
 
 
-RUNTIME_VERSION = "1.0.3"
+RUNTIME_VERSION = "1.0.7"
 _SCHEMA_RESOURCES = (
     "schemas/generator_catalog_placement_v1.schema.json",
     "schemas/multi_room/floor_plan_v1.schema.json",

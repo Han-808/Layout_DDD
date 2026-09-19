@@ -45,6 +45,7 @@ from benchmark.scene_generation.multi_room.floor_plan import (
 from benchmark.scene_generation.multi_room.provenance import (
     compatibility_source_manifest,
 )
+from benchmark.scene_generation.multi_room import runtime as multi_room_runtime
 from benchmark.scene_generation.campaign.multi_room_profiles import (
     load_multi_room_profile_registry,
 )
@@ -377,6 +378,49 @@ def test_wall_attachment_range_is_declared_not_hardcoded(tmp_path: Path) -> None
         )
 
 
+@pytest.mark.parametrize("delta", [-1, 1])
+def test_requested_count_off_by_one_is_normalized(
+    tmp_path: Path, delta: int
+) -> None:
+    core = load_frozen_core(ROOT / "tools/api3_anthropic_runner_v2")
+    plan = load_floor_plan(
+        _write_plan(tmp_path / "floor.json", _plan(1))
+    )
+    brief = compile_room_brief(plan, "room_1")
+    emitted = _object_plan("type_0", wall_count=1)
+    chair = next(item for item in emitted["objects"] if item["id"] == "chair")
+    chair["metadata"]["requested_count"] = chair["count"] + delta
+
+    validated = validate_room_object_plan(
+        emitted,
+        room_brief=brief,
+        frozen_validate_object_plan=core.validate_object_plan,
+    )
+
+    validated_chair = next(
+        item for item in validated["objects"] if item["id"] == "chair"
+    )
+    assert validated_chair["metadata"]["requested_count"] == validated_chair["count"]
+
+
+def test_requested_count_difference_above_one_fails_closed(tmp_path: Path) -> None:
+    core = load_frozen_core(ROOT / "tools/api3_anthropic_runner_v2")
+    plan = load_floor_plan(
+        _write_plan(tmp_path / "floor.json", _plan(1))
+    )
+    brief = compile_room_brief(plan, "room_1")
+    emitted = _object_plan("type_0", wall_count=1)
+    chair = next(item for item in emitted["objects"] if item["id"] == "chair")
+    chair["metadata"]["requested_count"] = chair["count"] + 2
+
+    with pytest.raises(MultiRoomContractError, match="differs from count by more than 1"):
+        validate_room_object_plan(
+            emitted,
+            room_brief=brief,
+            frozen_validate_object_plan=core.validate_object_plan,
+        )
+
+
 def test_dispatch_is_explicit_not_inferred_from_floor_plan(tmp_path: Path) -> None:
     path = _write_plan(tmp_path / "floor.json", _plan(1))
     with pytest.raises(ValueError, match="single-room campaigns"):
@@ -516,6 +560,115 @@ def test_additive_registry_reuses_every_reviewed_model_profile() -> None:
         item.retrieval_profile_id == RETRIEVAL_PROFILE_ID
         for item in registry.campaigns.values()
     )
+
+
+@pytest.mark.parametrize(
+    ("campaign_id", "model_profile_id"),
+    [
+        ("api2-gpt56sol-multi-room-retry5-v2", "api2-gpt-5-6-sol-retry5"),
+        ("api2-kimi-k3-multi-room-retry5-v2", "api2-kimi-k3-retry5"),
+        (
+            "api2-kimi-k3-multi-room-retry5-stagec1500-v1",
+            "api2-kimi-k3-retry5-stagec1500",
+        ),
+        ("api2-glm53-multi-room-retry5-v2", "api2-glm-5-3-retry5"),
+        (
+            "api2-hy4-preview-multi-room-retry5-v1",
+            "api2-hy4-preview-retry5",
+        ),
+        ("api3-opus5-multi-room-retry5-v2", "api3-claude-opus-5-retry5"),
+        (
+            "api3-sonnet5-multi-room-retry5-v2",
+            "api3-claude-sonnet-5-retry5",
+        ),
+        ("api3-fable5-multi-room-retry5-v2", "api3-claude-fable-5-retry5"),
+    ],
+)
+def test_retry5_multi_room_campaigns_are_bounded_and_continue(
+    campaign_id: str,
+    model_profile_id: str,
+) -> None:
+    base = load_campaign_profile_bundle(PROFILE_ROOT)
+    resolved = load_multi_room_profile_registry(ROOT, base).resolve(campaign_id)
+
+    assert resolved.model.model_profile_id == model_profile_id
+    assert resolved.execution.execution_policy_id == "multi-room-retry5-continue-v1"
+    assert resolved.execution.max_infrastructure_retries == 5
+    assert resolved.execution.retry_delay_seconds == 30.0
+    assert resolved.execution.retryable_transport_statuses == ("transport_failure",)
+    assert resolved.execution.retryable_http_statuses == (
+        408,
+        409,
+        425,
+        429,
+        500,
+        502,
+        503,
+        504,
+    )
+    assert resolved.execution.retry_ambiguous_timeouts is False
+    assert resolved.execution.continue_after_case_failure is True
+
+
+def test_multi_room_execution_policy_enables_bounded_semantic_retries(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    shared = {
+        "plan_path": _write_plan(tmp_path / "floor.json", _plan(1)),
+        "responses": [
+            _chat_response(_object_plan("type_0")),
+            _chat_response(_placement()),
+        ],
+    }
+
+    (_, _, _), _, _, output = _run_fake_campaign(
+        tmp_path, monkeypatch, shared=shared
+    )
+    execution = json.loads((output / "execution_policy.json").read_text())
+    manifest = json.loads((output / "run_manifest.json").read_text())
+
+    assert execution["semantic_retry_allowed"] is True
+    assert execution["max_semantic_retries_per_stage"] == 3
+    assert execution["semantic_retry_count"] == 3
+    assert execution["schema_retry_count"] == 3
+    assert execution["semantic_retry_delay_seconds"] == 30.0
+    assert manifest["model"]["generator_semantic_retry_allowed"] is True
+    assert manifest["model"]["max_semantic_retries_per_stage"] == 3
+
+
+def test_expanded_room_area_requires_expanded_22_26_tier() -> None:
+    value = _plan(1)
+    room = value["rooms"][0]
+    room["object_count_tier"] = "expanded_22_26"
+    room["target_instances"] = {"min": 22, "max": 26}
+    room["room_dimensions_m"] = [8.0, 5.0, 3.0]
+    room["room"]["boundary"] = [
+        [0.0, 0.0],
+        [8.0, 0.0],
+        [8.0, 5.0],
+        [0.0, 5.0],
+    ]
+    room["runner_projection"]["local_room"]["boundary"] = [
+        [0.0, 0.0],
+        [8.0, 0.0],
+        [8.0, 5.0],
+        [0.0, 5.0],
+    ]
+    value["global_envelope"]["boundary"] = [
+        [0.0, 0.0],
+        [8.0, 0.0],
+        [8.0, 5.0],
+        [0.0, 5.0],
+    ]
+    value["global_envelope"]["dimensions_m"] = [8.0, 5.0, 3.0]
+
+    validate_floor_plan(value)
+
+    room["object_count_tier"] = "large_15_19"
+    room["target_instances"] = {"min": 15, "max": 19}
+    with pytest.raises(FloorPlanValidationError, match="object_count_tier"):
+        validate_floor_plan(value)
 
 
 def test_compatibility_source_manifest_closes_projection_dependencies() -> None:
@@ -830,9 +983,11 @@ def _run_fake_campaign(
         shared["plan_path"] = _write_plan(tmp_path / "floor.json", _plan(2))
     plan_path = shared["plan_path"]
     prepared = prepare_generation_campaign(
-        "api2-kimi-k3-multi-room-v1", floor_plan_path=plan_path
+        shared.get("campaign_id", "api2-kimi-k3-multi-room-v1"),
+        floor_plan_path=plan_path,
     )
     core = load_frozen_core(prepared.core_root)
+    monkeypatch.setattr(multi_room_runtime.time, "sleep", lambda _: None)
     responses = shared.setdefault(
         "responses",
         [
@@ -1049,11 +1204,15 @@ def test_exact_json_fence_is_normalized_and_relation_family_is_projected(
     ] == "proximity"
     assert json.loads((room_root / "object_plan_validation.json").read_text()) == {
         "response_envelope": "single_json_code_fence_v1",
+        "semantic_attempt_count": 1,
+        "semantic_retry_count": 0,
         "syntactic_normalization": True,
         "valid": True,
     }
     assert json.loads((room_root / "placement_validation.json").read_text()) == {
         "response_envelope": "single_json_code_fence_v1",
+        "semantic_attempt_count": 1,
+        "semantic_retry_count": 0,
         "syntactic_normalization": True,
         "valid": True,
     }
@@ -1076,7 +1235,7 @@ def test_exact_json_fence_is_normalized_and_relation_family_is_projected(
     )
 
 
-def test_json_fence_with_surrounding_prose_remains_contract_invalid(
+def test_json_fence_with_surrounding_prose_remains_invalid_after_retry_budget(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     wrapped_with_prose = (
@@ -1086,7 +1245,7 @@ def test_json_fence_with_surrounding_prose_remains_contract_invalid(
     )
     shared = {
         "responses": [
-            _chat_response(wrapped_with_prose),
+            *[_chat_response(wrapped_with_prose) for _ in range(4)],
             _chat_response(_object_plan("type_1")),
             _chat_response(_placement()),
         ]
@@ -1103,6 +1262,107 @@ def test_json_fence_with_surrounding_prose_remains_contract_invalid(
     )
     assert first["status"] == "stage_a_schema_invalid"
     assert first["error_type"] == "StrictJSONError"
+    assert first["semantic_retry_count"] == 3
+
+
+def test_stage_a_semantic_failure_retries_exact_request_and_recovers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    shared = {
+        "plan_path": _write_plan(tmp_path / "floor.json", _plan(1)),
+        "responses": [
+            _chat_response({"schema_version": "invalid"}),
+            _chat_response(_object_plan("type_0")),
+            _chat_response(_placement()),
+        ],
+    }
+
+    (summary, stopped, _), runtime, calls, output = _run_fake_campaign(
+        tmp_path, monkeypatch, shared=shared
+    )
+
+    assert stopped is False
+    assert summary["complete_rooms"] == 1
+    assert summary["failed_rooms"] == 0
+    assert len(calls) == 3
+    assert len(runtime.requests) == 1
+    assert shared["request_bodies"][0] == shared["request_bodies"][1]
+    room_root = output / "layout_42/rooms/room_000"
+    audit = json.loads((room_root / "one_shot_audit.json").read_text())
+    result = json.loads((room_root / "room_result.json").read_text())
+    validation = json.loads((room_root / "object_plan_validation.json").read_text())
+    assert audit["stage_a_semantic_emissions"] == 2
+    assert audit["semantic_retry_count"] == 1
+    assert result["semantic_retry_count"] == 1
+    assert validation["semantic_attempt_count"] == 2
+    assert validation["semantic_retry_count"] == 1
+    assert (room_root / "stage_a_semantic_retry_01/attempt_01/request.json").is_file()
+
+
+def test_retry5_campaign_recovers_on_sixth_stage_a_semantic_attempt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    shared = {
+        "campaign_id": "api2-kimi-k3-multi-room-retry5-v2",
+        "plan_path": _write_plan(tmp_path / "floor.json", _plan(1)),
+        "responses": [
+            *[
+                _chat_response({"schema_version": "invalid"})
+                for _ in range(5)
+            ],
+            _chat_response(_object_plan("type_0")),
+            _chat_response(_placement()),
+        ],
+    }
+
+    (summary, stopped, _), _, calls, output = _run_fake_campaign(
+        tmp_path, monkeypatch, shared=shared
+    )
+
+    assert stopped is False
+    assert summary["complete_rooms"] == 1
+    assert summary["failed_rooms"] == 0
+    assert len(calls) == 7
+    assert len(set(shared["request_bodies"][:6])) == 1
+    room_root = output / "layout_42/rooms/room_000"
+    result = json.loads((room_root / "room_result.json").read_text())
+    audit = json.loads((room_root / "one_shot_audit.json").read_text())
+    assert result["semantic_retry_count"] == 5
+    assert audit["stage_a_semantic_emissions"] == 6
+    assert audit["semantic_retry_count"] == 5
+    assert (room_root / "stage_a_semantic_retry_05/attempt_01/request.json").is_file()
+
+
+def test_stage_c_semantic_failure_retries_exact_request_and_recovers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    shared = {
+        "plan_path": _write_plan(tmp_path / "floor.json", _plan(1)),
+        "responses": [
+            _chat_response(_object_plan("type_0")),
+            _chat_response({"schema_version": "invalid"}),
+            _chat_response(_placement()),
+        ],
+    }
+
+    (summary, stopped, _), runtime, calls, output = _run_fake_campaign(
+        tmp_path, monkeypatch, shared=shared
+    )
+
+    assert stopped is False
+    assert summary["complete_rooms"] == 1
+    assert summary["failed_rooms"] == 0
+    assert len(calls) == 3
+    assert len(runtime.requests) == 1
+    assert shared["request_bodies"][1] == shared["request_bodies"][2]
+    room_root = output / "layout_42/rooms/room_000"
+    audit = json.loads((room_root / "one_shot_audit.json").read_text())
+    validation = json.loads((room_root / "placement_validation.json").read_text())
+    assert audit["stage_c_placement_emissions"] == 2
+    assert audit["semantic_retry_count"] == 1
+    assert validation["semantic_attempt_count"] == 2
+    assert validation["semantic_retry_count"] == 1
+    assert (room_root / "stage_c_semantic_retry_01/attempt_01/request.json").is_file()
 
 
 def test_stage_a_receives_only_room_local_model_brief(
@@ -1154,7 +1414,10 @@ def test_room_schema_failure_is_terminal_and_later_room_continues(
 ) -> None:
     shared = {
         "responses": [
-            _chat_response({"schema_version": "invalid"}),
+            *[
+                _chat_response({"schema_version": "invalid"})
+                for _ in range(4)
+            ],
             _chat_response(_object_plan("type_1")),
             _chat_response(_placement()),
         ]
@@ -1166,7 +1429,7 @@ def test_room_schema_failure_is_terminal_and_later_room_continues(
     assert summary["complete_rooms"] == 1
     assert summary["failed_rooms"] == 1
     assert summary["projected_rooms"] == 1
-    assert len(calls) == 3
+    assert len(calls) == 6
     assert len(runtime.requests) == 1
     scene = json.loads(
         (output / "layout_42/assembled_multi_room_scene.json").read_text()

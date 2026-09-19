@@ -594,7 +594,14 @@ def run_prepared_multi_room_campaign(
         "expected_room_ids": list(plan.generation_order),
         "room_execution": "sequential_isolated_v1",
         "continue_after_terminal_room": True,
-        "semantic_retry_allowed": False,
+        **prepared.retry_policy.to_public_dict(),
+        "semantic_retry_allowed": True,
+        "max_semantic_retries_per_stage": (
+            prepared.retry_policy.max_infrastructure_retries
+        ),
+        "semantic_retry_count": prepared.retry_policy.max_infrastructure_retries,
+        "schema_retry_count": prepared.retry_policy.max_infrastructure_retries,
+        "semantic_retry_delay_seconds": prepared.retry_policy.retry_delay_seconds,
         "run_provenance": {
             "schema_version": "generation_campaign_run_provenance_v1",
             "static_source_manifest_sha256": prepared.source_manifest[
@@ -603,7 +610,6 @@ def run_prepared_multi_room_campaign(
             "route_binding": binding.public_dict(),
             "preflight": dict(preflight),
         },
-        **prepared.retry_policy.to_public_dict(),
     }
     run_spec = {
         "campaign_id": prepared.campaign.campaign_id,

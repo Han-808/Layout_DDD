@@ -1,0 +1,2587 @@
+{
+  "schema_version": "s100_minimal_redacted_regression_v1",
+  "provenance": {
+    "source_scene_quality_sha256": "012afdee74808baaba478b1798a6618b44d08764fac4fe6a930d599831785fa6",
+    "source_report_deleted_by_campaign_owner": true,
+    "extraction_complete": false,
+    "retained_functional_groups": 4,
+    "retained_functional_episodes": 13,
+    "limitation": "Source directory was removed during extraction. Only the captured scope subset is retained. Full 29/29 and 12/12 replay was verified earlier; its receipt is separate, not reproducible in full from this subset."
+  },
+  "redaction": {
+    "raw_exchanges": false,
+    "absolute_source_paths": false,
+    "images": false,
+    "meshes": false,
+    "blends": false,
+    "free_text": "replaced by [redacted]",
+    "image_references": "placeholder labels, not file evidence"
+  },
+  "metrics": {
+    "functional_consistency": {
+      "status": "failed",
+      "score": null,
+      "reason": "required_scope_infrastructure_failure",
+      "group_results": [
+        {
+          "group_id": "group_001",
+          "status": "failed",
+          "terminal_state": "infrastructure_failure",
+          "vlm_invoked": true,
+          "evidence_resolution": {
+            "images_used": []
+          },
+          "judgement": {
+            "verdict": "invalid",
+            "confidence": 0.96,
+            "evidence_status": "sufficient",
+            "reason": "[redacted]",
+            "missing_evidence": [],
+            "functional_check_results": [
+              {
+                "check_id": "functional_check_009",
+                "target_ids": [
+                  "living_sofa"
+                ],
+                "observation_status": "observed",
+                "conclusion": "invalid",
+                "reason": "[redacted]",
+                "evidence_resolution": {
+                  "policy": "evidence_consistency_fallback_v2",
+                  "accepted": true,
+                  "model_judgement_completed": true,
+                  "model_invoked": true,
+                  "visual_observation_complete": false,
+                  "evidence_tier": "full_visual",
+                  "decision_source": "model",
+                  "metric": "functional_consistency",
+                  "fallback": false,
+                  "inference_under_constraints": false,
+                  "images_used": [
+                    "retained-image-redacted",
+                    "retained-image-redacted",
+                    "retained-image-redacted"
+                  ]
+                }
+              },
+              {
+                "check_id": "functional_check_010",
+                "target_ids": [
+                  "lounge_chair_east"
+                ],
+                "observation_status": "observed",
+                "conclusion": "valid",
+                "reason": "[redacted]",
+                "evidence_resolution": {
+                  "policy": "evidence_consistency_fallback_v2",
+                  "accepted": true,
+                  "model_judgement_completed": true,
+                  "model_invoked": true,
+                  "visual_observation_complete": false,
+                  "evidence_tier": "full_visual",
+                  "decision_source": "model",
+                  "metric": "functional_consistency",
+                  "fallback": false,
+                  "inference_under_constraints": false,
+                  "images_used": [
+                    "retained-image-redacted",
+                    "retained-image-redacted",
+                    "retained-image-redacted"
+                  ]
+                }
+              },
+              {
+                "check_id": "functional_check_011",
+                "target_ids": [
+                  "lounge_chair_west"
+                ],
+                "observation_status": "observed",
+                "conclusion": "valid",
+                "reason": "[redacted]",
+                "evidence_resolution": {
+                  "policy": "evidence_consistency_fallback_v2",
+                  "accepted": true,
+                  "model_judgement_completed": true,
+                  "model_invoked": true,
+                  "visual_observation_complete": false,
+                  "evidence_tier": "full_visual",
+                  "decision_source": "model",
+                  "metric": "functional_consistency",
+                  "fallback": false,
+                  "inference_under_constraints": false,
+                  "images_used": [
+                    "retained-image-redacted",
+                    "retained-image-redacted",
+                    "retained-image-redacted"
+                  ]
+                }
+              }
+            ],
+            "defects": [
+              {
+                "scope": "orientation_for_use",
+                "target_ids": [
+                  "living_sofa"
+                ],
+                "check_refs": [
+                  "functional_check_009"
+                ],
+                "category": "directed_surface_unusable",
+                "severity": "impaired",
+                "attribution_mode": "unary",
+                "reason": "[redacted]",
+                "relation": "[redacted]"
+              }
+            ]
+          },
+          "functional_probe_evidence": {
+            "required_checks": [
+              {
+                "check_id": "functional_check_009",
+                "check_type": "architecture_orientation",
+                "check_family": "architecture_orientation",
+                "owner_stage": "group_local",
+                "owning_group_id": "group_001",
+                "target_ids": [
+                  "living_sofa"
+                ],
+                "group_ids": [
+                  "group_001"
+                ],
+                "required_observations": [
+                  "target_visible",
+                  "interaction_side_visible",
+                  "front_back_disambiguated",
+                  "architecture_plane_visible",
+                  "global_context_preserved"
+                ]
+              }
+            ]
+          },
+          "check_episodes": [
+            {
+              "group_id": "group_001",
+              "status": "evaluated",
+              "score": 0,
+              "terminal_state": "evaluated_degraded",
+              "functional_check_episode_id": "functional_check_009",
+              "vlm_invoked": true,
+              "evidence_resolution": {
+                "images_used": []
+              },
+              "judgement": {
+                "verdict": "invalid",
+                "confidence": 0.97,
+                "evidence_status": "sufficient",
+                "reason": "[redacted]",
+                "missing_evidence": [],
+                "evidence_resolution": {
+                  "policy": "evidence_consistency_fallback_v2",
+                  "accepted": true,
+                  "model_judgement_completed": true,
+                  "model_invoked": true,
+                  "visual_observation_complete": false,
+                  "evidence_tier": "full_visual",
+                  "decision_source": "model",
+                  "metric": "functional_consistency",
+                  "fallback": false,
+                  "inference_under_constraints": false,
+                  "images_used": [
+                    "retained-image-redacted",
+                    "retained-image-redacted",
+                    "retained-image-redacted"
+                  ]
+                },
+                "functional_check_results": [
+                  {
+                    "check_id": "functional_check_009",
+                    "target_ids": [
+                      "living_sofa"
+                    ],
+                    "observation_status": "observed",
+                    "conclusion": "invalid",
+                    "reason": "[redacted]",
+                    "evidence_resolution": {
+                      "policy": "evidence_consistency_fallback_v2",
+                      "accepted": true,
+                      "model_judgement_completed": true,
+                      "model_invoked": true,
+                      "visual_observation_complete": false,
+                      "evidence_tier": "full_visual",
+                      "decision_source": "model",
+                      "metric": "functional_consistency",
+                      "fallback": false,
+                      "inference_under_constraints": false,
+                      "images_used": [
+                        "retained-image-redacted",
+                        "retained-image-redacted",
+                        "retained-image-redacted"
+                      ]
+                    }
+                  }
+                ],
+                "defects": [
+                  {
+                    "scope": "orientation_for_use",
+                    "target_ids": [
+                      "living_sofa"
+                    ],
+                    "check_refs": [
+                      "functional_check_009"
+                    ],
+                    "category": "directed_surface_unusable",
+                    "severity": "impaired",
+                    "attribution_mode": "unary",
+                    "reason": "[redacted]",
+                    "relation": "[redacted]"
+                  }
+                ]
+              },
+              "functional_probe_evidence": {
+                "required_checks": [
+                  {
+                    "check_id": "functional_check_009",
+                    "check_type": "architecture_orientation",
+                    "check_family": "architecture_orientation",
+                    "owner_stage": "group_local",
+                    "owning_group_id": "group_001",
+                    "target_ids": [
+                      "living_sofa"
+                    ],
+                    "group_ids": [
+                      "group_001"
+                    ],
+                    "required_observations": [
+                      "target_visible",
+                      "interaction_side_visible",
+                      "front_back_disambiguated",
+                      "architecture_plane_visible",
+                      "global_context_preserved"
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "group_id": "group_001",
+              "status": "evaluated",
+              "score": 1,
+              "terminal_state": "evaluated_degraded",
+              "functional_check_episode_id": "functional_check_010",
+              "vlm_invoked": true,
+              "evidence_resolution": {
+                "images_used": []
+              },
+              "judgement": {
+                "verdict": "valid",
+                "confidence": 0.96,
+                "evidence_status": "sufficient",
+                "reason": "[redacted]",
+                "missing_evidence": [],
+                "evidence_resolution": {
+                  "policy": "evidence_consistency_fallback_v2",
+                  "accepted": true,
+                  "model_judgement_completed": true,
+                  "model_invoked": true,
+                  "visual_observation_complete": false,
+                  "evidence_tier": "full_visual",
+                  "decision_source": "model",
+                  "metric": "functional_consistency",
+                  "fallback": false,
+                  "inference_under_constraints": false,
+                  "images_used": [
+                    "retained-image-redacted",
+                    "retained-image-redacted",
+                    "retained-image-redacted"
+                  ]
+                },
+                "functional_check_results": [
+                  {
+                    "check_id": "functional_check_010",
+                    "target_ids": [
+                      "lounge_chair_east"
+                    ],
+                    "observation_status": "observed",
+                    "conclusion": "valid",
+                    "reason": "[redacted]",
+                    "evidence_resolution": {
+                      "policy": "evidence_consistency_fallback_v2",
+                      "accepted": true,
+                      "model_judgement_completed": true,
+                      "model_invoked": true,
+                      "visual_observation_complete": false,
+                      "evidence_tier": "full_visual",
+                      "decision_source": "model",
+                      "metric": "functional_consistency",
+                      "fallback": false,
+                      "inference_under_constraints": false,
+                      "images_used": [
+                        "retained-image-redacted",
+                        "retained-image-redacted",
+                        "retained-image-redacted"
+                      ]
+                    }
+                  }
+                ],
+                "defects": []
+              },
+              "functional_probe_evidence": {
+                "required_checks": [
+                  {
+                    "check_id": "functional_check_010",
+                    "check_type": "architecture_orientation",
+                    "check_family": "architecture_orientation",
+                    "owner_stage": "group_local",
+                    "owning_group_id": "group_001",
+                    "target_ids": [
+                      "lounge_chair_east"
+                    ],
+                    "group_ids": [
+                      "group_001"
+                    ],
+                    "required_observations": [
+                      "target_visible",
+                      "interaction_side_visible",
+                      "front_back_disambiguated",
+                      "architecture_plane_visible",
+                      "global_context_preserved"
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "group_id": "group_001",
+              "status": "evaluated",
+              "score": 1,
+              "terminal_state": "evaluated_degraded",
+              "functional_check_episode_id": "functional_check_011",
+              "vlm_invoked": true,
+              "evidence_resolution": {
+                "images_used": []
+              },
+              "judgement": {
+                "verdict": "valid",
+                "confidence": 0.96,
+                "evidence_status": "sufficient",
+                "reason": "[redacted]",
+                "missing_evidence": [],
+                "evidence_resolution": {
+                  "policy": "evidence_consistency_fallback_v2",
+                  "accepted": true,
+                  "model_judgement_completed": true,
+                  "model_invoked": true,
+                  "visual_observation_complete": false,
+                  "evidence_tier": "full_visual",
+                  "decision_source": "model",
+                  "metric": "functional_consistency",
+                  "fallback": false,
+                  "inference_under_constraints": false,
+                  "images_used": [
+                    "retained-image-redacted",
+                    "retained-image-redacted",
+                    "retained-image-redacted"
+                  ]
+                },
+                "functional_check_results": [
+                  {
+                    "check_id": "functional_check_011",
+                    "target_ids": [
+                      "lounge_chair_west"
+                    ],
+                    "observation_status": "observed",
+                    "conclusion": "valid",
+                    "reason": "[redacted]",
+                    "evidence_resolution": {
+                      "policy": "evidence_consistency_fallback_v2",
+                      "accepted": true,
+                      "model_judgement_completed": true,
+                      "model_invoked": true,
+                      "visual_observation_complete": false,
+                      "evidence_tier": "full_visual",
+                      "decision_source": "model",
+                      "metric": "functional_consistency",
+                      "fallback": false,
+                      "inference_under_constraints": false,
+                      "images_used": [
+                        "retained-image-redacted",
+                        "retained-image-redacted",
+                        "retained-image-redacted"
+                      ]
+                    }
+                  }
+                ],
+                "defects": []
+              },
+              "functional_probe_evidence": {
+                "required_checks": [
+                  {
+                    "check_id": "functional_check_011",
+                    "check_type": "architecture_orientation",
+                    "check_family": "architecture_orientation",
+                    "owner_stage": "group_local",
+                    "owning_group_id": "group_001",
+                    "target_ids": [
+                      "lounge_chair_west"
+                    ],
+                    "group_ids": [
+                      "group_001"
+                    ],
+                    "required_observations": [
+                      "target_visible",
+                      "interaction_side_visible",
+                      "front_back_disambiguated",
+                      "architecture_plane_visible",
+                      "global_context_preserved"
+                    ]
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "group_id": "group_002",
+          "status": "failed",
+          "terminal_state": "infrastructure_failure",
+          "vlm_invoked": true,
+          "evidence_resolution": {
+            "images_used": []
+          },
+          "judgement": {
+            "verdict": "valid",
+            "confidence": 0.98,
+            "evidence_status": "sufficient",
+            "reason": "[redacted]",
+            "missing_evidence": [],
+            "functional_check_results": [
+              {
+                "check_id": "functional_check_001",
+                "target_ids": [
+                  "dining_chair_east_north"
+                ],
+                "observation_status": "observed",
+                "conclusion": "valid",
+                "reason": "[redacted]",
+                "evidence_resolution": {
+                  "policy": "evidence_consistency_fallback_v2",
+                  "accepted": true,
+                  "model_judgement_completed": true,
+                  "model_invoked": true,
+                  "visual_observation_complete": false,
+                  "evidence_tier": "full_visual",
+                  "decision_source": "model",
+                  "metric": "functional_consistency",
+                  "fallback": false,
+                  "inference_under_constraints": false,
+                  "images_used": [
+                    "retained-image-redacted",
+                    "retained-image-redacted",
+                    "retained-image-redacted"
+                  ]
+                }
+              },
+              {
+                "check_id": "functional_check_002",
+                "target_ids": [
+                  "dining_chair_east_south"
+                ],
+                "observation_status": "observed",
+                "conclusion": "valid",
+                "reason": "[redacted]",
+                "evidence_resolution": {
+                  "policy": "evidence_consistency_fallback_v2",
+                  "accepted": true,
+                  "model_judgement_completed": true,
+                  "model_invoked": true,
+                  "visual_observation_complete": false,
+                  "evidence_tier": "full_visual",
+                  "decision_source": "model",
+                  "metric": "functional_consistency",
+                  "fallback": false,
+                  "inference_under_constraints": false,
+                  "images_used": [
+                    "retained-image-redacted",
+                    "retained-image-redacted",
+                    "retained-image-redacted"
+                  ]
+                }
+              },
+              {
+                "check_id": "functional_check_003",
+                "target_ids": [
+                  "dining_chair_north_end"
+                ],
+                "observation_status": "observed",
+                "conclusion": "valid",
+                "reason": "[redacted]",
+                "evidence_resolution": {
+                  "policy": "evidence_consistency_fallback_v2",
+                  "accepted": true,
+                  "model_judgement_completed": true,
+                  "model_invoked": true,
+                  "visual_observation_complete": false,
+                  "evidence_tier": "full_visual",
+                  "decision_source": "model",
+                  "metric": "functional_consistency",
+                  "fallback": false,
+                  "inference_under_constraints": false,
+                  "images_used": [
+                    "retained-image-redacted",
+                    "retained-image-redacted",
+                    "retained-image-redacted"
+                  ]
+                }
+              },
+              {
+                "check_id": "functional_check_004",
+                "target_ids": [
+                  "dining_chair_south_end"
+                ],
+                "observation_status": "observed",
+                "conclusion": "valid",
+                "reason": "[redacted]",
+                "evidence_resolution": {
+                  "policy": "evidence_consistency_fallback_v2",
+                  "accepted": true,
+                  "model_judgement_completed": true,
+                  "model_invoked": true,
+                  "visual_observation_complete": false,
+                  "evidence_tier": "full_visual",
+                  "decision_source": "model",
+                  "metric": "functional_consistency",
+                  "fallback": false,
+                  "inference_under_constraints": false,
+                  "images_used": [
+                    "retained-image-redacted",
+                    "retained-image-redacted",
+                    "retained-image-redacted"
+                  ]
+                }
+              },
+              {
+                "check_id": "functional_check_005",
+                "target_ids": [
+                  "dining_chair_west_north"
+                ],
+                "observation_status": "observed",
+                "conclusion": "valid",
+                "reason": "[redacted]",
+                "evidence_resolution": {
+                  "policy": "evidence_consistency_fallback_v2",
+                  "accepted": true,
+                  "model_judgement_completed": true,
+                  "model_invoked": true,
+                  "visual_observation_complete": false,
+                  "evidence_tier": "full_visual",
+                  "decision_source": "model",
+                  "metric": "functional_consistency",
+                  "fallback": false,
+                  "inference_under_constraints": false,
+                  "images_used": [
+                    "retained-image-redacted",
+                    "retained-image-redacted",
+                    "retained-image-redacted"
+                  ]
+                }
+              },
+              {
+                "check_id": "functional_check_006",
+                "target_ids": [
+                  "dining_chair_west_south"
+                ],
+                "observation_status": "observed",
+                "conclusion": "valid",
+                "reason": "[redacted]",
+                "evidence_resolution": {
+                  "policy": "evidence_consistency_fallback_v2",
+                  "accepted": true,
+                  "model_judgement_completed": true,
+                  "model_invoked": true,
+                  "visual_observation_complete": false,
+                  "evidence_tier": "full_visual",
+                  "decision_source": "model",
+                  "metric": "functional_consistency",
+                  "fallback": false,
+                  "inference_under_constraints": false,
+                  "images_used": [
+                    "retained-image-redacted",
+                    "retained-image-redacted",
+                    "retained-image-redacted"
+                  ]
+                }
+              }
+            ],
+            "defects": []
+          },
+          "functional_probe_evidence": {
+            "required_checks": [
+              {
+                "check_id": "functional_check_001",
+                "check_type": "architecture_orientation",
+                "check_family": "architecture_orientation",
+                "owner_stage": "group_local",
+                "owning_group_id": "group_002",
+                "target_ids": [
+                  "dining_chair_east_north"
+                ],
+                "group_ids": [
+                  "group_002"
+                ],
+                "required_observations": [
+                  "target_visible",
+                  "interaction_side_visible",
+                  "front_back_disambiguated",
+                  "architecture_plane_visible",
+                  "global_context_preserved"
+                ]
+              }
+            ]
+          },
+          "check_episodes": [
+            {
+              "group_id": "group_002",
+              "status": "evaluated",
+              "score": 1,
+              "terminal_state": "evaluated_degraded",
+              "functional_check_episode_id": "functional_check_001",
+              "vlm_invoked": true,
+              "evidence_resolution": {
+                "images_used": []
+              },
+              "judgement": {
+                "verdict": "valid",
+                "confidence": 0.98,
+                "evidence_status": "sufficient",
+                "reason": "[redacted]",
+                "missing_evidence": [],
+                "evidence_resolution": {
+                  "policy": "evidence_consistency_fallback_v2",
+                  "accepted": true,
+                  "model_judgement_completed": true,
+                  "model_invoked": true,
+                  "visual_observation_complete": false,
+                  "evidence_tier": "full_visual",
+                  "decision_source": "model",
+                  "metric": "functional_consistency",
+                  "fallback": false,
+                  "inference_under_constraints": false,
+                  "images_used": [
+                    "retained-image-redacted",
+                    "retained-image-redacted",
+                    "retained-image-redacted"
+                  ]
+                },
+                "functional_check_results": [
+                  {
+                    "check_id": "functional_check_001",
+                    "target_ids": [
+                      "dining_chair_east_north"
+                    ],
+                    "observation_status": "observed",
+                    "conclusion": "valid",
+                    "reason": "[redacted]",
+                    "evidence_resolution": {
+                      "policy": "evidence_consistency_fallback_v2",
+                      "accepted": true,
+                      "model_judgement_completed": true,
+                      "model_invoked": true,
+                      "visual_observation_complete": false,
+                      "evidence_tier": "full_visual",
+                      "decision_source": "model",
+                      "metric": "functional_consistency",
+                      "fallback": false,
+                      "inference_under_constraints": false,
+                      "images_used": [
+                        "retained-image-redacted",
+                        "retained-image-redacted",
+                        "retained-image-redacted"
+                      ]
+                    }
+                  }
+                ],
+                "defects": []
+              },
+              "functional_probe_evidence": {
+                "required_checks": [
+                  {
+                    "check_id": "functional_check_001",
+                    "check_type": "architecture_orientation",
+                    "check_family": "architecture_orientation",
+                    "owner_stage": "group_local",
+                    "owning_group_id": "group_002",
+                    "target_ids": [
+                      "dining_chair_east_north"
+                    ],
+                    "group_ids": [
+                      "group_002"
+                    ],
+                    "required_observations": [
+                      "target_visible",
+                      "interaction_side_visible",
+                      "front_back_disambiguated",
+                      "architecture_plane_visible",
+                      "global_context_preserved"
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "group_id": "group_002",
+              "status": "evaluated",
+              "score": 1,
+              "terminal_state": "evaluated_degraded",
+              "functional_check_episode_id": "functional_check_002",
+              "vlm_invoked": true,
+              "evidence_resolution": {
+                "images_used": []
+              },
+              "judgement": {
+                "verdict": "valid",
+                "confidence": 0.98,
+                "evidence_status": "sufficient",
+                "reason": "[redacted]",
+                "missing_evidence": [],
+                "evidence_resolution": {
+                  "policy": "evidence_consistency_fallback_v2",
+                  "accepted": true,
+                  "model_judgement_completed": true,
+                  "model_invoked": true,
+                  "visual_observation_complete": false,
+                  "evidence_tier": "full_visual",
+                  "decision_source": "model",
+                  "metric": "functional_consistency",
+                  "fallback": false,
+                  "inference_under_constraints": false,
+                  "images_used": [
+                    "retained-image-redacted",
+                    "retained-image-redacted",
+                    "retained-image-redacted"
+                  ]
+                },
+                "functional_check_results": [
+                  {
+                    "check_id": "functional_check_002",
+                    "target_ids": [
+                      "dining_chair_east_south"
+                    ],
+                    "observation_status": "observed",
+                    "conclusion": "valid",
+                    "reason": "[redacted]",
+                    "evidence_resolution": {
+                      "policy": "evidence_consistency_fallback_v2",
+                      "accepted": true,
+                      "model_judgement_completed": true,
+                      "model_invoked": true,
+                      "visual_observation_complete": false,
+                      "evidence_tier": "full_visual",
+                      "decision_source": "model",
+                      "metric": "functional_consistency",
+                      "fallback": false,
+                      "inference_under_constraints": false,
+                      "images_used": [
+                        "retained-image-redacted",
+                        "retained-image-redacted",
+                        "retained-image-redacted"
+                      ]
+                    }
+                  }
+                ],
+                "defects": []
+              },
+              "functional_probe_evidence": {
+                "required_checks": [
+                  {
+                    "check_id": "functional_check_002",
+                    "check_type": "architecture_orientation",
+                    "check_family": "architecture_orientation",
+                    "owner_stage": "group_local",
+                    "owning_group_id": "group_002",
+                    "target_ids": [
+                      "dining_chair_east_south"
+                    ],
+                    "group_ids": [
+                      "group_002"
+                    ],
+                    "required_observations": [
+                      "target_visible",
+                      "interaction_side_visible",
+                      "front_back_disambiguated",
+                      "architecture_plane_visible",
+                      "global_context_preserved"
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "group_id": "group_002",
+              "status": "evaluated",
+              "score": 1,
+              "terminal_state": "evaluated_degraded",
+              "functional_check_episode_id": "functional_check_003",
+              "vlm_invoked": true,
+              "evidence_resolution": {
+                "images_used": []
+              },
+              "judgement": {
+                "verdict": "valid",
+                "confidence": 0.98,
+                "evidence_status": "sufficient",
+                "reason": "[redacted]",
+                "missing_evidence": [],
+                "evidence_resolution": {
+                  "policy": "evidence_consistency_fallback_v2",
+                  "accepted": true,
+                  "model_judgement_completed": true,
+                  "model_invoked": true,
+                  "visual_observation_complete": false,
+                  "evidence_tier": "full_visual",
+                  "decision_source": "model",
+                  "metric": "functional_consistency",
+                  "fallback": false,
+                  "inference_under_constraints": false,
+                  "images_used": [
+                    "retained-image-redacted",
+                    "retained-image-redacted",
+                    "retained-image-redacted"
+                  ]
+                },
+                "functional_check_results": [
+                  {
+                    "check_id": "functional_check_003",
+                    "target_ids": [
+                      "dining_chair_north_end"
+                    ],
+                    "observation_status": "observed",
+                    "conclusion": "valid",
+                    "reason": "[redacted]",
+                    "evidence_resolution": {
+                      "policy": "evidence_consistency_fallback_v2",
+                      "accepted": true,
+                      "model_judgement_completed": true,
+                      "model_invoked": true,
+                      "visual_observation_complete": false,
+                      "evidence_tier": "full_visual",
+                      "decision_source": "model",
+                      "metric": "functional_consistency",
+                      "fallback": false,
+                      "inference_under_constraints": false,
+                      "images_used": [
+                        "retained-image-redacted",
+                        "retained-image-redacted",
+                        "retained-image-redacted"
+                      ]
+                    }
+                  }
+                ],
+                "defects": []
+              },
+              "functional_probe_evidence": {
+                "required_checks": [
+                  {
+                    "check_id": "functional_check_003",
+                    "check_type": "architecture_orientation",
+                    "check_family": "architecture_orientation",
+                    "owner_stage": "group_local",
+                    "owning_group_id": "group_002",
+                    "target_ids": [
+                      "dining_chair_north_end"
+                    ],
+                    "group_ids": [
+                      "group_002"
+                    ],
+                    "required_observations": [
+                      "target_visible",
+                      "interaction_side_visible",
+                      "front_back_disambiguated",
+                      "architecture_plane_visible",
+                      "global_context_preserved"
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "group_id": "group_002",
+              "status": "evaluated",
+              "score": 1,
+              "terminal_state": "evaluated_degraded",
+              "functional_check_episode_id": "functional_check_004",
+              "vlm_invoked": true,
+              "evidence_resolution": {
+                "images_used": []
+              },
+              "judgement": {
+                "verdict": "valid",
+                "confidence": 0.99,
+                "evidence_status": "sufficient",
+                "reason": "[redacted]",
+                "missing_evidence": [],
+                "evidence_resolution": {
+                  "policy": "evidence_consistency_fallback_v2",
+                  "accepted": true,
+                  "model_judgement_completed": true,
+                  "model_invoked": true,
+                  "visual_observation_complete": false,
+                  "evidence_tier": "full_visual",
+                  "decision_source": "model",
+                  "metric": "functional_consistency",
+                  "fallback": false,
+                  "inference_under_constraints": false,
+                  "images_used": [
+                    "retained-image-redacted",
+                    "retained-image-redacted",
+                    "retained-image-redacted"
+                  ]
+                },
+                "functional_check_results": [
+                  {
+                    "check_id": "functional_check_004",
+                    "target_ids": [
+                      "dining_chair_south_end"
+                    ],
+                    "observation_status": "observed",
+                    "conclusion": "valid",
+                    "reason": "[redacted]",
+                    "evidence_resolution": {
+                      "policy": "evidence_consistency_fallback_v2",
+                      "accepted": true,
+                      "model_judgement_completed": true,
+                      "model_invoked": true,
+                      "visual_observation_complete": false,
+                      "evidence_tier": "full_visual",
+                      "decision_source": "model",
+                      "metric": "functional_consistency",
+                      "fallback": false,
+                      "inference_under_constraints": false,
+                      "images_used": [
+                        "retained-image-redacted",
+                        "retained-image-redacted",
+                        "retained-image-redacted"
+                      ]
+                    }
+                  }
+                ],
+                "defects": []
+              },
+              "functional_probe_evidence": {
+                "required_checks": [
+                  {
+                    "check_id": "functional_check_004",
+                    "check_type": "architecture_orientation",
+                    "check_family": "architecture_orientation",
+                    "owner_stage": "group_local",
+                    "owning_group_id": "group_002",
+                    "target_ids": [
+                      "dining_chair_south_end"
+                    ],
+                    "group_ids": [
+                      "group_002"
+                    ],
+                    "required_observations": [
+                      "target_visible",
+                      "interaction_side_visible",
+                      "front_back_disambiguated",
+                      "architecture_plane_visible",
+                      "global_context_preserved"
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "group_id": "group_002",
+              "status": "evaluated",
+              "score": 1,
+              "terminal_state": "evaluated_degraded",
+              "functional_check_episode_id": "functional_check_005",
+              "vlm_invoked": true,
+              "evidence_resolution": {
+                "images_used": []
+              },
+              "judgement": {
+                "verdict": "valid",
+                "confidence": 0.99,
+                "evidence_status": "sufficient",
+                "reason": "[redacted]",
+                "missing_evidence": [],
+                "evidence_resolution": {
+                  "policy": "evidence_consistency_fallback_v2",
+                  "accepted": true,
+                  "model_judgement_completed": true,
+                  "model_invoked": true,
+                  "visual_observation_complete": false,
+                  "evidence_tier": "full_visual",
+                  "decision_source": "model",
+                  "metric": "functional_consistency",
+                  "fallback": false,
+                  "inference_under_constraints": false,
+                  "images_used": [
+                    "retained-image-redacted",
+                    "retained-image-redacted",
+                    "retained-image-redacted"
+                  ]
+                },
+                "functional_check_results": [
+                  {
+                    "check_id": "functional_check_005",
+                    "target_ids": [
+                      "dining_chair_west_north"
+                    ],
+                    "observation_status": "observed",
+                    "conclusion": "valid",
+                    "reason": "[redacted]",
+                    "evidence_resolution": {
+                      "policy": "evidence_consistency_fallback_v2",
+                      "accepted": true,
+                      "model_judgement_completed": true,
+                      "model_invoked": true,
+                      "visual_observation_complete": false,
+                      "evidence_tier": "full_visual",
+                      "decision_source": "model",
+                      "metric": "functional_consistency",
+                      "fallback": false,
+                      "inference_under_constraints": false,
+                      "images_used": [
+                        "retained-image-redacted",
+                        "retained-image-redacted",
+                        "retained-image-redacted"
+                      ]
+                    }
+                  }
+                ],
+                "defects": []
+              },
+              "functional_probe_evidence": {
+                "required_checks": [
+                  {
+                    "check_id": "functional_check_005",
+                    "check_type": "architecture_orientation",
+                    "check_family": "architecture_orientation",
+                    "owner_stage": "group_local",
+                    "owning_group_id": "group_002",
+                    "target_ids": [
+                      "dining_chair_west_north"
+                    ],
+                    "group_ids": [
+                      "group_002"
+                    ],
+                    "required_observations": [
+                      "target_visible",
+                      "interaction_side_visible",
+                      "front_back_disambiguated",
+                      "architecture_plane_visible",
+                      "global_context_preserved"
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "group_id": "group_002",
+              "status": "evaluated",
+              "score": 1,
+              "terminal_state": "evaluated_degraded",
+              "functional_check_episode_id": "functional_check_006",
+              "vlm_invoked": true,
+              "evidence_resolution": {
+                "images_used": []
+              },
+              "judgement": {
+                "verdict": "valid",
+                "confidence": 0.98,
+                "evidence_status": "sufficient",
+                "reason": "[redacted]",
+                "missing_evidence": [],
+                "evidence_resolution": {
+                  "policy": "evidence_consistency_fallback_v2",
+                  "accepted": true,
+                  "model_judgement_completed": true,
+                  "model_invoked": true,
+                  "visual_observation_complete": false,
+                  "evidence_tier": "full_visual",
+                  "decision_source": "model",
+                  "metric": "functional_consistency",
+                  "fallback": false,
+                  "inference_under_constraints": false,
+                  "images_used": [
+                    "retained-image-redacted",
+                    "retained-image-redacted",
+                    "retained-image-redacted"
+                  ]
+                },
+                "functional_check_results": [
+                  {
+                    "check_id": "functional_check_006",
+                    "target_ids": [
+                      "dining_chair_west_south"
+                    ],
+                    "observation_status": "observed",
+                    "conclusion": "valid",
+                    "reason": "[redacted]",
+                    "evidence_resolution": {
+                      "policy": "evidence_consistency_fallback_v2",
+                      "accepted": true,
+                      "model_judgement_completed": true,
+                      "model_invoked": true,
+                      "visual_observation_complete": false,
+                      "evidence_tier": "full_visual",
+                      "decision_source": "model",
+                      "metric": "functional_consistency",
+                      "fallback": false,
+                      "inference_under_constraints": false,
+                      "images_used": [
+                        "retained-image-redacted",
+                        "retained-image-redacted",
+                        "retained-image-redacted"
+                      ]
+                    }
+                  }
+                ],
+                "defects": []
+              },
+              "functional_probe_evidence": {
+                "required_checks": [
+                  {
+                    "check_id": "functional_check_006",
+                    "check_type": "architecture_orientation",
+                    "check_family": "architecture_orientation",
+                    "owner_stage": "group_local",
+                    "owning_group_id": "group_002",
+                    "target_ids": [
+                      "dining_chair_west_south"
+                    ],
+                    "group_ids": [
+                      "group_002"
+                    ],
+                    "required_observations": [
+                      "target_visible",
+                      "interaction_side_visible",
+                      "front_back_disambiguated",
+                      "architecture_plane_visible",
+                      "global_context_preserved"
+                    ]
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "group_id": "group_003",
+          "status": "failed",
+          "terminal_state": "infrastructure_failure",
+          "vlm_invoked": true,
+          "evidence_resolution": {
+            "images_used": []
+          },
+          "judgement": {
+            "verdict": "invalid",
+            "confidence": 0.97,
+            "evidence_status": "sufficient",
+            "reason": "[redacted]",
+            "missing_evidence": [],
+            "functional_check_results": [
+              {
+                "check_id": "functional_check_007",
+                "target_ids": [
+                  "dining_sideboard"
+                ],
+                "observation_status": "observed",
+                "conclusion": "valid",
+                "reason": "[redacted]",
+                "evidence_resolution": {
+                  "policy": "evidence_consistency_fallback_v2",
+                  "accepted": true,
+                  "model_judgement_completed": true,
+                  "model_invoked": true,
+                  "visual_observation_complete": false,
+                  "evidence_tier": "full_visual",
+                  "decision_source": "model",
+                  "metric": "functional_consistency",
+                  "fallback": false,
+                  "inference_under_constraints": false,
+                  "images_used": [
+                    "retained-image-redacted",
+                    "retained-image-redacted",
+                    "retained-image-redacted"
+                  ]
+                }
+              },
+              {
+                "check_id": "functional_check_017",
+                "target_ids": [
+                  "dining_sideboard"
+                ],
+                "observation_status": "observed",
+                "conclusion": "invalid",
+                "reason": "[redacted]",
+                "evidence_resolution": {
+                  "policy": "evidence_consistency_fallback_v2",
+                  "accepted": true,
+                  "model_judgement_completed": true,
+                  "model_invoked": true,
+                  "visual_observation_complete": false,
+                  "evidence_tier": "full_visual",
+                  "decision_source": "model",
+                  "metric": "functional_consistency",
+                  "fallback": false,
+                  "inference_under_constraints": false,
+                  "images_used": [
+                    "retained-image-redacted",
+                    "retained-image-redacted",
+                    "retained-image-redacted"
+                  ]
+                }
+              }
+            ],
+            "defects": [
+              {
+                "scope": "opening_clearance",
+                "target_ids": [
+                  "tall_reading_bookcase_1"
+                ],
+                "check_refs": [
+                  "functional_check_017"
+                ],
+                "category": "approach_clearance_failure",
+                "severity": "impaired",
+                "attribution_mode": "responsible_endpoint",
+                "reason": "[redacted]",
+                "relation": "[redacted]"
+              }
+            ]
+          },
+          "functional_probe_evidence": {
+            "required_checks": [
+              {
+                "check_id": "functional_check_007",
+                "check_type": "architecture_orientation",
+                "check_family": "architecture_orientation",
+                "owner_stage": "group_local",
+                "owning_group_id": "group_003",
+                "target_ids": [
+                  "dining_sideboard"
+                ],
+                "group_ids": [
+                  "group_003"
+                ],
+                "required_observations": [
+                  "target_visible",
+                  "interaction_side_visible",
+                  "front_back_disambiguated",
+                  "architecture_plane_visible",
+                  "global_context_preserved"
+                ]
+              }
+            ]
+          },
+          "check_episodes": [
+            {
+              "group_id": "group_003",
+              "status": "evaluated",
+              "score": 1,
+              "terminal_state": "evaluated_degraded",
+              "functional_check_episode_id": "functional_check_007",
+              "vlm_invoked": true,
+              "evidence_resolution": {
+                "images_used": []
+              },
+              "judgement": {
+                "verdict": "valid",
+                "confidence": 0.98,
+                "evidence_status": "sufficient",
+                "reason": "[redacted]",
+                "missing_evidence": [],
+                "evidence_resolution": {
+                  "policy": "evidence_consistency_fallback_v2",
+                  "accepted": true,
+                  "model_judgement_completed": true,
+                  "model_invoked": true,
+                  "visual_observation_complete": false,
+                  "evidence_tier": "full_visual",
+                  "decision_source": "model",
+                  "metric": "functional_consistency",
+                  "fallback": false,
+                  "inference_under_constraints": false,
+                  "images_used": [
+                    "retained-image-redacted",
+                    "retained-image-redacted",
+                    "retained-image-redacted"
+                  ]
+                },
+                "functional_check_results": [
+                  {
+                    "check_id": "functional_check_007",
+                    "target_ids": [
+                      "dining_sideboard"
+                    ],
+                    "observation_status": "observed",
+                    "conclusion": "valid",
+                    "reason": "[redacted]",
+                    "evidence_resolution": {
+                      "policy": "evidence_consistency_fallback_v2",
+                      "accepted": true,
+                      "model_judgement_completed": true,
+                      "model_invoked": true,
+                      "visual_observation_complete": false,
+                      "evidence_tier": "full_visual",
+                      "decision_source": "model",
+                      "metric": "functional_consistency",
+                      "fallback": false,
+                      "inference_under_constraints": false,
+                      "images_used": [
+                        "retained-image-redacted",
+                        "retained-image-redacted",
+                        "retained-image-redacted"
+                      ]
+                    }
+                  }
+                ],
+                "defects": []
+              },
+              "functional_probe_evidence": {
+                "required_checks": [
+                  {
+                    "check_id": "functional_check_007",
+                    "check_type": "architecture_orientation",
+                    "check_family": "architecture_orientation",
+                    "owner_stage": "group_local",
+                    "owning_group_id": "group_003",
+                    "target_ids": [
+                      "dining_sideboard"
+                    ],
+                    "group_ids": [
+                      "group_003"
+                    ],
+                    "required_observations": [
+                      "target_visible",
+                      "interaction_side_visible",
+                      "front_back_disambiguated",
+                      "architecture_plane_visible",
+                      "global_context_preserved"
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "group_id": "group_003",
+              "status": "evaluated",
+              "score": 0,
+              "terminal_state": "evaluated_degraded",
+              "functional_check_episode_id": "functional_check_017",
+              "vlm_invoked": true,
+              "evidence_resolution": {
+                "images_used": []
+              },
+              "judgement": {
+                "verdict": "invalid",
+                "confidence": 0.97,
+                "evidence_status": "sufficient",
+                "reason": "[redacted]",
+                "missing_evidence": [],
+                "evidence_resolution": {
+                  "policy": "evidence_consistency_fallback_v2",
+                  "accepted": true,
+                  "model_judgement_completed": true,
+                  "model_invoked": true,
+                  "visual_observation_complete": false,
+                  "evidence_tier": "full_visual",
+                  "decision_source": "model",
+                  "metric": "functional_consistency",
+                  "fallback": false,
+                  "inference_under_constraints": false,
+                  "images_used": [
+                    "retained-image-redacted",
+                    "retained-image-redacted",
+                    "retained-image-redacted"
+                  ]
+                },
+                "functional_check_results": [
+                  {
+                    "check_id": "functional_check_017",
+                    "target_ids": [
+                      "dining_sideboard"
+                    ],
+                    "observation_status": "observed",
+                    "conclusion": "invalid",
+                    "reason": "[redacted]",
+                    "evidence_resolution": {
+                      "policy": "evidence_consistency_fallback_v2",
+                      "accepted": true,
+                      "model_judgement_completed": true,
+                      "model_invoked": true,
+                      "visual_observation_complete": false,
+                      "evidence_tier": "full_visual",
+                      "decision_source": "model",
+                      "metric": "functional_consistency",
+                      "fallback": false,
+                      "inference_under_constraints": false,
+                      "images_used": [
+                        "retained-image-redacted",
+                        "retained-image-redacted",
+                        "retained-image-redacted"
+                      ]
+                    }
+                  }
+                ],
+                "defects": [
+                  {
+                    "scope": "opening_clearance",
+                    "target_ids": [
+                      "tall_reading_bookcase_1"
+                    ],
+                    "check_refs": [
+                      "functional_check_017"
+                    ],
+                    "category": "approach_clearance_failure",
+                    "severity": "impaired",
+                    "attribution_mode": "responsible_endpoint",
+                    "reason": "[redacted]",
+                    "relation": "[redacted]"
+                  }
+                ]
+              },
+              "functional_probe_evidence": {
+                "required_checks": [
+                  {
+                    "check_id": "functional_check_017",
+                    "check_type": "clearance",
+                    "check_family": "clearance",
+                    "owner_stage": "group_local",
+                    "owning_group_id": "group_003",
+                    "target_ids": [
+                      "dining_sideboard"
+                    ],
+                    "group_ids": [
+                      "group_003"
+                    ],
+                    "required_observations": [
+                      "target_visible",
+                      "interaction_side_visible",
+                      "approach_zone_visible"
+                    ]
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "group_id": "group_004",
+          "status": "failed",
+          "terminal_state": "infrastructure_failure",
+          "vlm_invoked": true,
+          "evidence_resolution": {
+            "images_used": []
+          },
+          "judgement": {
+            "verdict": "valid",
+            "confidence": 0.9,
+            "evidence_status": "sufficient",
+            "reason": "[redacted]",
+            "missing_evidence": [],
+            "functional_check_results": [
+              {
+                "check_id": "functional_check_008",
+                "target_ids": [
+                  "display_bookcase_1"
+                ],
+                "observation_status": "observed",
+                "conclusion": "valid",
+                "reason": "[redacted]",
+                "evidence_resolution": {
+                  "policy": "evidence_consistency_fallback_v2",
+                  "accepted": true,
+                  "model_judgement_completed": true,
+                  "model_invoked": true,
+                  "visual_observation_complete": false,
+                  "evidence_tier": "full_visual",
+                  "decision_source": "model",
+                  "metric": "functional_consistency",
+                  "fallback": false,
+                  "inference_under_constraints": false,
+                  "images_used": [
+                    "retained-image-redacted",
+                    "retained-image-redacted",
+                    "retained-image-redacted"
+                  ]
+                }
+              },
+              {
+                "check_id": "functional_check_018",
+                "target_ids": [
+                  "display_bookcase_1"
+                ],
+                "observation_status": "observed",
+                "conclusion": "valid",
+                "reason": "[redacted]",
+                "evidence_resolution": {
+                  "policy": "evidence_consistency_fallback_v2",
+                  "accepted": true,
+                  "model_judgement_completed": true,
+                  "model_invoked": true,
+                  "visual_observation_complete": false,
+                  "evidence_tier": "full_visual",
+                  "decision_source": "model",
+                  "metric": "functional_consistency",
+                  "fallback": false,
+                  "inference_under_constraints": false,
+                  "images_used": [
+                    "retained-image-redacted",
+                    "retained-image-redacted",
+                    "retained-image-redacted"
+                  ]
+                }
+              }
+            ],
+            "defects": []
+          },
+          "functional_probe_evidence": {
+            "required_checks": [
+              {
+                "check_id": "functional_check_008",
+                "check_type": "architecture_orientation",
+                "check_family": "architecture_orientation",
+                "owner_stage": "group_local",
+                "owning_group_id": "group_004",
+                "target_ids": [
+                  "display_bookcase_1"
+                ],
+                "group_ids": [
+                  "group_004"
+                ],
+                "required_observations": [
+                  "target_visible",
+                  "interaction_side_visible",
+                  "front_back_disambiguated",
+                  "architecture_plane_visible",
+                  "global_context_preserved"
+                ]
+              }
+            ]
+          },
+          "check_episodes": [
+            {
+              "group_id": "group_004",
+              "status": "evaluated",
+              "score": 1,
+              "terminal_state": "evaluated_degraded",
+              "functional_check_episode_id": "functional_check_008",
+              "vlm_invoked": true,
+              "evidence_resolution": {
+                "images_used": []
+              },
+              "judgement": {
+                "verdict": "valid",
+                "confidence": 0.9,
+                "evidence_status": "sufficient",
+                "reason": "[redacted]",
+                "missing_evidence": [],
+                "evidence_resolution": {
+                  "policy": "evidence_consistency_fallback_v2",
+                  "accepted": true,
+                  "model_judgement_completed": true,
+                  "model_invoked": true,
+                  "visual_observation_complete": false,
+                  "evidence_tier": "full_visual",
+                  "decision_source": "model",
+                  "metric": "functional_consistency",
+                  "fallback": false,
+                  "inference_under_constraints": false,
+                  "images_used": [
+                    "retained-image-redacted",
+                    "retained-image-redacted",
+                    "retained-image-redacted"
+                  ]
+                },
+                "functional_check_results": [
+                  {
+                    "check_id": "functional_check_008",
+                    "target_ids": [
+                      "display_bookcase_1"
+                    ],
+                    "observation_status": "observed",
+                    "conclusion": "valid",
+                    "reason": "[redacted]",
+                    "evidence_resolution": {
+                      "policy": "evidence_consistency_fallback_v2",
+                      "accepted": true,
+                      "model_judgement_completed": true,
+                      "model_invoked": true,
+                      "visual_observation_complete": false,
+                      "evidence_tier": "full_visual",
+                      "decision_source": "model",
+                      "metric": "functional_consistency",
+                      "fallback": false,
+                      "inference_under_constraints": false,
+                      "images_used": [
+                        "retained-image-redacted",
+                        "retained-image-redacted",
+                        "retained-image-redacted"
+                      ]
+                    }
+                  }
+                ],
+                "defects": []
+              },
+              "functional_probe_evidence": {
+                "required_checks": [
+                  {
+                    "check_id": "functional_check_008",
+                    "check_type": "architecture_orientation",
+                    "check_family": "architecture_orientation",
+                    "owner_stage": "group_local",
+                    "owning_group_id": "group_004",
+                    "target_ids": [
+                      "display_bookcase_1"
+                    ],
+                    "group_ids": [
+                      "group_004"
+                    ],
+                    "required_observations": [
+                      "target_visible",
+                      "interaction_side_visible",
+                      "front_back_disambiguated",
+                      "architecture_plane_visible",
+                      "global_context_preserved"
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "group_id": "group_004",
+              "status": "evaluated",
+              "score": 1,
+              "terminal_state": "evaluated_degraded",
+              "functional_check_episode_id": "functional_check_018",
+              "vlm_invoked": true,
+              "evidence_resolution": {
+                "images_used": []
+              },
+              "judgement": {
+                "verdict": "valid",
+                "confidence": 0.94,
+                "evidence_status": "sufficient",
+                "reason": "[redacted]",
+                "missing_evidence": [],
+                "evidence_resolution": {
+                  "policy": "evidence_consistency_fallback_v2",
+                  "accepted": true,
+                  "model_judgement_completed": true,
+                  "model_invoked": true,
+                  "visual_observation_complete": false,
+                  "evidence_tier": "full_visual",
+                  "decision_source": "model",
+                  "metric": "functional_consistency",
+                  "fallback": false,
+                  "inference_under_constraints": false,
+                  "images_used": [
+                    "retained-image-redacted",
+                    "retained-image-redacted",
+                    "retained-image-redacted"
+                  ]
+                },
+                "functional_check_results": [
+                  {
+                    "check_id": "functional_check_018",
+                    "target_ids": [
+                      "display_bookcase_1"
+                    ],
+                    "observation_status": "observed",
+                    "conclusion": "valid",
+                    "reason": "[redacted]",
+                    "evidence_resolution": {
+                      "policy": "evidence_consistency_fallback_v2",
+                      "accepted": true,
+                      "model_judgement_completed": true,
+                      "model_invoked": true,
+                      "visual_observation_complete": false,
+                      "evidence_tier": "full_visual",
+                      "decision_source": "model",
+                      "metric": "functional_consistency",
+                      "fallback": false,
+                      "inference_under_constraints": false,
+                      "images_used": [
+                        "retained-image-redacted",
+                        "retained-image-redacted",
+                        "retained-image-redacted"
+                      ]
+                    }
+                  }
+                ],
+                "defects": []
+              },
+              "functional_probe_evidence": {
+                "required_checks": [
+                  {
+                    "check_id": "functional_check_018",
+                    "check_type": "clearance",
+                    "check_family": "clearance",
+                    "owner_stage": "group_local",
+                    "owning_group_id": "group_004",
+                    "target_ids": [
+                      "display_bookcase_1"
+                    ],
+                    "group_ids": [
+                      "group_004"
+                    ],
+                    "required_observations": [
+                      "target_visible",
+                      "interaction_side_visible",
+                      "approach_zone_visible"
+                    ]
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "resolution_coverage": {
+        "original_planned_scope_ids": [
+          "scene_global",
+          "group:group_001",
+          "group:group_002",
+          "group:group_003",
+          "group:group_005",
+          "group:group_006",
+          "group:group_007"
+        ],
+        "planned_count": 29,
+        "accepted_count": 22
+      },
+      "judgement_coverage_projection": {
+        "observed_score": null,
+        "judgement_fraction": 0.7586206896551724,
+        "infrastructure_failure": true
+      },
+      "functional_check_ledger": {
+        "checks": [
+          {
+            "check_id": "functional_check_001",
+            "result_row": {
+              "check_id": "functional_check_001",
+              "target_ids": [
+                "dining_chair_east_north"
+              ],
+              "observation_status": "observed",
+              "conclusion": "valid",
+              "reason": "[redacted]",
+              "evidence_resolution": {
+                "policy": "evidence_consistency_fallback_v2",
+                "accepted": true,
+                "model_judgement_completed": true,
+                "model_invoked": true,
+                "visual_observation_complete": false,
+                "evidence_tier": "full_visual",
+                "decision_source": "model",
+                "metric": "functional_consistency",
+                "fallback": false,
+                "inference_under_constraints": false,
+                "images_used": [
+                  "retained-image-redacted",
+                  "retained-image-redacted",
+                  "retained-image-redacted"
+                ]
+              }
+            }
+          },
+          {
+            "check_id": "functional_check_002",
+            "result_row": {
+              "check_id": "functional_check_002",
+              "target_ids": [
+                "dining_chair_east_south"
+              ],
+              "observation_status": "observed",
+              "conclusion": "valid",
+              "reason": "[redacted]",
+              "evidence_resolution": {
+                "policy": "evidence_consistency_fallback_v2",
+                "accepted": true,
+                "model_judgement_completed": true,
+                "model_invoked": true,
+                "visual_observation_complete": false,
+                "evidence_tier": "full_visual",
+                "decision_source": "model",
+                "metric": "functional_consistency",
+                "fallback": false,
+                "inference_under_constraints": false,
+                "images_used": [
+                  "retained-image-redacted",
+                  "retained-image-redacted",
+                  "retained-image-redacted"
+                ]
+              }
+            }
+          },
+          {
+            "check_id": "functional_check_003",
+            "result_row": {
+              "check_id": "functional_check_003",
+              "target_ids": [
+                "dining_chair_north_end"
+              ],
+              "observation_status": "observed",
+              "conclusion": "valid",
+              "reason": "[redacted]",
+              "evidence_resolution": {
+                "policy": "evidence_consistency_fallback_v2",
+                "accepted": true,
+                "model_judgement_completed": true,
+                "model_invoked": true,
+                "visual_observation_complete": false,
+                "evidence_tier": "full_visual",
+                "decision_source": "model",
+                "metric": "functional_consistency",
+                "fallback": false,
+                "inference_under_constraints": false,
+                "images_used": [
+                  "retained-image-redacted",
+                  "retained-image-redacted",
+                  "retained-image-redacted"
+                ]
+              }
+            }
+          },
+          {
+            "check_id": "functional_check_004",
+            "result_row": {
+              "check_id": "functional_check_004",
+              "target_ids": [
+                "dining_chair_south_end"
+              ],
+              "observation_status": "observed",
+              "conclusion": "valid",
+              "reason": "[redacted]",
+              "evidence_resolution": {
+                "policy": "evidence_consistency_fallback_v2",
+                "accepted": true,
+                "model_judgement_completed": true,
+                "model_invoked": true,
+                "visual_observation_complete": false,
+                "evidence_tier": "full_visual",
+                "decision_source": "model",
+                "metric": "functional_consistency",
+                "fallback": false,
+                "inference_under_constraints": false,
+                "images_used": [
+                  "retained-image-redacted",
+                  "retained-image-redacted",
+                  "retained-image-redacted"
+                ]
+              }
+            }
+          },
+          {
+            "check_id": "functional_check_005",
+            "result_row": {
+              "check_id": "functional_check_005",
+              "target_ids": [
+                "dining_chair_west_north"
+              ],
+              "observation_status": "observed",
+              "conclusion": "valid",
+              "reason": "[redacted]",
+              "evidence_resolution": {
+                "policy": "evidence_consistency_fallback_v2",
+                "accepted": true,
+                "model_judgement_completed": true,
+                "model_invoked": true,
+                "visual_observation_complete": false,
+                "evidence_tier": "full_visual",
+                "decision_source": "model",
+                "metric": "functional_consistency",
+                "fallback": false,
+                "inference_under_constraints": false,
+                "images_used": [
+                  "retained-image-redacted",
+                  "retained-image-redacted",
+                  "retained-image-redacted"
+                ]
+              }
+            }
+          },
+          {
+            "check_id": "functional_check_006",
+            "result_row": {
+              "check_id": "functional_check_006",
+              "target_ids": [
+                "dining_chair_west_south"
+              ],
+              "observation_status": "observed",
+              "conclusion": "valid",
+              "reason": "[redacted]",
+              "evidence_resolution": {
+                "policy": "evidence_consistency_fallback_v2",
+                "accepted": true,
+                "model_judgement_completed": true,
+                "model_invoked": true,
+                "visual_observation_complete": false,
+                "evidence_tier": "full_visual",
+                "decision_source": "model",
+                "metric": "functional_consistency",
+                "fallback": false,
+                "inference_under_constraints": false,
+                "images_used": [
+                  "retained-image-redacted",
+                  "retained-image-redacted",
+                  "retained-image-redacted"
+                ]
+              }
+            }
+          },
+          {
+            "check_id": "functional_check_007",
+            "result_row": {
+              "check_id": "functional_check_007",
+              "target_ids": [
+                "dining_sideboard"
+              ],
+              "observation_status": "observed",
+              "conclusion": "valid",
+              "reason": "[redacted]",
+              "evidence_resolution": {
+                "policy": "evidence_consistency_fallback_v2",
+                "accepted": true,
+                "model_judgement_completed": true,
+                "model_invoked": true,
+                "visual_observation_complete": false,
+                "evidence_tier": "full_visual",
+                "decision_source": "model",
+                "metric": "functional_consistency",
+                "fallback": false,
+                "inference_under_constraints": false,
+                "images_used": [
+                  "retained-image-redacted",
+                  "retained-image-redacted",
+                  "retained-image-redacted"
+                ]
+              }
+            }
+          },
+          {
+            "check_id": "functional_check_008",
+            "result_row": {
+              "check_id": "functional_check_008",
+              "target_ids": [
+                "display_bookcase_1"
+              ],
+              "observation_status": "observed",
+              "conclusion": "valid",
+              "reason": "[redacted]",
+              "evidence_resolution": {
+                "policy": "evidence_consistency_fallback_v2",
+                "accepted": true,
+                "model_judgement_completed": true,
+                "model_invoked": true,
+                "visual_observation_complete": false,
+                "evidence_tier": "full_visual",
+                "decision_source": "model",
+                "metric": "functional_consistency",
+                "fallback": false,
+                "inference_under_constraints": false,
+                "images_used": [
+                  "retained-image-redacted",
+                  "retained-image-redacted",
+                  "retained-image-redacted"
+                ]
+              }
+            }
+          },
+          {
+            "check_id": "functional_check_009",
+            "result_row": {
+              "check_id": "functional_check_009",
+              "target_ids": [
+                "living_sofa"
+              ],
+              "observation_status": "observed",
+              "conclusion": "invalid",
+              "reason": "[redacted]",
+              "evidence_resolution": {
+                "policy": "evidence_consistency_fallback_v2",
+                "accepted": true,
+                "model_judgement_completed": true,
+                "model_invoked": true,
+                "visual_observation_complete": false,
+                "evidence_tier": "full_visual",
+                "decision_source": "model",
+                "metric": "functional_consistency",
+                "fallback": false,
+                "inference_under_constraints": false,
+                "images_used": [
+                  "retained-image-redacted",
+                  "retained-image-redacted",
+                  "retained-image-redacted"
+                ]
+              }
+            }
+          },
+          {
+            "check_id": "functional_check_010",
+            "result_row": {
+              "check_id": "functional_check_010",
+              "target_ids": [
+                "lounge_chair_east"
+              ],
+              "observation_status": "observed",
+              "conclusion": "valid",
+              "reason": "[redacted]",
+              "evidence_resolution": {
+                "policy": "evidence_consistency_fallback_v2",
+                "accepted": true,
+                "model_judgement_completed": true,
+                "model_invoked": true,
+                "visual_observation_complete": false,
+                "evidence_tier": "full_visual",
+                "decision_source": "model",
+                "metric": "functional_consistency",
+                "fallback": false,
+                "inference_under_constraints": false,
+                "images_used": [
+                  "retained-image-redacted",
+                  "retained-image-redacted",
+                  "retained-image-redacted"
+                ]
+              }
+            }
+          },
+          {
+            "check_id": "functional_check_011",
+            "result_row": {
+              "check_id": "functional_check_011",
+              "target_ids": [
+                "lounge_chair_west"
+              ],
+              "observation_status": "observed",
+              "conclusion": "valid",
+              "reason": "[redacted]",
+              "evidence_resolution": {
+                "policy": "evidence_consistency_fallback_v2",
+                "accepted": true,
+                "model_judgement_completed": true,
+                "model_invoked": true,
+                "visual_observation_complete": false,
+                "evidence_tier": "full_visual",
+                "decision_source": "model",
+                "metric": "functional_consistency",
+                "fallback": false,
+                "inference_under_constraints": false,
+                "images_used": [
+                  "retained-image-redacted",
+                  "retained-image-redacted",
+                  "retained-image-redacted"
+                ]
+              }
+            }
+          },
+          {
+            "check_id": "functional_check_012",
+            "result_row": {
+              "check_id": "functional_check_012",
+              "target_ids": [
+                "media_console"
+              ],
+              "observation_status": "observed",
+              "conclusion": "invalid",
+              "reason": "[redacted]",
+              "evidence_resolution": {
+                "policy": "evidence_consistency_fallback_v2",
+                "accepted": true,
+                "model_judgement_completed": true,
+                "model_invoked": true,
+                "visual_observation_complete": false,
+                "evidence_tier": "full_visual",
+                "decision_source": "model",
+                "metric": "functional_consistency",
+                "fallback": false,
+                "inference_under_constraints": false,
+                "images_used": [
+                  "retained-image-redacted",
+                  "retained-image-redacted",
+                  "retained-image-redacted"
+                ]
+              }
+            }
+          },
+          {
+            "check_id": "functional_check_013",
+            "result_row": {
+              "check_id": "functional_check_013",
+              "target_ids": [
+                "reading_bookcase"
+              ],
+              "observation_status": "inferred_under_budget",
+              "conclusion": "valid",
+              "reason": "[redacted]",
+              "evidence_resolution": {
+                "policy": "evidence_consistency_fallback_v2",
+                "accepted": true,
+                "model_judgement_completed": true,
+                "model_invoked": true,
+                "visual_observation_complete": false,
+                "evidence_tier": "partial_visual",
+                "decision_source": "model",
+                "metric": "functional_consistency",
+                "fallback": true,
+                "inference_under_constraints": true,
+                "images_used": [
+                  "retained-image-redacted",
+                  "retained-image-redacted",
+                  "retained-image-redacted",
+                  "retained-image-redacted",
+                  "retained-image-redacted",
+                  "retained-image-redacted",
+                  "retained-image-redacted",
+                  "retained-image-redacted"
+                ]
+              }
+            }
+          },
+          {
+            "check_id": "functional_check_014",
+            "result_row": {
+              "check_id": "functional_check_014",
+              "target_ids": [
+                "reading_chair"
+              ],
+              "observation_status": "observed",
+              "conclusion": "valid",
+              "reason": "[redacted]",
+              "evidence_resolution": {
+                "policy": "evidence_consistency_fallback_v2",
+                "accepted": true,
+                "model_judgement_completed": true,
+                "model_invoked": true,
+                "visual_observation_complete": false,
+                "evidence_tier": "full_visual",
+                "decision_source": "model",
+                "metric": "functional_consistency",
+                "fallback": false,
+                "inference_under_constraints": false,
+                "images_used": [
+                  "retained-image-redacted",
+                  "retained-image-redacted",
+                  "retained-image-redacted"
+                ]
+              }
+            }
+          },
+          {
+            "check_id": "functional_check_015",
+            "result_row": {
+              "check_id": "functional_check_015",
+              "target_ids": [
+                "tall_reading_bookcase_1"
+              ],
+              "observation_status": "observed",
+              "conclusion": "valid",
+              "reason": "[redacted]",
+              "evidence_resolution": {
+                "policy": "evidence_consistency_fallback_v2",
+                "accepted": true,
+                "model_judgement_completed": true,
+                "model_invoked": true,
+                "visual_observation_complete": false,
+                "evidence_tier": "full_visual",
+                "decision_source": "model",
+                "metric": "functional_consistency",
+                "fallback": false,
+                "inference_under_constraints": false,
+                "images_used": [
+                  "retained-image-redacted",
+                  "retained-image-redacted",
+                  "retained-image-redacted"
+                ]
+              }
+            }
+          },
+          {
+            "check_id": "functional_check_016",
+            "result_row": {
+              "check_id": "functional_check_016",
+              "target_ids": [
+                "television"
+              ],
+              "observation_status": "observed",
+              "conclusion": "invalid",
+              "reason": "[redacted]",
+              "evidence_resolution": {
+                "policy": "evidence_consistency_fallback_v2",
+                "accepted": true,
+                "model_judgement_completed": true,
+                "model_invoked": true,
+                "visual_observation_complete": false,
+                "evidence_tier": "full_visual",
+                "decision_source": "model",
+                "metric": "functional_consistency",
+                "fallback": false,
+                "inference_under_constraints": false,
+                "images_used": [
+                  "retained-image-redacted",
+                  "retained-image-redacted",
+                  "retained-image-redacted"
+                ]
+              }
+            }
+          },
+          {
+            "check_id": "functional_check_017",
+            "result_row": {
+              "check_id": "functional_check_017",
+              "target_ids": [
+                "dining_sideboard"
+              ],
+              "observation_status": "observed",
+              "conclusion": "invalid",
+              "reason": "[redacted]",
+              "evidence_resolution": {
+                "policy": "evidence_consistency_fallback_v2",
+                "accepted": true,
+                "model_judgement_completed": true,
+                "model_invoked": true,
+                "visual_observation_complete": false,
+                "evidence_tier": "full_visual",
+                "decision_source": "model",
+                "metric": "functional_consistency",
+                "fallback": false,
+                "inference_under_constraints": false,
+                "images_used": [
+                  "retained-image-redacted",
+                  "retained-image-redacted",
+                  "retained-image-redacted"
+                ]
+              }
+            }
+          },
+          {
+            "check_id": "functional_check_018",
+            "result_row": {
+              "check_id": "functional_check_018",
+              "target_ids": [
+                "display_bookcase_1"
+              ],
+              "observation_status": "observed",
+              "conclusion": "valid",
+              "reason": "[redacted]",
+              "evidence_resolution": {
+                "policy": "evidence_consistency_fallback_v2",
+                "accepted": true,
+                "model_judgement_completed": true,
+                "model_invoked": true,
+                "visual_observation_complete": false,
+                "evidence_tier": "full_visual",
+                "decision_source": "model",
+                "metric": "functional_consistency",
+                "fallback": false,
+                "inference_under_constraints": false,
+                "images_used": [
+                  "retained-image-redacted",
+                  "retained-image-redacted",
+                  "retained-image-redacted"
+                ]
+              }
+            }
+          },
+          {
+            "check_id": "functional_check_019",
+            "result_row": {
+              "check_id": "functional_check_019",
+              "target_ids": [
+                "media_console"
+              ],
+              "observation_status": "observed",
+              "conclusion": "invalid",
+              "reason": "[redacted]",
+              "evidence_resolution": {
+                "policy": "evidence_consistency_fallback_v2",
+                "accepted": true,
+                "model_judgement_completed": true,
+                "model_invoked": true,
+                "visual_observation_complete": false,
+                "evidence_tier": "full_visual",
+                "decision_source": "model",
+                "metric": "functional_consistency",
+                "fallback": false,
+                "inference_under_constraints": false,
+                "images_used": [
+                  "retained-image-redacted",
+                  "retained-image-redacted",
+                  "retained-image-redacted"
+                ]
+              }
+            }
+          },
+          {
+            "check_id": "functional_check_020",
+            "result_row": {
+              "check_id": "functional_check_020",
+              "target_ids": [
+                "reading_bookcase"
+              ],
+              "observation_status": "inferred_under_budget",
+              "conclusion": "valid",
+              "reason": "[redacted]",
+              "evidence_resolution": {
+                "policy": "evidence_consistency_fallback_v2",
+                "accepted": true,
+                "model_judgement_completed": true,
+                "model_invoked": true,
+                "visual_observation_complete": false,
+                "evidence_tier": "partial_visual",
+                "decision_source": "model",
+                "metric": "functional_consistency",
+                "fallback": true,
+                "inference_under_constraints": true,
+                "images_used": [
+                  "retained-image-redacted",
+                  "retained-image-redacted",
+                  "retained-image-redacted",
+                  "retained-image-redacted",
+                  "retained-image-redacted",
+                  "retained-image-redacted",
+                  "retained-image-redacted"
+                ]
+              }
+            }
+          },
+          {
+            "check_id": "functional_check_021",
+            "result_row": {
+              "check_id": "functional_check_021",
+              "target_ids": [
+                "tall_reading_bookcase_1"
+              ],
+              "observation_status": "observed",
+              "conclusion": "valid",
+              "reason": "[redacted]",
+              "evidence_resolution": {
+                "policy": "evidence_consistency_fallback_v2",
+                "accepted": true,
+                "model_judgement_completed": true,
+                "model_invoked": true,
+                "visual_observation_complete": false,
+                "evidence_tier": "full_visual",
+                "decision_source": "model",
+                "metric": "functional_consistency",
+                "fallback": false,
+                "inference_under_constraints": false,
+                "images_used": [
+                  "retained-image-redacted",
+                  "retained-image-redacted",
+                  "retained-image-redacted"
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "placement_check_ledger": null,
+      "judgement": {
+        "scene_global_judgement": {
+          "verdict": "valid",
+          "terminal_state": "evaluated_degraded",
+          "confidence": 0.95,
+          "evidence_status": "sufficient",
+          "reason": "[redacted]",
+          "missing_evidence": [],
+          "evidence_resolution": {
+            "policy": "evidence_consistency_fallback_v2",
+            "accepted": true,
+            "model_judgement_completed": true,
+            "model_invoked": true,
+            "visual_observation_complete": false,
+            "evidence_tier": "full_visual",
+            "decision_source": "model",
+            "metric": "functional_consistency",
+            "fallback": false,
+            "inference_under_constraints": false,
+            "images_used": [
+              "retained-image-redacted"
+            ]
+          },
+          "defects": []
+        },
+        "residual_global_placement_judgement": {}
+      }
+    },
+    "semantic_placement_consistency": {
+      "status": "failed",
+      "score": null,
+      "reason": null,
+      "group_results": [],
+      "resolution_coverage": {
+        "original_planned_scope_ids": [
+          "scene_global",
+          "group:group_001",
+          "group:group_002",
+          "group:group_003",
+          "group:group_005",
+          "group:group_006",
+          "group:group_007"
+        ],
+        "planned_count": 12,
+        "accepted_count": 11
+      },
+      "judgement_coverage_projection": {
+        "observed_score": null,
+        "judgement_fraction": 0.9166666666666666,
+        "infrastructure_failure": true
+      },
+      "functional_check_ledger": null,
+      "placement_check_ledger": {
+        "checks": [
+          {
+            "check_id": "placement_check_367706f0e716be1f",
+            "result_row": {
+              "check_id": "placement_check_367706f0e716be1f",
+              "subject_id": "reading_open_book_1",
+              "context_ids": [
+                "reading_side_table"
+              ],
+              "observation_status": "observed",
+              "conclusion": "invalid",
+              "reason": "[redacted]"
+            }
+          },
+          {
+            "check_id": "placement_check_72d1d2907d93e959",
+            "result_row": {
+              "check_id": "placement_check_72d1d2907d93e959",
+              "subject_id": "tall_reading_bookcase_1",
+              "context_ids": [],
+              "observation_status": "observed",
+              "conclusion": "valid",
+              "reason": "[redacted]"
+            }
+          },
+          {
+            "check_id": "placement_check_ddd510d360cd60f6",
+            "result_row": {
+              "check_id": "placement_check_ddd510d360cd60f6",
+              "subject_id": "living_floor_lamp",
+              "context_ids": [
+                "living_sofa",
+                "lounge_chair_west"
+              ],
+              "observation_status": "observed",
+              "conclusion": "valid",
+              "reason": "[redacted]"
+            }
+          },
+          {
+            "check_id": "placement_check_fc42530e8f746f67",
+            "result_row": {
+              "check_id": "placement_check_fc42530e8f746f67",
+              "subject_id": "dining_table",
+              "context_ids": [
+                "dining_chair_east_north",
+                "dining_chair_east_south",
+                "dining_chair_north_end",
+                "dining_chair_south_end",
+                "dining_chair_west_north",
+                "dining_chair_west_south"
+              ],
+              "observation_status": "observed",
+              "conclusion": "invalid",
+              "reason": "[redacted]"
+            }
+          }
+        ]
+      },
+      "judgement": {
+        "scene_global_judgement": {
+          "verdict": "valid",
+          "terminal_state": "evaluated_degraded",
+          "confidence": 0.93,
+          "evidence_status": "sufficient",
+          "reason": "[redacted]",
+          "missing_evidence": [],
+          "evidence_resolution": {
+            "policy": "evidence_consistency_fallback_v2",
+            "accepted": true,
+            "model_judgement_completed": true,
+            "model_invoked": true,
+            "visual_observation_complete": false,
+            "evidence_tier": "full_visual",
+            "decision_source": "model",
+            "metric": "semantic_placement_consistency",
+            "fallback": false,
+            "inference_under_constraints": false,
+            "images_used": [
+              "retained-image-redacted"
+            ]
+          },
+          "placement_check_results": [
+            {
+              "check_id": "placement_check_72d1d2907d93e959",
+              "subject_id": "tall_reading_bookcase_1",
+              "context_ids": [],
+              "observation_status": "observed",
+              "conclusion": "valid",
+              "reason": "[redacted]"
+            }
+          ],
+          "defects": []
+        },
+        "residual_global_placement_judgement": {
+          "verdict": "valid",
+          "terminal_state": "evaluated",
+          "confidence": 0.88,
+          "evidence_status": "sufficient",
+          "reason": "[redacted]",
+          "missing_evidence": [],
+          "evidence_resolution": {
+            "policy": "evidence_consistency_fallback_v2",
+            "accepted": true,
+            "model_judgement_completed": true,
+            "model_invoked": true,
+            "visual_observation_complete": true,
+            "evidence_tier": "full_visual",
+            "decision_source": "model",
+            "metric": "semantic_placement_consistency",
+            "fallback": false,
+            "inference_under_constraints": false,
+            "images_used": [
+              "retained-image-redacted",
+              "retained-image-redacted",
+              "retained-image-redacted"
+            ]
+          },
+          "defects": []
+        }
+      }
+    }
+  },
+  "previous_full_replay_counts": {
+    "placement": {
+      "old_accepted": 11,
+      "new_scope_accepted": 12,
+      "planned": 12
+    },
+    "functional": {
+      "old_accepted": 22,
+      "new_scope_accepted": 29,
+      "planned": 29,
+      "accepted_groups": 7,
+      "episode_count": 21
+    }
+  },
+  "preview_identity_summary": {
+    "blank_camera_ids": [
+      "functional_consistency_00_frontage_270"
+    ],
+    "surviving_camera_ids": [
+      "functional_consistency_02_frontage_246",
+      "functional_consistency_03_frontage_225",
+      "functional_consistency_01_frontage_294"
+    ],
+    "live_rerender_performed": false
+  }
+}

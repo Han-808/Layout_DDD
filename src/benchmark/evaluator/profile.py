@@ -116,8 +116,8 @@ DEFAULT_EVALUATION_PROFILE: dict[str, Any] = {
                 "weight": DEFAULT_L3_METRIC_WEIGHTS[
                     "object_pairing_consistency"
                 ],
-                "requires": ["object_grouping_report"],
-                "scope": "group_member_category_and_role_compatibility_only",
+                "requires": ["canonical_room_object_inventory"],
+                "scope": "room_global_object_inventory_coherence_only",
             },
             "style_consistency": {
                 "enabled": True,

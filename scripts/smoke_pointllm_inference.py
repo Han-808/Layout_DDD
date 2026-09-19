@@ -17,7 +17,7 @@ Hard checks:
 
 Usage:
     PYTHONPATH=/mnt/group/cmh/tools/PointLLM-R \
-    /mnt/group/cmh/envs/pointllm/bin/python scripts/smoke_pointllm_inference.py \
+    /mnt/group/cmh/envs/pointllm-cu126/bin/python scripts/smoke_pointllm_inference.py \
         --model-key PointLLM-R-7B \
         --modelnet-dat /mnt/group/cmh/models/pointllm_data/modelnet40_data/modelnet40_test_8192pts_fps.dat
 """
@@ -25,6 +25,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import faulthandler
 import hashlib
 import json
 import pickle
@@ -112,6 +113,12 @@ def build_prompt(conv, question: str, point_backbone_config: dict) -> str:
 
 
 def main() -> int:
+    faulthandler.enable(all_threads=True)
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(line_buffering=True)
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(line_buffering=True)
+
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--registry", type=Path, default=DEFAULT_REGISTRY)
     parser.add_argument("--model-key", required=True, help="registry key, e.g. PointLLM-R-7B")
@@ -126,7 +133,7 @@ def main() -> int:
     )
     parser.add_argument("--npy", type=Path, action="append", default=None)
     parser.add_argument("--prompt", default="What is this?")
-    parser.add_argument("--torch-dtype", choices=tuple(DTYPES), default="bfloat16")
+    parser.add_argument("--torch-dtype", choices=tuple(DTYPES), default="float16")
     parser.add_argument("--max-new-tokens", type=int, default=512)
     parser.add_argument("--json-out", type=Path, default=None)
     args = parser.parse_args()
@@ -212,12 +219,26 @@ def main() -> int:
 
     results = []
     for (points, label), digest in zip(samples, digests):
+        print(f"\n[stage 3 probe] build prompt for {label}", flush=True)
         prompt = build_prompt(conv, args.prompt, point_backbone_config)
+        print(f"[stage 3 probe] tokenize prompt for {label}", flush=True)
         input_ids = torch.as_tensor(tokenizer([prompt]).input_ids).cuda()
+        print(
+            f"[stage 3 probe] input ids ready: shape={tuple(input_ids.shape)}",
+            flush=True,
+        )
         stopping = KeywordsStoppingCriteria([stop_str], tokenizer, input_ids)
+        print(f"[stage 3 probe] transfer point cloud for {label}", flush=True)
         point_clouds = torch.from_numpy(points).unsqueeze(0).cuda().to(dtype)
+        torch.cuda.synchronize()
+        print(
+            f"[stage 3 probe] point tensor ready: "
+            f"shape={tuple(point_clouds.shape)} dtype={point_clouds.dtype}",
+            flush=True,
+        )
 
         started = time.time()
+        print(f"[stage 3 probe] generate start for {label}", flush=True)
         with torch.inference_mode():
             output_ids = model.generate(
                 input_ids,
@@ -226,6 +247,8 @@ def main() -> int:
                 max_new_tokens=args.max_new_tokens,
                 stopping_criteria=[stopping],
             )
+        torch.cuda.synchronize()
+        print(f"[stage 3 probe] generate complete for {label}", flush=True)
         elapsed = time.time() - started
 
         text = tokenizer.batch_decode(

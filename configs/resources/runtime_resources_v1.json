@@ -1,6 +1,6 @@
 {
   "schema_version": "runtime_resources_v1",
-  "camera_evidence_implementation_sha256": "457ff95848300defe71e613c24e772aa2f541ee258b66471d894a566499f0929",
+  "camera_evidence_implementation_sha256": "aeb00d196be1a04393826b4a93c684c4e0df98289fc92bb90bce82f9d48e7abd",
   "resources": [
     {
       "resource": "schemas/generator_catalog_placement_v1.schema.json",

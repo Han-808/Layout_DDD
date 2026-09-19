@@ -331,6 +331,21 @@ _OBSERVATION_ALIASES.update(
 )
 
 _METRIC_OBSERVATION_ALIASES = {
+    "functional_consistency": {
+        # Function owns these relative-use observations. Decompose them into
+        # camera framing requirements, not facing or usability verdicts. In
+        # particular, an undirected side table must not acquire an invented
+        # front/back constraint. The original labels and view goal remain in
+        # the constraint metadata for selection and subsequent Judge review.
+        "relative_layout_visible": (
+            "joint_visibility",
+            "group_context_visible",
+        ),
+        "interaction_region_visible": (
+            "joint_visibility",
+            "limited_local_context",
+        ),
+    },
     "collision": {
         "support_contact_region": ("contact_surface_visible",),
         "collision_contact_region": ("contact_surface_visible",),
