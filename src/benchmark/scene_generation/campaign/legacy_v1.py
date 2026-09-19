@@ -24,6 +24,9 @@ from benchmark.scene_generation.frozen_two_stage.compatibility.loader import (
     inspect_model_metadata,
 )
 from benchmark.scene_generation.frozen_two_stage.config import load_run_config
+from benchmark.scene_generation.frozen_two_stage.providers.codecs.openai_chat import (
+    DEFAULT_MAX_TOKENS_FIELD,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -127,8 +130,14 @@ def _execution_policy_id(config: object, *, retries: int, delay: float) -> str:
     return execution_policy_id
 
 
-def _option_contract_id(route_kind: str, chat_option_style: str | None) -> str:
+def _option_contract_id(
+    route_kind: str,
+    chat_option_style: str | None,
+    chat_max_tokens_field: str = DEFAULT_MAX_TOKENS_FIELD,
+) -> str:
     if route_kind == "api2_chat" and chat_option_style == "top_level_reasoning":
+        if chat_max_tokens_field == "max_completion_tokens":
+            return "chat_top_level_reasoning_azure_v1"
         return "chat_top_level_reasoning_v1"
     if route_kind == "api2_responses":
         return "responses_reasoning_effort_v1"
@@ -143,7 +152,10 @@ def _option_contract_id(route_kind: str, chat_option_style: str | None) -> str:
 
 
 def _preflight_contract_id(config: object, option_contract_id: str) -> str:
-    if option_contract_id == "chat_top_level_reasoning_v1":
+    if option_contract_id in {
+        "chat_top_level_reasoning_v1",
+        "chat_top_level_reasoning_azure_v1",
+    }:
         return "api2-chat-json-content-v1"
     if option_contract_id == "responses_reasoning_effort_v1":
         return "api2-responses-completed-json-v1"
@@ -165,7 +177,9 @@ def project_legacy_v1(path: str | Path) -> LegacyV1Projection:
     config = load_run_config(path)
     model = inspect_model_metadata(config.models_path, config.model_key)
     option_contract_id = _option_contract_id(
-        config.route.kind, config.route.chat_option_style
+        config.route.kind,
+        config.route.chat_option_style,
+        config.route.chat_max_tokens_field,
     )
     if config.route.kind.startswith("api2_"):
         gateway_options = GatewayOptions(
