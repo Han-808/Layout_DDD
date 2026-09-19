@@ -5,6 +5,10 @@
       "endpoint": "https://api2.example.invalid/v1/chat/completions",
       "credential_env": "SET_API2_CREDENTIAL_IN_LOCAL_COPY"
     },
+    "api2-chat-top-level-reasoning-azure-v1": {
+      "endpoint": "https://api2.example.invalid/openai/v1/chat/completions",
+      "credential_env": "SET_API2_CREDENTIAL_IN_LOCAL_COPY"
+    },
     "api2-responses-reasoning-v1": {
       "endpoint": "https://api2.example.invalid/v1/responses",
       "credential_env": "SET_API2_CREDENTIAL_IN_LOCAL_COPY"
