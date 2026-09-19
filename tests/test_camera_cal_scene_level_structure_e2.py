@@ -101,7 +101,11 @@ def test_cli_and_discovery_match_the_frozen_e0_runner(tmp_path: Path) -> None:
         "10",
         "--no-terminal-progress",
     ]
-    assert vars(runner.parse_args(argv)) == vars(historical.parse_args(argv))
+    # CLI evolution must stay additive: every option the frozen e0 runner parsed
+    # still parses to the same value, but the current runner may declare more.
+    current_args = vars(runner.parse_args(argv))
+    frozen_args = vars(historical.parse_args(argv))
+    assert frozen_args.items() <= current_args.items()
 
     dataset = tmp_path / "dataset"
     _ready_case(dataset, "S100")
