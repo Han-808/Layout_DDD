@@ -74,6 +74,23 @@ def promptless_l3_only_profile() -> dict[str, Any]:
     return profile
 
 
+def promptless_l1_only_profile() -> dict[str, Any]:
+    """Return an audit-explicit recovery profile that executes only L1."""
+
+    profile = promptless_l1_l3_profile()
+    profile["layer_weights"] = {
+        L1: 1.0,
+        L2: 0.0,
+        L3: 0.0,
+        L4: 0.0,
+    }
+    profile[L3]["enabled"] = False
+    for metric in profile[L3]["metrics"].values():
+        metric["enabled"] = False
+        metric["weight"] = 0.0
+    return profile
+
+
 def scene_quality_config(
     metrics: tuple[str, ...],
     *,
@@ -171,6 +188,7 @@ __all__ = [
     "L4",
     "camera_cal_asset_policy",
     "promptless_l1_l3_profile",
+    "promptless_l1_only_profile",
     "promptless_l3_only_profile",
     "promptless_scene_request",
     "scene_quality_config",

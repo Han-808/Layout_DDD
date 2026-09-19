@@ -70,9 +70,9 @@ def _bundle(tmp_path: Path, *, boundary: bool = True) -> list[dict]:
         ),
         (
             "support",
-            ["metric_local_rgb", "metric_local_rgb", "metric_highlighted_global"],
-            ["local_1", "local_2", "global_top"],
-            3,
+            ["metric_local_rgb", "metric_highlighted_global"],
+            ["local_1", "global_top"],
+            2,
         ),
     ],
 )
@@ -131,22 +131,22 @@ def test_p0b_request_and_result_record_applied_metric_default(tmp_path: Path) ->
     )
 
     request = captured[0]
-    assert len(request["render_evidence"]) == 3
+    assert len(request["render_evidence"]) == 2
     assert (
         request["visual_evidence_policy"]["config_id"]
-        == "support_local2_raw_global_top_budget3_v2"
+        == "support_local_raw_global_top_budget2_v3"
     )
     assert report["visual_evidence_policy"] == request["visual_evidence_policy"]
 
 
 def test_metric_default_does_not_allow_judge_to_silently_truncate(tmp_path: Path) -> None:
     class _Judge:
-        max_images = 2
+        max_images = 1
 
         def adjudicate_p0b(self, _request: dict) -> dict:  # pragma: no cover - must not be called
             raise AssertionError("judge should not be called")
 
-    with pytest.raises(RuntimeError, match="below the support default VisualConfig budget=3"):
+    with pytest.raises(RuntimeError, match="below the support default VisualConfig budget=2"):
         adjudicate_p0b_event(
             metric="support",
             event={"object_id": "object"},

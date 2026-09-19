@@ -228,7 +228,20 @@ def main() -> None:
         cycles_denoising=args.cycles_denoising,
     )
     _add_lighting(boundary, scene_height)
-    views = _render_views(boundary, scene_height, out_dir)
+    active_wall_ids = list(
+        (architecture.get("physical_walls") or {}).get("active_wall_ids") or []
+    )
+    views = _render_views(
+        boundary,
+        scene_height,
+        out_dir,
+        active_wall_ids=active_wall_ids,
+    )
+    standardized_camera_policy = next(
+        view["camera_policy"]
+        for view in views
+        if view.get("name") == "perspective"
+    )
     canonical_ids = sorted(expected_objects)
     identity_legend: dict[str, str] = {}
     identity_palette: dict[str, str] = {}
@@ -247,6 +260,7 @@ def main() -> None:
         identity_render = {
             "status": "available",
             "camera_source": "standardized_perspective",
+            "camera_policy": standardized_camera_policy["policy_id"],
             "architecture_identity": "neutral_background",
             "canonical_object_count": len(canonical_ids),
             "scene_mutated": False,
@@ -275,6 +289,7 @@ def main() -> None:
         "render_engine": args.render_engine,
         "render_config": render_config,
         "views": views,
+        "standardized_camera_policy": standardized_camera_policy,
         "identity_legend": identity_legend,
         "identity_palette": identity_palette,
         "identity_render": identity_render,
@@ -292,10 +307,7 @@ def main() -> None:
         "wall_policy": (
             (architecture.get("physical_walls") or {}).get("policy")
         ),
-        "active_wall_ids": list(
-            (architecture.get("physical_walls") or {}).get("active_wall_ids")
-            or []
-        ),
+        "active_wall_ids": active_wall_ids,
         "source_pre_render_state": {
             "camera_names": source_camera_names,
             "light_names": source_light_names,

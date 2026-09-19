@@ -63,11 +63,16 @@ CANONICAL_WALL_IDS = (
     "east_wall",
     "west_wall",
 )
+STANDARDIZED_PERSPECTIVE_CAMERA_POLICY = "deterministic_open_wall_view_v1"
+STANDARDIZED_TOP_CAMERA_POLICY = "fixed_room_top_v1"
 DEFAULT_COLLISION_MAX_VERTICES_PER_OBJECT = 50_000
 DEFAULT_COLLISION_MAX_FACES_PER_OBJECT = 100_000
 DEFAULT_COLLISION_MAX_TOTAL_VERTICES = 200_000
 DEFAULT_COLLISION_MAX_TOTAL_FACES = 400_000
 COLLISION_GEOMETRY_CENTER_TOLERANCE_M = 0.05
+COLLISION_DECIMATION_POLICY_VERSION = "collision_decimate_collapse_v1"
+COLLISION_DECIMATION_SAFETY_FACTOR = 0.9
+COLLISION_DECIMATION_MAX_PASSES = 5
 
 
 def main() -> None:
@@ -134,7 +139,18 @@ def main() -> None:
         )
     _add_lighting(boundary, room_height)
     _record_progress(progress_path, "render_started")
-    views = _render_views(boundary, room_height, out_dir, progress_path=progress_path)
+    views = _render_views(
+        boundary,
+        room_height,
+        out_dir,
+        active_wall_ids=active_wall_ids,
+        progress_path=progress_path,
+    )
+    standardized_camera_policy = next(
+        view["camera_policy"]
+        for view in views
+        if view.get("name") == "perspective"
+    )
     identity_legend: dict[str, str] = {}
     identity_palette: dict[str, str] = {}
     identity_render = {
@@ -155,6 +171,7 @@ def main() -> None:
         identity_render = {
             "status": "available",
             "camera_source": "standardized_perspective",
+            "camera_policy": standardized_camera_policy["policy_id"],
             "architecture_identity": "neutral_background",
             "canonical_object_count": len(canonical_object_ids),
             "scene_mutated": False,
@@ -184,6 +201,7 @@ def main() -> None:
         "saved_inspection_view": inspection_view,
         "shader_image_embedding": shader_images,
         "views": views,
+        "standardized_camera_policy": standardized_camera_policy,
         "identity_legend": identity_legend,
         "identity_palette": identity_palette,
         "identity_render": identity_render,
@@ -714,7 +732,13 @@ def _import_and_place(
         vertical_anchor=vertical_anchor,
     )
     root.location = Vector(placement["root_location"])
-    return {**fit, **placement}
+    alignment = _align_root_world_bounds_center(
+        root,
+        meshes,
+        expected_center=placement["rendered_bounds_center"],
+    )
+    placement["root_location"] = [float(value) for value in root.location]
+    return {**fit, **placement, **alignment}
 
 
 def _uniform_contain_fit(source_size, target_size) -> dict:
@@ -754,6 +778,74 @@ def _root_location(source_center, uniform_scale: float, rotation_matrix, target_
     scaled_center = [uniform_scale * float(source_center[index]) for index in range(3)]
     rotated = _matvec3(rotation_matrix, scaled_center)
     return [float(target_center[index]) - rotated[index] for index in range(3)]
+
+
+def _bounds_center_alignment_delta(
+    minimum,
+    maximum,
+    expected_center,
+) -> dict:
+    """Return the translation that aligns an observed AABB to its target.
+
+    Mapping the pre-rotation source AABB center through the root transform is
+    insufficient for asymmetric meshes: after rotation, their world-space AABB
+    center can move even though the transformed source center is correct.  The
+    collision exporter validates the actual world-space bounds, so placement
+    must use those same bounds as the final authority.
+    """
+
+    lower = _require_finite_vec3(minimum, "minimum")
+    upper = _require_finite_vec3(maximum, "maximum")
+    expected = _require_finite_vec3(expected_center, "expected_center")
+    observed = [(lower[index] + upper[index]) * 0.5 for index in range(3)]
+    delta = [expected[index] - observed[index] for index in range(3)]
+    return {
+        "pre_alignment_world_bounds_center": observed,
+        "world_bounds_center_alignment_delta": delta,
+        "world_bounds_center_alignment_distance_m": math.sqrt(
+            sum(value * value for value in delta)
+        ),
+    }
+
+
+def _align_root_world_bounds_center(root, mesh_objects, *, expected_center) -> dict:
+    """Translate one imported root so its real world AABB center is exact."""
+
+    _refresh_scene_graph()
+    minimum, maximum = _world_vertex_bounds(mesh_objects)
+    alignment = _bounds_center_alignment_delta(
+        minimum,
+        maximum,
+        expected_center,
+    )
+    delta = alignment["world_bounds_center_alignment_delta"]
+    if any(abs(float(value)) > 1.0e-12 for value in delta):
+        root.location = Vector(
+            [float(root.location[index]) + float(delta[index]) for index in range(3)]
+        )
+        _refresh_scene_graph()
+
+    aligned_minimum, aligned_maximum = _world_vertex_bounds(mesh_objects)
+    residual = _bounds_center_alignment_delta(
+        aligned_minimum,
+        aligned_maximum,
+        expected_center,
+    )
+    residual_distance = float(
+        residual["world_bounds_center_alignment_distance_m"]
+    )
+    if residual_distance > 1.0e-6:
+        raise RuntimeError(
+            "world bounds center alignment residual exceeds tolerance: "
+            f"{residual_distance:.9f}>0.000001000"
+        )
+    return {
+        **alignment,
+        "post_alignment_world_bounds_center": residual[
+            "pre_alignment_world_bounds_center"
+        ],
+        "world_bounds_center_alignment_residual_m": residual_distance,
+    }
 
 
 def _anchored_root_placement(
@@ -923,6 +1015,28 @@ def _coerce_vec3(values, label: str) -> list[float]:
 
 def _world_bounds(objects: list) -> tuple[Vector, Vector]:
     points = [obj.matrix_world @ Vector(corner) for obj in objects for corner in obj.bound_box]
+    return (
+        Vector([min(point[index] for point in points) for index in range(3)]),
+        Vector([max(point[index] for point in points) for index in range(3)]),
+    )
+
+
+def _world_vertex_bounds(objects: list) -> tuple[Vector, Vector]:
+    """Bounds from the exact vertices used by collision PLY export.
+
+    Blender's imported ``bound_box`` can remain stale for some FBX assets even
+    after the dependency graph is refreshed.  The collision exporter writes
+    raw ``obj.data.vertices`` transformed by ``matrix_world``, so final frame
+    alignment must measure that same geometry rather than the cached box.
+    """
+
+    points = [
+        obj.matrix_world @ obj.data.vertices[index].co
+        for obj in objects
+        for index in _referenced_vertex_indices(obj)
+    ]
+    if not points:
+        raise RuntimeError("cannot align imported asset with no mesh vertices")
     return (
         Vector([min(point[index] for point in points) for index in range(3)]),
         Vector([max(point[index] for point in points) for index in range(3)]),
@@ -1117,27 +1231,144 @@ def _camera_evidence_lighting_geometry(
     )
 
 
+def standardized_perspective_camera_spec(
+    boundary: list[list[float]],
+    room_height: float,
+    active_wall_ids: list[str] | tuple[str, ...],
+) -> dict:
+    """Map the benchmark wall contract to one deterministic overview pose.
+
+    This is deliberately not a candidate generator.  Open wall normals select
+    the observation side directly; opposite openings use the historical
+    southeast direction as a stable tie-break.  A fully closed room keeps the
+    same horizontal direction at a steeper elevation so the camera can look
+    over, rather than through, its walls.
+    """
+
+    raw_walls = [str(value) for value in active_wall_ids]
+    unknown = sorted(set(raw_walls) - set(CANONICAL_WALL_IDS))
+    if unknown:
+        raise ValueError(f"unknown active wall ids for standardized camera: {unknown}")
+    active = tuple(wall for wall in CANONICAL_WALL_IDS if wall in raw_walls)
+    open_walls = tuple(wall for wall in CANONICAL_WALL_IDS if wall not in active)
+    center, span = _room_center_span(boundary)
+    height = float(room_height)
+    if not math.isfinite(height) or height <= 0.0:
+        raise ValueError("room_height must be finite and positive")
+    target = [center[0], center[1], min(height * 0.4, 1.2)]
+    normals = {
+        "north_wall": (0.0, 1.0),
+        "south_wall": (0.0, -1.0),
+        "east_wall": (1.0, 0.0),
+        "west_wall": (-1.0, 0.0),
+    }
+    default_direction = (math.sqrt(0.5), -math.sqrt(0.5))
+    fallback_reason = None
+
+    if not open_walls:
+        direction = default_direction
+        selected_view = "southeast_high_closed_fallback"
+        selection_reason = "four_active_walls_high_southeast_fallback"
+        fallback_reason = "no_open_wall"
+        camera_z = height + span * 1.10
+    elif len(open_walls) == len(CANONICAL_WALL_IDS):
+        direction = default_direction
+        selected_view = "southeast_default"
+        selection_reason = "no_active_walls_preserve_historical_direction"
+        camera_z = height + span * 0.70
+    else:
+        dx = sum(normals[wall][0] for wall in open_walls)
+        dy = sum(normals[wall][1] for wall in open_walls)
+        magnitude = math.hypot(dx, dy)
+        if magnitude <= 1.0e-9:
+            preferred = max(
+                open_walls,
+                key=lambda wall: (
+                    normals[wall][0] * default_direction[0]
+                    + normals[wall][1] * default_direction[1],
+                    -CANONICAL_WALL_IDS.index(wall),
+                ),
+            )
+            direction = normals[preferred]
+            selection_reason = (
+                "opposite_open_walls_prefer_historical_southeast_axis"
+            )
+        else:
+            direction = (dx / magnitude, dy / magnitude)
+            selection_reason = "open_wall_outward_normal_sum"
+        horizontal = "east" if direction[0] > 1.0e-9 else (
+            "west" if direction[0] < -1.0e-9 else ""
+        )
+        vertical = "north" if direction[1] > 1.0e-9 else (
+            "south" if direction[1] < -1.0e-9 else ""
+        )
+        selected_view = (
+            f"{vertical}{horizontal}_open_corner"
+            if horizontal and vertical
+            else f"{horizontal or vertical}_open_side"
+        )
+        camera_z = height + span * 0.70
+
+    if abs(direction[0]) > 1.0e-9 and abs(direction[1]) > 1.0e-9:
+        x_offset = math.copysign(span * 0.85, direction[0])
+        y_offset = math.copysign(span * 0.95, direction[1])
+    elif abs(direction[0]) > 1.0e-9:
+        x_offset = math.copysign(span * 1.275, direction[0])
+        y_offset = 0.0
+    else:
+        x_offset = 0.0
+        y_offset = math.copysign(span * 1.275, direction[1])
+
+    location = [center[0] + x_offset, center[1] + y_offset, camera_z]
+    return {
+        "policy_id": STANDARDIZED_PERSPECTIVE_CAMERA_POLICY,
+        "active_wall_ids": list(active),
+        "open_wall_ids": list(open_walls),
+        "selected_view": selected_view,
+        "selection_reason": selection_reason,
+        "fallback_reason": fallback_reason,
+        "view_direction_xy": [float(direction[0]), float(direction[1])],
+        "camera_location": location,
+        "camera_target": target,
+        "lens_mm": 48.0,
+    }
+
+
 def _render_views(
     boundary: list[list[float]],
     room_height: float,
     out_dir: Path,
     *,
+    active_wall_ids: list[str] | tuple[str, ...] = (),
     progress_path: Path | None = None,
 ) -> list[dict]:
     center, span = _room_center_span(boundary)
     target = Vector((center[0], center[1], min(room_height * 0.4, 1.2)))
+    perspective = standardized_perspective_camera_spec(
+        boundary,
+        room_height,
+        active_wall_ids,
+    )
     definitions = [
         {
             "name": "top",
             "location": Vector((center[0], center[1], room_height + max(5.0, span * 1.15))),
+            "target": target,
             "camera_type": "ORTHO",
             "ortho_scale": span * 1.15,
+            "camera_policy": {
+                "policy_id": STANDARDIZED_TOP_CAMERA_POLICY,
+                "selected_view": "room_center_top",
+                "fallback_reason": None,
+            },
         },
         {
             "name": "perspective",
-            "location": Vector((center[0] + span * 0.85, center[1] - span * 0.95, room_height + span * 0.70)),
+            "location": Vector(perspective["camera_location"]),
+            "target": Vector(perspective["camera_target"]),
             "camera_type": "PERSP",
             "ortho_scale": None,
+            "camera_policy": perspective,
         },
     ]
     results = []
@@ -1151,7 +1382,9 @@ def _render_views(
             camera_data.ortho_scale = definition["ortho_scale"]
         camera = bpy.data.objects.new(f"camera_{definition['name']}", camera_data)
         camera.location = definition["location"]
-        camera.rotation_euler = (target - camera.location).to_track_quat("-Z", "Y").to_euler()
+        camera.rotation_euler = (
+            definition["target"] - camera.location
+        ).to_track_quat("-Z", "Y").to_euler()
         bpy.context.collection.objects.link(camera)
         bpy.context.scene.camera = camera
         render_path = out_dir / f"standardized_{definition['name']}.png"
@@ -1192,7 +1425,8 @@ def _render_views(
                 "name": definition["name"],
                 "path": str(render_path),
                 "camera_location": list(camera.location),
-                "camera_target": list(target),
+                "camera_target": list(definition["target"]),
+                "camera_policy": definition["camera_policy"],
                 "elapsed_seconds": elapsed_seconds,
                 "pixel_stats": pixel_stats,
             }
@@ -1466,6 +1700,7 @@ def _write_collision_geometry_manifest(
     exported_vertices = 0
     exported_faces = 0
     skipped_complexity = 0
+    decimated_meshes = 0
     for result in object_results:
         if not isinstance(result, dict):
             continue
@@ -1494,22 +1729,49 @@ def _write_collision_geometry_manifest(
             max_total_vertices=max_total_vertices,
             max_total_faces=max_total_faces,
         )
-        if complexity_error is not None:
-            skipped_complexity += 1
-            entries[object_id] = {
-                "representation": "triangle_mesh",
-                "geometry_path": str(geometry_path),
-                "transform_baked": True,
-                "geometry_source": geometry_source,
-                "source_uri": result.get("mesh_path"),
-                "complete": False,
-                "vertex_count": vertex_count,
-                "face_count": face_count,
-                "error": complexity_error,
-            }
-            continue
+        collision_root = root
+        temporary_root = None
+        decimation = {
+            "schema_version": COLLISION_DECIMATION_POLICY_VERSION,
+            "applied": False,
+            "visible_scene_modified": False,
+            "saved_blend_modified": False,
+            "original_vertex_count": vertex_count,
+            "original_face_count": face_count,
+            "passes": [],
+        }
         try:
-            written_vertices, written_faces, world_bounds = _export_world_triangles(root, geometry_path)
+            if complexity_error is not None:
+                temporary_root, decimation = _build_decimated_collision_root(
+                    root,
+                    object_id=object_id,
+                    expected_center=result.get("rendered_bounds_center"),
+                    exported_vertices=exported_vertices,
+                    exported_faces=exported_faces,
+                    max_vertices_per_object=max_vertices_per_object,
+                    max_faces_per_object=max_faces_per_object,
+                    max_total_vertices=max_total_vertices,
+                    max_total_faces=max_total_faces,
+                )
+                collision_root = temporary_root
+                decimated_meshes += 1
+            simplified_vertices, simplified_faces = _mesh_complexity(collision_root)
+            remaining_error = _complexity_limit_error(
+                vertex_count=simplified_vertices,
+                face_count=simplified_faces,
+                exported_vertices=exported_vertices,
+                exported_faces=exported_faces,
+                max_vertices_per_object=max_vertices_per_object,
+                max_faces_per_object=max_faces_per_object,
+                max_total_vertices=max_total_vertices,
+                max_total_faces=max_total_faces,
+            )
+            if remaining_error is not None:
+                raise RuntimeError(remaining_error)
+            written_vertices, written_faces, world_bounds = _export_world_triangles(
+                collision_root,
+                geometry_path,
+            )
             exported_vertices += written_vertices
             exported_faces += written_faces
             frame_validation = _exported_bounds_frame_validation(
@@ -1536,6 +1798,12 @@ def _write_collision_geometry_manifest(
                 "vertical_anchor_source": result.get("vertical_anchor_source"),
                 "rendered_bounds_center": result.get("rendered_bounds_center"),
                 "frame_validation": frame_validation,
+                "collision_mesh_source": (
+                    "deterministic_decimated_copy"
+                    if decimation["applied"]
+                    else "visible_asset_mesh"
+                ),
+                "decimation": decimation,
                 **(
                     {}
                     if frame_consistent
@@ -1550,8 +1818,14 @@ def _write_collision_geometry_manifest(
                 "geometry_source": geometry_source,
                 "source_uri": result.get("mesh_path"),
                 "complete": False,
+                "vertex_count": vertex_count,
+                "face_count": face_count,
+                "decimation": decimation,
                 "error": f"{type(exc).__name__}: {exc}",
             }
+        finally:
+            if temporary_root is not None:
+                _remove_temporary_collision_root(temporary_root)
     if not entries:
         return None
     manifest = {
@@ -1564,6 +1838,7 @@ def _write_collision_geometry_manifest(
             "complete_mesh_count": sum(entry.get("complete") is True for entry in entries.values()),
             "incomplete_mesh_count": sum(entry.get("complete") is not True for entry in entries.values()),
             "complexity_skipped_count": skipped_complexity,
+            "decimated_mesh_count": decimated_meshes,
             "exported_vertex_count": exported_vertices,
             "exported_face_count": exported_faces,
             "limits": {
@@ -1590,7 +1865,9 @@ def _asset_geometry_source(mesh_path: object) -> str:
 
 def _export_world_triangles(root, geometry_path: Path) -> tuple[int, int, dict[str, list[float]]]:
     mesh_objects = _mesh_objects(root)
-    vertex_count, face_count = _mesh_complexity(root)
+    topologies = [_collision_export_topology(obj) for obj in mesh_objects]
+    vertex_count = sum(len(item[0]) for item in topologies)
+    face_count = sum(len(item[1]) for item in topologies)
     if vertex_count <= 0 or face_count <= 0:
         raise RuntimeError("no world-space triangle geometry extracted")
     bounds_min = [math.inf, math.inf, math.inf]
@@ -1612,21 +1889,28 @@ def _export_world_triangles(root, geometry_path: Path) -> tuple[int, int, dict[s
             )
             + "\n"
         )
-        for obj in mesh_objects:
+        for obj, (vertex_indices, _) in zip(mesh_objects, topologies):
             matrix = obj.matrix_world
-            for vertex in obj.data.vertices:
+            for vertex_index in vertex_indices:
+                vertex = obj.data.vertices[vertex_index]
                 world = matrix @ vertex.co
                 for axis in range(3):
                     bounds_min[axis] = min(bounds_min[axis], float(world[axis]))
                     bounds_max[axis] = max(bounds_max[axis], float(world[axis]))
                 handle.write(f"{float(world[0]):.6f} {float(world[1]):.6f} {float(world[2]):.6f}\n")
         offset = 0
-        for obj in mesh_objects:
-            for polygon in obj.data.polygons:
-                indices = [int(index) + offset for index in polygon.vertices]
-                for tri_start in range(1, len(indices) - 1):
-                    handle.write(f"3 {indices[0]} {indices[tri_start]} {indices[tri_start + 1]}\n")
-            offset += len(obj.data.vertices)
+        for vertex_indices, triangles in topologies:
+            compact = {
+                source_index: offset + compact_index
+                for compact_index, source_index in enumerate(vertex_indices)
+            }
+            for triangle in triangles:
+                handle.write(
+                    "3 "
+                    + " ".join(str(compact[index]) for index in triangle)
+                    + "\n"
+                )
+            offset += len(vertex_indices)
     return vertex_count, face_count, {
         "min": [float(value) for value in bounds_min],
         "max": [float(value) for value in bounds_max],
@@ -1687,9 +1971,241 @@ def _mesh_complexity(root) -> tuple[int, int]:
     vertex_count = 0
     triangle_count = 0
     for obj in _mesh_objects(root):
-        vertex_count += len(obj.data.vertices)
-        triangle_count += sum(max(0, len(polygon.vertices) - 2) for polygon in obj.data.polygons)
+        vertex_indices, triangles = _collision_export_topology(obj)
+        vertex_count += len(vertex_indices)
+        triangle_count += len(triangles)
     return vertex_count, triangle_count
+
+
+def _referenced_vertex_indices(obj) -> list[int]:
+    """Sorted vertices that participate in at least one exported face."""
+
+    return sorted(
+        {
+            int(index)
+            for polygon in obj.data.polygons
+            for index in polygon.vertices
+        }
+    )
+
+
+def _collision_export_topology(obj) -> tuple[list[int], list[tuple[int, int, int]]]:
+    """Compact deterministic PLY topology, excluding unreferenced vertices."""
+
+    triangles: list[tuple[int, int, int]] = []
+    for polygon in obj.data.polygons:
+        indices = [int(index) for index in polygon.vertices]
+        triangles.extend(
+            (indices[0], indices[tri_start], indices[tri_start + 1])
+            for tri_start in range(1, len(indices) - 1)
+        )
+    return _referenced_vertex_indices(obj), triangles
+
+
+def _collision_decimation_ratio(
+    *,
+    vertex_count: int,
+    face_count: int,
+    exported_vertices: int,
+    exported_faces: int,
+    max_vertices_per_object: int,
+    max_faces_per_object: int,
+    max_total_vertices: int,
+    max_total_faces: int,
+) -> float:
+    """Choose a deterministic collapse ratio beneath every active budget."""
+
+    if vertex_count < 1 or face_count < 1:
+        raise ValueError("collision decimation requires non-empty triangle geometry")
+    available_vertices = min(
+        max(0, int(max_vertices_per_object)),
+        max(0, int(max_total_vertices) - int(exported_vertices)),
+    )
+    available_faces = min(
+        max(0, int(max_faces_per_object)),
+        max(0, int(max_total_faces) - int(exported_faces)),
+    )
+    if available_vertices < 1 or available_faces < 1:
+        raise RuntimeError("collision geometry budget is exhausted before decimation")
+    ratio = min(
+        1.0,
+        available_vertices / float(vertex_count),
+        available_faces / float(face_count),
+    )
+    if ratio >= 1.0:
+        return 1.0
+    return max(1.0e-6, ratio * COLLISION_DECIMATION_SAFETY_FACTOR)
+
+
+def _build_decimated_collision_root(
+    source_root,
+    *,
+    object_id: str,
+    expected_center,
+    exported_vertices: int,
+    exported_faces: int,
+    max_vertices_per_object: int,
+    max_faces_per_object: int,
+    max_total_vertices: int,
+    max_total_faces: int,
+):
+    """Build an audited collision-only decimated copy of one visible asset."""
+
+    source_objects = sorted(_mesh_objects(source_root), key=lambda item: item.name)
+    if not source_objects:
+        raise RuntimeError("cannot decimate collision geometry with no mesh objects")
+    temporary_root = bpy.data.objects.new(
+        f"collision_decimated_{object_id}",
+        None,
+    )
+    bpy.context.collection.objects.link(temporary_root)
+    try:
+        for index, source in enumerate(source_objects):
+            duplicate = source.copy()
+            duplicate.data = source.data.copy()
+            duplicate.name = f"collision_decimated_{object_id}_{index:04d}"
+            world = source.matrix_world.copy()
+            bpy.context.collection.objects.link(duplicate)
+            duplicate.parent = temporary_root
+            duplicate.matrix_world = world
+            duplicate.hide_render = True
+        _refresh_scene_graph()
+
+        passes = []
+        for pass_index in range(COLLISION_DECIMATION_MAX_PASSES):
+            current_vertices, current_faces = _mesh_complexity(temporary_root)
+            error = _complexity_limit_error(
+                vertex_count=current_vertices,
+                face_count=current_faces,
+                exported_vertices=exported_vertices,
+                exported_faces=exported_faces,
+                max_vertices_per_object=max_vertices_per_object,
+                max_faces_per_object=max_faces_per_object,
+                max_total_vertices=max_total_vertices,
+                max_total_faces=max_total_faces,
+            )
+            if error is None:
+                break
+            ratio = _collision_decimation_ratio(
+                vertex_count=current_vertices,
+                face_count=current_faces,
+                exported_vertices=exported_vertices,
+                exported_faces=exported_faces,
+                max_vertices_per_object=max_vertices_per_object,
+                max_faces_per_object=max_faces_per_object,
+                max_total_vertices=max_total_vertices,
+                max_total_faces=max_total_faces,
+            )
+            if ratio >= 1.0:
+                raise RuntimeError(error)
+            before = {
+                "vertex_count": current_vertices,
+                "face_count": current_faces,
+            }
+            for duplicate in sorted(
+                _mesh_objects(temporary_root),
+                key=lambda item: item.name,
+            ):
+                _apply_collision_decimate_modifier(
+                    duplicate,
+                    ratio=ratio,
+                    pass_index=pass_index,
+                )
+            _refresh_scene_graph()
+            after_vertices, after_faces = _mesh_complexity(temporary_root)
+            passes.append(
+                {
+                    "pass_index": pass_index,
+                    "ratio": ratio,
+                    "before": before,
+                    "after": {
+                        "vertex_count": after_vertices,
+                        "face_count": after_faces,
+                    },
+                }
+            )
+            if (
+                after_vertices >= current_vertices
+                and after_faces >= current_faces
+            ):
+                raise RuntimeError("collision decimation made no complexity progress")
+
+        final_vertices, final_faces = _mesh_complexity(temporary_root)
+        remaining = _complexity_limit_error(
+            vertex_count=final_vertices,
+            face_count=final_faces,
+            exported_vertices=exported_vertices,
+            exported_faces=exported_faces,
+            max_vertices_per_object=max_vertices_per_object,
+            max_faces_per_object=max_faces_per_object,
+            max_total_vertices=max_total_vertices,
+            max_total_faces=max_total_faces,
+        )
+        if remaining is not None:
+            raise RuntimeError(
+                "collision decimation could not satisfy official limits: "
+                + remaining
+            )
+        alignment = _align_root_world_bounds_center(
+            temporary_root,
+            _mesh_objects(temporary_root),
+            expected_center=expected_center,
+        )
+        return temporary_root, {
+            "schema_version": COLLISION_DECIMATION_POLICY_VERSION,
+            "applied": True,
+            "algorithm": "blender_decimate_collapse",
+            "deterministic_object_order": True,
+            "triangulate_after_collapse": True,
+            "visible_scene_modified": False,
+            "saved_blend_modified": False,
+            "original_vertex_count": sum(
+                len(_referenced_vertex_indices(item)) for item in source_objects
+            ),
+            "original_face_count": sum(
+                sum(max(0, len(polygon.vertices) - 2) for polygon in item.data.polygons)
+                for item in source_objects
+            ),
+            "final_vertex_count": final_vertices,
+            "final_face_count": final_faces,
+            "passes": passes,
+            "frame_alignment": alignment,
+        }
+    except Exception:
+        _remove_temporary_collision_root(temporary_root)
+        raise
+
+
+def _apply_collision_decimate_modifier(obj, *, ratio: float, pass_index: int) -> None:
+    if bpy.context.object is not None and bpy.context.object.mode != "OBJECT":
+        bpy.ops.object.mode_set(mode="OBJECT")
+    bpy.ops.object.select_all(action="DESELECT")
+    obj.select_set(True)
+    bpy.context.view_layer.objects.active = obj
+    modifier = obj.modifiers.new(
+        name=f"benchmark_collision_decimate_{pass_index:02d}",
+        type="DECIMATE",
+    )
+    modifier.decimate_type = "COLLAPSE"
+    modifier.ratio = float(ratio)
+    modifier.use_collapse_triangulate = True
+    modifier.use_symmetry = False
+    bpy.ops.object.modifier_apply(modifier=modifier.name)
+    obj.select_set(False)
+
+
+def _remove_temporary_collision_root(root) -> None:
+    if root is None or bpy is None:
+        return
+    meshes = list(_mesh_objects(root))
+    mesh_data = [item.data for item in meshes if item.data is not None]
+    for item in meshes:
+        bpy.data.objects.remove(item, do_unlink=True)
+    if root.name in bpy.data.objects:
+        bpy.data.objects.remove(root, do_unlink=True)
+    for data in mesh_data:
+        if data.users == 0:
+            bpy.data.meshes.remove(data)
 
 
 def _complexity_limit_error(

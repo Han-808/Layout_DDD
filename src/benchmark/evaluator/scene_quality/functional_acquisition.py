@@ -6,6 +6,7 @@ from copy import deepcopy
 from typing import Any
 
 from benchmark.evaluator.scene_quality.functional_checks import (
+    _stable_unique,
     build_functional_check_ledger,
     check_ids_for_discovery,
     functional_relation_required_observations,
@@ -977,18 +978,6 @@ def _coverage_gain_score(gain: dict[str, Any]) -> tuple[int, ...]:
         -len(repeated_objects),
         -int(gain["tier"]),
     )
-
-
-def _stable_unique(values: list[Any]) -> list[Any]:
-    result: list[Any] = []
-    seen: set[str] = set()
-    for value in values:
-        marker = repr(value)
-        if marker in seen:
-            continue
-        seen.add(marker)
-        result.append(value)
-    return result
 
 
 def _unscheduled(

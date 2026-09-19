@@ -10,7 +10,7 @@ import time
 import urllib.error
 import urllib.request
 from urllib.parse import urlparse
-from typing import Any
+from typing import Any, Callable
 
 from benchmark.models.prompt_budget import (
     DEFAULT_PROMPT_SAFETY_MARGIN_TOKENS,
@@ -71,6 +71,9 @@ class OpenAICompatibleModel:
     response_format_json: bool = False
     max_retries: int = 0
     retry_backoff_seconds: float = 1.0
+    retry_backoff_mode: str = "linear"
+    retry_all_http_errors: bool = False
+    retry_malformed_response: bool = False
     min_request_interval_seconds: float = 0.0
     retry_on_status: list[int] | None = None
     max_tokens_field: str = "max_tokens"
@@ -93,6 +96,9 @@ class OpenAICompatibleModel:
         response_format_json: bool = False,
         max_retries: int = 0,
         retry_backoff_seconds: float = 1.0,
+        retry_backoff_mode: str = "linear",
+        retry_all_http_errors: bool = False,
+        retry_malformed_response: bool = False,
         min_request_interval_seconds: float = 0.0,
         retry_on_status: list[int] | None = None,
         max_tokens_field: str = "max_tokens",
@@ -118,6 +124,14 @@ class OpenAICompatibleModel:
         self.response_format_json = response_format_json
         self.max_retries = max_retries
         self.retry_backoff_seconds = retry_backoff_seconds
+        resolved_backoff_mode = str(retry_backoff_mode).strip().lower()
+        if resolved_backoff_mode not in {"constant", "linear"}:
+            raise ValueError(
+                "retry_backoff_mode must be 'constant' or 'linear'"
+            )
+        self.retry_backoff_mode = resolved_backoff_mode
+        self.retry_all_http_errors = bool(retry_all_http_errors)
+        self.retry_malformed_response = bool(retry_malformed_response)
         resolved_min_interval = float(min_request_interval_seconds)
         if not math.isfinite(resolved_min_interval) or resolved_min_interval < 0.0:
             raise ValueError(
@@ -199,13 +213,24 @@ class OpenAICompatibleModel:
         self.last_request_metadata["min_request_interval_seconds"] = (
             self.min_request_interval_seconds
         )
+        self.last_request_metadata["retry_policy"] = {
+            "max_retries": int(self.max_retries),
+            "retry_backoff_seconds": float(self.retry_backoff_seconds),
+            "retry_backoff_mode": self.retry_backoff_mode,
+            "retry_all_http_errors": self.retry_all_http_errors,
+            "retry_malformed_response": self.retry_malformed_response,
+        }
         self.last_request_metadata["prompt_budget_report"] = budget_report
         self.last_request_metadata["prompt_budget_warning"] = budget_report.get("warning")
         self.last_request_metadata["prompt_budget_exceeded"] = budget_report.get("fits_context") is False
         if self.fail_fast_prompt_budget and budget_report.get("fits_context") is False:
             self.last_response_text = ""
             raise PromptBudgetError(budget_report)
-        raw = self._post_json(_chat_completions_url(self.endpoint), body)
+        raw = self._post_json(
+            _chat_completions_url(self.endpoint),
+            body,
+            response_validator=_validate_chat_completion_response,
+        )
         try:
             parsed = json.loads(raw)
             choice = parsed["choices"][0]
@@ -225,7 +250,10 @@ class OpenAICompatibleModel:
         return content
 
     def list_models(self) -> dict:
-        raw = self._get_json(_models_url(self.endpoint))
+        raw = self._get_json(
+            _models_url(self.endpoint),
+            response_validator=_validate_json_response,
+        )
         try:
             return json.loads(raw)
         except json.JSONDecodeError as exc:
@@ -276,32 +304,64 @@ class OpenAICompatibleModel:
             )
         return result
 
-    def _post_json(self, url: str, body: bytes) -> str:
+    def _post_json(
+        self,
+        url: str,
+        body: bytes,
+        *,
+        response_validator: Callable[[str], None] | None = None,
+    ) -> str:
         request = urllib.request.Request(
             url,
             data=body,
             headers=self._headers(),
             method="POST",
         )
-        return self._open_with_retry(request)
+        return self._open_with_retry(
+            request,
+            response_validator=response_validator,
+        )
 
-    def _get_json(self, url: str) -> str:
+    def _get_json(
+        self,
+        url: str,
+        *,
+        response_validator: Callable[[str], None] | None = None,
+    ) -> str:
         request = urllib.request.Request(url, headers=self._headers(), method="GET")
-        return self._open_with_retry(request)
+        return self._open_with_retry(
+            request,
+            response_validator=response_validator,
+        )
 
-    def _open_with_retry(self, request: urllib.request.Request) -> str:
+    def _open_with_retry(
+        self,
+        request: urllib.request.Request,
+        *,
+        response_validator: Callable[[str], None] | None = None,
+    ) -> str:
         attempts = max(0, int(self.max_retries)) + 1
         last_error: Exception | None = None
         for attempt in range(attempts):
             if attempt > 0:
-                time.sleep(max(0.0, float(self.retry_backoff_seconds)) * attempt)
+                multiplier = 1 if self.retry_backoff_mode == "constant" else attempt
+                time.sleep(
+                    max(0.0, float(self.retry_backoff_seconds)) * multiplier
+                )
             _wait_for_request_slot(
                 key=f"{self.endpoint}|{self.model_id}",
                 min_interval_seconds=self.min_request_interval_seconds,
             )
             try:
                 with _urlopen_no_redirect(request, self.timeout_seconds) as response:
-                    return response.read().decode("utf-8")
+                    raw = response.read().decode("utf-8")
+                if response_validator is not None:
+                    response_validator(raw)
+                self.last_request_metadata.update(
+                    transport_attempts=attempt + 1,
+                    transport_retries=attempt,
+                )
+                return raw
             except urllib.error.HTTPError as exc:
                 raw_detail = exc.read(MAX_HTTP_ERROR_BODY_BYTES + 1).decode(
                     "utf-8", errors="replace"
@@ -313,7 +373,8 @@ class OpenAICompatibleModel:
                 )
                 error_class = (
                     EndpointConfigurationError
-                    if _is_upstream_route_configuration_error(
+                    if not self.retry_all_http_errors
+                    and _is_upstream_route_configuration_error(
                         status_code=exc.code,
                         detail=detail,
                     )
@@ -322,12 +383,36 @@ class OpenAICompatibleModel:
                 last_error = error_class(
                     f"Model endpoint returned HTTP {exc.code}: {detail}"
                 )
-                if exc.code not in self.retry_on_status or attempt == attempts - 1:
+                self.last_request_metadata.update(
+                    transport_attempts=attempt + 1,
+                    transport_retries=attempt,
+                    last_transport_error_type=type(last_error).__name__,
+                    last_http_status=int(exc.code),
+                )
+                retryable = (
+                    self.retry_all_http_errors
+                    or exc.code in self.retry_on_status
+                )
+                if not retryable or attempt == attempts - 1:
                     raise last_error from exc
             except urllib.error.URLError as exc:
                 last_error = EndpointConnectionError(f"Could not reach model endpoint {self.endpoint}: {exc.reason}")
+                self.last_request_metadata.update(
+                    transport_attempts=attempt + 1,
+                    transport_retries=attempt,
+                    last_transport_error_type=type(last_error).__name__,
+                )
                 if attempt == attempts - 1:
                     raise last_error from exc
+            except EndpointMalformedResponseError as exc:
+                last_error = exc
+                self.last_request_metadata.update(
+                    transport_attempts=attempt + 1,
+                    transport_retries=attempt,
+                    last_transport_error_type=type(last_error).__name__,
+                )
+                if not self.retry_malformed_response or attempt == attempts - 1:
+                    raise
         raise last_error or EndpointConnectionError(f"Could not reach model endpoint {self.endpoint}.")
 
     def _headers(self) -> dict[str, str]:
@@ -349,6 +434,30 @@ class OpenAICompatibleModel:
             return None
         token = token.strip()
         return token or None
+
+
+def _validate_json_response(raw: str) -> None:
+    try:
+        json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise EndpointMalformedResponseError(
+            f"Unexpected model endpoint response: {raw[:500]}"
+        ) from exc
+
+
+def _validate_chat_completion_response(raw: str) -> None:
+    try:
+        parsed = json.loads(raw)
+        choice = parsed["choices"][0]
+        content = choice["message"]["content"]
+    except (KeyError, IndexError, TypeError, json.JSONDecodeError) as exc:
+        raise EndpointMalformedResponseError(
+            f"Unexpected model endpoint response: {raw[:500]}"
+        ) from exc
+    if not isinstance(content, str):
+        raise EndpointMalformedResponseError(
+            "Model endpoint response content is not text."
+        )
 
 
 def _wait_for_request_slot(*, key: str, min_interval_seconds: float) -> None:

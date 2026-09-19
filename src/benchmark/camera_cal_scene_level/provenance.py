@@ -22,6 +22,7 @@ SceneQualityConfigBuilder = Callable[..., Mapping[str, Any]]
 
 
 CASE_RUNTIME_IMPLEMENTATION_FILES = (
+    "src/benchmark/architecture_policy.py",
     "src/benchmark/api/evaluation.py",
     "src/benchmark/camera_cal_scene_level/adapters.py",
     "src/benchmark/camera_cal_scene_level/audit.py",
@@ -36,6 +37,13 @@ CASE_RUNTIME_IMPLEMENTATION_FILES = (
     "src/benchmark/camera_cal_scene_level/reports.py",
     "src/benchmark/camera_cal_scene_level/resume.py",
     "src/benchmark/camera_cal_scene_level/telemetry.py",
+    "src/benchmark/evaluator/context_projection.py",
+    "src/benchmark/evaluator/structured_fallback.py",
+    "src/benchmark/evaluator/generic_validity/collision.py",
+    "src/benchmark/evaluator/generic_validity/evaluator.py",
+    "src/benchmark/evaluator/generic_validity/support.py",
+    "src/benchmark/evaluator/scene_quality/terminal.py",
+    "src/benchmark/visual_judge/p0b.py",
 )
 
 
@@ -66,6 +74,7 @@ class ProvenanceDependencies:
     file_sha256: FileHash
     json_sha256: JsonHash
     promptless_l1_l3_profile: PolicyBuilder
+    promptless_l1_only_profile: PolicyBuilder
     promptless_l3_only_profile: PolicyBuilder
     scene_quality_config: SceneQualityConfigBuilder
     camera_cal_asset_policy: PolicyBuilder
@@ -96,6 +105,27 @@ def safe_route_manifest(route: Mapping[str, Any]) -> dict[str, Any]:
     if "min_request_interval_seconds" in route:
         manifest["min_request_interval_seconds"] = float(
             route["min_request_interval_seconds"]
+        )
+    if "max_retries" in route:
+        manifest["max_retries"] = int(route["max_retries"])
+    if "retry_backoff_seconds" in route:
+        manifest["retry_backoff_seconds"] = float(
+            route["retry_backoff_seconds"]
+        )
+    if "retry_backoff_mode" in route:
+        manifest["retry_backoff_mode"] = str(route["retry_backoff_mode"])
+    for key in ("retry_all_http_errors", "retry_malformed_response"):
+        if key in route:
+            manifest[key] = bool(route[key])
+    for key in (
+        "endpoint_preflight_required_successes",
+        "endpoint_preflight_concurrency",
+    ):
+        if key in route:
+            manifest[key] = int(route[key])
+    if "endpoint_preflight_sleep_seconds" in route:
+        manifest["endpoint_preflight_sleep_seconds"] = float(
+            route["endpoint_preflight_sleep_seconds"]
         )
     return manifest
 
@@ -141,8 +171,11 @@ def case_input_fingerprint(
         for relative in dependencies.scoring_implementation_paths
     )
 
+    l1_only = not metrics and not l3_only
     profile = (
-        dependencies.promptless_l3_only_profile()
+        dependencies.promptless_l1_only_profile()
+        if l1_only
+        else dependencies.promptless_l3_only_profile()
         if l3_only
         else dependencies.promptless_l1_l3_profile()
     )
@@ -180,7 +213,9 @@ def case_input_fingerprint(
             "camera_selector": dependencies.camera_selector_completion_max_tokens,
         },
         "selected_l3_metrics": list(metrics),
-        "recovery_mode": "l3_only" if l3_only else None,
+        "recovery_mode": (
+            "l1_only" if l1_only else "l3_only" if l3_only else None
+        ),
         "deduction_multiplier": deduction_value,
         "source_prompt_used": False,
         "metric_scoped_public_context": {

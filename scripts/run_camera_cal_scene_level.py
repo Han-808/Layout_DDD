@@ -151,6 +151,8 @@ CANONICAL_L3_METRICS = ANNOTATED_L3_METRICS
 # Empty compatibility export: all annotated L3 metrics are benchmark metrics.
 EXPERIMENTAL_L3_METRICS: tuple[str, ...] = ()
 FUNCTIONAL_PROBE_IMPLEMENTATION_FILES = (
+    "src/benchmark/evaluator/context_projection.py",
+    "src/benchmark/evaluator/structured_fallback.py",
     "src/benchmark/evaluator/scene_quality/functional_acquisition.py",
     "src/benchmark/evaluator/scene_quality/functional_boundary_evidence.py",
     "src/benchmark/evaluator/scene_quality/cross_group_relations.py",
@@ -162,6 +164,8 @@ FUNCTIONAL_PROBE_IMPLEMENTATION_FILES = (
     "src/benchmark/evaluator/scene_quality/group_scoped.py",
     "src/benchmark/evaluator/scene_quality/interfaces.py",
     "src/benchmark/evaluator/scene_quality/placement_checks.py",
+    "src/benchmark/evaluator/scene_quality/target_scoped.py",
+    "src/benchmark/evaluator/scene_quality/terminal.py",
     "src/benchmark/rendering/camera_pose.py",
     "src/benchmark/visual_judge/functional_discovery.py",
     "src/benchmark/visual_judge/functional_discovery_contract.py",
@@ -311,6 +315,9 @@ def _provenance_dependencies() -> _runtime_provenance.ProvenanceDependencies:
         file_sha256=lambda path: file_sha256(path),
         json_sha256=lambda value: json_sha256(value),
         promptless_l1_l3_profile=lambda: promptless_l1_l3_profile(),
+        promptless_l1_only_profile=(
+            lambda: _runtime_policy.promptless_l1_only_profile()
+        ),
         promptless_l3_only_profile=lambda: promptless_l3_only_profile(),
         scene_quality_config=lambda *args, **kwargs: scene_quality_config(
             *args, **kwargs
@@ -393,6 +400,9 @@ def _case_runtime_dependencies() -> _runtime_case.CaseRuntimeDeps:
             grouping_evidence_packet=grouping_evidence_packet,
             promptless_scene_request=promptless_scene_request,
             promptless_l1_l3_profile=promptless_l1_l3_profile,
+            promptless_l1_only_profile=(
+                _runtime_policy.promptless_l1_only_profile
+            ),
             promptless_l3_only_profile=promptless_l3_only_profile,
             scene_quality_config=scene_quality_config,
             camera_cal_asset_policy=camera_cal_asset_policy,

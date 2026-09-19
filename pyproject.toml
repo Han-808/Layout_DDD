@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "3d-layout-benchmark"
-version = "0.1.0"
+version = "0.1.0+model.uniform.polygon.v1"
 description = "Adapter-based scene construction and deterministic evaluation harness."
 requires-python = ">=3.10"
 dependencies = [
@@ -74,6 +74,28 @@ include-package-data = false
 
 [tool.pytest.ini_options]
 testpaths = [
+  "tests/test_uniform_model_evaluator.py",
+  "tests/test_uniform_nonrect_evaluator.py",
+  "tests/test_s100_evaluator_regressions.py",
+  "tests/test_placement_residual_references.py",
+  "tests/test_r12_placement_scope_control.py",
+  "tests/test_r13_best_effort_terminal.py",
+  "tests/test_r13_placement_stage_handoff.py",
+  "tests/test_r14_new_placement_exclusions.py",
+  "tests/test_r15_batch_placement_handoff.py",
+  "tests/test_r10_exception_metric_contract.py",
+  "tests/test_r11_acquisition_terminal.py",
+  "tests/test_postrun_placement_scope.py",
+  "tests/test_postrun_metric_isolation.py",
+  "tests/test_postrun_public_reports.py",
+  "tests/test_postrun_policy_boundary.py",
+  "tests/test_postrun_evidence_gap.py",
+  "tests/test_postrun_validation_feedback.py",
+  "tests/test_placement_audit_contract.py",
+  "tests/test_placement_proposal_handoff.py",
+  "tests/test_evidence_adaptive_review_revision.py",
+  "tests/test_response_repair_parse_failure.py",
+  "tests/test_evidence_adaptive_judgement.py",
   "tests/test_adapter_io_contracts.py",
   "tests/test_asset_policy.py",
   "tests/test_asset_retriever.py",
@@ -84,6 +106,11 @@ testpaths = [
   "tests/test_camera_acquisition_cascade.py",
   "tests/test_camera_pose_modes.py",
   "tests/test_camera_dsl.py",
+  "tests/test_functional_acquisition_routing.py",
+  "tests/test_placement_reference_repair.py",
+  "tests/test_placement_ownership_retry.py",
+  "tests/test_functional_relation_recovery.py",
+  "tests/test_functional_camera_contract.py",
   "tests/test_camera_cal_scene_level_e0_contract.py",
   "tests/test_camera_cal_scene_level_leaf_runtime.py",
   "tests/test_camera_cal_scene_level_structure_e2.py",
@@ -172,6 +199,7 @@ testpaths = [
   "tests/test_visual_style_spec.py",
   "tests/test_vlm_control_loop.py",
   "tests/test_vlm_evaluation_control_config.py",
+  "tests/test_evaluator_refactor_characterization.py",
 ]
 pythonpath = ["src", "."]
 addopts = "-q"

@@ -6,7 +6,11 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
-from benchmark.architecture_policy import architecture_contract_from_scene
+from benchmark.visual_judge.evidence_gap_v2 import enabled as fallback_v2_enabled
+from benchmark.visual_judge.evidence_resolution import failure_record
+from benchmark.visual_judge.acquisition_outcome import AcquisitionExhausted, acquire_evidence, recorded_acquisition_audit
+
+from benchmark.non_rectangular.architecture import observable_architecture_from_scene
 from benchmark.evaluator.scene_quality.functional_acquisition import (
     FUNCTIONAL_ACQUISITION_PLAN_VERSION,
     build_functional_acquisition_plan,
@@ -241,6 +245,11 @@ def acquire_functional_probe_evidence(
             audit["response_schema_validation"] = deepcopy(
                 schema_audit
             )
+        if not recoverable:
+            # Do not let an incomplete inventory or service/program failure
+            # reach downstream judges as a successful empty relation plan.
+            audit["failure"] = failure_record(exc, phase="acquisition")
+            audit["failed_stage"] = "functional_discovery"
         return [], audit
     units = (
         plan.get("probe_units")
@@ -354,6 +363,27 @@ def acquire_functional_probe_evidence(
         for item in minimal_objects
     }
     selected_paths: list[str] = []
+    hard_acquisition_failures: list[dict[str, Any]] = []
+
+    def acquire_probe(request: dict[str, Any], record: dict[str, Any]) -> Any:
+        if not fallback_v2_enabled():
+            return provider_call(request)
+        outcome = acquire_evidence(provider_call, request)
+        record["acquisition_outcome"] = deepcopy(outcome.audit)
+        outcome.raise_if_failed()
+        if not outcome.items:
+            raise AcquisitionExhausted("functional_probe_exhausted", audit=outcome.audit)
+        return outcome.items
+
+    def record_acquisition_failure(error: Exception, record: dict[str, Any]) -> bool:
+        if not fallback_v2_enabled():
+            return False
+        failure = failure_record(error, phase="acquisition")
+        record["failure"] = failure
+        hard = not failure["recoverable_acquisition"]
+        if hard:
+            hard_acquisition_failures.append(deepcopy(failure))
+        return hard
     failures = 0
     successful_probe_count = 0
     provider_failure_attempt_count = 0
@@ -707,7 +737,7 @@ def acquire_functional_probe_evidence(
             "evidence_paths": [],
         }
         try:
-            raw = provider_call(provider_request)
+            raw = acquire_probe(provider_request, result_record)
             identity_grounded = record_available_probe(
                 result_record=result_record,
                 raw=raw,
@@ -730,6 +760,7 @@ def acquire_functional_probe_evidence(
                     }
                 )
         except Exception as exc:
+            hard_failure = record_acquisition_failure(exc, result_record)
             failures += 1
             provider_failure_attempt_count += 1
             provider_usage = deepcopy(
@@ -783,7 +814,7 @@ def acquire_functional_probe_evidence(
                     "error": str(exc),
                 }
             )
-            if not is_backfill:
+            if not is_backfill and not hard_failure:
                 failed_primary_retry_queue.append(
                     {
                         "unit": deepcopy(unit),
@@ -852,7 +883,7 @@ def acquire_functional_probe_evidence(
             _probe_unit_identity_record(retry_unit)
         )
         try:
-            raw = provider_call(retry_request)
+            raw = acquire_probe(retry_request, retry_record)
             identity_grounded = record_available_probe(
                 result_record=retry_record,
                 raw=raw,
@@ -890,6 +921,7 @@ def acquire_functional_probe_evidence(
                     }
                 )
         except Exception as exc:
+            record_acquisition_failure(exc, retry_record)
             provider_failure_attempt_count += 1
             provider_usage = deepcopy(
                 getattr(provider, "last_call_usage", None)
@@ -1225,6 +1257,10 @@ def acquire_functional_probe_evidence(
         if audit.get("budget_exhausted")
         else "no_functional_probe_evidence_available"
     )
+    if hard_acquisition_failures:
+        audit.update(status="failed", reason="functional_probe_acquisition_hard_failure",
+                     failure=deepcopy(hard_acquisition_failures[0]),
+                     hard_acquisition_failures=hard_acquisition_failures)
     return selected_paths, audit
 
 
@@ -1703,6 +1739,8 @@ def functional_relation_judge_packet(
         ),
         decision_authority="none",
     )
+    if fallback_v2_enabled():
+        packet["acquisition_outcome"] = recorded_acquisition_audit(probe_result)
     return packet
 
 
@@ -2212,7 +2250,7 @@ def _functional_architecture_context(
             "physical_walls_rendered": None,
             "physical_wall_ids": [],
         }
-    contract = architecture_contract_from_scene(scene)
+    contract = observable_architecture_from_scene(scene)
     logical = (
         contract.get("logical_boundary")
         if isinstance(contract.get("logical_boundary"), dict)

@@ -1,6 +1,11 @@
 """P0b object-object collision metric with OBB broad phase and mesh narrow phase."""
 
 from __future__ import annotations
+from benchmark.visual_judge.evidence_gap_v2 import enabled as fallback_v2_enabled
+
+from benchmark.evaluator.adaptive_audit import adaptive_l1_result
+
+from benchmark.visual_judge.evidence_resolution import adaptive_enabled, with_evidence_policy, failure_record
 
 import math
 from copy import deepcopy
@@ -25,6 +30,12 @@ from benchmark.evaluator.generic_validity.mesh_geometry import (
     load_triangle_mesh,
 )
 from benchmark.evaluator.generic_validity.obb_sat import obb_sat_test
+from benchmark.evaluator.structured_fallback import (
+    GEOMETRY_ONLY_VLM_MODE,
+    POLICY_DEFAULT_VALID_MODE,
+    structured_fallback_record,
+    structured_geometry_packet,
+)
 from benchmark.visual_judge.p0b import (
     COLLISION_CANDIDATE_SELECTION_POLICY,
     LocalViewProvider,
@@ -36,7 +47,7 @@ from benchmark.visual_judge.contracts import (
 from benchmark.visual_judge.runtime import EvidenceControlUnresolvedError
 
 
-COLLISION_EVALUATOR_VERSION = "collision_p0b_v3"
+COLLISION_EVALUATOR_VERSION = "collision_p0b_v4"
 DEFAULT_COLLISION_CONFIG = {
     "enabled": True,
     "official_mode": False,
@@ -79,6 +90,8 @@ class CollisionEvaluationError(RuntimeError):
     """Raised when official collision evaluation cannot complete adjudication."""
 
 
+@with_evidence_policy
+@adaptive_l1_result
 def check_collision(
     scene: dict,
     config: dict | None = None,
@@ -132,18 +145,17 @@ def check_collision(
     official_mode = bool(cfg.get("official_mode"))
     detector_only = bool(cfg.get("detector_only"))
 
-    if adjudication_failures and official_mode:
-        raise CollisionEvaluationError("; ".join(adjudication_failures))
-    if requires_vlm_count and official_mode and vlm_judge is None:
-        raise CollisionEvaluationError(
-            "collision events require P0b VLM adjudication in official mode, but no judge is configured"
-        )
-
     unresolved_vlm_count = sum(
         1
         for pair in pairs
         if pair.get("requires_vlm") and pair.get("final_verdict") not in {"valid", "invalid"}
     )
+    if adjudication_failures and official_mode and unresolved_vlm_count and not fallback_v2_enabled():
+        raise CollisionEvaluationError("; ".join(adjudication_failures))
+    if unresolved_vlm_count and official_mode and vlm_judge is None:
+        raise CollisionEvaluationError(
+            "collision events remain unresolved in official mode"
+        )
 
     if detector_only:
         score = None
@@ -230,7 +242,7 @@ def check_collision(
             "vlm_adjudicated_pairs": sum(1 for pair in pairs if pair.get("route") == "vlm_adjudicated"),
         },
         "notes": [
-            "Collision is static object-object surface interpenetration only; floor/wall/ceiling penetration belongs to OOB/OAR.",
+            "Collision covers object-object surface interpenetration only; object-room-envelope violations, including active physical-wall inner-surface crossings, belong to OOB.",
             "Deterministic geometry is evidence, not the final semantic judge.",
             "Candidates are proposed by a high-recall detector; selection carries no verdict prior.",
             "Only final invalid pairs count as collisions; candidate overlap alone is not penalized.",
@@ -261,6 +273,11 @@ def _evaluate_pair(
     mesh_enclosure_cache: dict[int, dict[str, Any]],
 ) -> dict[str, Any]:
     obb = obb_sat_test(obj_a, obj_b, eps=float(cfg.get("obb_sat_eps", 1.0e-6)))
+    bounding_sphere = _bounding_sphere_separation(
+        obj_a,
+        obj_b,
+        eps=float(cfg.get("obb_sat_eps", 1.0e-6)),
+    )
     diagnostics = {
         "xy_overlap_area": float(footprint_overlap_area(obj_a, obj_b)),
         "z_overlap": float(z_interval_overlap(obj_a, obj_b)),
@@ -278,6 +295,7 @@ def _evaluate_pair(
         "object_a": obj_a.id,
         "object_b": obj_b.id,
         "obb_evidence": obb,
+        "bounding_sphere_evidence": bounding_sphere,
         "diagnostics": diagnostics,
         "geometry_provenance": geometry_provenance,
         "mesh_enclosure_evidence": None,
@@ -291,6 +309,31 @@ def _evaluate_pair(
         "adjudication_error": None,
         "scoring_geometry": _collision_scoring_geometry(obj_a, obj_b, obb),
     }
+
+    if bounding_sphere["certifiably_separated"]:
+        pair.update(
+            {
+                "route": "direct_valid_bounding_sphere_separated",
+                "final_verdict": "valid",
+                "affects_collision_score": True,
+            }
+        )
+        return pair
+
+    # The canonical OBB is the authoritative generated placement envelope.
+    # A supplied mesh that escapes that envelope is an asset/frame QA concern,
+    # not a reason to manufacture a collision candidate between canonically
+    # disjoint objects.  The enclosure guard remains active for mesh-only
+    # narrow-phase separation when the canonical boxes overlap.
+    if obb.get("obb_certifiably_separated"):
+        pair.update(
+            {
+                "route": "direct_valid_obb_separated",
+                "final_verdict": "valid",
+                "affects_collision_score": True,
+            }
+        )
+        return pair
 
     enclosure_evidence = None
     enclosure_safe = False
@@ -322,17 +365,6 @@ def _evaluate_pair(
         enclosure_safe = all(
             bool(item.get("safe_for_obb_separation")) for item in enclosure_evidence.values()
         )
-
-    if obb.get("obb_certifiably_separated"):
-        if enclosure_safe:
-            pair.update(
-                {
-                    "route": "direct_valid_obb_separated",
-                    "final_verdict": "valid",
-                    "affects_collision_score": True,
-                }
-            )
-            return pair
 
     if _is_direct_valid_zero_penetration_contact(
         obb,
@@ -451,6 +483,30 @@ def _evaluate_pair(
         return pair
 
     if vlm_judge is None:
+        if adaptive_enabled():
+            pair["adjudication_error"] = "JudgeUnavailable"
+            pair["adjudication_failure"] = {"failure_category": "model_service_failure"}
+            return pair
+        geometry_packet = structured_geometry_packet(
+            scene,
+            metric="collision",
+            target_ids=[obj_a.id, obj_b.id],
+            trigger_reason="collision_judge_not_configured",
+        )
+        fallback = structured_fallback_record(
+            mode=POLICY_DEFAULT_VALID_MODE,
+            trigger_reason="collision_judge_not_configured",
+            geometry_packet=geometry_packet,
+            empirically_grounded=False,
+        )
+        pair.update(
+            {
+                "route": "direct_valid_policy_fallback",
+                "final_verdict": "valid",
+                "affects_collision_score": True,
+                "structured_fallback": deepcopy(fallback),
+            }
+        )
         return pair
 
     event = {
@@ -480,6 +536,12 @@ def _evaluate_pair(
         "focus_region": mesh_evidence.get("focus_region") if isinstance(mesh_evidence, dict) else None,
         "extracted_relationships_are_claims_only": True,
     }
+    geometry_packet = structured_geometry_packet(
+        scene,
+        metric="collision",
+        target_ids=[obj_a.id, obj_b.id],
+        trigger_reason="collision_visual_or_judge_unavailable",
+    )
     try:
         judge_result = adjudicate_p0b_event(
             metric="collision",
@@ -493,30 +555,97 @@ def _evaluate_pair(
             overview_render_evidence=list(render_evidence or []),
             local_view_provider=local_view_provider,
         )
-    except EvidenceControlUnresolvedError as exc:
-        pair["route"] = "unresolved"
-        pair["evidence_control"] = exc.result.to_dict()
-        return pair
     except Exception as exc:
+        if adaptive_enabled():
+            pair["adjudication_error"] = type(exc).__name__
+            pair["adjudication_failure"] = failure_record(exc, phase="judge")
+            return pair
         pair["adjudication_error"] = f"{type(exc).__name__}: {exc}"
-        pair["route"] = "vlm_adjudication_failed"
+        if isinstance(exc, EvidenceControlUnresolvedError):
+            pair["evidence_control"] = exc.result.to_dict()
         schema_audit = response_schema_audit_from_exception(exc)
         if schema_audit is not None:
             pair["adjudication_failure_audit"] = schema_audit
-        if bool(cfg.get("official_mode")):
-            raise CollisionEvaluationError(pair["adjudication_error"]) from exc
-        return pair
+        judge_result = None
+        if geometry_packet is not None:
+            try:
+                judge_result = adjudicate_p0b_event(
+                    metric="collision",
+                    event=event,
+                    prompt=str(prompt or ""),
+                    relationships=relationships,
+                    scene=scene,
+                    detector_evidence=detector_evidence,
+                    judge=vlm_judge,
+                    object_ids=[obj_a.id, obj_b.id],
+                    overview_render_evidence=[],
+                    local_view_provider=None,
+                    visual_config_policy="passthrough",
+                    structured_geometry_finalization=geometry_packet,
+                )
+            except Exception as fallback_exc:
+                pair["geometry_adjudication_error"] = (
+                    f"{type(fallback_exc).__name__}: {fallback_exc}"
+                )
+        if judge_result is None:
+            fallback = structured_fallback_record(
+                mode=POLICY_DEFAULT_VALID_MODE,
+                trigger_reason="collision_adjudication_failed",
+                geometry_packet=geometry_packet,
+                empirically_grounded=False,
+            )
+            pair.update(
+                {
+                    "route": "direct_valid_policy_fallback",
+                    "final_verdict": "valid",
+                    "affects_collision_score": True,
+                    "structured_fallback": deepcopy(fallback),
+                }
+            )
+            return pair
+        fallback = structured_fallback_record(
+            mode=GEOMETRY_ONLY_VLM_MODE,
+            trigger_reason="collision_visual_or_judge_unavailable",
+            geometry_packet=geometry_packet,
+        )
+        judge_result["structured_fallback"] = deepcopy(fallback)
+        pair["structured_fallback"] = deepcopy(fallback)
+        pair["route"] = "vlm_adjudicated_geometry_only"
 
     verdict = str(judge_result.get("verdict"))
     pair.update(
         {
-            "route": "vlm_adjudicated",
+            "route": pair.get("route") or "vlm_adjudicated",
             "final_verdict": verdict,
             "affects_collision_score": True,
             "judge_result": deepcopy(judge_result),
         }
     )
     return pair
+
+
+def _bounding_sphere_separation(
+    obj_a: Any,
+    obj_b: Any,
+    *,
+    eps: float,
+) -> dict[str, Any]:
+    """Cheap conservative broad-phase certificate from canonical OBB sizes."""
+
+    center_a = np.asarray(obj_a.center, dtype=float)
+    center_b = np.asarray(obj_b.center, dtype=float)
+    radius_a = float(np.linalg.norm(np.asarray(obj_a.half, dtype=float)))
+    radius_b = float(np.linalg.norm(np.asarray(obj_b.half, dtype=float)))
+    center_distance = float(np.linalg.norm(center_a - center_b))
+    threshold = radius_a + radius_b + max(0.0, float(eps))
+    return {
+        "center_distance_m": center_distance,
+        "radius_a_m": radius_a,
+        "radius_b_m": radius_b,
+        "separation_threshold_m": threshold,
+        "separation_margin_m": center_distance - threshold,
+        "certifiably_separated": center_distance > threshold,
+    }
 
 
 def _empty_collision_report(object_errors: dict[str, str]) -> dict[str, Any]:
@@ -605,10 +734,18 @@ def _validate_collision_config(config: dict[str, Any]) -> None:
     if bool(config.get("official_mode")) and bool(config.get("detector_only")):
         raise ValueError("collision.official_mode and collision.detector_only are mutually exclusive")
     eps = float(config.get("obb_sat_eps", 1.0e-6))
+    architecture_eps = float(
+        config.get("architecture_penetration_eps_m", 1.0e-6)
+    )
     enclosure_eps = float(config.get("mesh_enclosure_eps_m", 1.0e-4))
     separation = float(config.get("separation_threshold_m", 0.02))
     if not math.isfinite(eps) or eps < 0.0:
         raise ValueError("collision.obb_sat_eps must be a finite non-negative number")
+    if not math.isfinite(architecture_eps) or architecture_eps < 0.0:
+        raise ValueError(
+            "collision.architecture_penetration_eps_m must be a finite "
+            "non-negative number"
+        )
     if not math.isfinite(enclosure_eps) or enclosure_eps < 0.0:
         raise ValueError("collision.mesh_enclosure_eps_m must be a finite non-negative number")
     if not math.isfinite(separation) or separation < 0.0:

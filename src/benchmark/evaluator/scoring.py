@@ -1187,6 +1187,13 @@ def _oob_magnitude(record: Mapping[str, Any]) -> tuple[float | None, str]:
             continue
         effective = max(0.0, penetration - floor_tolerance) if plane == "floor_oob" else max(0.0, penetration)
         ratios.append(effective / extent)
+    polygon_ratios = record.get("boundary_penetration_ratios")
+    if isinstance(polygon_ratios, list):
+        for value in polygon_ratios:
+            ratio = _optional_finite(value)
+            if ratio is None or ratio < 0:
+                raise ValueError("Invalid polygon OOB boundary measurement")
+            ratios.append(ratio)
     if not ratios:
         return None, "unavailable"
     return _clip(max(ratios) / OOB_FULL_SEVERITY_RATIO), "obb_plane_penetration"

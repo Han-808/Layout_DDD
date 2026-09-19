@@ -27,6 +27,9 @@ Function:
 
 from __future__ import annotations
 
+from benchmark.visual_judge.evidence_resolution import ADAPTIVE_POLICY, adaptive_enabled, with_evidence_policy, policy_of, FALLBACK_POLICY
+from benchmark.evaluator.adaptive_audit import adaptive_layer_accepted, policy_code_identity
+
 import argparse
 from copy import deepcopy
 import math
@@ -139,6 +142,7 @@ from benchmark.visual_judge import (
 )
 
 
+@with_evidence_policy
 def run_evaluate(
     *,
     evaluation_mode: str | None = None,
@@ -264,6 +268,163 @@ def _run_selected_non_rectangular_evaluate(**kwargs: Any) -> dict[str, Any]:
     )
 
 
+def _resolved_scoring_setup(
+    *,
+    scoring_profile_id: str | None,
+    active_l2_metrics: list[str],
+    resolved_profile: dict[str, Any],
+    deduction_multiplier: float,
+) -> tuple[dict[str, Any] | None, dict[str, Any], dict[str, float], float]:
+    """Bind the run scoring profile and mirror its weights into the profile.
+
+    Returns (scoring_profile, resolved_profile, canonical_l3_metric_weights,
+    resolved_deduction_multiplier); the input profile object is never mutated.
+    """
+
+    scoring_profile = _resolve_run_scoring_profile(
+        scoring_profile_id=scoring_profile_id,
+        active_l2_metrics=active_l2_metrics,
+        resolved_profile=resolved_profile,
+    )
+    resolved_deduction_multiplier = _validate_deduction_multiplier(
+        deduction_multiplier
+    )
+    if scoring_profile is not None:
+        scoring_profile = deepcopy(scoring_profile)
+        scoring_profile["deduction_multiplier"] = (
+            resolved_deduction_multiplier
+        )
+        scoring_profile["deduction_multiplier_metrics"] = list(
+            DEDUCTION_MULTIPLIER_METRICS
+        )
+        resolved_profile = deepcopy(resolved_profile)
+        resolved_profile["layer_weights"] = deepcopy(
+            scoring_profile["layer_weights"]
+        )
+        for metric_name, metric_weight in scoring_profile[
+            "l3_metric_weights"
+        ].items():
+            resolved_profile[L3]["metrics"][metric_name]["weight"] = (
+                metric_weight
+            )
+    canonical_l3_metric_weights = (
+        deepcopy(scoring_profile["l3_metric_weights"])
+        if scoring_profile is not None
+        else deepcopy(L3_METRIC_WEIGHTS)
+    )
+    return (
+        scoring_profile,
+        resolved_profile,
+        canonical_l3_metric_weights,
+        resolved_deduction_multiplier,
+    )
+
+
+def _narrowed_l1_applicability(
+    l1_config: dict[str, Any],
+    metric_applicability: dict[str, bool] | None,
+) -> dict[str, bool]:
+    """Profile-enabled L1 metrics, optionally narrowed by runtime input."""
+
+    l1_applicability = {
+        name: bool(metric.get("enabled"))
+        for name, metric in l1_config["metrics"].items()
+    }
+    if metric_applicability is not None:
+        unknown = sorted(set(metric_applicability) - set(l1_applicability))
+        if unknown:
+            raise ValueError(f"metric_applicability contains unknown metrics: {unknown}")
+        for name, applicable in metric_applicability.items():
+            if not isinstance(applicable, bool):
+                raise ValueError(f"metric_applicability.{name} must be boolean")
+            # Runtime input may narrow a frozen metric but may never enable a
+            # profile-disabled metric.
+            l1_applicability[name] = bool(l1_applicability[name] and applicable)
+    return l1_applicability
+
+
+def _canonical_scoring_reliability(
+    *,
+    resolved_vlm_control: Any,
+    runtime_vlm_judge: Any,
+    scoring_profile: dict[str, Any] | None,
+    active_l2_metrics: list[str],
+    canonical_l3_metric_weights: dict[str, float],
+    generic_validity_report: dict[str, Any],
+    l2_report: dict[str, Any],
+    scene_quality_report: dict[str, Any],
+    coverage: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Return (vlm control manifest, per-metric reliability summary)."""
+
+    vlm_control_manifest = _runtime_vlm_control_manifest(
+        resolved_vlm_control,
+        runtime_judge=runtime_vlm_judge,
+    )
+    runtime_control = (
+        vlm_control_manifest.get("integration", {}).get("runtime", {})
+        if isinstance(vlm_control_manifest, dict)
+        else {}
+    )
+    controlled_calls = (
+        runtime_control.get("controlled_calls")
+        if isinstance(runtime_control, dict)
+        and isinstance(runtime_control.get("controlled_calls"), list)
+        else []
+    )
+    required_reliability_metrics = (
+        {
+            L1: ["collision", "support", "oob"],
+            L2: list(active_l2_metrics),
+            L3: list(canonical_l3_metric_weights),
+        }
+        if scoring_profile is not None
+        else None
+    )
+    reliability_calls = controlled_calls
+    if adaptive_enabled():
+        from benchmark.visual_judge.evidence_resolution import ADAPTIVE_METRICS
+        reliability_calls = [item for item in controlled_calls if
+            item.get("metric") not in ADAPTIVE_METRICS
+            or (item.get("resolution") or {}).get("model_invoked") is True
+            or int(((item.get("audit") or {}).get("experiment_telemetry") or {}).get("judge_calls") or 0) > 0]
+    scoring_reliability = scoring_reliability_summary(
+        l1_metrics=(generic_validity_report.get("metrics") or {}),
+        l2_metrics=(l2_report.get("claim_family_reports") or {}),
+        l3_metrics=(scene_quality_report.get("metrics") or {}),
+        judge_episodes=reliability_calls,
+        required_metrics_by_layer=required_reliability_metrics,
+        scoring_coverage=coverage,
+    )
+    return vlm_control_manifest, scoring_reliability
+
+
+def _apply_adaptive_resolution_coverage(
+    report: dict[str, Any],
+    *,
+    l1_report: dict[str, Any],
+    scene_quality_report: dict[str, Any],
+    coverage: dict[str, Any],
+    benchmark_score: float | None,
+) -> None:
+    """Attach the policy-specific resolution coverage to the final report."""
+
+    from benchmark.evaluator.adaptive_audit import coverage_from_units
+    units = [unit for layer in (l1_report, scene_quality_report)
+             for unit in layer.get("resolution_coverage", {}).get("units", [])]
+    report["evidence_resolution_policy"] = policy_of()
+    report["resolution_coverage"] = coverage_from_units(
+        units, complete=coverage.get("complete") is True and benchmark_score is not None,
+    )
+    if policy_of() == FALLBACK_POLICY:
+        from benchmark.evaluator.consistency_audit_v2 import inventory_coverage
+        sources = {**(l1_report.get("metrics") or {}), **(scene_quality_report.get("metrics") or {})}
+        planned = [name for name, item in sources.items() if item.get("enabled", True)
+                   and item.get("status") != "not_applicable"]
+        report["resolution_coverage"] = inventory_coverage(sources, planned)
+        report["execution_complete"] = True
+
+
 def _run_canonical_evaluate(
     *,
     scene: dict,
@@ -379,36 +540,16 @@ def _run_canonical_evaluate(
             )
     active_l2_metrics = _active_specification_families(resolved_contract)
     resolved_profile = resolve_evaluation_profile(evaluation_profile)
-    scoring_profile = _resolve_run_scoring_profile(
+    (
+        scoring_profile,
+        resolved_profile,
+        canonical_l3_metric_weights,
+        resolved_deduction_multiplier,
+    ) = _resolved_scoring_setup(
         scoring_profile_id=scoring_profile_id,
         active_l2_metrics=active_l2_metrics,
         resolved_profile=resolved_profile,
-    )
-    resolved_deduction_multiplier = _validate_deduction_multiplier(
-        deduction_multiplier
-    )
-    if scoring_profile is not None:
-        scoring_profile = deepcopy(scoring_profile)
-        scoring_profile["deduction_multiplier"] = (
-            resolved_deduction_multiplier
-        )
-        scoring_profile["deduction_multiplier_metrics"] = list(
-            DEDUCTION_MULTIPLIER_METRICS
-        )
-        resolved_profile = deepcopy(resolved_profile)
-        resolved_profile["layer_weights"] = deepcopy(
-            scoring_profile["layer_weights"]
-        )
-        for metric_name, metric_weight in scoring_profile[
-            "l3_metric_weights"
-        ].items():
-            resolved_profile[L3]["metrics"][metric_name]["weight"] = (
-                metric_weight
-            )
-    canonical_l3_metric_weights = (
-        deepcopy(scoring_profile["l3_metric_weights"])
-        if scoring_profile is not None
-        else deepcopy(L3_METRIC_WEIGHTS)
+        deduction_multiplier=deduction_multiplier,
     )
     frozen_object_ids = canonical_scene_object_ids(normalized_scene)
     l3_render_evidence = _normalize_canonical_render_evidence(render_evidence)
@@ -509,20 +650,9 @@ def _run_canonical_evaluate(
 
     l1_config = resolved_profile[L1]
     l1_metric_config = deepcopy(l1_config.get("metric_config") or {})
-    l1_applicability = {
-        name: bool(metric.get("enabled"))
-        for name, metric in l1_config["metrics"].items()
-    }
-    if metric_applicability is not None:
-        unknown = sorted(set(metric_applicability) - set(l1_applicability))
-        if unknown:
-            raise ValueError(f"metric_applicability contains unknown metrics: {unknown}")
-        for name, applicable in metric_applicability.items():
-            if not isinstance(applicable, bool):
-                raise ValueError(f"metric_applicability.{name} must be boolean")
-            # Runtime input may narrow a frozen metric but may never enable a
-            # profile-disabled metric.
-            l1_applicability[name] = bool(l1_applicability[name] and applicable)
+    l1_applicability = _narrowed_l1_applicability(
+        l1_config, metric_applicability
+    )
     reports["generic_validity"] = evaluate_generic_validity(
         normalized_scene,
         deepcopy(l1_metric_config),
@@ -543,6 +673,9 @@ def _run_canonical_evaluate(
             deduction_multiplier=resolved_deduction_multiplier,
         )
     l1_report = _canonical_l1_report(reports["generic_validity"])
+    if adaptive_enabled():
+        from benchmark.evaluator.adaptive_audit import apply_adaptive_layer_audit
+        apply_adaptive_layer_audit(l1_report)
 
     if "oor" in active_l2_metrics:
         generic_metrics = reports["generic_validity"].get("metrics") or {}
@@ -712,37 +845,18 @@ def _run_canonical_evaluate(
             scoring_reports=scoring_reports,
             layer_weights=layer_weights,
         )
-    vlm_control_manifest = _runtime_vlm_control_manifest(
-        resolved_vlm_control,
-        runtime_judge=runtime_vlm_judge,
-    )
-    runtime_control = (
-        vlm_control_manifest.get("integration", {}).get("runtime", {})
-        if isinstance(vlm_control_manifest, dict)
-        else {}
-    )
-    controlled_calls = (
-        runtime_control.get("controlled_calls")
-        if isinstance(runtime_control, dict)
-        and isinstance(runtime_control.get("controlled_calls"), list)
-        else []
-    )
-    required_reliability_metrics = (
-        {
-            L1: ["collision", "support", "oob"],
-            L2: list(active_l2_metrics),
-            L3: list(canonical_l3_metric_weights),
-        }
-        if scoring_profile is not None
-        else None
-    )
-    scoring_reliability = scoring_reliability_summary(
-        l1_metrics=(reports["generic_validity"].get("metrics") or {}),
-        l2_metrics=(l2_report.get("claim_family_reports") or {}),
-        l3_metrics=(scene_quality_report.get("metrics") or {}),
-        judge_episodes=controlled_calls,
-        required_metrics_by_layer=required_reliability_metrics,
-        scoring_coverage=coverage,
+    vlm_control_manifest, scoring_reliability = (
+        _canonical_scoring_reliability(
+            resolved_vlm_control=resolved_vlm_control,
+            runtime_vlm_judge=runtime_vlm_judge,
+            scoring_profile=scoring_profile,
+            active_l2_metrics=active_l2_metrics,
+            canonical_l3_metric_weights=canonical_l3_metric_weights,
+            generic_validity_report=reports["generic_validity"],
+            l2_report=l2_report,
+            scene_quality_report=scene_quality_report,
+            coverage=coverage,
+        )
     )
 
     report = {
@@ -857,6 +971,14 @@ def _run_canonical_evaluate(
             "L4 is deferred until downstream task types are frozen.",
         ],
     }
+    if adaptive_enabled():
+        _apply_adaptive_resolution_coverage(
+            report,
+            l1_report=l1_report,
+            scene_quality_report=scene_quality_report,
+            coverage=coverage,
+            benchmark_score=benchmark_score,
+        )
     out_path = Path(out)
     if out_path.suffix.lower() != ".json":
         out_path = out_path / "evaluation_report.json"
@@ -1920,6 +2042,8 @@ def _resolve_runtime_vlm_control(
     existing_max_views = getattr(camera_provider, "max_views", None)
     existing_max_steps = getattr(camera_provider, "max_steps", None)
     judge_max_images = getattr(vlm_judge, "max_images", None)
+    if adaptive_enabled(vlm_judge) and (value is None or "evidence_resolution_policy" not in value):
+        value = {**(value or {}), "evidence_resolution_policy": policy_of(vlm_judge)}
     return resolve_vlm_evaluation_control(
         value,
         existing_max_views=(
@@ -1960,6 +2084,8 @@ def _runtime_vlm_control_manifest(
     runtime_judge: object | None = None,
 ) -> dict[str, Any]:
     result = control.manifest()
+    if adaptive_enabled(control):
+        result["evidence_resolution_implementation"] = policy_code_identity()
     runtime_manifest = getattr(runtime_judge, "manifest", None)
     result["integration"] = {
         "core_boundaries": [
@@ -2893,6 +3019,10 @@ def _strict_scoring_profile_score(
     numerator = 0.0
     denominator = 0.0
     required_weight = sum(float(layer_weights[name]) for name in required)
+    if adaptive_enabled():
+        if not all(adaptive_layer_accepted(reports.get(name) or {}) for name in required):
+            return None
+        return sum(float(reports[name]["score"]) * float(layer_weights[name]) for name in required) / required_weight
     for name in required:
         report = reports.get(name) or {}
         if report.get("status") in {"not_applicable", "not_implemented"}:
@@ -3034,6 +3164,15 @@ def _strict_scoring_profile_coverage(
             "aggregation_denominator": required_weight,
         }
     )
+    if adaptive_enabled():
+        accepted = [name for name in required if adaptive_layer_accepted(scoring_reports.get(name) or {})]
+        result.update(
+            evidence_resolution_policy=policy_of(),
+            accepted_layers=accepted,
+            acceptance_complete=bool(required and len(accepted) == len(required)),
+            complete=bool(required and len(accepted) == len(required)),
+            coverage_threshold_passed=bool(required and len(accepted) == len(required)),
+        )
     return result
 
 

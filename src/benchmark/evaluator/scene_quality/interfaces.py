@@ -10,20 +10,21 @@ subfamilies:
 - **L3d Semantic Placement** —
   ``semantic_placement_consistency``.
 
-``object_pairing_consistency`` is evaluated only after the configured grouping
-algorithm supplies object groups. Its verdict covers target category and role
-compatibility with both the scene and local group context. Object position,
-distance, angle, orientation, access, and functional arrangement are not
-pairing defects: prompt-specified local function belongs to L2
+``object_pairing_consistency`` evaluates the complete canonical room inventory
+without requiring object groups. Structured JSON performs the first screen;
+only a suspicious or insufficient screen receives one room-global visual
+confirmation. Object position, distance, angle, orientation, access, and
+functional arrangement are not pairing defects: prompt-specified local function belongs to L2
 ``functional_semantic_fidelity`` and explicit relations belong to L2 OOR/OAR.
 
 The module consumes prepared visual evidence and an injected VLM judge. When a
 local metric lacks scope-correct evidence, it may request a packet from an
 injected camera-evidence provider; that provider remains selection/rendering
 infrastructure and never supplies the metric verdict. This module does not own
-camera policy, grouping, or prompt parsing. Internal routers may temporarily
-request more evidence, but every required metric boundary must end in a binary
-scientific result or an explicit infrastructure failure.
+camera policy, grouping, or prompt parsing. Pairing never expands beyond its
+single global confirmation; other metric routers may temporarily request more
+evidence. Every required metric boundary must end in a binary scientific result
+or an explicit infrastructure failure.
 
 Prompt-authorized deviations are passed to the judge with target/relation scope.
 When a judge returns structured defects, defects covered by an exact exemption
@@ -32,14 +33,20 @@ are removed before scoring. Exemptions never disable an entire metric.
 
 from __future__ import annotations
 
+from benchmark.visual_judge.evidence_resolution import (
+    ADAPTIVE_POLICY, adaptive_enabled, with_evidence_policy, resolution_of,
+    resolution_accepted, bind_resolution, failure_record, finite_score,
+)
+from benchmark.evaluator.scene_quality.adaptive_acceptance import adaptive_metric_result, adaptive_scene_result
+
 import json
 import math
 from collections.abc import Mapping
 from copy import deepcopy
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
-from benchmark.architecture_policy import architecture_contract_from_scene
+from benchmark.non_rectangular.architecture import observable_architecture_from_scene
 from benchmark.evaluator.scene_quality.authorized_deviations import (
     deviation_matches,
     deviations_for_metric,
@@ -110,6 +117,9 @@ from benchmark.evaluator.scene_quality.prompt_context import (
     metric_prompt_context,
     prompt_context_manifest,
     resolve_scene_quality_prompt_context,
+)
+from benchmark.evaluator.context_projection import (
+    project_scene_for_evaluator_context,
 )
 from benchmark.evaluator.scene_quality.json_screen_first import (
     evaluate_json_screen_then_group_visual as _evaluate_json_screen_then_group_visual,
@@ -193,6 +203,8 @@ def _resolve_canonical_metric_weights(
     return normalized
 
 
+@with_evidence_policy
+@adaptive_scene_result
 def evaluate_scene_quality_interfaces(
     scene: dict[str, Any],
     config: dict[str, Any] | None = None,
@@ -230,6 +242,7 @@ def evaluate_scene_quality_interfaces(
 
     if not isinstance(scene, dict):
         raise TypeError("scene quality interface scene must be a JSON object")
+    scene = project_scene_for_evaluator_context(scene)
     canonical_weights = _resolve_canonical_metric_weights(
         canonical_metric_weights
     )
@@ -386,10 +399,11 @@ def evaluate_scene_quality_interfaces(
                     fraction = coverage.get("fraction")
                 if not isinstance(fraction, (int, float)):
                     fraction = 1.0
-                projection = project_incomplete_metric_coverage(
-                    projection,
-                    coverage_fraction=float(fraction),
-                )
+                if not adaptive_enabled(metric=metric_name):
+                    projection = project_incomplete_metric_coverage(
+                        projection,
+                        coverage_fraction=float(fraction),
+                    )
                 coverage["score_projection"] = deepcopy(
                     projection.get("coverage_projection") or {}
                 )
@@ -456,7 +470,10 @@ def evaluate_scene_quality_interfaces(
         )
         if failure is not None:
             infrastructure_failures.append(failure)
-        elif metric_report.get("status") != "evaluated":
+        elif metric_report.get("status") != "evaluated" and not (
+            metric_report.get("evidence_resolution_policy") == "evidence_consistency_fallback_v2"
+            and metric_report.get("status") == "not_evaluable"
+        ):
             infrastructure_failures.append(
                 required_scope_failure(
                     phase=f"l3_metric:{metric_name}",
@@ -477,6 +494,18 @@ def evaluate_scene_quality_interfaces(
         if grounded_score_weight > 0.0
         else None
     )
+    if adaptive_enabled():
+        accepted_weights = {
+            name: metric_weights[name] for name in active_metric_names
+            if metric_reports[name].get("resolution_coverage", {}).get("complete")
+            and finite_score(metric_reports[name].get("score"))
+        }
+        complete = bool(active) and len(accepted_weights) == len(active_metric_names)
+        coverage_threshold_passed = complete
+        resolved_score = (
+            sum(float(metric_reports[name]["score"]) * weight for name, weight in accepted_weights.items())
+            / required_score_weight if complete and required_score_weight > 0 else None
+        )
     score = resolved_score if coverage_threshold_passed else None
     if not top_enabled:
         status, reason = "not_applicable", "disabled_by_configuration"
@@ -533,12 +562,12 @@ def evaluate_scene_quality_interfaces(
         "resolved_score": resolved_score,
         "affects_score": bool(active),
         "affects_aggregation": bool(active),
-        "renderer_invoked": any(
-            bool(entry.get("renderer_invoked"))
+        "renderer_invoked": _any_reported_invocation(
+            entry.get("renderer_invoked")
             for entry in metric_reports.values()
         ),
-        "preview_renderer_invoked": any(
-            bool(entry.get("preview_renderer_invoked"))
+        "preview_renderer_invoked": _any_reported_invocation(
+            entry.get("preview_renderer_invoked")
             for entry in metric_reports.values()
         ),
         "preview_render_count": sum(
@@ -549,11 +578,14 @@ def evaluate_scene_quality_interfaces(
             int(entry.get("final_render_count") or 0)
             for entry in metric_reports.values()
         ),
-        "camera_evidence_provider_invoked": any(
-            bool(entry["evidence_request"]["provider_invoked"])
+        "camera_evidence_provider_invoked": _any_reported_invocation(
+            entry["evidence_request"]["provider_invoked"]
             for entry in metric_reports.values()
         ),
-        "vlm_invoked": any(entry["vlm_invoked"] for entry in metric_reports.values()),
+        "vlm_invoked": _any_reported_invocation(entry["vlm_invoked"] for entry in metric_reports.values()),
+        "invocation_audit_complete": all(
+            entry.get("invocation_audit_complete", True) for entry in metric_reports.values()
+        ),
         "coverage": {
             "eligible_count": eligible_count,
             "resolved_count": resolved_count,
@@ -680,7 +712,8 @@ def evaluate_scene_quality_interfaces(
                 "when explicitly specified by the prompt"
             ),
             "object_pairing_scope": (
-                "L3 scene_and_group category_and_role_compatibility_only; "
+                "L3 room-global object-inventory coherence over identity, "
+                "role, coexistence, and materially implausible redundancy; "
                 "excludes position, distance, angle, orientation, and "
                 "arrangement"
             ),
@@ -698,14 +731,14 @@ def evaluate_scene_quality_interfaces(
         "double_count_guard": {
             "affects_aggregate_score": bool(active),
             "reason": (
-                "Scale, grouped Object Pairing, Style, Functional Consistency, "
+                "Scale, room-global Object Pairing, Style, Functional Consistency, "
                 "and Semantic Placement are owned and scored only by current "
                 "L3 Scene Quality."
             ),
         },
         "notes": [
             "Semantic Coherence, Perceptual Visual Quality, Functional Validity, and Semantic Placement are distinct L3 subfamilies.",
-            "Object pairing runs after external grouping and judges target category/role compatibility with both scene and local-group context.",
+            "Object pairing screens the complete canonical room inventory and uses at most one global room view to confirm identity/role coexistence; it does not require or adjudicate object groups.",
             "Semantic placement is an active benchmark metric for scene- and local-context location plausibility; it excludes collision, physical support, and functional operability.",
             "Prompt-specified local functionality is owned by L2; explicit position/angle relations are owned by OOR/OAR.",
             "An L3 invalid verdict requires a significant, explicitly identified, visible metric-scoped defect; otherwise sufficient evidence resolves valid.",
@@ -717,86 +750,23 @@ def evaluate_scene_quality_interfaces(
     }
 
 
-def _evaluate_metric(
+def _any_reported_invocation(values: Iterable[bool | None]) -> bool | None:
+    """Unknown exception telemetry cannot certify that no invocation occurred."""
+    values = list(values)
+    if any(value is True for value in values):
+        return True
+    return None if any(value is None for value in values) else False
+
+
+def _select_scope_targets(
     *,
+    scope: str,
     metric_name: str,
-    metric_config: dict[str, Any],
-    top_enabled: bool,
-    scene: dict[str, Any],
     object_ids: list[str],
     groups: list[dict[str, Any]] | None,
     grouping_available: bool,
-    grouping_report: dict[str, Any] | None,
-    render_evidence: list[str] | dict[str, Any] | None,
-    camera_evidence_provider: Any,
-    functional_evidence_planner: Any,
-    functional_probe_evidence_provider: Any,
-    functional_prejudgement_evidence_source: Any,
-    functional_prejudgement_evidence_config: dict[str, Any],
-    discovery_identity_image_path: str | None,
-    discovery_identity_legend: dict[str, str] | None,
-    vlm_judge: Any,
-    prompt: str | None,
-    resolved_prompt_context: Mapping[str, Any],
-    visual_style_spec: dict[str, Any] | None,
-    authorized_deviations: list[dict[str, Any]],
-    applicability: Any,
-    prior_metric_reports: dict[str, dict[str, Any]],
-) -> dict[str, Any]:
-    metric_context = metric_prompt_context(
-        resolved_prompt_context,
-        metric_name,
-    )
-    # Downstream workflow modules already accept a prompt string. Feed them
-    # the deterministic metric-scoped rendering rather than the complete
-    # generator instruction; the structured selection remains in the report.
-    prompt = metric_context.get("rendered_prompt")
-    policy = deepcopy(metric_config["evidence_policy"])
-    evidence_plan = (
-        metric_config.get("evidence_plan")
-        if isinstance(metric_config.get("evidence_plan"), dict)
-        else {}
-    )
-    json_screen_first = bool(
-        metric_name
-        in {"scale_consistency", "object_pairing_consistency"}
-        and evidence_plan.get("evidence_strategy")
-        == "json_screen_then_visual"
-    )
-    global_discovery_then_group_local = bool(
-        metric_name
-        in {
-            "functional_consistency",
-            "semantic_placement_consistency",
-        }
-        and evidence_plan.get("evidence_strategy")
-        == "global_discovery_then_group_local"
-    )
-    style_global_screen_then_local = bool(
-        metric_name == "style_consistency"
-        and evidence_plan.get("evidence_strategy")
-        in {
-            "global_screen_then_local",
-            "global_discovery_then_group_local",
-        }
-    )
-    declared_scope = str(policy["camera_scope"])
-    # Existing direct callers can still adjudicate a scale packet without
-    # supplying the new grouping dependency. Canonical runs provide grouping
-    # and therefore take the group-scoped branch below.
-    legacy_scale_scope = bool(
-        metric_name == "scale_consistency"
-        and declared_scope in _GROUP_SCOPES
-        and not grouping_available
-    )
-    if legacy_scale_scope:
-        policy.update(
-            camera_scope="object_local",
-            include_global_context=False,
-            image_order=None,
-        )
-    scope = str(policy["camera_scope"])
-    enabled = bool(metric_config["enabled"])
+) -> tuple[list[str], list[str], list[dict[str, Any]], int]:
+    """Resolve (selected_object_ids, selected_group_ids, groups, eligible)."""
 
     selected_object_ids: list[str] = []
     selected_group_ids: list[str] = []
@@ -845,22 +815,32 @@ def _evaluate_metric(
             eligible_count = len(selected_group_ids)
         else:
             eligible_count = 0
-
-    if json_screen_first and object_ids:
-        # JSON screening itself is scene-wide. A localized candidate can use
-        # a target-centred fallback even when no multi-object group is eligible.
-        eligible_count = max(1, eligible_count)
-
-    applicable_state, applicability_record = _applicability_state(applicability)
-    applicability_assumed = applicable_state == "pending"
-    should_acquire_evidence = bool(
-        top_enabled
-        and enabled
-        and float(metric_config.get("weight", 1.0)) > 0.0
-        and applicable_state == "relevant"
-        and eligible_count > 0
-        and vlm_judge is not None
+    return (
+        selected_object_ids,
+        selected_group_ids,
+        selected_groups_for_judge,
+        eligible_count,
     )
+
+
+def _resolve_scope_evidence(
+    render_evidence: list[str] | dict[str, Any] | None,
+    *,
+    scope: str,
+    metric_name: str,
+    policy: dict[str, Any],
+    scene: dict[str, Any],
+    prompt: str | None,
+    selected_object_ids: list[str],
+    selected_group_ids: list[str],
+    selected_groups_for_judge: list[dict[str, Any]],
+    grouping_report: dict[str, Any] | None,
+    camera_evidence_provider: Any,
+    should_acquire_evidence: bool,
+    json_screen_first: bool,
+) -> tuple[list[dict[str, Any]], list[str], dict[str, Any]]:
+    """Resolve (group packets, deduped evidence paths, resolution audit)."""
+
     group_evidence_packets: list[dict[str, Any]] = []
     if scope in _GROUP_SCOPES:
         group_evidence_packets = _resolve_group_evidence_packets(
@@ -907,14 +887,32 @@ def _evaluate_metric(
                 else None
             ),
         )
-    evidence_available = bool(resolved_evidence)
-    available, unavailable_reason, dependencies = _dependency_state(
-        scope=scope,
-        grouping_available=grouping_available,
-        evidence_available=evidence_available,
-        provider_available=camera_evidence_provider is not None,
-        evidence_resolution=evidence_resolution,
-    )
+    return group_evidence_packets, resolved_evidence, evidence_resolution
+
+
+def _metric_report_base(
+    *,
+    metric_name: str,
+    metric_config: dict[str, Any],
+    enabled: bool,
+    scope: str,
+    declared_scope: str,
+    legacy_scale_scope: bool,
+    policy: dict[str, Any],
+    selected_object_ids: list[str],
+    selected_group_ids: list[str],
+    resolved_evidence: list[str],
+    evidence_resolution: dict[str, Any],
+    group_evidence_packets: list[dict[str, Any]],
+    authorized_deviations: list[dict[str, Any]],
+    metric_context: dict[str, Any],
+    applicability_record: dict[str, Any],
+    applicability_assumed: bool,
+    dependencies: dict[str, Any],
+    unavailable_reason: str | None,
+    eligible_count: int,
+) -> dict[str, Any]:
+    """Build the unresolved metric report skeleton every path fills in."""
 
     base: dict[str, Any] = {
         "metric": metric_name,
@@ -965,6 +963,8 @@ def _evaluate_metric(
         "selected_object_ids": selected_object_ids,
         "selected_group_ids": selected_group_ids,
         "evidence_paths": list(resolved_evidence),
+        **({"initial_acquisition_resolution": deepcopy(evidence_resolution)}
+           if adaptive_enabled(metric=metric_name) else {}),
         "evidence_handles": [],
         "evidence_request": {
             "camera_scope": scope,
@@ -1021,6 +1021,290 @@ def _evaluate_metric(
                 "active_metric_pending_applicability_defaults_valid_v1"
             ),
         }
+    return base
+
+
+def _direct_final_judgement(
+    base: dict[str, Any],
+    *,
+    metric_name: str,
+    scene: dict[str, Any],
+    prompt: str | None,
+    resolved_evidence: list[str],
+    evidence_resolution: dict[str, Any],
+    selected_object_ids: list[str],
+    selected_group_ids: list[str],
+    selected_groups_for_judge: list[dict[str, Any]],
+    object_ids: list[str],
+    authorized_deviations: list[dict[str, Any]],
+    visual_style_spec: dict[str, Any] | None,
+    vlm_judge: Any,
+    eligible_count: int,
+) -> dict[str, Any]:
+    """Single direct final judge call for scopes without staged routing."""
+
+    request = _judge_request(
+        metric_name=metric_name,
+        scene=scene,
+        prompt=prompt,
+        render_evidence=resolved_evidence,
+        selected_object_ids=selected_object_ids,
+        selected_group_ids=selected_group_ids,
+        groups=selected_groups_for_judge,
+        authorized_deviations=authorized_deviations,
+        visual_style_spec=visual_style_spec,
+    )
+    if adaptive_enabled(metric=metric_name):
+        from benchmark.visual_judge.evidence_resolution import bind_acquisition_resolution
+        bind_acquisition_resolution(request, evidence_resolution)
+    base["evidence_request"]["vlm_invoked"] = True
+    base["vlm_invoked"] = True
+    audit_records = getattr(vlm_judge, "audit_records", None)
+    audit_start = (
+        len(audit_records)
+        if isinstance(audit_records, list)
+        else None
+    )
+    try:
+        raw = _call_scene_quality_judge(vlm_judge, request)
+        if (
+            audit_start is not None
+            and isinstance(audit_records, list)
+            and len(audit_records) > audit_start
+        ):
+            _apply_controller_render_audit(
+                base,
+                audit_records[-1],
+            )
+        adjusted = _apply_prompt_exemptions(
+            raw,
+            metric_name=metric_name,
+            authorized_deviations=authorized_deviations,
+        )
+        outcome = _normalize_judgement(
+            adjusted,
+            metric_name=metric_name,
+            valid_object_ids=set(object_ids),
+        )
+    except Exception as exc:
+        base.update(
+            status="unresolved",
+            reason="vlm_judge_failed",
+            judgement={
+                "error_type": type(exc).__name__,
+                **({"failure": failure_record(exc, phase="judge")} if adaptive_enabled(metric=metric_name) else {}),
+                "error": str(exc),
+            },
+        )
+        return terminalize_required_scope(
+            base,
+            phase=f"{metric_name}:direct_final_judge",
+        )
+
+    base["judgement"] = adjusted
+    base["status"] = outcome["status"]
+    base["reason"] = outcome["reason"]
+    base["score"] = outcome["score"]
+    if outcome["status"] == "evaluated":
+        base["coverage"] = {
+            "eligible_count": eligible_count,
+            "resolved_count": eligible_count,
+            "fraction": 1.0,
+            "complete": True,
+        }
+    return terminalize_required_scope(
+        base,
+        phase=f"{metric_name}:direct_final_judge",
+    )
+
+
+@adaptive_metric_result
+def _evaluate_metric(
+    *,
+    metric_name: str,
+    metric_config: dict[str, Any],
+    top_enabled: bool,
+    scene: dict[str, Any],
+    object_ids: list[str],
+    groups: list[dict[str, Any]] | None,
+    grouping_available: bool,
+    grouping_report: dict[str, Any] | None,
+    render_evidence: list[str] | dict[str, Any] | None,
+    camera_evidence_provider: Any,
+    functional_evidence_planner: Any,
+    functional_probe_evidence_provider: Any,
+    functional_prejudgement_evidence_source: Any,
+    functional_prejudgement_evidence_config: dict[str, Any],
+    discovery_identity_image_path: str | None,
+    discovery_identity_legend: dict[str, str] | None,
+    vlm_judge: Any,
+    prompt: str | None,
+    resolved_prompt_context: Mapping[str, Any],
+    visual_style_spec: dict[str, Any] | None,
+    authorized_deviations: list[dict[str, Any]],
+    applicability: Any,
+    prior_metric_reports: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    metric_context = metric_prompt_context(
+        resolved_prompt_context,
+        metric_name,
+    )
+    # Downstream workflow modules already accept a prompt string. Feed them
+    # the deterministic metric-scoped rendering rather than the complete
+    # generator instruction; the structured selection remains in the report.
+    prompt = metric_context.get("rendered_prompt")
+    policy = deepcopy(metric_config["evidence_policy"])
+    evidence_plan = (
+        metric_config.get("evidence_plan")
+        if isinstance(metric_config.get("evidence_plan"), dict)
+        else {}
+    )
+    if metric_name == "object_pairing_consistency":
+        # Pairing's evidence boundary is invariant, not a tunable local-camera
+        # optimization. Keep compatibility config parsing, but never execute a
+        # group/pair/target-local Pairing acquisition.
+        policy.update(
+            camera_scope="global",
+            camera_mode="global_oblique",
+            image_budget=1,
+            global_image_budget=1,
+            presentation="raw",
+            image_order=["global_context"],
+            include_global_context=True,
+            camera_pose_mode="global_only",
+        )
+        policy.pop("scoped_image_budget", None)
+    json_screen_first = bool(
+        metric_name
+        in {"scale_consistency", "object_pairing_consistency"}
+        and evidence_plan.get("evidence_strategy")
+        == "json_screen_then_visual"
+    )
+    global_discovery_then_group_local = bool(
+        metric_name
+        in {
+            "functional_consistency",
+            "semantic_placement_consistency",
+        }
+        and evidence_plan.get("evidence_strategy")
+        == "global_discovery_then_group_local"
+    )
+    style_global_screen_then_local = bool(
+        metric_name == "style_consistency"
+        and evidence_plan.get("evidence_strategy")
+        in {
+            "global_screen_then_local",
+            "global_discovery_then_group_local",
+        }
+    )
+    declared_scope = str(policy["camera_scope"])
+    if adaptive_enabled(metric=metric_name) and json_screen_first:
+        # JSON screening has routing authority only. The adaptive policy uses
+        # the existing final scope and its configured acquisition budget.
+        json_screen_first = False
+    # Existing direct callers can still adjudicate a scale packet without
+    # supplying the new grouping dependency. Canonical runs provide grouping
+    # and therefore take the group-scoped branch below.
+    legacy_scale_scope = bool(
+        metric_name == "scale_consistency"
+        and declared_scope in _GROUP_SCOPES
+        and not grouping_available
+    )
+    if legacy_scale_scope:
+        policy.update(
+            camera_scope="object_local",
+            include_global_context=False,
+            image_order=None,
+        )
+    scope = str(policy["camera_scope"])
+    enabled = bool(metric_config["enabled"])
+
+    (
+        selected_object_ids,
+        selected_group_ids,
+        selected_groups_for_judge,
+        eligible_count,
+    ) = _select_scope_targets(
+        scope=scope,
+        metric_name=metric_name,
+        object_ids=object_ids,
+        groups=groups,
+        grouping_available=grouping_available,
+    )
+
+    if adaptive_enabled(metric=metric_name) and metric_name == "object_pairing_consistency" and object_ids and eligible_count == 0:
+        # The complete semantic inventory remains judgeable without a multi-object
+        # camera group. This does not remove inventory items or create a verdict.
+        policy["camera_scope"] = "global"
+        scope = "global"
+        selected_object_ids = list(object_ids)
+        selected_groups_for_judge = deepcopy(groups or [])
+        eligible_count = 1
+
+    if json_screen_first and object_ids:
+        # JSON screening itself is scene-wide. Scale can use a target-centred
+        # fallback without grouping; Pairing stays room-global throughout.
+        eligible_count = max(1, eligible_count)
+
+    applicable_state, applicability_record = _applicability_state(applicability)
+    applicability_assumed = applicable_state == "pending"
+    should_acquire_evidence = bool(
+        top_enabled
+        and enabled
+        and float(metric_config.get("weight", 1.0)) > 0.0
+        and applicable_state == "relevant"
+        and eligible_count > 0
+        and vlm_judge is not None
+    )
+    (
+        group_evidence_packets,
+        resolved_evidence,
+        evidence_resolution,
+    ) = _resolve_scope_evidence(
+        render_evidence,
+        scope=scope,
+        metric_name=metric_name,
+        policy=policy,
+        scene=scene,
+        prompt=prompt,
+        selected_object_ids=selected_object_ids,
+        selected_group_ids=selected_group_ids,
+        selected_groups_for_judge=selected_groups_for_judge,
+        grouping_report=grouping_report,
+        camera_evidence_provider=camera_evidence_provider,
+        should_acquire_evidence=should_acquire_evidence,
+        json_screen_first=json_screen_first,
+    )
+    evidence_available = bool(resolved_evidence)
+    available, unavailable_reason, dependencies = _dependency_state(
+        scope=scope,
+        grouping_available=grouping_available,
+        evidence_available=evidence_available,
+        provider_available=camera_evidence_provider is not None,
+        evidence_resolution=evidence_resolution,
+    )
+
+    base = _metric_report_base(
+        metric_name=metric_name,
+        metric_config=metric_config,
+        enabled=enabled,
+        scope=scope,
+        declared_scope=declared_scope,
+        legacy_scale_scope=legacy_scale_scope,
+        policy=policy,
+        selected_object_ids=selected_object_ids,
+        selected_group_ids=selected_group_ids,
+        resolved_evidence=resolved_evidence,
+        evidence_resolution=evidence_resolution,
+        group_evidence_packets=group_evidence_packets,
+        authorized_deviations=authorized_deviations,
+        metric_context=metric_context,
+        applicability_record=applicability_record,
+        applicability_assumed=applicability_assumed,
+        dependencies=dependencies,
+        unavailable_reason=unavailable_reason,
+        eligible_count=eligible_count,
+    )
 
     if not top_enabled or not enabled:
         base.update(status="not_applicable", reason="disabled_by_configuration")
@@ -1125,7 +1409,7 @@ def _evaluate_metric(
             ),
             decision_mode="final",
         )
-    if not available:
+    if not available and not adaptive_enabled(metric=metric_name):
         base.update(status="unresolved", reason=unavailable_reason)
         return terminalize_required_scope(
             base,
@@ -1217,74 +1501,21 @@ def _evaluate_metric(
             ),
         )
 
-    request = _judge_request(
+    return _direct_final_judgement(
+        base,
         metric_name=metric_name,
         scene=scene,
         prompt=prompt,
-        render_evidence=resolved_evidence,
+        resolved_evidence=resolved_evidence,
+        evidence_resolution=evidence_resolution,
         selected_object_ids=selected_object_ids,
         selected_group_ids=selected_group_ids,
-        groups=selected_groups_for_judge,
+        selected_groups_for_judge=selected_groups_for_judge,
+        object_ids=object_ids,
         authorized_deviations=authorized_deviations,
         visual_style_spec=visual_style_spec,
-    )
-    base["evidence_request"]["vlm_invoked"] = True
-    base["vlm_invoked"] = True
-    audit_records = getattr(vlm_judge, "audit_records", None)
-    audit_start = (
-        len(audit_records)
-        if isinstance(audit_records, list)
-        else None
-    )
-    try:
-        raw = _call_scene_quality_judge(vlm_judge, request)
-        if (
-            audit_start is not None
-            and isinstance(audit_records, list)
-            and len(audit_records) > audit_start
-        ):
-            _apply_controller_render_audit(
-                base,
-                audit_records[-1],
-            )
-        adjusted = _apply_prompt_exemptions(
-            raw,
-            metric_name=metric_name,
-            authorized_deviations=authorized_deviations,
-        )
-        outcome = _normalize_judgement(
-            adjusted,
-            metric_name=metric_name,
-            valid_object_ids=set(object_ids),
-        )
-    except Exception as exc:
-        base.update(
-            status="unresolved",
-            reason="vlm_judge_failed",
-            judgement={
-                "error_type": type(exc).__name__,
-                "error": str(exc),
-            },
-        )
-        return terminalize_required_scope(
-            base,
-            phase=f"{metric_name}:direct_final_judge",
-        )
-
-    base["judgement"] = adjusted
-    base["status"] = outcome["status"]
-    base["reason"] = outcome["reason"]
-    base["score"] = outcome["score"]
-    if outcome["status"] == "evaluated":
-        base["coverage"] = {
-            "eligible_count": eligible_count,
-            "resolved_count": eligible_count,
-            "fraction": 1.0,
-            "complete": True,
-        }
-    return terminalize_required_scope(
-        base,
-        phase=f"{metric_name}:direct_final_judge",
+        vlm_judge=vlm_judge,
+        eligible_count=eligible_count,
     )
 
 
@@ -1455,6 +1686,7 @@ def _resolve_metric_evidence(
     global_paths: list[str] = []
     scoped_paths: list[str] = []
     source = "none"
+    evidence_metadata: list[dict[str, Any]] = []
 
     if isinstance(value, dict):
         selected = value.get(metric_name)
@@ -1481,10 +1713,18 @@ def _resolve_metric_evidence(
             scoped_paths = list(global_paths)
             source = "flat_global_input"
 
+    if adaptive_enabled(metric=metric_name):
+        input_packets = ([selected, value.get("global") or value.get("global_context")
+                          or value.get("default") or value.get("all")]
+                         if isinstance(value, dict) else [value])
+        evidence_metadata = [deepcopy(item) for packet in input_packets
+                             if isinstance(packet, (list, tuple)) for item in packet if isinstance(item, dict)]
+
     provider_invoked = False
     provider_status = "not_needed" if scoped_paths else "not_configured"
     provider_reason: str | None = None
     provider_error: str | None = None
+    provider_failure: dict[str, Any] | None = None
     if not scoped_paths and camera_evidence_provider is not None:
         provider_invoked = True
         provider_result = _request_scene_quality_evidence(
@@ -1501,6 +1741,7 @@ def _resolve_metric_evidence(
             existing_global_paths=global_paths,
         )
         provider_status = provider_result["status"]
+        provider_failure = deepcopy(provider_result.get("failure"))
         provider_reason = provider_result["reason"]
         provider_error = (
             str(provider_result.get("error") or "").strip() or None
@@ -1509,6 +1750,7 @@ def _resolve_metric_evidence(
             provider_result.get("provider_usage")
         )
         scoped_paths = provider_result["paths"]
+        evidence_metadata.extend(deepcopy(provider_result.get("evidence_metadata") or []))
         provider_global_paths = provider_result.get("global_paths") or []
         for path in provider_global_paths:
             if path not in global_paths:
@@ -1521,6 +1763,21 @@ def _resolve_metric_evidence(
     else:
         provider_usage = None
 
+    invalid_artifact_paths: list[str] = []
+    all_available_paths: list[str] = []
+    excluded_images: list[dict[str, Any]] = []
+    if adaptive_enabled(metric=metric_name):
+        from benchmark.visual_judge.evidence_resolution import usable_visuals, visual_references
+        global_paths, global_errors = usable_visuals(
+            visual_references(global_paths, evidence_metadata), target_ids=selected_object_ids,
+        )
+        scoped_paths, scoped_errors = usable_visuals(
+            visual_references(scoped_paths, evidence_metadata), target_ids=selected_object_ids,
+        )
+        excluded_images = global_errors + scoped_errors
+        invalid_artifact_paths = [item["path"] for item in excluded_images
+                                  if item.get("path") and item.get("reason") == "missing_or_undecodable_visual"]
+        all_available_paths = list(dict.fromkeys(global_paths + scoped_paths))
     scoped_image_budget = policy.get("scoped_image_budget")
     if scoped_image_budget is not None:
         scoped_limit = int(scoped_image_budget)
@@ -1538,12 +1795,12 @@ def _resolve_metric_evidence(
             )
         global_paths = global_paths[:global_limit]
 
-    missing_paths = [
+    missing_paths = invalid_artifact_paths + [
         path
         for path in list(dict.fromkeys([*global_paths, *scoped_paths]))
         if not Path(path).expanduser().is_file()
     ]
-    if missing_paths:
+    if missing_paths and not adaptive_enabled(metric=metric_name):
         return [], {
             "scope_satisfied": False,
             "source": source,
@@ -1565,6 +1822,9 @@ def _resolve_metric_evidence(
             "local_scope_satisfied": False,
         }
 
+    if adaptive_enabled(metric=metric_name):
+        global_paths = [path for path in global_paths if path not in missing_paths]
+        scoped_paths = [path for path in scoped_paths if path not in missing_paths]
     resolved: list[str] = []
     order = policy.get("image_order")
     include_global = bool(policy.get("include_global_context"))
@@ -1588,7 +1848,12 @@ def _resolve_metric_evidence(
         if include_global:
             resolved.extend(global_paths)
 
-    resolved = list(dict.fromkeys(resolved))[:image_budget]
+    if adaptive_enabled(metric=metric_name):
+        # Missing local protocol coverage does not make a retained overview
+        # useless. Keep its true global role, without claiming local coverage.
+        resolved.extend(global_paths)
+    available_paths = list(dict.fromkeys(resolved))
+    resolved = available_paths[:image_budget]
     resolved_set = set(resolved)
     resolved_global_paths = [
         path for path in global_paths if path in resolved_set
@@ -1619,8 +1884,15 @@ def _resolve_metric_evidence(
         "global_anchor_required": require_global_anchor,
         "global_anchor_satisfied": global_anchor_satisfied,
         "local_scope_satisfied": local_scope_satisfied,
-        "missing_paths": [],
+        "missing_paths": missing_paths,
         "provider_usage": provider_usage,
+        **({"available_paths": all_available_paths,
+            "evidence_metadata": evidence_metadata, "excluded_images": excluded_images,
+            "images_not_delivered": [path for path in all_available_paths if path not in resolved],
+            "failure": provider_failure or {"failure_category": "evidence_unavailable", "phase": "acquisition",
+                                             "recoverable_acquisition": True}
+            if missing_paths or provider_status in {"failed", "insufficient"} else None}
+           if adaptive_enabled(metric=metric_name) else {}),
     }
 
 
@@ -1721,12 +1993,12 @@ def _request_scene_quality_evidence(
         "object_ids": list(selected_object_ids),
         "group_ids": list(selected_group_ids),
         "object_groups": deepcopy(selected_groups),
-        "scene": deepcopy(scene),
+        "scene": project_scene_for_evaluator_context(scene),
         "scene_summary": {
             "scene_id": scene.get("scene_id"),
             "scene_type": scene.get("scene_type"),
             "object_count": len(scene.get("objects") or []),
-            "architecture": architecture_contract_from_scene(scene),
+            "architecture": observable_architecture_from_scene(scene),
         },
         "natural_language_prompt": prompt,
         "evidence_scope": str(policy["camera_scope"]),
@@ -1795,23 +2067,55 @@ def _request_scene_quality_evidence(
     if not callable(call) and callable(provider):
         call = provider
     if not callable(call):
+        if adaptive_enabled(metric=metric_name):
+            from benchmark.visual_judge.evidence_resolution import EvidenceIntegrityError
+            raise EvidenceIntegrityError("camera evidence provider is not callable")
         return {
             "status": "failed",
             "reason": "camera_evidence_provider_not_callable",
             "paths": [],
         }
+    from benchmark.visual_judge.evidence_gap_v2 import enabled as fallback_v2_enabled
+    if fallback_v2_enabled() and adaptive_enabled(metric=metric_name):
+        from benchmark.visual_judge.acquisition_outcome import acquire_evidence
+        outcome = acquire_evidence(call, request)
+        paths, global_paths = _split_provider_evidence(outcome.items, requested_scope=str(policy["camera_scope"]))
+        failure = outcome.audit.get("failure")
+        incomplete = outcome.audit["packet_incomplete"] or not paths
+        return {
+            "status": "failed" if failure and not failure["recoverable_acquisition"] else "insufficient" if incomplete else "available",
+            "reason": "camera_acquisition_incomplete" if incomplete else None,
+            "paths": paths, "global_paths": global_paths,
+            "provider_usage": deepcopy(getattr(provider, "last_call_usage", None)),
+            "evidence_metadata": [deepcopy(item) for item in outcome.items if isinstance(item, dict)],
+            "failure": deepcopy(failure), "acquisition_outcome": deepcopy(outcome.audit),
+        }
     try:
         raw = call(request)
     except Exception as exc:
+        if adaptive_enabled(metric=metric_name) and not failure_record(exc, phase="acquisition")["recoverable_acquisition"]:
+            raise
         return {
             "status": "failed",
             "reason": "camera_evidence_provider_failed",
-            "error": f"{type(exc).__name__}: {exc}",
+            "error": type(exc).__name__ if adaptive_enabled(metric=metric_name) else f"{type(exc).__name__}: {exc}",
             "paths": [],
         }
     provider_usage = deepcopy(
         getattr(provider, "last_call_usage", None)
     )
+    if adaptive_enabled(metric=metric_name):
+        from benchmark.visual_judge.evidence_resolution import adaptive_provider_payload
+        items, acquisition = adaptive_provider_payload(raw)
+        paths, global_paths = _split_provider_evidence(items, requested_scope=str(policy["camera_scope"]))
+        incomplete = acquisition["packet_incomplete"] or not paths
+        return {
+            "status": "insufficient" if incomplete else "available",
+            "reason": "camera_acquisition_incomplete" if incomplete else None,
+            "paths": paths, "global_paths": global_paths, "provider_usage": provider_usage,
+            "evidence_metadata": [deepcopy(item) for item in items if isinstance(item, dict)],
+            "failure": acquisition.get("failure"),
+        }
     if isinstance(raw, dict):
         status = str(raw.get("status") or "available").strip().lower()
         if status in {"failed", "error"} or raw.get("error"):
@@ -1934,6 +2238,8 @@ def _weighted_metric_score(entries: list[dict[str, Any]]) -> float | None:
 
 
 def _metric_score_grounding_fraction(entry: dict[str, Any]) -> float:
+    if entry.get("evidence_resolution_policy") in {ADAPTIVE_POLICY, "evidence_consistency_fallback_v2"}:
+        return float(entry.get("resolution_coverage", {}).get("visual_evidence_fraction") or 0.0)
     coverage = entry.get("coverage")
     coverage = coverage if isinstance(coverage, dict) else {}
     projection = coverage.get("score_projection")
@@ -1971,6 +2277,9 @@ def _default_valid_metric_without_specialized_target(
 ) -> dict[str, Any]:
     """Return a numeric, explicitly ungrounded fallback for an active metric."""
 
+    if adaptive_enabled():
+        base.update(status="unresolved", score=None, reason=reason)
+        return terminalize_required_scope(base, phase="applicability_or_target_inventory")
     base.update(
         status="evaluated",
         terminal_state=TERMINAL_EVALUATED_DEGRADED,
@@ -2026,6 +2335,509 @@ def _default_valid_metric_without_specialized_target(
     return base
 
 
+def _selected_scene_objects(
+    scene: dict[str, Any],
+    selected_object_ids: list[str],
+    *,
+    functional_visual_context: bool,
+    pairing_inventory_context: bool,
+) -> list[dict[str, Any]]:
+    """Project scene objects for the metric's judge-facing context."""
+
+    return [
+        (
+            _compact_functional_object(item)
+            if functional_visual_context
+            else _compact_pairing_object(item)
+            if pairing_inventory_context
+            else _compact_object(item)
+        )
+        for item in scene.get("objects", [])
+        if isinstance(item, dict)
+        and (
+            not selected_object_ids
+            or str(item.get("id")) in set(selected_object_ids)
+        )
+    ]
+
+
+def _selected_group_contexts(
+    groups: list[dict[str, Any]] | None,
+    selected_group_ids: list[str],
+    *,
+    membership_only: bool,
+) -> list[dict[str, Any]]:
+    """Project selected groups: bare membership or the audited projection."""
+
+    return [
+        (
+            {
+                "group_id": str(group.get("group_id") or ""),
+                "object_ids": [
+                    str(item)
+                    for item in group.get("object_ids") or []
+                    if str(item).strip()
+                ],
+            }
+            if membership_only
+            else _judge_group_context(group)
+        )
+        for group in groups or []
+        if not selected_group_ids or str(group.get("group_id")) in set(selected_group_ids)
+    ]
+
+
+def _allowed_defect_targets(
+    scene: dict[str, Any],
+    selected_object_ids: list[str],
+    *,
+    allow_scene_wide_functional_ownership: bool,
+    attribution_target_ids: list[str] | None,
+) -> list[str]:
+    """Resolve the exact defect-ownership ID whitelist for the contract."""
+
+    allowed_defect_target_ids = list(
+        dict.fromkeys(
+            str(item)
+            for item in (
+                (
+                    [
+                        object_record.get("id")
+                        for object_record in scene.get("objects") or []
+                        if isinstance(object_record, dict)
+                    ]
+                    if allow_scene_wide_functional_ownership
+                    else selected_object_ids
+                )
+                or [
+                    object_record.get("id")
+                    for object_record in scene.get("objects") or []
+                    if isinstance(object_record, dict)
+                ]
+            )
+            if str(item).strip()
+        )
+    )
+    if attribution_target_ids is not None:
+        allowed_defect_target_ids = list(
+            dict.fromkeys(
+                str(item)
+                for item in attribution_target_ids
+                if str(item).strip()
+            )
+        )
+    return allowed_defect_target_ids
+
+
+def _structured_context_policy(
+    *,
+    pairing_inventory_context: bool,
+    functional_visual_context: bool,
+    residual_placement_context: bool,
+) -> dict[str, Any] | None:
+    """Declare which structured fields the judge may rely on, per context."""
+
+    return (
+        {
+            "object_fields": ["id", "category"],
+            "group_fields": [],
+            "excluded_object_fields": [
+                "description",
+                "center",
+                "size",
+                "rotation",
+                "generator_relationships",
+                "task_slots",
+            ],
+            "reason": (
+                "Pairing judges canonical room-inventory identity and "
+                "role composition without generator intent or transform "
+                "shortcuts; visual evidence independently confirms identity"
+            ),
+        }
+        if pairing_inventory_context
+        else
+        {
+            "object_fields": ["id", "category"],
+            "group_fields": ["group_id", "object_ids"],
+            "excluded_object_fields": [
+                "center",
+                "size",
+                "rotation",
+                "description",
+            ],
+            "reason": (
+                "functional visual grounding must not be replaced by "
+                "transform or grouping-prose shortcuts"
+            ),
+        }
+        if functional_visual_context
+        else {
+            "object_fields": [
+                "id",
+                "category",
+                "center",
+                "size",
+                "rotation",
+            ],
+            "group_fields": ["group_id", "object_ids"],
+            "excluded_group_fields": [
+                "group_source",
+                "region_category",
+                "edge_reasons",
+                "formation_edges",
+            ],
+            "reason": (
+                "residual Placement uses group membership only to "
+                "organize independent visual observations; grouping "
+                "interpretations are not decision evidence"
+            ),
+        }
+        if residual_placement_context
+        else None
+    )
+
+
+def _base_response_contract(
+    metric_name: str,
+    allowed_defect_target_ids: list[str],
+) -> dict[str, Any]:
+    """The canonical-metric response contract shared by all five metrics."""
+
+    return {
+        "evidence_status": ["sufficient", "insufficient"],
+        "verdict": ["valid", "invalid", "ambiguous"],
+        "invalid_requires_significant_metric_scoped_defect": True,
+        "insufficient_requires_ambiguous": True,
+        "missing_evidence": {
+            "allowed": (
+                "empty_or_exact_evidence_request_token_mirror"
+            ),
+            "authority": "evidence_request.missing_observations",
+        },
+        "evidence_request": {
+            "required_when_insufficient": True,
+            "fields": [
+                "target_ids",
+                "missing_observations",
+                "view_goal",
+                "metadata",
+            ],
+        },
+        "allowed_target_ids": allowed_defect_target_ids,
+        "defect_attribution_unit": (
+            "object"
+            if metric_name
+            in {
+                "style_consistency",
+                "functional_consistency",
+                "semantic_placement_consistency",
+            }
+            else "claim"
+        ),
+        "defects": {
+            "required_when_invalid": True,
+            "fields": [
+                "scope",
+                "target_ids",
+                "relation",
+                "reason",
+                "category",
+                "attribution_mode",
+                *(
+                    []
+                    if metric_name == "object_pairing_consistency"
+                    else ["severity"]
+                ),
+            ],
+            "allowed_scopes": list(
+                JUDGMENT_SCOPE_BY_METRIC[metric_name]["included"]
+            ),
+            "allowed_target_ids": allowed_defect_target_ids,
+            "allowed_field_values": {
+                "category": sorted(L3_CATEGORIES[metric_name]),
+                "severity": sorted(L3_SEVERITY_BURDENS[metric_name]),
+                "attribution_mode": [
+                    "unary",
+                    "responsible_endpoint",
+                    "minimum_repair_set",
+                ],
+            },
+        },
+    }
+
+
+def _attach_functional_check_contract(
+    request: dict[str, Any],
+    required_functional_checks: list[dict[str, Any]],
+) -> None:
+    """Bind the exact typed Function check obligations to the contract."""
+
+    request["required_functional_checks"] = deepcopy(
+        required_functional_checks
+    )
+    request["response_contract"]["functional_check_results"] = {
+        "required": True,
+        "exact_check_ids": [
+            str(item.get("check_id") or "")
+            for item in required_functional_checks
+            if isinstance(item, dict)
+        ],
+        "fields": [
+            "check_id",
+            "target_ids",
+            "observation_status",
+            "conclusion",
+            "reason",
+        ],
+        "conditional_invalid_clearance_fields": [
+            "affected_object_ids",
+            "cause_kind",
+            "causal_object_ids",
+            "scoring_target_ids",
+        ],
+        "deterministically_derived_fields": {
+            "scoring_target_ids": (
+                "validated causal_object_ids for external_object; "
+                "affected_object_ids for self_layout"
+            ),
+            "defect.target_ids": "derived scoring_target_ids",
+        },
+        "observation_status": [
+            "observed",
+            "inferred_under_budget",
+            "missing",
+        ],
+        "conclusion": ["valid", "invalid", "unresolved"],
+        "invalid_defect_linkage": {
+            "field": "check_refs",
+            "coverage": "every_invalid_check_exactly_once",
+            "multiple_refs_allowed_only_for_one_physical_defect": True,
+        },
+    }
+
+
+def _attach_placement_contracts(
+    request: dict[str, Any],
+    *,
+    evidence_phase: str,
+    placement_checks: list[dict[str, Any]],
+    selected_groups: list[dict[str, Any]],
+) -> list[str]:
+    """Bind Placement policies/contracts to the request.
+
+    Returns the ``allowed_check_types`` list object that is embedded in
+    ``placement_check_policy`` so the adaptive tail can narrow it in place;
+    ``judge_originated_placement_results.check_type`` holds a copy and is
+    deliberately not affected by that later narrowing.
+    """
+
+    residual_phase = (
+        evidence_phase == "residual_global_placement_review"
+    )
+    allowed_placement_check_types = (
+        ["scene_zone", "contextual_anchor"]
+        if residual_phase
+        else [
+            "support_and_height",
+            "scene_zone",
+            "contextual_anchor",
+        ]
+    )
+    request["response_contract"]["defects"]["fields"].extend(
+        [
+            "check_id",
+            "check_type",
+        ]
+    )
+    request["placement_severity_policy"] = {
+        "schema_version": SCORING_SPEC_VERSION,
+        "levels": sorted(
+            L3_SEVERITY_BURDENS[
+                "semantic_placement_consistency"
+            ]
+        ),
+        "metric_verdict_unchanged": True,
+        "severity_controls_burden_only": True,
+    }
+    request["placement_check_policy"] = {
+        "schema_version": "placement_check_results_v2",
+        "allowed_check_types": allowed_placement_check_types,
+        "discovery_is_routing_prior_only": True,
+        "baseline_judge_may_register_discovery_miss": True,
+        "defect_owner": "subject_id_only",
+        "context_ids_are_non_owning": True,
+        "functional_verdicts_are_not_placement_evidence": True,
+        "placement_claim_is_judged_independently": True,
+        "cross_metric_overlap_is_posthoc_audit_only": False,
+        "exact_function_event_deduplication_enabled": True,
+        "exact_function_event_deduplication_requires": [
+            "conclusion=excluded_function_owned",
+            "known final function_event_ref",
+            "same_physical_event=true",
+            "placement subject overlaps a cited Function event role",
+        ],
+        "object_overlap_alone_suppresses": False,
+    }
+    request["response_contract"]["placement_check_results"] = {
+        "required": bool(placement_checks),
+        "exact_check_ids": [
+            str(item.get("check_id") or "")
+            for item in placement_checks
+        ],
+        "fields": [
+            "check_id",
+            "subject_id",
+            "context_ids",
+            "observation_status",
+            "conclusion",
+            "reason",
+        ],
+        "observation_status": [
+            "observed",
+            "inferred_under_budget",
+            "missing",
+        ],
+        "conclusion": [
+            "valid",
+            "invalid",
+            "excluded_function_owned",
+            "unresolved",
+        ],
+        "conditional_excluded_function_owned_fields": [
+            "function_event_ref",
+            "same_physical_event",
+        ],
+        "excluded_function_owned_contract": {
+            "function_event_ref": "one exact supplied final event ID",
+            "same_physical_event": True,
+            "defects_for_check": 0,
+            "shared_object_identity_is_sufficient": False,
+        },
+    }
+    request["response_contract"][
+        "judge_originated_placement_results"
+    ] = {
+        "purpose": "strictly_typed_discovery_miss_recovery",
+        "same_call_resolution_requires_current_evidence": True,
+        "insufficient_evidence_requires": (
+            "evidence_request.metadata.placement_check_proposal"
+        ),
+        "fields": [
+            "proposal_id",
+            "subject_id",
+            "context_ids",
+            "check_type",
+            "observation_goal",
+            "observation_status",
+            "conclusion",
+            "reason",
+            "severity",
+            "function_event_ref",
+            "same_physical_event",
+        ],
+        "check_type": [
+            *allowed_placement_check_types,
+        ],
+        "proposal_defect_reference": (
+            "defect.check_id equals proposal_id in the model response; "
+            "the Controller replaces it with the stable check_id"
+        ),
+        "valid_verdict_exception": (
+            "allowed only when every Judge-originated row concludes "
+            "excluded_function_owned with an exact final Function event"
+        ),
+    }
+    if residual_phase:
+        residual_groups = [
+            {
+                "group_id": str(item.get("group_id") or ""),
+                "object_ids": list(item.get("object_ids") or []),
+            }
+            for item in selected_groups
+            if isinstance(item, dict)
+        ]
+        request["response_contract"][
+            "group_global_observations"
+        ] = {
+            "required": True,
+            "schema_version": (
+                "placement_residual_group_observations_v1"
+            ),
+            "exact_group_ids": [
+                item["group_id"] for item in residual_groups
+            ],
+            "one_row_per_group": True,
+            "fields": [
+                "group_id",
+                "object_ids",
+                "global_position_observation",
+                "related_group_ids",
+                "inter_group_observation",
+                "evidence_sufficiency",
+                "residual_issue_candidate",
+            ],
+            "evidence_sufficiency": [
+                "sufficient",
+                "partial_but_usable",
+                "insufficient",
+            ],
+            "residual_issue_candidate": [
+                "none",
+                "scene_zone",
+                "contextual_anchor",
+            ],
+            "decision_authority": "none",
+            "final_synthesis_rule": (
+                "inspect every group first; then issue only novel "
+                "scene_zone/contextual_anchor results"
+            ),
+        }
+    return allowed_placement_check_types
+
+
+def _attach_group_scope(
+    request: dict[str, Any],
+    group_scope: "GroupCameraScope",
+    *,
+    functional_visual_context: bool,
+) -> None:
+    """Bind the group camera scope to the request and its event record."""
+
+    scope_value = group_scope.to_dict()
+    request["scene_summary"]["group_scope"] = deepcopy(
+        {
+            "group_id": scope_value.get("group_id"),
+            "member_ids": deepcopy(
+                scope_value.get("member_ids") or []
+            ),
+        }
+        if functional_visual_context
+        else scope_value
+    )
+    request.update(
+        {
+            "group_scope": scope_value,
+            "member_ids": list(group_scope.member_ids),
+            "target_bounds": deepcopy(
+                scope_value["target_bounds"]
+            ),
+            "focus_center": list(group_scope.focus_center),
+            "target_extent": list(group_scope.extent),
+            "evidence_goal": group_scope_evidence_goal(
+                group_scope
+            ),
+            "grouping_role": (
+                "primary_visual_evidence_decomposition"
+            ),
+        }
+    )
+    request["event"]["group_id"] = group_scope.group_id
+    request["event"]["focus_region"] = deepcopy(
+        scope_value["target_bounds"]
+    )
+
+
 def _judge_request(
     *,
     metric_name: str,
@@ -2065,35 +2877,22 @@ def _judge_request(
         metric_name == "semantic_placement_consistency"
         and evidence_phase == "residual_global_placement_review"
     )
-    objects = [
-        (
-            _compact_functional_object(item)
-            if functional_visual_context
-            else _compact_object(item)
-        )
-        for item in scene.get("objects", [])
-        if isinstance(item, dict)
-        and (
-            not selected_object_ids
-            or str(item.get("id")) in set(selected_object_ids)
-        )
-    ]
-    selected_groups = [
-        (
-            {
-                "group_id": str(group.get("group_id") or ""),
-                "object_ids": [
-                    str(item)
-                    for item in group.get("object_ids") or []
-                    if str(item).strip()
-                ],
-            }
-            if functional_visual_context or residual_placement_context
-            else deepcopy(group)
-        )
-        for group in groups or []
-        if not selected_group_ids or str(group.get("group_id")) in set(selected_group_ids)
-    ]
+    pairing_inventory_context = bool(
+        metric_name == "object_pairing_consistency"
+    )
+    objects = _selected_scene_objects(
+        scene,
+        selected_object_ids,
+        functional_visual_context=functional_visual_context,
+        pairing_inventory_context=pairing_inventory_context,
+    )
+    selected_groups = _selected_group_contexts(
+        groups,
+        selected_group_ids,
+        membership_only=(
+            functional_visual_context or residual_placement_context
+        ),
+    )
     required_functional_checks = (
         (
             functional_probe_evidence.get("required_checks")
@@ -2115,35 +2914,27 @@ def _judge_request(
             if isinstance(item, dict)
         )
     )
-    allowed_defect_target_ids = list(
-        dict.fromkeys(
-            str(item)
-            for item in (
-                (
-                    [
-                        object_record.get("id")
-                        for object_record in scene.get("objects") or []
-                        if isinstance(object_record, dict)
-                    ]
-                    if allow_scene_wide_functional_ownership
-                    else selected_object_ids
-                )
-                or [
-                    object_record.get("id")
-                    for object_record in scene.get("objects") or []
-                    if isinstance(object_record, dict)
-                ]
-            )
-            if str(item).strip()
-        )
+    allowed_defect_target_ids = _allowed_defect_targets(
+        scene,
+        selected_object_ids,
+        allow_scene_wide_functional_ownership=(
+            allow_scene_wide_functional_ownership
+        ),
+        attribution_target_ids=attribution_target_ids,
     )
-    if attribution_target_ids is not None:
-        allowed_defect_target_ids = list(
-            dict.fromkeys(
-                str(item)
-                for item in attribution_target_ids
-                if str(item).strip()
-            )
+    scene_summary = {
+        "scene_id": scene.get("scene_id"),
+        "scene_type": scene.get("scene_type"),
+        "object_count": len(scene.get("objects") or []),
+        "objects": objects,
+    }
+    if not pairing_inventory_context:
+        scene_summary.update(
+            {
+                "boundary": deepcopy(scene.get("boundary")),
+                "scene_height": scene.get("scene_height"),
+                "architecture": observable_architecture_from_scene(scene),
+            }
         )
     request = {
         "category": SCENE_QUALITY_INTERFACE_NAMESPACE,
@@ -2165,16 +2956,12 @@ def _judge_request(
         },
         "prompt": prompt,
         "natural_language_prompt": prompt,
-        "camera_scene_context": deepcopy(scene),
-        "scene_summary": {
-            "scene_id": scene.get("scene_id"),
-            "scene_type": scene.get("scene_type"),
-            "boundary": deepcopy(scene.get("boundary")),
-            "scene_height": scene.get("scene_height"),
-            "architecture": architecture_contract_from_scene(scene),
-            "object_count": len(scene.get("objects") or []),
-            "objects": objects,
-        },
+        "camera_scene_context": (
+            deepcopy(scene_summary)
+            if pairing_inventory_context
+            else project_scene_for_evaluator_context(scene)
+        ),
+        "scene_summary": scene_summary,
         "target_object_ids": list(
             attribution_target_ids
             if attribution_target_ids is not None
@@ -2206,45 +2993,10 @@ def _judge_request(
         "functional_ownership_ledger": deepcopy(
             functional_ownership_ledger
         ),
-        "structured_context_policy": (
-            {
-                "object_fields": ["id", "category"],
-                "group_fields": ["group_id", "object_ids"],
-                "excluded_object_fields": [
-                    "center",
-                    "size",
-                    "rotation",
-                    "description",
-                ],
-                "reason": (
-                    "functional visual grounding must not be replaced by "
-                    "transform or grouping-prose shortcuts"
-                ),
-            }
-            if functional_visual_context
-            else {
-                "object_fields": [
-                    "id",
-                    "category",
-                    "center",
-                    "size",
-                    "rotation",
-                ],
-                "group_fields": ["group_id", "object_ids"],
-                "excluded_group_fields": [
-                    "group_source",
-                    "region_category",
-                    "edge_reasons",
-                    "formation_edges",
-                ],
-                "reason": (
-                    "residual Placement uses group membership only to "
-                    "organize independent visual observations; grouping "
-                    "interpretations are not decision evidence"
-                ),
-            }
-            if residual_placement_context
-            else None
+        "structured_context_policy": _structured_context_policy(
+            pairing_inventory_context=pairing_inventory_context,
+            functional_visual_context=functional_visual_context,
+            residual_placement_context=residual_placement_context,
         ),
         "defect_attribution": (
             {
@@ -2283,67 +3035,9 @@ def _judge_request(
             else None
         ),
         "render_evidence": list(render_evidence),
-        "response_contract": {
-            "evidence_status": ["sufficient", "insufficient"],
-            "verdict": ["valid", "invalid", "ambiguous"],
-            "invalid_requires_significant_metric_scoped_defect": True,
-            "insufficient_requires_ambiguous": True,
-            "missing_evidence": {
-                "allowed": (
-                    "empty_or_exact_evidence_request_token_mirror"
-                ),
-                "authority": "evidence_request.missing_observations",
-            },
-            "evidence_request": {
-                "required_when_insufficient": True,
-                "fields": [
-                    "target_ids",
-                    "missing_observations",
-                    "view_goal",
-                    "metadata",
-                ],
-            },
-            "allowed_target_ids": allowed_defect_target_ids,
-            "defect_attribution_unit": (
-                "object"
-                if metric_name
-                in {
-                    "style_consistency",
-                    "functional_consistency",
-                    "semantic_placement_consistency",
-                }
-                else "claim"
-            ),
-            "defects": {
-                "required_when_invalid": True,
-                "fields": [
-                    "scope",
-                    "target_ids",
-                    "relation",
-                    "reason",
-                    "category",
-                    "attribution_mode",
-                    *(
-                        []
-                        if metric_name == "object_pairing_consistency"
-                        else ["severity"]
-                    ),
-                ],
-                "allowed_scopes": list(
-                    JUDGMENT_SCOPE_BY_METRIC[metric_name]["included"]
-                ),
-                "allowed_target_ids": allowed_defect_target_ids,
-                "allowed_field_values": {
-                    "category": sorted(L3_CATEGORIES[metric_name]),
-                    "severity": sorted(L3_SEVERITY_BURDENS[metric_name]),
-                    "attribution_mode": [
-                        "unary",
-                        "responsible_endpoint",
-                        "minimum_repair_set",
-                    ],
-                },
-            },
-        },
+        "response_contract": _base_response_contract(
+            metric_name, allowed_defect_target_ids
+        ),
         **vlm_audit_metadata(
             VLMRole.JUDGE,
             decision_contract=DecisionContract.CANONICAL_METRIC,
@@ -2354,204 +3048,16 @@ def _judge_request(
         metric_name == "functional_consistency"
         and required_functional_checks
     ):
-        request["required_functional_checks"] = deepcopy(
-            required_functional_checks
+        _attach_functional_check_contract(
+            request, required_functional_checks
         )
-        request["response_contract"]["functional_check_results"] = {
-            "required": True,
-            "exact_check_ids": [
-                str(item.get("check_id") or "")
-                for item in required_functional_checks
-                if isinstance(item, dict)
-            ],
-            "fields": [
-                "check_id",
-                "target_ids",
-                "observation_status",
-                "conclusion",
-                "reason",
-            ],
-            "conditional_invalid_clearance_fields": [
-                "affected_object_ids",
-                "cause_kind",
-                "causal_object_ids",
-                "scoring_target_ids",
-            ],
-            "deterministically_derived_fields": {
-                "scoring_target_ids": (
-                    "validated causal_object_ids for external_object; "
-                    "affected_object_ids for self_layout"
-                ),
-                "defect.target_ids": "derived scoring_target_ids",
-            },
-            "observation_status": [
-                "observed",
-                "inferred_under_budget",
-                "missing",
-            ],
-            "conclusion": ["valid", "invalid", "unresolved"],
-            "invalid_defect_linkage": {
-                "field": "check_refs",
-                "coverage": "every_invalid_check_exactly_once",
-                "multiple_refs_allowed_only_for_one_physical_defect": True,
-            },
-        }
     if metric_name == "semantic_placement_consistency":
-        residual_phase = (
-            evidence_phase == "residual_global_placement_review"
+        allowed_placement_check_types = _attach_placement_contracts(
+            request,
+            evidence_phase=evidence_phase,
+            placement_checks=placement_checks,
+            selected_groups=selected_groups,
         )
-        allowed_placement_check_types = (
-            ["scene_zone", "contextual_anchor"]
-            if residual_phase
-            else [
-                "support_and_height",
-                "scene_zone",
-                "contextual_anchor",
-            ]
-        )
-        request["response_contract"]["defects"]["fields"].extend(
-            [
-                "check_id",
-                "check_type",
-            ]
-        )
-        request["placement_severity_policy"] = {
-            "schema_version": SCORING_SPEC_VERSION,
-            "levels": sorted(
-                L3_SEVERITY_BURDENS[
-                    "semantic_placement_consistency"
-                ]
-            ),
-            "metric_verdict_unchanged": True,
-            "severity_controls_burden_only": True,
-        }
-        request["placement_check_policy"] = {
-            "schema_version": "placement_check_results_v2",
-            "allowed_check_types": allowed_placement_check_types,
-            "discovery_is_routing_prior_only": True,
-            "baseline_judge_may_register_discovery_miss": True,
-            "defect_owner": "subject_id_only",
-            "context_ids_are_non_owning": True,
-            "functional_verdicts_are_not_placement_evidence": True,
-            "placement_claim_is_judged_independently": True,
-            "cross_metric_overlap_is_posthoc_audit_only": False,
-            "exact_function_event_deduplication_enabled": True,
-            "exact_function_event_deduplication_requires": [
-                "conclusion=excluded_function_owned",
-                "known final function_event_ref",
-                "same_physical_event=true",
-                "placement subject overlaps a cited Function event role",
-            ],
-            "object_overlap_alone_suppresses": False,
-        }
-        request["response_contract"]["placement_check_results"] = {
-            "required": bool(placement_checks),
-            "exact_check_ids": [
-                str(item.get("check_id") or "")
-                for item in placement_checks
-            ],
-            "fields": [
-                "check_id",
-                "subject_id",
-                "context_ids",
-                "observation_status",
-                "conclusion",
-                "reason",
-            ],
-            "observation_status": [
-                "observed",
-                "inferred_under_budget",
-                "missing",
-            ],
-            "conclusion": [
-                "valid",
-                "invalid",
-                "excluded_function_owned",
-                "unresolved",
-            ],
-            "conditional_excluded_function_owned_fields": [
-                "function_event_ref",
-                "same_physical_event",
-            ],
-            "excluded_function_owned_contract": {
-                "function_event_ref": "one exact supplied final event ID",
-                "same_physical_event": True,
-                "defects_for_check": 0,
-                "shared_object_identity_is_sufficient": False,
-            },
-        }
-        request["response_contract"][
-            "judge_originated_placement_results"
-        ] = {
-            "purpose": "strictly_typed_discovery_miss_recovery",
-            "same_call_resolution_requires_current_evidence": True,
-            "insufficient_evidence_requires": (
-                "evidence_request.metadata.placement_check_proposal"
-            ),
-            "fields": [
-                "proposal_id",
-                "subject_id",
-                "context_ids",
-                "check_type",
-                "observation_goal",
-                "observation_status",
-                "conclusion",
-                "reason",
-                "severity",
-            ],
-            "check_type": [
-                *allowed_placement_check_types,
-            ],
-            "proposal_defect_reference": (
-                "defect.check_id equals proposal_id in the model response; "
-                "the Controller replaces it with the stable check_id"
-            ),
-        }
-        if residual_phase:
-            residual_groups = [
-                {
-                    "group_id": str(item.get("group_id") or ""),
-                    "object_ids": list(item.get("object_ids") or []),
-                }
-                for item in selected_groups
-                if isinstance(item, dict)
-            ]
-            request["response_contract"][
-                "group_global_observations"
-            ] = {
-                "required": True,
-                "schema_version": (
-                    "placement_residual_group_observations_v1"
-                ),
-                "exact_group_ids": [
-                    item["group_id"] for item in residual_groups
-                ],
-                "one_row_per_group": True,
-                "fields": [
-                    "group_id",
-                    "object_ids",
-                    "global_position_observation",
-                    "related_group_ids",
-                    "inter_group_observation",
-                    "evidence_sufficiency",
-                    "residual_issue_candidate",
-                ],
-                "evidence_sufficiency": [
-                    "sufficient",
-                    "partial_but_usable",
-                    "insufficient",
-                ],
-                "residual_issue_candidate": [
-                    "none",
-                    "scene_zone",
-                    "contextual_anchor",
-                ],
-                "decision_authority": "none",
-                "final_synthesis_rule": (
-                    "inspect every group first; then issue only novel "
-                    "scene_zone/contextual_anchor results"
-                ),
-            }
     if allow_scene_wide_functional_ownership:
         request["allowed_external_evidence_target_ids"] = list(
             allowed_defect_target_ids
@@ -2569,39 +3075,33 @@ def _judge_request(
             if isinstance(item, dict) and item.get("id")
         ]
     if group_scope is not None:
-        scope_value = group_scope.to_dict()
-        request["scene_summary"]["group_scope"] = deepcopy(
-            {
-                "group_id": scope_value.get("group_id"),
-                "member_ids": deepcopy(
-                    scope_value.get("member_ids") or []
-                ),
-            }
-            if functional_visual_context
-            else scope_value
+        _attach_group_scope(
+            request,
+            group_scope,
+            functional_visual_context=functional_visual_context,
         )
-        request.update(
-            {
-                "group_scope": scope_value,
-                "member_ids": list(group_scope.member_ids),
-                "target_bounds": deepcopy(
-                    scope_value["target_bounds"]
-                ),
-                "focus_center": list(group_scope.focus_center),
-                "target_extent": list(group_scope.extent),
-                "evidence_goal": group_scope_evidence_goal(
-                    group_scope
-                ),
-                "grouping_role": (
-                    "primary_visual_evidence_decomposition"
-                ),
-            }
-        )
-        request["event"]["group_id"] = group_scope.group_id
-        request["event"]["focus_region"] = deepcopy(
-            scope_value["target_bounds"]
-        )
+    if adaptive_enabled(metric=metric_name):
+        from benchmark.visual_judge.evidence_resolution import policy_of
+        request["evidence_resolution_policy"] = policy_of()
+        request["camera_scene_context"] = deepcopy(scene)
+        from benchmark.visual_judge.evidence_gap_v2 import enabled as fallback_v2_enabled
+        if fallback_v2_enabled() and metric_name == "semantic_placement_consistency":
+            request["placement_scene_groups"] = deepcopy(groups or [])
+            request["placement_check_policy"]["final_owner_stage"] = (
+                "group_local" if evidence_phase in {"group_local_review", "initial_visual"}
+                else "scene_global"
+            )
+            request["placement_check_policy"]["cross_stage_proposal_route"] = (
+                "evidence_request.metadata.placement_check_proposal"
+            )
+            if evidence_phase in {"group_local_review", "initial_visual"}:
+                allowed_placement_check_types[:] = ["support_and_height", "contextual_anchor"]
     return request
+
+
+def _judge_group_context(group: dict[str, Any]) -> dict[str, Any]:
+    from benchmark.visual_judge.group_context import project_group
+    return project_group(group)
 
 
 def _compact_object(value: dict[str, Any]) -> dict[str, Any]:
@@ -2613,6 +3113,18 @@ def _compact_object(value: dict[str, Any]) -> dict[str, Any]:
         "center": deepcopy(value.get("center")),
         "size": deepcopy(value.get("size") or proxy.get("bbox_size")),
         "rotation": deepcopy(value.get("rotation")),
+    }
+
+
+def _compact_pairing_object(
+    value: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "id": value.get("id"),
+        "category": (
+            value.get("category")
+            or value.get("retrieval_category")
+        ),
     }
 
 
@@ -2629,6 +3141,11 @@ def _compact_functional_object(
 
 
 def _call_scene_quality_judge(judge: Any, request: dict[str, Any]) -> dict[str, Any]:
+    from benchmark.visual_judge.evidence_gap_v2 import enabled as fallback_v2_enabled
+    if fallback_v2_enabled(request) and request.get("adaptive_terminal"):
+        # A routing screen must not bypass the controlled terminal boundary
+        # after its acquisition has ended (or failed).
+        request = {**request, "decision_mode": "final"}
     call = None
     if str(request.get("decision_mode") or "").lower() == "screen":
         call = getattr(judge, "screen_scene_quality", None)

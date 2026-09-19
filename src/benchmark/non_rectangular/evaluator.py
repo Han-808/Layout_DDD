@@ -7,7 +7,7 @@ import math
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
-from benchmark.evaluator import resolve_evaluation_profile
+from benchmark.evaluator.profile import resolve_evaluation_profile
 from benchmark.evaluator.generic_validity.collision import check_collision
 from benchmark.evaluator.generic_validity.support import check_support
 from benchmark.evaluator.scene_quality.definitions import (

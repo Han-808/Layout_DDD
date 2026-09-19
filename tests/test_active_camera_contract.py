@@ -527,7 +527,7 @@ def test_oob_preview_requires_visible_object_and_architecture_plane() -> None:
     assert assessment["camera_repairable"] is True
 
 
-def test_support_duplicate_views_are_camera_repairable() -> None:
+def test_support_one_required_view_does_not_reject_an_extra_duplicate() -> None:
     request = {"metric": "support", "object_ids": ["obj_001"]}
     visibility = {
         "target_pixel_fractions": {"obj_001": 0.02},
@@ -545,9 +545,11 @@ def test_support_duplicate_views_are_camera_repairable() -> None:
         poses_by_id={"view_00": pose, "view_01": pose},
     )
 
-    assert assessment["status"] == INSUFFICIENT
-    assert assessment["reason_codes"] == ["redundant_local_views"]
-    assert assessment["camera_repairable"] is True
+    assert assessment["status"] == "sufficient"
+    assert assessment["reason_codes"] == [
+        "selected_preview_visibility_sufficient"
+    ]
+    assert assessment["camera_repairable"] is False
 
 
 def test_shadow_mode_preserves_official_deterministic_packet(tmp_path: Path) -> None:

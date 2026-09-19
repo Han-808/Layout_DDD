@@ -369,6 +369,12 @@ def discover_openai_compatible_functional_evidence(
             ),
         )
     )
+    from benchmark.visual_judge.functional_relation_recovery import complete_relation_inventory
+    relations, relation_schema_audit = complete_relation_inventory(
+        model=model, normalized=normalized, messages=relation_messages,
+        initial_metadata=relation_meta, relations=relations, audit=relation_schema_audit,
+        response_format_json=use_json_response, initial_raw=relation_raw,
+    )
     relation_meta["schema_validation"] = deepcopy(relation_schema_audit)
     relation_meta["affordance_prior"] = {
         "policy": relation_affordance_prior["policy"],
@@ -1030,6 +1036,9 @@ def _validate_discovery_response_with_single_repair(
         status="complete",
         latency_seconds=round(time.perf_counter() - started, 6),
     )
+    # Parsing may fail before assignment (for example, a length-truncated reply).
+    # Salvage must still see an empty repair and retain legal initial atoms.
+    repaired_value: Any = None
     try:
         repaired_value = parse_json_object(repaired_raw)
         repaired = validator(repaired_value)

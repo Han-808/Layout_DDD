@@ -6,6 +6,7 @@ import math
 from typing import Any
 
 from benchmark.visual_judge.control_config import VLMEvaluationControl
+from benchmark.visual_judge.evidence_resolution import adaptive_enabled, failure_record
 from benchmark.visual_judge.interfaces.camera import (
     CameraSelectionRequest,
     CameraSelectionResult,
@@ -45,6 +46,7 @@ class SelectionExecution:
     selector_calls: int
     failure_kind: str | None = None
     error: str | None = None
+    failure: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -98,7 +100,9 @@ class CameraRepairExecutor:
                 selection=None,
                 selector_calls=dispatch_charge,
                 failure_kind=exc.failure_kind,
-                error=str(exc),
+                error=(type(exc.original_error).__name__ if adaptive_enabled(self.control, metric=request.metric) else str(exc)),
+                failure=(failure_record(exc.original_error, phase="acquisition")
+                         if adaptive_enabled(self.control, metric=request.metric) else None),
             )
         return SelectionExecution(
             selection=selection,
@@ -290,6 +294,12 @@ class CameraRepairExecutor:
             else:
                 reason = "camera evidence rendering failed"
                 stop_reason = "render_failed"
+            if adaptive_enabled(self.control, metric=judge_request.metric):
+                failure = failure_record(exc, phase="acquisition")
+                if failure_contract_error or "provenance_validation_error" in failure_provenance:
+                    failure = {"failure_category": "input_integrity_failure", "phase": "acquisition",
+                               "error_type": type(exc).__name__, "recoverable_acquisition": False}
+                failure_provenance["failure"] = failure
             return RenderExecution(
                 rendered=None,
                 render_request=render_request,
@@ -297,7 +307,7 @@ class CameraRepairExecutor:
                 camera_actions=failure_camera_actions,
                 rejected_visual_evidence=tuple(deepcopy(rejected)),
                 failure_kind="render_failure",
-                error=f"{type(exc).__name__}: {exc}",
+                error=(type(exc).__name__ if adaptive_enabled(self.control, metric=judge_request.metric) else f"{type(exc).__name__}: {exc}"),
                 stop_reason=stop_reason,
                 reason=reason,
                 failure_provenance=failure_provenance,

@@ -8,7 +8,7 @@ semantics.
 from __future__ import annotations
 
 
-L3_METRIC_PROMPT_VERSION = "l3_burden_categories_v30"
+L3_METRIC_PROMPT_VERSION = "l3_burden_categories_v31"
 
 L3_METRIC_BOUNDARY_RULES = (
     "Additional visual evidence can be acquired.",
@@ -23,9 +23,12 @@ L3_METRIC_BOUNDARY_RULES = (
     "subjective preference, and proximity to a normative threshold are not "
     "evidence insufficiency. If the evidence is adequate but no clear "
     "significant in-scope defect is established, return valid.",
-    "Object pairing owns object identity and semantic role. If the same object "
-    "would remain inappropriate after relocation to any reasonable location "
-    "in the same scene, it is an object-pairing defect.",
+    "Object pairing owns room-global semantic inventory coherence: object "
+    "identity, semantic role, coexistence, and materially implausible role "
+    "redundancy. If coherence would require removing, replacing, "
+    "reclassifying, or changing the semantic role of an existing object, it "
+    "is an object-pairing defect. If relocation alone can make the complete "
+    "inventory plausible, it is not.",
     "Semantic placement assumes the identity belongs in the scene. It owns the "
     "current support surface, height, scene zone, and contextual location when "
     "relocation alone would remove the anomaly.",
@@ -144,19 +147,30 @@ L3_METRIC_RUBRICS = {
         "or gross."
     ),
     "object_pairing_consistency": (
-        "Judge only whether an object's identity and semantic role belong in "
-        "this scene and local ensemble, independently of its current "
-        "transform. Apply the relocation test: hold identity, category, scale, "
-        "and style fixed, then imagine relocating the object to a reasonable "
-        "location in the same scene. If at least one ordinary location would "
-        "make its role contextually plausible, the object pairing is valid. "
-        "Return invalid only when its category or semantic role would remain "
-        "clearly inappropriate regardless of reasonable relocation. The "
-        "supplied group is evidence scope, not compatibility ground truth. Do "
-        "not judge current support surface, zone, height, distance, "
-        "orientation, access, clearance, scale, style, collision, or physical "
-        "support. Classify each invalid defect as out_of_context_object or "
-        "incompatible_object_set. Object-pairing invalidity has no mild tier."
+        "Judge only the room-global semantic inventory coherence of the "
+        "complete canonical room object list, independently of current transforms. "
+        "Treat the list as a multiset of object identities and semantic roles. "
+        "Judge whether individual objects and their combined role composition "
+        "can plausibly coexist in at least one ordinary interpretation of this "
+        "room. Apply the inventory counterfactual: hold every object's "
+        "identity, category, count, and semantic role fixed, then "
+        "allow reasonable relocation within the same room. Return valid if the "
+        "complete inventory can thereby become plausible. Return invalid only "
+        "when semantic coherence would require removing, replacing, "
+        "reclassifying, or changing the role of one or more existing objects. "
+        "This includes an individually out-of-context object, mutually "
+        "incompatible object roles, or materially implausible redundancy in "
+        "the room's role composition. Repetition alone carries no invalidity "
+        "prior. Do not require a stereotypical room checklist, penalize missing "
+        "expected objects, or reject an unusual but plausible multi-purpose "
+        "inventory. Do not judge current support surface, zone, height, "
+        "distance, orientation, access, clearance, scale, style, collision, "
+        "physical support, or prompt-specific count fidelity. Use the global "
+        "room view only to confirm visible object identity and whether one "
+        "coherent room-level inventory interpretation exists; do not turn "
+        "layout awkwardness into a Pairing defect. Classify each invalid "
+        "defect as out_of_context_object or incompatible_object_set. "
+        "Object-pairing invalidity has no mild tier."
     ),
     "functional_consistency": (
         "Judge only whether ordinary real-world use is feasible in the current "

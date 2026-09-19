@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+from benchmark.visual_judge.evidence_resolution import (
+    ADAPTIVE_POLICY, adaptive_enabled, failure_record, with_evidence_policy, policy_of,
+)
+
 from copy import deepcopy
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
-from benchmark.architecture_policy import architecture_contract_from_scene
+from benchmark.non_rectangular.architecture import observable_architecture_from_scene
 from benchmark.evaluator.context_projection import (
     project_scene_for_evaluator_context,
 )
@@ -124,6 +128,7 @@ LocalViewProvider = Callable[
 ]
 
 
+@with_evidence_policy
 def adjudicate_p0b_event(
     *,
     metric: str,
@@ -137,6 +142,7 @@ def adjudicate_p0b_event(
     overview_render_evidence: list[str] | None = None,
     local_view_provider: LocalViewProvider | None = None,
     visual_config_policy: str = "metric_default",
+    structured_geometry_finalization: dict[str, Any] | None = None,
 ) -> dict:
     """Resolve one ambiguous P0b event with a mandatory binary VLM verdict.
 
@@ -163,7 +169,7 @@ def adjudicate_p0b_event(
         for item in scene.get("objects", [])
         if isinstance(item, dict) and str(item.get("id")) in resolved_ids
     ]
-    architecture = _observable_architecture_for_scene(scene)
+    architecture = observable_architecture_from_scene(scene)
     local_request = build_p0b_local_evidence_request(
         metric=metric_name,
         event=event,
@@ -173,51 +179,51 @@ def adjudicate_p0b_event(
         detector_evidence=detector_evidence,
         object_ids=resolved_ids,
     )
-    local_acquisition_exhaustion: dict[str, Any] | None = None
+    adaptive = adaptive_enabled(judge, metric=metric_name)
+    acquisition_failure = None
+    acquisition = None
     try:
-        local_items = (
-            list(local_view_provider(local_request))
-            if local_view_provider is not None
-            else []
-        )
+        from benchmark.visual_judge.evidence_gap_v2 import enabled as fallback_v2_enabled
+        if adaptive and fallback_v2_enabled(judge):
+            from benchmark.visual_judge.acquisition_outcome import acquire_evidence
+            acquisition = acquire_evidence(local_view_provider or (lambda _: []), local_request)
+            local_items = acquisition.items
+            acquisition_failure = acquisition.audit.get("failure")
+        else:
+            local_items = list(local_view_provider(local_request)) if local_view_provider is not None else []
     except Exception as exc:
-        if not nonrect_scene:
-            raise
-        from benchmark.non_rectangular.camera import (
-            NonRectangularCameraEvidenceExhausted,
-        )
-
-        if not isinstance(
-            exc,
-            NonRectangularCameraEvidenceExhausted,
-        ):
+        acquisition_failure = failure_record(exc, phase="acquisition")
+        if not adaptive or not acquisition_failure["recoverable_acquisition"]:
             raise
         local_items = []
-        local_acquisition_exhaustion = {
-            "error_type": type(exc).__name__,
-            "reason": "bounded_nonrect_local_camera_search_exhausted",
-        }
     local_paths, local_metadata = _normalize_local_view_items(local_items)
     overview_paths = list(overview_render_evidence or [])
     applied_visual_config: dict[str, Any] | None = None
+    packet_incomplete = False
     if (
         visual_config_policy == "metric_default"
         and metric_name in DEFAULT_P0B_VISUAL_CONFIGS
         and is_metric_focus_evidence(local_metadata, metric=metric_name)
     ):
-        selected_items, applied_visual_config = compose_default_p0b_visual_evidence(
-            metric_name,
-            local_metadata,
-        )
+        try:
+            selected_items, applied_visual_config = compose_default_p0b_visual_evidence(
+                metric_name, local_metadata,
+            )
+        except RuntimeError:
+            if not adaptive:
+                raise
+            selected_items = local_metadata
+            packet_incomplete = True
         local_paths, local_metadata = _normalize_local_view_items(selected_items)
         render_evidence = list(local_paths)
         max_images = getattr(judge, "max_images", None)
-        if isinstance(max_images, int) and max_images < len(render_evidence):
+        if not adaptive and isinstance(max_images, int) and max_images < len(render_evidence):
             raise RuntimeError(
                 f"judge max_images={max_images} is below the {metric_name} default "
                 f"VisualConfig budget={len(render_evidence)}"
             )
     else:
+        packet_incomplete = adaptive
         # Legacy/path-only providers and frozen experiment arms retain their
         # original evidence ordering. OOB is global-first in that contract.
         render_evidence = _deduplicate_paths(
@@ -252,6 +258,10 @@ def adjudicate_p0b_event(
             judge_method="adjudicate_p0b",
         ),
     }
+    if structured_geometry_finalization is not None:
+        request["structured_geometry_finalization"] = deepcopy(
+            structured_geometry_finalization
+        )
     if str(prompt or "").strip():
         request["natural_language_prompt"] = str(prompt)
         if relationships is not None:
@@ -267,6 +277,16 @@ def adjudicate_p0b_event(
             "local_camera_mode": "visibility_ranked",
             "pose_selector": "deterministic",
         }
+    if adaptive:
+        request["evidence_resolution_policy"] = policy_of(judge)
+        request["camera_scene_context"] = deepcopy(scene)
+        request["adaptive_packet_incomplete"] = packet_incomplete or acquisition_failure is not None
+        request["adaptive_missing_observations"] = ["calibrated_visual_packet_incomplete"] if packet_incomplete else []
+        if acquisition_failure is not None:
+            request["acquisition_failure"] = acquisition_failure
+        if acquisition is not None:
+            from benchmark.visual_judge.evidence_resolution import bind_provider_acquisition
+            bind_provider_acquisition(request, acquisition.audit)
     if metric_name in CANDIDATE_SELECTION_POLICY_METRICS:
         # Collision and Support candidates are proposed by high-recall detectors;
         # selection carries no verdict prior. Surface this explicitly so it
@@ -304,9 +324,7 @@ def adjudicate_p0b_event(
             "retained_visual_count": len(render_evidence),
             "geometry_context_available": True,
             "candidate_generation_audit": candidate_audit,
-            "typed_acquisition_exhaustion": deepcopy(
-                local_acquisition_exhaustion
-            ),
+            "typed_acquisition_exhaustion": deepcopy(acquisition_failure),
             "degraded": True,
         }
         request["visual_evidence_policy"] = {
@@ -347,6 +365,7 @@ def adjudicate_p0b_event(
         }
     elif (
         metric_name == "support"
+        and not adaptive
         and visual_config_policy == "metric_default"
         and _support_local_raw_count(
             local_paths=local_paths,
@@ -420,6 +439,7 @@ def adjudicate_p0b_event(
     return {
         "status": "evaluated",
         "metric": metric_name,
+        **({"evidence_resolution": deepcopy(raw["evidence_resolution"])} if raw.get("evidence_resolution") else {}),
         "verdict": verdict,
         "score": 1.0 if verdict == "valid" else 0.0,
         "confidence": confidence,
@@ -451,6 +471,7 @@ def _with_p0b_evidence_control(
     max_steps = getattr(local_view_provider, "max_steps", None)
     max_images = getattr(judge, "max_images", None)
     control = resolve_vlm_evaluation_control(
+        {"evidence_resolution_policy": policy_of(judge)} if adaptive_enabled(judge) else None,
         existing_max_views=(
             max_views
             if isinstance(max_views, int)
@@ -536,7 +557,14 @@ def _project_scene_for_camera_evidence(
     if not isinstance(metadata, dict):
         metadata = {}
         projected["metadata"] = metadata
-    architecture = deepcopy(architecture_contract_from_scene(scene))
+    from benchmark.non_rectangular.geometry import polygon_geometry_from_scene
+
+    if polygon_geometry_from_scene(projected) is not None:
+        # Polygon metadata is the render contract. Never store an observable
+        # polygon summary under the incompatible rectangular formal contract.
+        metadata.pop("architecture_contract", None)
+        return projected
+    architecture = observable_architecture_from_scene(scene)
     physical = architecture.get("physical_walls")
     if isinstance(physical, dict):
         physical["policy_source"] = "withheld_from_evaluator"
@@ -725,7 +753,6 @@ def _project_architecture_for_judge(
     }
     if architecture.get("geometry_type") == "non_rectangular_polygon":
         projected["geometry_type"] = "non_rectangular_polygon"
-        projected["ceiling"] = {"enabled": False, "z": None}
     if metric not in _PHYSICAL_WALL_METRICS:
         return projected
     physical = architecture.get("physical_walls")
@@ -751,9 +778,7 @@ def _project_architecture_for_judge(
         ),
     }
     if architecture.get("geometry_type") == "non_rectangular_polygon":
-        projected["physical_walls"]["wall_segments"] = deepcopy(
-            physical.get("wall_segments") or []
-        )
+        projected["physical_walls"]["wall_segments"] = deepcopy(physical.get("wall_segments") or [])
     return projected
 
 
@@ -765,7 +790,8 @@ def _project_detector_evidence_for_judge(
 
     projected = deepcopy(detector_evidence)
     projected.pop("extracted_relationships_are_claims_only", None)
-    projected.pop("candidate_selection_policy", None)
+    # Retain the explicit no-prior candidate policy beside the measurements;
+    # downstream Judges and audits must not infer invalidity from routing.
     if metric != "support":
         return projected
 

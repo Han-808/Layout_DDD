@@ -34,6 +34,7 @@ from benchmark.evaluator.generic_validity.mesh_collision import (
 )
 from benchmark.evaluator.generic_validity.obb_sat import obb_encloses_points, obb_sat_test, obb_sat_test_parts
 from benchmark.rendering.blender_worker import _uniform_contain_fit
+from benchmark.task_contract import architecture_contract_for_room
 from benchmark.visual_judge.contracts import ResponseSchemaRepairError
 
 
@@ -135,10 +136,67 @@ class _Judge:
     def __init__(self, verdict: str) -> None:
         self.verdict = verdict
         self.calls = 0
+        self.requests: list[dict] = []
 
     def adjudicate_p0b(self, request: dict) -> dict:
         self.calls += 1
+        self.requests.append(request)
         return {"verdict": self.verdict, "confidence": 0.9, "reason": "test"}
+
+
+def test_active_wall_volume_penetration_is_not_collision_owned() -> None:
+    scene = _scene(
+        [
+            _obj(
+                "cabinet",
+                [0.03, 1.5, 1.0],
+                [0.04, 0.8, 0.8],
+                category="cabinet",
+                description="storage cabinet",
+            )
+        ]
+    )
+    scene["metadata"]["architecture_contract"] = (
+        architecture_contract_for_room(
+            {
+                "boundary": scene["boundary"],
+                "height": scene["scene_height"],
+            },
+            physical_wall_policy="explicit_only",
+            active_wall_ids=("west_wall",),
+            policy_source="wall-volume-test",
+        )
+    )
+    judge = _Judge("invalid")
+
+    report = check_collision(scene, vlm_judge=judge)
+
+    assert report["score"] == 1.0
+    assert report["pairs"] == []
+    assert judge.calls == 0
+
+
+def test_inactive_wall_does_not_change_collision_baseline() -> None:
+    scene = _scene(
+        [_obj("cabinet", [0.03, 1.5, 1.0], [0.04, 0.8, 0.8])]
+    )
+    scene["metadata"]["architecture_contract"] = (
+        architecture_contract_for_room(
+            {
+                "boundary": scene["boundary"],
+                "height": scene["scene_height"],
+            },
+            physical_wall_policy="explicit_only",
+            active_wall_ids=(),
+            policy_source="inactive-wall-test",
+        )
+    )
+
+    report = check_collision(scene)
+
+    assert report["status"] == "checked"
+    assert report["score"] == 1.0
+    assert report["pairs"] == []
 
 
 # 1. Full 3D OBB SAT separation and intersection
@@ -179,8 +237,27 @@ def test_obb_separation_skips_mesh_and_vlm() -> None:
     judge = _Judge("invalid")
     report = check_collision(scene, {"detector_only": False}, vlm_judge=judge)
     pair = report["pairs"][0]
-    assert pair["route"] == "direct_valid_obb_separated"
+    assert pair["route"] == "direct_valid_bounding_sphere_separated"
+    assert pair["bounding_sphere_evidence"]["certifiably_separated"] is True
     assert pair["final_verdict"] == "valid"
+    assert judge.calls == 0
+
+
+def test_obb_separation_culls_when_bounding_spheres_overlap() -> None:
+    scene = _scene(
+        [
+            _obj("a", [1.0, 1.0, 0.5], [0.5, 4.0, 0.5]),
+            _obj("b", [2.0, 1.0, 0.5], [0.5, 4.0, 0.5]),
+        ]
+    )
+    judge = _Judge("invalid")
+
+    report = check_collision(scene, vlm_judge=judge)
+
+    pair = report["pairs"][0]
+    assert pair["bounding_sphere_evidence"]["certifiably_separated"] is False
+    assert pair["obb_evidence"]["obb_certifiably_separated"] is True
+    assert pair["route"] == "direct_valid_obb_separated"
     assert judge.calls == 0
 
 
@@ -860,11 +937,18 @@ def test_mesh_backend_failure_is_explicit(tmp_path: Path) -> None:
     assert result["mesh_reliable_for_separation"] is False
 
 
-# 13. Missing judge in official mode fails evaluation
-def test_missing_judge_in_official_mode_fails() -> None:
+# 13. Missing judge in official mode uses explicit binary policy
+def test_missing_judge_in_official_mode_uses_policy_valid() -> None:
     scene = _scene([_obj("a", [1.0, 1.0, 0.5], [1.0, 1.0, 1.0]), _obj("b", [1.2, 1.0, 0.5], [1.0, 1.0, 1.0])])
-    with pytest.raises(CollisionEvaluationError, match="no judge"):
-        check_collision(scene, {"official_mode": True}, vlm_judge=None)
+    report = check_collision(
+        scene,
+        {"official_mode": True},
+        vlm_judge=None,
+    )
+
+    assert report["status"] == "checked"
+    assert report["score"] == 1.0
+    assert report["pairs"][0]["route"] == "direct_valid_policy_fallback"
 
 
 # 14. Invalid VLM verdict fails parsing
@@ -878,7 +962,8 @@ def test_invalid_vlm_verdict_fails_parsing() -> None:
     scene = _scene([_obj("a", [1.0, 1.0, 0.5], [1.0, 1.0, 1.0]), _obj("b", [1.2, 1.0, 0.5], [1.0, 1.0, 1.0])])
     report = check_collision(scene, vlm_judge=BadJudge())
     assert report["pairs"][0]["adjudication_error"] is not None
-    assert report["pairs"][0]["route"] == "vlm_adjudication_failed"
+    assert report["pairs"][0]["route"] == "direct_valid_policy_fallback"
+    assert report["pairs"][0]["final_verdict"] == "valid"
     assert report["coverage"]["vlm_adjudicated_pairs"] == 0
 
 
@@ -908,10 +993,11 @@ def test_binary_schema_failure_audit_is_preserved_in_event_report() -> None:
     report = check_collision(scene, vlm_judge=BadJudge())
 
     pair = report["pairs"][0]
-    assert pair["route"] == "vlm_adjudication_failed"
+    assert pair["route"] == "direct_valid_policy_fallback"
+    assert pair["final_verdict"] == "valid"
     assert pair["adjudication_failure_audit"] == schema_audit
-    assert report["status"] == "requires_vlm"
-    assert report["score"] is None
+    assert report["status"] == "checked"
+    assert report["score"] == 1.0
 
 
 # 15. VLM valid/invalid update pair and aggregate reports
@@ -1076,10 +1162,11 @@ def test_aabb_nesting_does_not_claim_mesh_containment() -> None:
     assert _containment_numpy(disjoint, outer) is False
 
 
-def test_obb_separation_routes_when_complete_mesh_escapes_canonical_obb(tmp_path: Path) -> None:
+def test_canonical_separation_ignores_mesh_frame_escape(tmp_path: Path) -> None:
     mesh_a = tmp_path / "a.ply"
     # Canonical a is centered at x=1, but its claimed complete world mesh is at
-    # x=4 beside b.  OBB separation alone is therefore not a safe certificate.
+    # x=4 beside b. Collision follows the canonical generated placement;
+    # stale mesh framing is separate asset QA.
     _box_mesh(mesh_a, [4.0, 1.0, 0.5], [0.5, 0.5, 0.5])
     geometry = _geometry_manifest(
         tmp_path,
@@ -1105,9 +1192,9 @@ def test_obb_separation_routes_when_complete_mesh_escapes_canonical_obb(tmp_path
 
     pair = report["pairs"][0]
     assert pair["obb_evidence"]["obb_certifiably_separated"] is True
-    assert pair["mesh_enclosure_evidence"]["object_a"]["status"] == "outside_canonical_obb"
-    assert pair["route"] == "vlm_adjudicated"
-    assert judge.calls == 1
+    assert pair["mesh_enclosure_evidence"] is None
+    assert pair["route"] == "direct_valid_bounding_sphere_separated"
+    assert judge.calls == 0
 
 
 def test_obb_separation_accepts_renderer_style_contained_ply(tmp_path: Path) -> None:
@@ -1136,8 +1223,8 @@ def test_obb_separation_accepts_renderer_style_contained_ply(tmp_path: Path) -> 
     report = check_collision(scene, collision_geometry=geometry, vlm_judge=judge)
 
     pair = report["pairs"][0]
-    assert pair["mesh_enclosure_evidence"]["object_a"]["status"] == "verified_inside"
-    assert pair["route"] == "direct_valid_obb_separated"
+    assert pair["mesh_enclosure_evidence"] is None
+    assert pair["route"] == "direct_valid_bounding_sphere_separated"
     assert judge.calls == 0
 
 
@@ -1188,7 +1275,7 @@ def test_mesh_separation_cannot_bypass_canonical_frame_guard_when_obbs_overlap(
     assert judge.calls == 1
 
 
-def test_obb_separation_does_not_trust_unavailable_claimed_complete_mesh(tmp_path: Path) -> None:
+def test_canonical_separation_does_not_require_claimed_mesh(tmp_path: Path) -> None:
     geometry = _geometry_manifest(
         tmp_path,
         {
@@ -1212,9 +1299,9 @@ def test_obb_separation_does_not_trust_unavailable_claimed_complete_mesh(tmp_pat
     report = check_collision(scene, collision_geometry=geometry, vlm_judge=judge)
 
     pair = report["pairs"][0]
-    assert pair["mesh_enclosure_evidence"]["object_a"]["status"] == "mesh_enclosure_unavailable"
-    assert pair["route"] == "vlm_adjudicated"
-    assert judge.calls == 1
+    assert pair["mesh_enclosure_evidence"] is None
+    assert pair["route"] == "direct_valid_bounding_sphere_separated"
+    assert judge.calls == 0
 
 
 def test_glb_scene_graph_transforms_are_baked(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

@@ -40,9 +40,11 @@ DEFAULT_METRIC_CONTEXT_INSTRUCTIONS = {
         "intended visual style."
     ),
     "object_pairing_consistency": (
-        "Use room type only to disambiguate ordinary semantic compatibility. "
-        "Do not require stereotypical contents and do not penalize a "
-        "plausible multi-purpose use."
+        "Use room type only to disambiguate the room-global semantic "
+        "inventory of object identities, roles, coexistence, and materially "
+        "implausible redundancy. Do not require stereotypical contents, "
+        "penalize missing expected objects, or reject a plausible "
+        "multi-purpose use."
     ),
 }
 

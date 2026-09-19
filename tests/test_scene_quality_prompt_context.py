@@ -134,6 +134,12 @@ def test_evaluator_routes_short_context_not_full_prompt(tmp_path: Path) -> None:
     image = tmp_path / "pair.png"
     image.write_bytes(b"test-image")
     requests: list[dict] = []
+    scene = _scene()
+    scene["objects"][0].update(
+        description="generator says wall-mounted chair",
+        task_slot="wall_mounted",
+        generator_relationships=["against_wall"],
+    )
 
     def judge(request: dict) -> dict:
         requests.append(request)
@@ -165,7 +171,7 @@ def test_evaluator_routes_short_context_not_full_prompt(tmp_path: Path) -> None:
     }
     full_prompt = "Create a game room and place the chair north of the table."
     report = evaluate_scene_quality_interfaces(
-        _scene(),
+        scene,
         config=config,
         object_grouping_report={
             "object_groups": [
@@ -173,7 +179,7 @@ def test_evaluator_routes_short_context_not_full_prompt(tmp_path: Path) -> None:
             ]
         },
         render_evidence={
-            "object_pairing_consistency": {"group": [str(image)]}
+            "global": [str(image)]
         },
         vlm_judge=judge,
         prompt=full_prompt,
@@ -190,6 +196,25 @@ def test_evaluator_routes_short_context_not_full_prompt(tmp_path: Path) -> None:
     assert outbound["prompt"] != full_prompt
     assert "room_type: game room" in outbound["prompt"]
     assert "chair north of the table" not in outbound["prompt"]
+    assert outbound["scene_summary"]["objects"] == [
+        {"id": "chair", "category": "chair"},
+        {"id": "table", "category": "table"},
+    ]
+    assert outbound["camera_scene_context"]["objects"] == (
+        outbound["scene_summary"]["objects"]
+    )
+    assert set(outbound["scene_summary"]) == {
+        "scene_id",
+        "scene_type",
+        "object_count",
+        "objects",
+    }
+    assert outbound["camera_scene_context"] == outbound["scene_summary"]
+    serialized_context = str(outbound["camera_scene_context"])
+    assert "wall-mounted" not in serialized_context
+    assert "task_slot" not in serialized_context
+    assert "generator_relationships" not in serialized_context
+    assert outbound["object_groups"] == []
     metric = report["metrics"]["object_pairing_consistency"]
     assert metric["metric_prompt_context"]["values"] == {
         "room_type": "game room"
