@@ -27,6 +27,13 @@ class ChatOptionStyle(str, Enum):
     ADAPTIVE_THINKING = "adaptive_thinking"
 
 
+# Reasoning models on Azure OpenAI reject the deprecated ``max_tokens`` field and
+# require ``max_completion_tokens`` instead, so the output-budget field name is
+# part of a route's wire contract rather than a constant.
+MAX_TOKENS_FIELDS = frozenset({"max_tokens", "max_completion_tokens"})
+DEFAULT_MAX_TOKENS_FIELD = "max_tokens"
+
+
 @dataclass(frozen=True)
 class ChatOptionPolicy:
     """Typed, allowlisted Chat options rather than a free-form template."""
@@ -35,8 +42,14 @@ class ChatOptionPolicy:
     default_reasoning_effort: str | None = None
     fixed_reasoning_effort: str | None = None
     thinking_type: str | None = None
+    max_tokens_field: str = DEFAULT_MAX_TOKENS_FIELD
 
     def __post_init__(self) -> None:
+        if self.max_tokens_field not in MAX_TOKENS_FIELDS:
+            raise ValueError(
+                "Chat max_tokens_field must be one of "
+                f"{sorted(MAX_TOKENS_FIELDS)}, got {self.max_tokens_field!r}"
+            )
         if self.style is ChatOptionStyle.LEGACY_CORE:
             if any(
                 value is not None
@@ -76,13 +89,21 @@ class ChatOptionPolicy:
 
     @classmethod
     def top_level_reasoning(
-        cls, *, default_reasoning_effort: str = "max"
+        cls,
+        *,
+        default_reasoning_effort: str = "max",
+        max_tokens_field: str = DEFAULT_MAX_TOKENS_FIELD,
     ) -> "ChatOptionPolicy":
-        """Match the API2 Kimi top-level reasoning field layout."""
+        """Match the API2 Kimi top-level reasoning field layout.
+
+        ``max_tokens_field`` stays on the historical ``max_tokens`` default; Azure
+        reasoning routes pass ``max_completion_tokens``.
+        """
 
         return cls(
             style=ChatOptionStyle.TOP_LEVEL_REASONING,
             default_reasoning_effort=default_reasoning_effort,
+            max_tokens_field=max_tokens_field,
         )
 
     @classmethod
@@ -103,6 +124,7 @@ class ChatOptionPolicy:
             "default_reasoning_effort": self.default_reasoning_effort,
             "fixed_reasoning_effort": self.fixed_reasoning_effort,
             "thinking_type": self.thinking_type,
+            "max_tokens_field": self.max_tokens_field,
         }
 
 
@@ -127,6 +149,7 @@ class OpenAIChatCodec:
                 "content": canonical_json_bytes(user_value).decode("utf-8"),
             },
         ]
+        budget_field = self.option_policy.max_tokens_field
         if self.option_policy.style is ChatOptionStyle.TOP_LEVEL_REASONING:
             return {
                 "model": model.wire_model,
@@ -135,14 +158,14 @@ class OpenAIChatCodec:
                     model.reasoning_effort
                     or self.option_policy.default_reasoning_effort
                 ),
-                "max_tokens": model.max_tokens,
+                budget_field: model.max_tokens,
                 "stream": False,
             }
         if self.option_policy.style is ChatOptionStyle.ADAPTIVE_THINKING:
             return {
                 "model": model.wire_model,
                 "messages": messages,
-                "max_tokens": model.max_tokens,
+                budget_field: model.max_tokens,
                 "stream": False,
                 "thinking": {"type": self.option_policy.thinking_type},
                 "reasoning_effort": self.option_policy.fixed_reasoning_effort,
@@ -151,7 +174,7 @@ class OpenAIChatCodec:
         value: dict[str, Any] = {
             "model": model.wire_model,
             "messages": messages,
-            "max_tokens": model.max_tokens,
+            budget_field: model.max_tokens,
             "stream": False,
         }
         if model.temperature is not None:

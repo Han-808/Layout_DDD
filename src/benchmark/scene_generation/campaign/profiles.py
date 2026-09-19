@@ -61,6 +61,16 @@ _GRAMMARS = (
         legacy_route_kind="api2_responses",
     ),
     ProtocolGrammar(
+        # Azure reasoning deployments reject the deprecated `max_tokens` field and
+        # require `max_completion_tokens`; the wire shape is otherwise identical to
+        # `chat_top_level_reasoning_v1`.
+        codec_id="openai_chat_completions_v1",
+        gateway_id="api2_bearer_query_v1",
+        option_contract_id="chat_top_level_reasoning_azure_v1",
+        response_contract_id="openai_chat_single_choice_v1",
+        legacy_route_kind="api2_chat",
+    ),
+    ProtocolGrammar(
         codec_id="openai_chat_completions_v1",
         gateway_id="api3_bearer_session_v1",
         option_contract_id="chat_adaptive_thinking_v1",
@@ -340,6 +350,7 @@ class RequestOptions:
         option_id = route.option_contract_id
         if option_id in {
             "chat_top_level_reasoning_v1",
+            "chat_top_level_reasoning_azure_v1",
             "responses_reasoning_effort_v1",
         }:
             if self.reasoning_effort is None:

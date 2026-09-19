@@ -18,6 +18,8 @@ from typing import Any, Mapping
 
 from benchmark.scene_generation.frozen_two_stage.providers.base import ProviderRoute
 from benchmark.scene_generation.frozen_two_stage.providers.codecs.openai_chat import (
+    DEFAULT_MAX_TOKENS_FIELD,
+    MAX_TOKENS_FIELDS,
     ChatOptionPolicy,
 )
 from benchmark.scene_generation.frozen_two_stage.providers.routes import (
@@ -249,6 +251,7 @@ class RouteConfig:
     timeout_seconds: int | None = None
     chat_option_style: str | None = None
     reasoning_effort: str | None = None
+    chat_max_tokens_field: str = DEFAULT_MAX_TOKENS_FIELD
 
     def build_route(self) -> ProviderRoute:
         """Compose existing codec/gateway classes; never infer from model name."""
@@ -263,7 +266,8 @@ class RouteConfig:
                 option_policy=ChatOptionPolicy.top_level_reasoning(
                     default_reasoning_effort=self._required(
                         self.reasoning_effort, "reasoning_effort"
-                    )
+                    ),
+                    max_tokens_field=self.chat_max_tokens_field,
                 ),
                 route_key=self.key,
                 runner_version=self.runner_version,
@@ -322,6 +326,13 @@ class RouteConfig:
                 "timeout_seconds": self.timeout_seconds,
                 "chat_option_style": self.chat_option_style,
                 "reasoning_effort": self.reasoning_effort,
+                # Recorded only when it deviates, so existing routes keep their
+                # historical public shape.
+                "chat_max_tokens_field": (
+                    None
+                    if self.chat_max_tokens_field == DEFAULT_MAX_TOKENS_FIELD
+                    else self.chat_max_tokens_field
+                ),
             }.items()
             if value is not None
         }
@@ -410,7 +421,9 @@ class FrozenTwoStageRunConfig:
         }
 
 
-def _parse_chat_options(value: Any, *, route_kind: str) -> tuple[str, str | None]:
+def _parse_chat_options(
+    value: Any, *, route_kind: str
+) -> tuple[str, str | None, str]:
     options = _object(value, field_name="route.chat_options")
     style = _string(options.get("style"), field_name="route.chat_options.style")
     if style == "legacy_core":
@@ -421,12 +434,13 @@ def _parse_chat_options(value: Any, *, route_kind: str) -> tuple[str, str | None
         )
         if route_kind != "api3_chat":
             raise ValueError("legacy_core Chat options are allowlisted only for API3")
-        return style, None
+        return style, None, DEFAULT_MAX_TOKENS_FIELD
     if style == "top_level_reasoning":
         _keys(
             options,
             field_name="route.chat_options",
             required=frozenset({"style", "default_reasoning_effort"}),
+            optional=frozenset({"max_tokens_field"}),
         )
         if route_kind != "api2_chat":
             raise ValueError(
@@ -436,7 +450,7 @@ def _parse_chat_options(value: Any, *, route_kind: str) -> tuple[str, str | None
             options["default_reasoning_effort"],
             field_name="route.chat_options.default_reasoning_effort",
         )
-        return style, effort
+        return style, effort, _parse_max_tokens_field(options)
     if style == "adaptive_thinking":
         _keys(
             options,
@@ -451,8 +465,23 @@ def _parse_chat_options(value: Any, *, route_kind: str) -> tuple[str, str | None
             options["reasoning_effort"],
             field_name="route.chat_options.reasoning_effort",
         )
-        return style, effort
+        return style, effort, DEFAULT_MAX_TOKENS_FIELD
     raise ValueError(f"unsupported route.chat_options.style: {style!r}")
+
+
+def _parse_max_tokens_field(options: Mapping[str, Any]) -> str:
+    """Resolve the output-budget field name, defaulting to the historical one."""
+
+    field_name = "route.chat_options.max_tokens_field"
+    value = _slug(
+        options.get("max_tokens_field", DEFAULT_MAX_TOKENS_FIELD),
+        field_name=field_name,
+    )
+    if value not in MAX_TOKENS_FIELDS:
+        raise ValueError(
+            f"{field_name} must be one of {sorted(MAX_TOKENS_FIELDS)}, got {value!r}"
+        )
+    return value
 
 
 def _parse_route(value: Any) -> RouteConfig:
@@ -476,8 +505,11 @@ def _parse_route(value: Any) -> RouteConfig:
         _keys(route, field_name="route", required=required, optional=optional)
         style: str | None = None
         effort: str | None
+        budget_field = DEFAULT_MAX_TOKENS_FIELD
         if kind == "api2_chat":
-            style, effort = _parse_chat_options(route["chat_options"], route_kind=kind)
+            style, effort, budget_field = _parse_chat_options(
+                route["chat_options"], route_kind=kind
+            )
         else:
             effort = _slug(
                 route["default_reasoning_effort"],
@@ -500,6 +532,7 @@ def _parse_route(value: Any) -> RouteConfig:
             ),
             chat_option_style=style,
             reasoning_effort=effort,
+            chat_max_tokens_field=budget_field,
         )
     if kind == "api3_chat":
         _keys(
@@ -508,7 +541,7 @@ def _parse_route(value: Any) -> RouteConfig:
             required=common_required | frozenset({"chat_options"}),
             optional=common_optional,
         )
-        style, effort = _parse_chat_options(route["chat_options"], route_kind=kind)
+        style, effort, _ = _parse_chat_options(route["chat_options"], route_kind=kind)
         return RouteConfig(
             kind=kind,
             key=key,

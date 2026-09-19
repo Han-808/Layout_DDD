@@ -503,7 +503,7 @@
         },
         {
           "path": "providers/codecs/openai_chat.py",
-          "sha256": "4b35f37b5561831d9bb1b3d043fdd69c9c1521b6641786b56fe764143df8a60f",
+          "sha256": "b55fca16c889b56efb98ec7f1ebd10a06daeca8f8627688e87f588d9dc35c962",
           "mode": "0644"
         },
         {
@@ -663,7 +663,7 @@
         },
         {
           "path": "legacy_v1.py",
-          "sha256": "a1625cc3ca168fd2e05b80277224fb0b5d7ca0a7f4aee925f16d8fe1a194b955",
+          "sha256": "d920a73657fb3e649506409644f6088a134d7a8f85363bff40300a85ea1a7920",
           "mode": "0644"
         },
         {
@@ -683,12 +683,12 @@
         },
         {
           "path": "profiles.py",
-          "sha256": "19070a7dcdabd36b3688faebc3bc71205d3a9d2547db461c62ad88e6380836ea",
+          "sha256": "6edb9f3887ffb2b5d382dfea70227b03fec6f6f70db86e1b82fd6abad874e1ce",
           "mode": "0644"
         },
         {
           "path": "runtime.py",
-          "sha256": "4dee70b25dc952a4589c60c6809c773909c600b28248a5a9a66da4f4c5ebba92",
+          "sha256": "183336501d95efff22ffd39cbda477ff1f8b4ec19777466fef77c6992bddbc73",
           "mode": "0644"
         }
       ]
