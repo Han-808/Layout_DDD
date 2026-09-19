@@ -516,13 +516,21 @@ def test_zero_visual_deterministic_l1_fallbacks_are_binary_and_audited() -> None
         check_collision(collision_scene),
     )
     assert collision["status"] == "checked"
+    # With no judge configured, check_collision now resolves the pair itself and
+    # attaches a structured fallback record, instead of leaving it for the caller's
+    # zero-visual finalizer. The outcome must still be binary and auditable.
     collision_fallbacks = [
         item for item in collision["pairs"]
-        if item.get("route") == "deterministic_zero_visual_fallback"
+        if item.get("route") == "direct_valid_policy_fallback"
     ]
     assert collision_fallbacks
     assert all(
         item["final_verdict"] in {"valid", "invalid"}
+        for item in collision_fallbacks
+    )
+    assert all(
+        item["structured_fallback"]["trigger_reason"] == "collision_judge_not_configured"
+        and item["structured_fallback"]["empirically_grounded"] is False
         for item in collision_fallbacks
     )
 
@@ -548,8 +556,17 @@ def test_zero_visual_deterministic_l1_fallbacks_are_binary_and_audited() -> None
     target_support = next(
         item for item in support["objects"] if item["object_id"] == "target"
     )
-    assert target_support["final_verdict"] == "invalid"
-    assert target_support["nonrect_evidence_continuity"]["degraded"] is True
+    # Support needs a judge to reach a verdict, and none is configured here, so the
+    # pair resolves to the policy default rather than a deterministic "invalid".
+    # The record must say so explicitly: an audit has to be able to see that this
+    # verdict was not grounded in evidence. Contrast oob above, which is pure
+    # geometry and still decides "invalid" without a judge.
+    assert target_support["final_verdict"] == "valid"
+    assert target_support["route"] == "direct_valid_policy_fallback"
+    assert target_support["structured_fallback"]["trigger_reason"] == (
+        "support_judge_not_configured"
+    )
+    assert target_support["structured_fallback"]["empirically_grounded"] is False
 
     detector_only = check_polygon_oob(
         _l_room_scene(object_center=[1.55, 2.0, 0.5]),
