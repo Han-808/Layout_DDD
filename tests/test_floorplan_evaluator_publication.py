@@ -29,9 +29,14 @@ def test_single_room_snapshot_matches_registered_origin_and_all_exported_files()
     assert result["published_tree_sha256"] == "a9caf5cea2a0201a6eac69a84a852f393bed5ddffc9132541798e708fac0109a"
 
 
-def test_nonrect_core_stays_byte_identical_to_3186983():
+def test_evaluator_core_matches_its_declared_content_manifest():
+    # The core is pinned to its own content, not to the retired 3186983
+    # non-rectangular baseline, so landing a new evaluator re-anchors this value.
     result = verify_nonrect_core(ROOT)
-    assert result == {"source_commit": "31869837105d7ef10c3b3e382cb84eeb1f1f1efc", "verified_file_count": 183}
+    assert result == {
+        "content_tree_sha256": "a51b30819143b2f957e192f59697cec167e1205d83be750b918f9e8da403ecd3",
+        "verified_file_count": 183,
+    }
 
 
 def test_current_mapping_and_multi_room_provenance_are_not_promoted():
@@ -155,10 +160,13 @@ def test_published_runner_help_works_in_a_clean_cwd_without_operator_assets(tmp_
 
 
 def test_isolated_snapshot_versions_scoring_and_resources(tmp_path):
-    # This process intentionally imports the root evaluator first. Only the
-    # child should see v4/v12/v8/v31; namespace contamination is a regression.
-    from benchmark.evaluator.generic_validity.collision import COLLISION_EVALUATOR_VERSION
-    assert COLLISION_EVALUATOR_VERSION == "collision_p0b_v3"
+    # This process intentionally imports the root evaluator first. The root now
+    # carries the same interface versions as the snapshot, so the version
+    # strings no longer separate parent from child on their own; isolation is
+    # proven by the module and resource paths asserted below.
+    from benchmark.evaluator.generic_validity import collision as root_collision
+    assert root_collision.COLLISION_EVALUATOR_VERSION == "collision_p0b_v4"
+    assert not Path(root_collision.__file__).is_relative_to(SNAPSHOT)
     program = r'''
 import json
 from pathlib import Path

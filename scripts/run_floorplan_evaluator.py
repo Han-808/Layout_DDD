@@ -40,8 +40,6 @@ def resolve_release(repo: Path, mode: str) -> dict[str, Any]:
         result.update(entrypoint=str(entry), source_root=str(source_root), execution_available=True)
     elif mode == "non_rectangular_multi_room":
         core = verify_nonrect_core(repo)
-        if core["source_commit"] != baseline["code_identity"]["commit"]:
-            raise EvaluatorReleaseError("Nonrect baseline/core mismatch")
         entry = relative_file(repo, "scripts/run_complicated_combined142_hardened.py")
         sealed = repo / "Support/artifacts/releases/complicated_eval_combined142_v1/run_combined.py"
         result.update(core_verification=core, entrypoint=str(entry), source_root=str(repo),

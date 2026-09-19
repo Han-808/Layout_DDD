@@ -117,9 +117,17 @@ def verify_snapshot(repo: Path, baseline_id: str) -> dict[str, Any]:
 
 
 def verify_nonrect_core(repo: Path) -> dict[str, Any]:
-    """Verify existing Nonrect core without rewriting it to the Single-room version."""
-    manifest = read_json(repo / "configs/runners/nonrect_3186983_core_manifest_v1.json")
+    """Verify the evaluator core still matches its declared content manifest.
+
+    The manifest pins file content, not a historical commit: the checkout is no
+    longer required to reproduce the retired 3186983 non-rectangular baseline.
+    """
+    manifest = read_json(repo / "configs/runners/nonrect_core_manifest_v2.json")
     entries = manifest["files"]
-    tree_sha256(entries)
+    if tree_sha256(entries) != manifest["content_tree_sha256"]:
+        raise EvaluatorReleaseError("Evaluator core manifest tree hash mismatch")
     verify_files(repo, entries)
-    return {"source_commit": manifest["source_commit"], "verified_file_count": len(entries)}
+    return {
+        "content_tree_sha256": manifest["content_tree_sha256"],
+        "verified_file_count": len(entries),
+    }
