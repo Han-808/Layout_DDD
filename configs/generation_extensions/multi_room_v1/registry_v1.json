@@ -7,7 +7,7 @@
     "core_runner_version": "2.0.0",
     "core_runner_source_sha256": "c5bd82c9cf5b1cf38a8e53c4a199c357134f438685b42d9728f034811200950a",
     "compatibility_runtime_version": "1.0.7",
-    "compatibility_source_manifest_sha256": "2fa693e5d9b215256485cdaf0517c6445e852dfc768b4f571c8f0579a0da9bae",
+    "compatibility_source_manifest_sha256": "8830196afbf827a676eaa6a167565b3cec06ce51694c1cbc5807fec2d96d6264",
     "stage_a_prompt_sha256": "9fb6008cb0398abf012e2eb274cc4ffbdc5d4f6a32f502b74664e9ecdac7f7f6",
     "stage_c_prompt_sha256": "d5bf9841308a11646b2d5d061897f7ebe7a7cb590ecc24ceb7264b19987ced9f",
     "floor_plan_schema_sha256": "67fd2f9bcc971f7151ad956b70e5b9c10f4dc520061c80825e404d37e8ab7167",
