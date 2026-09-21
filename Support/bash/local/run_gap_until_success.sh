@@ -66,10 +66,18 @@ mkdir -p "$STATE"
 [[ -x "$LAUNCHER" ]] || { print -u2 -- "launcher is not executable: $LAUNCHER"; exit 2 }
 [[ -r "$REGISTRY" ]] || { print -u2 -- "campaign registry is unreadable: $REGISTRY"; exit 2 }
 if [[ -z "${(P)CRED:-}" ]]; then
-  # The launcher would fall back to a hidden interactive prompt and the loop would
-  # hang on it forever, so require the export up front.
-  print -u2 -- "$CRED is not exported; the loop must not inherit an interactive prompt"
-  exit 2
+  # Ask once, here, and export -- otherwise the launcher's own hidden prompt fires on
+  # every single round, and under nohup it would block forever on the first one.
+  if [[ -t 0 ]]; then
+    print -n -- "$CRED (hidden): "
+    read -rs "${CRED?}"
+    print
+    export "${CRED?}"
+    [[ -n "${(P)CRED}" ]] || { print -u2 -- "$CRED is empty"; exit 2 }
+  else
+    print -u2 -- "$CRED is not set and stdin is not a terminal; export it before detaching"
+    exit 2
+  fi
 fi
 if [[ -f "$STATE/run.pid" ]] && kill -0 "$(<"$STATE/run.pid")" 2>/dev/null; then
   print -u2 -- "another loop for $CAMPAIGN is live (pid $(<"$STATE/run.pid"))"
