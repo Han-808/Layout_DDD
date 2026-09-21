@@ -517,6 +517,145 @@
       },
       "preflight_contract_id": "api3-chat-content-model-identity-v1",
       "response_model_identity": "claude-fable-5"
+    },
+    {
+      "model_profile_id": "api3-claude-sonnet-5-retry3",
+      "display_label": "claude-sonnet-5-aihub",
+      "configured_model": "openai/claude-sonnet-5-aihub",
+      "wire_model": "claude-sonnet-5-aihub",
+      "route_profile_id": "api3-chat-legacy-core-v1",
+      "gateway_options": {
+        "strategy_type": "ConsistentHash"
+      },
+      "request_options": {
+        "request_timeout_seconds": 1800.0,
+        "max_tokens": 65536,
+        "temperature": null,
+        "top_p": null,
+        "top_k": null,
+        "repetition_penalty": null,
+        "reasoning_effort": null,
+        "thinking_type": null,
+        "preserved_thinking": null
+      },
+      "transport_policy": {
+        "max_infrastructure_retries": 3,
+        "retry_delay_seconds": 30.0
+      },
+      "preflight_contract_id": "api3-chat-content-model-identity-v1",
+      "response_model_identity": "claude-sonnet-5"
+    },
+    {
+      "model_profile_id": "api3-claude-opus-5-retry3",
+      "display_label": "claude-opus-5-aihub",
+      "configured_model": "openai/claude-opus-5-aihub",
+      "wire_model": "claude-opus-5-aihub",
+      "route_profile_id": "api3-chat-legacy-core-v1",
+      "gateway_options": {
+        "strategy_type": "ConsistentHash"
+      },
+      "request_options": {
+        "request_timeout_seconds": 1800.0,
+        "max_tokens": 65536,
+        "temperature": null,
+        "top_p": null,
+        "top_k": null,
+        "repetition_penalty": null,
+        "reasoning_effort": null,
+        "thinking_type": null,
+        "preserved_thinking": null
+      },
+      "transport_policy": {
+        "max_infrastructure_retries": 3,
+        "retry_delay_seconds": 30.0
+      },
+      "preflight_contract_id": "api3-chat-content-model-identity-v1",
+      "response_model_identity": "claude-opus-5"
+    },
+    {
+      "model_profile_id": "api3-claude-fable-5-retry3",
+      "display_label": "claude-fable-5-aihub",
+      "configured_model": "openai/claude-fable-5-aihub",
+      "wire_model": "claude-fable-5-aihub",
+      "route_profile_id": "api3-chat-legacy-core-v1",
+      "gateway_options": {
+        "strategy_type": "ConsistentHash"
+      },
+      "request_options": {
+        "request_timeout_seconds": 1800.0,
+        "max_tokens": 65536,
+        "temperature": null,
+        "top_p": null,
+        "top_k": null,
+        "repetition_penalty": null,
+        "reasoning_effort": null,
+        "thinking_type": null,
+        "preserved_thinking": null
+      },
+      "transport_policy": {
+        "max_infrastructure_retries": 3,
+        "retry_delay_seconds": 30.0
+      },
+      "preflight_contract_id": "api3-chat-content-model-identity-v1",
+      "response_model_identity": "claude-fable-5"
+    },
+    {
+      "model_profile_id": "tokenhub-hy4-preview-retry3",
+      "display_label": "hy4-preview-tokenhub",
+      "configured_model": "anthropic/hy4-preview",
+      "wire_model": "hy4-preview",
+      "route_profile_id": "tokenhub-chat-top-level-reasoning-v1",
+      "gateway_options": {
+        "user_agent_suffix": "tokenhub-hy4-preview-generation-v1"
+      },
+      "request_options": {
+        "request_timeout_seconds": 1800.0,
+        "max_tokens": 65536,
+        "temperature": null,
+        "top_p": null,
+        "top_k": null,
+        "repetition_penalty": null,
+        "reasoning_effort": "high",
+        "thinking_type": null,
+        "preserved_thinking": null
+      },
+      "transport_policy": {
+        "max_infrastructure_retries": 3,
+        "retry_delay_seconds": 30.0
+      },
+      "preflight_contract_id": "tokenhub-chat-json-content-v1",
+      "response_model_identity": null
+    },
+    {
+      "model_profile_id": "api2-gpt-6-astra-high",
+      "display_label": "gpt-6-astra-high",
+      "configured_model": "azure_openai/gpt-6-astra",
+      "wire_model": "gpt-6-astra",
+      "route_profile_id": "api2-chat-top-level-reasoning-azure-v1",
+      "gateway_options": {
+        "provider": "azure_openai",
+        "gateway_model": "gpt-6-astra",
+        "user_agent_suffix": "api2-gpt-6-astra-high-v1",
+        "auth_timeout_seconds": 600,
+        "strategy_type": "chat_completions_api2_azure_openai"
+      },
+      "request_options": {
+        "request_timeout_seconds": 3000.0,
+        "max_tokens": 65536,
+        "temperature": null,
+        "top_p": null,
+        "top_k": null,
+        "repetition_penalty": null,
+        "reasoning_effort": "high",
+        "thinking_type": null,
+        "preserved_thinking": null
+      },
+      "transport_policy": {
+        "max_infrastructure_retries": 3,
+        "retry_delay_seconds": 30.0
+      },
+      "preflight_contract_id": "api2-chat-json-content-v1",
+      "response_model_identity": null
     }
   ]
 }

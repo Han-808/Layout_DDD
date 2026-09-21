@@ -55,7 +55,11 @@ class LegacyV1Projection:
 _LEGACY_BRIEF_SETS = {
     "c016ed9b926309c2a02278936dbc0e777a46b0bd30a71bcc1f563919418dcb55": (
         "hy34-paired-briefs-v1"
-    )
+    ),
+    # brief_00..09 unchanged, brief_10..19 appended (Open-space +10 expansion).
+    "5bfc545fba38cd4dfd53a7144e8a91a00f19dd272913697eeeedb26a7e09e126": (
+        "hy34-paired-briefs-v2"
+    ),
 }
 def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()

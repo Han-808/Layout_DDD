@@ -240,9 +240,15 @@ def _load_briefs(path: Path) -> list[dict[str, Any]]:
     if value.get("schema_version") != "hy34_paired_briefs_v1":
         raise ValueError("unsupported paired briefs schema")
     briefs = [validate_brief(item) for item in value.get("briefs", [])]
-    expected = [f"brief_{index:02d}" for index in range(10)]
+    # The original frozen set is brief_00..brief_09.  Additional paired briefs
+    # may only be appended after it, so the set stays a contiguous, ordered
+    # prefix and the first ten identities never move.
+    expected = [f"brief_{index:02d}" for index in range(max(10, len(briefs)))]
     if [item["brief_id"] for item in briefs] != expected:
-        raise ValueError("paired briefs must be exactly ordered brief_00 through brief_09")
+        raise ValueError(
+            "paired briefs must be exactly ordered brief_00 through brief_09, "
+            "optionally followed by contiguous appended brief_NN entries"
+        )
     return briefs
 
 

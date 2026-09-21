@@ -5,7 +5,7 @@
     "generation_mode": "multi_room_with_architecture_v1",
     "core_bundle_id": "api3-anthropic-runner-core-v2",
     "core_runner_version": "2.0.0",
-    "core_runner_source_sha256": "c5bd82c9cf5b1cf38a8e53c4a199c357134f438685b42d9728f034811200950a",
+    "core_runner_source_sha256": "c5193be2915a4ea7622f44ff1f913aff356539b2e21934a9953280417c2091af",
     "compatibility_runtime_version": "1.0.7",
     "compatibility_source_manifest_sha256": "8830196afbf827a676eaa6a167565b3cec06ce51694c1cbc5807fec2d96d6264",
     "stage_a_prompt_sha256": "9fb6008cb0398abf012e2eb274cc4ffbdc5d4f6a32f502b74664e9ecdac7f7f6",

@@ -553,8 +553,18 @@ def test_resolve_resource_gate_and_preflight_share_canonical_boundaries(
 def test_additive_registry_reuses_every_reviewed_model_profile() -> None:
     base = load_campaign_profile_bundle(PROFILE_ROOT)
     registry = load_multi_room_profile_registry(ROOT, base)
-    assert {item.model_profile_id for item in registry.campaigns.values()} == set(
-        base.models.by_id
+    # The Open-space +10 expansion registered retry-3 profiles for the frozen
+    # single-room workload only; no multi-room campaign was authorized for them.
+    single_room_only = {
+        "api3-claude-sonnet-5-retry3",
+        "api3-claude-opus-5-retry3",
+        "api3-claude-fable-5-retry3",
+        "tokenhub-hy4-preview-retry3",
+        "api2-gpt-6-astra-high",
+    }
+    assert single_room_only <= set(base.models.by_id)
+    assert {item.model_profile_id for item in registry.campaigns.values()} == (
+        set(base.models.by_id) - single_room_only
     )
     assert all(
         item.retrieval_profile_id == RETRIEVAL_PROFILE_ID

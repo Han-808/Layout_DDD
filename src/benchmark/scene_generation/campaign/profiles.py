@@ -834,7 +834,20 @@ class CampaignProfileBundle:
                 ) from exc
             if workflow.core_bundle_id != brief_set.core_bundle_id:
                 raise ValueError("workflow and brief set reference different core bundles")
-            if campaign.ordered_brief_ids != brief_set.ordered_brief_ids:
+            # A campaign may run the whole brief set or an ordered subset of it,
+            # but it must never reorder briefs relative to the set contract.
+            positions = {
+                brief_id: index
+                for index, brief_id in enumerate(brief_set.ordered_brief_ids)
+            }
+            try:
+                selected = [positions[brief_id] for brief_id in campaign.ordered_brief_ids]
+            except KeyError as exc:
+                raise ValueError(
+                    f"campaign {campaign.campaign_id!r} selects a brief outside its "
+                    f"brief-set contract: {exc}"
+                ) from exc
+            if any(later <= earlier for earlier, later in zip(selected, selected[1:])):
                 raise ValueError(
                     f"campaign {campaign.campaign_id!r} brief order differs from its brief-set contract"
                 )
