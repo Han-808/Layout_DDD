@@ -133,9 +133,13 @@ def test_checked_in_campaign_bundle_is_portable_and_immutable() -> None:
     # consolidated make-up round then added two 1800s-timeout profiles
     # (api2-kimi-k3-t1800, api2-glm-5-3-t1800) and three rerun campaigns
     # (two t1800 + api2-gpt56sol-plus10-rerun-v1 reusing the 3000s Sol profile).
+    # Stage 1 track (b) added two `high`-effort profiles (api2-kimi-k3-high,
+    # api2-glm-5-3-high) and three gap-only campaigns that run just the briefs
+    # still missing from the merged set; the Opus gap campaign needs no new
+    # profile because the legacy core emits no effort field at all.
     assert len(bundle.routes.routes) == 7
-    assert len(bundle.models.models) == 25
-    assert len(bundle.campaigns.campaigns) == 16
+    assert len(bundle.models.models) == 27
+    assert len(bundle.campaigns.campaigns) == 19
     campaign, model, route = bundle.resolve_campaign(
         "api3-opus48-high-scene10-v2"
     )
@@ -348,8 +352,10 @@ def test_multiple_models_share_one_retrieval_profile_without_resource_fields() -
     # 5 scene10 models + 8 plus10 models, of which Kimi and GLM reuse the
     # scene10 profile (same retry budget), so 11 distinct.  The make-up round
     # adds two more (api2-kimi-k3-t1800, api2-glm-5-3-t1800); the Sol rerun
-    # reuses api2-gpt-5-6-sol, so 13 distinct model profiles.
-    assert len({item["model_profile_id"] for item in campaigns}) == 13
+    # reuses api2-gpt-5-6-sol, so 13 distinct model profiles.  Stage 1 track (b)
+    # adds api2-kimi-k3-high and api2-glm-5-3-high; its Opus gap campaign reuses
+    # api3-claude-opus-5-retry3, so 15 distinct.
+    assert len({item["model_profile_id"] for item in campaigns}) == 15
     allowed = {
         "campaign_id",
         "workflow_profile_id",

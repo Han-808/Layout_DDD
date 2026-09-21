@@ -720,6 +720,70 @@
       },
       "preflight_contract_id": "api2-responses-completed-json-v1",
       "response_model_identity": null
+    },
+    {
+      "model_profile_id": "api2-kimi-k3-high",
+      "display_label": "kimi-k3",
+      "configured_model": "moonshot/kimi-k3",
+      "wire_model": "kimi-k3",
+      "route_profile_id": "api2-chat-top-level-reasoning-v1",
+      "gateway_options": {
+        "provider": "moonshot",
+        "gateway_model": "kimi-k3",
+        "user_agent_suffix": "api2-kimi-k3-plus10-high-v1",
+        "auth_timeout_seconds": 600,
+        "strategy_type": "chat_completions_api2_moonshot"
+      },
+      "request_options": {
+        "request_timeout_seconds": 1800.0,
+        "stage_c_request_timeout_seconds": 1800.0,
+        "max_tokens": 65536,
+        "temperature": null,
+        "top_p": null,
+        "top_k": null,
+        "repetition_penalty": null,
+        "reasoning_effort": "high",
+        "thinking_type": null,
+        "preserved_thinking": null
+      },
+      "transport_policy": {
+        "max_infrastructure_retries": 3,
+        "retry_delay_seconds": 30.0
+      },
+      "preflight_contract_id": "api2-chat-json-content-v1",
+      "response_model_identity": null
+    },
+    {
+      "model_profile_id": "api2-glm-5-3-high",
+      "display_label": "glm-5.3",
+      "configured_model": "zhipu/glm-5.3",
+      "wire_model": "glm-5.3",
+      "route_profile_id": "api2-responses-reasoning-v1",
+      "gateway_options": {
+        "provider": "zhipu",
+        "gateway_model": "glm-5.3",
+        "user_agent_suffix": "api2-glm53-plus10-high-v1",
+        "auth_timeout_seconds": 600,
+        "strategy_type": "responses_api2_zhipu"
+      },
+      "request_options": {
+        "request_timeout_seconds": 1800.0,
+        "stage_c_request_timeout_seconds": 1800.0,
+        "max_tokens": 65536,
+        "temperature": null,
+        "top_p": null,
+        "top_k": null,
+        "repetition_penalty": null,
+        "reasoning_effort": "high",
+        "thinking_type": null,
+        "preserved_thinking": null
+      },
+      "transport_policy": {
+        "max_infrastructure_retries": 3,
+        "retry_delay_seconds": 30.0
+      },
+      "preflight_contract_id": "api2-responses-completed-json-v1",
+      "response_model_identity": null
     }
   ]
 }

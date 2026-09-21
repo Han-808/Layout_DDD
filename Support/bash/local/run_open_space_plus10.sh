@@ -89,8 +89,13 @@ case "$FAMILY" in
     # wait_response ambiguous timeout at 600s/1200s), and Sol re-run unchanged
     # (its 3000s timeout was ample; brief_16 was a stage_a schema violation).
     # Select the make-up ids explicitly with --campaign and a fresh --output-base.
-    CAMPAIGNS=(api2-kimi-k3-plus10-v1 api2-glm53-plus10-v1 api2-gpt56sol-plus10-v1 api2-gpt6-astra-high-plus10-v1 api2-kimi-k3-plus10-t1800-v1 api2-glm53-plus10-t1800-v1 api2-gpt56sol-plus10-rerun-v1)
-    ROUTES=(api2-chat-top-level-reasoning-v1 api2-responses-reasoning-v1 api2-standard-chat-reasoning-v1 api2-chat-top-level-reasoning-azure-v1 api2-chat-top-level-reasoning-v1 api2-responses-reasoning-v1 api2-standard-chat-reasoning-v1)
+    # The two `-high-gap` ids are the Stage 1 track (b) reruns: Kimi/GLM drop from
+    # `max` to `high` because their remaining failures are a hard 504 at exactly
+    # 600s (the polaris gateway's own ceiling, which the 1800s client timeout
+    # cannot reach), and each runs only the briefs still missing from the merged
+    # set rather than all ten.
+    CAMPAIGNS=(api2-kimi-k3-plus10-v1 api2-glm53-plus10-v1 api2-gpt56sol-plus10-v1 api2-gpt6-astra-high-plus10-v1 api2-kimi-k3-plus10-t1800-v1 api2-glm53-plus10-t1800-v1 api2-gpt56sol-plus10-rerun-v1 api2-kimi-k3-plus10-high-gap-v1 api2-glm53-plus10-high-gap-v1)
+    ROUTES=(api2-chat-top-level-reasoning-v1 api2-responses-reasoning-v1 api2-standard-chat-reasoning-v1 api2-chat-top-level-reasoning-azure-v1 api2-chat-top-level-reasoning-v1 api2-responses-reasoning-v1 api2-standard-chat-reasoning-v1 api2-chat-top-level-reasoning-v1 api2-responses-reasoning-v1)
     ENDPOINTS=(
       "http://trpc-gpt-eval.production.polaris:8080/v1/chat/completions"
       "http://trpc-gpt-eval.production.polaris:8080/api/v1/responses"
@@ -99,14 +104,21 @@ case "$FAMILY" in
       "http://trpc-gpt-eval.production.polaris:8080/v1/chat/completions"
       "http://trpc-gpt-eval.production.polaris:8080/api/v1/responses"
       "http://llm-api.model-eval.woa.com/v1/chat/completions"
+      "http://trpc-gpt-eval.production.polaris:8080/v1/chat/completions"
+      "http://trpc-gpt-eval.production.polaris:8080/api/v1/responses"
     )
     ;;
   api3)
     CREDENTIAL_ENV="API3_API_KEY"
     CREDENTIAL_PROMPT="API3 key (hidden; shared by Sonnet 5/Opus 5/Fable 5)"
-    CAMPAIGNS=(api3-sonnet5-plus10-v1 api3-opus5-plus10-v1 api3-fable5-plus10-v1)
-    ROUTES=(api3-chat-legacy-core-v1 api3-chat-legacy-core-v1 api3-chat-legacy-core-v1)
+    # `api3-opus5-plus10-gap-v1` is the Stage 1 track (b) Opus rerun: the legacy
+    # core emits no effort field, so Opus already runs at the server default
+    # `high` and needs no new model profile -- only the four briefs whose Stage A
+    # output violated the relation/instance-count contracts.
+    CAMPAIGNS=(api3-sonnet5-plus10-v1 api3-opus5-plus10-v1 api3-fable5-plus10-v1 api3-opus5-plus10-gap-v1)
+    ROUTES=(api3-chat-legacy-core-v1 api3-chat-legacy-core-v1 api3-chat-legacy-core-v1 api3-chat-legacy-core-v1)
     ENDPOINTS=(
+      "http://21.214.33.175:4000/v1/chat/completions"
       "http://21.214.33.175:4000/v1/chat/completions"
       "http://21.214.33.175:4000/v1/chat/completions"
       "http://21.214.33.175:4000/v1/chat/completions"
