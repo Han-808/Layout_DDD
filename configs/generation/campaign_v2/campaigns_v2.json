@@ -369,7 +369,6 @@
       "retrieval_profile_id": "imaginarium-qwen3-embedding-0.6b-stable-top1-v2",
       "brief_set_id": "hy34-paired-briefs-v2",
       "ordered_brief_ids": [
-        "brief_10",
         "brief_12",
         "brief_16",
         "brief_19"
@@ -384,9 +383,7 @@
       "retrieval_profile_id": "imaginarium-qwen3-embedding-0.6b-stable-top1-v2",
       "brief_set_id": "hy34-paired-briefs-v3",
       "ordered_brief_ids": [
-        "brief_10",
-        "brief_14",
-        "brief_19"
+        "brief_14"
       ],
       "execution_policy_id": "api3-scene10-retry3-continue-v1",
       "artifact_contract_id": "hy34-two-stage-artifacts-v3"
