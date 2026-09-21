@@ -272,15 +272,32 @@ for c in "${CAMPAIGNS[@]}"; do
 done
 print -r -- "resolve: bindings present for ${#CAMPAIGNS[@]} campaign(s)"
 
+# Persist the sanitized preflight report per campaign so a later reader (or a
+# background monitor) can see pass/fail without the terminal.  The CLI's last
+# line is its public terminal surface: logical ids, http status and failure
+# category only; never an endpoint, credential name, header or server body.
+LOG_DIR="$OUTPUT_BASE/_launcher_logs"
+mkdir -p -- "$LOG_DIR"
+STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+PREFLIGHT_RECORD="$LOG_DIR/preflight.${FAMILY}.${STAMP}.jsonl"
+: > "$PREFLIGHT_RECORD"
+
 PREFLIGHT_FAILED=0
 for c in "${CAMPAIGNS[@]}"; do
   set +e
+  # `$status` is zsh's read-only alias of `$?`; use a distinct name.  With a
+  # pipeline, capture the preflight command's own exit via pipestatus.
   report=$("$PYTHON_BIN" -m benchmark.scene_generation preflight --campaign "$c" \
-    --generation-bindings "$GENERATION_BINDINGS" --resource-bindings "$RESOURCE_BINDINGS" 2>&1 | tail -1)
-  status=$?
+    --generation-bindings "$GENERATION_BINDINGS" --resource-bindings "$RESOURCE_BINDINGS" 2>&1 | tail -1; print -r -- "__EXIT__=${pipestatus[1]}")
+  preflight_exit="${report##*__EXIT__=}"
+  report="${report%$'\n'__EXIT__=*}"
   set -e
   ok=$(print -r -- "$report" | jq -r '.ok // false' 2>/dev/null || print false)
-  if [[ "$ok" == "true" && $status -eq 0 ]]; then
+  jq -c -n --arg campaign "$c" --arg mode "$MODE" --argjson exit "${preflight_exit:-255}" \
+    --arg observed_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg raw "$report" \
+    '{observed_at: $observed_at, mode: $mode, campaign_id: $campaign, exit: $exit,
+      report: (try ($raw | fromjson) catch {unparsed: $raw})}' >> "$PREFLIGHT_RECORD" 2>/dev/null || true
+  if [[ "$ok" == "true" && "$preflight_exit" == "0" ]]; then
     print -r -- "preflight OK   : $c"
   else
     PREFLIGHT_FAILED=1
@@ -288,6 +305,7 @@ for c in "${CAMPAIGNS[@]}"; do
     print -u2 -- "preflight FAIL : $c  ($detail)"
   fi
 done
+print -r -- "preflight record: $PREFLIGHT_RECORD"
 (( PREFLIGHT_FAILED == 0 )) || { print -u2 -- "Preflight failed for at least one campaign; nothing generated"; exit 2; }
 if [[ "$MODE" == "preflight" ]]; then
   print -r -- "Preflight-only passed for [$FAMILY]; nothing generated"
@@ -295,10 +313,6 @@ if [[ "$MODE" == "preflight" ]]; then
 fi
 
 # ---- Stage 4: generate, all campaigns of the family concurrently ----
-mkdir -p -- "$OUTPUT_BASE"
-LOG_DIR="$OUTPUT_BASE/_launcher_logs"
-mkdir -p -- "$LOG_DIR"
-STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 print -r -- "generation: launching ${#CAMPAIGNS[@]} process(es) -> $OUTPUT_BASE"
 typeset -A PID_TO_CAMPAIGN
 for c in "${CAMPAIGNS[@]}"; do
