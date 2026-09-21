@@ -338,6 +338,201 @@
       ]
     },
     {
+      "bundle_id": "api3_anthropic_runner_v3",
+      "root": "tools/api3_anthropic_runner_v3",
+      "role": "frozen_generation_core",
+      "entrypoints": [
+        "generation_runner.py",
+        "run_generation.sh"
+      ],
+      "compatibility_mirrors": [
+        {
+          "path": "retriever_runtime.pod.json",
+          "state": "frozen_replay",
+          "sha256": "1814be3b7fae3a56b43a310f579a8b9de2dc0ed724892b7ffd77d748770f1831",
+          "replacement": "configs/retrieval/profiles_v2.json"
+        },
+        {
+          "path": "retriever_golden_v1.json",
+          "state": "frozen_replay",
+          "sha256": "28992804c7dd6653dfddbfe95f5d4560039290d16ee38a10384176137a5d28fb",
+          "replacement": "configs/retrieval/golden/imaginarium_qwen3_0_6b_v2.json"
+        }
+      ],
+      "files": [
+        {
+          "path": "README.md",
+          "sha256": "284cbcc49bbf1ccdc6001253d2bbf0a58a6fe3463877d6dc7cc250d7bea3bb2c",
+          "mode": "0644"
+        },
+        {
+          "path": "__init__.py",
+          "sha256": "4c90c76c815929ba739f5ae0166c6f7b8a8b02726ebff5308959c4b1f5fc2d6f",
+          "mode": "0644"
+        },
+        {
+          "path": "artifacts.py",
+          "sha256": "c267e56617e5e020de39bef7b33df43b62c57895347c966e9b610b16179cf768",
+          "mode": "0644"
+        },
+        {
+          "path": "briefs.json",
+          "sha256": "5bfc545fba38cd4dfd53a7144e8a91a00f19dd272913697eeeedb26a7e09e126",
+          "mode": "0644"
+        },
+        {
+          "path": "contracts.py",
+          "sha256": "c214f1237403e08277c750c2b5eebf03e5ec280c0fc3a6d455514bca75f4438e",
+          "mode": "0644"
+        },
+        {
+          "path": "diagnose_api3_compat.py",
+          "sha256": "a3335bcbe58c683b61a9839a24f72272ef917d72c721c2f5e177e53b4eb1e8a6",
+          "mode": "0755"
+        },
+        {
+          "path": "generation_runner.py",
+          "sha256": "f0439d91652775d30816b6479f7a9b46dc4126c7f951fe226c160de8f2b0de3a",
+          "mode": "0755"
+        },
+        {
+          "path": "launch_all_local_api3_anthropic_scene10.sh",
+          "sha256": "3b2f4b384255bb456c8956ebfd1edfa04fc9dd413c4b0cb4de6707ce470f7df6",
+          "mode": "0755"
+        },
+        {
+          "path": "launch_all_local_api3_failed_retry3.sh",
+          "sha256": "1110e4d7e7c084bdaf499278a3524ad085d722942350c1732cdae4e4e58b2991",
+          "mode": "0755"
+        },
+        {
+          "path": "launch_all_local_api3_failed_retry6.sh",
+          "sha256": "2cf28c6da80f2030a34a5349e932de2e370d1a51ed3bca133af124ee50b24a74",
+          "mode": "0755"
+        },
+        {
+          "path": "launch_all_local_api3_failed_retry_max2.sh",
+          "sha256": "411e5e266ed4d2ae8773b81115285b6202eef1c9572c35a83c36fd335e81a7a3",
+          "mode": "0755"
+        },
+        {
+          "path": "launch_local_api3_opus5_unresolved3_until_valid_or10.sh",
+          "sha256": "4e5d3d2424d59a9001b0a0c9ec2c443d8f0fb027ed36a7a0fbf74b1a3fd4f1cf",
+          "mode": "0755"
+        },
+        {
+          "path": "launch_local_api3_retry3_watchdog.sh",
+          "sha256": "2bba61b065c36aa5328358c48f3470c54f9ed38d11450545bd2ecea2e7c8c540",
+          "mode": "0755"
+        },
+        {
+          "path": "launch_local_api3_retry_watchdog.sh",
+          "sha256": "807f12f9cfc4967ad1bad20d22ec01757bbed3bffb899c16d6ccf3269c07376b",
+          "mode": "0755"
+        },
+        {
+          "path": "models.pod.json",
+          "sha256": "2da772438d77cb6ae401aa4a72d3843c448eadd296e52212e95620b9dc5b26d7",
+          "mode": "0644"
+        },
+        {
+          "path": "preflight_api3.py",
+          "sha256": "3e08b77257d16a43ab53265350ea84295918aae52230d6b94c67284eabc41188",
+          "mode": "0755"
+        },
+        {
+          "path": "retriever_golden_v1.json",
+          "sha256": "28992804c7dd6653dfddbfe95f5d4560039290d16ee38a10384176137a5d28fb",
+          "mode": "0644"
+        },
+        {
+          "path": "retriever_runtime.pod.json",
+          "sha256": "1814be3b7fae3a56b43a310f579a8b9de2dc0ed724892b7ffd77d748770f1831",
+          "mode": "0644"
+        },
+        {
+          "path": "retriever_runtime.py",
+          "sha256": "2ace18795781dac83e884528eb4c343052abd50707f834e103669d873261fe20",
+          "mode": "0644"
+        },
+        {
+          "path": "run_generation.sh",
+          "sha256": "e42b820f17c92a77e38ecc096b892444319112c7a1bd0e055b8194f808584258",
+          "mode": "0755"
+        },
+        {
+          "path": "run_local_api3_failed_retry3.sh",
+          "sha256": "3f2f897c22280d9b1e4ee9f99d31b6e4eff8ff025324bd68a69e2173f70bdcca",
+          "mode": "0755"
+        },
+        {
+          "path": "run_local_api3_failed_retry6.sh",
+          "sha256": "41fddc230e50461efd23661224563cfff0984f273d724e859c2dfb8df2d4cd81",
+          "mode": "0755"
+        },
+        {
+          "path": "run_local_api3_failed_retry_max2.sh",
+          "sha256": "25350052570a2ebd6711c553c7d67ff80abe6f49d9d5876319b3bd5375430eea",
+          "mode": "0755"
+        },
+        {
+          "path": "run_local_api3_model_scene10.sh",
+          "sha256": "e8ebccfbb245b4d55641ed537dfd94c131b61fa3c58dac15c5ff71eea46a1703",
+          "mode": "0755"
+        },
+        {
+          "path": "run_local_api3_opus5_unresolved3_until_valid_or10.py",
+          "sha256": "34ff662717ff76a1d066ca9379ed5a043a5f995b2918330ee537fc38ec31d320",
+          "mode": "0755"
+        },
+        {
+          "path": "run_local_api3_retry3_watchdog.sh",
+          "sha256": "46c9932be0f46c269b9b3da7ccb3207ba6c0ffb28c07d3b5b507052099111e81",
+          "mode": "0755"
+        },
+        {
+          "path": "run_local_api3_retry_watchdog.sh",
+          "sha256": "a1ab82c28fbde23bbfe1bc2a0d4dcef81b03a89304597c9d062f049e916b8825",
+          "mode": "0755"
+        },
+        {
+          "path": "run_retriever.sh",
+          "sha256": "e274e1cc620e62090bcf9c1850b3d530ff88ebc36f803675c82197e529e22b22",
+          "mode": "0755"
+        },
+        {
+          "path": "schemas/catalog_placement.schema.json",
+          "sha256": "89dcb769c92b11bbb86ac899a69394f253210dd9c0baa1e272783e3a75975c08",
+          "mode": "0644"
+        },
+        {
+          "path": "schemas/object_plan.schema.json",
+          "sha256": "83bf270024ac02adf5adf59f200fdd02ed3dd7a151533950e7f599080b93c6b1",
+          "mode": "0644"
+        },
+        {
+          "path": "stage_a_prompt.txt",
+          "sha256": "546d76f6a76e2530f3c18c4b6d85a1bfa094a113352585799c650589664a7754",
+          "mode": "0644"
+        },
+        {
+          "path": "stage_c_prompt.txt",
+          "sha256": "d4a055b01cdbdb3f2548d440bc3bcbdb1aa86c65a76972d32a1d545fc23f4b56",
+          "mode": "0644"
+        },
+        {
+          "path": "strict_json.py",
+          "sha256": "48df502194010aa8162b1fb9615465e39856141a08bfb667d51c55163bad81b3",
+          "mode": "0644"
+        },
+        {
+          "path": "transport.py",
+          "sha256": "c5fb77f09817653637ea18ae9f3344fe3cb725217657ee72fac70b075ca6c532",
+          "mode": "0644"
+        }
+      ]
+    },
+    {
       "bundle_id": "api2_generation_recovery_v1",
       "root": "tools/api2_generation_recovery_v1",
       "role": "api2_recovery",
@@ -596,12 +791,12 @@
         },
         {
           "path": "campaign_v2/campaigns_v2.json",
-          "sha256": "1e6974a16870dc53d7cc9677a9709e4be99165d1a42812cf8ac8ae923ad45fed",
+          "sha256": "a7731f5d03b8f92e7e3a402cdeb9943ede3cd306e62ac06a259eb9b6737e78bf",
           "mode": "0644"
         },
         {
           "path": "campaign_v2/contracts_v2.json",
-          "sha256": "f52d11c41d24d8740424a1c4a1924eb085184eff484373c2a77d27afcc03b03b",
+          "sha256": "e00c14c0d24907ffc1ebcd24a1d07d26392afd12f91007a40cda900c8549eea0",
           "mode": "0644"
         },
         {
@@ -658,7 +853,7 @@
         },
         {
           "path": "execution.py",
-          "sha256": "e57e63e9c11f96b5b23140d8114971590198676b372777b86085357c931bfcea",
+          "sha256": "5c2ed365df284d092eb4b7f3bd3f181cc80a1f7170e1d88c2e5c3c93460ce656",
           "mode": "0644"
         },
         {

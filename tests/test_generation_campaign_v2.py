@@ -136,10 +136,14 @@ def test_checked_in_campaign_bundle_is_portable_and_immutable() -> None:
     # Stage 1 track (b) added two `high`-effort profiles (api2-kimi-k3-high,
     # api2-glm-5-3-high) and three gap-only campaigns that run just the briefs
     # still missing from the merged set; the Opus gap campaign needs no new
-    # profile because the legacy core emits no effort field at all.
+    # profile because the legacy core emits no effort field at all.  The Sonnet
+    # gap campaign then added the v3 core's workflow and brief set, reusing the
+    # existing retry-3 Sonnet profile.
     assert len(bundle.routes.routes) == 7
     assert len(bundle.models.models) == 27
-    assert len(bundle.campaigns.campaigns) == 19
+    assert len(bundle.campaigns.campaigns) == 20
+    assert len(bundle.contracts.workflow_by_id) == 2
+    assert len(bundle.contracts.brief_set_by_id) == 3
     campaign, model, route = bundle.resolve_campaign(
         "api3-opus48-high-scene10-v2"
     )

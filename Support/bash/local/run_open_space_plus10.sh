@@ -115,9 +115,13 @@ case "$FAMILY" in
     # core emits no effort field, so Opus already runs at the server default
     # `high` and needs no new model profile -- only the four briefs whose Stage A
     # output violated the relation/instance-count contracts.
-    CAMPAIGNS=(api3-sonnet5-plus10-v1 api3-opus5-plus10-v1 api3-fable5-plus10-v1 api3-opus5-plus10-gap-v1)
-    ROUTES=(api3-chat-legacy-core-v1 api3-chat-legacy-core-v1 api3-chat-legacy-core-v1 api3-chat-legacy-core-v1)
+    # `api3-sonnet5-plus10-gap-v1` runs on the v3 core, which tolerates one
+    # whole-response JSON code fence -- the sole reason four of Sonnet's cases
+    # were rejected while their content validated cleanly.
+    CAMPAIGNS=(api3-sonnet5-plus10-v1 api3-opus5-plus10-v1 api3-fable5-plus10-v1 api3-opus5-plus10-gap-v1 api3-sonnet5-plus10-gap-v1)
+    ROUTES=(api3-chat-legacy-core-v1 api3-chat-legacy-core-v1 api3-chat-legacy-core-v1 api3-chat-legacy-core-v1 api3-chat-legacy-core-v1)
     ENDPOINTS=(
+      "http://21.214.33.175:4000/v1/chat/completions"
       "http://21.214.33.175:4000/v1/chat/completions"
       "http://21.214.33.175:4000/v1/chat/completions"
       "http://21.214.33.175:4000/v1/chat/completions"

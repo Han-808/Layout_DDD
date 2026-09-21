@@ -43,6 +43,28 @@
       "quarantine_evidence": []
     },
     {
+      "component_id": "api3_anthropic_runner_v3",
+      "root": "tools/api3_anthropic_runner_v3",
+      "state": "active",
+      "owner": "scene-generation",
+      "replacement": null,
+      "reason": "Frozen two-stage generation core, identical to api3_anthropic_runner_v2 except that generation_runner.py tolerates exactly one whole-response JSON code fence around a stage emission. v2 stays byte-identical because it generated the published scene cohort; v3 exists so campaigns that need the wider parse can select it by core_bundle_id without disturbing that lineage.",
+      "tracked_policy": "all_tracked",
+      "entrypoints": [
+        "tools/api3_anthropic_runner_v3/generation_runner.py",
+        "tools/api3_anthropic_runner_v3/run_generation.sh"
+      ],
+      "sources": [
+        "tools/api3_anthropic_runner_v3/contracts.py",
+        "tools/api3_anthropic_runner_v3/retriever_runtime.py"
+      ],
+      "dependencies": [
+        "generation_retrieval_runtime_v2",
+        "generation_retrieval_profiles_v2"
+      ],
+      "quarantine_evidence": []
+    },
+    {
       "component_id": "api2_generation_recovery_v1",
       "root": "tools/api2_generation_recovery_v1",
       "state": "compatibility",
@@ -174,6 +196,7 @@
       ],
       "dependencies": [
         "api3_anthropic_runner_v2",
+        "api3_anthropic_runner_v3",
         "frozen_two_stage_compatibility_runtime_v1",
         "generation_retrieval_runtime_v2",
         "generation_retrieval_profiles_v2",

@@ -376,6 +376,20 @@
       ],
       "execution_policy_id": "api3-scene10-retry3-continue-v1",
       "artifact_contract_id": "hy34-two-stage-artifacts-v3"
+    },
+    {
+      "campaign_id": "api3-sonnet5-plus10-gap-v1",
+      "workflow_profile_id": "frozen-two-stage-generation-v3",
+      "model_profile_id": "api3-claude-sonnet-5-retry3",
+      "retrieval_profile_id": "imaginarium-qwen3-embedding-0.6b-stable-top1-v2",
+      "brief_set_id": "hy34-paired-briefs-v3",
+      "ordered_brief_ids": [
+        "brief_10",
+        "brief_14",
+        "brief_19"
+      ],
+      "execution_policy_id": "api3-scene10-retry3-continue-v1",
+      "artifact_contract_id": "hy34-two-stage-artifacts-v3"
     }
   ]
 }

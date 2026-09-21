@@ -8,6 +8,14 @@
       "runner_source_sha256": "c5193be2915a4ea7622f44ff1f913aff356539b2e21934a9953280417c2091af",
       "stage_a_prompt_sha256": "546d76f6a76e2530f3c18c4b6d85a1bfa094a113352585799c650589664a7754",
       "stage_c_prompt_sha256": "d4a055b01cdbdb3f2548d440bc3bcbdb1aa86c65a76972d32a1d545fc23f4b56"
+    },
+    {
+      "workflow_profile_id": "frozen-two-stage-generation-v3",
+      "core_bundle_id": "api3-anthropic-runner-core-v3",
+      "runner_version": "2.0.0",
+      "runner_source_sha256": "f0439d91652775d30816b6479f7a9b46dc4126c7f951fe226c160de8f2b0de3a",
+      "stage_a_prompt_sha256": "546d76f6a76e2530f3c18c4b6d85a1bfa094a113352585799c650589664a7754",
+      "stage_c_prompt_sha256": "d4a055b01cdbdb3f2548d440bc3bcbdb1aa86c65a76972d32a1d545fc23f4b56"
     }
   ],
   "brief_sets": [
@@ -16,8 +24,16 @@
       "core_bundle_id": "api3-anthropic-runner-core-v2",
       "content_sha256": "c016ed9b926309c2a02278936dbc0e777a46b0bd30a71bcc1f563919418dcb55",
       "ordered_brief_ids": [
-        "brief_00", "brief_01", "brief_02", "brief_03", "brief_04",
-        "brief_05", "brief_06", "brief_07", "brief_08", "brief_09"
+        "brief_00",
+        "brief_01",
+        "brief_02",
+        "brief_03",
+        "brief_04",
+        "brief_05",
+        "brief_06",
+        "brief_07",
+        "brief_08",
+        "brief_09"
       ]
     },
     {
@@ -25,10 +41,53 @@
       "core_bundle_id": "api3-anthropic-runner-core-v2",
       "content_sha256": "5bfc545fba38cd4dfd53a7144e8a91a00f19dd272913697eeeedb26a7e09e126",
       "ordered_brief_ids": [
-        "brief_00", "brief_01", "brief_02", "brief_03", "brief_04",
-        "brief_05", "brief_06", "brief_07", "brief_08", "brief_09",
-        "brief_10", "brief_11", "brief_12", "brief_13", "brief_14",
-        "brief_15", "brief_16", "brief_17", "brief_18", "brief_19"
+        "brief_00",
+        "brief_01",
+        "brief_02",
+        "brief_03",
+        "brief_04",
+        "brief_05",
+        "brief_06",
+        "brief_07",
+        "brief_08",
+        "brief_09",
+        "brief_10",
+        "brief_11",
+        "brief_12",
+        "brief_13",
+        "brief_14",
+        "brief_15",
+        "brief_16",
+        "brief_17",
+        "brief_18",
+        "brief_19"
+      ]
+    },
+    {
+      "brief_set_id": "hy34-paired-briefs-v3",
+      "core_bundle_id": "api3-anthropic-runner-core-v3",
+      "content_sha256": "5bfc545fba38cd4dfd53a7144e8a91a00f19dd272913697eeeedb26a7e09e126",
+      "ordered_brief_ids": [
+        "brief_00",
+        "brief_01",
+        "brief_02",
+        "brief_03",
+        "brief_04",
+        "brief_05",
+        "brief_06",
+        "brief_07",
+        "brief_08",
+        "brief_09",
+        "brief_10",
+        "brief_11",
+        "brief_12",
+        "brief_13",
+        "brief_14",
+        "brief_15",
+        "brief_16",
+        "brief_17",
+        "brief_18",
+        "brief_19"
       ]
     }
   ],
@@ -37,8 +96,19 @@
       "execution_policy_id": "api2-scene10-retry3-continue-v1",
       "max_infrastructure_retries": 3,
       "retry_delay_seconds": 30.0,
-      "retryable_transport_statuses": ["transport_failure"],
-      "retryable_http_statuses": [408, 409, 425, 429, 500, 502, 503, 504],
+      "retryable_transport_statuses": [
+        "transport_failure"
+      ],
+      "retryable_http_statuses": [
+        408,
+        409,
+        425,
+        429,
+        500,
+        502,
+        503,
+        504
+      ],
       "retry_ambiguous_timeouts": false,
       "continue_after_case_failure": true
     },
@@ -46,8 +116,19 @@
       "execution_policy_id": "api3-scene10-retry2-continue-v1",
       "max_infrastructure_retries": 2,
       "retry_delay_seconds": 30.0,
-      "retryable_transport_statuses": ["transport_failure"],
-      "retryable_http_statuses": [408, 409, 425, 429, 500, 502, 503, 504],
+      "retryable_transport_statuses": [
+        "transport_failure"
+      ],
+      "retryable_http_statuses": [
+        408,
+        409,
+        425,
+        429,
+        500,
+        502,
+        503,
+        504
+      ],
       "retry_ambiguous_timeouts": false,
       "continue_after_case_failure": true
     },
@@ -55,8 +136,19 @@
       "execution_policy_id": "api3-scene10-retry3-continue-v1",
       "max_infrastructure_retries": 3,
       "retry_delay_seconds": 30.0,
-      "retryable_transport_statuses": ["transport_failure"],
-      "retryable_http_statuses": [408, 409, 425, 429, 500, 502, 503, 504],
+      "retryable_transport_statuses": [
+        "transport_failure"
+      ],
+      "retryable_http_statuses": [
+        408,
+        409,
+        425,
+        429,
+        500,
+        502,
+        503,
+        504
+      ],
       "retry_ambiguous_timeouts": false,
       "continue_after_case_failure": true
     },
@@ -64,8 +156,19 @@
       "execution_policy_id": "tokenhub-scene10-retry3-continue-v1",
       "max_infrastructure_retries": 3,
       "retry_delay_seconds": 30.0,
-      "retryable_transport_statuses": ["transport_failure"],
-      "retryable_http_statuses": [408, 409, 425, 429, 500, 502, 503, 504],
+      "retryable_transport_statuses": [
+        "transport_failure"
+      ],
+      "retryable_http_statuses": [
+        408,
+        409,
+        425,
+        429,
+        500,
+        502,
+        503,
+        504
+      ],
       "retry_ambiguous_timeouts": false,
       "continue_after_case_failure": true
     },
@@ -73,8 +176,19 @@
       "execution_policy_id": "tokenhub-scene10-retry5-continue-v1",
       "max_infrastructure_retries": 5,
       "retry_delay_seconds": 30.0,
-      "retryable_transport_statuses": ["transport_failure"],
-      "retryable_http_statuses": [408, 409, 425, 429, 500, 502, 503, 504],
+      "retryable_transport_statuses": [
+        "transport_failure"
+      ],
+      "retryable_http_statuses": [
+        408,
+        409,
+        425,
+        429,
+        500,
+        502,
+        503,
+        504
+      ],
       "retry_ambiguous_timeouts": false,
       "continue_after_case_failure": true
     },
@@ -82,8 +196,19 @@
       "execution_policy_id": "multi-room-retry5-continue-v1",
       "max_infrastructure_retries": 5,
       "retry_delay_seconds": 30.0,
-      "retryable_transport_statuses": ["transport_failure"],
-      "retryable_http_statuses": [408, 409, 425, 429, 500, 502, 503, 504],
+      "retryable_transport_statuses": [
+        "transport_failure"
+      ],
+      "retryable_http_statuses": [
+        408,
+        409,
+        425,
+        429,
+        500,
+        502,
+        503,
+        504
+      ],
       "retry_ambiguous_timeouts": false,
       "continue_after_case_failure": true
     }

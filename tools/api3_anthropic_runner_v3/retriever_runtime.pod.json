@@ -1,0 +1,30 @@
+{
+  "schema_version": "hy34_frozen_retriever_runtime_v1",
+  "index_stem": "/Users/han_mohan/Desktop/Layout_DDD/Support/Assets/imaginarium_assets/.benchmark_index/qwen3_embedding_0_6b",
+  "index_sha256": {
+    "json": "bd3736bb430d295c516ac9272deb6c1a58ae42a3250dccc75d8d6dfc158ad809",
+    "npy": "688aaea0a9f23dff5e63e4f5d66b090403cdcebc1386b9ec966726e16d66b494"
+  },
+  "model_path": "/Users/han_mohan/.cache/huggingface/hub/models--Qwen--Qwen3-Embedding-0.6B/snapshots/97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3",
+  "model_revision": "97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3",
+  "device": "cpu",
+  "query_prompt_name": "query",
+  "expected_embedding_shape": [2043, 1024],
+  "retrieval": {
+    "category_argument": null,
+    "size_tolerance": 0.5,
+    "top_k": 1,
+    "min_score": 0.3
+  },
+  "golden_queries_path": "/Users/han_mohan/Desktop/Layout_DDD/tools/api3_anthropic_runner_v2/retriever_golden_v1.json",
+  "golden_score_tolerance": 0.005,
+  "package_expectations": {
+    "sentence-transformers": "5.6.0",
+    "transformers": "5.13.0",
+    "numpy": "2.5.0"
+  },
+  "gate_policy": {
+    "default": "hard_fail_on_corrupt_or_unusable_inputs; warn_on_package_or_golden_drift",
+    "strict": "promote_all_warnings_to_failure"
+  }
+}

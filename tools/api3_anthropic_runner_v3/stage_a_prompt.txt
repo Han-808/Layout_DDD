@@ -1,0 +1,118 @@
+You are generating one benchmark scene. Return exactly one JSON object and no
+prose, Markdown, code fence, comments, or additional value.
+
+BENCHMARK PURPOSE
+
+The evaluated capability is end-to-end scene layout generation:
+
+- choosing a coherent set of objects for a room brief;
+- assigning objects to functional zones;
+- placing objects at physically and semantically reasonable positions;
+- orienting directed objects toward their intended users or counterparts;
+- maintaining plausible circulation, support, clearance, and room use.
+
+The layout must be the model's one-shot output. The benchmark evaluator will
+later judge physical validity, scale, style, object pairing, functionality, and
+semantic placement. Do not optimize against the evaluator or assume evaluator
+results.
+
+This is Phase A. Create the complete object plan and one natural-language
+retrieval query per public object slot. The request is frozen immediately after
+this response. Object membership, counts, estimated sizes, relationships, and
+queries cannot be revised after retrieval.
+
+The final expanded instance count is the sum of object count fields and must be
+inside the brief's inclusive target range. A public slot may use count greater
+than one for repeated interchangeable objects. IDs must be unique lowercase
+snake_case.
+
+For every public slot include:
+
+- intended category, functional role, and description;
+- count and estimated real-world bbox size [x, y, z] in meters;
+- zone and support ("floor" or another public slot ID);
+- directed/non-directed status;
+- local_neg_y as functional_side for every directed asset, null otherwise;
+- intended world-facing relationship when directed;
+- exactly one frozen retrieval query;
+- relevant absolute and relative placement relations.
+
+The logical rectangular room boundary and floor exist. The room has no physical
+wall objects. Plan usable circulation, accessible storage, ordinary operating
+clearances, plausible support, and functional counterpart orientation.
+
+FIXED ASSET AND RETRIEVAL POLICY
+
+For every public object slot:
+
+1. Freeze one natural-language retrieval query before retrieval.
+2. The benchmark invokes the deterministic local retriever exactly once.
+3. top_k = 1 and category = null.
+4. The rank-1 result is used exactly as returned.
+5. The query cannot be rewritten.
+6. Retrieval cannot be retried.
+7. An awkward result cannot be rejected or replaced.
+8. No VLM/model-based asset selection is used.
+9. No web retrieval or asset generation is used.
+10. An asset returned for another slot cannot be borrowed.
+
+Retrieval is semantic-only. estimated_size is part of the model's planning
+intent but is not supplied as a retrieval size constraint. After retrieval, the
+benchmark returns the selected asset's real catalog bbox size for the one-shot
+placement decision.
+
+SHARED FACING PRIOR
+
+For a directed catalog asset, the canonical functional/front side is local -Y,
+represented as local_neg_y. Do not infer a different catalog-wide front-axis
+convention. For a genuinely non-directed object, functional_side must be null.
+
+Do not inspect asset meshes, previews, renders, point clouds, Blender scenes,
+previous experiments, or benchmark outputs.
+
+Required JSON shape, with no additional keys:
+{
+  "schema_version": "hy34_object_plan_v2",
+  "scene_type": "snake_case room type",
+  "scene_description": "string",
+  "prompt_granularity": "fine_grained",
+  "global_constraints": ["string"],
+  "zones": [
+    {"id": "snake_case", "description": "string", "extent_hint": "string"}
+  ],
+  "relations": [
+    {
+      "family": "string",
+      "type": "string",
+      "subject_id": "public_slot_id",
+      "object_id": "public_slot_id"
+    }
+  ],
+  "objects": [
+    {
+      "id": "snake_case",
+      "category": "string",
+      "role": "string",
+      "description": "string",
+      "count": 1,
+      "estimated_size": [1.0, 1.0, 1.0],
+      "metadata": {
+        "intended_role": "same value as role",
+        "zone": "zone_id",
+        "support": "floor_or_slot_id",
+        "directed": true,
+        "functional_side": "local_neg_y or null",
+        "facing_intent": "string or null",
+        "retrieval_query": "string",
+        "requested_count": 1
+      },
+      "placement_intent": {
+        "absolute_relations": ["string"],
+        "relative_relations": ["string"]
+      }
+    }
+  ]
+}
+
+Do not output asset IDs or transforms in Phase A.
+

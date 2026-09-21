@@ -56,7 +56,10 @@ from benchmark.scene_generation.retrieval.bindings import (
 DEFAULT_PROFILE_RELATIVE = Path("configs/generation/campaign_v2")
 DEFAULT_RETRIEVAL_CATALOG_RELATIVE = Path("configs/retrieval/profiles_v2.json")
 _CORE_BUNDLES = {
-    "api3-anthropic-runner-core-v2": Path("tools/api3_anthropic_runner_v2")
+    "api3-anthropic-runner-core-v2": Path("tools/api3_anthropic_runner_v2"),
+    # v3 is v2 plus tolerance for one whole-response JSON code fence.  v2 is kept
+    # byte-identical because it generated the published scene cohort.
+    "api3-anthropic-runner-core-v3": Path("tools/api3_anthropic_runner_v3"),
 }
 
 
@@ -233,13 +236,6 @@ def prepare_campaign(
         else Path(retrieval_catalog_path).expanduser().resolve()
     )
     inventory = TrustInventory.load(trust_manifest)
-    trust_report = inventory.verify_campaign_inputs(
-        core_root=root / _CORE_BUNDLES["api3-anthropic-runner-core-v2"],
-        campaign_runtime_root=Path(__file__).resolve().parent,
-        campaign_profile_path=profiles / "campaigns_v2.json",
-        retrieval_runtime_root=Path(build_runtime.__code__.co_filename).resolve().parent,
-        retrieval_catalog_path=catalog_path,
-    )
     bundle = load_campaign_profile_bundle(profiles)
     try:
         campaign, model, route = bundle.resolve_campaign(campaign_id)
@@ -256,6 +252,22 @@ def prepare_campaign(
     except KeyError as exc:
         raise ValueError(f"unknown runtime core bundle: {workflow.core_bundle_id!r}") from exc
     core_root = (root / core_relative).resolve()
+    # The inventory gate runs against the core bundle this campaign actually
+    # selected, so it must follow the workflow lookup -- the same ordering the
+    # multi-room path already uses (`multi_room_execution.py`).  `_reverify_trust`
+    # repeats it with `prepared.core_root`; pinning a single hardcoded bundle here
+    # would make the two reports disagree for any campaign that is not on that
+    # bundle, and would leave the other bundles' inventories unverified.  Config
+    # parsing moving ahead of the gate is safe: the gate still hashes
+    # `campaigns_v2.json` and fails the run long before a credential is read or a
+    # request is sent.
+    trust_report = inventory.verify_campaign_inputs(
+        core_root=core_root,
+        campaign_runtime_root=Path(__file__).resolve().parent,
+        campaign_profile_path=profiles / "campaigns_v2.json",
+        retrieval_runtime_root=Path(build_runtime.__code__.co_filename).resolve().parent,
+        retrieval_catalog_path=catalog_path,
+    )
     briefs_path = core_root / "briefs.json"
     models_public_path = profiles / "model_profiles_v2.json"
     static_core = inspect_core_metadata(core_root)
