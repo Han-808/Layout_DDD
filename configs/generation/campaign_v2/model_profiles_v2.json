@@ -520,9 +520,9 @@
     },
     {
       "model_profile_id": "api3-claude-sonnet-5-retry3",
-      "display_label": "claude-sonnet-5-aihub",
-      "configured_model": "openai/claude-sonnet-5-aihub",
-      "wire_model": "claude-sonnet-5-aihub",
+      "display_label": "claude-sonnet-5-aihub-aws_third",
+      "configured_model": "openai/claude-sonnet-5-aihub-aws_third",
+      "wire_model": "claude-sonnet-5-aihub-aws_third",
       "route_profile_id": "api3-chat-legacy-core-v1",
       "gateway_options": {
         "strategy_type": "ConsistentHash"
@@ -543,13 +543,13 @@
         "retry_delay_seconds": 30.0
       },
       "preflight_contract_id": "api3-chat-content-model-identity-v1",
-      "response_model_identity": "claude-sonnet-5"
+      "response_model_identity": "claude-sonnet-5-aihub-aws_third"
     },
     {
       "model_profile_id": "api3-claude-opus-5-retry3",
-      "display_label": "claude-opus-5-aihub",
-      "configured_model": "openai/claude-opus-5-aihub",
-      "wire_model": "claude-opus-5-aihub",
+      "display_label": "claude-opus-5-aihub-anthropic",
+      "configured_model": "openai/claude-opus-5-aihub-anthropic",
+      "wire_model": "claude-opus-5-aihub-anthropic",
       "route_profile_id": "api3-chat-legacy-core-v1",
       "gateway_options": {
         "strategy_type": "ConsistentHash"
@@ -570,13 +570,13 @@
         "retry_delay_seconds": 30.0
       },
       "preflight_contract_id": "api3-chat-content-model-identity-v1",
-      "response_model_identity": "claude-opus-5"
+      "response_model_identity": "claude-opus-5-aihub-anthropic"
     },
     {
       "model_profile_id": "api3-claude-fable-5-retry3",
-      "display_label": "claude-fable-5-aihub",
-      "configured_model": "openai/claude-fable-5-aihub",
-      "wire_model": "claude-fable-5-aihub",
+      "display_label": "claude-fable-5-aihub-anthropic",
+      "configured_model": "openai/claude-fable-5-aihub-anthropic",
+      "wire_model": "claude-fable-5-aihub-anthropic",
       "route_profile_id": "api3-chat-legacy-core-v1",
       "gateway_options": {
         "strategy_type": "ConsistentHash"
@@ -597,7 +597,7 @@
         "retry_delay_seconds": 30.0
       },
       "preflight_contract_id": "api3-chat-content-model-identity-v1",
-      "response_model_identity": "claude-fable-5"
+      "response_model_identity": "claude-fable-5-aihub-anthropic"
     },
     {
       "model_profile_id": "tokenhub-hy4-preview-retry3",
