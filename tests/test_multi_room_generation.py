@@ -555,12 +555,16 @@ def test_additive_registry_reuses_every_reviewed_model_profile() -> None:
     registry = load_multi_room_profile_registry(ROOT, base)
     # The Open-space +10 expansion registered retry-3 profiles for the frozen
     # single-room workload only; no multi-room campaign was authorized for them.
+    # The consolidated make-up round added two 1800s-timeout single-room
+    # profiles (Kimi/GLM) for the same frozen workload.
     single_room_only = {
         "api3-claude-sonnet-5-retry3",
         "api3-claude-opus-5-retry3",
         "api3-claude-fable-5-retry3",
         "tokenhub-hy4-preview-retry3",
         "api2-gpt-6-astra-high",
+        "api2-kimi-k3-t1800",
+        "api2-glm-5-3-t1800",
     }
     assert single_room_only <= set(base.models.by_id)
     assert {item.model_profile_id for item in registry.campaigns.values()} == (

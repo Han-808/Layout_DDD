@@ -129,10 +129,13 @@ def test_checked_in_campaign_bundle_is_portable_and_immutable() -> None:
 
     # Counts grow when a model is onboarded.  Astra (xhigh) added one route,
     # one model and one campaign; the Open-space +10 expansion added five
-    # retry-3 model profiles and eight `plus10` campaigns (brief_10..19).
+    # retry-3 model profiles and eight `plus10` campaigns (brief_10..19); the
+    # consolidated make-up round then added two 1800s-timeout profiles
+    # (api2-kimi-k3-t1800, api2-glm-5-3-t1800) and three rerun campaigns
+    # (two t1800 + api2-gpt56sol-plus10-rerun-v1 reusing the 3000s Sol profile).
     assert len(bundle.routes.routes) == 7
-    assert len(bundle.models.models) == 23
-    assert len(bundle.campaigns.campaigns) == 13
+    assert len(bundle.models.models) == 25
+    assert len(bundle.campaigns.campaigns) == 16
     campaign, model, route = bundle.resolve_campaign(
         "api3-opus48-high-scene10-v2"
     )
@@ -343,8 +346,10 @@ def test_multiple_models_share_one_retrieval_profile_without_resource_fields() -
         RETRIEVAL_PROFILE_ID
     }
     # 5 scene10 models + 8 plus10 models, of which Kimi and GLM reuse the
-    # scene10 profile (same retry budget), so 11 distinct model profiles.
-    assert len({item["model_profile_id"] for item in campaigns}) == 11
+    # scene10 profile (same retry budget), so 11 distinct.  The make-up round
+    # adds two more (api2-kimi-k3-t1800, api2-glm-5-3-t1800); the Sol rerun
+    # reuses api2-gpt-5-6-sol, so 13 distinct model profiles.
+    assert len({item["model_profile_id"] for item in campaigns}) == 13
     allowed = {
         "campaign_id",
         "workflow_profile_id",

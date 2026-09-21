@@ -83,13 +83,22 @@ case "$FAMILY" in
   api2)
     CREDENTIAL_ENV="API2_APP_CREDENTIAL"
     CREDENTIAL_PROMPT="API2 APP_ID:APP_KEY (hidden; shared by Kimi/GLM/Sol/Astra)"
-    CAMPAIGNS=(api2-kimi-k3-plus10-v1 api2-glm53-plus10-v1 api2-gpt56sol-plus10-v1 api2-gpt6-astra-high-plus10-v1)
-    ROUTES=(api2-chat-top-level-reasoning-v1 api2-responses-reasoning-v1 api2-standard-chat-reasoning-v1 api2-chat-top-level-reasoning-azure-v1)
+    # The four `*-plus10-v1` campaigns are round 1.  The three `*-t1800`/`-rerun`
+    # ids are the consolidated make-up campaigns: Kimi/GLM re-bound to 1800s
+    # request+stage_c timeouts (round 1 halted at brief_11 on a Stage C
+    # wait_response ambiguous timeout at 600s/1200s), and Sol re-run unchanged
+    # (its 3000s timeout was ample; brief_16 was a stage_a schema violation).
+    # Select the make-up ids explicitly with --campaign and a fresh --output-base.
+    CAMPAIGNS=(api2-kimi-k3-plus10-v1 api2-glm53-plus10-v1 api2-gpt56sol-plus10-v1 api2-gpt6-astra-high-plus10-v1 api2-kimi-k3-plus10-t1800-v1 api2-glm53-plus10-t1800-v1 api2-gpt56sol-plus10-rerun-v1)
+    ROUTES=(api2-chat-top-level-reasoning-v1 api2-responses-reasoning-v1 api2-standard-chat-reasoning-v1 api2-chat-top-level-reasoning-azure-v1 api2-chat-top-level-reasoning-v1 api2-responses-reasoning-v1 api2-standard-chat-reasoning-v1)
     ENDPOINTS=(
       "http://trpc-gpt-eval.production.polaris:8080/v1/chat/completions"
       "http://trpc-gpt-eval.production.polaris:8080/api/v1/responses"
       "http://llm-api.model-eval.woa.com/v1/chat/completions"
       "http://trpc-gpt-eval.production.polaris:8080/openai/v1/chat/completions"
+      "http://trpc-gpt-eval.production.polaris:8080/v1/chat/completions"
+      "http://trpc-gpt-eval.production.polaris:8080/api/v1/responses"
+      "http://llm-api.model-eval.woa.com/v1/chat/completions"
     )
     ;;
   api3)

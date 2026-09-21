@@ -596,7 +596,7 @@
         },
         {
           "path": "campaign_v2/campaigns_v2.json",
-          "sha256": "fb316bbc3381557d3076cdd955b8bca598b309107528a466fe7c991a4787fe69",
+          "sha256": "662f00e9ff7ce9f37b7fecd1bcfbad07b75beed61dea8145b19724c206c11d69",
           "mode": "0644"
         },
         {
@@ -611,7 +611,7 @@
         },
         {
           "path": "campaign_v2/model_profiles_v2.json",
-          "sha256": "0d5de067f8f9a634f29926da6a51e8a6b57a1bed8faae07c477b02dea7bc9001",
+          "sha256": "8287075122716f491973ac2b1d3f0bcb22b6e7b95e82580e8a4bdb2c6d3da453",
           "mode": "0644"
         },
         {
