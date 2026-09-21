@@ -138,10 +138,11 @@ def test_checked_in_campaign_bundle_is_portable_and_immutable() -> None:
     # still missing from the merged set; the Opus gap campaign needs no new
     # profile because the legacy core emits no effort field at all.  The Sonnet
     # gap campaign then added the v3 core's workflow and brief set, reusing the
-    # existing retry-3 Sonnet profile.
+    # existing retry-3 Sonnet profile; Kimi and GLM later got `-high-gap-v3`
+    # variants on that same core once Kimi was seen to fence an emission too.
     assert len(bundle.routes.routes) == 7
     assert len(bundle.models.models) == 27
-    assert len(bundle.campaigns.campaigns) == 20
+    assert len(bundle.campaigns.campaigns) == 22
     assert len(bundle.contracts.workflow_by_id) == 2
     assert len(bundle.contracts.brief_set_by_id) == 3
     campaign, model, route = bundle.resolve_campaign(

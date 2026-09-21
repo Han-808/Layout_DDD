@@ -103,8 +103,12 @@ case "$FAMILY" in
     # 600s (the polaris gateway's own ceiling, which the 1800s client timeout
     # cannot reach), and each runs only the briefs still missing from the merged
     # set rather than all ten.
-    CAMPAIGNS=(api2-kimi-k3-plus10-v1 api2-glm53-plus10-v1 api2-gpt56sol-plus10-v1 api2-gpt6-astra-high-plus10-v1 api2-kimi-k3-plus10-t1800-v1 api2-glm53-plus10-t1800-v1 api2-gpt56sol-plus10-rerun-v1 api2-kimi-k3-plus10-high-gap-v1 api2-glm53-plus10-high-gap-v1)
-    ROUTES=(api2-chat-top-level-reasoning-v1 api2-responses-reasoning-v1 api2-standard-chat-reasoning-v1 api2-chat-top-level-reasoning-azure-v1 api2-chat-top-level-reasoning-v1 api2-responses-reasoning-v1 api2-standard-chat-reasoning-v1 api2-chat-top-level-reasoning-v1 api2-responses-reasoning-v1)
+    # The `-high-gap-v3` ids are the same gap runs bound to the fence-tolerant v3
+    # core: Kimi's brief_14 emission in round r6 was a Markdown-fenced object plan
+    # whose content passes the contract once the fence is removed, so the envelope
+    # problem is not confined to the api3 Claude models.
+    CAMPAIGNS=(api2-kimi-k3-plus10-v1 api2-glm53-plus10-v1 api2-gpt56sol-plus10-v1 api2-gpt6-astra-high-plus10-v1 api2-kimi-k3-plus10-t1800-v1 api2-glm53-plus10-t1800-v1 api2-gpt56sol-plus10-rerun-v1 api2-kimi-k3-plus10-high-gap-v1 api2-glm53-plus10-high-gap-v1 api2-kimi-k3-plus10-high-gap-v3 api2-glm53-plus10-high-gap-v3)
+    ROUTES=(api2-chat-top-level-reasoning-v1 api2-responses-reasoning-v1 api2-standard-chat-reasoning-v1 api2-chat-top-level-reasoning-azure-v1 api2-chat-top-level-reasoning-v1 api2-responses-reasoning-v1 api2-standard-chat-reasoning-v1 api2-chat-top-level-reasoning-v1 api2-responses-reasoning-v1 api2-chat-top-level-reasoning-v1 api2-responses-reasoning-v1)
     ENDPOINTS=(
       "http://trpc-gpt-eval.production.polaris:8080/v1/chat/completions"
       "http://trpc-gpt-eval.production.polaris:8080/api/v1/responses"
@@ -113,6 +117,8 @@ case "$FAMILY" in
       "http://trpc-gpt-eval.production.polaris:8080/v1/chat/completions"
       "http://trpc-gpt-eval.production.polaris:8080/api/v1/responses"
       "http://llm-api.model-eval.woa.com/v1/chat/completions"
+      "http://trpc-gpt-eval.production.polaris:8080/v1/chat/completions"
+      "http://trpc-gpt-eval.production.polaris:8080/api/v1/responses"
       "http://trpc-gpt-eval.production.polaris:8080/v1/chat/completions"
       "http://trpc-gpt-eval.production.polaris:8080/api/v1/responses"
     )
