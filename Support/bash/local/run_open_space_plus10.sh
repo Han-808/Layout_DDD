@@ -28,8 +28,17 @@ if [[ "$REPO_ROOT" == */.claude/worktrees/* ]]; then
 else
   PRIMARY_ROOT="$REPO_ROOT"
 fi
-PYTHON_BIN="$REPO_ROOT/.venv/bin/python"
-[[ -x "$PYTHON_BIN" ]] || PYTHON_BIN="$PRIMARY_ROOT/.venv/bin/python"
+# Prefer the worktree's own interpreter, but only if it actually carries the
+# retrieval dependencies: a bare `uv venv` in a worktree is executable yet has an
+# empty site-packages, and picking it fails much later with a bewildering
+# ModuleNotFoundError from inside the campaign check.
+PYTHON_BIN=""
+for candidate in "$REPO_ROOT/.venv/bin/python" "$PRIMARY_ROOT/.venv/bin/python"; do
+  [[ -x "$candidate" ]] || continue
+  if "$candidate" -c 'import numpy' >/dev/null 2>&1; then PYTHON_BIN="$candidate"; break; fi
+  print -u2 -- "note: ignoring $candidate (retrieval dependencies are not installed)"
+done
+[[ -n "$PYTHON_BIN" ]] || PYTHON_BIN="$PRIMARY_ROOT/.venv/bin/python"
 RESOURCE_BINDINGS="${LAYOUT_DDD_RETRIEVAL_BINDINGS:-$REPO_ROOT/.runtime/retrieval_bindings.local.json}"
 [[ -f "$RESOURCE_BINDINGS" ]] || RESOURCE_BINDINGS="$PRIMARY_ROOT/.runtime/retrieval_bindings.local.json"
 PROXY_LAUNCHER="$REPO_ROOT/Support/bash/local/run_litellm_hy4_preview_tokenhub_proxy.sh"

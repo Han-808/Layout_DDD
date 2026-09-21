@@ -547,9 +547,9 @@
     },
     {
       "model_profile_id": "api3-claude-opus-5-retry3",
-      "display_label": "claude-opus-5-aihub-anthropic",
-      "configured_model": "openai/claude-opus-5-aihub-anthropic",
-      "wire_model": "claude-opus-5-aihub-anthropic",
+      "display_label": "claude-opus-5-aihub-aws_third",
+      "configured_model": "openai/claude-opus-5-aihub-aws_third",
+      "wire_model": "claude-opus-5-aihub-aws_third",
       "route_profile_id": "api3-chat-legacy-core-v1",
       "gateway_options": {
         "strategy_type": "ConsistentHash"
@@ -570,7 +570,7 @@
         "retry_delay_seconds": 30.0
       },
       "preflight_contract_id": "api3-chat-content-model-identity-v1",
-      "response_model_identity": "claude-opus-5-aihub-anthropic"
+      "response_model_identity": "claude-opus-5-aihub-aws_third"
     },
     {
       "model_profile_id": "api3-claude-fable-5-retry3",
