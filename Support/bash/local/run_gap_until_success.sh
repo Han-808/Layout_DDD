@@ -86,11 +86,53 @@ fi
 print $$ > "$STATE/run.pid"
 
 CHILD_PID=""
+STOP=exhausted
+round=0
+started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+typeset -A CODES
+CODES=(success 0 exhausted 1 no_free_base 3 credit 4 preflight_permanent 5
+       circuit_breaker 6 review_gate 7 backoff_exhausted 8 local_abort 9
+       interrupted 143)
+
+# Written on every exit path, including a signal -- a loop that spent real money and
+# left no record of why it stopped is worse than one that never ran.
+write_summary() {
+  local -a final
+  final=(${(f)"$(remaining_briefs)"})
+  local code=${CODES[$STOP]:-1}
+  mkdir -p "$STATE"
+  jq -n --arg campaign "$CAMPAIGN" --arg stop "$STOP" --arg started "$started_at" \
+        --arg finished "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --argjson code "$code" \
+        --argjson rounds_this_loop "$round" --argjson rounds_total "$(rounds_consumed)" \
+        --arg remaining "${final[*]}" \
+    '{schema_version:"gap_until_success_summary_v1", campaign_id:$campaign,
+      stop_reason:$stop, exit_code:$code, started_at:$started, finished_at:$finished,
+      rounds_this_loop:$rounds_this_loop, rounds_total:$rounds_total,
+      remaining_briefs:($remaining | split(" ") | map(select(length>0)))}' \
+    > "$STATE/summary.json"
+  print -- ""
+  print -- "stop: $STOP (exit $code)"
+  print -- "rounds this loop: $round   total for this campaign: $(rounds_consumed)"
+  if (( ${#final} == 0 )); then
+    print -- "all requested briefs are banked"
+  else
+    print -- "still missing: ${final[*]}"
+  fi
+  print -- "summary: $STATE/summary.json"
+}
+
 cleanup() {
   [[ -n "$CHILD_PID" ]] && kill -TERM "$CHILD_PID" 2>/dev/null
   rm -f "$STATE/run.pid"
 }
-on_signal() { print -- "\ninterrupted; stopping after the current round"; cleanup; exit 143 }
+on_signal() {
+  print -- "\ninterrupted"
+  STOP=interrupted
+  cleanup
+  write_summary
+  exit 143
+}
 trap on_signal INT TERM HUP
 trap cleanup EXIT
 
@@ -194,11 +236,8 @@ walled_brief() {
 }
 
 # ---- loop -------------------------------------------------------------------
-STOP=exhausted
 backoffs=0
 barren=0
-round=0
-started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
 print -- "gap loop: campaign=$CAMPAIGN family=$FAMILY"
 print -- "  requested briefs : $(requested_briefs | tr '\n' ' ')"
@@ -229,6 +268,9 @@ while true; do
   (( round += 1 ))
 
   base=$(free_base) || { STOP=no_free_base; break }
+  # Re-assert the state directory each round: a loop that spends money must not die
+  # because something else removed its log directory underneath it.
+  mkdir -p "$STATE"
   round_log="$STATE/round.$(date -u +%Y%m%dT%H%M%SZ).log"
   print -- "round $round (consumed $consumed/$MAX_ROUNDS): remaining ${rem[*]} -> ${base:t}"
 
@@ -283,30 +325,5 @@ while true; do
 done
 
 # ---- terminal summary -------------------------------------------------------
-typeset -a final
-final=(${(f)"$(remaining_briefs)"})
-typeset -A CODES
-CODES=(success 0 exhausted 1 no_free_base 3 credit 4 preflight_permanent 5
-       circuit_breaker 6 review_gate 7 backoff_exhausted 8 local_abort 9)
-code=${CODES[$STOP]:-1}
-
-jq -n --arg campaign "$CAMPAIGN" --arg stop "$STOP" --arg started "$started_at" \
-      --arg finished "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --argjson code "$code" \
-      --argjson rounds_this_loop "$round" --argjson rounds_total "$(rounds_consumed)" \
-      --arg remaining "${final[*]}" \
-  '{schema_version:"gap_until_success_summary_v1", campaign_id:$campaign,
-    stop_reason:$stop, exit_code:$code, started_at:$started, finished_at:$finished,
-    rounds_this_loop:$rounds_this_loop, rounds_total:$rounds_total,
-    remaining_briefs:($remaining | split(" ") | map(select(length>0)))}' \
-  > "$STATE/summary.json"
-
-print -- ""
-print -- "stop: $STOP (exit $code)"
-print -- "rounds this loop: $round   total for this campaign: $(rounds_consumed)"
-if (( ${#final} == 0 )); then
-  print -- "all requested briefs are banked"
-else
-  print -- "still missing: ${final[*]}"
-fi
-print -- "summary: $STATE/summary.json"
-exit "$code"
+write_summary
+exit "${CODES[$STOP]:-1}"
