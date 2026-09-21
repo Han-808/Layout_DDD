@@ -187,13 +187,18 @@ free_base() {
 # this campaign and to mode "run" -- a glob for the newest file would pick up a
 # concurrent campaign's record from a shared base.
 preflight_status() {
-  local round_log="$1" record
+  # `status` is a read-only special parameter in zsh, and assigning to one aborts a
+  # non-interactive shell outright -- which is why an earlier version of this
+  # function killed the loop after a single round and left no summary behind.  The
+  # value is captured in a substitution rather than through `read`, which would also
+  # have lost it to the pipeline's subshell.
+  local round_log="$1" record http
   record=$(sed -n 's/^preflight record: //p' "$round_log" | tail -1)
   [[ -n "$record" && -r "$record" ]] || { print -- "none"; return }
-  jq -r --arg c "$CAMPAIGN" \
-    'select(.campaign_id==$c and .mode=="run") | .report.http_status // "null"' \
-    "$record" 2>/dev/null | tail -1 | read -r status
-  print -- "${status:-none}"
+  http=$(jq -r --arg c "$CAMPAIGN" \
+    'select(.campaign_id==$c and .mode=="run") | .report.http_status // empty' \
+    "$record" 2>/dev/null | tail -1)
+  print -- "${http:-none}"
 }
 
 # A case reached a content verdict only if the model actually answered and the
@@ -288,12 +293,12 @@ while true; do
     break
   fi
 
-  status=$(preflight_status "$round_log")
-  case "$status" in
+  preflight_http=$(preflight_status "$round_log")
+  case "$preflight_http" in
     200)
       : ;;
     400|401|403)
-      print -u2 -- "  preflight http=$status is permanent (credential or entitlement)"
+      print -u2 -- "  preflight http=$preflight_http is permanent (credential or entitlement)"
       STOP=preflight_permanent
       break ;;
     none)
@@ -306,7 +311,7 @@ while true; do
       break ;;
     *)
       (( backoffs += 1 ))
-      print -- "  preflight http=$status is transient (backoff $backoffs/$MAX_PREFLIGHT_BACKOFFS); round not counted"
+      print -- "  preflight http=$preflight_http is transient (backoff $backoffs/$MAX_PREFLIGHT_BACKOFFS); round not counted"
       if (( backoffs > MAX_PREFLIGHT_BACKOFFS )); then STOP=backoff_exhausted; break; fi
       sleep "$PREFLIGHT_BACKOFF"
       continue ;;
