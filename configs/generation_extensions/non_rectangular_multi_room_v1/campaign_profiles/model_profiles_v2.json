@@ -164,6 +164,37 @@
       },
       "preflight_contract_id": "api3-chat-content-model-identity-v1",
       "response_model_identity": "claude-fable-5"
+    },
+    {
+      "model_profile_id": "api2-gpt-6-astra-xhigh-nonrect-global-retry5-v1",
+      "display_label": "gpt-6-astra-xhigh",
+      "configured_model": "azure_openai/gpt-6-astra",
+      "wire_model": "gpt-6-astra",
+      "route_profile_id": "api2-chat-top-level-reasoning-azure-v1",
+      "gateway_options": {
+        "provider": "azure_openai",
+        "gateway_model": "gpt-6-astra",
+        "user_agent_suffix": "api2-gpt-6-astra-xhigh-nonrect-retry5-v1",
+        "auth_timeout_seconds": 600,
+        "strategy_type": "chat_completions_api2_azure_openai"
+      },
+      "request_options": {
+        "request_timeout_seconds": 2400.0,
+        "max_tokens": 65536,
+        "temperature": null,
+        "top_p": null,
+        "top_k": null,
+        "repetition_penalty": null,
+        "reasoning_effort": "xhigh",
+        "thinking_type": null,
+        "preserved_thinking": null
+      },
+      "transport_policy": {
+        "max_infrastructure_retries": 5,
+        "retry_delay_seconds": 30.0
+      },
+      "preflight_contract_id": "api2-chat-json-content-v1",
+      "response_model_identity": null
     }
   ]
 }

@@ -14,6 +14,7 @@ from typing import Any, Callable
 from benchmark.scene_generation.campaign.profiles import ModelProfile, RouteProfile
 from benchmark.scene_generation.frozen_two_stage.providers.base import ProviderRoute
 from benchmark.scene_generation.frozen_two_stage.providers.codecs.openai_chat import (
+    DEFAULT_MAX_TOKENS_FIELD,
     ChatOptionPolicy,
 )
 from benchmark.scene_generation.frozen_two_stage.providers.routes import (
@@ -142,6 +143,17 @@ class RuntimeProviderModel:
     public_dict = to_public_dict
 
 
+_AZURE_BUDGET_OPTION_CONTRACTS = frozenset({"chat_top_level_reasoning_azure_v1"})
+
+
+def _chat_max_tokens_field(route: RouteProfile) -> str:
+    """Pick the output-budget field name the route's option contract requires."""
+
+    if route.option_contract_id in _AZURE_BUDGET_OPTION_CONTRACTS:
+        return "max_completion_tokens"
+    return DEFAULT_MAX_TOKENS_FIELD
+
+
 def build_provider_route(
     route: RouteProfile,
     model: ModelProfile,
@@ -165,7 +177,8 @@ def build_provider_route(
             gateway_model=gateway.gateway_model,
             user_agent_suffix=gateway.user_agent_suffix,
             option_policy=ChatOptionPolicy.top_level_reasoning(
-                default_reasoning_effort=effort
+                default_reasoning_effort=effort,
+                max_tokens_field=_chat_max_tokens_field(route),
             ),
             route_key=route.route_profile_id,
             runner_version=route.runner_version,
@@ -211,7 +224,8 @@ def build_provider_route(
         return make_standard_chat_route(
             user_agent_suffix=gateway.user_agent_suffix,
             option_policy=ChatOptionPolicy.top_level_reasoning(
-                default_reasoning_effort=effort
+                default_reasoning_effort=effort,
+                max_tokens_field=_chat_max_tokens_field(route),
             ),
             route_key=route.route_profile_id,
             runner_version=route.runner_version,

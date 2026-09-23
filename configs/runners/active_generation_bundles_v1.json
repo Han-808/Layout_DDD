@@ -473,7 +473,7 @@
         },
         {
           "path": "config.py",
-          "sha256": "0b801cabc424de6194d22ec42d7c2612a013292bbaeab1d41ae9ebb9d52ce5d7",
+          "sha256": "c3b230525bffd89bf3f94237408674a4466bea1922713a7740e105d39a80a60c",
           "mode": "0644"
         },
         {
@@ -503,7 +503,7 @@
         },
         {
           "path": "providers/codecs/openai_chat.py",
-          "sha256": "4b35f37b5561831d9bb1b3d043fdd69c9c1521b6641786b56fe764143df8a60f",
+          "sha256": "b55fca16c889b56efb98ec7f1ebd10a06daeca8f8627688e87f588d9dc35c962",
           "mode": "0644"
         },
         {
@@ -596,7 +596,7 @@
         },
         {
           "path": "campaign_v2/campaigns_v2.json",
-          "sha256": "2987d62f23dc7346c7df40582b198319cc654aa7fc441da64551e31f7346012b",
+          "sha256": "9097372bc191c3194f7a688134608861831a3e057968a5b9991cb70b640d9e5e",
           "mode": "0644"
         },
         {
@@ -606,17 +606,17 @@
         },
         {
           "path": "campaign_v2/generation_bindings.local.example.json",
-          "sha256": "03f7d18cf8ff651d28f67c467df3ded07485672cc254aba54ca3abd96a80dbee",
+          "sha256": "05676a469e5689b7e0ae1f14a3a0c55991d25c3e5acac40f92e2929d89dc0b96",
           "mode": "0644"
         },
         {
           "path": "campaign_v2/model_profiles_v2.json",
-          "sha256": "a0bdcbcda44ac0e2df97ef6e5cf170d0f4a9e0b7e30c8822c00f56642f20a89c",
+          "sha256": "d0357db4ec1e0567ff9ae688ede8171f901b252c8bf67eb730c50a05b55a2c3e",
           "mode": "0644"
         },
         {
           "path": "campaign_v2/route_profiles_v2.json",
-          "sha256": "098262af7670b9531faaa5353b8ef21924cd342405c9e631325d94dd928661b0",
+          "sha256": "1d80437ed99e9af81112db39e4f922a83235aaf87a869aa18cee19c4f495a771",
           "mode": "0644"
         }
       ]
@@ -663,7 +663,7 @@
         },
         {
           "path": "legacy_v1.py",
-          "sha256": "a1625cc3ca168fd2e05b80277224fb0b5d7ca0a7f4aee925f16d8fe1a194b955",
+          "sha256": "d920a73657fb3e649506409644f6088a134d7a8f85363bff40300a85ea1a7920",
           "mode": "0644"
         },
         {
@@ -683,12 +683,12 @@
         },
         {
           "path": "profiles.py",
-          "sha256": "19070a7dcdabd36b3688faebc3bc71205d3a9d2547db461c62ad88e6380836ea",
+          "sha256": "6edb9f3887ffb2b5d382dfea70227b03fec6f6f70db86e1b82fd6abad874e1ce",
           "mode": "0644"
         },
         {
           "path": "runtime.py",
-          "sha256": "4dee70b25dc952a4589c60c6809c773909c600b28248a5a9a66da4f4c5ebba92",
+          "sha256": "183336501d95efff22ffd39cbda477ff1f8b4ec19777466fef77c6992bddbc73",
           "mode": "0644"
         }
       ]
@@ -860,12 +860,12 @@
       "files": [
         {
           "path": "additive_registry_manifest_v1.json",
-          "sha256": "8e6757ba14b562951488ad161ad2c9591200cf690365576e03d01ee565906972",
+          "sha256": "7e01e14eca7c8e0ed4642c3f3c1845379a1350e568fcb0e489a7ebf1e7e6f348",
           "mode": "0644"
         },
         {
           "path": "multi_room_v1/registry_v1.json",
-          "sha256": "1edf4d325d2c915dd35471f59b0d98aaae88a5774639041cffd9d5bbaf8bdf41",
+          "sha256": "b8c5c612709aa4382c8297ed88b4971952bf04536d220ba9cd647c8519f67907",
           "mode": "0644"
         },
         {
@@ -1270,7 +1270,7 @@
         },
         {
           "path": "non_rectangular_multi_room_v1/campaign_profiles/model_profiles_v2.json",
-          "sha256": "66c5dc6ab566a30b2b66e86920c4abfa02de1c3778f2eb6e2b026c63adb7faa2",
+          "sha256": "1b59b71dc808e9b10616f12c3188998cc454b27a6eb8faef9e1d61ee8229cc35",
           "mode": "0644"
         },
         {
@@ -1280,7 +1280,7 @@
         },
         {
           "path": "non_rectangular_multi_room_v1/fullruns/spatiallm_selected10_api2_retry5_v2.json",
-          "sha256": "a249556ba17e891cf050ed33f586953a64b19a6b942d37fd77e036f196810586",
+          "sha256": "fbcf4820b7043a77dc124a5c758ad0938017acb7376ac06ce1ed117c5da0446f",
           "mode": "0644"
         },
         {
@@ -1605,7 +1605,7 @@
         },
         {
           "path": "non_rectangular_multi_room_v1/registry_v2.json",
-          "sha256": "1e5954d2111deb97bf2e26ad5c9c38d2da16b1ab9be8697c6c099fd4cb2991be",
+          "sha256": "314c8e6447b31d95ba1075f562ea9fbcf3271e783af2c66beeec2b4522e3b055",
           "mode": "0644"
         }
       ]

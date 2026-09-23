@@ -86,6 +86,12 @@
       "model_profile_id": "api3-claude-fable-5-nonrect-global-retry5-v1",
       "retrieval_profile_id": "imaginarium-qwen3-embedding-0.6b-stable-top1-v2",
       "execution_policy_id": "nonrect-global-retry5-continue-v1"
+    },
+    {
+      "campaign_id": "api2-gpt6-astra-xhigh-nonrect-global-retry5-v2",
+      "model_profile_id": "api2-gpt-6-astra-xhigh-nonrect-global-retry5-v1",
+      "retrieval_profile_id": "imaginarium-qwen3-embedding-0.6b-stable-top1-v2",
+      "execution_policy_id": "nonrect-global-retry5-continue-v1"
     }
   ]
 }

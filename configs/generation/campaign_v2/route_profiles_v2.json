@@ -18,6 +18,14 @@
       "runner_version": "2.0.0"
     },
     {
+      "route_profile_id": "api2-chat-top-level-reasoning-azure-v1",
+      "codec_id": "openai_chat_completions_v1",
+      "gateway_id": "api2_bearer_query_v1",
+      "option_contract_id": "chat_top_level_reasoning_azure_v1",
+      "response_contract_id": "openai_chat_single_choice_v1",
+      "runner_version": "2.0.0"
+    },
+    {
       "route_profile_id": "api2-responses-reasoning-v1",
       "codec_id": "openai_responses_v1",
       "gateway_id": "api2_bearer_query_v1",

@@ -127,9 +127,10 @@ def _write_json(path: Path, value: Any) -> None:
 def test_checked_in_campaign_bundle_is_portable_and_immutable() -> None:
     bundle = load_campaign_profile_bundle(PROFILE_ROOT)
 
-    assert len(bundle.routes.routes) == 6
-    assert len(bundle.models.models) == 17
-    assert len(bundle.campaigns.campaigns) == 4
+    # Counts grow when a model is onboarded; the last +1 each is Astra (xhigh).
+    assert len(bundle.routes.routes) == 7
+    assert len(bundle.models.models) == 18
+    assert len(bundle.campaigns.campaigns) == 5
     campaign, model, route = bundle.resolve_campaign(
         "api3-opus48-high-scene10-v2"
     )
@@ -339,7 +340,7 @@ def test_multiple_models_share_one_retrieval_profile_without_resource_fields() -
     assert {item["retrieval_profile_id"] for item in campaigns} == {
         RETRIEVAL_PROFILE_ID
     }
-    assert len({item["model_profile_id"] for item in campaigns}) == 4
+    assert len({item["model_profile_id"] for item in campaigns}) == 5
     allowed = {
         "campaign_id",
         "workflow_profile_id",
